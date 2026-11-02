@@ -24,6 +24,7 @@ the first line, and the kiss-tnc always upgrades to TXRESULT.
 """
 import json
 import os
+import re
 import select
 import socket
 import struct
@@ -386,7 +387,7 @@ def main(argv):
         band = argv[argv.index("--radio") + 1]
     if "--id" in argv:
         rid = argv[argv.index("--id") + 1]
-        if not (len(rid) in (2, 3) and rid[0] == "r" and rid[1:].isdigit() and rid[1] != "0"):
+        if not re.fullmatch(r"r[1-9][0-9]?", rid):
             print(f"testlab fake loraham_daemon: --id {rid!r} is not r1..r99", file=sys.stderr)
             return 2
     if "--rflog-path" in argv:                   # as the real daemon: its RF log is opened at init, or it exits

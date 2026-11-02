@@ -4,6 +4,8 @@ BOUND=) and the exit actions stay with the wiring. A module of its own, so the s
 """
 from __future__ import annotations
 
+import dataclasses
+
 from . import config as cfgmod
 from . import daemon_params as _dp
 from . import radio_daemon, radio_models, radios, rflog
@@ -286,6 +288,17 @@ def band_rid(svc, band: str) -> radio_daemon.Target:
                                        old_config=radio_daemon.old_config_state(svc._paths))
 
 
+def daemon_rid(svc, band: str) -> radio_daemon.Target:
+    """band_rid for the daemon start: a shared band's refusal names its next step, the hardware list
+    (radio_daemon.SHARED_BAND_TEXT), not the `<stack>@<rid>` form 0.14.0 does not have."""
+    t = band_rid(svc, band)
+    if t.outcome == "refuse" and len(t.candidates) > 1:
+        reason = t.reason.removesuffix("; name one")
+        return dataclasses.replace(t, reason=f"{reason}; {radio_daemon.SHARED_BAND_TEXT}",
+                                   next_command="config/radios.toml")
+    return t
+
+
 def daemon_key(svc, band: str) -> str:
     """The key of a band's daemon sockets (daemon_control.conf_socket): the rid of the band's one enabled radio
     when the hardware list resolves the band (stage L5, `loraconf-<rid>.sock`); else the band itself, which
@@ -413,7 +426,6 @@ def band_radios(svc, band: str) -> list:
 def radio_endpoints(paths, specs) -> list:
     """Each `{rid}` endpoint once per enabled radio of the hardware list (W6-2: two radios of one band are two
     entries); none without a valid list. Every other endpoint passes through unchanged."""
-    import dataclasses
     rids = [r.id for r in radios.load(paths).radios if r.enabled]
     return [dataclasses.replace(s, address=s.address.replace("{rid}", rid))
             for s in specs for rid in (rids if "{rid}" in s.address else ("",))]

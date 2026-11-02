@@ -103,3 +103,15 @@ def test_every_preset_keyed_table_holds_each_model_preset():
     pairs = {(v.preset, m.chip) for m in radio_models.load().values() for v in m.variants}
     assert {p: config.HW_PRESET_FAMILY.get(p) for p, _ in pairs} == dict(pairs)
     assert {p for p, _ in pairs} <= set(config.HW_PRESET_LABELS)
+
+
+def test_the_shared_band_sentence_is_one_wording_in_code_docs_page_and_changelog():
+    # PKT-D20 item 5: the refusal, daemon.md, the Hardware page and the CHANGELOG say the same sentence.
+    from lhpc.core import radio_daemon
+    repo = CORE.parent.parent
+    words = " ".join(radio_daemon.SHARED_BAND_TEXT.split()).lower()
+    for f in ("docs/stacks/daemon.md", "lhpc/adapters/web/templates/hardware.html", "CHANGELOG.md"):
+        t = (repo / f).read_text()
+        for a, b in (("<code>", ""), ("</code>", ""), ("`", ""), ("&lt;", "<"), ("&gt;", ">")):
+            t = t.replace(a, b)
+        assert words in " ".join(t.split()).lower(), f

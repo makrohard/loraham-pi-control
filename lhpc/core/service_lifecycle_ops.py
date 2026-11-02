@@ -2124,7 +2124,7 @@ class LifecycleOpsMixin:
             for b in sorted(absent):
                 # Stage L5: the band's one enabled radio (W1-3/4/5) and its start plan from the hardware list:
                 # --id, --hw from the model, the radio's own settings and RF-log path (W7-1, W7-7, W7-8).
-                t = radio_start.band_rid(self, b)
+                t = radio_start.daemon_rid(self, b)
                 params, refusal, _notes = radio_start.start_plan(self, t.rid) if t.rid else (None, t.reason, ())
                 if params is None or refusal:
                     lines.append(f"  [BLOCKED] daemon on {b}: {refusal}")

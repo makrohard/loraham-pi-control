@@ -79,3 +79,11 @@ def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypat
     for band, rid in (("433", "r1"), ("868", "r2")):
         assert f'id="radio-cards-{band}"' in cols[band] and cols[band].count('class="radio-card"') == 1
         assert f'data-rid="{rid}"' in cols[band]
+
+
+def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):
+    # PKT-D20 item 5: the Hardware page says what the daemon start's shared-band refusal says, rendered.
+    import html
+    page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
+    assert ("A band with two enabled radios starts no daemon: set enabled = false on one of them in "
+            "config/radios.toml (the <stack>@<rid> form is not in 0.14.0).") in page

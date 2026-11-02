@@ -466,7 +466,7 @@ def test_fake_daemon_opens_its_rf_log_and_serves(tmp_path):
         proc.wait(timeout=5)
 
 
-@pytest.mark.parametrize("rid", ["r0", "r100", "R1", "r01", "x", "r1/..", ""])
+@pytest.mark.parametrize("rid", ["r0", "r100", "R1", "r01", "x", "r1/..", "", "r\u0661", "r1\u0662", "r1\n"])
 def test_fake_daemon_refuses_an_id_that_is_no_radio_id(tmp_path, rid):
     from lhpc_testlab import data_path
     script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))

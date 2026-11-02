@@ -310,6 +310,9 @@ def _order(radios):
 OLD_CONFIG_TEXT = ("the old [radio] configuration is present and nothing was converted: set up the radios in the "
                    "hardware list first")
 OLD_CONFIG_UNREADABLE = "the old configuration cannot be read"
+# LEG/PKT-D20: the daemon start's one wording for a shared band, for the refusal, daemon.md and the Hardware page.
+SHARED_BAND_TEXT = ("a band with two enabled radios starts no daemon: set enabled = false on one of them in "
+                    "config/radios.toml (the <stack>@<rid> form is not in 0.14.0)")
 
 
 def _unstartable(state, old_config) -> Target:

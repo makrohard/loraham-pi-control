@@ -6,6 +6,8 @@
   <div class="body">
     <p class="muted">The hardware list (config/radios.toml) names the radios; a daemon starts for each band the board
       setup serves, as that band's radio on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
+    <p class="muted" id="hardware-shared-band">A band with two enabled radios starts no daemon: set <code>enabled = false</code>
+      on one of them in config/radios.toml (the <code>&lt;stack&gt;@&lt;rid&gt;</code> form is not in 0.14.0).</p>
     {% if view.kind != "valid" %}
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>
