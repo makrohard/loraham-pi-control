@@ -147,9 +147,27 @@ def doctor_usb(svc) -> list:
 
 
 def _daemon_procs(svc) -> list:
-    """Every daemon process in /proc as radio_daemon reads it (id / no-id / unknown)."""
-    return [radio_daemon.parse_daemon_proc(pid, argv) for pid, argv in svc._system.procfs.cmdlines().items()
-            if radio_daemon.daemon_entry(None, "", argv, "", None, "") == radio_daemon.Tri.YES]
+    """Every process in /proc that is, or cannot be told from, the daemon, as radio_daemon reads it (id / no-id /
+    unknown). G2-0.14.0-1 item 2: every pid is judged (the command lines and the /proc listing) from all three sources
+    (argv, the exe link, comm). A pid any readable source names as another program is not the daemon (a kernel
+    thread, another user's process, G2-D12); one whose three sources are all unreadable while it still exists is
+    "unknown", which the start and save rules refuse; one gone by the reads is not counted."""
+    fs, argvs = svc._system.fs, svc._system.procfs.cmdlines()
+    pids = set(argvs) | {int(e) for e in fs.listdir("/proc", 100_000) if e.isdigit()}
+    out = []
+    for pid in sorted(pids):
+        argv = argvs.get(pid)
+        exe = fs.readlink(f"/proc/{pid}/exe") or None
+        comm = fs.read_text(f"/proc/{pid}/comm", 64) or None
+        unread = "EUNREADABLE"          # the readers answer "" for every failure, so an error is only "not read"
+        tri = radio_daemon.daemon_entry(exe, "" if exe else unread, argv, "" if argv is not None else unread,
+                                        comm, "" if comm else unread)
+        if tri == radio_daemon.Tri.YES:
+            out.append(radio_daemon.parse_daemon_proc(pid, argv))
+        elif tri == radio_daemon.Tri.UNKNOWN and fs.exists(f"/proc/{pid}"):
+            out.append(radio_daemon.DaemonProc(pid, "unknown", reason=f"cannot tell whether pid {pid} is the daemon "
+                                               "(its command line, exe and comm cannot be read)"))
+    return out
 
 
 def _radio_users(svc, radio) -> list:
