@@ -72,3 +72,34 @@ def test_w2_7_the_daemon_start_reads_no_band_setting():
     ops = ast.parse((CORE / "service_lifecycle_ops.py").read_text())
     ensure = next(n for n in ast.walk(ops) if isinstance(n, ast.FunctionDef) and n.name == "_ensure_daemon")
     assert _names(ensure) & BAND_READERS == set()
+
+
+def test_w7_7_the_daemons_hw_choices_are_the_model_tables_presets():
+    # T-M3: the start plan passes variant(radio, model).preset as --hw; the manifest's enum must hold exactly those
+    # (LEG-D41: a meshstick-1262 row was refused "hw: 'meshstick-1262' not in (…)" before any launch).
+    from lhpc.core import radio_models
+    daemon = next(c for st in manifest.load_manifest() for c in st.components if c.id == "loraham-daemon")
+    hw = next(p for p in daemon.run_params if p.name == "hw")
+    presets = {v.preset for m in radio_models.load().values() for v in m.variants}
+    assert set(hw.choices) == presets
+
+
+def test_every_enum_the_start_plan_fills_holds_its_values():
+    # The class (LEG-D41): each daemon param radio_daemon.daemon_params fills from the row or the model table has a
+    # manifest constraint that admits every value it can produce.
+    from lhpc.core import radio_models, radios
+    daemon = next(c for st in manifest.load_manifest() for c in st.components if c.id == "loraham-daemon")
+    by = {p.name: set(p.choices) for p in daemon.run_params if p.choices}
+    models = radio_models.load().values()
+    assert {b for m in models for b in m.bands} <= by["radio"]
+    assert set(radios.TXMODES) <= by["txmode"] and set(radios.CADMONS) <= by["cadmon"]
+    assert {"on", "off"} <= by["rf_log"]
+
+
+def test_every_preset_keyed_table_holds_each_model_preset():
+    # The class (LEG-D41): config's preset-keyed tables cover every preset of the model table, and the family
+    # of each is that model's chip (chip_family reads HW_PRESET_FAMILY by the row's preset).
+    from lhpc.core import config, radio_models
+    pairs = {(v.preset, m.chip) for m in radio_models.load().values() for v in m.variants}
+    assert {p: config.HW_PRESET_FAMILY.get(p) for p, _ in pairs} == dict(pairs)
+    assert {p for p, _ in pairs} <= set(config.HW_PRESET_LABELS)

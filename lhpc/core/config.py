@@ -206,6 +206,7 @@ HW_PRESET_LABELS = {
     "uputronics-ce0": "Uputronics CE0",
     "uputronics-ce1": "Uputronics CE1",
     "waveshare-sx1262": "Waveshare SX1262",
+    "meshstick-1262": "ELECROW Meshstick",
 }
 
 
@@ -222,6 +223,7 @@ HW_PRESET_FAMILY = {
     "uputronics-ce0": "sx127x",
     "uputronics-ce1": "sx127x",
     "waveshare-sx1262": "sx1262",
+    "meshstick-1262": "sx1262",     # the model table's chip (radio_models.toml); a test holds the two equal
 }
 
 

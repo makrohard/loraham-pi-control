@@ -132,7 +132,8 @@ main = "loraham-daemon"
     [[stack.component.param]]
     name = "hw"
     kind = "enum"
-    choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262"]
+    # W7-7 / T-M3: exactly the presets of the model table (lhpc/data/radio_models.toml); a test fails when they differ.
+    choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262", "meshstick-1262"]
     # Friendly labels for the GUI (the wire value still submits). `loraham` is the daemon's renamed
     # dual-module preset.
     default = "loraham"
