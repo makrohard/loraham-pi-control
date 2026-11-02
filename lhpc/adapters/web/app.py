@@ -1806,8 +1806,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _redirect_for(sid)
 
     def _safe_job(value):
-        # only a plain logs/<name>.log filename, never a path
-        return value if value and "/" not in value and ".." not in value else None
+        # a plain logs/<name>.log filename, or exactly a radio's daemon RF log `r<1-99>/rf-daemon.log` (stage L5,
+        # W7-8a; REL14-D33); never any other path
+        if not isinstance(value, str) or not value:
+            return None
+        if _rflog.RADIO_JOB.fullmatch(value):
+            return value
+        return value if "/" not in value and ".." not in value else None
 
     def _safe_band(value):
         # `band` picks the instance of a band-scoped component and reaches a FILENAME
