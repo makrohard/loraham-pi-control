@@ -12,8 +12,9 @@
     {% if view.hw_setups %}
       <section class="cfgsec">
         <h3>Hardware</h3>
-        <p class="depnote" id="hardware-list-notice">The hardware list decides which radios launch. This page's board
-          choice only names the served bands until the Hardware section replaces it.</p>
+        <p class="depnote" id="hardware-list-notice">The hardware list names the radios; a daemon starts for each band
+          the board setup serves. This page's board choice names the served bands until the Hardware section
+          replaces it.</p>
         <p class="muted">Which physical radio board(s) this box has. This fixes the served band(s). Until a real
           setup is chosen the daemon
           refuses to start. Use <strong>Detect</strong> to probe a candidate board (its LED lights while

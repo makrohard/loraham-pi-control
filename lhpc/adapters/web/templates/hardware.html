@@ -4,8 +4,8 @@
 <section class="card" id="hardware-section">
   <header><h2>Hardware: the radios</h2></header>
   <div class="body">
-    <p class="muted">The hardware list (config/radios.toml) decides which radios launch: one daemon per radio, each
-      on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
+    <p class="muted">The hardware list (config/radios.toml) names the radios; a daemon starts for each band the board
+      setup serves, as that band's radio on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
     {% if view.kind != "valid" %}
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>

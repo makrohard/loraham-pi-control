@@ -18,7 +18,7 @@ from lhpc.core.paths import Paths
 
 SETUPS = sorted(cfgmod.HW_SETUPS)
 STATES = ["absent", "valid", "invalid", "dangling", "directory"]
-EXISTS = "  hardware list: exists, not changed (config/radios.toml decides which radios launch)"   # measured, CLI at 66f162d8
+EXISTS = "  hardware list: exists, not changed (config/radios.toml names the radios; a daemon starts for each band the board setup serves)"   # measured, CLI at 66f162d8
 
 
 def _cli(tmp_path, monkeypatch, capsys, *args):

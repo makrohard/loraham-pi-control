@@ -239,7 +239,7 @@ def setup_radios(paths, setup_id: str) -> tuple:
     except Exception:                                    # a path refusal: never read as "absent"
         present = True
     if present:
-        return True, "hardware list: exists, not changed (config/radios.toml decides which radios launch)"
+        return True, "hardware list: exists, not changed (config/radios.toml names the radios; a daemon starts for each band the board setup serves)"
     if setup is None or not setup[1]:
         return True, "hardware list: stays absent (no radio in this setup)"
     models, rows = radio_models.load(), []

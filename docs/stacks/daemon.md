@@ -25,9 +25,12 @@ one `loraham_daemon` process per served band (433/868 MHz). It never transmits o
 
 ## The hardware list (0.14.0)
 
-From 0.14.0 the hardware list, `config/radios.toml`, decides which radios launch: one daemon per enabled radio,
-each with its own sockets (`/tmp/loraconf-<rid>.sock`, `lora-<rid>`, `loraf-<rid>`), its `--id <rid>` and its
-RF log `logs/<rid>/rf-daemon.log`. Clients use their band's radio.
+From 0.14.0 the hardware list, `config/radios.toml`, names each radio and its band. The daemon is started for
+each band the board setup serves (`lhpc hardware <setup>`, saved in `config/local.toml`), as that band's one
+enabled radio of the list, with its own sockets (`/tmp/loraconf-<rid>.sock`, `lora-<rid>`, `loraf-<rid>`), its
+`--id <rid>` and its RF log `logs/<rid>/rf-daemon.log`. Clients use their band's radio. A radio on a band the
+setup does not serve is not started: launching every enabled radio of the list whatever the setup is not in
+this release.
 
 - **Cutover:** an updated box keeps its old `[radio]` setup in `config/local.toml`, and nothing is converted.
   Until the list exists, no daemon starts and the console shows a banner. `lhpc hardware <setup>` writes the

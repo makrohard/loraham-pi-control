@@ -58,8 +58,8 @@ def test_an_existing_list_is_never_touched_and_the_setup_still_names_the_bands(t
     path = tmp_path / "config" / "radios.toml"
     before = os.readlink(path) if path.is_symlink() else path.read_bytes()
     res = svc.set_hardware_setup("waveshare-868")
-    assert res.ok and res.details[-1] == ("  hardware list: exists, not changed (config/radios.toml decides which "
-                                          "radios launch)")
+    assert res.ok and res.details[-1] == ("  hardware list: exists, not changed (config/radios.toml names the radios; "
+                                          "a daemon starts for each band the board setup serves)")
     assert (os.readlink(path) if path.is_symlink() else path.read_bytes()) == before
     assert config.load_config(Paths(runtime_root=tmp_path)).radio.hardware == "waveshare-868"
 
@@ -79,7 +79,7 @@ def test_a_path_that_cannot_be_judged_is_a_list(tmp_path, monkeypatch):
         raise PermissionError("denied")
     monkeypatch.setattr(radios, "exists_at_all", boom)
     res = _svc(tmp_path).set_hardware_setup("loraham")
-    assert res.details[-1] == "  hardware list: exists, not changed (config/radios.toml decides which radios launch)"
+    assert res.details[-1] == "  hardware list: exists, not changed (config/radios.toml names the radios; a daemon starts for each band the board setup serves)"
     assert not (tmp_path / "config" / "radios.toml").exists()
 
 

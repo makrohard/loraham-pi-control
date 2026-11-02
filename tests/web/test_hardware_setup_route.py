@@ -73,9 +73,9 @@ def test_a_refused_choice_changes_nothing(box, csrf, tmp_path, token):
 
 
 def test_the_old_board_choice_says_the_hardware_list_decides(box):
-    # B4-D26 (stage L5): the page states, in plain words, that the hardware list decides what launches.
+    # B4-D26 (stage L5): the page states, in plain words, what the hardware list and the board setup each do.
     client, _svc, _launched = box
     html = client.get("/stacks/daemon", follow_redirects=True).get_data(as_text=True)
-    assert ("The hardware list decides which radios launch. This page's board choice only names the served bands "
-            "until the Hardware section replaces it.") in " ".join(html.split())
+    assert ("The hardware list names the radios; a daemon starts for each band the board setup serves. This page's "
+            "board choice names the served bands until the Hardware section replaces it.") in " ".join(html.split())
     assert "preset each radio launches with" not in html

@@ -2,8 +2,8 @@
 
 ## 0.14.0
 
-- Radios: the hardware list (config/radios.toml) decides which radios launch, one daemon each with its own
-  sockets, `--id` and RF log; `lhpc hardware <setup>` writes it. An old `[radio]` setup is not converted.
+- Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
+  starts per served band as that band's radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
   setup as one command; a start is refused by name when the stick or its access is missing.
 - LoRaHAM daemon v1.3.1 (660be550, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
@@ -13,8 +13,6 @@
 
 Fixed
 
-- Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
-  for rns"; each installs RNS from its own clone of the pinned checkout.
 - Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
   checkouts one after another instead of failing; the demo's own workaround is removed.
 - GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the
