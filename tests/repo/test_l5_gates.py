@@ -17,9 +17,22 @@ def _hits(pattern):
     return [f"{n}: {ln.strip()}" for n, ln in enumerate(LINES, 1) if rx.search(ln)]
 
 
+# Every 0.13.x band socket name: raw `lora<band>.sock`, framed `lora<band>f.sock`, CONF `loraconf<band>.sock`
+# (G2-0.14.0-1 item 4: the framed name puts its `f` after the band; the old pattern looked for `loraf<band>`).
+BAND_SOCKET = re.compile(r"lora(conf|f)?(433|868)f?\.sock")
+LEGACY_FORMS = [f"{d}/{n}" for d in ("/tmp", "/run/loraham") for b in ("433", "868")
+                for n in (f"lora{b}.sock", f"lora{b}f.sock", f"loraconf{b}.sock")]
+
+
+def test_the_band_socket_pattern_names_every_legacy_form_and_no_radio_socket():
+    assert [f for f in LEGACY_FORMS if not BAND_SOCKET.search(f)] == []                      # 12 canaries
+    rid = [f"{d}/{n}-r1.sock" for d in ("/tmp", "/run/loraham") for n in ("lora", "loraf", "loraconf")]
+    assert [f for f in rid if BAND_SOCKET.search(f)] == []
+
+
 def test_w3_8_no_band_socket_literal_in_the_manifest():
     # The daemon's sockets are its radio's (`lora{,f,conf}-<rid>.sock`); a 0.13.x band name never returns.
-    assert _hits(r"lora(conf|f)?(433|868)\.sock") == []
+    assert _hits(BAND_SOCKET.pattern) == []
 
 
 def test_w3_8_no_socket_param_takes_a_band_default():
