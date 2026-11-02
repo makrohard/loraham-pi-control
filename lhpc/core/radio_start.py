@@ -38,10 +38,31 @@ def start_plan(svc, rid: str) -> tuple:
         settings = radios.radio_settings(radio, model, legacy, legacy_dp, defaults)
     except ValueError as exc:
         return None, str(exc), ()
-    refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
+    refusal = (radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model)
+               or ensure_rf_dir(svc, radio.id) or "")
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
     params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
     return params, refusal, settings.notes
+
+
+def ensure_rf_dir(svc, rid: str) -> str:
+    """LEG-D32: the radio's RF log directory `logs/<rid>/` exists before its daemon starts, because the daemon opens
+    `--rflog-path` at init and exits when it cannot. "" when it is there or was created; else the refusal. It is
+    judged as rflog.radio_dir_state judges it: PRESENT is used; ABSENT is created as a real directory under the
+    contained logs/ (runtime_fs: no component is followed through a link); UNKNOWN (an escaping or dangling
+    logs/ link, a file, an unreadable path) is refused and nothing is created."""
+    from . import runtime_fs
+    job = f"{rid}/rf-daemon.log"
+    state = rflog.radio_dir_state(svc._paths, job)
+    if state == rflog.PRESENT:
+        return ""
+    if state != rflog.ABSENT:
+        return f"{rid}: logs/{rid} cannot hold its RF log (a link, a file or unreadable); fix or remove it"
+    try:
+        runtime_fs.mkdir(svc._paths, "logs", rid)
+    except (OSError, PathContainmentError) as exc:
+        return f"{rid}: logs/{rid} cannot be created for its RF log: {exc}"
+    return "" if rflog.radio_dir_state(svc._paths, job) == rflog.PRESENT else f"{rid}: logs/{rid} is not usable"
 
 
 USB_SETUP_HINT = "set up USB access first: the Hardware section's USB setup (a copy-paste command)"

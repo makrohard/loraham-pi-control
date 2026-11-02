@@ -350,7 +350,7 @@ def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
 # --- fake daemon protocol conformance ----------------------------------------------------
 
 
-def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid=""):
+def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid="", extra=()):
     sockdir = tmp_path / "socks"
     sockdir.mkdir(exist_ok=True)
     root = tmp_path / "droot"
@@ -364,7 +364,7 @@ def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid=""):
                LORAHAM_RUNTIME_DIR=str(root / "state" / "loraham"))
     from lhpc_testlab import data_path
     script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))
-    proc = subprocess.Popen([sys.executable, script, "--radio", band, *(["--id", rid] if rid else [])], env=env)
+    proc = subprocess.Popen([sys.executable, script, "--radio", band, *(["--id", rid] if rid else []), *extra], env=env)
     conf = sockdir / (f"loraconf-{rid}.sock" if rid else f"loraconf{band}.sock")    # stage L5: the radio's socket
     import time as _t
     deadline = _t.monotonic() + 5
@@ -436,6 +436,31 @@ def test_fake_daemon_serves_its_radios_sockets_with_an_id(tmp_path):
         head, *tokens = line.split()
         assert (head, tokens[:3]) == ("STATUS", ["ID=r1", "BOUND=-", "RADIO=READY"]), line
         assert len({t.split("=")[0] for t in tokens}) == len(tokens)          # no duplicate keys
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+def test_fake_daemon_exits_when_its_rf_log_cannot_be_opened(tmp_path):
+    """LEG-D32: as the real daemon, the fake opens `--rflog-path` at init and exits 1 naming it when it cannot (its
+    directory is missing), so the acceptance lane sees a start that did not create logs/<rid>/."""
+    from lhpc_testlab import data_path
+    script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))
+    path = tmp_path / "logs" / "r1" / "rf-daemon.log"
+    out = subprocess.run([sys.executable, script, "--radio", "433", "--id", "r1", "--rflog-path", str(path)],
+                         capture_output=True, text=True, timeout=10, check=False,
+                         env=dict(os.environ, LORAHAM_SOCKET_DIR=str(tmp_path)))
+    assert out.returncode == 1
+    assert out.stderr.strip() == f"cannot open RF log {path}: No such file or directory"
+
+
+@pytest.mark.slow
+def test_fake_daemon_opens_its_rf_log_and_serves(tmp_path):
+    path = tmp_path / "logs" / "r1" / "rf-daemon.log"
+    path.parent.mkdir(parents=True)
+    proc, _sockdir, _root = _spawn_fake_daemon(tmp_path, rid="r1", extra=("--rflog-path", str(path)))
+    try:
+        assert path.is_file()                                  # opened (created) at init, before serving
     finally:
         proc.terminate()
         proc.wait(timeout=5)
