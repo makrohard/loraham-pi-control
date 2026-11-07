@@ -2642,9 +2642,9 @@ class MaintenanceOpsMixin:
                    known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),
                    known_working.store_path(self._paths, sid),
-                   # a clean that promises a fresh slate must not leave a stale
-                   # operator stop intent behind for the reinstall to inherit.
-                   self._stop_intent_path(sid)]
+                   # a clean that promises a fresh slate must not leave a stale operator stop
+                   # intent behind (its own or an instance's, 7e) for the reinstall to inherit.
+                   self._stop_intent_path(sid), *sorted(self._paths.under("state", "stop-intent").glob(f"{sid}@r*.json"))]
 
         details = [f"  [remove] src/{p.split('/')[-1]}" for p, _ in src_remove]
         details += [f"  [keep — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"
