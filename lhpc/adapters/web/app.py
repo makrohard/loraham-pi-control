@@ -1128,11 +1128,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None
 
-    def _stacks_context(band="", *, hw_probe=None, only_sid=None, cfg_sid=""):
+    def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
-        with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
-        it inline; the lazy partial passes None — the transient belongs to the whole-page render).
+        with a missing var.
         `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
         fw_status, listeners = _render_wide_reads()
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
@@ -1190,17 +1189,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "operator_callsign_legacy": service.operator_callsign_legacy(),
             "operator_callsign_suggestion": service.operator_callsign_correction(),
             "restored_open": restored_open,
-            "hw_probe": hw_probe,
             "confirm": None,
         }
         return ctx, groups, snapshot
 
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
-        # cached-only — no live git/network/identity on a GET. hw_probe is popped (consumed once).
+        # cached-only — no live git/network/identity on a GET.
         ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
-                                                 cfg_sid=request.args.get("cfg", ""),
-                                                  hw_probe=session.pop("hw_probe", None))
+                                                 cfg_sid=request.args.get("cfg", ""))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
         # expanding any row; the per-stack Settings carry only their own `use_gps` switch.
@@ -2063,9 +2060,53 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """B5: the Hardware section — each radio of the hardware list, its daemon on its own socket, the USB
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
+        from lhpc.core import radio_models, radio_start
+        return render_template("hardware.html", view=radio_start.hardware_view(service), models=radio_models.load())
+
+    @app.get("/hardware/radio/<rid>")
+    def hardware_radio(rid: str):
+        """W257: one radio's detail: its facts and problems, Re-bind (a USB radio), Detect and Remove."""
+        from lhpc.core import radio_models, radio_start
+        r = radio_start.radio_detail(service, rid)
+        if r is None:
+            abort(404)
+        return render_template("hardware_radio.html", r=r, models=radio_models.load(),
+                               detect=session.pop("hw_detect", None))
+
+    @app.get("/hardware/add")
+    def hardware_add_page():
+        """W257: Add Hardware: each plugged-in stick no radio holds (its model picked here), and one HAT row."""
+        from lhpc.core import radio_models, radio_start
+        models, sticks = radio_models.load(), {}
+        for mid, c in radio_start.hardware_view(service)["addable"]:
+            sticks.setdefault(c.port, {"port": c.port, "label": c.label, "models": []})["models"].append(models[mid])
+        boards = []                     # (model:variant, label): a variant is named only where the band does not pick it
+        for m in (m for m in models.values() if m.transport == "spi"):
+            keyed = [v for v in m.variants if not v.band] if len(m.variants) > 1 else []
+            boards += [(f"{m.id}:{v.key}", f"{m.label} ({v.key})") for v in keyed] or [(f"{m.id}:", m.label)]
+        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards,
+                               detect=session.pop("hw_detect", None))
+
+    @app.post("/hardware/add-hat")
+    def hardware_add_hat():
+        """W257: add one HAT (SPI) radio to the list (radio_start.add_hat: its own checks and lock)."""
+        if not _csrf_ok():
+            abort(400)
         from lhpc.core import radio_start
-        return render_template("hardware.html", view=radio_start.hardware_view(service),
-                               stop_first=radio_start.stop_first, detect=session.pop("hw_detect", None))
+        model, _, variant = request.form.get("board", "").partition(":")
+        ok, msg = radio_start.add_hat(service, model, request.form.get("band", ""), variant)
+        flash(msg, "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") if ok else url_for("hardware_add_page"))
+
+    @app.post("/hardware/enabled")
+    def hardware_enabled():
+        """W257/W252: the list row's one button, Disable or Enable (radio_start.set_enabled: its own checks)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        ok, msg = radio_start.set_enabled(service, request.form.get("rid", ""), request.form.get("enabled") == "on")
+        flash(msg, "ok" if ok else "warn")
+        return redirect(url_for("hardware_view"))
 
     @app.post("/hardware/detect")
     def hardware_detect():
@@ -2080,12 +2121,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         elif kind == "stick":
             key, res = "port-" + f.get("port", ""), run.detect_stick(service, f.get("model", ""), f.get("port", ""))
         elif kind == "board":
-            key = f"board-{f.get('model', '')}-{f.get('band', '')}"
-            res = run.detect_board(service, f.get("model", ""), f.get("variant", ""), f.get("band", ""))
+            model, _, variant = f.get("board", "").partition(":")
+            key, res = "board", run.detect_board(service, model, variant, f.get("band", ""))
         else:
             abort(400)
         session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line}
-        return redirect(url_for("hardware_view") + "#detect-" + key)
+        back = f.get("back", "")              # W257: back to the page Detect was pressed on, a /hardware page only
+        ok_back = back.startswith("/hardware") and "//" not in back and "\\" not in back
+        return redirect((back if ok_back else url_for("hardware_view")) + "#detect-" + key)
 
     @app.post("/hardware/bind")
     def hardware_bind():
@@ -2093,9 +2136,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         from lhpc.core import radio_start
-        ok, msg, box = radio_start.bind_usb(service, request.form.get("rid", ""), request.form.get("port", ""))
-        flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
-        return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+        rid = request.form.get("rid", "")
+        ok, msg, box = radio_start.bind_usb(service, rid, request.form.get("port", ""))
+        flash(msg + (" — run the USB setup on the Hardware page to give this account access" if box else ""),
+              "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") + "#usb-setup" if box else url_for("hardware_radio", rid=rid))
 
     @app.post("/hardware/add")
     def hardware_add():
@@ -2105,6 +2150,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         from lhpc.core import radio_start
         ok, msg, box = radio_start.add_usb(service, request.form.get("model", ""), request.form.get("port", ""))
         flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
+        if not ok:
+            return redirect(url_for("hardware_add_page"))
         return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
 
     @app.get("/hardware/remove/<rid>")
@@ -2141,17 +2188,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.set_high_power(request.form.get("band", ""), request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
-                        + "#stack-settings-daemon")
-
-    @app.post("/hardware/probe")
-    def hardware_probe():
-        if not _csrf_ok():
-            abort(400)
-        pr = service.probe_hardware(request.form.get("band", ""), request.form.get("hw", ""))
-        # Stash for INLINE rendering under the Detect button (not a top-level flash banner).
-        session["hw_probe"] = {"present": pr.present, "busy": pr.busy,
-                               "message": pr.message, "diagnostic": pr.diagnostic}
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 

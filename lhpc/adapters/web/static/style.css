@@ -783,3 +783,16 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 }
 .wsopen { margin: .4rem 0 .6rem; font-size: .9rem; }
 
+
+/* W257 Hardware list: the whole row opens the radio's detail (its id link stretched over the row, no JS); the
+   row's Disable/Enable sits above that link, so a click or Enter on it never opens the detail (W258). */
+.hwlist td, .hwlist th { padding: .45rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.hwlist .hwrow { position: relative; }
+.hwlist .hwrow:hover, .hwlist .hwrow:focus-within { background: var(--pill-bg); cursor: pointer; }
+.hwlist .idlink { font-weight: 600; }
+.hwlist .idlink::after { content: ""; position: absolute; inset: 0; }
+.hwlist .idlink .det { font-weight: 400; font-size: .85rem; margin-left: .3rem; }
+.hwlist .act { position: relative; z-index: 1; }
+.hwlist .off { color: var(--muted); }
+.state-on { color: var(--ok); font-weight: 600; }
+.note-bad { display: block; color: var(--bad); font-size: .88rem; }

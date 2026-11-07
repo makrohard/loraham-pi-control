@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_hw_macros.html" import detect_result, hidden with context %}
+{% block title %}Add Hardware — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+<section class="card" id="hardware-add">
+  <header><h2>Add Hardware</h2></header>
+  <div class="body">
+    {# Detect and Add share one form per row: Detect posts the same fields to /hardware/detect (formaction), no JS. #}
+    {% for s in sticks %}
+      <form method="post" action="{{ url_for('hardware_add') }}" class="hw-addrow" data-add-port="{{ s.port }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {{ hidden([("kind", "stick"), ("port", s.port), ("back", url_for('hardware_add_page'))]) }}
+        <p><strong>{{ s.label }}</strong></p>
+        <select name="model" id="detect-port-{{ s.port }}">{% for m in s.models %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}</select>
+        <button type="submit" formaction="{{ url_for('hardware_detect') }}">Detect</button>
+        <button type="submit">Add</button>
+        {{ detect_result("port-" ~ s.port) }}
+      </form>
+    {% else %}
+      <p class="muted">No new stick is plugged in. Plug one in; it shows up here.</p>
+    {% endfor %}
+    <form method="post" action="{{ url_for('hardware_add_hat') }}" class="hw-addrow" id="hw-addhat">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      {{ hidden([("kind", "board"), ("back", url_for('hardware_add_page'))]) }}
+      <p><strong>A HAT on the Pi's SPI bus</strong> <span class="muted">(not USB: it does not show up by itself)</span></p>
+      <label>Board <select name="board" id="detect-board">{% for value, label in boards %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+      <label>Band <select name="band"><option value="433">433 MHz</option><option value="868">868 MHz</option></select></label>
+      <button type="submit" formaction="{{ url_for('hardware_detect') }}">Detect</button>
+      <button type="submit">Add</button>
+      {{ detect_result("board") }}
+      <p class="muted">Use <strong>Detect</strong> to probe the board first.</p>
+    </form>
+    <p><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
+  </div>
+</section>
+{% endblock %}

@@ -12,8 +12,7 @@ import radios_fixture
 
 from lhpc.core import commands, config, radios
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import CommandResult, FakeSystem
-from lhpc.core.probes.hardware import ProbeResult, probe_radio
+from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 # This module drives the hardware model directly, so it opts out of the test-baseline setup and sees
@@ -230,85 +229,6 @@ def test_stop_and_uninstall_never_hardware_or_radio_blocked(tmp_path):
     assert svc.uninstall("meshcore", apply=False).ok
 
 
-# ---- M4: LED probe --------------------------------------------------------------------------------
-
-class _Runner:
-    def __init__(self, result):
-        self._r, self.calls = result, []
-
-    def run(self, argv, timeout, cwd=None, env=None):
-        self.calls.append((argv, cwd, env))
-        return self._r
-
-
-class _Sys:
-    def __init__(self, runner):
-        self.runner = runner
-
-
-def test_probe_present_when_daemon_stays_up(tmp_path):
-    # SUCCESS: the daemon never exits, so the bounded runner times out (and terminated it) -> present.
-    runner = _Runner(CommandResult(returncode=124, stdout="[Daemon] active radios: 433\n",
-                                   stderr="", timed_out=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
-    assert pr.present and not pr.busy
-    argv, _cwd, env = runner.calls[0]
-    assert argv == ["/bin/daemon", "--radio", "433", "--hw", "loraham", "--debug"]
-    assert env["LORAHAM_RUNTIME_DIR"] == "/rt"
-    # v112 defaults sockets to /run/loraham (not created on a direct spawn); without a socket dir the
-    # probe daemon dies at socket-open before begin() and every probe reads 'not detected'.
-    assert env["LORAHAM_SOCKET_DIR"] == "/tmp"
-
-
-@pytest.mark.contract
-def test_probe_absent_captures_chip_diagnostic(tmp_path):
-    runner = _Runner(CommandResult(
-        returncode=1, stdout="",
-        stderr="SX1262 antwortet nicht (BUSY) - HAT fehlt, falsches Profil oder Verdrahtung\n"
-               "[Daemon] Kein ausgewaehltes Radio bereit, beende.\n", timed_out=False))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "868", "waveshare-sx1262", runtime_dir="/rt")
-    assert not pr.present and not pr.busy
-    assert "antwortet nicht" in pr.diagnostic
-
-
-@pytest.mark.contract
-def test_probe_busy_when_band_already_served(tmp_path):
-    runner = _Runner(CommandResult(returncode=3, stdout="", stderr="instance lock busy\n",
-                                   timed_out=False))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
-    assert pr.busy and not pr.present
-
-
-def test_probe_binary_missing(tmp_path):
-    runner = _Runner(CommandResult(returncode=127, stdout="", stderr="", not_found=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
-    assert not pr.present and "not found" in pr.message
-
-
-def test_service_probe_guards(tmp_path):
-    svc = _svc(tmp_path)
-    assert isinstance(svc.probe_hardware("999", "loraham"), ProbeResult)
-    assert "invalid band" in svc.probe_hardware("999", "loraham").message
-    assert "unknown hardware preset" in svc.probe_hardware("433", "bogus").message
-    # A known request with the daemon not built stops before any spawn.
-    assert "not built" in svc.probe_hardware("433", "loraham").message
-
-
-@pytest.mark.safety("radio-band-exclusive")
-def test_probe_refused_while_a_direct_radio_stack_owns_the_band(tmp_path):
-    # meshtasticd drives the 868 chip itself (an exclusive `loraham.radio.868` claim) and holds no
-    # daemon instance lock: Detect must refuse with the holder named, never spawn a probe daemon.
-    fake = FakeSystem(cmdlines_data={200: ["meshtasticd"]})
-    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
-    binp.parent.mkdir(parents=True)
-    binp.write_text("#!/bin/sh\n")
-    os.chmod(binp, 0o755)
-    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    pr = svc.probe_hardware("868", "loraham")
-    assert pr.busy and not pr.present and "meshtastic" in pr.message
-    assert not any("--hw" in argv for argv in fake.calls)          # no probe daemon spawned
-
-
 # ---- M5: dashboard states -----------------------------------------------------------------------
 
 def _body_has_class(html, name):
@@ -363,34 +283,6 @@ def test_hw_preset_label_is_friendly_never_legacy():
     assert config.hw_preset_label("loraham") == "LoRaHAM"
     assert config.hw_preset_label("waveshare-sx1262") == "Waveshare SX1262"
     assert config.hw_preset_label("uputronics-ce0") == "Uputronics CE0"
-
-
-def test_probe_message_uses_friendly_label_not_wire_name(tmp_path):
-    runner = _Runner(CommandResult(returncode=124, stdout="active radios\n", stderr="", timed_out=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham",
-                     runtime_dir="/rt", label="LoRaHAM")
-    assert pr.present and "LoRaHAM" in pr.message and "legacy" not in pr.message
-
-
-@pytest.mark.contract
-def test_probe_result_renders_inline_and_is_consumed_once(tmp_path):
-    # The Detect result is stashed in the session and rendered INLINE (under the Detect button on the
-    # daemon Hardware settings), not as a top-level flash; a reload does not re-show it.
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    _setup(svc, "loraham")
-    app = create_app(service_factory=lambda: svc)
-    app.config["SESSION_COOKIE_SECURE"] = False
-    c = app.test_client()
-    c.get("/stacks")
-    with c.session_transaction() as s:
-        tok = s["_csrf"]
-    r = c.post("/hardware/probe", data={"_csrf": tok, "band": "433", "hw": "loraham"})
-    assert r.status_code == 302                                  # PRG: redirect, result in session
-    body = c.get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
-    assert "not built" in body                                  # inline result shown (daemon unbuilt)
-    body2 = c.get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
-    assert "not built" not in body2                             # consumed once (popped from session)
 
 
 def test_dashboard_narrows_in_single_radio_setup(tmp_path):

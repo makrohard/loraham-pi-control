@@ -1,0 +1,8 @@
+{# W257/DEC-W43: Detect's form and its result line, shared by the radio detail and Add Hardware. `back` is the page
+   Detect was pressed on; the result shows once, next to the button whose `key` it carries. #}
+{% macro detect_result(key) %}
+  {% if detect and detect.key == key %}
+    <p class="depnote depnote-{{ {'found': 'ok', 'refused': 'bad'}.get(detect.outcome, 'info') }}" data-detect="{{ detect.outcome }}">{{ detect.line }}</p>
+  {% endif %}
+{% endmacro %}
+{% macro hidden(fields) %}{% for name, value in fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}{% endmacro %}
