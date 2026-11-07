@@ -889,3 +889,27 @@ def test_uninstall_reload_failure_restore_handles_spaces_in_path(tmp_path):
         assert (ud / k).exists()                                  # restored despite the space in the path
         assert not (ud / (k + ".uninstall-staged")).exists()
     assert (root / "src").exists()
+
+
+def test_uninstall_keeps_a_listed_instances_app_data(tmp_path):
+    # 7d part 3: an instance's app data lives under state/<rid>/ (meshcore@r3's companion.db); a default uninstall
+    # keeps it like slot 0's state/meshcore. A state/ entry that is no radio id still goes.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    (root / "state" / "r3" / "meshcore").mkdir(parents=True)
+    (root / "state" / "r3" / "meshcore" / "companion.db").write_text("INSTANCE")
+    (root / "state" / "r100").mkdir()                                      # not a radio id (r1 … r99)
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (root / "state" / "r3" / "meshcore" / "companion.db").read_text() == "INSTANCE"
+    assert not (root / "state" / "r100").exists()
+
+
+@pytest.mark.parametrize("leftover,kept", [("state/r3/meshcore", True), ("state/r100", False)])
+def test_install_takes_an_instances_app_data_as_remainder(tmp_path, leftover, kept):
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"; _remainder(root)
+    (root / leftover).mkdir(parents=True)
+    r = _run(INSTALL, ["--target", str(root)], home, _fake_bin(tmp_path, git_src=REPO))
+    assert ("not a managed stack's app data" not in (r.stdout + r.stderr)) is kept, r.stdout + r.stderr

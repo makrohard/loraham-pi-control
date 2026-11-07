@@ -131,7 +131,8 @@ if [ -e "$TARGET_DIR" ]; then
 	done
 	for _e in "$TARGET_DIR"/state/* "$TARGET_DIR"/state/.[!.]* "$TARGET_DIR"/state/..?*; do
 		[ -e "$_e" ] || [ -L "$_e" ] || continue
-		case " $APP_DATA " in *" state/${_e##*/} "*) no_symlink "$_e" ;; *) die "$_e is not a managed stack's app data — refusing (move it aside)." ;; esac
+		case " $APP_DATA " in *" state/${_e##*/} "*) no_symlink "$_e"; continue ;; esac
+		case "${_e##*/}" in r[1-9]|r[1-9][0-9]) no_symlink "$_e" ;; *) die "$_e is not a managed stack's app data — refusing (move it aside)." ;; esac   # an instance's state/<rid>
 	done
 	[ ! -e "${TARGET_DIR}/.git" ] || die "$TARGET_DIR is itself a git checkout (tangled) — move it aside."
 fi

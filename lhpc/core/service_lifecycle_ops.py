@@ -1340,7 +1340,7 @@ class LifecycleOpsMixin:
                 # absent config — the same three-status handling as the sibling write sites.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                                 position=position)
+                                                 position=position, inst=prep.inst)
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1423,7 +1423,7 @@ class LifecycleOpsMixin:
                 # present a command as ready-to-run.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                                 position=position)
+                                                 position=position, inst=prep.inst)
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1494,7 +1494,7 @@ class LifecycleOpsMixin:
             # stale or absent configuration.
             if comp.config_file:
                 cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                             position=position)
+                                             position=position, inst=prep.inst)
                 mine = [w for w in cw if w.component == comp.id]
                 bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                 if bad:

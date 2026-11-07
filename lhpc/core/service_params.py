@@ -2072,7 +2072,7 @@ class ParamsConfigMixin:
     @invalidates_snapshot
     def write_config_files(self, target: str, band: str = "",
                            overrides: dict | None = None,
-                           position: dict | None = None) -> list[ConfigWrite]:
+                           position: dict | None = None, inst=None) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         no-base / failed) so an auto-start can block on a generation
@@ -2141,10 +2141,8 @@ class ParamsConfigMixin:
         written: list[ConfigWrite] = []
         for c in self._file_config_components(target):
             fc = c.config_file
-            # Validate every stored value against its FileParam; an invalid value
-            # (e.g. hand-edited TOML) reverts to the manifest default — never written
-            # raw into the app's config file. The inherited-identity overlay (`overrides`)
-            # takes precedence for THIS launch only.
+            # Every stored value is validated against its FileParam; an invalid one reverts to the (instance's) default, never
+            # written raw. The inherited-identity overlay (`overrides`) takes precedence for THIS launch only.
             values = {}
             secret_error = ""
             # The MeshCore mode this render describes — the SAVED mode (there is no per-launch
@@ -2221,14 +2219,16 @@ class ParamsConfigMixin:
                         runtime, _rflog.is_on(self._resolved_param_value(
                             target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
                     continue
+                default = inst.subst(p.default_template) if inst is not None and inst.slot and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
+                raw = default if raw == p.default else raw        # 7d: a listed instance's own controller paths
                 raw = raw.replace("{rid}", _rid(c.band or cfg_band or band)) if isinstance(raw, str) else raw
                 if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
                     raw = _web_client.current_root(raw, runtime, p.default)
                 try:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:
-                    values[p.name] = p.default
+                    values[p.name] = default
             if not secret_error and c.id == _reticulum_interfaces.NODE_ID:
                 # CROSS-FIELD rules, checked where the passphrase is resolved and BEFORE the
                 # file is written: an enabled Internet interface whose endpoint or IFAC is half
@@ -2242,7 +2242,7 @@ class ParamsConfigMixin:
                 written.append(ConfigWrite(c.id, str(fc.path), "failed", secret_error))
                 continue
             # THREE explicit destination policies (P1 generated-config containment):
-            dest = self._resolve_config_dest(c, fc.path)
+            dest = self._resolve_config_dest(c, inst.subst(fc.path_template) if inst is not None and inst.slot and fc.path_template else fc.path)
             if dest.status != "ok":
                 written.append(ConfigWrite(c.id, dest.detail_path, dest.status, dest.detail))
                 continue
