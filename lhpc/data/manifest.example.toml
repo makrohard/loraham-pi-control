@@ -422,8 +422,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "660be550e3af762120f41a02d48b53af45ad109c"
-    pin_tag = "v1.3.1"
+    pin_commit = "3ffee0094541237a9faf51098f489b49f91746af"
+    pin_tag = "v1.4.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
