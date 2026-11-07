@@ -242,9 +242,9 @@ def test_p5_a_start_refuses_exactly_when_a_pid_is_or_cannot_be_told_from_the_dae
 
 # ---- item 3: a boot-restore band item kept only when its band resolves to its radio ----------------------------
 
-def _plan(rows, items):
+def _plan(rows, items, listed=None):
     from lhpc.core import radio_daemon
-    return radio_daemon.restore_plan(items, rows)
+    return radio_daemon.restore_plan(items, rows, listed)
 
 
 def test_b1_a_disabled_radio_does_not_share_the_band(tmp_path):
@@ -272,16 +272,19 @@ def test_b3_a_radio_now_on_another_band_is_refused_naming_both_bands():
 
 
 @pytest.mark.parametrize("seed", range(30))
-def test_b4_a_band_item_is_kept_exactly_when_its_bands_enabled_radios_are_its_radio(seed):
-    """Seeded lists of 1-4 radios, some disabled (an all-disabled list included); the item names any of them."""
+def test_b4_a_slot0_band_item_is_kept_exactly_when_its_radio_is_slot0s_of_its_band(seed):
+    """Seeded lists of 1-4 radios, some disabled (an all-disabled list included), some listed for kiss; the item names
+    any of them. Since 7e (DEC-W49) the band resolves to slot 0's radio: its lowest enabled rid not listed (DEC-W16)."""
     R = _radios().Radio
     rng = random.Random(seed)  # noqa: S311 - a seeded, repeatable test input, no secret
     rows = [R(f"r{i}", f"n{i}", "loraham", rng.choice(["433", "868"]), enabled=rng.random() < 0.7)
             for i in range(1, rng.randint(2, 5))]
     r = rng.choice(rows)
+    listed = {"kiss": frozenset(x.id for x in rows if rng.random() < 0.3)}
     item = {"target": "kiss", "band": rng.choice(["433", "868"]), "rid": r.id}
-    kept, refused = _plan(rows, [item])
-    want = r.enabled and [x.id for x in rows if x.enabled and x.band == item["band"]] == [r.id]
+    kept, refused = _plan(rows, [item], listed)
+    free = [x.id for x in rows if x.enabled and x.band == item["band"] and x.id not in listed["kiss"]]
+    want = r.enabled and r.band == item["band"] and free[:1] == [r.id]
     assert (kept, [it for it, _why in refused]) == (([item], []) if want else ([], [item]))
 
 

@@ -724,7 +724,7 @@ class LifecycleOpsMixin:
                                         band=_op_band, position=position, position_note=_pos_note, inst=inst)
                 # The operator's stop intent, from the launch's result.
                 if _operator and self._start_supersedes_stop_intent(target, _res):
-                    self._clear_stop_intent(target)
+                    self._clear_stop_intent(f"{target}@{inst.rid}" if inst is not None and inst.slot else target)
                 return _res
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
                 PathContainmentError, _ohs.OneStoreError) as exc:

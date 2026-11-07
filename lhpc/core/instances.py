@@ -266,15 +266,19 @@ def slot0_radio(paths, sid: str, band: str):
     """Slot 0's radio on `band` (DEC-W16): the first enabled radio of the band, by rid order, that is not listed for
     the stack. (rid, "") or ("", why) when every radio of the band is listed; ("", "") when the band has no enabled
     radio at all (the caller's own refusal names that)."""
-    rows = sorted((r for r in radios.load(paths).radios if r.enabled and r.band == band), key=lambda r: int(r.id[1:]))
+    rows = [r for r in radios.load(paths).radios if r.enabled and r.band == band]
     if not rows:
         return "", ""
-    taken = listed_rids(paths, sid)
-    free = [r.id for r in rows if r.id not in taken]
+    free = slot0_of(rows, listed_rids(paths, sid))
     if free:
-        return free[0], ""
-    return "", (f"every enabled radio of {band} MHz holds a listed instance of {sid} ({', '.join(r.id for r in rows)}): "
-                f"start one of them as {sid}@<rid>")
+        return free, ""
+    return "", (f"every enabled radio of {band} MHz holds a listed instance of {sid} "
+                f"({', '.join(sorted((r.id for r in rows), key=lambda x: int(x[1:])))}): start one of them as {sid}@<rid>")
+
+
+def slot0_of(rows, taken) -> str:
+    """DEC-W16's choice among one band's enabled radios: the first by rid order not in `taken`, else ""."""
+    return next((r.id for r in sorted(rows, key=lambda r: int(r.id[1:])) if r.id not in taken), "")
 
 
 def slot0_note(paths, sid: str, band: str, rid: str) -> str:

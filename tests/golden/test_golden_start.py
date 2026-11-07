@@ -242,4 +242,5 @@ def test_a_started_client_records_its_radio(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields["ok"], run.fields
     recs = [json.loads(p.read_text()) for p in (box.root / "state" / "owned").glob("*.json")]
-    assert {r["component"]: r.get("rid") for r in recs if r.get("role") == ""} == {"loraham-kiss-tnc": "r1"}
+    assert {r["component"]: (r.get("rid"), r.get("slot")) for r in recs if r.get("role") == ""} == {
+        "loraham-kiss-tnc": ("r1", 0)}                               # 7e: and its instance's slot, 0

@@ -52,16 +52,46 @@ def new_item(item_id: str, kind: str, *, target: str = "", band: str = "",
 _RID = re.compile(r"r[1-9][0-9]?")
 
 
+def slot_of(value):
+    """A record's instance slot when it is one (a plain int 0..7, item 7e), else None: the record then reads by the
+    instance list, as a record from before 7e does."""
+    from .commands import SLOTS
+    return value if type(value) is int and value in SLOTS else None
+
+
 def rid_of(value) -> str:
     """A record's radio id when it is one (r1..r99), else "" (the record then reads as pre-0.14.0)."""
     return value if isinstance(value, str) and _RID.fullmatch(value) else ""
 
 
-def radio_filter(plan, rows) -> None:
+def instance_key(stack: str, rid: str, listed: dict, slot=None) -> str:
+    """Item 7e: a record's instance key — `<stack>@<rid>` for a listed instance's, `<stack>` for slot 0's. The
+    record's own slot decides; a record without one (before 7e) is a listed instance's when the stack lists one on
+    its radio (the rule 7c2b's plain stop uses)."""
+    if slot is not None:
+        return f"{stack}@{rid}" if slot and rid else stack
+    return f"{stack}@{rid}" if rid and rid in listed.get(stack, ()) else stack
+
+
+def listed_instances(paths: Paths) -> tuple[dict, str]:
+    """({stack: frozenset of listed rids}, "") from config/instances.toml, or ({}, why) when it does not read back."""
+    from . import instances
+    state = instances.load(paths)
+    if state.kind == instances.INVALID:
+        return {}, f"{instances.FILE[-1]} does not read back: " + "; ".join(state.reasons)
+    return {sid: frozenset(rid for _k, rid in instances.listed(state, sid)) for sid in state.slots}, ""
+
+
+def radio_filter(plan, rows, listed=None, unlisted_why: str = "") -> None:
     """D14/D15 (stage L5): a pre-0.14.0 band item (no `rid`) is not restored, W12 (nothing converted); an item whose
-    radio is gone or disabled is refused with the reason. Both move to `plan.skipped`, their evidence named."""
-    from . import radio_daemon
-    kept, refused = radio_daemon.restore_plan(plan.items, rows)
+    radio is gone, disabled or no longer its instance's is refused with the reason (radio_daemon.restore_plan). When
+    the instance list does not read back (`unlisted_why`), an item of a stack that may have instances is refused with
+    that reason: its records cannot be told apart. Both move to `plan.skipped`, their evidence named."""
+    from . import instances, radio_daemon
+    unknown = {id(it) for it in plan.items if unlisted_why and it.get("rid")
+               and it["target"].partition("@")[0] in instances.MAY}
+    kept, refused = radio_daemon.restore_plan([it for it in plan.items if id(it) not in unknown], rows, listed)
+    refused += [(it, unlisted_why) for it in plan.items if id(it) in unknown]
     why = {id(it): r for it, r in refused}
     for it in plan.items:
         if not any(it is k for k in kept):
@@ -227,6 +257,7 @@ class Evidence:
     band: str                    # the record's own band ("" for band-less)
     launched_at: float
     rid: str = ""                # stage L5: the radio the instance ran on ("" for band-less or pre-0.14.0)
+    slot: int | None = None      # 7e: the instance's slot as recorded (None before 7e)
     start_scope: str = ""        # "stack" / "component" / "" (never widened)
     requested_target: str = ""
 
@@ -292,24 +323,27 @@ def _band_candidates(ev: Evidence, meta: StackMeta, mk: MarkerView) -> tuple[str
 
 
 def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
-                markers: dict[str, MarkerView], daemon_stack_id: str) -> Plan:
-    """Deterministic plan from CLASSIFIED evidence. One non-daemon item per stack; conflicts are
-    typed ambiguities. Daemon evidence collapses into ONE `daemon-reconcile` item, LAST."""
+                markers: dict[str, MarkerView], daemon_stack_id: str, listed=None) -> Plan:
+    """Deterministic plan from CLASSIFIED evidence. One non-daemon item per instance key (7e: `<stack>` for slot 0,
+    `<stack>@<rid>` for an instance `listed` names, {stack: rids}); conflicts are typed ambiguities. The band markers
+    are slot 0's: a listed instance's band is its record's. Daemon evidence collapses into ONE `daemon-reconcile`
+    item, LAST."""
     plan = Plan()
     by_stack: dict[str, list[Evidence]] = {}
     for ev in evidence:
-        by_stack.setdefault(ev.stack, []).append(ev)
+        by_stack.setdefault(instance_key(ev.stack, ev.rid, listed or {}, ev.slot), []).append(ev)
 
     daemon_bands: set[str] = set()
     daemon_evidence: list[str] = []
     orderable: list[tuple[float, str, dict]] = []
     daemon_main = metas[daemon_stack_id].main if daemon_stack_id in metas else None
 
-    for stack_id, evs in sorted(by_stack.items()):
+    for key, evs in sorted(by_stack.items()):
         ev_ids = [e.launch_id for e in evs]
+        stack_id = evs[0].stack
         meta = metas.get(stack_id)
         if meta is None:
-            plan.skipped.append({"stack": stack_id, "reason": "unknown stack",
+            plan.skipped.append({"stack": key, "reason": "unknown stack",
                                  "evidence_ids": ev_ids})
             continue
         if stack_id == daemon_stack_id:
@@ -324,7 +358,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
         mains = [e for e in evs if e.component == meta.main
                  or (meta.interactive_main and e.component == daemon_main)]
         if not mains:
-            plan.skipped.append({"stack": stack_id,
+            plan.skipped.append({"stack": key,
                                  "reason": "no main-component evidence",
                                  "evidence_ids": ev_ids})
             continue
@@ -332,22 +366,22 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
         scoped = [e for e in mains if e.start_scope == "stack"
                   and e.requested_target == stack_id]
         if not scoped:
-            plan.skipped.append({"stack": stack_id,
+            plan.skipped.append({"stack": key,
                                  "reason": "no full-stack-scoped evidence "
                                            "(component-scoped starts are never widened)",
                                  "evidence_ids": ev_ids})
             continue
         bands = {e.band for e in scoped}
         if len(bands) > 1 or len({e.rid for e in scoped}) > 1:
-            plan.skipped.append({"stack": stack_id,
+            plan.skipped.append({"stack": key,
                                  "reason": "conflicting main records on different bands or radios",
                                  "evidence_ids": ev_ids})
             continue
         ev0 = scoped[0]
-        mk = markers.get(stack_id, MarkerView())
+        mk = markers.get(stack_id, MarkerView()) if key == stack_id else MarkerView()   # slot 0's markers
         band, why = _band_candidates(ev0, meta, mk)
         if why:
-            plan.skipped.append({"stack": stack_id, "reason": f"band ambiguity: {why}",
+            plan.skipped.append({"stack": key, "reason": f"band ambiguity: {why}",
                                  "evidence_ids": ev_ids})
             continue
         order_key = mk.last_start_at if (mk.last_start_state == "valid"
@@ -357,8 +391,8 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
         parts = sorted({e.component for e in evs
                         if e.start_scope == "component" and e.requested_target == e.component
                         and e.component in meta.restorable_parts and e.component != meta.main})
-        orderable.append((order_key, stack_id,
-                          new_item(secrets.token_hex(6), "stack", target=stack_id,
+        orderable.append((order_key, key,
+                          new_item(secrets.token_hex(6), "stack", target=key,
                                    band=band, evidence_ids=tuple(ev_ids),
                                    components=tuple(parts), rid=ev0.rid)))
 
