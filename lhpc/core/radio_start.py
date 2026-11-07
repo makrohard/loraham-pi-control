@@ -418,12 +418,16 @@ def rf_band(svc, key: str) -> str:
 
 def daemon_rf_links(svc, e, band: str) -> list:
     """The dashboard's daemon RF-log links for `band` (W7-8a): rflog.list_jobs over the hardware list and the
-    names in logs/, kept to the radios of `band` and that band's 0.13.x file."""
+    names in logs/, kept to the radios of `band` and that band's 0.13.x file. A logs/ that exists but cannot be
+    listed is one entry naming that (`error`, no job), never "no files" (ledger L23); an absent logs/ has no files."""
     state = radios.load(svc._paths)
     try:
         names = [p.name for p in svc._paths.under("logs").iterdir()]
-    except (OSError, PathContainmentError):
+    except FileNotFoundError:
         names = []
+    except (OSError, PathContainmentError) as exc:
+        return [{"label": "", "target": e.writer, "job": "", "readonly": True,
+                 "error": f"logs/ cannot be listed ({type(exc).__name__})"}]
     mine = {r.id for r in state.radios if r.band == band} if state.startable else set()
     return [{"label": j.label, "target": e.writer, "job": j.job, "readonly": j.readonly}
             for j in rflog.list_jobs(state.radios if state.startable else (), names) if j.key in mine or j.key == band]

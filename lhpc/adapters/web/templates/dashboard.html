@@ -65,7 +65,7 @@
       {% set links %}
         <p class="links">
           <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
-          <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endfor %}</span>
+          <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" data-radio-band="{{ r.band }}">
