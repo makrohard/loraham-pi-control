@@ -1046,7 +1046,7 @@ class LifecycleOpsMixin:
                                    "the terminal variant is the fallback for boxes "
                                    "without a graphical environment")
                     continue
-                cmd = self.manual_start_command(comp)
+                cmd = self.manual_start_command(comp, prep.inst)
                 details.append(f"  [manual] {comp.id} is interactive — the daemon is "
                                "ensured, then run it yourself in a terminal:")
                 details.append(f"    {cmd}")
@@ -1423,7 +1423,7 @@ class LifecycleOpsMixin:
                     # regeneration — say so instead of implying it applied.
                     record(comp, stack, Outcome.MANUAL_REQUIRED,
                            f"interactive — run it yourself in a terminal{marker_note}:",
-                           command=self.manual_start_command(comp),
+                           command=self.manual_start_command(comp, prep.inst),
                            note="an already-running instance keeps its previous config "
                                 "until you restart it")
                 continue
@@ -2715,7 +2715,7 @@ class LifecycleOpsMixin:
                 + ";B:" + ",".join(booting)
                 + ";M:" + self.radio_mode())      # mode switch reflows the columns -> force a reload
 
-    def manual_start_command(self, comp) -> str:
+    def manual_start_command(self, comp, inst=None) -> str:
         """The command the operator runs in a terminal to start an interactive
         component (the controller never starts these itself). Rendered from the
         SAME structured command spec, shell-quoted — values are individual argv
@@ -2731,12 +2731,12 @@ class LifecycleOpsMixin:
         # The saved values a start would use, resolved as `_saved_launch_refusal` does: the band
         # the stack runs (or was presented) on, its stored config and the inherited identity.
         sid = self.stack_of(comp.id) or comp.id
-        hint = self._launch_band_hint(sid, "")
+        hint = radio_start.rf_band(self, inst.rid) if inst is not None and inst.slot else self._launch_band_hint(sid, "")
         band = self._config_band(sid, hint)
-        params = dict(self.stack_config(comp.id, band))
-        run_over, _file_over = self._materialize_inherited_identity(sid, hint)
+        params = dict(self.stack_config(comp.id, band, inst))          # 7f: a listed instance's own values and radio
+        run_over, _file_over = self._materialize_inherited_identity(sid, hint, inst)
         params.update(self._overrides_for_comp(sid, "run", run_over, comp.id))
-        inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band)   # W3: the radio's sockets
+        inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band, inst)   # W3: the radio's sockets
         cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst) if inst else ""
         if not cmd:
             return f"(no run command: {_why})" if _why else "(no run command)"

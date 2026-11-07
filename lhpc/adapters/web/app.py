@@ -1075,7 +1075,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "ui_creds_list": service.ui_credentials_list(stack.id, _inst),   # 7f: the shown instance's own
                     "pin_refusal": service.binary_install_refusal(stack.id),
                     "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
-                    "command": service.manual_start_command(main) if interactive else "",
+                    "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
                     "view": {**service.config_view(stack.id, _iband or sband),

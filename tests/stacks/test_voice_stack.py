@@ -109,7 +109,7 @@ def test_lite_voice_start_blocks_when_the_sidecar_command_is_not_presented(tmp_p
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
     _config_written(monkeypatch, svc)
     set_call(svc)
-    monkeypatch.setattr(svc, "manual_start_command", lambda comp: "")
+    monkeypatch.setattr(svc, "manual_start_command", lambda comp, inst=None: "")
     res = svc.start("voice", apply=True)
     cli = next(r for r in res.results if r.component == "loraham-voice-cli")
     assert cli.outcome == Outcome.MANUAL_REQUIRED

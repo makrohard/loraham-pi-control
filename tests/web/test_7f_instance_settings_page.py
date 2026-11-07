@@ -112,3 +112,10 @@ def test_a_band_switchable_instances_save_keeps_slot0s_files_and_takes_no_auto_s
     assert not any(k[:10] == "autostart_" for k in own)
     assert not (tmp_path / "config" / "stacks" / "kiss.toml").exists()
     assert not (tmp_path / "config" / "stacks" / "kiss@433.toml").exists()
+
+
+def test_an_instances_page_shows_its_own_run_command(box):
+    c, _post, _tmp = box
+    page = c.get("/stacks?cfg=chat&radio=r3").get_data(as_text=True)
+    assert "--data-socket /tmp/lora-r3.sock --conf-socket /tmp/loraconf-r3.sock" in page
+    assert "/tmp/lora-r1.sock" not in page
