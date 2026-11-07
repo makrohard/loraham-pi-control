@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 
@@ -348,11 +349,14 @@ def save(paths, radios, models: dict | None = None) -> list:
         p = path(paths)
     except PathContainmentError as exc:                  # Q2: nothing written
         return [f"{FILE[-1]} has no safe path ({exc}); nothing written"]
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = None
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+        # W217: a temp name of its own (mkstemp: O_EXCL, never a shared `radios.toml.tmp`), so no other writer can
+        # truncate it or have its rename publish this list; the readers' mode as before.
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".", suffix=".tmp")
         try:
+            os.fchmod(fd, 0o644)
             view = memoryview(text.encode("utf-8"))
             while view:
                 n = os.write(fd, view)
@@ -365,7 +369,8 @@ def save(paths, radios, models: dict | None = None) -> list:
         os.replace(tmp, p)
     except OSError as exc:
         try:
-            os.unlink(tmp)
+            if tmp is not None:
+                os.unlink(tmp)
         except OSError:
             pass
         return [f"{FILE[-1]} could not be written ({type(exc).__name__}: {exc}); the old file is unchanged"]
