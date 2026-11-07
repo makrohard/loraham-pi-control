@@ -266,7 +266,7 @@ def test_a_partial_publication_left_in_the_temp_file_is_never_taken(tmp_path):
 
 # ---- A21 (LBS-D2): a failed qemu launch uploads only its capture --------------------------------------------------
 
-@pytest.mark.parametrize("job", ["qb1", "topic"])
+@pytest.mark.parametrize("job", ["topic"])
 def test_a_failed_qemu_launch_uploads_only_the_launch_failure_capture(tmp_path, job):
     work, ev = tmp_path / "work", tmp_path / "ev"
     work.mkdir()
@@ -350,40 +350,6 @@ def test_verify_and_active_on_a_missing_file_are_plumbing(tmp_path):
         assert p.returncode == 2 and "an input cannot be read" in p.stderr, (args, p.stderr)
 
 
-@pytest.mark.parametrize("uname, rc", [("echo", 1), ("echo 6.11.0-azure; exit 1", 1), ("echo 6.11.0-azure", 0)],
-                         ids=["empty", "output-then-nonzero", "ok"])
-def test_the_runner_kernel_is_a_checked_read(tmp_path, uname, rc):
-    # B2 (qb1 M1), with the F4 case "normal output, then a non-zero status".
-    stub = _stub(tmp_path, uname=f'[ "$1" = -r ] && {{ {uname}; }} || exec /usr/bin/uname "$@"',
-                 nproc="echo 4", free="echo mem")
-    ev, rt = tmp_path / "ev", tmp_path / "rt"
-    block = _run_block(_step("qb1", "The runner (M1)"))
-    p = subprocess.run(["bash", "-e", "-c", block], capture_output=True, text=True,
-                       env={"EV": str(ev), "RUNNER_TEMP": str(rt), "GITHUB_ENV": str(tmp_path / "env"),
-                            "PATH": f"{stub}:/usr/bin:/bin"})
-    assert (p.returncode == 0) == (rc == 0), (p.returncode, p.stdout, p.stderr)
-    if rc == 0:
-        assert (ev / "runner-kernel.txt").read_text() == "6.11.0-azure\n"
-        assert (rt / "laneb" / "qemu.pid.state").read_text() == "none\n"
-
-
-@pytest.mark.parametrize("recorded, ok", [("", False), ("6.0.0-old\n", False), ("6.11.0-azure\n", True)])
-def test_the_recorded_runner_kernel_must_still_be_the_runners(tmp_path, recorded, ok):
-    # B3 (qb1 M4): read, non-empty, equal to a fresh uname -r; the guest side is stubbed.
-    ev, work = tmp_path / "ev", tmp_path / "work"
-    ev.mkdir()
-    work.mkdir()
-    (ev / "runner-kernel.txt").write_text(recorded)
-    stub = _stub(tmp_path, uname='[ "$1" = -r ] && echo 6.11.0-azure || exec /usr/bin/uname "$@"',
-                 ssh='case "$*" in *"uname -m"*) echo aarch64;; *"uname -r"*) echo 6.12.48+deb13-arm64;; '
-                     '*os-release*) echo VERSION_CODENAME=trixie;; *rpi-issue*) echo yes;; *) echo x;; esac')
-    block = _run_block(_step("qb1", "The guest is the guest (M4)"))
-    p = subprocess.run(["bash", "-e", "-c", block], capture_output=True, text=True,
-                       env={"EV": str(ev), "WORK": str(work), "PATH": f"{stub}:/usr/bin:/bin",
-                            "GITHUB_WORKSPACE": str(repo_paths.REPO)})
-    assert (p.returncode == 0) == ok, (p.returncode, p.stdout, p.stderr)
-
-
 @pytest.mark.parametrize("text, ok", [("4f8a6b1c-02", True), ("4f8a6b1c-1234-5678-9abc-def012345678", True),
                                       ("", False), ("4f8a6b1c", False), ("4F8A6B1C-02", False), ("x\n4f8a6b1c-02", False)])
 def test_the_partuuid_has_its_shape_before_it_reaches_the_kernel_line(tmp_path, text, ok):
@@ -453,24 +419,6 @@ def test_a_wait_on_a_frozen_clock_stops_at_its_poll_bound(tmp_path, fn):
                        text=True, timeout=30, env={"WORK": str(tmp_path), "PATH": f"{stub}:/usr/bin:/bin"})
     assert p.returncode == 1, (p.stdout, p.stderr)
     assert len(count.read_text().splitlines()) <= 60 // 5 + 1
-
-
-def test_the_qb1_boot_wait_stops_when_its_clock_fails(tmp_path):
-    # B10, the inline loop of qb1's boot step (W:96-110 before the fix).
-    work, ev = tmp_path / "work", tmp_path / "ev"
-    work.mkdir()
-    ev.mkdir()
-    (work / "partuuid").write_text("4f8a6b1c-02\n")
-    (work / "qemu.pid.state").write_text("none\n")
-    n = tmp_path / "n"
-    stub = _stub(tmp_path, **{"qemu-system-aarch64": "exit 0", "ssh": "exit 255", "sleep": "exit 0",
-                              "date": f'c=$(cat {n} 2>/dev/null || echo 0); echo $((c+1)) > {n}; [ "$c" -lt 1 ] && echo 1000 || exit 1'})
-    block = _run_block(_step("qb1", "Boot without KVM to ssh (M3)"))
-    p = subprocess.run(["bash", "-e", "-c", block], capture_output=True, text=True, timeout=60,
-                       env={"EV": str(ev), "WORK": str(work), "BOOT_BOUND_S": "1200", "PATH": f"{stub}:/usr/bin:/bin",
-                            "GITHUB_WORKSPACE": str(repo_paths.REPO)})
-    assert p.returncode == 1 and "the clock cannot be read" in (ev / "boot.txt").read_text(), (p.stdout, p.stderr)
-    assert (work / "qemu.pid.state").read_text() == "launching\n"
 
 
 # ---- rule 2: every command substitution the lane runs is checked ------------------------------------------------

@@ -97,7 +97,7 @@ def test_an_artifact_uploads_only_after_its_redaction_guard_passed():
             if "launchfail" in guard.group(2):
                 block = _run_block(owner[0])
                 assert block.index('redact "$LF" || exit 1') < block.index('echo "launchfail=1" >> "$GITHUB_OUTPUT"'), job
-    assert uploaded == 4                                       # QB-1 and the from-topic job, two each
+    assert uploaded == 2                                       # the one job, from-topic: two
 
 
 def _run_block(step: str) -> str:
