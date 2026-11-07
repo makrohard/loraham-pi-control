@@ -228,9 +228,33 @@ def daemon_running(svc, radio, procs=None) -> bool:
     return daemon_control.read_view(svc._system, radio.id).reachable
 
 
-def stop_first(rid: str, activity: list) -> str:
+def stop_first(rid: str, activity: list, verb: str = "remove") -> str:
     """The line a running radio's card and refusal show: "stop meshcore and stop its daemon, then remove r2"."""
-    return " and ".join(f"stop {a}" for a in activity) + f", then remove {rid}"
+    return " and ".join(f"stop {a}" for a in activity) + f", then {verb} {rid}"
+
+
+def set_enabled(svc, rid: str, enabled: bool) -> tuple:
+    """W257: the list row's Disable / Enable, under the hardware list's lock (W217). (ok, message)."""
+    word = "enabled" if enabled else "disabled"
+    return _with_list_lock(svc._paths, lambda why: (False, f"Not {word}: {why}"), _set_enabled, svc, rid, bool(enabled))
+
+
+def _set_enabled(svc, rid: str, enabled: bool) -> tuple:
+    """A disable is refused while the radio runs (radio_activity, the answer Remove uses); an enable is the list's
+    own save checks' to refuse. Only the row's `enabled` changes; save() keeps the reserved ids."""
+    word = "enabled" if enabled else "disabled"
+    state = radios.load(svc._paths)
+    if state.kind != radios.VALID:
+        return False, f"Not {word}: the hardware list is not valid: " + "; ".join(state.reasons)
+    row = next((r for r in state.radios if r.id == rid), None)
+    if row is None:
+        return False, f"Not {word}: there is no radio {rid}"
+    if not enabled and (activity := radio_activity(svc, row)):
+        return False, f"Not disabled: {stop_first(rid, activity, 'disable')}"
+    reasons = radios.save(svc._paths, radios.with_row(state.radios, dataclasses.replace(row, enabled=enabled)))
+    if reasons:
+        return False, f"Not {word}: " + "; ".join(reasons)
+    return True, f"{rid} {word}"
 
 
 def _restore_records(svc, rid: str) -> list:
