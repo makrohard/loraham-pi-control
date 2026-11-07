@@ -255,6 +255,11 @@ def resolve(svc, target: str):
     return sid, inst, radio.band, ""
 
 
+def own_rid(inst) -> str:
+    """A listed instance's radio id, whose own settings file it has (DEC-W60); "" for slot 0 or no instance."""
+    return inst.rid if inst is not None and inst.slot else ""
+
+
 def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
     """(stored, bandless): the saved settings a component of stack `sid` reads. Slot 0: its band's file and the
     band-less file (the stack-level params), as before; a listed instance: its own `config/stacks/<sid>@<rid>.toml`
@@ -468,3 +473,26 @@ def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
             out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",
                         "current": job == shown_job})
     return out
+
+
+def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
+    """7f, DEC-W40: the Settings page's radio chooser of stack `sid`, one entry per enabled radio of its bands
+    ("rN · band"): a listed instance opens its own settings (`radio=`); slot 0's radio of a band opens slot 0's on
+    that band (`band=`, so a band-switchable stack's slot 0 moves there); any other radio of a stack that may run
+    instances is greyed with "add instance". `radio` is the shown instance's rid ("" for slot 0)."""
+    stack = svc.stack(sid)
+    bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
+    rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
+    listed, shown = listed_rids(svc._paths, sid), inst.rid if inst is not None and inst.slot else ""
+    out = []
+    for r in rows:
+        label = f"{r.id} · {r.band}"
+        if r.id in listed:
+            out.append({"label": label, "radio": r.id, "band": "", "sel": shown == r.id, "disabled": False})
+        elif slot0_radio(svc._paths, sid, r.band)[0] == r.id:
+            out.append({"label": label, "radio": "", "band": r.band, "sel": not shown and r.band == (band or r.band),
+                        "disabled": False})
+        elif sid in MAY:
+            out.append({"label": f"{label} · add instance", "disabled": True, "sel": False,
+                        "title": f"no {sid} instance on {r.id}: add one to use it"})
+    return {"radio": shown, "radio_choices": out if len(out) > 1 or listed else []}

@@ -55,7 +55,19 @@
         {% endif %}
       </section>
     {% endif %}
-    {% if view.bands %}
+    {% if view.radio_choices %}
+      {# 7f, DEC-W40: one entry per radio of the stack's bands; a listed instance opens its own settings #}
+      <p><strong>Radio:</strong>
+        <span class="bandswitch">
+          {% for c in view.radio_choices %}
+            {% if c.disabled %}<span class="disabled" title="{{ c.title }}">{{ c.label }}</span>
+            {% else %}<a class="{{ 'sel' if c.sel else '' }}"
+               href="{{ url_for('stacks_overview', band=c.band or None, radio=c.radio or None, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ c.label }}</a>{% endif %}
+          {% endfor %}
+        </span>
+        <span class="muted">— each radio has its own config</span></p>
+      {% if view.radio %}<p class="muted instance-note">{{ stack.id }}@{{ view.radio }} starts from the defaults: slot 0's settings are not shared, and a change applies at its next start.</p>{% endif %}
+    {% elif view.bands %}
       <p><strong>Band:</strong>
         <span class="bandswitch">
           {% for b in view.bands %}
@@ -157,6 +169,7 @@
     <form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="band" value="{{ view.band }}">
+      {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
 
       {% if config_groups %}
         <section class="cfgsec">
@@ -197,7 +210,7 @@
         </section>
       {% endif %}
 
-      {% if view.sources %}
+      {% if view.sources and not view.radio %}{# 7f: remotes and auto-start are slot 0's #}
         <section class="cfgsec">
           <h3>Source remotes (GitHub)</h3>
           <p class="muted">Override per component where install/update clones from.
@@ -212,7 +225,7 @@
         </section>
       {% endif %}
 
-      {% if view.optional %}
+      {% if view.optional and not view.radio %}
         <section class="cfgsec">
           <h3>Optional components</h3>
           <p class="muted">Tick to auto-start with the stack; otherwise run them on demand below.</p>
@@ -237,6 +250,7 @@
     <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act cfgreset">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="band" value="{{ view.band }}">
+      {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
       <button type="submit">Reset to defaults</button>
     </form>
 
