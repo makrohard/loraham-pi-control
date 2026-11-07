@@ -219,7 +219,8 @@ def remove_plan(svc, rid: str) -> dict:
     goes += [f"{r.get('stack') or '?'} will not be restored at the next boot: radio {rid} no longer exists"
              for r in _restore_records(svc, rid)]
     stays = [f"the id {rid} stays reserved, so logs and ports stay unambiguous (DEC-W39)",
-             f"logs/{rid}/ (its RF logs already written) stays on disk",
+             *([f"kept folder {k}" + (" (its RF logs already written)" if k.endswith(f"/logs/{rid}") else "")
+                for k in _kept_folders(svc, rid)] or [f"no folder of {rid} is on disk"]),
              "the stick itself: plugged in, it shows up again as a new stick",
              "the other radios and their stacks; the per-band stack settings (config/stacks/)"]
     return {"rid": rid, "row": row, "reason": "", "activity": activity, "goes": goes, "stays": stays,

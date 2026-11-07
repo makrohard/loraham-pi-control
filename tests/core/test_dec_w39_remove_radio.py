@@ -127,7 +127,17 @@ def test_the_confirm_names_what_stays_and_the_restore_items(tmp_path, monkeypatc
                         lambda svc, rid: [{"stack": "kiss", "launch_id": "L1", "rid": rid}])
     text = _all(radio_start.remove_radio(svc, "r3", ""))
     assert "kiss will not be restored at the next boot: radio r3 no longer exists" in text
-    assert "logs/r3/" in text and "r3 stays reserved" in text
+    assert "r3 stays reserved" in text
+
+
+def test_the_dry_run_names_only_kept_folders_that_exist(tmp_path, monkeypatch):
+    # every "kept" folder line comes from a path on disk: none before the radio wrote a log, logs/r3 after
+    svc = _svc(tmp_path, monkeypatch)
+    kept = [d for d in radio_start.remove_radio(svc, "r3", "").details if "folder" in d]
+    assert kept == ["  [stays] no folder of r3 is on disk"], kept
+    (tmp_path / "logs" / "r3").mkdir(parents=True)
+    kept = [d for d in radio_start.remove_radio(svc, "r3", "").details if "folder" in d]
+    assert kept == [f"  [stays] kept folder {tmp_path}/logs/r3 (its RF logs already written)"], kept
 
 
 def test_after_a_remove_the_boot_planner_skips_its_item_naming_the_evidence(tmp_path, monkeypatch):
