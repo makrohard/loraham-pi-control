@@ -239,36 +239,45 @@ def _plan(rows, items):
 
 def test_b1_a_disabled_radio_does_not_share_the_band(tmp_path):
     R = _radios().Radio
+    item = {"target": "kiss", "band": "433", "rid": "r1"}
     kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "waveshare-sx1262", "433", enabled=False)],
-                          [{"target": "kiss", "band": "433", "rid": "r1"}])
-    assert len(kept) == 1 and refused == []
+                          [item])
+    assert kept == [item] and refused == []
 
 
 @pytest.mark.parametrize("band", ["433", "868"])
 def test_b2_a_band_less_item_with_a_radio_is_kept(band):
     R = _radios().Radio
-    kept, refused = _plan([R("r1", "a", "loraham", band)], [{"target": "reticulum", "band": "", "rid": "r1"}])
-    assert len(kept) == 1 and refused == []
+    item = {"target": "reticulum", "band": "", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", band)], [item])
+    assert kept == [item] and refused == []
 
 
 def test_b3_a_radio_now_on_another_band_is_refused_naming_both_bands():
     R = _radios().Radio
-    kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "loraham", "868")],
-                          [{"target": "kiss", "band": "868", "rid": "r1"}])
-    assert kept == [] and "433" in refused[0][1] and "868" in refused[0][1]
+    item = {"target": "kiss", "band": "868", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "loraham", "868")], [item])
+    assert kept == [] and [it for it, _why in refused] == [item]
+    assert "433" in refused[0][1] and "868" in refused[0][1]
 
 
 @pytest.mark.parametrize("seed", range(30))
 def test_b4_a_band_item_is_kept_exactly_when_its_bands_enabled_radios_are_its_radio(seed):
+    """Seeded lists of 1-4 radios, some disabled (an all-disabled list included); the item names any of them."""
     R = _radios().Radio
     rng = random.Random(seed)  # noqa: S311 - a seeded, repeatable test input, no secret
     rows = [R(f"r{i}", f"n{i}", "loraham", rng.choice(["433", "868"]), enabled=rng.random() < 0.7)
             for i in range(1, rng.randint(2, 5))]
-    enabled = [r for r in rows if r.enabled]
-    if not enabled:
-        return
-    r = rng.choice(enabled)
-    band = rng.choice(["433", "868"])
-    kept, refused = _plan(rows, [{"target": "kiss", "band": band, "rid": r.id}])
-    want = [x.id for x in rows if x.enabled and x.band == band] == [r.id]
-    assert (len(kept) == 1) is want and (len(refused) == 1) is (not want)
+    r = rng.choice(rows)
+    item = {"target": "kiss", "band": rng.choice(["433", "868"]), "rid": r.id}
+    kept, refused = _plan(rows, [item])
+    want = r.enabled and [x.id for x in rows if x.enabled and x.band == item["band"]] == [r.id]
+    assert (kept, [it for it, _why in refused]) == (([item], []) if want else ([], [item]))
+
+
+def test_b5_in_an_all_disabled_list_the_item_is_refused_as_disabled():
+    R = _radios().Radio
+    item = {"target": "kiss", "band": "433", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", "433", enabled=False),
+                           R("r2", "b", "loraham", "868", enabled=False)], [item])
+    assert kept == [] and refused == [(item, "radio r1 is disabled")]
