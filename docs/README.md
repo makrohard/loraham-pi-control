@@ -20,6 +20,8 @@ The `lhpc` docs by task; the top-level README covers install. Start with Archite
 - [CLI](cli.md) — every command and flag.
 - [Operations](operations.md) — running the box: boot restore, TX safety, secrets, backup, the console.
 - [GPS](gps.md) — the global position source and how each stack uses it.
+- [USB radios](usb-radios.md) — LoRa sticks behind a CH341: the models, one USB id for all, adding a stick.
+- [Building a 433 MHz USB radio](usb-radio-433-build.md) — CH341A + RFM98PW + EEPROM, step by step.
 - [Maintenance](maintenance.md) — CI, branches and releases, moving a pin, Pi gotchas.
 - [Backlog](backlog.md) — accepted deferrals; read before changing a unit template.
 
