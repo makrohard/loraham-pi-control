@@ -43,6 +43,7 @@ from .start_plan import (
     rollback_ids,
     verify_start,
 )
+from .status import component_note
 
 # docs/architecture.md, SPI policy: the maintainer's wording, shown where the pair is admitted.
 SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmitting at the same "
@@ -3085,11 +3086,10 @@ class LifecycleOpsMixin:
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads
                     # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
-                    booting = (c.id in live and live[c.id].run_state in up
-                               and self._component_booting(c.id))
+                    booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
                     comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
-                          "interactive": c.interactive,
+                          "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
                           # Interactive components (GUI/CLI/REPL) are run by the
                           # operator, never by lhpc — show the command to copy.
                           "command": self.manual_start_command(c) if c.interactive else "",

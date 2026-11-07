@@ -547,8 +547,14 @@ def _find(stacks: tuple[Stack, ...], component_id: str) -> Component | None:
 
 def component_note(status) -> str:
     """One short line on why a component is not plainly running, for the console and `lhpc status` ("" = nothing to
-    add): a GPS feed without a fix (F2)."""
+    add): a GPS feed without a fix (F2); for a degraded or failed component its reason (F3b): the GPS feed's own note,
+    else the listeners that are absent."""
     ev = getattr(status, "evidence", None) or {}
     if ev.get("gps.fix") == "no-fix":
         return "no fix yet (the receiver is reachable)"
-    return ""
+    if getattr(getattr(status, "run_state", None), "value", "") not in ("degraded", "failed"):
+        return ""
+    if ev.get("gps.feed") and ev.get("gps.fix") != "fix":
+        return f"GPS feed: {ev['gps.feed']}"
+    absent = [o.spec.address for o in (getattr(status, "endpoints", None) or ()) if not o.present]
+    return f"listener absent: {', '.join(absent)}" if absent else ""
