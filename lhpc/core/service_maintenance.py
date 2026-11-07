@@ -123,10 +123,10 @@ class MaintenanceOpsMixin:
         if loc.returncode != 0 or not loc.stdout.strip():
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = loc.stdout.strip()
-        entry["upstream_head"] = remote_sha
-        entry["local_head_at_check"] = local_sha
-        entry["status"] = (stackupdates.UP_TO_DATE if local_sha == remote_sha
-                           else stackupdates.BEHIND)
+        want = stackupdates.pinned_target(self._paths, self.stack(self.stack_of(comp.id) or ""), comp,
+                                          self._effective_remote) or remote_sha
+        entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
+        entry["status"] = stackupdates.UP_TO_DATE if local_sha == want else stackupdates.BEHIND
         return entry
 
     def update_status(self, comp) -> str:
@@ -685,13 +685,13 @@ class MaintenanceOpsMixin:
         return None
 
     @invalidates_snapshot
-    def power_action(self, kind: str, apply: bool = False) -> ActionResult:
+    def power_action(self, kind: str, apply: bool = False, client: str = "") -> ActionResult:
         """The dashboard's Reboot / Shut down, through logind (`systemctl <kind>`), gracefully.
         Dry-run renders the confirm-page plan; apply runs a SYNCHRONOUS CanReboot/CanPowerOff
         authorization handshake under task admission, records a pending marker (which refuses
         new admissions until the trigger fires or its bounded life expires), then triggers
         respond-first via a detached bounded spawn. Contract: failures BEFORE the handshake
-        verdict are typed; failures after it land only in the trigger log."""
+        verdict are typed; failures after it land only in the trigger log; `power_record` names `client` first."""
         if kind not in power.POWER_KINDS:
             return ActionResult(False, f"unknown power action {kind!r} (reboot | poweroff)")
         running = sorted(s.id for s in self.stacks() if self.stack_running(s.id))
@@ -714,16 +714,17 @@ class MaintenanceOpsMixin:
         from . import reslock
         try:
             with self._admission_guard("power", kind):
-                return self._power_apply_locked(kind, verb, running)
+                return self._power_apply_locked(kind, verb, running, client)
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot {kind}: {busy}")
 
-    def _power_apply_locked(self, kind: str, verb: str, running: list) -> ActionResult:
+    def _power_apply_locked(self, kind: str, verb: str, running: list, client: str = "") -> ActionResult:
         import getpass as _getpass
 
         from . import deps as deps_mod
+        from . import power_record
         from .lifecycle import current_boot_id
         boot_id = current_boot_id()
         if not boot_id:
@@ -760,8 +761,8 @@ class MaintenanceOpsMixin:
                                        f"({exc}) — nothing was triggered")
         # Respond-first detached trigger, bounded strictly under POWER_PENDING_TTL_S:
         # --no-block returns after enqueuing with logind; timeout SIGKILL-backstops the client.
-        log_path = self._paths.under("logs", f"power-{kind}.log")
-        argv = power.power_trigger_argv(kind)
+        log_path, argv = self._paths.under("logs", f"power-{kind}.log"), power.power_trigger_argv(kind)
+        _rec, rec_err = power_record.write(self._paths, kind, client)
         try:
             pid = self._lifecycle()._spawn(argv, log_path)
         except (OSError, PathContainmentError) as exc:
@@ -770,9 +771,8 @@ class MaintenanceOpsMixin:
                                        f"({exc}) — the pending guard was cleared")
         if pid is None:
             self._safe_unlink(marker)
-            return ActionResult(False, f"Cannot {kind}: the trigger could not be spawned — "
-                                       "the pending guard was cleared")
-        notes = [f"  [running] {sid}" for sid in running]
+            return ActionResult(False, f"Cannot {kind}: the trigger could not be spawned — the pending guard was cleared")
+        notes = [f"  [running] {sid}" for sid in running] + [f"  [warn] power record not written ({rec_err})"] * bool(rec_err)
         notes.append(f"  [log] failures after authorization land ONLY in {log_path}")
         if kind == "reboot":
             notes.append("  [note] running stacks come back via boot-restore")
@@ -1185,11 +1185,11 @@ class MaintenanceOpsMixin:
             # recovery-required task — it is the state an operator most needs to see. Never hidden,
             # never expires until resolved.
             out.append({"kind": "auto-install", "run_id": bst.get("run_id", ""),
-                        "label": "Install / build all stacks", "href": "/auto-install",
+                        "label": "Auto-install", "href": "/auto-install",
                         "state": "unsafe", "hint": _bounded_reason(bst.get("reason"))})
         elif bst:
             rid, state = bst.get("run_id", ""), bst.get("state")
-            base = {"kind": "auto-install", "run_id": rid, "label": "Install / build all stacks",
+            base = {"kind": "auto-install", "run_id": rid, "label": "Auto-install",
                     "href": "/auto-install"}
             if state in ("preparing", "running"):
                 out.append({**base, "state": "running"})
@@ -1835,8 +1835,8 @@ class MaintenanceOpsMixin:
             return ActionResult(
                 False, f"'{target}' is installed from a binary — switching to the "
                        f"{source} source channel is an install, not an update.",
-                next_commands=[f"lhpc install {target} --source {source} --yes"],
-                data={"channel": "binary"})
+                next_commands=[f"lhpc install {target} --source {source} --yes"], data={"channel": "binary"},
+                details=[web_client.SWITCH_HINT] if target == web_client.DAEMON else [])
         all_items = self._with_source(target)
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(

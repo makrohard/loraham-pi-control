@@ -224,6 +224,14 @@ def test_altitude_datum_order_and_legacy_fallback(fake_gpsd):
     assert r["alt"] == 1.0 and r["alt_kind"] == "msl"
 
 
+def test_an_altitude_too_large_for_a_float_is_skipped_for_the_next_datum(fake_gpsd):
+    # L24 F1, the class: a 401-digit JSON integer is not a finite number (math.isfinite raised).
+    r = _snap(fake_gpsd, DEV_A, _tpv(3, altMSL=10 ** 400, altHAE=2.0))
+    assert r["alt"] == 2.0 and r["alt_kind"] == "hae"
+    r = _snap(fake_gpsd, DEV_A, _tpv(3, altMSL=True, altHAE=2.0))     # a bool is no altitude (never 1.0 m)
+    assert r["alt"] == 2.0 and r["alt_kind"] == "hae"
+
+
 def test_sky_counts_come_from_gpsd_when_present_and_bad_points_are_skipped(fake_gpsd):
     sats = [_sat(1), _sat(2, el=float("nan")) if False else {"PRN": 2, "el": "x", "az": 10, "ss": 5},
             {"PRN": 3, "el": 200, "az": 10, "ss": 5}, {"PRN": 4, "el": 10, "az": 370, "ss": -3},

@@ -454,7 +454,7 @@ def test_web_buttons_confirm_and_apply(web, csrf, tmp_path, monkeypatch):
     # stage 2: applies via the service and redirects to the dashboard
     seen = {}
 
-    def fake_apply(self, kind, apply=False):
+    def fake_apply(self, kind, apply=False, client=""):
         from lhpc.core.services import ActionResult
         seen["kind"], seen["apply"] = kind, apply
         return ActionResult(True, "poweroff requested")

@@ -29,7 +29,11 @@ FILE_NAME = "config.yaml"
 # replaced, so a field upstream adds to one of them is covered too.
 OWNED_SECTIONS = ("radio_type", "radio", "http", "storage")
 REMOVED_SECTIONS = ("radios", "kiss", "modem_usb", "modem_tcp")
-OWNED_KEYS = ("glass.cert_store_dir", "setup_completed", "repeater.security.jwt_secret")
+OWNED_KEYS = ("glass.cert_store_dir", "setup_completed", "repeater.security.jwt_secret",
+              "repeater.security.jwt_expiry_minutes")
+# F3a (his word W225): the dashboard judges its token's expiry by the browser's clock, so a box clock behind it
+# minted tokens the phone took for expired. 12 h tolerates a box up to ~12 h behind; openHop's default is 60.
+JWT_EXPIRY_MINUTES = 720
 
 # Lives only in this file (LHPC writes it while the repeater is stopped).
 ONE_STORE = ("repeater.node_name", "repeater.mode", "repeater.security.admin_password",

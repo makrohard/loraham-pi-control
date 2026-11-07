@@ -40,12 +40,12 @@ from flask import (
 )
 
 from lhpc.adapters.web.oneshot import OneShot
+from lhpc.core import auto_install_form, validators, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
-from lhpc.core import validators
 from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
@@ -633,7 +633,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             starting=starting, starting_run=starting_run,
             spawn_failed=spawn_failed, dep_preflight=service.auto_install_dep_preflight(),
             log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS,
-            rows=service.auto_install_rows())
+            rows=(_rows := service.auto_install_rows()),
+            ai_form=auto_install_form.view(_rows, session.get(auto_install_form.SESSION_KEY)))
 
     _TX_CONFIRM_TTL_S = 300.0
     # Single use of an RF confirmation, held in THIS web process (one process, waitress threads): the
@@ -718,6 +719,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         selection, canonical = _parse_ai_selection()
+        session[auto_install_form.SESSION_KEY] = auto_install_form.to_session(selection)   # W206: the page keeps it
         errs = service.auto_install_check_selection(selection)
         if errs:
             flash(errs[0], "warn")
@@ -1017,6 +1019,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
+                "web_client": web_client.view(service) if stack.id == web_client.DAEMON else {},   # item 12
                 "fetched_ver": (_fv := (service.fetched_version_state(stack.id)
                                         if buildable else {})),
                 # Reuse _fv's installed instead of a second fetched_version_state read.
@@ -1346,7 +1349,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             plan = service.power_action(kind, apply=False)
             return render_template("power_confirm.html", kind=kind,
                                    question=plan.summary, details=plan.details)
-        res = service.power_action(kind, apply=True)
+        # DEC-W11: the record names the client only by a certificate nginx verified (it sets both headers)
+        _dn = request.headers.get("X-LHPC-Client-DN", "") if request.headers.get("X-LHPC-Client-Verify") == "SUCCESS" else ""
+        res = service.power_action(kind, apply=True, client=_dn)
         flash(res.summary + ((" " + "; ".join(d.strip() for d in res.details))
                             if res.details else ""),
               "ok" if res.ok else "warn")
@@ -1625,7 +1630,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             missing_deps=(_gate["block"] if _gate else None),
             optional_deps=(_gate["warn"] if _gate else None),
             frm=frm, cancel_href=cancel_href,
-            source_choices=(service.allowed_channels(service.stack_of(target) or target)
+            source_choices=(web_client.SELECTORS if target == web_client.COMPONENT and op == "update" else
+                            service.allowed_channels(service.stack_of(target) or target)
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
             offer_source=bool(plan.data.get("offer_source")),
