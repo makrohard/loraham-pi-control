@@ -3,7 +3,7 @@
 ## 0.14.0
 
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
-  starts per served band as that band's radio, with its own sockets, `--id` and RF log. Old setups are not converted.
+  starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
   setup as one command; a start is refused by name when the stick or its access is missing.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its

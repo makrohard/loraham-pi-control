@@ -1,17 +1,17 @@
 # Stack: LoRaHAM daemon
 
 The radio owner behind every daemon-backed stack (kiss, graywolf, chat, voice, meshcom, meshcore):
-one `loraham_daemon` process per served band (433/868 MHz). It never transmits on its own.
+one `loraham_daemon` process per enabled radio of the hardware list (433/868 MHz). It never transmits on its own.
 
 | | |
 |---|---|
 | Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (the project's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the ELECROW Meshstick; an optional build input (source checkout), adopted by default; never started |
 | Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `makrohard/libch341-spi-userspace`, the fork carrying the serial/port selection fix, at 98b656bf (the commit in the daemon's `.github/ci/libpinedio.lock`) |
-| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
-| Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
+| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/<rid>/rf-daemon.log --id <rid> [--usb-port <port>]` — one process per radio; lhpc computes every value at spawn |
+| Sockets (per radio) | `/tmp/loraconf-<rid>.sock` (CONF / status), `/tmp/loraf-<rid>.sock` (framed), `/tmp/lora-<rid>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)) + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
-| Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
+| Resources | `spi.bus.0` cooperative · `loraham.radio.{radio:<band>}` / `loraham.daemon-socket.{radio:<band>}` provider, resolved to a radio through the hardware list |
 | Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`, `libusb-1.0-0-dev`). The binary carries `loraham_daemon/lib/libloraham-ch341.so` beside the daemon, which loads it from there for the Meshstick; running it needs `libusb-1.0-0`. A source build without the library clone has no Meshstick support until `lhpc install daemon` adopts it; with the clone it needs `libusb-1.0-0-dev`, and the build stops naming it when the headers are missing. Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
 
 ## Contents
@@ -25,18 +25,20 @@ one `loraham_daemon` process per served band (433/868 MHz). It never transmits o
 
 ## The hardware list (0.14.0)
 
-From 0.14.0 the hardware list, `config/radios.toml`, names each radio and its band. The daemon is started for
-each band the board setup serves (`lhpc hardware <setup>`, saved in `config/local.toml`), as that band's one
-enabled radio of the list, with its own sockets (`/tmp/loraconf-<rid>.sock`, `lora-<rid>`, `loraf-<rid>`), its
-`--id <rid>` and its RF log `logs/<rid>/rf-daemon.log`. Clients use their band's radio. A radio on a band the
+From 0.14.0 the hardware list, `config/radios.toml`, names each radio and its band. A daemon is started for
+each enabled radio of the list on a band the board setup serves (`lhpc hardware <setup>`, saved in
+`config/local.toml`), one process per radio, with its own sockets (`/tmp/loraconf-<rid>.sock`, `lora-<rid>`, `loraf-<rid>`), its
+`--id <rid>` and its RF log `logs/<rid>/rf-daemon.log`. `lhpc stack start|stop|restart daemon --radio rN` acts on
+one radio's daemon alone. A radio on a band the
 setup does not serve is not started: launching every enabled radio of the list whatever the setup is not in
 this release.
 
 - **Cutover:** an updated box keeps its old `[radio]` setup in `config/local.toml`, and nothing is converted.
   Until the list exists, no daemon starts and the console shows a banner. `lhpc hardware <setup>` writes the
   list for the setup (one radio per band) when there is none; an existing list is never changed by it.
-- **USB radios:** the console's Hardware page (`/hardware`) lists each radio with its own daemon's state, adds a
-  listed USB stick as a new radio, binds a radio to a stick, and offers the one-time USB setup as one command
+- **USB radios:** the console's Hardware page (*Apps › Daemon › Hardware*, `/hardware`) lists each radio with its
+  own daemon's state; *Add Hardware* adds a listed USB stick or a HAT as a new radio, a radio's detail page re-binds
+  it to a stick, and the page offers the one-time USB setup as one command
   ([USB radios](../usb-radios.md)).
 - **Two radios on one band:** two radios on one band each run their own daemon: address one by its radio id
   (`lhpc stack stop daemon --radio rN`). A client starts its own radio's daemon; a per-band stop stops the clients
@@ -83,13 +85,13 @@ every Apply. Nothing is written back to the file at a start.
 
 ## Settings
 
-**Hardware setup** — `lhpc hardware <setup>` or the console's daemon *Hardware* section sets the
-served band(s) and `--hw` preset ([cli](../cli.md#hardware)). A single-radio setup blocks stacks
+**Hardware setup** — `lhpc hardware <setup>` sets the
+served band(s) and `--hw` preset (the console adds radios on *Add Hardware*) ([cli](../cli.md#hardware)). A single-radio setup blocks stacks
 needing the absent band (`meshcore`: 868). A fresh install is `unset`; the daemon refuses to start
 until a setup is chosen.
 
 **Stack params** — in `config/stacks/daemon.toml`. `lhpc config daemon` exposes none of them:
-`hipower_<band>` is set in the Hardware settings or with `lhpc hardware --high-power <band> on|off`,
+`hipower_<band>` is set with the daemon Settings' +20 dBm switch or with `lhpc hardware --high-power <band> on|off`,
 `rf_log` on the daemon's log page, the rest in that file.
 
 | param | default | meaning |
@@ -99,7 +101,7 @@ until a setup is chosen.
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
 | `hipower_433` / `hipower_868` | `off` | +20 dBm permission per band, strict `off`/`on`: `on` adds `--high-power` at the band's next daemon start, admitting exactly `POWER=20` on SX127x (inert on SX1262). Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it started with. Datasheet limits for +20 dBm: duty cycle ≤ 1 %, VSWR ≤ 3:1, VDD 2.4–3.7 V — nothing measures or enforces them; keep the chip cooled, **warranty void if disregarded**. LoRaHAM 433 RFM98PW: no sustained +20 dBm — unvalidated with the module's external PA; the release test matrix sends no +20 dBm on it |
 | `ocp_433` / `ocp_868` | `auto` | PA over-current limit per band, `auto` or mA; every start passes `--ocp`. `auto` = 140 mA with the band's `hipower` on, else 100 mA. A value must be one the band's chip represents (SX127x: 0 = off, 45..120 in steps of 5, 130..240 in steps of 10; SX1262: 5..140 in steps of 5) — `lhpc hardware --ocp <band> auto\|<mA>` refuses others, and a hand-edited one blocks that band's start. Saving marks the daemon restart-required and restarts nothing |
-| `rf_log` | `on` | RF log, one file per band (`logs/rf-daemon-433.log`, `-868.log`): every frame received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | `on` | RF log, one file per radio (`logs/<rid>/rf-daemon.log`): every frame received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 
 Each client stack's `requires_daemon_tx` (DIRECT for voice, MANAGED for the rest) is applied live
 when it starts. Live change without a restart ([daemon control](../architecture.md#daemon-control)): `lhpc daemon
@@ -120,7 +122,7 @@ stack's components start.
 **`POWER`** (ranges above): below 2 dBm the SX127x driver uses the RFO pin instead of the
 antenna's PA_BOOST pin, whose RadioLib API admits 2–17 and exactly 20 (no 18/19); 20 needs the
 band's `hipower_<band>` on and the daemon restarted with it. Saved values are validated against
-the board in the Hardware settings plus the saved switch; **live** requests against the running
+the radio's board (its model in the hardware list) plus the saved switch; **live** requests against the running
 daemon's `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`) — a daemon reporting neither gets only 2–17. A saved
 `POWER=20` applies only while the switch is on (off, the stack's default power is used); with the
 switch on but the running daemon lacking the permission, the stack start is refused.
@@ -142,7 +144,9 @@ limits in [reticulum](reticulum.md#band-limits). Defaults:
 | base LBT (every stack) | | | CADWAIT 1500 ms, CADIDLE 250 ms, TXQUEUE 1, CADMONITOR 0, CADRSSI −90, CADTXAFTERTIMEOUT 0 |
 
 Set them in the **Daemon radio parameters** panel of each stack's Settings (*Save* persists,
-*Apply* pushes live, *Reset* restores defaults) or with the CLI (`<stack>` may be `daemon`):
+*Apply* pushes live, *Reset* restores defaults) or with the CLI (`<stack>` may be `daemon`). The daemon's own
+panel is per radio (`?rid=rN`) and saves that radio's `dp_<PARAM>` in its row of `config/radios.toml`
+([the list file](#the-list-file)):
 
 ```
 lhpc config <stack> --band <433|868> --daemon-param KEY=VALUE [--daemon-param ...]   # persist

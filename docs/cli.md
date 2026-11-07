@@ -190,10 +190,10 @@ lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes
 lhpc hardware --ocp 433 auto|<mA>     # the band's PA over-current limit (auto: 140 with high power, else 100); next daemon start
 ```
 
-Web: the loraham daemon stack's **Hardware** settings, which add a **Detect** probe (starts the
-daemon briefly per candidate board and reports whether the chip responds; the board's LED lights
-during init). Detect is refused, naming the stack, while a stack that drives the radio itself
-(Meshtastic, Reticulum) runs on that band.
+Web: *Apps › Daemon › Hardware* (`/hardware`) lists the radios. Each radio's detail page
+(`/hardware/radio/<rid>`) and *Add Hardware* (`/hardware/add`, a listed USB stick or a HAT on the SPI bus) offer
+**Detect**, the same probe as `lhpc hardware detect <rid>` below. The board setup itself stays a CLI command
+(`lhpc hardware <setup>`).
 
 #### hardware detect
 Ask the chip of one radio in the hardware list whether it answers, on that radio's own lines or stick:

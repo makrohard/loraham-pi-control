@@ -2,7 +2,8 @@
 
 A USB radio is a LoRa module behind a CH341 USB-to-SPI bridge. The [daemon](stacks/daemon.md) drives
 it over USB with the CH341 library (the project's fork of pine64's); no Pi GPIO or SPI line is used. Each stick is one radio of the
-hardware list (`config/radios.toml`), added and bound on the console's Hardware page (`/hardware`).
+hardware list (`config/radios.toml`), added on the console's *Add Hardware* page and bound on a radio's detail page
+(*Apps › Daemon › Hardware*, `/hardware`).
 
 ## Contents
 
@@ -39,10 +40,10 @@ guesses a stick's model from the id or from its serial:
 
 ## Adding a stick
 
-On `/hardware` each listed stick shows its serial (or, without one, its port). **Add as a new radio**
-creates a radio for the chosen model on that stick; **Bind** points an existing radio at a stick. A
-start is refused by name when the radio's stick or the access to it is missing. Two enabled radios on
-one band start no daemon: set `enabled = false` on one of them in `config/radios.toml`.
+On *Add Hardware* (`/hardware/add`) each listed stick shows its serial (or, without one, its port). **Add**
+creates a radio for the chosen model on that stick; **Re-bind** on a radio's detail page points that radio at a
+stick. A start is refused by name when the radio's stick or the access to it is missing. Two radios on one band
+each run their own daemon: address one by its radio id (`lhpc stack stop daemon --radio rN`).
 
 ## Host access
 
