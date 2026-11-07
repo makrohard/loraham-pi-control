@@ -289,6 +289,10 @@ class Target:
     reason: str                     # "" when an explicit rid proceeds; else why (incl. the chosen rid)
     candidates: tuple = ()          # the rids considered, radio order
     next_command: str = ""
+    kind: str = ""                  # SEVERAL for "two or more radios can run it" (package item 24); else ""
+
+
+SEVERAL = "several"
 
 
 @dataclass(frozen=True)
@@ -302,8 +306,8 @@ _KINDS = ("id", "no-id", "unknown")
 _LOCKED_FIELDS = ("model", "band", "ce", "usb_serial", "usb_port")
 
 
-def _refuse(reason: str, candidates=(), next_command: str = "") -> Target:
-    return Target("refuse", "", reason, tuple(candidates), next_command)
+def _refuse(reason: str, candidates=(), next_command: str = "", kind: str = "") -> Target:
+    return Target("refuse", "", reason, tuple(candidates), next_command, kind)
 
 
 def _order(radios):
@@ -355,7 +359,7 @@ def _pick(cands, scope: str, stack_hint: str = "<stack>") -> Target:
     if not cands:
         return _refuse(f"no enabled radio {scope}", ids, "lhpc hardware")
     named = ", ".join(f"{r.id} ({r.name})" for r in cands)
-    return _refuse(f"{len(cands)} radios can run it {scope}: {named}; name one", ids, f"{stack_hint}@<rid>")
+    return _refuse(f"{len(cands)} radios can run it {scope}: {named}; name one", ids, f"{stack_hint}@<rid>", SEVERAL)
 
 
 def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), fallback_rid=None,

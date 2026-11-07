@@ -358,7 +358,7 @@ def daemon_rid(svc, band: str) -> radio_daemon.Target:
     """band_rid for the daemon start: a shared band's refusal names its next step, the hardware list
     (radio_daemon.SHARED_BAND_TEXT), not the `<stack>@<rid>` form 0.14.0 does not have."""
     t = band_rid(svc, band)
-    if t.outcome == "refuse" and len(t.candidates) > 1:
+    if t.outcome == "refuse" and t.kind == radio_daemon.SEVERAL:       # item 24: the refusal's kind, not its count
         reason = t.reason.removesuffix("; name one")
         return dataclasses.replace(t, reason=f"{reason}; {radio_daemon.SHARED_BAND_TEXT}",
                                    next_command="config/radios.toml")
