@@ -21,6 +21,11 @@
 - Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
   back that instance alone, and a removed instance's record starts nothing.
 
+Upgrading from 0.13.x
+
+- Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
+  (or `sudo modprobe spi_ch341`).
+
 Fixed
 
 - Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
