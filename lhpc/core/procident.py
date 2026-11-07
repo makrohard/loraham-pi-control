@@ -60,22 +60,26 @@ def proc_alive(pid: int) -> bool:
     return state not in ("Z", "X", "x")
 
 
-def pid_exists_signal0(pid: int) -> bool:
-    """Signal-0 liveness with the start gate's semantics — distinct from `proc_alive()` (which
-    reads /proc and treats a zombie as dead): a non-positive or non-int pid is never signalled;
-    ProcessLookupError -> gone; PermissionError -> alive (owned by someone else); any other
-    OSError -> gone."""
+def signal0_state(pid) -> str:
+    """Signal-0 probe of a pid read from a file or another process's record: "alive", "denied" (it exists and is
+    someone else's: PermissionError) or "gone". A non-positive or non-int pid is never signalled; a pid the kernel
+    cannot hold (OverflowError, ValueError: 2**31 and above) names no process, so it is "gone", never an exception
+    out of a status read."""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
+        return "gone"
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
     except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+        return "denied"
+    except (OSError, OverflowError, ValueError):
+        return "gone"
+    return "alive"
+
+
+def pid_exists_signal0(pid: int) -> bool:
+    """Signal-0 liveness with the start gate's semantics — distinct from `proc_alive()` (which
+    reads /proc and treats a zombie as dead): `signal0_state`, with someone else's process alive."""
+    return signal0_state(pid) != "gone"
 
 
 def identity_complete(ident) -> bool:

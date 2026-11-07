@@ -963,15 +963,11 @@ def nginx_master_active(paths: Paths) -> bool:
     """True iff an LHPC-owned nginx master appears to be running (pidfile present + a live
     process for that PID). NOTE: this is a pragmatic pidfile+liveness check; a full PID-reuse
     identity check (procident) is a hardening follow-up."""
-    import os
     pid = _read_pid(paths)
     if pid is None or pid <= 1:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    from . import procident
+    return procident.signal0_state(pid) == "alive"      # a pid the kernel cannot hold is gone, not an exception
 
 
 def reload(system, paths: Paths) -> tuple:
