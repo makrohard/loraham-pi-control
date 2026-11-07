@@ -379,9 +379,51 @@ def client_rid(svc, sid: str, band: str, inst=None) -> str:
     slot 0's (DEC-W16: the band's first enabled radio not listed for the stack). "" for the daemon's own start, and
     for no single band: then every enabled radio of the needed bands."""
     from . import instances
-    if sid == (svc.stack_of(svc.DAEMON_ID) or "daemon") or band not in ("433", "868"):
+    if sid == (svc.stack_of(svc.DAEMON_ID) or "daemon"):
+        return inst.rid if inst is not None else ""                 # `--radio rN`: that radio's daemon alone
+    if band not in ("433", "868"):
         return ""
     return inst.rid if inst is not None and inst.slot else instances.slot0_radio(svc._paths, sid, band)[0]
+
+
+def daemon_radio(svc, rid: str) -> tuple:
+    """`--radio rN` of a daemon start, stop or restart (item 16): (the daemon's Instance on that radio, its band, "")
+    or (None, "", why) when rN is not an enabled radio of the hardware list."""
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    if row is None or not row.enabled:
+        return None, "", f"{rid} is " + ("not a radio of the hardware list" if row is None else "disabled")
+    return daemon_inst(rid), row.band, ""
+
+
+def daemon_dependents(svc, sid: str, band: str, inst, stopped_bands) -> list:
+    """The dependents a daemon stop stops first: by radio (radio_dependents) for a stop of a band's daemons the
+    hardware list names, else the running dependents of the stopped bands, as before item 16."""
+    by_radio = radio_dependents(svc, band, inst) if band else None
+    return svc.stop_dependents(sid, bands=stopped_bands) if by_radio is None else by_radio
+
+
+def radio_dependents(svc, band: str, inst=None):
+    """Item 16: the running clients a stop of `band`'s daemons leaves without a daemon, by instance key — `<stack>`
+    for slot 0, `<stack>@<rid>` for a listed instance — on radio `inst.rid` alone when given, else on each enabled
+    radio of the band. None when the hardware list names no enabled radio of the band (the band's dependents are then
+    read by band, as before)."""
+    from . import commands, instances
+    rows = {r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band}
+    rids = {inst.rid} if inst is not None and inst.rid else rows
+    if not rows or not rids <= rows:
+        return None
+    daemon_sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
+    slot0 = set(svc.stop_dependents(daemon_sid, bands={band}))
+    out = []
+    for stk in svc.stacks():
+        if stk.id == daemon_sid or not any(svc.DAEMON_ID in c.depends_on for c in stk.components):
+            continue
+        if stk.id in slot0 and instances.slot0_radio(svc._paths, stk.id, band)[0] in rids:
+            out.append(stk.id)
+        for i in commands.stack_instances(stk, svc._paths)[1:]:
+            if i.rid in rids and any(instances.instance_runs(svc, c, i, band) for c in stk.components if c.process):
+                out.append(f"{stk.id}@{i.rid}")
+    return out
 
 
 def daemon_units(svc, bands, rid: str = "") -> list:
@@ -538,25 +580,6 @@ def verify_identity(svc, rid: str) -> str:
     if radio is None:
         return f"radio {rid} is no longer in the hardware list"
     return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
-
-
-def shared_band_refusal(svc, target: str, band: str, op: str):
-    """W1-11 (B4-D39): a per-band daemon stop on a band of two or more enabled radios is refused, naming them;
-    nothing is signalled. No radio-addressed stop exists before the per-instance stage, so the next command is the
-    whole daemon's. None for any other target, band or list."""
-    from .service_base import ActionResult
-    sid = svc.stack_of(target)
-    stk = svc.stack(sid) if sid else None
-    if stk is None or stk.main != svc.DAEMON_ID or band not in ("433", "868"):
-        return None
-    rows = [r for r in radios.load(svc._paths).radios if r.enabled and r.band == band]
-    if len(rows) < 2:
-        return None
-    names = ", ".join(f"{r.id} ({r.name})" for r in rows)
-    return ActionResult(False, f"Cannot {op} the daemon of {band} MHz alone: {len(rows)} radios share it: {names}",
-                        details=[f"  [blocked] {band} MHz: one daemon per radio; a radio is not addressed by id "
-                                 "before the per-instance stage"],
-                        next_commands=[f"lhpc stack {op} {sid}"])
 
 
 def radio_name(paths, band: str) -> str:

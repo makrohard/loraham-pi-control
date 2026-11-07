@@ -106,3 +106,10 @@ def test_a_radio_a_daemon_process_still_holds_is_not_launched_again(tmp_path, mo
     assert launches == [(DAEMON, "r2", "433")]
     assert any("[fail] daemon on 433 (r1): CONF socket unreachable but a daemon process" in line
                for line in res.details), res.details
+
+
+def test_a_daemon_start_for_one_radio_launches_that_radios_daemon_only(tmp_path, monkeypatch):
+    # `lhpc stack start|restart daemon --radio r2`: the other radio of the band is left as it is.
+    svc, launches = _box(tmp_path, monkeypatch)
+    svc.start("daemon", apply=True, band="433", inst=radio_start.daemon_inst("r2"))
+    assert launches == [(DAEMON, "r2", "433")]

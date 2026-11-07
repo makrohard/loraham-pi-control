@@ -808,8 +808,8 @@ class LifecycleOpsMixin:
         planned and launched 868, and a daemon preview promised 433 while the launch clamped it to
         868). Returns a refusal or None; a bandless request keeps resolving normally, and plan and
         apply take this same decision because both go through the public entry."""
-        if (op in ("stop", "restart") and (_s := radio_start.shared_band_refusal(self, target, band, op))) or op == "stop":
-            return _s      # W1-11: only a band two radios share refuses a stop or restart's stop leg (a stray stays stoppable)
+        if op == "stop":
+            return None    # a stop is never refused by its band (item 16: a shared band stops each radio's daemon)
         if not band:
             return None
         active = self.active_bands()

@@ -11,7 +11,7 @@ from .model import ComponentKind, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
-from .service_lifecycle_ops import _daemon_presence, _ohs, instances
+from .service_lifecycle_ops import _daemon_presence, _ohs, instances, radio_start
 from .snapshot_memo import invalidates_snapshot
 
 
@@ -216,7 +216,7 @@ class StopOpsMixin:
                                     details=det, results=tuple(results),
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
-        dependents = self.stop_dependents(_sid or target, bands=stopped_bands)
+        dependents = radio_start.daemon_dependents(self, _sid or target, band if _daemon_band_stop else "", inst, stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
                 for _, c in items if c.units and not c.run_argv]
@@ -260,8 +260,8 @@ class StopOpsMixin:
         blocked_deps: list[str] = []            # dependents whose stop did not verify
         if cascade:
             interactive_deps = [dep for dep in dependents
-                                if (self.stack(dep) and self.stack(dep).main_component
-                                    and self.stack(dep).main_component.interactive)]
+                                if (self.stack(dep.partition("@")[0]) and self.stack(dep.partition("@")[0]).main_component
+                                    and self.stack(dep.partition("@")[0]).main_component.interactive)]
             if interactive_deps:
                 for dep in interactive_deps:
                     results.append(CompResult(component=dep, stack=dep, action="stop",
@@ -287,7 +287,7 @@ class StopOpsMixin:
                     # band-scoped DAEMON stop (band switch) names no dependent for good —
                     # tombstoning them dropped stacks from restore the operator never stopped. A
                     # client's stop with its band (the console's) is the operator's (finding 143).
-                    dep_res = self.stop(dep, apply=True, release_daemon=False,
+                    dep_res = self.stop(dep.partition("@")[0], apply=True, release_daemon=False, inst=instances.resolve(self, dep)[1],
                                         _operator=_operator and not (
                                             band and self._is_daemon_target(target)))
                     results.append(CompResult(component=dep, stack=dep, action="stop",
@@ -328,7 +328,7 @@ class StopOpsMixin:
             # signals ONLY the owned instance(s) serving that band. Record-driven +
             # identity-verified inside Lifecycle.stop, which returns a typed result.
             if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
-                cr = life.stop(comp, band=band)
+                cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             else:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
             results.append(cr)

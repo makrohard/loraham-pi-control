@@ -26,15 +26,16 @@ def _fake_service(monkeypatch, tmp_path, rows):
                                              paths=Paths(runtime_root=tmp_path)))
 
 
-def test_a_restart_of_a_shared_band_is_refused_naming_both_radios_and_signals_nothing(tmp_path, monkeypatch,
+def test_a_restart_of_a_shared_band_is_no_longer_refused_and_signals_no_unowned_daemon(tmp_path, monkeypatch,
                                                                                         capsys):
+    # Item 16 (DEC-W53 (2)) replaces W1-11's refusal; its own case is test_16_radio_stop.py.
     _fake_service(monkeypatch, tmp_path, TWO_868)
     signals = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(("kill", pid, sig)))
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append(("killpg", pgid, sig)))
-    assert cli.main(["stack", "restart", "daemon", "--band", "868", "--yes"]) == 1
+    cli.main(["stack", "restart", "daemon", "--band", "868", "--yes"])
     out = capsys.readouterr().out
-    assert "Cannot restart the daemon of 868 MHz alone: 2 radios share it: r1 (a), r2 (b)" in out, out
+    assert "share it" not in out, out
     assert signals == []
 
 
