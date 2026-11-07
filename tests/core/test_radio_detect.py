@@ -291,7 +291,8 @@ _A, _B = ("A1B2C3D4E5", (1, 3)), ("Q9R8S7T6", (1, 4))
     ([_B], {"serial": "A1B2C3D4"}, {}, "no stick with serial A1B2C3D4"),             # absent
     ([_A, _B], {"serial": "A1B2C3D4"}, {"claimed": (0,)}, "in use by another"),     # held
     ([_A, ("A1B2C3D4ZZ", (1, 4))], {"serial": "A1B2C3D4"}, {}, "more than one stick"),
-    ([(None, (1, 3)), (None, (1, 4))], {"port": (1, 3)}, {}, "without a serial"),
+    ([(None, (1, 3)), (None, (1, 4))], {"port": (1, 3)}, {}, None),                 # by port: a second
+                                                                                      # serial-less stick is no bar (P2)
     ([_A, _B], {"serial": "A1B2C3D4"}, {"gone": (0,)}, "removed during selection"),
     ([_A, _B], {"serial": "A1B2C3D4"}, {"changes": (0,)}, "changed during selection"),
 ])
@@ -458,7 +459,7 @@ class _Libusb:
 @pytest.mark.parametrize("sticks, kw", [
     ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "serial-fails")], {"serial": "A1B2C3D4"}),
     ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "unopenable")], {"serial": "A1B2C3D4"}),
-    ([("Q9R8S7T6", (1, 3), "serial-fails")], {"port": (1, 3)}),
+    # (by port, the target's unreadable serial proceeds: P2, tests/core/test_p2_ch341_port_select.py)
 ])
 def test_a_stick_of_unknown_identity_refuses_the_selection(sticks, kw):
     # A serial that cannot be read is not "no serial", and an unopenable stick still counts: no claim, no write.
