@@ -157,15 +157,20 @@ def _retired_error(retired) -> str:
     return ""
 
 
-def stored_retired(paths) -> tuple:
-    """The reserved ids the file holds now (DEC-W39), read on their own so a save that is not given them keeps them;
-    () when the file is absent or unreadable or its `retired` is not a valid list."""
+def stored_retired(paths) -> tuple | None:
+    """The reserved ids the file holds now (DEC-W39), read on their own so a save that is not given them keeps them:
+    () when there is no file; None when the file is there but cannot be read, is no TOML, or its `retired` is not a
+    valid list (G1-C4: a save must not write over ids it could not read)."""
+    p = None
     try:
-        data = tomllib.loads(path(paths).read_text(encoding="utf-8"))
+        p = path(paths)
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None if p is None or exists_at_all(p) else ()
     except (OSError, UnicodeDecodeError, PathContainmentError, tomllib.TOMLDecodeError, RecursionError, ValueError):
-        return ()
+        return None
     retired = data.get("retired", [])
-    return () if _retired_error(retired) else tuple(retired)
+    return None if _retired_error(retired) else tuple(retired)
 
 
 def _row(row, i):
@@ -371,6 +376,8 @@ def save(paths, radios, models: dict | None = None, retired: tuple | None = None
     file stays byte-unchanged; a failure after it is reported as written, not durable (Q1). `retired` None keeps the
     reserved ids the file holds (DEC-W39), so no writer that is not about them can drop them."""
     retired = stored_retired(paths) if retired is None else tuple(retired)
+    if retired is None:
+        return [f"{FILE[-1]} cannot be read, so its reserved ids (retired) are unknown; nothing written"]
     reasons = check(radios, models, retired)
     if reasons:
         return reasons

@@ -450,7 +450,7 @@ ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout
     _n=$((_n + 1)); TS_TRIES=$_n; _r=0
     ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
     [ "$_r" -eq 3 ] || return "$_r"
-    sleep "$SVC_RETRY_PAUSE_S"
+    [ "$_n" -ge "$SVC_RETRIES" ] || sleep "$SVC_RETRY_PAUSE_S"     # no pause after the last attempt (G1-C8)
     if [ "$1" = restart ] && [ -n "$_base" ]; then
       _r=0; ts_base "$2" || _r=$?
       [ "$_r" -ne 12 ] || return 12

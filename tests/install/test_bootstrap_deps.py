@@ -44,6 +44,7 @@ act() {
     timeout) echo "Failed to $2: Connection timed out" >&2; exit 1 ;;
     deny) echo "Failed to $2: Access denied" >&2; exit 1 ;;
     hang) sleep 30; exit 0 ;;
+    tick) c=$(cut -d' ' -f1 "$SVC_UPTIME"); echo "$((${c%%.*} + 5)).00 0.00" > "$SVC_UPTIME"; return 0 ;;
     empty) exit 0 ;;
     absent) exit 1 ;;
     plumb) exit 125 ;;
@@ -77,7 +78,15 @@ fi
 if [ "$1" = "enable" ] || [ "$1" = "restart" ]; then
   if a=$(plan_take "$1"); then act "$a" "$1 unit"; fi
 fi
+if [ "$1" = "stop" ] && [ -n "$st" ]; then
+  mkdir -p "$st"; echo "stop $u" >> "$st/calls"
+  a=$(plan_take stop) || a=""
+  [ -z "$a" ] || act "$a" "stop unit"
+  known || { echo "Failed to stop unit: Unit $u not loaded." >&2; exit 1; }
+  mark stopped; exit 0
+fi
 if [ "$1" = "disable" ] && [ -n "$st" ]; then
+  mkdir -p "$st"; echo "disable $u" >> "$st/calls"; echo "$u" >> "$st/reloads"   # a unit-file change: one reload
   a=$(plan_take disable) || a=""
   case "$a" in
     took) mark disabled; mark stopped; act timeout "disable unit" ;;
@@ -2349,3 +2358,38 @@ def test_row28_plumbing_and_a_failed_time_source_report_both(tmp_path):
     assert r.returncode == 11, r.stdout + r.stderr
     assert "could not run in the time-source step (exit 12 at the end)" in r.stderr
     assert "chrony REFUSED to start" in r.stderr
+
+
+# ---- DEC-W55 and G1-C8: a retry never adds load; the run's bound stops every further call; no pause after the last --
+
+def test_dec_w55_a_half_done_disable_is_finished_by_a_stop_that_queues_no_reload(tmp_path):
+    # lane run 11: each `disable` makes PID 1 reload (~29 s under TCG); the retry of a disable that took effect must not
+    # queue another one. The fake counts one reload per disable and none per stop.
+    r, _log = _units_run(tmp_path, ["disable half"])
+    assert r.returncode == 0, r.stderr
+    st = tmp_path / "systemd-state"
+    assert (st / "calls").read_text().splitlines() == ["disable nginx.service", "stop nginx.service"]
+    assert (st / "reloads").read_text().splitlines() == ["nginx.service"]
+
+
+def test_g1_c8_a_call_after_the_runs_bound_is_never_made(tmp_path):
+    # the unit's listing answers but takes 5 s of the helper's clock (the fake advances SVC_UPTIME); with a 3 s run bound
+    # no further call starts: the state read is refused, the state stays unknown, exit 8, no disable is called
+    up = tmp_path / "uptime"
+    up.write_text("100.00 0.00\n")
+    r, _log = _units_run(tmp_path, ["list tick"], SVC_UPTIME=str(up), SVC_SCRIPT_BOUND_S="3")
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "the run's bound for service calls (3 s) is reached" in r.stderr
+    assert not (tmp_path / "systemd-state" / "calls").exists()
+
+
+def test_g1_c8_no_pause_after_the_last_restart_attempt(tmp_path):
+    fb = tmp_path / "sbin"
+    fb.mkdir()
+    log = tmp_path / "sleeps"
+    (fb / "sleep").write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
+    (fb / "sleep").chmod(0o755)
+    r, _log = _ts_run(tmp_path, ["restart@gpsd.service timeout"] * 2,
+                      env={"SVC_RETRIES": "2", "PATH": f"{fb}:{tmp_path / 'fb'}:/usr/bin:/bin"})
+    assert r.returncode == 11, r.stdout + r.stderr
+    assert log.read_text().splitlines().count("1") == 1          # one pause between the two attempts, none after

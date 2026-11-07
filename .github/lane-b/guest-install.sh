@@ -15,7 +15,8 @@ t() { local name=$1 s; shift; s=$(date +%s); "$@"; echo "t_$name=$(( $(date +%s)
 deps() {
   curl -fsSL "https://raw.githubusercontent.com/makrohard/loraham-pi-control/$FROM/bootstrap-deps.sh" -o bootstrap-deps.sh
   bash bootstrap-deps.sh --dry-run
-  sudo bash bootstrap-deps.sh --spi-mode soft-cs < /dev/null
+  # the lane's call bound, if it sets one (DEC-W55), crosses sudo's environment reset through env; else the default
+  sudo env "SVC_CALL_BOUND_S=${SVC_CALL_BOUND_S:-90}" bash bootstrap-deps.sh --spi-mode soft-cs < /dev/null
 }
 
 clone() {

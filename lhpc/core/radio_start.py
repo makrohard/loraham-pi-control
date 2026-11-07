@@ -420,7 +420,7 @@ def _add_hat(svc, model_id: str, band: str, variant: str) -> tuple:
     v = next((x for x in fits if x.key == variant), None) if variant else fits[0]
     if v is None:
         return False, f"Not added: {m.id} has no variant {variant!r} for {band} MHz"
-    several = len(m.variants) > 1 and not all(x.band for x in m.variants)
+    several = bool(variant) or len(fits) > 1          # G1-C19: an explicit variant is always kept as `ce`
     try:
         rid = radios.next_id(state.radios, state.retired)
     except ValueError as exc:

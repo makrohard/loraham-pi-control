@@ -30,7 +30,7 @@ python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$hk" "$EV/guest"
 # README steps 4 and 5 at FROM (the stated reset), then step 6 (reboot), then step 8's units line for a manual install.
 gcp "$LB/guest-install.sh" guest-install.sh
 start_samplers
-t0=$(now); irc=0; g "bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || irc=$?
+t0=$(now); irc=0; g "SVC_CALL_BOUND_S=${SVC_CALL_BOUND_S:-90} bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || irc=$?
 g 'cat sampler.log 2>/dev/null; true' > "$EV/guest/systemctl-samples.txt" 2>&1 || true
 collect_samples
 [ "$irc" -eq 0 ] || fail "the install at $FROM, rc $irc (see install.txt; guest/systemctl-samples.txt, runner-load.txt)"

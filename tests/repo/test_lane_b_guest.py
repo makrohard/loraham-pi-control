@@ -130,7 +130,7 @@ wait_ssh() {{ echo 1; }}; wait_up() {{ echo "1 running"; }}; wait_reboot() {{ ec
 g() {{ local c="$*" f={fault!r}
   case "$c" in
     "uname -m") echo aarch64;; "uname -r") echo 6.12.0-guest;; "cat /etc/os-release") echo VERSION_CODENAME=trixie;;
-    "test -f /etc/rpi-issue"*) echo yes;; "bash guest-install.sh "*) echo t_deps=1; echo t_install=1;;
+    "test -f /etc/rpi-issue"*) echo yes;; *"bash guest-install.sh "*) echo t_deps=1; echo t_install=1;;
     "cat /proc/sys/kernel/random/boot_id") [ "$f" = bootid ] && return 255; echo {_B0};;
     *"# installs the units"*) [ "$f" = unitsline ] && return 255; echo "lhpc self-update --repair-integration   # installs the units";;
     *"command -v lhpc"*) [ "$f" = commandv ] && return 255; echo /home/lhpc/.local/bin/lhpc;;
@@ -157,3 +157,4 @@ def test_a_failed_observation_is_never_a_pass(tmp_path, fault):
         assert p.returncode != 0 and "ROW TOPIC: PASS" not in p.stdout, p.stdout + p.stderr
     else:
         assert p.returncode == 0 and "ROW TOPIC: PASS" in p.stdout, p.stdout + p.stderr
+

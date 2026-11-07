@@ -132,3 +132,11 @@ def test_a_hat_never_takes_a_reserved_id(tmp_path, monkeypatch):
     assert radios.save(svc._paths, state.radios, retired=("r2",)) == []
     ok, msg = radio_start.add_hat(svc, "waveshare-sx1262", "868")
     assert (ok, msg) == (True, "r3 added: waveshare-sx1262 on 868 MHz")
+
+
+def test_an_explicit_variant_is_kept_even_when_every_variant_carries_a_band(tmp_path, monkeypatch):
+    # G1-C19: loraham's variants each carry their band; the operator's pick is still the row's `ce`
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "stick", "meshstick-1262", "868", usb_port="1-1.3"),))
+    ok, msg = radio_start.add_hat(svc, "loraham", "433", "433")
+    assert (ok, msg) == (True, "r2 added: loraham (433) on 433 MHz")
+    assert _ids(tmp_path)[-1] == ("r2", "loraham", "433", "433")

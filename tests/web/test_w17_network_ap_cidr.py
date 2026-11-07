@@ -20,7 +20,8 @@ def box(tmp_path, web):
     (tmp_path / "state").mkdir(exist_ok=True)
     svc = ControllerService(system=FakeSystem(files={"/proc/uptime": "100.0 200.0\n"}).system,
                             paths=Paths(runtime_root=tmp_path))
-    with patch.object(ControllerService, "network_supported", lambda self: True):
+    with patch.object(ControllerService, "network_supported", lambda self: True), \
+            patch.object(ControllerService, "_network_authorized", lambda self: True):
         yield svc, web(service_factory=lambda: svc)
 
 
@@ -90,3 +91,14 @@ def test_the_409_names_the_cli_recovery_only_for_a_bad_ap_subnet(box, stored, hi
     assert r.status_code == 409
     line = f"lhpc network --ap-cidr default --confirm-phrase {type(svc).AP_CIDR_CONFIRM}"
     assert (line in r.get_data(as_text=True)) is hint
+
+
+def test_the_panel_post_without_the_network_authorization_stores_nothing(box, csrf):
+    # G1-C10: the gate of every network write (a supported box whose operator NetworkManager does not authorize)
+    svc, c = box
+    token = csrf(c)
+    with patch.object(ControllerService, "_network_authorized", lambda self: False):
+        r = c.post("/network/ap-cidr", data={"_csrf": token, "ap_cidr": "10.43.0.0/24",
+                                             "confirm_phrase": type(svc).AP_CIDR_CONFIRM})
+    assert r.status_code in (302, 303)
+    assert _stored(svc) == "10.42.0.0/24"

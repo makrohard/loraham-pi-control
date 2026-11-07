@@ -60,7 +60,10 @@ def set_ap_cidr(svc, value: str, confirm: str) -> ActionResult:
     try:
         cfg = svc.config()
     except cfgmod.ConfigError as exc:
-        return _recover(svc, value, exc)
+        return _recover(svc, value, exc)        # only the default, from a broken state: the recovery needs no gate
+    if not (svc.network_supported() and svc._network_authorized()):        # G1-C10: the gate of every network write
+        return ActionResult(False, "Not changed: network controls are not available on this box",
+                            data={"reason": "not-authorized"})
     if not cfg.network.valid:
         return ActionResult(False, "Not changed: the local configuration cannot be read, so network.ap_cidr is "
                                    "unknown", data={"reason": "config-unreadable"})
@@ -81,9 +84,11 @@ def set_ap_cidr(svc, value: str, confirm: str) -> ActionResult:
     if fw.ap_cidr and fw.ap_cidr == previous:
         res = svc.firewall_configure(ap_enabled=fw.ap_enabled, ap_interface=fw.ap_interface, ap_cidr=stored)
         svc._invalidate_config()
-        if not res.ok:
-            return ActionResult(False, f"The AP subnet is {stored}, but the firewall's AP subnet could not follow: "
-                                       f"{res.summary}", details=details + res.details,
+        if not res.ok:                          # G1-C10: the setting goes back, so the two never disagree
+            cfgmod.set_network(svc._paths, ap_cidr="default" if previous == ap_subnet.DEFAULT else previous)
+            svc._invalidate_config()
+            return ActionResult(False, f"Not changed: the firewall's AP subnet could not follow ({res.summary}); the "
+                                       f"AP subnet stays {previous}", details=res.details,
                                 data={"reason": "firewall-not-followed"})
         details.append(f"  [firewall] the AP subnet follows: {previous} -> {stored} (apply the firewall to make it "
                        "live)")
