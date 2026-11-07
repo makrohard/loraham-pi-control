@@ -168,6 +168,10 @@ def add_instance(svc, sid: str, rid: str):
                 return ActionResult(False, f"Cannot add {sid}@{rid}: {rid} is "
                                            + ("not an enabled radio of the hardware list" if radio is None else "disabled"),
                                     next_commands=["lhpc hardware"])
+            if any(instance_runs(svc, c, commands.Instance(0, rid), radio.band) for c in stack.components
+                   if c.process is not None):       # G1-C7 B1: slot 0 runs on that radio
+                return ActionResult(False, f"Cannot add {sid}@{rid}: {sid} (slot 0) runs on {rid} — stop it first",
+                                    next_commands=[f"lhpc stack stop {sid}"])
             bands = stack_bands(stack)
             if radio.band not in bands:
                 return ActionResult(False, f"Cannot add {sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, "
@@ -242,8 +246,10 @@ def resolve(svc, target: str):
     if inst is None:
         return sid, None, "", f"{sid}@{rid} is not a listed instance (lhpc stack add-instance {sid} {rid})"
     radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
-    if radio is None or not radio.enabled:
-        return sid, None, "", f"{sid}@{rid}: {rid} is " + ("not in the hardware list" if radio is None else "disabled")
+    if radio is None:
+        return sid, None, "", f"{sid}@{rid}: {rid} is not in the hardware list"
+    if not radio.enabled:                     # G1-C7 B3: still addressed (a stop, a removal's running check), never started
+        return sid, inst, radio.band, f"{sid}@{rid}: {rid} is disabled"
     if radio.band not in stack_bands(stack):
         return sid, None, "", f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
     return sid, inst, radio.band, ""
@@ -325,8 +331,6 @@ def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> boo
     listed instances, every service component of `order` must run as THAT instance and the daemon of its band be
     READY; an interactive main is never "already healthy" (its start pass always runs). Otherwise the snapshot
     check as before (`_order_already_healthy`), unchanged for a box without listed instances."""
-    from . import daemon_control, radio_start
-    from .model import ComponentKind
     sid = svc.stack_of(target) or target                 # the target's stack (the run order starts with the daemon)
     if inst is None or not inst.slot:                    # slot 0: scoped only while the stack has listed instances
         if not listed_rids(svc._paths, sid):
@@ -335,20 +339,29 @@ def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> boo
         if not rid:
             return False
         inst = commands.Instance(0, rid)
-    for stack, comp in order:
-        if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE) or comp.kind == ComponentKind.ONESHOT:
+    # G1-C7 B4: slot 0's own rule (`_all_components_healthy`: readiness endpoints, DEGRADED) over the instance's
+    # statuses: its run state and its own TCP endpoints in place of the snapshot's.
+    from .probes.endpoints import tcp_endpoint_match
+    snap = svc.build_snapshot()
+    idx = {c.id: ss.components[c.id] for ss in snap.stacks for c in ss.stack.components}
+    for _s, comp in order:
+        cs = idx.get(comp.id)
+        if cs is None or comp.id == svc.DAEMON_ID or comp.process is None:
             continue
-        if comp.interactive:
-            if comp.id == stack.main:
-                return False
-            continue
-        if comp.id == svc.DAEMON_ID:
-            if not daemon_control.read_view(svc._system, radio_start.daemon_key(svc, band)).ready:
-                return False
-            continue
-        if not instance_runs(svc, comp, inst, band):
-            return False
-    return True
+        eps = [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
+               else o for o in cs.endpoints or () for e in endpoints_for([o.spec], inst)]
+        idx[comp.id] = dataclasses.replace(cs, run_state=instance_state(svc, comp, inst, band, cs.run_state), endpoints=eps)
+    return svc._all_components_healthy(order, idx, radio)
+
+
+def running_claim_keys(svc, sid: str, comp, claim) -> set:
+    """G1-C7 B5: `claim`'s keys as stack `sid`'s running `comp` holds them: slot 0's key and the key of each listed
+    instance of it that runs (claim_key), so two stacks' instances on one derived key conflict."""
+    keys = {claim.key}
+    for i in commands.stack_instances(svc.stack(sid), svc._paths):
+        if i.slot and instance_runs(svc, comp, i, resolve(svc, f"{sid}@{i.rid}")[2]):
+            keys.add(claim_key(claim, i))
+    return keys
 
 
 def endpoints_for(endpoints, inst) -> list:
@@ -379,7 +392,10 @@ def instance_state(svc, comp, inst, band: str, snap_state):
     if (comp.id == svc.DAEMON_ID or comp.process is None
             or comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE, ComponentKind.ONESHOT)):
         return snap_state
-    return RunState.RUNNING if instance_runs(svc, comp, inst, band) else RunState.STOPPED
+    if not instance_runs(svc, comp, inst, band):
+        return RunState.STOPPED
+    # G1-C7 B4: slot 0 keeps the snapshot's DEGRADED (judged on slot 0's endpoints); a listed instance's comes from its own
+    return RunState.DEGRADED if snap_state == RunState.DEGRADED and not inst.slot else RunState.RUNNING
 
 
 def start_state(svc, sid: str, comp, inst, band: str, snap_state):

@@ -1451,7 +1451,7 @@ def _run(argv: list[str] | None = None) -> int:
             sid, inst, iband, why = instances.resolve(svc, args.stack)
             if inst is not None and args.stack_action == "poststart":
                 why = f"lhpc stack poststart {args.stack}: not for an instance in this build"
-            if why:
+            if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1
             if inst is not None and getattr(args, "band", "") and args.band != iband:

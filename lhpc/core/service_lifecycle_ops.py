@@ -436,8 +436,8 @@ class LifecycleOpsMixin:
                         rb = resources_mod.radio_band(r.key)
                         if rb in active and resources_mod.radio_claim(rb) in claims:
                             add(sid, c.id, resources_mod.radio_claim(rb))
-                    elif r.key in claims:
-                        add(sid, c.id, r.key)
+                    else:                              # G1-C7 B5: a running instance's derived key too
+                        [add(sid, c.id, k) for k in sorted(instances.running_claim_keys(self, sid, c, r) & claims.keys())]
                 # same-frequency rule: another APP stack competing for a band we need. Exclude the
                 # daemon STACK (it provides the radio). Also skip it entirely when the TARGET is the
                 # daemon: its own dependent clients are consumers of the radio it provides, not
@@ -1121,7 +1121,7 @@ class LifecycleOpsMixin:
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
         return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst else ''}': {len(order)} component(s) in order.",
                             details=details,
-                            next_commands=[f"lhpc stack start {target}"
+                            next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst else f"lhpc stack start {target}"
                                            + (f" --band {band}" if band else "") + " --yes"],
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})
