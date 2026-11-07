@@ -234,8 +234,8 @@ class LifecycleOpsMixin:
                 return getattr(st, "run_state", None) in (RunState.RUNNING, RunState.DEGRADED)
         return False
 
-    def _meshcore_mode_refusal(self, target: str):
-        return _meshcore_mode.start_refusal(self, target)      # the rules: meshcore_mode.py
+    def _meshcore_mode_refusal(self, target: str, inst=None):
+        return _meshcore_mode.start_refusal(self, target, inst)      # the rules: meshcore_mode.py
 
     def _ready_endpoints_present(self, comp, inst=None) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
@@ -246,7 +246,7 @@ class LifecycleOpsMixin:
         from .probes.unixsock import probe_socket
         # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
         # repeater modes) — the SAME selection ongoing status applies.
-        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode()), inst) if e.ready]
+        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode(inst)), inst) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -638,7 +638,7 @@ class LifecycleOpsMixin:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         from . import reslock
         if auto_install_ctx is not None:
@@ -655,7 +655,7 @@ class LifecycleOpsMixin:
             _ob = self.operation_band(target, band)
             _order, _radio = self._order_radio(target, _ob)
             if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
-                                                position_note)[0]) is not None:
+                                                position_note, inst)[0]) is not None:
                 return _r
             return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band, inst=inst)
         # The guards: admission FIRST (outside the config-stability guard and before every
@@ -670,7 +670,7 @@ class LifecycleOpsMixin:
                 # before the boot-restore claim, the feed clearing and any other mutation.
                 # The inner PREPARE remains the authoritative backstop for direct callers.
                 _r, position, _pos_note = self._start_outer_refusal(
-                    target, _order, _op_band, _radio, position, position_note)
+                    target, _order, _op_band, _radio, position, position_note, inst)
                 if _r is not None:
                     return _r
                 # BOOT-RESTORE CLAIM HOOK: every lock held, nothing mutated yet. A refusal
@@ -900,7 +900,7 @@ class LifecycleOpsMixin:
                                 next_commands=["lhpc list"])
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         if (_r := self._start_static_refusal(target, "start")) is not None:
             return _r
@@ -950,7 +950,7 @@ class LifecycleOpsMixin:
         # so a refused start is known before anything is queued; the public `start()` re-checks it
         # under the locks as the authoritative, race-safe backstop immediately before mutation.
         _id_band = self._launch_band_hint(target, band)
-        id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band, inst)
         if not id_ok:
             return ActionResult(False, f"Cannot start '{target}': {id_msg}",
                                 data={"enforce_fields": id_fields},
@@ -2279,10 +2279,10 @@ class LifecycleOpsMixin:
         vals[_ri.NETKEY] = key if isinstance(key, str) else ""
         return _ri.problem(vals), _ri.reason(vals)
 
-    def _identity_refusal(self, target: str, band: str, op: str):
+    def _identity_refusal(self, target: str, band: str, op: str, inst=None):
         """The typed refusal for an unusable SAVED identity, or None — the one wording the start
         plan, the restart preflight and the locked apply-side recheck share."""
-        id_ok, id_fields, id_msg = self.enforce_identity(target, band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, band, inst)
         if id_ok:
             return None
         return ActionResult(False, f"Cannot {op} '{target}': {id_msg}",
@@ -2309,12 +2309,12 @@ class LifecycleOpsMixin:
         return None, position, note
 
     def _start_outer_refusal(self, target: str, order, band: str, radio: str,
-                             position: dict | None, note: str):
+                             position: dict | None, note: str, inst=None):
         """`(refusal or None, position, note)`: the public start's identity and MeshCore position
         decision, taken by the plan and the apply at the same point and in the same order.
         `order` is None/empty for an unknown target or nothing to run — `_start_impl` reports
         that properly, so no snapshot is taken then; nor for an already-healthy no-op."""
-        if order and (_r := self._identity_refusal(target, band, "start")) is not None:
+        if order and (_r := self._identity_refusal(target, band, "start", inst)) is not None:
             return _r, position, note
         if position is None and order and not self._order_already_healthy(order, radio):
             return self._position_refusal(target, "start")

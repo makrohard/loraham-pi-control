@@ -129,42 +129,42 @@ def _set(svc, values: dict, inst=None) -> None:
 _ROWS_SEEN: dict = {}          # file path -> ((inode, mtime_ns, size), every row key's value)
 
 
-def _rows(svc) -> dict:
+def _rows(svc, inst=None) -> dict:
     """Every row key's value in ONE helper call, reused while the file is unchanged (a Settings
     render reads five rows: one subprocess, not five). Any write replaces the file (a new inode)
     or changes its mtime, so a changed file is read again."""
-    p = file_path(svc._paths)
+    p = file_path(svc._paths, inst)
     st = p.stat()
     stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
     seen = _ROWS_SEEN.get(str(p))
     if seen is None or seen[0] != stamp:
-        seen = _ROWS_SEEN[str(p)] = (stamp, read(svc, [k for k, _s in ROWS.values()]))
+        seen = _ROWS_SEEN[str(p)] = (stamp, read(svc, [k for k, _s in ROWS.values()], inst))
     return seen[1]
 
 
-def row_value(svc, name: str, legacy: str) -> str:
+def row_value(svc, name: str, legacy: str, inst=None) -> str:
     """The stopped row's value: openHop's file if it holds the key, else the legacy source
     (the pre-first-start migration state)."""
     try:
-        value = _rows(svc).get(ROWS[name][0])
+        value = _rows(svc, inst).get(ROWS[name][0])
     except (OSError, OneStoreError):
         value = None
     return to_row(name, value) if value is not None else legacy
 
 
-def chat_name_taken(svc, name: str) -> bool:
+def chat_name_taken(svc, name: str, inst=None) -> bool:
     """Plan §13: a companion in openHop's file other than LHPC's chat node (found by the chat
     node's identity key) already carries `name`. False without a file or a name."""
-    if not name or not file_path(svc._paths).exists():
+    if not name or not file_path(svc._paths, inst).exists():
         return False
-    companions = read(svc, ["identities.companions"]).get("identities.companions") or []
-    mine = _mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME)
+    companions = read(svc, ["identities.companions"], inst).get("identities.companions") or []
+    mine = _mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.slot else "")
     return any(isinstance(c, dict) and c.get("name") == name
                and str(c.get("identity_key") or "").strip().lower() != mine
                for c in companions)
 
 
-def rows_target(svc, values: dict) -> tuple:
+def rows_target(svc, values: dict, inst=None) -> tuple:
     """The config-transaction target that writes the named rows (each exactly its own key) into
     openHop's file. Rendered INSIDE the transaction's exclusive lock: refused while the repeater
     runs or its stop is unverified, and committed or rolled back together with every other target
@@ -172,20 +172,20 @@ def rows_target(svc, values: dict) -> tuple:
     keys = {ROWS[n][0]: to_file(n, v) for n, v in values.items()}
 
     def render(_paths):
-        why = blocked(svc)
+        why = blocked(svc, inst)
         if why:
             raise cfgmod.ConfigError(why)
         try:
-            return _helper(svc, "render", str(file_path(svc._paths)), stdin=json.dumps(keys))
+            return _helper(svc, "render", str(file_path(svc._paths, inst)), stdin=json.dumps(keys))
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise cfgmod.ConfigError(f"openHop's config file: {exc}") from exc
-    return ("openhop", file_path(svc._paths), render, 0o600)
+    return ("openhop", file_path(svc._paths, inst), render, 0o600)
 
 
-def save_rows(svc, values: dict) -> str:
+def save_rows(svc, values: dict, inst=None) -> str:
     """The rows alone, as their own transaction. '' on success, else the refusal (nothing written)."""
     try:
-        cfgmod.apply_config_transaction(svc._paths, [rows_target(svc, values)])
+        cfgmod.apply_config_transaction(svc._paths, [rows_target(svc, values, inst)])
     except cfgmod.ConfigError as exc:
         return str(exc)
     return ""
@@ -204,7 +204,7 @@ def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
             raise OneStoreError(why)
         if legacy is None:
             svc._invalidate_config()                     # the committed store, read under the lock
-            legacy = {n: svc._stored_param_value(STACK_ID, "file", NODE_ID, n)
+            legacy = {n: svc._stored_param_value(STACK_ID, "file", NODE_ID, n, inst=inst)     # 7f: an instance's own
                       for n in ("repeater_name", "repeater_mode", "airtime")}
         have = read(svc, [k for k, _s in ROWS.values()], inst)
         missing = {}
@@ -248,10 +248,10 @@ def _mint(name: str, airtime_default: str):
     return ""
 
 
-def for_start(svc, target: str) -> bool:
+def for_start(svc, target: str, inst=None) -> bool:
     """Does a start of `target` run the repeater (the one-store steps apply)?"""
     from .meshcore_mode import repeater_on
-    return target in (STACK_ID, NODE_ID) and repeater_on(svc.meshcore_mode())
+    return target in (STACK_ID, NODE_ID) and repeater_on(svc.meshcore_mode(inst))   # 7f: an instance's own mode
 
 
 def start_ensure(svc, target: str, nested: bool = False, inst=None) -> None:
@@ -259,7 +259,7 @@ def start_ensure(svc, target: str, nested: bool = False, inst=None) -> None:
     legacy stack-config values, read under ensure's lock. Any failure refuses the start as a
     OneStoreError. A repeater start nested under a held guard must come from a restart that ran
     `restart_ensure` before it (the caller passes `_ensured`); any other is refused (fails closed)."""
-    if not for_start(svc, target):
+    if not for_start(svc, target, inst):
         return
     if nested:
         raise OneStoreError("the openHop-file step must run before the config-stability guard: "
@@ -277,7 +277,7 @@ def restart_ensure(svc, target: str, inst=None) -> None:
     wait for the guard), so it skips `start_ensure`. With every one-store key in openHop's file there
     is nothing to migrate; otherwise the first repeater-mode start migrates here, which needs the node
     stopped (a running chat node switched to a repeater mode is refused before anything stops)."""
-    if not for_start(svc, target):
+    if not for_start(svc, target, inst):
         return
     try:
         complete = file_path(svc._paths, inst).exists() and all(
@@ -298,17 +298,17 @@ def restart_ensure(svc, target: str, inst=None) -> None:
     start_ensure(svc, target, inst=inst)
 
 
-def split_saves(svc, target: str, params: list) -> tuple:
+def split_saves(svc, target: str, params: list, inst=None) -> tuple:
     """A settings save: once openHop's file exists, the one-store rows go there, as one more
     target of the save's own transaction (never cleared). Returns (refusal ActionResult or None,
     the params left for LHPC's own store, the targets to commit with them, the recheck the save
     runs inside its exclusive lock: "file exists?" is decided here, before that lock, and a first
     start (`ensure`, the same lock) may create the file in between; a changed answer refuses)."""
     rows = [ch for ch in params if ch.kind == "f" and ch.comp.id == NODE_ID and ch.param.name in ROWS]
-    had = bool(rows) and file_path(svc._paths).exists()
+    had = bool(rows) and file_path(svc._paths, inst).exists()
 
     def recheck():
-        if rows and file_path(svc._paths).exists() != had:
+        if rows and file_path(svc._paths, inst).exists() != had:
             raise cfgmod.ConfigError("openHop's settings file was created or removed during this save "
                                      "(a repeater start or purge); nothing was saved, save again")
     if not rows or not had:
@@ -318,7 +318,7 @@ def split_saves(svc, target: str, params: list) -> tuple:
         return ActionResult(False, f"Config not saved for '{target}'.",
                             details=["a repeater setting kept in openHop's file cannot be cleared"]), [], [], recheck
     left = [ch for ch in params if ch not in rows]
-    return None, left, [rows_target(svc, {ch.param.name: str(ch.value) for ch in rows})], recheck
+    return None, left, [rows_target(svc, {ch.param.name: str(ch.value) for ch in rows}, inst)], recheck
 
 
 def pending_rows(params: list) -> dict:
@@ -327,7 +327,7 @@ def pending_rows(params: list) -> dict:
             if ch.kind == "f" and ch.comp.id == NODE_ID and ch.param.name in ROWS}
 
 
-def rendered(svc, name: str, target: str):
+def rendered(svc, name: str, target: str, inst=None):
     """The host-config value generation renders for a meshcore-node param of this feature, or
     None for any other param: a one-store row is never rendered (the host reads openHop's file);
     `openhop_use_gps` is derived from the stack's `use_gps` switch."""
@@ -337,7 +337,7 @@ def rendered(svc, name: str, target: str):
         return "on" if svc.gps_enabled_for(target) else "off"
     if name == "chat_node_id":                          # the pure repeater's handle, never secret
         try:
-            return key_id(_mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME))
+            return key_id(_mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.slot else ""))
         except (OSError, ValueError):
             return ""                                    # no usable chat key: nothing is "mine"
     return None
@@ -349,7 +349,7 @@ def key_id(key_hex: str) -> str:
     return hashlib.sha256(key_hex.strip().lower().encode()).hexdigest()[:16] if key_hex else ""
 
 
-def chat_name_refusal(svc, current: dict, merged: dict) -> str:
+def chat_name_refusal(svc, current: dict, merged: dict, inst=None) -> str:
     """Plan §13 at save: in chat+repeater the chat node is an entry of openHop's companion list,
     so a save that sets its name or turns that mode on is refused when another companion there
     carries the name (the host refuses the same at start). "" = fine; an unreadable file refuses."""
@@ -359,24 +359,24 @@ def chat_name_refusal(svc, current: dict, merged: dict) -> str:
     if new == old or normalize(new["mode"]) != "chat+repeater":
         return ""
     try:
-        return CHAT_NAME_TAKEN if chat_name_taken(svc, str(new["node_name"] or "")) else ""
+        return CHAT_NAME_TAKEN if chat_name_taken(svc, str(new["node_name"] or ""), inst) else ""
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return f"openHop's config file could not be read, so the chat node's name cannot be checked ({exc})"
 
 
-def password_view(svc, comp) -> dict | None:
+def password_view(svc, comp, inst=None) -> dict | None:
     """The Password section once openHop's file exists (it holds the dashboard password), else
     None (before the first repeater-mode start the legacy secret file is shown, and for any other
     component's password)."""
-    if not comp.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) or not file_path(svc._paths).exists():
+    if not comp.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) or not file_path(svc._paths, inst).exists():
         return None
     try:
-        value = read(svc, ["repeater.security.admin_password"]).get(
+        value = read(svc, ["repeater.security.admin_password"], inst).get(
             "repeater.security.admin_password") or None
         reason = "" if value else "not set in openHop's config file"
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         value, reason = None, f"openHop's config file is unreadable ({exc})"
-    return {"user": comp.ui_user or "admin", "path": str(file_path(svc._paths)),
+    return {"user": comp.ui_user or "admin", "path": str(file_path(svc._paths, inst)),
             "exists": value is not None, "value": value, "reason": reason, "edit_command": "",
             "note": comp.ui_password_note}
 
@@ -385,7 +385,7 @@ def start_warnings(svc, target: str, inst=None) -> list:
     """The `[warning]` lines of a repeater-mode start (plan DELTA-2 a): a repeater name equal to the
     operator callsign, or a dashboard password outside LHPC's rule, written the upstream way is neither
     refused nor overwritten, only shown. [] when there is no file yet or it cannot be read (the ensure step reports that)."""
-    if not for_start(svc, target) or not file_path(svc._paths, inst).exists():
+    if not for_start(svc, target, inst) or not file_path(svc._paths, inst).exists():
         return []
     try:
         got = read(svc, ["repeater.node_name", "repeater.security.admin_password"], inst)

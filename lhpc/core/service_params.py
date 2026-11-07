@@ -370,14 +370,14 @@ class ParamsConfigMixin:
         return out
 
     def _stored_param_value(self, target: str, kind: str, comp_id: str, name: str,
-                            band: str = "") -> str:
+                            band: str = "", inst=None) -> str:
         """Like `_resolved_param_value` but STORED-ONLY: "" when nothing was explicitly saved,
         never the (operator-substituted) default. Identity fields resolve through this so an
         inherited value is never mistaken for — or round-tripped into — a saved local one."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         use_band = "" if (cfg_band and name in _BANDLESS_STACK_PARAMS) else cfg_band
-        stored = self._stack_config_cached(self._owner_stack_id(target), use_band)
+        stored, _bandless = _instances.stores(self, self._owner_stack_id(target), use_band, inst)   # 7f: its own
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -385,18 +385,18 @@ class ParamsConfigMixin:
         return "" if val is None else str(val)
 
     def _resolved_param_value(self, target: str, kind: str, comp_id: str, name: str,
-                              band: str = "") -> str:
+                              band: str = "", inst=None) -> str:
         """The component's OWN persisted value (component-scoped, else a UNIQUE flat) or its
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # 7f: its own
         if cfg_band and name in _BANDLESS_STACK_PARAMS:
             # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
             # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
             # then display, and which the next bundle save writes back as "at default -> remove",
             # silently clearing the switch while editing something unrelated.
-            stored = self._stack_config_cached(self._owner_stack_id(target), "")
+            stored = bandless
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -406,7 +406,7 @@ class ParamsConfigMixin:
             bd = band_default(p, cfg_band or band, self.config().radio) if p is not None else ""
             val = self._op_subst(bd)
         if kind == "file" and comp_id == MESHCORE_COMPONENT and name in _openhop_store.ROWS:
-            return _openhop_store.row_value(self, name, str(val))    # issue #5: the file wins
+            return _openhop_store.row_value(self, name, str(val), inst)    # issue #5: the file wins
         return str(val)
 
     def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
@@ -1490,18 +1490,19 @@ class ParamsConfigMixin:
             return f"could not preserve the MeshCore identity: {exc}"
         return ""
 
-    def _controller_secret(self, name: str) -> str:
+    def _controller_secret(self, name: str, inst=None) -> str:
         """Resolve a `secret_file` FileParam to its value, creating it if this is first use.
 
         Config generation is the ONE place allowed to mint a MeshCore identity: every other
         caller adopts only. An unusable existing key raises rather than being replaced.
         """
         from . import meshcore_identity
+        rid = inst.rid if inst is not None and inst.slot else ""      # 7f: a listed instance's own, never slot 0's
         if name == meshcore_identity.IDENTITY_FILENAME:
-            return meshcore_identity.ensure_identity(self._paths,
-                                                     self.meshcore_identity_candidates())
+            return meshcore_identity.ensure_identity(self._paths, () if rid else self.meshcore_identity_candidates(),
+                                                     rid=rid)
         if name == meshcore_identity.REPEATER_JWT_FILENAME:
-            return meshcore_identity.ensure_password(self._paths, name)
+            return meshcore_identity.ensure_password(self._paths, name, rid)
         raise ValueError(f"unknown controller secret {name!r}")
 
     def _snapshot_or_none(self):
@@ -1666,7 +1667,7 @@ class ParamsConfigMixin:
         so the comparison has to fold case itself."""
         return value.strip().casefold() in {p.casefold() for p in self._IDENTITY_PLACEHOLDERS}
 
-    def _identity_fields(self, target: str) -> list[dict]:
+    def _identity_fields(self, target: str, inst=None) -> list[dict]:
         """EVERY operator-identity field CALL/node enforcement guards (a stack may have more
         than one — Meshtastic requires both its long and short node names). Scoped to the
         target: a STACK target inspects every component; a direct COMPONENT target only that
@@ -1690,14 +1691,14 @@ class ParamsConfigMixin:
                             "default": str(getattr(p, "default", "") or "")})
         from . import meshcore_mode as _mm
         if (any(r["comp"] == _mm.NODE_ID for r in out)
-                and not _mm.chat_identity_required(self.meshcore_mode())):
+                and not _mm.chat_identity_required(self.meshcore_mode(inst))):
             # Repeater-only: no Companion runs, so the chat node's name is not an identity to
             # enforce (the repeater's own name is checked by `meshcore_mode.start_refusal`).
             out = [r for r in out if not (r["comp"] == _mm.NODE_ID and r["name"] == "node_name")]
         out.sort(key=lambda r: r["enforce"] != "licensed")
         return out
 
-    def meshcore_mode(self) -> str:
+    def meshcore_mode(self, inst=None) -> str:
         """The MeshCore stack's SAVED (desired) mode (`meshcore_mode.MODES`), read from the node's
         `mode` setting exactly like every other param — the mode the next start runs in. `chat`
         (the default, the mode every box ran before the setting existed) when the stack or the
@@ -1708,6 +1709,8 @@ class ParamsConfigMixin:
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is None or not any(p.name == "mode" for p in fc.params):
             return _mm.DEFAULT_MODE
+        if inst is not None and inst.slot:                  # 7f: a listed instance's own mode (DEC-W52)
+            return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
 
     def meshcore_running_mode(self) -> str:
@@ -1895,7 +1898,7 @@ class ParamsConfigMixin:
         except validators.ValidationError as exc:
             return "", str(exc)
 
-    def identity_resolution(self, target: str, band: str = "") -> list[dict]:
+    def identity_resolution(self, target: str, band: str = "", inst=None) -> list[dict]:
         """THE authoritative effective-identity resolution of the SAVED configuration — every
         consumer (start plan + apply gates, Settings views, CLI hints, TX tests) reads precedence
         from here. The explicit local value is the STORED one (`_stored_param_value`), never the
@@ -1916,10 +1919,10 @@ class ParamsConfigMixin:
         from . import validators
         out = []
         global_call = str(self.config().operator.callsign or "").strip()
-        for rec in self._identity_fields(target):
+        for rec in self._identity_fields(target, inst):
             kind = "run" if rec["kind"] == "run" else "file"
             explicit = self._stored_param_value(target, kind, rec["comp"], rec["name"],
-                                                band).strip()
+                                                band, inst).strip()
             validate = validators._NAMED.get(rec["validator"])
             row = dict(rec)
             row.update({"explicit": explicit, "effective": "", "source": "missing",
@@ -2003,13 +2006,13 @@ class ParamsConfigMixin:
         rows = self.identity_resolution(target, band)
         return rows[0]["effective"] if rows else ""
 
-    def enforce_identity(self, target: str, band: str = "") -> tuple[bool, list, str]:
+    def enforce_identity(self, target: str, band: str = "", inst=None) -> tuple[bool, list, str]:
         """Whether `target` may start given its identity rules, judged on the SAVED configuration
         (the plan and the locked apply share it). Returns (ok, fields, message): `fields` is
         EVERY Settings field to highlight (Meshtastic has two required names) and `message`
         names every problem. Delegates entirely to `identity_resolution` — the one
         precedence/validation path all consumers share."""
-        rows = self.identity_resolution(target, band)
+        rows = self.identity_resolution(target, band, inst)
         bad = [r for r in rows if r["problem"]]
         if not bad:
             return (True, [r["field"] for r in rows], "")
@@ -2181,7 +2184,7 @@ class ParamsConfigMixin:
                     # authorised. Empty -> `omit_if_empty` drops the key (and any stale one).
                     values[p.name] = str((position or {}).get(p.name, "") or "")
                     continue
-                if c.id == MESHCORE_COMPONENT and (_oh := _openhop_store.rendered(self, p.name, target)) is not None:
+                if c.id == MESHCORE_COMPONENT and (_oh := _openhop_store.rendered(self, p.name, target, inst)) is not None:
                     values[p.name] = _oh                # issue #5: one-store rows, derived use_gps
                     continue
                 if getattr(p, "secret_file", ""):
@@ -2202,7 +2205,7 @@ class ParamsConfigMixin:
                         values[p.name] = ""            # blank -> the base is left untouched
                         continue
                     try:
-                        values[p.name] = self._controller_secret(p.secret_file)
+                        values[p.name] = self._controller_secret(p.secret_file, inst)
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
                         break

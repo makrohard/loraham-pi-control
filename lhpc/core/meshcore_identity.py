@@ -60,8 +60,10 @@ class MeshCoreIdentityError(ValueError):
     """
 
 
-def secret_path(paths: Paths, filename: str = IDENTITY_FILENAME) -> Path:
-    return paths.under("config", "secrets", filename)
+def secret_path(paths: Paths, filename: str = IDENTITY_FILENAME, rid: str = "") -> Path:
+    """config/secrets/<filename>, a listed instance's config/secrets/<rid>/<filename> (7f: its own key, never slot 0's;
+    the layout of the manifest's `config/secrets/{instance_dir}…` paths)."""
+    return paths.under("config", "secrets", rid, filename) if rid else paths.under("config", "secrets", filename)
 
 
 def normalize_key(raw: object) -> str:
@@ -102,7 +104,7 @@ def _mint() -> str:
 
 
 def _read_secret(paths: Paths, filename: str = IDENTITY_FILENAME, *, normalize=None,
-                 what: str = "MeshCore identity") -> str:
+                 what: str = "MeshCore identity", rid: str = "") -> str:
     """The stored secret, or "" if there is none.
 
     Raises `MeshCoreIdentityError` when the file exists but is unusable — including when it
@@ -111,7 +113,7 @@ def _read_secret(paths: Paths, filename: str = IDENTITY_FILENAME, *, normalize=N
     canonical value or "" (default: a MeshCore private key).
     """
     normalize = normalize or normalize_key
-    path = secret_path(paths, filename)
+    path = secret_path(paths, filename, rid)
     # Permissions FIRST: a lax secret must be refused rather than read. Checking after the
     # read would have already pulled key material out of a file we then declare untrusted.
     st = runtime_fs.stat_leaf_nofollow(paths, path)     # None = absent/unreadable/escaping
@@ -185,7 +187,7 @@ def candidate_key(paths: Paths, path: Path) -> str:
 
 
 def _store(paths: Paths, key: str, filename: str = IDENTITY_FILENAME, *, normalize=None,
-           what: str = "MeshCore identity") -> str:
+           what: str = "MeshCore identity", rid: str = "") -> str:
     """Persist `key`, or return the winner of a concurrent first-write race.
 
     Target-exclusive creation, not an atomic replace: `atomic_write_bytes` renames over the
@@ -194,18 +196,20 @@ def _store(paths: Paths, key: str, filename: str = IDENTITY_FILENAME, *, normali
     already holds the config guard SHARED and a nested exclusive under it is rejected.
     """
     runtime_fs.chmod(paths, paths.under("config", "secrets"), 0o700, create_dir=True)
+    if rid:
+        runtime_fs.chmod(paths, paths.under("config", "secrets", rid), 0o700, create_dir=True)
     try:
-        runtime_fs.create_exclusive_bytes(paths, secret_path(paths, filename),
+        runtime_fs.create_exclusive_bytes(paths, secret_path(paths, filename, rid),
                                           (key + "\n").encode("ascii"), mode=0o600)
     except FileExistsError:
-        existing = _read_secret(paths, filename, normalize=normalize, what=what)
+        existing = _read_secret(paths, filename, normalize=normalize, what=what, rid=rid)
         if existing:                            # raises if the winner is unusable
             return existing
         raise
     return key
 
 
-def adopt_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME) -> str:
+def adopt_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME, rid: str = "") -> str:
     """Adopt an existing identity so it survives an operation that replaces its file.
 
     Returns the stored key, or "" when there is nothing to adopt. NEVER mints: an operator
@@ -213,23 +217,23 @@ def adopt_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAM
     `MeshCoreIdentityError` if a stored secret or a candidate is present but invalid — the
     caller turns that into a refusal BEFORE deleting or replacing anything.
     """
-    stored = _read_secret(paths, filename)
+    stored = _read_secret(paths, filename, rid=rid)
     if stored:
         return stored
     for cand in candidates:
         key = candidate_key(paths, cand)
         if key:
-            return _store(paths, key, filename)
+            return _store(paths, key, filename, rid=rid)
     return ""
 
 
-def ensure_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME) -> str:
+def ensure_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME, rid: str = "") -> str:
     """The key to write into the generated config, minting one if none exists yet.
 
     The ONLY place a MeshCore identity is created (`filename` selects the node's or the
     repeater's). Adoption is tried first, so a key already held in a candidate config is kept.
     """
-    return adopt_identity(paths, candidates, filename) or _store(paths, _mint(), filename)
+    return adopt_identity(paths, candidates, filename, rid) or _store(paths, _mint(), filename, rid=rid)
 
 
 # 15 characters: a MeshCore client sends a login password in a 15-byte field, so a longer one can
@@ -259,17 +263,17 @@ def _normalize_password(raw: object) -> str:
 _MINTED_LENGTH = {REPEATER_ADMIN_FILENAME: OTA_LOGIN_MAX, REPEATER_JWT_FILENAME: 64}
 
 
-def ensure_password(paths: Paths, filename: str) -> str:
+def ensure_password(paths: Paths, filename: str, rid: str = "") -> str:
     """A controller-minted login secret (the openHop dashboard admin password or its JWT secret):
     read the stored one, else mint random letters and digits ONCE (`_MINTED_LENGTH`) and persist it
     0600 like the identities. Never replaces a stored value; a lax or garbled file raises, exactly
     like a bad key."""
     what = "dashboard password" if filename == REPEATER_ADMIN_FILENAME else "dashboard JWT secret"
-    stored = _read_secret(paths, filename, normalize=_normalize_password, what=what)
+    stored = _read_secret(paths, filename, normalize=_normalize_password, what=what, rid=rid)
     if stored:
         return stored
     minted = "".join(_secrets.choice(_ALNUM) for _ in range(_MINTED_LENGTH[filename]))
-    return _store(paths, minted, filename, normalize=_normalize_password, what=what)
+    return _store(paths, minted, filename, normalize=_normalize_password, what=what, rid=rid)
 
 
 # ----- issue #5: the repeater's identity and password move into openHop's own file -------------
@@ -284,10 +288,10 @@ def mint_password(filename: str = REPEATER_ADMIN_FILENAME) -> str:
     return "".join(_secrets.choice(_ALNUM) for _ in range(_MINTED_LENGTH[filename]))
 
 
-def read_secret(paths: Paths, filename: str) -> str:
+def read_secret(paths: Paths, filename: str, rid: str = "") -> str:
     """A legacy repeater secret's value, or "" when absent; a lax or garbled file raises."""
     normalize = _normalize_password if filename in _MINTED_LENGTH else None
-    return _read_secret(paths, filename, normalize=normalize)
+    return _read_secret(paths, filename, normalize=normalize, rid=rid)
 
 
 def remove_secret(paths: Paths, filename: str) -> None:

@@ -33,8 +33,14 @@ def _helper(calls):
     return helper
 
 
-def _repeater(tmp_path, name="Relay R3"):
+def _repeater(tmp_path, name="Relay R3", rid=""):
+    # rid: the listed instance's own settings, config/stacks/meshcore@<rid>.toml (7f, DEC-W60: never slot 0's)
     from lhpc.adapters.cli import main as cli
+    from lhpc.core import config as cfgmod
+    if rid:
+        cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore",
+                                   {"file_mode": "repeater", "file_repeater_name": name}, band=rid)
+        return
     svc = cli.ControllerService()
     r = svc.save_config("meshcore", {"file_mode": "repeater", "file_repeater_name": name})
     assert r.ok, (r.summary, r.details)
@@ -44,7 +50,8 @@ def test_a_listed_instance_gets_its_own_openhop_file_and_slot_0_is_untouched(box
     run = box((R1, R3), LISTED, ports=(5010, 8010, 8798))
     calls = []
     monkeypatch.setattr(ops, "_helper", _helper(calls))
-    _repeater(tmp_path)
+    _repeater(tmp_path, "Relay 0")                                # slot 0 a repeater too: nothing of it is lent
+    _repeater(tmp_path, rid="r3")
     slot0_key = mi.secret_path(Paths(runtime_root=tmp_path), mi.REPEATER_IDENTITY_FILENAME)
     slot0_key.parent.mkdir(parents=True, exist_ok=True)
     slot0_key.write_text("ab" * 32 + "\n")                        # slot 0's legacy identity, not yet migrated
@@ -67,7 +74,7 @@ def test_an_instances_file_waits_only_for_its_own_records(box, tmp_path, monkeyp
     from lhpc.core import lifecycle as lcmod
     run = box((R1, R3), LISTED, ports=(5010, 8010, 8798))
     monkeypatch.setattr(ops, "_helper", _helper([]))
-    _repeater(tmp_path)
+    _repeater(tmp_path, rid="r3")
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
     real = lcmod.Lifecycle.owned_records
 
