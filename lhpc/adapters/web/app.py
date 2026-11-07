@@ -1059,7 +1059,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "deps_report": service.deps_report(stack.id),
                     "needs_build": service.unbuilt_components(stack.id),
                     "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
-                    "daemon_params": service.daemon_params_view(stack.id, band),
+                    "daemon_params": service.daemon_params_view(stack.id, band, _view_rid(stack.id, band)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
@@ -1505,6 +1505,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if why:
             abort(make_response(jsonify(error=why), 404))
         return rid
+
+    def _view_rid(stack_id: str, band: str) -> str:
+        """The radio the opened daemon panel shows (`dp=<stack>&rid=rN`, item 16); "" (the band's view) for another
+        stack's panel, or a rid that is no enabled radio (of `band` when one is given): the page never fails on it."""
+        from lhpc.core import radio_start
+        rid = request.args.get("rid", "")
+        if not rid or request.args.get("dp") != stack_id:
+            return ""
+        _inst, rband, why = radio_start.daemon_radio(service, rid)
+        return "" if why or (band and rband != band) else rid
 
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):
@@ -2015,11 +2025,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = request.form.get("band", "")
         return band, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
-    def _dp_back(stack_id: str, band: str):
+    def _dp_back(stack_id: str, band: str, rid: str = ""):
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
         # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
         # `open=<stack_id>` forces the row and the anchor scrolls to it.
-        return redirect(url_for("stacks_overview", band=band or None,
+        return redirect(url_for("stacks_overview", band=band or None, rid=rid or None,      # item 16: its radio
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 
@@ -2190,9 +2200,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, values = _daemon_param_form()
-        result = service.save_daemon_params(stack_id, band, values)
+        rid = _radio_arg(band)
+        result = service.save_daemon_params(stack_id, band, values, rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/apply")
     def daemon_params_apply(stack_id: str):
@@ -2201,17 +2212,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, values = _daemon_param_form()
-        save = service.save_daemon_params(stack_id, band, values)   # persist first
+        rid = _radio_arg(band)
+        save = service.save_daemon_params(stack_id, band, values, rid)   # persist first
         if not save.ok:
             flash(save.summary, "warn")
-            return _dp_back(stack_id, band)
-        result = service.apply_daemon_params(stack_id, band)         # then push live
+            return _dp_back(stack_id, band, rid)
+        result = service.apply_daemon_params(stack_id, band, rid)         # then push live
         # Truthful: partial/total apply failure flashes as a warning (never green), and the
         # timing override stays saved regardless.
         flash("Saved. Apply live: " + result.summary
               + (" — " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/reset")
     def daemon_params_reset(stack_id: str):
@@ -2220,9 +2232,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band = request.form.get("band", "")
-        result = service.reset_daemon_params(stack_id, band)
+        rid = _radio_arg(band)
+        result = service.reset_daemon_params(stack_id, band, rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/mode")
     def stack_mode_save(stack_id: str):

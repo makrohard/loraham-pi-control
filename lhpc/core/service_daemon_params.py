@@ -227,14 +227,14 @@ class DaemonParamsMixin:
         fixed = sorted({c.band for c in (s.components if s else ()) if c.band} & set(active))
         return fixed[0] if fixed else active[0]
 
-    def chip_family_for_band(self, band: str) -> str:
+    def chip_family_for_band(self, band: str, rid: str = "") -> str:
         """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware
         is configured or the preset is unknown; at stage L5 the band's radio row's model (W5-2).
         The accepted POWER range depends on it: daemon 1.0.0 enforces 2..17 on SX127x (below 2
         RadioLib drives RFO instead of PA_BOOST, and 18..20 are refused) against 0..20 on SX1262.
         "" deliberately narrows nothing — see `daemon_control.int_range`."""
         from . import config as cfgmod
-        fam = radio_start.chip_family(self, band)
+        fam = radio_start.chip_family(self, band, rid)
         return fam if fam is not None else cfgmod.hw_preset_family(self.hw_preset_for_band(band))
 
     def _daemon_feed_source(self, band: str, rid: str = "") -> Path | None:
@@ -399,12 +399,12 @@ class DaemonParamsMixin:
             lines.append(f"  [{tag}] {band}: {detail}")
         return lines, tx_ok, ""
 
-    def daemon_params_view(self, target: str, band: str = "") -> dict:
-        """Web view for the daemon-params panel: the grouped, editable radio-parameter rows for
-        ONE band, plus the in-panel band chooser (`all_bands` = both toggle options, `bands` = the
-        ones this stack can use; the daemon and band-switchable clients get both, a fixed-band stack
-        only its own). {} for direct-SPI / unknown stacks. Values are the effective config-file
-        values (default + operator save)."""
+    def daemon_params_view(self, target: str, band: str = "", rid: str = "") -> dict:
+        """Web view for the daemon-params panel: the editable radio-parameter rows of ONE band (`bands` = the ones this
+        stack can use, `all_bands` the toggle's options), or with `rid` of one radio (item 16: radio_params_view);
+        `radios` = every enabled radio for the chooser. {} for direct-SPI / unknown stacks."""
+        if rid:
+            return radio_start.radio_params_view(self, target, rid)
         from . import daemon_params
         sid = self._owner_stack_id(target)                   # owner-stack daemon profile + storage
         is_daemon = self._is_daemon_target(target)
@@ -423,14 +423,14 @@ class DaemonParamsMixin:
         # app stack that is currently running (its daemon dependency is up).
         can_apply = is_daemon or self.stack_running(sid)
         return {"stack": target, "band": b, "bands": applicable, "all_bands": list(self.RADIO_BANDS),
-                "is_daemon": is_daemon, "can_apply": can_apply,
+                "is_daemon": is_daemon, "can_apply": can_apply, "radios": radio_start.view_radios(self._paths),
                 "high_power": self.high_power_state(b),
                 "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b),
                                                  self.chip_family_for_band(b),
                                                  self.high_power_for_band(b))}
 
     @invalidates_snapshot
-    def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
+    def save_daemon_params(self, target: str, band: str, values: dict, rid: str = "") -> ActionResult:
         """Persist operator overrides for a stack's daemon params (band-scoped). Semantics:
           * a param NOT present in `values` is left UNCHANGED (direct callers patch a subset);
           * an explicitly BLANK value clears ONLY that param's override;
@@ -438,9 +438,10 @@ class DaemonParamsMixin:
             normalised) before compare/store — an equivalent-to-default value clears rather than
             persisting a redundant override, and e.g. `fsk` is stored/displayed as `FSK`.
         Persisted via the LOCKED merge, so normal params, other-band dp_*, remotes and autostart
-        all survive. Never applies live."""
+        all survive. Never applies live. With `rid`, one radio's own settings (item 16: radio_start)."""
         from . import config as cfgmod
-        from . import daemon_params
+        if rid:
+            return radio_start.save_radio_params(self, target, rid, values)
         sid = self._owner_stack_id(target)                     # persist into the OWNER stack config
         band = self._effective_daemon_band(target, band)
         if not self._has_daemon_params(target):
@@ -450,21 +451,11 @@ class DaemonParamsMixin:
             return ActionResult(False, f"Cannot save daemon parameters for '{target}': no radio "
                                        "hardware configured — choose your board in the daemon "
                                        "Hardware settings first")
-        updates: dict[str, str] = {}
-        for name in daemon_params.ALL_PARAMS:
-            if name not in values:
-                continue                                           # omitted -> leave unchanged
-            key = f"dp_{band}_{name}"
-            raw = str(values[name]).strip()
-            if raw == "":
-                updates[key] = ""                                  # explicit blank -> clear this key
-                continue
-            err = daemon_control.validate_set(name, raw, self.chip_family_for_band(band),
-                                              self.high_power_for_band(band))
-            if err:
-                return ActionResult(False, f"{name}: {err}")
-            canon = daemon_control.canonical_value(name, raw)
-            updates[key] = "" if canon == daemon_params.default_value(sid, band, name) else canon
+        edits, err = radio_start.dp_updates(self, sid, band, values, self.chip_family_for_band(band),
+                                            self.high_power_for_band(band))
+        if err:
+            return ActionResult(False, err)
+        updates = {f"dp_{band}_{name}": v for name, v in edits.items()}
         try:
             # Merge ONLY the dp_<band>_<PARAM> keys into the OWNER stack config (clear_empty=True);
             # sibling run/file params, other-band dp_*, remotes and autostart all survive untouched.
@@ -475,7 +466,7 @@ class DaemonParamsMixin:
         return ActionResult(True, f"saved daemon params for {target} ({band})")
 
     @invalidates_snapshot
-    def apply_daemon_params(self, target: str, band: str = "") -> ActionResult:
+    def apply_daemon_params(self, target: str, band: str = "", rid: str = "") -> ActionResult:
         """Apply this stack's effective daemon params to the RUNNING daemon now (the Apply button).
 
         Serializes against start/stop/restart and another Apply on the same band via the band
@@ -494,8 +485,8 @@ class DaemonParamsMixin:
         is_daemon = self._is_daemon_target(target)
         if not (is_daemon or self.stack_running(sid)):
             return ActionResult(False, f"Apply live is only available while {target} is running")
-        b = self._effective_daemon_band(target, band)
-        keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, b)]   # vs start/stop on its radio
+        b = radio_start.daemon_radio(self, rid)[1] if rid else self._effective_daemon_band(target, band)   # item 16
+        keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, rid or b)]   # vs start/stop on its radio
         try:
             with self._keys_guard("apply", target, keys):        # re-entrant per thread
                 # Re-checked under the band's claim, held until the last SET: a start that takes the
@@ -508,13 +499,13 @@ class DaemonParamsMixin:
                     return ActionResult(False, f"Cannot apply {target}'s daemon parameters on {b} MHz: "
                                                f"that band serves {', '.join(others)}",
                                         data={"band": b, "in_use_by": others, "persisted": True})
-                if not daemon_control.read_view(self._system, radio_start.daemon_key(self, b)).reachable:
+                if not daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or b)).reachable:
                     return ActionResult(False, radio_start.socket_refusal(self._paths, b) or f"daemon not serving {b} MHz — start it first",
                                         data={"band": b, "persisted": True})   # L27: a band the list names no one radio for
-                applies = self._daemon_param_applies(sid, b)
+                applies = self._daemon_param_applies(sid, b, rid)
                 applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
                 for key, val in applies.items():
-                    ok, detail = self._apply_daemon_param(b, key, val)
+                    ok, detail = self._apply_daemon_param(b, key, val, rid)
                     if ok:
                         applied.append(key)
                         (confirmed if daemon_control.is_confirmable(key) else unconfirmed).append(key)
@@ -539,7 +530,7 @@ class DaemonParamsMixin:
                             f"{b} MHz (saved profile unchanged)", details=details, data=data)
 
     @invalidates_snapshot
-    def reset_daemon_params(self, target: str, band: str) -> ActionResult:
-        """Clear all daemon-param overrides for a stack+band (back to source defaults)."""
+    def reset_daemon_params(self, target: str, band: str, rid: str = "") -> ActionResult:
+        """Clear all daemon-param overrides for a stack+band, or a radio's own (back to source defaults)."""
         from . import daemon_params
-        return self.save_daemon_params(target, band, dict.fromkeys(daemon_params.ALL_PARAMS, ""))
+        return self.save_daemon_params(target, band, dict.fromkeys(daemon_params.ALL_PARAMS, ""), rid)

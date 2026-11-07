@@ -526,6 +526,85 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
+def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power) -> tuple:
+    """The daemon-param edits of a settings save, ({PARAM: canonical value, or "" to clear}, ""), or ({}, why): a
+    param not in `values` is left out; a blank clears; a value is validated for the chip, then canonicalised, and one
+    equal to its default clears. One rule for a band's save and a radio's (item 16)."""
+    from . import daemon_control, daemon_params
+    out = {}
+    for name in daemon_params.ALL_PARAMS:
+        if name not in values:
+            continue
+        raw = str(values[name]).strip()
+        if raw and (err := daemon_control.validate_set(name, raw, chip, high_power)):
+            return {}, f"{name}: {err}"
+        canon = daemon_control.canonical_value(name, raw) if raw else ""
+        out[name] = "" if canon == daemon_params.default_value(sid, band, name) else canon
+    return out, ""
+
+
+def radio_params_view(svc, target: str, rid: str) -> dict:
+    """Item 16 (DEC-W53): the daemon settings panel of radio `rid`: its row's dp_* over the band's saved values over
+    the defaults, for the daemon's own page only; {} for a client stack's page or a rid that is no enabled radio."""
+    from . import daemon_control, daemon_params
+    _inst, band, why = daemon_radio(svc, rid)
+    if why or not svc._is_daemon_target(target):
+        return {}
+    sid = svc._owner_stack_id(target)
+    ov = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
+    return {"stack": target, "band": band, "rid": rid, "bands": [band], "all_bands": list(svc.RADIO_BANDS),
+            "is_daemon": True, "can_apply": True, "radios": view_radios(svc._paths),
+            "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid)),
+            "rows": daemon_params.stack_view(sid, band, ov, svc.chip_family_for_band(band, rid),
+                                             radio_high_power(svc, rid))}
+
+
+def save_radio_params(svc, target: str, rid: str, values: dict):
+    """Item 16 (DEC-W53): save the daemon settings of radio `rid` into its row of the hardware list (its dp_* fields
+    only), under the list's lock (W217, set_row_dp); for the daemon's own page only. Never applies live."""
+    from .service_base import ActionResult
+    _inst, band, why = daemon_radio(svc, rid)
+    if why or not svc._is_daemon_target(target):
+        return ActionResult(False, f"Cannot save the settings of {rid}: " + (why or "a radio's settings are the daemon's"))
+    updates, why = dp_updates(svc, svc._owner_stack_id(target), band, values, svc.chip_family_for_band(band, rid),
+                              radio_high_power(svc, rid))
+    return ActionResult(False, why) if why else set_row_dp(svc, rid, updates)
+
+
+def radio_high_power(svc, rid: str) -> bool:
+    """Radio `rid`'s own high-power permission, as its daemon starts with it (its row, else the old band switch:
+    radios.radio_settings); False when its settings do not resolve (its start is refused then)."""
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    model = radio_models.load().get(row.model) if row else None
+    try:
+        return bool(model and _settings(svc, row, model).hipower)
+    except ValueError:
+        return False
+
+
+def set_row_dp(svc, rid: str, updates: dict):
+    """Write `updates` ({PARAM: value, "" clears}) into the dp_* fields of radio `rid`'s row and nothing else, under
+    the hardware list's lock (W217); radios.save checks the whole list, keeps its reserved ids and writes it whole."""
+    from .service_base import ActionResult
+    return _with_list_lock(svc._paths, lambda why: ActionResult(False, f"the hardware list is busy ({why}); nothing was "
+                                                               "changed — try again"), _set_row_dp, svc, rid, updates)
+
+
+def _set_row_dp(svc, rid: str, updates: dict):
+    from .service_base import ActionResult
+    state = radios.load(svc._paths)
+    row = next((r for r in state.radios if r.id == rid), None) if state.kind == radios.VALID else None
+    if row is None:
+        return ActionResult(False, f"{rid}'s settings not saved: " + (f"{rid} is not in the hardware list"
+                                   if state.kind == radios.VALID else "the hardware list does not read back"))
+    dp = {k: v for k, v in {**dict(row.dp), **updates}.items() if v}
+    reasons = radios.save(svc._paths, radios.with_row(state.radios, dataclasses.replace(row, dp=tuple(sorted(dp.items())))),
+                          radio_models.load())
+    if reasons:
+        return ActionResult(False, f"{rid}'s settings not saved: " + "; ".join(reasons))
+    return ActionResult(True, f"saved the daemon settings of {rid}")
+
+
 def view_radio(svc, band: str, rid: str) -> tuple:
     """Item 16 batch 2 (DEC-W53): (the socket key, "") of a radio-addressed daemon view: radio `rid`, an enabled radio
     of the hardware list on `band`; no rid gives the band's key, as before. ("", why) when rid is not one."""
@@ -738,10 +817,10 @@ def claim_key(paths, band: str, prefix: str = "loraham.radio.") -> str:
     return f"{prefix}{key_for(paths, band)}"
 
 
-def chip_family(svc, band: str):
-    """W5-2: the chip family of `band`'s one enabled radio, from its row's model variant (the preset its daemon
-    runs with); None when the hardware list does not resolve the band to one radio (0.13.x: the band's preset)."""
-    t = band_rid(svc, band)
+def chip_family(svc, band: str, rid: str = ""):
+    """W5-2: the chip family of radio `rid`, or of `band`'s one enabled radio, from its row's model variant (the preset
+    its daemon runs with); None when the hardware list does not resolve the band to one radio (0.13.x: its preset)."""
+    t = band_rid(svc, band) if not rid else radio_daemon.Target("proceed", rid, "")
     row = next((r for r in radios.load(svc._paths).radios if r.id == t.rid), None) if t.outcome == "proceed" else None
     model = radio_models.load().get(row.model) if row else None
     v = radios.variant(row, model) if model else None
