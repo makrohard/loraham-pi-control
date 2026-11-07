@@ -6,6 +6,9 @@ import os
 import subprocess
 
 import pytest
+# Q16 (package item 22): every test runs under the band-socket guard, an autouse fixture; its canaries are in
+# tests/repo/test_w22_band_socket_guard.py.
+from band_socket_guard import band_socket_guard  # noqa: F401
 
 # Every git a test starts runs its automatic maintenance in the FOREGROUND: detached (git 2.55's
 # default) it outlives `git commit` and can still hold its lock when the next git command runs

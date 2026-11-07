@@ -218,7 +218,23 @@ def _holder(rows, choice) -> str:
     return ""
 
 
+def _with_list_lock(paths, busy, fn, *args):
+    """W217: every read-modify-write of the hardware list runs whole under the interprocess config lock, so two
+    overlapping writers (two console requests, or the console and `lhpc hardware`) never both read the same list
+    and the last save never drops the other's row. A busy lock is refused with `busy(reason)`; nothing is written."""
+    try:
+        with cfgmod.config_lock(paths):
+            return fn(*args)
+    except cfgmod.ConfigLockBusy as exc:
+        return busy(f"the hardware list is busy ({exc}); nothing was changed — try again")
+
+
 def add_usb(svc, model_id: str, port: str) -> tuple:
+    """The Hardware page's add (below), under the hardware list's lock (W217)."""
+    return _with_list_lock(svc._paths, lambda why: (False, why, False), _add_usb, svc, model_id, port)
+
+
+def _add_usb(svc, model_id: str, port: str) -> tuple:
     """0.14.0 B (REL14-D2, DESIGN-AB-v2 §2): add the stick listed on `port` as a new USB radio: the lowest free id,
     the model's only band, the stick's serial (else its port), named `<short> <band>`. Fail-closed: no list, an
     invalid one, an unknown model, a stick not listed or held by a row, no free id, or the list's own save checks
@@ -263,6 +279,11 @@ def add_usb(svc, model_id: str, port: str) -> tuple:
 
 
 def bind_usb(svc, rid: str, port: str) -> tuple:
+    """The Hardware page's bind (below), under the hardware list's lock (W217)."""
+    return _with_list_lock(svc._paths, lambda why: (False, f"{rid}: {why}", False), _bind_usb, svc, rid, port)
+
+
+def _bind_usb(svc, rid: str, port: str) -> tuple:
     """B5 U-4…U-7: bind radio `rid` to the stick listed on `port` now; (ok, message, copybox). The save is the
     hardware list's own (radios.save); while the radio is in use it is refused, and nothing re-binds by itself."""
     from . import usb_access, usb_flow
@@ -290,6 +311,12 @@ def bind_usb(svc, rid: str, port: str) -> tuple:
 
 
 def setup_radios(paths, setup_id: str) -> tuple:
+    """`lhpc hardware <setup>`'s list write (below), under the hardware list's lock (W217)."""
+    return _with_list_lock(paths, lambda why: (False, f"hardware list: not written: {why}"), _setup_radios,
+                           paths, setup_id)
+
+
+def _setup_radios(paths, setup_id: str) -> tuple:
     """0.14.0 (REL14-D2 A): an explicit `lhpc hardware <setup>` also writes the hardware list when there is none:
     one row per band of the catalog setup in band order, each the model whose variant runs that band's preset. It
     runs BEFORE the setup itself is saved; a refused save changes nothing. A list that exists in any state (valid,

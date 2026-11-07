@@ -2013,8 +2013,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "647c2b59b0a26b225f063783b48170112cd95c1a"
-    pin_tag = "647c2b5"
+    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
+    pin_tag = "722b5e8"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2255,8 +2255,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "647c2b59b0a26b225f063783b48170112cd95c1a"
-    pin_tag = "647c2b5"
+    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
+    pin_tag = "722b5e8"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2316,8 +2316,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "10203967d50065ecfa3832b05418dab9001ddd21"
-    pin_tag = "v4.40a.spserver-24-g10203967"
+    pin_commit = "4f60051ce4ef2810df81d42a21df98de5228bbc9"
+    pin_tag = "v4.40a.10.28-31-g4f60051c"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -3008,8 +3008,8 @@ main = "meshcore-node"
     # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
     # and the byte-compile build step above fails the BUILD with file+line if a future pin
     # regresses on 3.11.
-    pin_commit = "dfcc74ee2a1f15e5484a636725e5e7e7c3b1e02e"
-    pin_tag = "v1.6.6"
+    pin_commit = "6d9547f5b2939c20acaf67379eff39ab3da0ccf2"
+    pin_tag = "v1.6.9"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -3031,8 +3031,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "85fc14a6b212f149e31a680453aa2ba707cd7d67"
-    pin_tag = "1.1.4-171-g85fc14a"
+    pin_commit = "72266e24f5f62caeae49cbe75d02183f8ec6176c"
+    pin_tag = "1.1.4-179-g72266e2"
 
 [[stack]]
 id = "reticulum"
@@ -3053,8 +3053,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "f0281cc9937a84dad1b966b04246dc5ea4919e8b"
-pin_tag = "f0281cc"
+pin_commit = "015540bd2ae95aae8f2a820d3234029e89ece9f5"
+pin_tag = "v0.3.1"
 
 [[stack.component]]
 id = "rns"
