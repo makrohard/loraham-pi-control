@@ -9,7 +9,7 @@ description = "Terminal-first and web-enabled installer/updater/configurator/orc
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Johannes Loose (DJ0CHE)", email = "410733@gmail.com" }]
+authors = [{ name = "makrohard" }]
 
 # The CLI and probe core use only the standard library (argparse, tomllib,
 # subprocess, socket). The local web console uses Flask with server-rendered

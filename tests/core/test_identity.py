@@ -73,13 +73,13 @@ def test_empty_is_allowed_as_unset_everywhere():
 
 # ===== Non-licensed validation examples (brief table) =====
 @pytest.mark.parametrize("fn,value,ok", [
-    (V.node_long, "Johannes", True), (V.node_long, "Field Node", True),
+    (V.node_long, "node1", True), (V.node_long, "Field Node", True),
     (V.node_long, "Madrid Gateway", True), (V.node_long, "", False),
     (V.node_long, "a\x01b", False), (V.node_long, "x" * 40, False), (V.node_long, "x" * 39, True),
     (V.node_short_name, "DJ0C", True), (V.node_short_name, "FN1", True),
     (V.node_short_name, "GW", True), (V.node_short_name, "", False),
     (V.node_short_name, "ABCDE", False), (V.node_short_name, "ééé", False),  # 6 UTF-8 bytes
-    (V.node_name, "Johannes", True), (V.node_name, "XX0XXA-12", True),
+    (V.node_name, "node1", True), (V.node_name, "XX0XXA-12", True),
     (V.node_name, "Field Node", True), (V.node_name, "", False),
     (V.node_name, "a\x02b", False), (V.node_name, "x" * 32, False), (V.node_name, "x" * 31, True),
 ])
