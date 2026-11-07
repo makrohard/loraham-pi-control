@@ -68,3 +68,25 @@ def test_the_panel_post_of_default_recovers_from_a_bad_stored_value(box, csrf):
                                          "confirm_phrase": type(svc).AP_CIDR_CONFIRM})
     assert r.status_code in (302, 303)
     assert _stored(svc) == "10.42.0.0/24"
+
+
+@pytest.mark.parametrize("stored, hint", [('[network]\nap_cidr = "8.8.8.0/24"\n', True),
+                                          ('[network]\nap_cidr = 42\n', True),
+                                          ('network = "x"\n', False),       # the clear refuses a non-table [network]: no hint to it
+                                          (None, False)],
+                         ids=["public-net", "wrong-type", "not-a-table", "other-config-error"])
+def test_the_409_names_the_cli_recovery_only_for_a_bad_ap_subnet(box, stored, hint):
+    svc, c = box
+    if stored is None:              # any other stored-config failure keeps the plain 409
+        def _broken(self):
+            raise cfgmod.ConfigError("secrets.toml is readable beyond its owner")
+        with patch.object(ControllerService, "config", _broken):
+            r = c.get("/stacks")
+    else:
+        p = svc._paths.runtime_root / "config" / "local.toml"
+        p.write_text(stored, encoding="utf-8")
+        p.chmod(0o600)
+        r = c.get("/stacks")
+    assert r.status_code == 409
+    line = f"lhpc network --ap-cidr default --confirm-phrase {type(svc).AP_CIDR_CONFIRM}"
+    assert (line in r.get_data(as_text=True)) is hint

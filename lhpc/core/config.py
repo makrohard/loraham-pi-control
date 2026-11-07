@@ -602,6 +602,11 @@ class NetworkConfig:
     valid: bool = True
 
 
+# The reason a bad stored network.ap_cidr VALUE carries: the 409 names `lhpc network --ap-cidr default`, which
+# clears it. A [network] that is not a table gets no hint: that clear refuses it (a hand edit is the way out).
+AP_CIDR_INVALID = "network-ap-cidr-invalid"
+
+
 def _parse_network(local: dict, failed: bool) -> NetworkConfig:
     """The stored `[network] ap_cidr`, validated by ap_subnet; an invalid value of any type is the loader's
     ConfigError naming network.ap_cidr (never a silent default)."""
@@ -616,7 +621,7 @@ def _parse_network(local: dict, failed: bool) -> NetworkConfig:
     try:
         return NetworkConfig(ap_cidr=str(ap_subnet.validate(raw["ap_cidr"])))
     except ap_subnet.ApSubnetError as exc:
-        raise ConfigError(f"network.ap_cidr in local.toml is invalid: {exc}") from None
+        raise ConfigError(f"network.ap_cidr in local.toml is invalid: {exc}", reason=AP_CIDR_INVALID) from None
 
 
 @dataclass

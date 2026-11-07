@@ -45,6 +45,7 @@ from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
 from lhpc.core import validators
+from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
@@ -410,6 +411,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         body = ("409 Conflict: a stored configuration file is unreadable or malformed. It was left "
                 "untouched for inspection. Repair or remove it (config/*.toml under the runtime root), "
                 "then retry.\n")
+        if getattr(exc, "reason", "") == _config.AP_CIDR_INVALID:   # W17: the recovery needs no console page
+            body += ("The access point subnet (network.ap_cidr) is invalid: reset it on the box with\n"
+                     f"  lhpc network --ap-cidr default --confirm-phrase {_AP_CIDR_CONFIRM}\n")
         return Response(body, status=409, mimetype="text/plain")
 
     def _runtime_root() -> str:
