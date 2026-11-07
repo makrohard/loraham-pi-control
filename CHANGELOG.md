@@ -12,6 +12,8 @@
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, makrohard's fork of libch341-spi-userspace, 98b656bf).
   Source builds need `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch it before `lhpc build daemon`.
+- Update: a libch341 checkout LHPC cloned from pine64 is re-cloned from the fork on `lhpc update`, not refused as
+  identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
 - Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
   guide for a 433 MHz CH341A + RFM98PW stick.
 
