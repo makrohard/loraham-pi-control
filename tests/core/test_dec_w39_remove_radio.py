@@ -1,4 +1,4 @@
-"""DEC-W39 (the coordinator's decision on the maintainer's "a function to delete a hardware row"): `lhpc hardware remove
+"""DEC-W39 (the decision on W247, "a function to delete a hardware row"): `lhpc hardware remove
 <rid>` removes one radio's row under the hardware list's lock (W217). Without the confirm phrase `remove-<rid>` it is
 a dry run that changes nothing. It is refused while the radio's daemon or a stack on it runs, naming them, from ONE
 answer (radio_start.radio_activity). The id stays reserved (`retired` in config/radios.toml): no later add takes it,
