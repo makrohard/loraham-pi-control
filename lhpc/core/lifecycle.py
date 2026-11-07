@@ -1158,7 +1158,7 @@ class Lifecycle:
         return valid, issues, "ok"
 
     def owned_records(self, comp_id: str, band: str | None = None,
-                      role: str | None = "") -> list[dict]:
+                      role: str | None = "", rid: str | None = None) -> list[dict]:
         """Records for a component, optionally scoped to a band (a band-less `""` record matches any
         band request). `role` selects the record class: "" = MAIN launches (default — so status and
         the ordinary stop never see auxiliary runners), "post" = detached post-start runners,
@@ -1172,6 +1172,8 @@ class Lifecycle:
             if role is not None and rec.get("role", "") != role:
                 continue
             if band is not None and rec.get("band") not in (band, ""):
+                continue
+            if rid is not None and rec.get("rid", "") != rid:      # item 7c2: one instance's launches only
                 continue
             out.append(rec)
         return out
@@ -1380,7 +1382,7 @@ class Lifecycle:
                 pass                    # best-effort: an orphan is inert, never ownership evidence
         return notes, unverified
 
-    def stop(self, comp: Component, band: str | None = None) -> CompResult:
+    def stop(self, comp: Component, band: str | None = None, rid: str | None = None) -> CompResult:
         """Stop the LHPC-owned launch(es) for this component (optionally one band),
         returning a TYPED outcome.
 
@@ -1405,7 +1407,7 @@ class Lifecycle:
             return CompResult(component=comp.id, action="stop", outcome=outcome,
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
-        recs = self.owned_records(comp.id, band)
+        recs = self.owned_records(comp.id, band, rid=rid)
         if not recs:
             # No ownership record. A matching foreign process is MANUAL_REQUIRED; a
             # lingering readiness endpoint means the stop is NOT verified (never claim

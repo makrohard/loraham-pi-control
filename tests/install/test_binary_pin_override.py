@@ -186,7 +186,7 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
     # a launched bridge is ready; the spawn records the component and QEMU's launch "fails".
     monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     monkeypatch.setattr(type(svc), "start_blocking_requirements", lambda self, comp: [])
-    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, comp: (True, []))
+    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, comp, inst=None: (True, []))
     spawned = []
     monkeypatch.setattr(type(svc._lifecycle()), "start",
                         lambda self, stack, comp, *a, **k: spawned.append(comp.id) or StartLaunch(

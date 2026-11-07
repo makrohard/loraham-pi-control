@@ -533,13 +533,26 @@ def radio_endpoints(paths, specs) -> list:
             for s in specs for rid in (rids if "{rid}" in s.address else ("",))]
 
 
-def client_instance(svc, comp, band: str) -> tuple:
-    """(instance, refusal) for a component's start (W3, stage L5): a daemon client — a run param whose value
-    template names `{rid}` — runs as the band's one radio's instance (W1-3/4/5); a refusal when the band has no
-    such radio or two. Any other component keeps slot 0 without a radio."""
-    from . import commands
+def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
+    """(instance, refusal) for a component's start (W3, stage L5; item 7c2). A listed instance `inst` (slot k, its
+    radio) is used as given. Otherwise a daemon client — a run param whose value template names `{rid}` — runs as
+    slot 0 on the first enabled radio of its band not listed for its stack (DEC-W16); with several radios there the
+    choice is named in `out` (instances.slot0_note), and when every radio of the band is listed it is refused. Any
+    other component keeps the given instance (default slot 0, without a radio)."""
+    from . import commands, instances
+    if inst is not None and inst.slot:
+        return inst, ""
     if not any("{rid}" in str(getattr(p, "default", "") or "") for p in getattr(comp, "run_params", ())):
         return commands.SLOT0, ""
+    sid = svc.stack_of(comp.id) or ""
+    rid, why = instances.slot0_radio(svc._paths, sid, band)
+    if why:
+        return None, f"no radio for its daemon sockets: {why}"
+    if rid:
+        note = instances.slot0_note(svc._paths, sid, band, rid)
+        if note and out is not None and f"  [radio] {note}" not in out:
+            out.append(f"  [radio] {note}")
+        return commands.Instance(0, rid), ""
     t = band_rid(svc, band)
     if t.outcome != "proceed":
         return None, f"no radio for its daemon sockets: {t.reason}"

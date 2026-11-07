@@ -384,7 +384,7 @@ def _held_start_svc(tmp_path, monkeypatch):
     monkeypatch.setattr(ops, "_helper", helper)
     entered, release = threading.Event(), threading.Event()
 
-    def held_readiness(self, comp):
+    def held_readiness(self, comp, inst=None):
         entered.set()
         assert release.wait(30)
         return True, ["held by the test"]

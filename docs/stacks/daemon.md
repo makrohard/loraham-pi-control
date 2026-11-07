@@ -38,7 +38,7 @@ this release.
 - **USB radios:** the console's Hardware page (`/hardware`) lists each radio with its own daemon's state, adds a
   listed USB stick as a new radio, binds a radio to a stick, and offers the one-time USB setup as one command.
 - **Two radios on one band:** a band with two enabled radios starts no daemon: set `enabled = false` on one of
-  them in `config/radios.toml` (the `<stack>@<rid>` form is not in 0.14.0). A client start on such a band, and a
+  them in `config/radios.toml`. A client start on such a band, and a
   per-band stop of it, are refused naming both radios.
 - x86 hosts: not yet verified.
 

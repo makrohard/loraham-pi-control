@@ -1165,7 +1165,7 @@ def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_p
 def _blockers_until_a_stop(monkeypatch, stopped, holders):
     """`run_blockers` reporting `holders` while nothing has been stopped yet, none afterwards."""
     monkeypatch.setattr(ControllerService, "run_blockers",
-                        lambda self, t, band="", radio="": [] if stopped else [
+                        lambda self, t, band="", radio="", inst=None: [] if stopped else [
                             {"resource": "loraham.radio.433", "holder": h, "holder_stack": s}
                             for h, s in holders])
 

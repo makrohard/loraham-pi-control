@@ -1432,11 +1432,22 @@ def _run(argv: list[str] | None = None) -> int:
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
+            from lhpc.core import instances
             from lhpc.core.outcomes import manual_required_only
+            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts on its radio's band (stop/restart: 7c2b).
+            sid, inst, iband, why = instances.resolve(svc, args.stack)
+            if inst is not None and args.stack_action != "start":
+                why = f"lhpc stack {args.stack_action} {args.stack}: an instance is started only, in this build"
+            if why:
+                print(f"ERR   {why}", file=sys.stderr)
+                return 1
+            if inst is not None and getattr(args, "band", "") and args.band != iband:
+                print(f"ERR   {args.stack} runs on {iband} MHz (its radio's band), not {args.band}", file=sys.stderr)
+                return 2
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, args.stack, apply=a,
-                                     band=getattr(args, "band", ""), stop_owners=stop_owners)
+                res = svc.run_action(args.stack_action, sid, apply=a, band=iband or getattr(args, "band", ""),
+                                     stop_owners=stop_owners, inst=inst)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).

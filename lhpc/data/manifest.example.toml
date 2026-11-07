@@ -992,7 +992,7 @@ main = "loraham-kiss-tnc"
     scheme = "serial"
 
     [[stack.component.resource]]
-    key = "serial.loraham-kiss"
+    key = "serial.loraham-kiss{instance_suffix}"
     kind = "serial"
     mode = "exclusive"
 

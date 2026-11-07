@@ -1381,7 +1381,7 @@ def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
     # Collaborators stubbed: the daemon, readiness and post-start are outside this test (the
     # callsign reaching graywolf's config).
     monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
-    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, c: (True, []))
+    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, c, inst=None: (True, []))
     monkeypatch.setattr(type(svc), "_run_post_start",
                         lambda self, *a, **k: (None, ""))
     res = svc.start("graywolf", apply=True)

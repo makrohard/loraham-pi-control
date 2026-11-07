@@ -15,6 +15,7 @@ from . import config as _config
 from . import (
     daemon_control,
     gps,
+    instances,
     procident,
     radio_start,
     runtime_fs,
@@ -235,7 +236,7 @@ class LifecycleOpsMixin:
     def _meshcore_mode_refusal(self, target: str):
         return _meshcore_mode.start_refusal(self, target)      # the rules: meshcore_mode.py
 
-    def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
+    def _ready_endpoints_present(self, comp, inst=None) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
         (all_present, evidence-lines). Only endpoints explicitly marked ready
         participate — reference/client/data endpoints never gate."""
@@ -244,7 +245,7 @@ class LifecycleOpsMixin:
         from .probes.unixsock import probe_socket
         # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
         # repeater modes) — the SAME selection ongoing status applies.
-        ready = [e for e in _mm.expected_endpoints(comp, self.meshcore_mode()) if e.ready]
+        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode()), inst) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -341,7 +342,7 @@ class LifecycleOpsMixin:
                         f"{req.note or 'disable it'}{cmd}")
         return ""
 
-    def run_blockers(self, target: str, band: str = "", radio: str = "") -> list[dict]:
+    def run_blockers(self, target: str, band: str = "", radio: str = "", inst=None) -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
         use that a RUNNING component of another stack is *actually* using. Radio
         bands are matched by the band each side really uses (a multi-band stack on
@@ -369,7 +370,7 @@ class LifecycleOpsMixin:
                     continue
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith("loraham.radio.")):
-                    claims[r.key] = c.id
+                    claims[instances.claim_key(r, inst)] = c.id     # 7a: the target instance's own key
         for b in needed_bands:
             claims.setdefault(resources_mod.radio_claim(b), target)
         # The GPS receiver is a DYNAMIC claim (which device, if any, comes from the resolved
@@ -656,7 +657,7 @@ class LifecycleOpsMixin:
     def start(self, target: str, apply: bool = False, stop_owners: bool = False,
               band: str = "", auto_install_ctx=None, *,
               _before_start_locked=None, _operator: bool = True, _ensured: bool = False,
-              position: dict | None = None, position_note: str = "") -> ActionResult:
+              position: dict | None = None, position_note: str = "", inst=None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         A start runs EXACTLY the saved configuration: there are no per-launch values (Settings is the only place configuration changes). The plan (`apply=False`) and the apply take
@@ -694,7 +695,7 @@ class LifecycleOpsMixin:
             if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
                                                 position_note)[0]) is not None:
                 return _r
-            return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band)
+            return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band, inst=inst)
         # The guards: admission FIRST (outside the config-stability guard and before every
         # mutation, so a start refused by a pending self-update/uninstall changes NOTHING), then
         # config stability, then the lifecycle/resource bundle.
@@ -719,7 +720,7 @@ class LifecycleOpsMixin:
                 # The launch's five phases (`_start_coordinator`), on the IMMUTABLE resolved
                 # band — never the raw argument a marker change could re-resolve differently.
                 _res = self._start_impl(target, apply=True, stop_owners=stop_owners,
-                                        band=_op_band, position=position, position_note=_pos_note)
+                                        band=_op_band, position=position, position_note=_pos_note, inst=inst)
                 # The operator's stop intent, from the launch's result.
                 if _operator and self._start_supersedes_stop_intent(target, _res):
                     self._clear_stop_intent(target)
@@ -785,17 +786,17 @@ class LifecycleOpsMixin:
 
     def _start_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                     band: str = "", position: dict | None = None,
-                    position_note: str = "") -> ActionResult:
+                    position_note: str = "", inst=None) -> ActionResult:
         """Applied starts run under the configuration-stability guard so saved config is a stable
         snapshot from the first read through generation/launch/post-start — a direct/internal
         apply=True call cannot skip it. Dry-run holds no long-lived guard. A guard/read failure is
         a TYPED failure returned BEFORE any lifecycle side effect."""
         if not apply:
             prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
-                                                     position_note, apply=False)
+                                                     position_note, apply=False, inst=inst)
             return prep if isinstance(prep, ActionResult) else self._start_preview(prep)
         try:
-            return self._start_coordinator(target, stop_owners, band, position, position_note)
+            return self._start_coordinator(target, stop_owners, band, position, position_note, inst)
         except (AdmissionRefused, SourceTxnBlocked, OSError, PathContainmentError) as exc:
             # The config-stability guard itself busy (e.g. an auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refused typed rather than hang or crash.
@@ -871,7 +872,7 @@ class LifecycleOpsMixin:
         return None
 
     def _start_coordinator(self, target: str, stop_owners: bool, band: str,
-                           position: dict | None, position_note: str) -> ActionResult:
+                           position: dict | None, position_note: str, inst=None) -> ActionResult:
         """THE APPLIED START as its five phases in order. PHASE 1 here is the configuration-
         stability guard, re-entrant: the public `start` already holds admission, config
         stability and the lifecycle bundle; a direct `_start_impl` apply holds this one only.
@@ -895,7 +896,7 @@ class LifecycleOpsMixin:
         MeshCore position) and the boot-restore claim."""
         with self._config_stable():                                             # PHASE 1
             prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
-                                                     position_note, apply=True)  # PHASE 2
+                                                     position_note, apply=True, inst=inst)  # PHASE 2
             if isinstance(prep, ActionResult):
                 return prep                 # a refusal, or the already-healthy no-op
             run = StartRun(out=[], results=[], presented=set(), daemon_launched=set(),
@@ -924,7 +925,7 @@ class LifecycleOpsMixin:
 
     def _prepare_from_fresh_evidence(self, target: str, band: str, stop_owners: bool,
                                      position: dict | None, position_note: str, *,
-                                     apply: bool):
+                                     apply: bool, inst=None):
         """PHASE 2 PREPARE: every input of the start resolved once from the saved configuration — on
         the apply under the stability guard `_start_coordinator` takes first, on the plan (`_start_impl`,
         `apply=False`) without it — and the launch's refusals, before its first stop or spawn: the
@@ -960,7 +961,7 @@ class LifecycleOpsMixin:
         # already_healthy and the radio stays put). Refuse with the reason and the commands that actually switch it.
         _sid = self.stack_of(target) or target
         _live = self.running_band(_sid, "")
-        if band and _live and band != _live and self.stack_bands(_sid) \
+        if band and _live and band != _live and self.stack_bands(_sid) and not getattr(inst, "slot", 0) \
                 and self._band_owner_is_up(_sid):
             return ActionResult(
                 False,
@@ -1004,14 +1005,14 @@ class LifecycleOpsMixin:
             target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
             radio=radio, tx=tx, start_sid=start_sid, target_is_stack=self.stack(target) is not None,
             params=params, file_over=file_over, position=position, position_note=position_note,
-            stop_owners=stop_owners)
+            stop_owners=stop_owners, inst=inst)
         if not apply:
             return prep
         # No-side-effect Start FIRST — BEFORE any owner handling: if EVERY requested component is
         # already healthy, return ALREADY_HEALTHY immediately. Never run blockers for mutation,
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
-        if self._order_already_healthy(order, radio):
+        if instances.already_healthy(self, target, order, radio, inst, cfg_band):  # 7c2: this instance's own
             # Only components the health predicate actually JUDGED may be reported 'already running':
             # a non-main interactive component was satisfied by its marker (its command was presented —
             # nothing is running under lhpc), and a GUI-skipped gui_optional component is not runnable
@@ -1105,19 +1106,19 @@ class LifecycleOpsMixin:
                 details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
         # The apply's firewall gate and ambiguity refusal, behind the apply's own healthy
         # shortcut; blockers stay plan details (the web's owner-confirm flow reads them).
-        if not self._order_already_healthy(order, radio) and (
+        if not instances.already_healthy(self, target, order, radio, prep.inst, cfg_band) and (
                 _r := self._start_preflight_refusal(target, order, band, radio, "start",
                                                     check_blockers=False,
                                                     render=False)) is not None:
             return _r
-        blockers = self.run_blockers(target, band, radio)
+        blockers = self.run_blockers(target, band, radio, prep.inst)
         for bl in blockers:
             details.append(f"  [conflict] {bl['resource']} is held by running stack "
                            f"'{bl['holder_stack']}' ({bl['holder']})")
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target)]
-        return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
+        return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst else ''}': {len(order)} component(s) in order.",
                             details=details,
                             next_commands=[f"lhpc stack start {target}"
                                            + (f" --band {band}" if band else "") + " --yes"],
@@ -1141,7 +1142,7 @@ class LifecycleOpsMixin:
         # component-scoped start must never be widened into a whole-stack boot restore.
         _req_target, _req_scope = target, prep.scope
         life = run.life
-        blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
+        blockers = self.run_blockers(target, band, radio, prep.inst) if prep.stop_owners else []
         if blockers:
             prelude = []
             unstopped = []
@@ -1163,7 +1164,7 @@ class LifecycleOpsMixin:
             for o in sorted({bl["holder_stack"] for bl in blockers} - {daemon_sid}):
                 stop_owner(o)
             if not unstopped and any(bl["holder_stack"] == daemon_sid for bl in blockers):
-                left = [bl for bl in self.run_blockers(target, band, radio)
+                left = [bl for bl in self.run_blockers(target, band, radio, prep.inst)
                         if bl["holder_stack"] == daemon_sid]
                 bands = sorted({bl.get("band", "") for bl in left})
                 # One daemon process serving both bands stops both on a per-band stop: refuse
@@ -1248,7 +1249,7 @@ class LifecycleOpsMixin:
             return self._overrides_for_comp(target, "file", file_over, comp_id)
 
         for stack, comp in order:
-            state = st_index[comp.id].run_state
+            state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state)   # 7c2
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
             # A DEGRADED component (process up but a ready endpoint missing) must not
             # be treated as healthy and must not trigger a duplicate launch. A GPS feed is judged
@@ -1433,8 +1434,7 @@ class LifecycleOpsMixin:
                 # component's pre_steps otherwise never execute: their only caller is
                 # `life.start`, which is exactly what this branch skips. Voice's terminal
                 # variant resolves its shared loraham_voice.conf from dirname(argv0), so
-                # without its `config/files` symlink the command we print here fails with
-                # ENOENT.
+                # without its `config/files` symlink the command we print here fails with ENOENT.
                 if comp.pre_steps:
                     from . import commands
                     try:
@@ -1512,7 +1512,7 @@ class LifecycleOpsMixin:
             # required post-start log, and the detached post runner's log all get a
             # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
             announcer = self._log_announcer(comp.id, out)
-            inst, why = radio_start.client_instance(self, comp, cfg_band or comp.band)   # a fixed-band client: its band
+            inst, why = radio_start.client_instance(self, comp, cfg_band or comp.band, prep.inst, out)   # 7c2: the instance
             if why:
                 record(comp, stack, Outcome.BLOCKED, why)
                 continue
@@ -1554,7 +1554,7 @@ class LifecycleOpsMixin:
                 # (`auto` softens exactly the upstream-missing states — see _gps_feed_admission.)
                 ready_ok, ev = self._gps_feed_admission(comp)
                 if not ready_ok:
-                    cleanup = life.stop(comp, band=cfg_band)
+                    cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                     record(comp, stack, Outcome.UNVERIFIED,
                            f"GPS feed never reached its source ({ev}); cleanup: "
                            + ("stopped" if cleanup.outcome == Outcome.STOPPED
@@ -1562,9 +1562,9 @@ class LifecycleOpsMixin:
                     continue
                 summary = f"started; {ev}"
             elif comp.readiness == "endpoint":
-                ready_ok, ev = self._ready_endpoints_present(comp)
+                ready_ok, ev = self._ready_endpoints_present(comp, inst)
                 if not ready_ok:
-                    cleanup = life.stop(comp, band=cfg_band)
+                    cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                     record(comp, stack, Outcome.UNVERIFIED,
                            f"ready endpoint(s) never came up ({'; '.join(ev)})"
                            + self._conflicting_service_hint(comp)
@@ -1581,7 +1581,7 @@ class LifecycleOpsMixin:
             required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band,
                                                              announce=announcer)
             if required_ok is False:
-                cleanup = life.stop(comp, band=cfg_band)
+                cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                 record(comp, stack, Outcome.UNVERIFIED,
                        f"required post-start failed: {post_summary}; cleanup: "
                        + ("stopped" if cleanup.outcome == Outcome.STOPPED
@@ -1597,7 +1597,7 @@ class LifecycleOpsMixin:
             # client started with band=868 must not write that marker while `rns` is
             # tuned to 433, or status, the dashboard, arbitration and per-band config
             # all describe a band the radio is not on.
-            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands):
+            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands) and not getattr(prep.inst, "slot", 0):   # slot 0's marker
                 band_ok = self._set_running_band(stack.id, cfg_band)
             if band_ok:
                 record(comp, stack, Outcome.VERIFIED, summary)
@@ -1606,7 +1606,7 @@ class LifecycleOpsMixin:
                 # outcome: later arbitration falls back to the DECLARED band, so a node
                 # actually on 433 reads as 868 and a second 433 owner can be admitted.
                 # Stop what we just started rather than run a radio we cannot account for.
-                cleanup = life.stop(comp, band=cfg_band)
+                cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                 record(comp, stack, Outcome.UNVERIFIED,
                        summary + "; running-band marker could not be persisted — "
                        + ("started process stopped again (no durable band evidence)"
@@ -3280,7 +3280,7 @@ class LifecycleOpsMixin:
     @invalidates_snapshot
     def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", purge: bool = False) -> ActionResult:
+                   band: str = "", purge: bool = False, inst=None) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
@@ -3292,7 +3292,7 @@ class LifecycleOpsMixin:
             "update": lambda: self.update(target, apply=apply, source=source,
                                           build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
-            "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band),
+            "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band, inst=inst),
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),
             "restart": lambda: self.restart(target, apply=apply, stop_owners=stop_owners,
                                             band=band, cascade=cascade),

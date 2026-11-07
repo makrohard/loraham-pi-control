@@ -86,4 +86,4 @@ def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path
     import html
     page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
     assert ("A band with two enabled radios starts no daemon: set enabled = false on one of them in "
-            "config/radios.toml (the <stack>@<rid> form is not in 0.14.0).") in page
+            "config/radios.toml.") in page

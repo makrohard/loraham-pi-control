@@ -8,6 +8,7 @@ Slot 0 is today's instance and is never listed. Only LHPC writes the file; a fil
 no instance beyond slot 0, with the reasons (fail-closed)."""
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import tempfile
@@ -212,3 +213,162 @@ def remove_instance(svc, sid: str, rid: str):
     if reasons:
         return ActionResult(False, f"{sid}@{rid} not removed: " + "; ".join(reasons))
     return ActionResult(True, f"{sid}@{rid} removed: slot {k + 1} stays reserved")
+
+
+# ---- item 7c2: addressing an instance -------------------------------------------------------------------
+
+def resolve(svc, target: str):
+    """`<stack>@<rid>` → (stack id, its listed Instance, the radio's band, ""), or (stack id, None, "", why) when it
+    cannot be started: the stack has no listed instance on that radio, or the radio is unknown, disabled or on a
+    band the stack does not run on. A target without "@" → (target, None, "", "") — today's slot 0."""
+    if not isinstance(target, str) or "@" not in target:
+        return target, None, "", ""
+    sid, _, rid = target.partition("@")
+    stack = svc.stack(sid)
+    if stack is None:
+        return sid, None, "", f"unknown stack {sid!r}"
+    inst = next((i for i in commands.stack_instances(stack, svc._paths) if i.slot and i.rid == rid), None)
+    if inst is None:
+        return sid, None, "", f"{sid}@{rid} is not a listed instance (lhpc stack add-instance {sid} {rid})"
+    radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    if radio is None or not radio.enabled:
+        return sid, None, "", f"{sid}@{rid}: {rid} is " + ("not in the hardware list" if radio is None else "disabled")
+    if radio.band not in stack_bands(stack):
+        return sid, None, "", f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
+    return sid, inst, radio.band, ""
+
+
+def listed_rids(paths, sid: str) -> frozenset:
+    """The radio ids the stack's listed instances run on (reserved slots left out)."""
+    return frozenset(rid for _k, rid in listed(load(paths), sid))
+
+
+def slot0_radio(paths, sid: str, band: str):
+    """Slot 0's radio on `band` (DEC-W16): the first enabled radio of the band, by rid order, that is not listed for
+    the stack. (rid, "") or ("", why) when every radio of the band is listed; ("", "") when the band has no enabled
+    radio at all (the caller's own refusal names that)."""
+    rows = sorted((r for r in radios.load(paths).radios if r.enabled and r.band == band), key=lambda r: int(r.id[1:]))
+    if not rows:
+        return "", ""
+    taken = listed_rids(paths, sid)
+    free = [r.id for r in rows if r.id not in taken]
+    if free:
+        return free[0], ""
+    return "", (f"every enabled radio of {band} MHz holds a listed instance of {sid} ({', '.join(r.id for r in rows)}): "
+                f"start one of them as {sid}@<rid>")
+
+
+def slot0_note(paths, sid: str, band: str, rid: str) -> str:
+    """The DEC-W16 line when slot 0's radio was chosen among several: "kiss starts on r1 (433 MHz); kiss@r3 is a
+    separate instance"; "" when the band has one radio."""
+    others = sorted(r.id for r in radios.load(paths).radios if r.enabled and r.band == band and r.id != rid)
+    if not others:
+        return ""
+    taken = listed_rids(paths, sid)
+    parts = [f"{sid}@{x} is a separate instance" if x in taken else f"{x} is not used by {sid}" for x in others]
+    return f"{sid} starts on {rid} ({band} MHz); " + "; ".join(parts)
+
+
+def _token(svc, comp, inst, band: str):
+    """The (option, value) that names `inst` in the argv of `comp`'s process (its spec's instance_arg, resolved as
+    its start renders it; kill.py's matcher), or None when the spec has none or it cannot be resolved."""
+    spec = comp.process
+    if spec is None or not spec.instance_arg:
+        return None
+    opt, tpl = spec.instance_arg
+    src = str(svc._paths.resolve_source(comp.source.path)) if comp.source else str(svc._paths.runtime_root)
+    try:
+        return opt, commands.instance_value(tpl, comp, svc.stack_config(comp.id, band), str(svc._paths.runtime_root),
+                                            src, band, inst=inst)
+    except Exception:          # an unresolvable value: the instance cannot be told by argv
+        return None
+
+
+def instance_runs(svc, comp, inst, band: str) -> bool:
+    """`comp` runs AS `inst`: a verified ownership record of the instance's radio (a slot-k launch records its rid),
+    or a process whose argv carries the instance's own token. Never "any process of the spec" (that is every
+    instance at once)."""
+    from .probes.process import matches
+    life = svc._lifecycle()
+    if any(rec.get("rid", "") == inst.rid and life.verify_owned(rec)[0] for rec in life.owned_records(comp.id)):
+        return True
+    tok = _token(svc, comp, inst, band)
+    return tok is not None and any(matches(comp.process, argv, tok)
+                                   for argv in svc._system.procfs.cmdlines().values())
+
+
+def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> bool:
+    """The start's already-healthy no-op (item 7c2). For a listed instance, and for slot 0 once its stack has
+    listed instances, every service component of `order` must run as THAT instance and the daemon of its band be
+    READY; an interactive main is never "already healthy" (its start pass always runs). Otherwise the snapshot
+    check as before (`_order_already_healthy`), unchanged for a box without listed instances."""
+    from . import daemon_control, radio_start
+    from .model import ComponentKind
+    sid = svc.stack_of(target) or target                 # the target's stack (the run order starts with the daemon)
+    if inst is None or not inst.slot:                    # slot 0: scoped only while the stack has listed instances
+        if not listed_rids(svc._paths, sid):
+            return svc._order_already_healthy(order, radio)
+        rid, _why = slot0_radio(svc._paths, sid, band)
+        if not rid:
+            return False
+        inst = commands.Instance(0, rid)
+    for stack, comp in order:
+        if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE) or comp.kind == ComponentKind.ONESHOT:
+            continue
+        if comp.interactive:
+            if comp.id == stack.main:
+                return False
+            continue
+        if comp.id == svc.DAEMON_ID:
+            if not daemon_control.read_view(svc._system, radio_start.daemon_key(svc, band)).ready:
+                return False
+            continue
+        if not instance_runs(svc, comp, inst, band):
+            return False
+    return True
+
+
+def endpoints_for(endpoints, inst) -> list:
+    """The endpoints as instance `inst` serves them (item 7c2): a slot-k copy of each templated address
+    (inst.subst(address_template), e.g. 127.0.0.1:8011); slot 0 / no instance: unchanged."""
+    if inst is None or not inst.slot:
+        return list(endpoints)
+    return [dataclasses.replace(e, address=inst.subst(e.address_template)) if getattr(e, "address_template", "")
+            else e for e in endpoints]
+
+
+def scoped(svc, sid: str, inst, band: str):
+    """The instance a start of stack `sid` concerns, when it is not just "the stack": the listed instance itself
+    (slot k), or slot 0 on its radio while the stack has listed instances; None for a stack without any (today's
+    by-component judgement stays)."""
+    if inst is not None and inst.slot:
+        return inst
+    if not listed_rids(svc._paths, sid):
+        return None
+    rid, _why = slot0_radio(svc._paths, sid, band)
+    return commands.Instance(0, rid) if rid else None
+
+
+def instance_state(svc, comp, inst, band: str, snap_state):
+    """A component's run state for one instance: RUNNING when it runs as that instance, else STOPPED. The daemon, a
+    library/firmware/oneshot and a component without a process spec keep the snapshot's state."""
+    from .model import ComponentKind, RunState
+    if (comp.id == svc.DAEMON_ID or comp.process is None
+            or comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE, ComponentKind.ONESHOT)):
+        return snap_state
+    return RunState.RUNNING if instance_runs(svc, comp, inst, band) else RunState.STOPPED
+
+
+def start_state(svc, sid: str, comp, inst, band: str, snap_state):
+    """The state a start judges `comp` by (item 7c2): its scoped instance's own (instance_state) when the start
+    concerns one (scoped), else the snapshot's."""
+    si = scoped(svc, sid, inst, band)
+    return snap_state if si is None else instance_state(svc, comp, si, band, snap_state)
+
+
+def claim_key(claim, inst) -> str:
+    """A resource claim's key for instance `inst` (item 7a): slot k's own key from its template (`tcp.port.8011`,
+    `serial.loraham-kiss-r3`); slot 0 or a claim without instance tokens: its key as declared."""
+    if inst is None or not inst.slot or not getattr(claim, "key_template", ""):
+        return claim.key
+    return inst.subst(claim.key_template)
