@@ -150,6 +150,25 @@ def effective_status(entry, current_head: str) -> str:
     return status
 
 
+def pinned_target(paths: Paths, stack, comp, effective_remote) -> str:
+    """The commit a bare Update installs for `comp` when its source follows the PIN, else "".
+
+    A bare Update is "Known working": the operator-confirmed composition's commit, else the manifest pin. A
+    source follows the pin when its ownership record says it was installed from the `pinned` selector; one
+    from dev or stable follows its branch, and one without a valid record keeps the branch tip as before.
+    The freshness check compares the head with this commit instead of the branch tip, which a pinned source
+    never reaches, so an Update offered there could never clear itself (W204, W208)."""
+    from . import known_working, source_registry
+    spec = getattr(comp, "source", None)
+    if spec is None or spec.artifact or stack is None:
+        return ""
+    rec = source_registry.read_record(paths, spec.path)
+    if rec is None or rec.selector != "pinned":
+        return ""
+    entries = known_working.compatible_composition(paths, stack, effective_remote) or {}
+    return (entries.get(comp.id) or {}).get("commit") or spec.pin_commit or ""
+
+
 def record(paths: Paths, results: dict, now: int | None = None) -> dict:
     """MERGE `results` (component_id -> entry) into the cache and write it atomically.
 

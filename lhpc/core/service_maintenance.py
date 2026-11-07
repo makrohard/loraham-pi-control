@@ -122,10 +122,10 @@ class MaintenanceOpsMixin:
         if loc.returncode != 0 or not loc.stdout.strip():
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = loc.stdout.strip()
-        entry["upstream_head"] = remote_sha
-        entry["local_head_at_check"] = local_sha
-        entry["status"] = (stackupdates.UP_TO_DATE if local_sha == remote_sha
-                           else stackupdates.BEHIND)
+        want = stackupdates.pinned_target(self._paths, self.stack(self.stack_of(comp.id) or ""), comp,
+                                          self._effective_remote) or remote_sha
+        entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
+        entry["status"] = stackupdates.UP_TO_DATE if local_sha == want else stackupdates.BEHIND
         return entry
 
     def update_status(self, comp) -> str:
