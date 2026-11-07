@@ -363,17 +363,6 @@ def band_rid(svc, band: str) -> radio_daemon.Target:
                                        old_config=radio_daemon.old_config_state(svc._paths))
 
 
-def daemon_rid(svc, band: str) -> radio_daemon.Target:
-    """band_rid for the daemon start: a shared band's refusal names its next step, the hardware list
-    (radio_daemon.SHARED_BAND_TEXT), not the `<stack>@<rid>` form 0.14.0 does not have."""
-    t = band_rid(svc, band)
-    if t.outcome == "refuse" and t.kind == radio_daemon.SEVERAL:       # item 24: the refusal's kind, not its count
-        reason = t.reason.removesuffix("; name one")
-        return dataclasses.replace(t, reason=f"{reason}; {radio_daemon.SHARED_BAND_TEXT}",
-                                   next_command="config/radios.toml")
-    return t
-
-
 def client_rid(svc, sid: str, band: str, inst=None) -> str:
     """Item 16: the radio whose daemon a start of stack `sid` on `band` needs — a listed instance's own radio, else
     slot 0's (DEC-W16: the band's first enabled radio not listed for the stack). "" for the daemon's own start, and
@@ -429,7 +418,7 @@ def radio_dependents(svc, band: str, inst=None):
 def daemon_units(svc, bands, rid: str = "") -> list:
     """Item 16: the (band, rid) daemons a start makes ready, one per radio, in band then rid order: `rid` alone on
     its band; else every enabled radio of each band. A band without one gives (band, ""), whose launch is refused
-    with daemon_rid's reason (no hardware list, no enabled radio)."""
+    with band_rid's reason (no hardware list, no enabled radio)."""
     rows = radios.load(svc._paths).radios
     out = []
     for b in bands:
@@ -450,9 +439,9 @@ def ensure_radio(svc, life, stack, comp, unit, label: str, lines: list, *, reque
     """Launch one radio's daemon (`unit` = (band, rid)) and wait for it READY, its lines appended; False when it
     is refused or fails. Stage L5 / item 16: the radio's start plan from the hardware list (--id, --hw from the
     model, the radio's own settings and RF-log path: W7-1, W7-7, W7-8); a band without a radio is refused with
-    daemon_rid's reason. Its record names the radio (daemon_inst)."""
-    band, rid = unit[0], unit[1] or daemon_rid(svc, unit[0]).rid
-    params, refusal, _notes = launch_plan(svc, rid) if rid else (None, daemon_rid(svc, band).reason, ())
+    band_rid's reason. Its record names the radio (daemon_inst)."""
+    band, rid = unit
+    params, refusal, _notes = launch_plan(svc, rid) if rid else (None, band_rid(svc, band).reason, ())
     if params is None or refusal:
         lines.append(f"  [BLOCKED] daemon on {label}: {refusal}")
         return False

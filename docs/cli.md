@@ -261,8 +261,9 @@ A single daemon process serving both bands stops on both when the other band has
 the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
 stopped. `--band` on a stop is for the daemon only (another stack is refused):
 `lhpc stack stop daemon --band <band>` stops the daemon on that band and its clients there — the
-remedy a held band names. `lhpc stack restart <stack> --band <band>` restarts on that band; on a band
-two enabled radios share, a daemon restart is refused, naming them, as the stop is. A start of a
+remedy a held band names; on a band two radios share it stops each radio's daemon and the clients on them.
+`lhpc stack restart <stack> --band <band>` restarts on that band. `lhpc stack {start|stop|restart} daemon
+--radio rN` acts on the daemon of radio rN alone (its clients first on a stop); it is not combined with `--band`. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.
 
