@@ -277,6 +277,24 @@ def _remove_radio(svc, rid: str, confirm: str):
     return ActionResult(True, f"{rid} removed; its id stays reserved", details=details)
 
 
+_RELOGIN = (" — this account's plugdev membership is granted but takes effect at its next login (log out and in, or"
+            " reboot)")
+
+
+def _access_line(msg: str, no_access: bool) -> tuple:
+    """(message, copybox) after an add or a bind: the USB setup box is pointed at only while the setup is still needed
+    (the page shows it then); with the rule current and plugdev granted but not yet effective there is no box, so the
+    line says the membership takes effect at the next login (W18-1)."""
+    from . import usb_access
+    if not no_access:
+        return msg, False
+    effective, configured, _euid = _groups()
+    rule = usb_access.rule_state(radio_models.load())
+    if usb_access.setup_needed(rule, usb_access.plugdev(effective, configured)):
+        return msg, True
+    return msg + _RELOGIN, False
+
+
 def _account() -> str:
     import os
     import pwd
@@ -388,8 +406,9 @@ def _add_usb(svc, model_id: str, port: str) -> tuple:
     device = next((d for d in found.devices if d.port == port), None)
     effective, _configured, euid = _groups()
     access = usb_access.node_access(device, effective, euid) if device else usb_access.Probe.UNKNOWN
-    return True, f"{rid} added: {m.id} on {band} MHz, " + (f"serial {choice.serial}" if choice.serial
-                                                          else f"port {port} (no serial)"), access is usb_access.Probe.ABSENT
+    return (True, *_access_line(f"{rid} added: {m.id} on {band} MHz, " + (f"serial {choice.serial}" if choice.serial
+                                                                         else f"port {port} (no serial)"),
+                                access is usb_access.Probe.ABSENT))
 
 
 def bind_usb(svc, rid: str, port: str) -> tuple:
@@ -421,7 +440,8 @@ def _bind_usb(svc, rid: str, port: str) -> tuple:
     reasons = radios.save(svc._paths, b.radios)
     if reasons:
         return False, f"{rid}: " + "; ".join(reasons), False
-    return True, f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial else ""), b.copybox
+    return (True, *_access_line(f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial
+                                                                             else ""), b.copybox))
 
 
 def setup_radios(paths, setup_id: str) -> tuple:
