@@ -674,6 +674,7 @@ def test_a_second_change_follows_again_and_the_ap_start_proceeds(tmp_path, monke
     svc._invalidate_config()
     assert cfgmod.load_config(svc._paths).firewall.ap_cidr == "10.43.0.0/24"
     spawned.clear()
+    svc._net_pending_path().unlink()      # the finalize helper (stubbed here) removes its record when it completes
     res = svc.network_set_ap_cidr("192.168.77.16/28", _phrase(svc))
     assert res.ok, res.summary
     svc._invalidate_config()
