@@ -11,7 +11,7 @@
 # unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted
 # BEFORE the script is ever granted root. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]
 #   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing
 #     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (every board; each radio drives its CS as a GPIO, the kernel does not claim CE0/CE1)
 #     hardware-cs  kernel chip selects, no overlay: dtparam=spi=on only  (LoRaHAM / Uputronics: radios on CE0 = GPIO 8 and CE1 = GPIO 7; the kernel serialises every transfer. Not for Waveshare, CS 21)
@@ -27,12 +27,16 @@
 #                        itself appears only on AP-managed boxes — desktop images pass
 #                        this flag). polkitd is installed unless BOTH power AND network
 #                        controls are opted out.
+#     --no-usb-setup     do NOT write the USB radios' udev rule (/etc/udev/rules.d/90-lhpc-usb-radio.rules) or
+#                        grant plugdev; the console's Hardware section then offers the same
+#                        setup as a copybox. No kernel module is blacklisted either way.
 # Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·
 #             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·
 #             7 hardware group grant failed · 8 system nginx.service could not be confirmed stopped ·
 #             9 systemd unit files could not be inspected, or a packaged service could not
 #             be disabled (fail-closed — a competing service may be active) ·
-#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).
+#             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·
+#             13 the USB setup could not write its udev rule or run udevadm.
 #             Steps that can legitimately fail on a CLEAN
 #             image (no packaged meshtasticd unit) are GUARDED — the script runs under
 #             `set -e`, so an unguarded one would abort before this summary.
@@ -55,7 +59,7 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]" >&2
 	echo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2
 }
 
@@ -65,6 +69,9 @@ OPERATOR_USER=""
 NO_SWAPFILE=""
 NO_POWER=""
 NO_NETWORK=""
+NO_USB=""
+LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup's path prefix (a test seam; empty = /)
+SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
@@ -78,6 +85,7 @@ while [ $# -gt 0 ]; do
 		--no-swapfile) NO_SWAPFILE=1; shift ;;
 		--no-power-controls) NO_POWER=1; shift ;;
 		--no-network-controls) NO_NETWORK=1; shift ;;
+		--no-usb-setup) NO_USB=1; shift ;;
 		--with-gui) WITH_GUI=1; shift ;;
 		--with-gps) WITH_GPS=1; shift ;;
 		--no-time-source) NO_TIME_SOURCE=1; shift ;;
@@ -955,6 +963,46 @@ if usermod -aG spi,gpio "$OP"; then
 else
 	echo "ERROR: could not grant spi,gpio to $OP — do those groups exist on this system? Rootless SPI/GPIO access will NOT work until this is resolved." >&2
 	_GROUPS_FAILED=1
+fi
+
+# --- USB radios: udev rule and plugdev grant (opt-out: --no-usb-setup) --------------------
+if [ -n "$NO_USB" ]; then
+	echo "[bootstrap-deps] USB setup: skipped (--no-usb-setup); the console's Hardware section offers it."
+else
+# --- USB radios: udev rule and plugdev grant (written by LHPC) ------------------------------
+_lhpc_usb_write() {    # <dir> <path> <text>: a temp file in <dir>, mode 0644, renamed into place
+	_lhpc_t=$(mktemp "$1/.lhpc-usb.XXXXXX") || return 1
+	if printf '%s' "$3" > "$_lhpc_t" && chmod 0644 "$_lhpc_t" && mv -f "$_lhpc_t" "$2"; then
+		return 0
+	fi
+	rm -f "$_lhpc_t"
+	return 1
+}
+if ! _lhpc_usb_write "${LHPC_USB_ROOT}"/etc/udev/rules.d "${LHPC_USB_ROOT}"/etc/udev/rules.d/90-lhpc-usb-radio.rules '# Written by LHPC'"'"'s bootstrap from its radio model table; a re-run replaces it.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev"
+'; then
+	echo "ERROR: [usb-setup] could not write ${LHPC_USB_ROOT}/etc/udev/rules.d/90-lhpc-usb-radio.rules" >&2
+	exit 13
+fi
+echo "[usb-setup] wrote ${LHPC_USB_ROOT}/etc/udev/rules.d/90-lhpc-usb-radio.rules"
+if [ -d "$SYSTEMD_RUNDIR" ]; then
+	if ! udevadm control --reload-rules; then
+		echo "ERROR: [usb-setup] udevadm control --reload-rules failed" >&2
+		exit 13
+	fi
+	if ! udevadm trigger --subsystem-match=usb --action=add; then
+		echo "ERROR: [usb-setup] udevadm trigger --subsystem-match=usb --action=add failed" >&2
+		exit 13
+	fi
+else
+	echo "[usb-setup] no running system (an image build): udev reads the rule at the first boot."
+fi
+if usermod -aG plugdev "$OP"; then
+	echo "[usb-setup] granted plugdev to $OP; it takes effect at the next log-in."
+else
+	echo "ERROR: [usb-setup] could not grant plugdev to $OP; the USB radios stay out of reach until it is granted." >&2
+	_GROUPS_FAILED=1
+fi
 fi
 
 # --- power controls: polkit rule for the console's Reboot/Shut down (opt-out) ------------

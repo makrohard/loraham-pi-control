@@ -757,6 +757,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     disk swap) and cannot be provisioned, the script exits 4; `--no-swapfile` is the way to proceed
     without it. Output is deterministic (packages sorted) so the shipped snapshot is stable.
     lhpc NEVER runs these."""
+    # W226: the USB step; loading deps alone never loads usb_access, rendering the script does
+    from . import radio_models, usb_flow
+
+    usb_models = radio_models.load()
+    usb_rules_path = usb_flow.host_setup(usb_models).files[0][0]
     # GUI-ONLY commands are bucketed separately and emitted behind --with-gui; they are NEVER part
     # of the default package list (a headless image must not grow an X/Wayland dev chain).
     gui_pkgs: list[str] = []
@@ -861,7 +866,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
         " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source]"
-        " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]",
+        " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (every board; each radio drives its CS as a GPIO, the kernel does not"
@@ -881,13 +886,17 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#                        itself appears only on AP-managed boxes — desktop images pass",
         "#                        this flag). polkitd is installed unless BOTH power AND network",
         "#                        controls are opted out.",
+        "#     --no-usb-setup     do NOT write the USB radios' udev rule (" + usb_rules_path + ") or",
+        "#                        grant plugdev; the console's Hardware section then offers the same",
+        "#                        setup as a copybox. No kernel module is blacklisted either way.",
         "# Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·",
         "#             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·",
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
         " stopped ·",
         "#             9 systemd unit files could not be inspected, or a packaged service could not",
         "#             be disabled (fail-closed — a competing service may be active) ·",
-        "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).",
+        "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·",
+        "#             13 the USB setup could not write its udev rule or run udevadm.",
         "#             Steps that can legitimately fail on a CLEAN",
         "#             image (no packaged meshtasticd unit) are GUARDED — the script runs under",
         "#             `set -e`, so an unguarded one would abort before this summary.",
@@ -926,7 +935,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
         ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source]'
         ' [--keep-wifi-powersave]'
-        ' [--no-power-controls] [--no-network-controls]" >&2',
+        ' [--no-power-controls] [--no-network-controls] [--no-usb-setup]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -937,6 +946,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'NO_SWAPFILE=""',
         'NO_POWER=""',
         'NO_NETWORK=""',
+        'NO_USB=""',
+        'LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup\'s path prefix (a test seam; empty = /)',
+        'SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
         'WITH_GPS=""',
@@ -950,6 +962,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
         '\t\t--no-power-controls) NO_POWER=1; shift ;;',
         '\t\t--no-network-controls) NO_NETWORK=1; shift ;;',
+        '\t\t--no-usb-setup) NO_USB=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
         '\t\t--with-gps) WITH_GPS=1; shift ;;',
         '\t\t--no-time-source) NO_TIME_SOURCE=1; shift ;;',
@@ -1205,7 +1218,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     if groups_csv:
         out(*_op_lines, "")
     else:
-        out('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ]; then')
+        out('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ] || [ -z "$NO_USB" ]; then')   # W226: the USB grant needs $OP
         out(*("\t" + ln for ln in _op_lines))
         out("fi", "")
 
@@ -1701,6 +1714,19 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "\t_GROUPS_FAILED=1",
             "fi",
             "")
+
+    # USB radios (W226): the udev rule for each USB model's vid:pid and the plugdev grant, from the SAME source the
+    # Hardware section's copybox renders (usb_flow.usb_setup_text). No module blacklist: the daemon's CH341 library
+    # detaches the kernel driver of the sticks it opens. Opt-out --no-usb-setup; the block's own failure exits 13, a failed
+    # grant joins _GROUPS_FAILED (exit 7 at the end, like the hardware groups).
+    out("# --- USB radios: udev rule and plugdev grant (opt-out: --no-usb-setup) --------------------",
+        'if [ -n "$NO_USB" ]; then',
+        '\techo "[bootstrap-deps] USB setup: skipped (--no-usb-setup); the console\'s Hardware section offers it."',
+        "else")
+    for ln in usb_flow.usb_setup_text(usb_flow.SCAFFOLD_USER, usb_models,
+                                      root_env="LHPC_USB_ROOT").rstrip("\n").split("\n"):
+        out(ln)                         # never indented: the rule text is a quoted string over several lines
+    out("fi", "")
 
     # Power controls: the polkit rule that authorizes $OP for the console's Reboot / Shut down
     # buttons (logind action ids). polkitd itself rides the merged apt transaction above via

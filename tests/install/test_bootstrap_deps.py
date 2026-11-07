@@ -139,6 +139,18 @@ def _fakebin(tmp_path, *, no_sudo=False):
     w("iw", '[ -n "${FAKE_IW_FAIL:-}" ] && exit 1\nexit 0\n')
     # The time source installs fake-hwclock; its tool must then exist (the setup checks it).
     w("fake-hwclock", 'exit 0\n')
+    # The USB setup (W226): udevadm logs its argv; FAKE_UDEVADM_FAIL makes it fail. The rule file goes under
+    # LHPC_USB_ROOT (set in _run), never the real /etc.
+    w("udevadm", f'echo "udevadm $*" >> "{tmp_path / "udevadm.log"}"\n[ -n "${{FAKE_UDEVADM_FAIL:-}}" ] && exit 1\nexit 0\n')
+    # With the LHPC_USB_ROOT seam unset (the real call) the block writes /etc/udev/rules.d: mktemp and mv catch
+    # exactly that directory into tmp_path/etc-udev and log it; every other call is the real tool.
+    eu = tmp_path / "etc-udev"; eu.mkdir(exist_ok=True)
+    w("mktemp", f'case "${{1:-}}" in /etc/udev/rules.d/*) t="{eu}/${{1##*/}}"; t="${{t%XXXXXX}}tmp"; : > "$t"; '
+                f'echo "mktemp $*" >> "{tmp_path / "etc-udev.log"}"; echo "$t"; exit 0 ;; esac\nexec /usr/bin/mktemp "$@"\n')
+    w("mv", 'last=""; for a in "$@"; do last="$a"; done\n'
+            f'case "$last" in /etc/udev/rules.d/*) echo "mv $*" >> "{tmp_path / "etc-udev.log"}"; '
+            f'src=""; for a in "$@"; do case "$a" in -*) ;; *) [ "$a" = "$last" ] || src="$a";; esac; done; '
+            f'exec /usr/bin/mv -f "$src" "{eu}/${{last##*/}}" ;; esac\nexec /usr/bin/mv "$@"\n')
     return b, apt, um
 
 
@@ -151,7 +163,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None, systemd_running=True):
+         operator_home=None, systemd_running=True, usb_seams=True):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -202,6 +214,10 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     if systemd_running:
         rundir.mkdir(exist_ok=True)
     env["SYSTEMD_RUNDIR"] = str(rundir)
+    usbroot = tmp_path / "usbroot"; (usbroot / "etc" / "udev" / "rules.d").mkdir(parents=True, exist_ok=True)
+    env["LHPC_USB_ROOT"] = str(usbroot)                # the USB setup's rule file lands here, never in /etc
+    if not usb_seams:                                  # the real call: neither seam is in the environment
+        env.pop("LHPC_USB_ROOT"); env.pop("SYSTEMD_RUNDIR")
     # The NMEA pre-flight reads <runtime root>/config/local.toml. Always point it at a tmp root:
     # the default would resolve through the REAL operator's home and read their real config.
     rt = tmp_path / "runtime"; (rt / "config").mkdir(parents=True, exist_ok=True)
@@ -1373,15 +1389,15 @@ def test_power_rule_has_exactly_one_install_site(tmp_path):
 
 
 def test_power_op_resolution_without_groups_is_gated_on_the_flags():
-    """A manifest with NO hardware groups still resolves $OP for the polkit rules — but only
-    when at least one of power/network controls is enabled, so a box run with BOTH opt-outs
-    and no grants is never refused for an operator it does not need."""
+    """A manifest with NO hardware groups still resolves $OP for the polkit rules and the USB setup's plugdev grant
+    — but only when at least one of power/network controls or the USB setup is enabled, so a box run with every
+    opt-out and no grants is never refused for an operator it does not need."""
     from lhpc.core import deps as deps_mod
     text = deps_mod.render_bootstrap_script(["sudo apt install -y git"], "test-rev")
-    guard = text.index('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ]; then')
+    guard = text.index('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ] || [ -z "$NO_USB" ]; then')
     op = text.index('OP="$OPERATOR_USER"')
     assert guard < op                                          # resolution inside the gate
-    assert "usermod" not in text                               # really the no-groups branch
+    assert [ln.strip() for ln in text.splitlines() if "usermod -aG" in ln] == ['if usermod -aG plugdev "$OP"; then']
     assert "49-lhpc-power.rules <<POWERRULE" in text
     assert "49-lhpc-network.rules <<NETWORKRULE" in text
 
@@ -1895,3 +1911,59 @@ def test_a_successful_setup_does_publish_the_witness(tmp_path):
     r = _run(tmp_path, _ARGS)[0]
     assert r.returncode == 0, r.stderr
     assert (r.ts / "10-lhpc-gps.conf").exists() and (r.ts / "clock-epoch").exists()
+
+
+# --- W18-1 (W226): the USB setup step (udev rule + plugdev; no module blacklist), opt-out --no-usb-setup ------
+
+_USB_RULE = "usbroot/etc/udev/rules.d/90-lhpc-usb-radio.rules"
+
+
+def _udevadm(tmp_path):
+    log = tmp_path / "udevadm.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_usb_setup_writes_the_rule_reloads_udev_and_grants_plugdev(tmp_path):
+    from lhpc.core import radio_models, usb_access
+    r, _cfg, _apt, um = _run(tmp_path, ["--spi-mode", "skip"])
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / _USB_RULE).read_text() == usb_access.udev_rules_text(radio_models.load())
+    assert _udevadm(tmp_path) == ["udevadm control --reload-rules", "udevadm trigger --subsystem-match=usb --action=add"]
+    assert f"usermod -aG plugdev {_USER}" in um.splitlines()
+    assert not list((tmp_path / "usbroot").rglob("*modprobe*"))
+
+
+def test_usb_setup_opt_out_writes_nothing_and_grants_nothing(tmp_path):
+    r, _cfg, _apt, um = _run(tmp_path, ["--spi-mode", "skip", "--no-usb-setup"])
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / _USB_RULE).exists()
+    assert _udevadm(tmp_path) == []
+    assert f"usermod -aG plugdev {_USER}" not in um.splitlines()
+    assert "USB setup: skipped (--no-usb-setup)" in r.stdout
+
+
+def test_usb_setup_on_an_image_build_writes_the_rule_without_udevadm(tmp_path):
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], systemd_running=False)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / _USB_RULE).is_file()
+    assert _udevadm(tmp_path) == []
+
+
+def test_usb_setup_a_failing_udevadm_exits_13(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_UDEVADM_FAIL", "1")
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"])
+    assert r.returncode == 13
+    assert "udevadm control --reload-rules failed" in r.stderr
+
+
+def test_usb_setup_runs_with_its_seams_unset_and_writes_etc_udev(tmp_path):
+    """The real call sets neither LHPC_USB_ROOT nor SYSTEMD_RUNDIR: the outer script must default both (under
+    set -u an unset one aborts the run). The fake mktemp/mv catch the /etc/udev/rules.d write into tmp_path."""
+    from lhpc.core import radio_models, usb_access
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], usb_seams=False)
+    assert r.returncode == 0, r.stderr
+    assert "unbound variable" not in r.stderr
+    assert (tmp_path / "etc-udev" / "90-lhpc-usb-radio.rules").read_text() == \
+        usb_access.udev_rules_text(radio_models.load())
+    moved = (tmp_path / "etc-udev.log").read_text().splitlines()
+    assert [ln.split()[-1] for ln in moved if ln.split()[0] == "mv"] == ["/etc/udev/rules.d/90-lhpc-usb-radio.rules"]

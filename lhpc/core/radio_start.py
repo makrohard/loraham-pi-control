@@ -187,7 +187,8 @@ def _account() -> str:
 
 def hardware_view(svc) -> dict:
     """B5 Hardware section: the hardware list's rows, each with its daemon's state on its own socket and, for a
-    USB row, the sticks it can be bound to (usb_flow.usb_choices); the copybox when a USB row is listed."""
+    USB row, the sticks it can be bound to (usb_flow.usb_choices); the copybox when a USB row is listed and the
+    host setup is not set (usb_access.setup_needed)."""
     from . import daemon_control, usb_access, usb_flow
     state = radios.load(svc._paths)
     models = radio_models.load()
@@ -203,7 +204,11 @@ def hardware_view(svc) -> dict:
                      "choices": usb_flow.usb_choices(found, m) if usb else None})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
-    box = usb_flow.copybox(svc._paths, _account(), models) if any(r["choices"] is not None for r in rows) else None
+    box = None
+    if any(r["choices"] is not None for r in rows):            # W226: only where the USB host setup is not set
+        effective, configured, _ = _groups()
+        if usb_access.setup_needed(usb_access.rule_state(models), usb_access.plugdev(effective, configured)):
+            box = usb_flow.copybox(svc._paths, _account(), models)
     return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
 
 

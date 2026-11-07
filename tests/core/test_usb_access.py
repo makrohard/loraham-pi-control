@@ -470,19 +470,13 @@ def test_a_new_usb_row_adds_its_line_and_a_repeated_id_does_not():
         'SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0660", GROUP="plugdev"\n')
 
 
-def test_the_modprobe_text_blacklists_spi_ch341():
-    """B2: the text the bootstrap prints before it writes."""
-    assert ua.modprobe_text() == ("# Written by LHPC's bootstrap for its USB radios; applies to the whole host.\n"
-                                  "blacklist spi_ch341\n")
-
-
 def test_the_host_setup_is_the_one_generator_of_files_commands_and_group():
-    """B3/W10: the script and the copybox read this one value."""
+    """B3/W10: the script and the copybox read this one value; W226: the udev rule only, no module blacklist and no
+    `modprobe -r` (the daemon's CH341 library detaches the kernel driver of a stick it opens)."""
     assert ua.host_setup(MODELS) == ua.HostSetup(
-        (("/etc/udev/rules.d/90-lhpc-usb-radio.rules", HEADER + RULE),
-         ("/etc/modprobe.d/lhpc-usb-radio.conf", ua.modprobe_text())),
-        (("udevadm", "control", "--reload-rules"), ("udevadm", "trigger", "--subsystem-match=usb", "--action=add"),
-         ("modprobe", "-r", "spi_ch341")), "plugdev")
+        (("/etc/udev/rules.d/90-lhpc-usb-radio.rules", HEADER + RULE),),
+        (("udevadm", "control", "--reload-rules"), ("udevadm", "trigger", "--subsystem-match=usb", "--action=add")),
+        "plugdev")
 
 
 # --- doctor-line data (B4-B10; T-U2..T-U4) ---
