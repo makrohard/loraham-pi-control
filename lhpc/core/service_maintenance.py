@@ -1184,11 +1184,11 @@ class MaintenanceOpsMixin:
             # recovery-required task — it is the state an operator most needs to see. Never hidden,
             # never expires until resolved.
             out.append({"kind": "auto-install", "run_id": bst.get("run_id", ""),
-                        "label": "Install / build all stacks", "href": "/auto-install",
+                        "label": "Auto-install", "href": "/auto-install",
                         "state": "unsafe", "hint": _bounded_reason(bst.get("reason"))})
         elif bst:
             rid, state = bst.get("run_id", ""), bst.get("state")
-            base = {"kind": "auto-install", "run_id": rid, "label": "Install / build all stacks",
+            base = {"kind": "auto-install", "run_id": rid, "label": "Auto-install",
                     "href": "/auto-install"}
             if state in ("preparing", "running"):
                 out.append({**base, "state": "running"})
