@@ -303,7 +303,7 @@ def _drv(tmp_path, monkeypatch, *, cur_boot="CURBOOT", enabled=True, web=(True, 
 
 def _stub_start(record, *, ok=True, call_hook=True, summary="started"):
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-             _before_start_locked=None, _operator=True, position=None, position_note=""):
+             _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         # the REAL start() signature (no per-launch params): a call the service
         # could not make fails here too, instead of being swallowed by a permissive stub
         record.append({"target": target, "band": band})
@@ -632,7 +632,7 @@ def test_driver_hook_cancels_when_evidence_removed(tmp_path, monkeypatch):
     path = _write_record(tmp_path, _v1())
     def vanish_then_hook(self, target, apply=False, params=None, stop_owners=False, band="",
                          daemon_overrides=None, file_overrides=None, auto_install_ctx=None, *,
-                         _before_start_locked=None):
+                         _before_start_locked=None, inst=None):
         path.unlink()
         refusal = _before_start_locked()
         assert refusal is not None                        # the hook refused
@@ -1218,7 +1218,7 @@ def test_hook_unsafe_owned_dir_never_consumes(tmp_path, monkeypatch):
     owned = tmp_path / "state" / "owned"
     def sabotage_then_start(self, target, apply=False, params=None, stop_owners=False, band="",
                             daemon_overrides=None, file_overrides=None, auto_install_ctx=None, *,
-                            _before_start_locked=None):
+                            _before_start_locked=None, inst=None):
         import shutil
         shutil.rmtree(owned)
         owned.symlink_to(tmp_path)                 # containment failure -> dir_state unsafe
@@ -1415,7 +1415,7 @@ def test_claim_hook_unreadable_leaf_leaves_item_pending(tmp_path, monkeypatch):
     path = _write_record(tmp_path, rec)
     def corrupt_then_hook(self, target, apply=False, params=None, stop_owners=False, band="",
                           daemon_overrides=None, file_overrides=None, auto_install_ctx=None, *,
-                          _before_start_locked=None):
+                          _before_start_locked=None, inst=None):
         path.write_text("{malformed")
         refusal = _before_start_locked()
         assert refusal is not None
@@ -1689,7 +1689,7 @@ def test_a_failed_item_keeps_each_components_reason(tmp_path, monkeypatch):
                           summary="not built — build it first (lhpc build meshcore)"))
 
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-             _before_start_locked=None, _operator=True, position=None, position_note=""):
+             _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         if _before_start_locked is not None:
             refusal = _before_start_locked()
             if refusal is not None:
@@ -1798,7 +1798,7 @@ def _parts_stub(calls, *, stack_ok=True, part_ok=True, part_result="typed"):
     from lhpc.core.outcomes import CompResult, Outcome
 
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-             _before_start_locked=None, _operator=True, position=None, position_note=""):
+             _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         calls.append({"target": target, "band": band})
         if _before_start_locked is not None:
             refusal = _before_start_locked()
@@ -1923,7 +1923,7 @@ def _start_after_the_openhop_check(record):
     from lhpc.core import openhop_store as ohs
 
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-             _before_start_locked=None, _operator=True, position=None, position_note=""):
+             _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         record.append(target)
         why = ohs.blocked(self) if target == "meshcore" else ""
         if why:
@@ -2024,18 +2024,19 @@ def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
     assert br.rid_of(value) == (value if ok else "")
 
 
-@pytest.mark.parametrize("rows,reason", [
-    ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")),
+@pytest.mark.parametrize("rows,rid,reason", [
+    ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")), "r1",
      "radio r1 is on 868 MHz now, not 433 MHz"),
-    ((radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "hat", "waveshare-sx1262", "433")),
-     "433 MHz has 2 enabled radios now (r1, r2)"),
-], ids=["the-radio-moved-band", "the-band-is-shared"])
-def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, monkeypatch, rows, reason):
+    ((radios.Radio("r1", "hat", "waveshare-sx1262", "433"), radios.Radio("r2", "low", "loraham", "433")), "r2",
+     "slot 0 of kiss on 433 MHz starts on r1 now, not r2"),
+], ids=["the-radio-moved-band", "slot-0-starts-on-another-radio"])
+def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, monkeypatch, rows, rid, reason):
     # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but its band no longer resolves to it; a band-addressed
-    # start would launch the client on another radio (r2), so the item is refused, naming why.
+    # start would launch the client on another radio, so the item is refused, naming why. Since 7e (DEC-W49) the band
+    # resolves to slot 0's radio (DEC-W16: its first enabled radio not listed for the stack), not to "its one radio".
     radios_fixture.write(tmp_path, rows)
     svc = _drv(tmp_path, monkeypatch)
-    rec = _v1()                                                       # kiss on 433, r1's instance
+    rec = {**_v1(), "rid": rid}                                       # kiss on 433, the radio it ran on
     _write_record(tmp_path, rec)
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))

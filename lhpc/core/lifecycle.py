@@ -537,7 +537,7 @@ class Lifecycle:
             return StartLaunch(False, str(log), str(exc))
         status = self._observe_and_record(stack, comp, pid, band, argv,
                                           requested_target=requested_target,
-                                          start_scope=start_scope, rid=inst.rid)
+                                          start_scope=start_scope, rid=inst.rid, slot=inst.slot)
         if status == "ok":
             return StartLaunch(True, str(log))
         # Not owned. Distinguish a clean failure (residual verified gone) from an
@@ -552,19 +552,20 @@ class Lifecycle:
 
     def _observe_and_record(self, stack: Stack, comp: Component, pid: int | None,
                             band: str, intended_argv: list[str], *,
-                            requested_target: str = "", start_scope: str = "", rid: str = "") -> str:
+                            requested_target: str = "", start_scope: str = "", rid: str = "", slot: int = 0) -> str:
         """Observe the launched pid's identity then persist ownership. Returns:
           * "ok"         — identity observed AND a durable ownership record persisted;
           * "ceased"     — could not be owned, but the residual process is verified gone;
           * "unverified" — could not be owned AND the residual process could NOT be
                            proven ceased (a leaked process — typed UNVERIFIED upstream).
         With OBSERVE_TIMEOUT_S=0 (tests) it records directly."""
+        extra = {"rid": rid, "slot": slot} if rid else None       # the instance's radio and slot (L5, 7e)
         if self.OBSERVE_TIMEOUT_S <= 0:
             # Capture a COMPLETE identity first and pass it to both record and cleanup,
             # so the zero-observation path follows the SAME no-signal-without-identity
             # rule as the normal path.
             ident = self._capture_identity(pid)
-            if self.record_launch(stack, comp, pid, band, ident=ident, extra={"rid": rid} if rid else None,
+            if self.record_launch(stack, comp, pid, band, ident=ident, extra=extra,
                                   requested_target=requested_target,
                                   start_scope=start_scope):
                 return "ok"
@@ -594,7 +595,7 @@ class Lifecycle:
                 if (self._identity_complete(launch_ident) and obs_ident is not None
                         and str(obs_ident.get("starttime")) != str(launch_ident.get("starttime"))):
                     return "unverified"
-                if self.record_launch(stack, comp, pid, band, ident=obs_ident, extra={"rid": rid} if rid else None,
+                if self.record_launch(stack, comp, pid, band, ident=obs_ident, extra=extra,
                                       requested_target=requested_target,
                                       start_scope=start_scope):
                     return "ok"

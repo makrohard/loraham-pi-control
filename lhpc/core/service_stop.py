@@ -168,7 +168,7 @@ class StopOpsMixin:
                              or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
                                     and (self.stack_of(r.component) or r.stack) == target
                                     for r in (res.results or ())))):
-                    self._write_stop_intent([target])
+                    self._write_stop_intent([f"{target}@{inst.rid}" if inst is not None and inst.slot else target])
                 return res
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
