@@ -58,23 +58,9 @@ def _port_tuple(port: str) -> tuple:
 
 
 def _stick_port(serial: str, port: str):
-    """(port, "") of the stick to open, or ("", why): a serial is resolved to its current port on sysfs (DEC-W35);
-    a serial-less radio's stick is its stored port, which must be listed."""
-    from ..usb_access import Probe
-    found = _scan()
-    if found.listing is not Probe.PRESENT:
-        return "", "the USB device list cannot be read"
-    if serial:
-        ports = [d.port for d in found.devices if d.serial.state is Probe.PRESENT
-                 and d.serial.value[:8] == serial[:8]]
-        if not ports:
-            return "", f"no stick with serial {serial[:8]} is plugged in"
-        if len(ports) > 1:
-            return "", f"more than one stick reports serial {serial[:8]}"
-        return ports[0], ""
-    if not any(d.port == port for d in found.devices):
-        return "", f"no stick is plugged in on port {port}"
-    return port, ""
+    """(port, "") of the stick to open, or ("", why): radio_start.stick_port on this module's scan (DEC-W35)."""
+    from .. import radio_start
+    return radio_start.stick_port(serial, port, _scan())
 
 
 def _search(bus, chip: str):
@@ -161,13 +147,26 @@ def detect_radio(svc, rid: str) -> Detected:
     return _run(rid, model.chip, _open_usb(model, dict(variant.pins), row.usb_serial, port))
 
 
-def _band_daemon(svc, band: str) -> str:
-    """The radio of `band` whose daemon runs (W2: the HAT's band), "" when none."""
-    from .. import radio_start, radios
-    state = radios.load(svc._paths)
-    rows = state.radios if state.kind == radios.VALID else ()
+_UNKNOWN_DAEMON = "Detect refused: a daemon process of unknown identity is running. Stop it first."
+
+
+def _list_refusal(state, who: str):
+    """G1-C5: Detect before an Add refuses an invalid hardware list (an absent one is fine: nothing to add to yet)."""
+    from .. import radios
+    return _refused(who, "the hardware list is not valid") if state.kind == radios.INVALID else None
+
+
+def _running(svc, rows) -> str:
+    """The first of `rows` whose daemon runs (radio_start.daemon_running, the answer Remove uses), "?" when a daemon
+    process of unknown identity runs although no row is asked about (it could be any radio's), else ""."""
+    from .. import radio_start
     procs = radio_start._daemon_procs(svc)
-    return next((r.id for r in rows if r.band == band and radio_start.daemon_running(svc, r, procs)), "")
+    hit = next((r.id for r in rows if radio_start.daemon_running(svc, r, procs)), "")
+    return hit or ("?" if any(p.kind == "unknown" for p in procs) else "")
+
+
+def _daemon_line(rid: str, chip: str = "") -> Detected:
+    return Detected("refused", _UNKNOWN_DAEMON, chip) if rid == "?" else _daemon_refusal(rid, chip)
 
 
 def detect_stick(svc, model_id: str, port: str) -> Detected:
@@ -179,13 +178,20 @@ def detect_stick(svc, model_id: str, port: str) -> Detected:
     if model is None or model.transport == "spi":
         return _refused(who, "not a USB model")
     state = radios.load(svc._paths)
+    if (bad := _list_refusal(state, who)) is not None:
+        return bad
     rows = state.radios if state.kind == radios.VALID else ()
-    dev = next((d for d in _scan().devices if d.port == port), None)
+    scan = _scan()
+    dev = next((d for d in scan.devices if d.port == port), None)
     serial = dev.serial.value if dev is not None and dev.serial.state is Probe.PRESENT else ""
-    holder = next((r for r in rows if (serial and r.usb_serial[:8] == serial[:8])
-                   or (not r.usb_serial and r.usb_port == port)), None)
-    if holder is not None and radio_start.daemon_running(svc, holder):     # FIRST
-        return _daemon_refusal(holder.id)
+    unread = dev is not None and dev.serial.state is Probe.UNKNOWN
+    # the radios this stick may be (G1-C5): every USB row whose stick resolves to this port; with its serial
+    # unreadable, also every serial row whose stick is listed nowhere else
+    holders = [r for r in rows if (r.usb_serial or r.usb_port) and (
+        radio_start.stick_port(r.usb_serial, r.usb_port, scan)[0] == port
+        or (unread and r.usb_serial and not radio_start.stick_port(r.usb_serial, r.usb_port, scan)[0]))]
+    if rid := _running(svc, holders):                                      # FIRST
+        return _daemon_line(rid)
     if dev is None:
         return _refused(who, f"no stick is plugged in on port {port}", model.chip)
     variant = model.variants[0] if len(model.variants) == 1 else None
@@ -198,13 +204,17 @@ def detect_stick(svc, model_id: str, port: str) -> Detected:
 
 def detect_board(svc, model_id: str, variant_key: str, band: str) -> Detected:
     """W2: Detect on a HAT (`model_id`, its variant `variant_key`) for `band`, before it is in the list."""
-    from .. import radio_models
+    from .. import radio_models, radios
     model = radio_models.load().get(model_id) if isinstance(model_id, str) else None
     who = f"{model_id} {band} MHz"
     if model is None or model.transport != "spi":
         return _refused(who, "not a board (SPI) model")
-    if rid := _band_daemon(svc, band):                                     # FIRST: the band's radio's daemon
-        return _daemon_refusal(rid, model.chip)
+    state = radios.load(svc._paths)
+    if (bad := _list_refusal(state, who)) is not None:
+        return bad
+    rows = state.radios if state.kind == radios.VALID else ()
+    if rid := _running(svc, [r for r in rows if r.band == band]):         # FIRST: the band's radios' daemons
+        return _daemon_line(rid, model.chip)
     variant = next((v for v in model.variants if v.key == variant_key), None)
     if variant is None or band not in model.bands or (variant.band and variant.band != band):
         return _refused(who, f"{model_id} has no variant {variant_key!r} on {band} MHz", model.chip)

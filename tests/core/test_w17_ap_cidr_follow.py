@@ -14,11 +14,14 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 
-def _svc(tmp_path):
+def _svc(tmp_path, authorized=True):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     (tmp_path / "state").mkdir(exist_ok=True)
-    return ControllerService(system=FakeSystem(files={"/proc/uptime": "100.0 200.0\n"}).system,
-                             paths=Paths(runtime_root=tmp_path))
+    svc = ControllerService(system=FakeSystem(files={"/proc/uptime": "100.0 200.0\n"}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    svc.network_supported = lambda: authorized               # the network gate (G1-C10): an AP box, the operator
+    svc._network_authorized = lambda: authorized             # authorized for NetworkManager, unless the case says not
+    return svc
 
 
 def _rendered_ap(tmp_path) -> dict:
@@ -84,3 +87,31 @@ def test_the_cli_recovers_from_a_bad_stored_value(tmp_path, monkeypatch, capsys)
     out = capsys.readouterr()
     assert rc == 0, out.out + out.err
     assert cfgmod.load_config(Paths(runtime_root=tmp_path)).network.ap_cidr == "10.42.0.0/24"
+
+
+# ---- G1-C10: the apply passes the network gate; a firewall that cannot follow rolls the setting back --------------
+
+def test_the_apply_is_refused_without_the_network_authorization_and_writes_nothing(tmp_path):
+    svc = _svc(tmp_path, authorized=False)
+    res = svc.network_set_ap_cidr("10.43.0.0/24", type(svc).AP_CIDR_CONFIRM)
+    assert (res.ok, res.summary) == (False, "Not changed: network controls are not available on this box")
+    assert not (tmp_path / "config" / "local.toml").exists()
+
+
+def test_the_recovery_from_a_bad_stored_value_needs_no_gate(tmp_path):
+    _bad_stored(tmp_path)
+    svc = _svc(tmp_path, authorized=False)
+    assert svc.network_set_ap_cidr("default", type(svc).AP_CIDR_CONFIRM).ok
+
+
+def test_a_firewall_that_cannot_follow_rolls_the_setting_back(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    assert svc.firewall_configure(ap_enabled=True, ap_interface="wlan0", ap_cidr="10.42.0.0/24").ok
+    svc._invalidate_config()
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(ControllerService, "firewall_configure", lambda self, **kw: ActionResult(False, "render failed"))
+    res = svc.network_set_ap_cidr("10.43.0.0/24", type(svc).AP_CIDR_CONFIRM)
+    assert (res.ok, res.summary) == (False, "Not changed: the firewall's AP subnet could not follow (render failed); "
+                                            "the AP subnet stays 10.42.0.0/24")
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).network.ap_cidr == "10.42.0.0/24"

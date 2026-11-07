@@ -337,6 +337,11 @@ svc_attempt() {   # svc_attempt BOUND ARGS...: one bounded systemctl call. Sets 
 	# 12 plumbing (timeout itself failed, or a helper file or the clock).
 	local b=$1 t0 t1 rc=0 a=0
 	shift
+	# the run's bound first (G1-C8): a call that answered after the bound was reached still added its time, so
+	# no further call starts once the total is at or above SVC_SCRIPT_BOUND_S
+	svc_acct_add 0 || a=$?
+	[ "$a" -ne 12 ] || return 12
+	if [ "$a" -ne 0 ]; then SVC_OUT=""; SVC_LAST="the run's bound for service calls ($SVC_SCRIPT_BOUND_S s) is reached"; return 5; fi
 	t0=$(svc_now) || return 12
 	SVC_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$b" systemctl "$@" 2>"$SVC_ERRF") || rc=$?
 	SVC_RC=$rc
@@ -422,7 +427,12 @@ svc_disable() {   # svc_disable UNIT: `disable --now`, each round reading the st
 				r=2 ;;
 			todo)
 				SVC_TRIES=$((SVC_TRIES + 1)); r=0
-				svc_attempt "$SVC_CALL_BOUND_S" disable --now "$1" || r=$?
+				# disabled but still active: only the stop is left, and a stop queues no manager reload, where every
+				# disable does (DEC-W55: a retry never adds load; lane run 11 queued ~29 s reloads)
+				case "$SVC_UF" in
+					disabled|masked|masked-runtime) svc_attempt "$SVC_CALL_BOUND_S" stop "$1" || r=$? ;;
+					*) svc_attempt "$SVC_CALL_BOUND_S" disable --now "$1" || r=$? ;;
+				esac
 				case "$r" in 0) SVC_DONE=disabled; return 0 ;; 1|5|12) return "$r" ;; esac ;;
 			*) r=2 ;;
 		esac
@@ -629,7 +639,7 @@ ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout
     _n=$((_n + 1)); TS_TRIES=$_n; _r=0
     ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
     [ "$_r" -eq 3 ] || return "$_r"
-    sleep "$SVC_RETRY_PAUSE_S"
+    [ "$_n" -ge "$SVC_RETRIES" ] || sleep "$SVC_RETRY_PAUSE_S"     # no pause after the last attempt (G1-C8)
     if [ "$1" = restart ] && [ -n "$_base" ]; then
       _r=0; ts_base "$2" || _r=$?
       [ "$_r" -ne 12 ] || return 12

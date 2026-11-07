@@ -234,3 +234,44 @@ def test_the_waveshare_row_takes_the_generic_sx1262_spi_path(tmp_path, monkeypat
     res = run.detect_board(box.svc, "waveshare-sx1262", "default", "868")
     assert res.line == "waveshare-sx1262 868 MHz: SX1262 found (SX1261 V2D 2D02)"
     assert box.opened[0][1:3] == ({"cs": 21, "irq": 16, "rst": 18, "gpio": 20, "txen": 6}, "sx1262")
+
+
+# ---- G1-C5: an invalid list, an unreadable serial and an unknown daemon refuse Detect before an Add -------------
+
+def _unread(port):
+    p = Field(Probe.PRESENT, "")
+    return UsbDevice(port, Field(Probe.PRESENT, "1a86"), Field(Probe.PRESENT, "5512"), p, p, p,
+                     Field(Probe.ABSENT), Field(Probe.UNKNOWN))
+
+
+def test_detect_before_an_add_refuses_an_invalid_list(tmp_path, monkeypatch):
+    box = _Box(tmp_path, monkeypatch, devices=[_dev("1-1.3", "MSTICK02")], chip=_Chip("sx1262"))
+    (tmp_path / "config" / "radios.toml").write_text("not toml [")
+    assert run.detect_stick(box.svc, "meshstick-1262", "1-1.3").line == \
+        "Detect refused: meshstick-1262 on port 1-1.3: the hardware list is not valid"
+    assert run.detect_board(box.svc, "uputronics", "ce1", "868").line == \
+        "Detect refused: uputronics 868 MHz: the hardware list is not valid"
+    assert box.opened == [] and box.selected == []
+
+
+def test_a_stick_whose_serial_cannot_be_read_is_checked_against_the_serial_radios(tmp_path, monkeypatch):
+    # r2's stick (serial 26073012) is listed nowhere by its serial, and the stick on 3-1 answers no serial: it may be
+    # r2's, whose daemon runs: refused, nothing opened
+    box = _Box(tmp_path, monkeypatch, procs=RUNNING_R2, devices=[_unread("3-1")], chip=_Chip("sx1262"))
+    assert run.detect_stick(box.svc, "meshstick-1262", "3-1").line == \
+        "Detect refused: r2's daemon is running. Stop it first."
+    assert box.opened == [] and box.selected == []
+
+
+def test_a_stick_found_by_its_serial_on_another_port_is_that_radios(tmp_path, monkeypatch):
+    box = _Box(tmp_path, monkeypatch, procs=RUNNING_R2, devices=[_dev("3-1", "26073012")], chip=_Chip("sx1262"))
+    assert run.detect_stick(box.svc, "meshstick-1262", "3-1").line == \
+        "Detect refused: r2's daemon is running. Stop it first."
+
+
+def test_a_daemon_of_unknown_identity_refuses_a_board_detect_with_no_radio_on_the_band(tmp_path, monkeypatch):
+    box = _Box(tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(9, "unknown", reason="?")], chip=_Chip("sx127x"))
+    (tmp_path / "config" / "radios.toml").unlink()                                  # no radio on any band
+    assert run.detect_board(box.svc, "uputronics", "ce0", "433").line == \
+        "Detect refused: a daemon process of unknown identity is running. Stop it first."
+    assert box.opened == []

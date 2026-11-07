@@ -1,4 +1,4 @@
-"""DEC-W39 (the coordinator's decision on the maintainer's "a function to delete a hardware row"): `lhpc hardware remove
+"""DEC-W39 (the decision on W247, "a function to delete a hardware row"): `lhpc hardware remove
 <rid>` removes one radio's row under the hardware list's lock (W217). Without the confirm phrase `remove-<rid>` it is
 a dry run that changes nothing. It is refused while the radio's daemon or a stack on it runs, naming them, from ONE
 answer (radio_start.radio_activity). The id stays reserved (`retired` in config/radios.toml): no later add takes it,
@@ -159,3 +159,25 @@ def test_the_cli_dry_run_and_the_remove(tmp_path, monkeypatch, capsys):
     assert _file(tmp_path) == before and "remove-r3" in capsys.readouterr().out
     assert main(["hardware", "remove", "r3", "--confirm-phrase", "remove-r3"]) == 0, capsys.readouterr().out
     assert radios.load(Paths(runtime_root=tmp_path)).retired == ("r3",)
+
+
+# ---- G1-C4: a save never writes over reserved ids it could not read -------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("text", ['retired = "r3"\n', "[[radio\n", 'retired = ["r3", "r3"]\n'],
+                         ids=["bad-retired", "not-toml", "twice"])
+def test_a_save_over_a_file_whose_reserved_ids_cannot_be_read_writes_nothing(tmp_path, monkeypatch, text):
+    svc = _svc(tmp_path, monkeypatch)
+    p = tmp_path / "config" / "radios.toml"
+    p.write_text(text)
+    reasons = radios.save(svc._paths, ROWS)
+    assert reasons == ["radios.toml cannot be read, so its reserved ids (retired) are unknown; nothing written"]
+    assert p.read_text() == text
+
+
+def test_a_save_with_no_file_has_no_reserved_ids(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    (tmp_path / "config" / "radios.toml").unlink()
+    assert radios.save(svc._paths, ROWS) == [] and radios.load(svc._paths).retired == ()

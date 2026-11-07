@@ -33,7 +33,11 @@ def start_plan(svc, rid: str) -> tuple:
         return None, str(exc), ()
     refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
-    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
+    port = ""
+    if model.transport != "spi":                       # DEC-W35: the daemon opens the stick by its port now
+        port, why = stick_port(radio.usb_serial, radio.usb_port)
+        refusal = refusal or (f"{radio.id}: {why}" if why else "")
+    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log, usb_port=port)
     return params, refusal, settings.notes
 
 
@@ -98,6 +102,27 @@ def ensure_rf_dir(svc, rid: str) -> str:
 
 
 USB_SETUP_HINT = "set up USB access first: the Hardware section's USB setup (a copy-paste command)"
+
+
+def stick_port(serial: str, port: str, scan=None) -> tuple:
+    """DEC-W35: (port, "") of a USB radio's stick now, or ("", why). A serial is resolved to the port sysfs lists it
+    on (the stick may have been replugged anywhere); a serial-less radio's stick is its stored port, which must be
+    listed. Start, verify and Detect all use this one answer."""
+    from . import usb_access
+    found = usb_access.scan() if scan is None else scan
+    if found.listing is not usb_access.Probe.PRESENT:
+        return "", "the USB device list cannot be read"
+    if serial:
+        ports = [d.port for d in found.devices if d.serial.state is usb_access.Probe.PRESENT
+                 and d.serial.value[:radios.SERIAL_PREFIX] == serial[:radios.SERIAL_PREFIX]]
+        if not ports:
+            return "", f"no stick with serial {serial[:radios.SERIAL_PREFIX]} is plugged in"
+        if len(ports) > 1:
+            return "", f"more than one stick reports serial {serial[:radios.SERIAL_PREFIX]}"
+        return ports[0], ""
+    if not any(d.port == port for d in found.devices):
+        return "", f"no stick is plugged in on port {port}"
+    return port, ""
 
 
 def usb_precheck(radio, model) -> str:
@@ -286,6 +311,24 @@ def _remove_radio(svc, rid: str, confirm: str):
     return ActionResult(True, f"{rid} removed; its id stays reserved", details=details)
 
 
+_RELOGIN = (" — this account's plugdev membership is granted but takes effect at its next login (log out and in, or"
+            " reboot)")
+
+
+def _access_line(msg: str, no_access: bool) -> tuple:
+    """(message, copybox) after an add or a bind: the USB setup box is pointed at only while the setup is still needed
+    (the page shows it then); with the rule current and plugdev granted but not yet effective there is no box, so the
+    line says the membership takes effect at the next login (W18-1)."""
+    from . import usb_access
+    if not no_access:
+        return msg, False
+    effective, configured, _euid = _groups()
+    rule = usb_access.rule_state(radio_models.load())
+    if usb_access.setup_needed(rule, usb_access.plugdev(effective, configured)):
+        return msg, True
+    return msg + _RELOGIN, False
+
+
 def _account() -> str:
     import os
     import pwd
@@ -313,7 +356,7 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
-                     "activity": radio_activity(svc, r, procs)})
+                     "activity": radio_activity(svc, r, procs), "problems": _problems(r, usb, v, found)})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None
@@ -322,6 +365,75 @@ def hardware_view(svc) -> dict:
         if usb_access.setup_needed(usb_access.rule_state(models), usb_access.plugdev(effective, configured)):
             box = usb_flow.copybox(svc._paths, _account(), models)
     return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
+
+
+def _problems(radio, usb: bool, view, found) -> list:
+    """W257: a row's short notes, read-only facts in a fixed order (no Detect, no bus): its daemon offline (enabled,
+    the CONF socket does not answer), then its stick not plugged in. A wrong band or a USB row with no binding never
+    reaches here: the list's own checks make such a list invalid, and an invalid list has no rows."""
+    out = ["daemon offline"] if radio.enabled and not view.reachable else []
+    if usb:
+        _port, why = stick_port(radio.usb_serial, radio.usb_port, found)
+        if why.startswith("no stick"):
+            out.append(f"stick not plugged in: serial {radio.usb_serial[:radios.SERIAL_PREFIX]}" if radio.usb_serial
+                       else f"stick not plugged in on port {radio.usb_port}")
+        elif why:
+            out.append(why)
+    return out
+
+
+def radio_detail(svc, rid: str):
+    """W257: the detail page of radio `rid`: its hardware_view row plus what Remove would do and what to stop first,
+    and whether Detect is offered; None when the list holds no such radio (the route's 404)."""
+    row = next((r for r in hardware_view(svc)["rows"] if r["rid"] == rid), None)
+    if row is None:
+        return None
+    plan = remove_plan(svc, rid)
+    return {**row, "remove": {"facts": plan.get("facts", {}), "activity": plan.get("activity", [])},
+            "stop_first": stop_first(rid, row["activity"]) if row["activity"] else "", "detect": True}
+
+
+def add_hat(svc, model_id: str, band: str, variant: str = "") -> tuple:
+    """W257: Add Hardware's HAT row: one SPI radio added to the list, under its lock (W217)."""
+    return _with_list_lock(svc._paths, lambda why: (False, f"Not added: {why}"), _add_hat, svc, model_id, band, variant)
+
+
+def _add_hat(svc, model_id: str, band: str, variant: str) -> tuple:
+    """(ok, message). The model must be a board (SPI) model with a variant for `band`; `variant` names it when the
+    model has more than one (Uputronics ce0 / ce1), stored as the row's `ce`. The new row takes the next free
+    non-reserved id (DEC-W39) and `<short> <band>`; the list's own checks decide the rest (a claimed pin refuses)."""
+    state = radios.load(svc._paths)
+    if state.kind == radios.ABSENT:
+        return False, "Not added: there is no hardware list: set it up first (lhpc hardware <setup>)"
+    if state.kind != radios.VALID:
+        return False, "Not added: the hardware list is not valid: " + "; ".join(state.reasons)
+    models = radio_models.load()
+    m = models.get(model_id) if isinstance(model_id, str) else None
+    if m is None:
+        return False, f"Not added: there is no model {model_id!r}"
+    if m.transport != "spi":
+        return False, f"Not added: {m.id} is not a board (SPI) model"
+    fits = [v for v in m.variants if band in m.bands and (not v.band or v.band == band)]
+    if not fits:
+        return False, f"Not added: {m.id} has no variant for {band} MHz"
+    if not variant and len(fits) > 1:
+        return False, f"Not added: {m.id} needs a variant ({', '.join(v.key for v in fits)})"
+    v = next((x for x in fits if x.key == variant), None) if variant else fits[0]
+    if v is None:
+        return False, f"Not added: {m.id} has no variant {variant!r} for {band} MHz"
+    several = bool(variant) or len(fits) > 1          # G1-C19: an explicit variant is always kept as `ce`
+    try:
+        rid = radios.next_id(state.radios, state.retired)
+    except ValueError as exc:
+        return False, f"Not added: {exc}"
+    name = f"{m.short} {band}"
+    if any(r.name.casefold() == name.casefold() for r in state.radios):
+        name = radios.default_name(state.radios, m)
+    row = radios.Radio(rid, name, m.id, band, ce=v.key if several else "")
+    reasons = radios.save(svc._paths, (*state.radios, row), models)
+    if reasons:
+        return False, "Not added: " + "; ".join(reasons)
+    return True, f"{rid} added: {m.id}" + (f" ({v.key})" if several else "") + f" on {band} MHz"
 
 
 def _holder(rows, choice) -> str:
@@ -376,6 +488,12 @@ def _add_usb(svc, model_id: str, port: str) -> tuple:
         return False, f"the stick on port {port} is already {holder}'s: re-bind {holder} in its card instead", False
     if len(m.bands) != 1:
         return False, f"{m.id} runs {len(m.bands)} bands; adding it needs a band choice", False
+    # DEC-W21: the stick's chip must answer as the picked model's before anything is written (Detect, on its bus).
+    from .radio_detect import run as detect
+    d = detect.detect_stick(svc, m.id, port)
+    if d.outcome != "found":
+        return False, "Not added: " + d.line + ("" if d.outcome == "refused" else
+                                                " — check the model; nothing was written"), False
     try:
         rid = radios.next_id(state.radios, state.retired)
     except ValueError as exc:
@@ -391,8 +509,9 @@ def _add_usb(svc, model_id: str, port: str) -> tuple:
     device = next((d for d in found.devices if d.port == port), None)
     effective, _configured, euid = _groups()
     access = usb_access.node_access(device, effective, euid) if device else usb_access.Probe.UNKNOWN
-    return True, f"{rid} added: {m.id} on {band} MHz, " + (f"serial {choice.serial}" if choice.serial
-                                                          else f"port {port} (no serial)"), access is usb_access.Probe.ABSENT
+    return (True, *_access_line(f"{rid} added: {m.id} on {band} MHz, " + (f"serial {choice.serial}" if choice.serial
+                                                                         else f"port {port} (no serial)"),
+                                access is usb_access.Probe.ABSENT))
 
 
 def bind_usb(svc, rid: str, port: str) -> tuple:
@@ -424,7 +543,8 @@ def _bind_usb(svc, rid: str, port: str) -> tuple:
     reasons = radios.save(svc._paths, b.radios)
     if reasons:
         return False, f"{rid}: " + "; ".join(reasons), False
-    return True, f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial else ""), b.copybox
+    return (True, *_access_line(f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial
+                                                                             else ""), b.copybox))
 
 
 def setup_radios(paths, setup_id: str) -> tuple:
@@ -695,7 +815,9 @@ def verify_identity(svc, rid: str) -> str:
     radio = next((r for r in state.radios if r.id == rid), None)
     if radio is None:
         return f"radio {rid} is no longer in the hardware list"
-    return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
+    model = radio_models.load()[radio.model]
+    port = stick_port(radio.usb_serial, radio.usb_port)[0] if model.transport != "spi" else ""
+    return radio_daemon.check_bound(status, radio, model, port) or ""
 
 
 def radio_name(paths, band: str) -> str:
