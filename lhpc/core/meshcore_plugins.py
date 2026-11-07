@@ -34,6 +34,11 @@ def marker_path(paths) -> Path:
     return paths.under("state", "openhop", MARKER_NAME)
 
 
+def marker_paths(paths) -> list:
+    """Slot 0's marker, then every instance's on disk (7d: state/<rid>/openhop, a removed instance's included)."""
+    return [marker_path(paths), *sorted(paths.runtime_root.glob(f"state/*/openhop/{MARKER_NAME}"))]
+
+
 # LOCKSTEP with meshcore_host/plugin_manager.py::marker_verdict — same text, same verdicts.
 def marker_verdict(path: Path | str, current_boot: str) -> str:
     """One of "absent" (no marker), "safe" (a marker from another boot: its processes cannot have
@@ -62,15 +67,17 @@ def marker_verdict(path: Path | str, current_boot: str) -> str:
 def unclean_refusal(paths, action: str) -> ActionResult | None:
     """The refusal for `action` when the marker says an unclean manager may own plugins in this
     boot, or when that cannot be proven; None when it is safe to proceed."""
-    verdict = marker_verdict(marker_path(paths), current_boot_id())
-    if verdict in ("absent", "safe"):
+    boot = current_boot_id()
+    marker, verdict = next(((p, v) for p in marker_paths(paths)
+                            if (v := marker_verdict(p, boot)) not in ("absent", "safe")), (None, "safe"))
+    if marker is None:
         return None
     why = (REBOOT_HINT if verdict == "unsafe"
            else "cannot prove the MeshCore plugin-manager state (its marker is unreadable or "
                 "malformed, or the boot id is unavailable) — reboot before modifying the "
                 "MeshCore installation")
     return ActionResult(False, f"Refusing to {action}: {why}.",
-                        details=[f"  marker: {marker_path(paths)}"], next_commands=["sudo reboot"],
+                        details=[f"  marker: {marker}"], next_commands=["sudo reboot"],
                         data={"prep_blocked": "meshcore_plugins", "reason": "meshcore-plugins"})
 
 

@@ -963,3 +963,19 @@ def test_a_read_only_lock_folder_is_named_not_a_traceback(tmp_path):
     assert "Another operation" not in r.summary
     assert _tree(b) == before
 
+
+
+def test_backup_holds_a_listed_instances_state_and_secrets(tmp_path):
+    # 7d (DEC-W51): meshcore@r3's identity and saved state are in the backup (state/r3/meshcore,
+    # config/secrets/r3/), so a restore brings back that node too.
+    a = _root(tmp_path, "a")
+    svc = _seed(a, pki=False)
+    (a / "config" / "instances.toml").write_text('meshcore = ["r3"]\n')
+    (a / "state/r3/meshcore").mkdir(parents=True)
+    (a / "state/r3/meshcore/companion.db").write_bytes(b"c")
+    (a / "config/secrets/r3").mkdir()
+    (a / "config/secrets/r3/meshcore_identity.key").write_bytes(b"k")
+    out = tmp_path / "out.tar"
+    _backup(svc, out)
+    names = _names(out)
+    assert "state/r3/meshcore/companion.db" in names and "config/secrets/r3/meshcore_identity.key" in names

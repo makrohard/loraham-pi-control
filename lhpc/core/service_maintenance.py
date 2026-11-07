@@ -12,6 +12,7 @@ from typing import ClassVar
 
 from . import (
     commands,
+    instances,
     power,
     provenance,
     restart_required,
@@ -2621,12 +2622,10 @@ class MaintenanceOpsMixin:
         # Named explicitly in the manifest (`build_root`) rather than guessed from `bin`.
         build_roots = [c.build_root for c in stack.components
                        if c.build_root and not c.source]
-        # Persistent component state kept outside every checkout (MeshCom's node image = the
-        # node's settings): an update never touches it, "Clean all" does.
-        state_roots = sorted({c.state_root for c in stack.components if c.state_root})
-        # The stack's own secrets (identities, keys, passwords LHPC minted for it) and the
-        # config files LHPC generates for it: "purge" is a full wipe (maintainer, 2026-09-27).
-        secret_files = sorted({n for c in stack.components for n in c.secret_files})
+        # Persistent state outside every checkout (MeshCom's node image, each instance's too): update keeps, "Clean all" removes.
+        state_roots = instances.instance_rels(self._paths, sid, sorted({c.state_root for c in stack.components if c.state_root}), 1)
+        # The stack's own secrets (its instances' too) and its generated config files: "purge" is a full wipe (2026-09-27).
+        secret_files = instances.instance_rels(self._paths, sid, sorted({n for c in stack.components for n in c.secret_files}), 0)
         gen_prefix = "{runtime}/config/files/"
         gen_files = sorted({c.config_file.path[len(gen_prefix):] for c in stack.components
                             if c.config_file and c.config_file.path.startswith(gen_prefix)

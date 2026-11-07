@@ -99,3 +99,18 @@ def test_removing_an_instance_that_is_not_listed_is_refused(run, tmp_path):
     rc, out = run("remove-instance", "kiss", "r2")
     assert rc != 0 and "kiss@r2 is not a listed instance" in out, out
     assert _listed(tmp_path) is None
+
+
+def test_a_removed_instance_names_the_state_it_keeps(run, tmp_path):
+    # 7d (DEC-W51): a removal deletes nothing; purge takes only listed instances' folders, so the kept state and
+    # secrets of meshcore@r3 are named (only what is on disk), never left there silently.
+    assert run("add-instance", "meshcore", "r3")[0] == 0
+    for rel in ("state/r3/meshcore/companion.db", "state/r3/openhop/repeater.db",
+                "config/secrets/r3/meshcore_identity.key"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x")
+    rc, out = run("remove-instance", "meshcore", "r3")
+    assert rc == 0, out
+    kept = sorted(ln.split("[kept] ")[1].split(" ")[0] for ln in out.splitlines() if "[kept] " in ln)
+    assert kept == ["config/secrets/r3/meshcore_identity.key", "state/r3/meshcore", "state/r3/openhop"], out
+    assert (tmp_path / "state/r3/meshcore/companion.db").exists()

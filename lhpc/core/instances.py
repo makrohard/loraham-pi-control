@@ -217,7 +217,13 @@ def remove_instance(svc, sid: str, rid: str):
         return ActionResult(False, f"the instance list is busy ({exc}); nothing was changed — try again")
     if reasons:
         return ActionResult(False, f"{sid}@{rid} not removed: " + "; ".join(reasons))
-    return ActionResult(True, f"{sid}@{rid} removed: slot {k + 1} stays reserved")
+    # 7d: nothing is deleted, and purge takes only listed instances' folders, so the kept ones are named.
+    comps = svc.stack(sid).components
+    kept = [r for r in (*(f"state/{rid}/{c.state_root.split('/', 1)[1]}" for c in comps if c.state_root),
+                        *(f"config/secrets/{rid}/{n}" for c in comps for n in c.secret_files))
+            if (svc._paths.runtime_root / r).exists()]
+    return ActionResult(True, f"{sid}@{rid} removed: slot {k + 1} stays reserved",
+                        details=[f"  [kept] {r} (remove it by hand when it is no longer needed)" for r in sorted(set(kept))])
 
 
 # ---- item 7c2: addressing an instance -------------------------------------------------------------------
@@ -246,6 +252,14 @@ def resolve(svc, target: str):
 def listed_rids(paths, sid: str) -> frozenset:
     """The radio ids the stack's listed instances run on (reserved slots left out)."""
     return frozenset(rid for _k, rid in listed(load(paths), sid))
+
+
+def instance_rels(paths, sid: str, rels, keep: int) -> list:
+    """7d: `rels` plus, for each listed instance of `sid`, the same with `<rid>` after their first `keep` segments
+    (the manifest's {instance_dir} layout: a state root state/<name> -> state/<rid>/<name> with keep=1; a secret
+    file <name> -> <rid>/<name> with keep=0)."""
+    parts = [r.split("/") for r in rels]
+    return [*rels, *("/".join([*q[:keep], rid, *q[keep:]]) for rid in sorted(listed_rids(paths, sid)) for q in parts)]
 
 
 def slot0_radio(paths, sid: str, band: str):
