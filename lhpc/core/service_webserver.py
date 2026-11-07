@@ -578,7 +578,7 @@ class WebserverOpsMixin:
         panel says when the upstream is served (`page_mode_note`)."""
         from .model import web_pages
         s = self.stack(stack_id)
-        return tuple(web_pages(s)) if s is not None else ()
+        return tuple(web_pages(s, paths=self._paths)) if s is not None else ()     # item 7: every instance
 
     def page_mode_note(self, page) -> str:
         """One sentence when the page's upstream is NOT served in the saved MeshCore mode (the

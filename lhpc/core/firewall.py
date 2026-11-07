@@ -610,7 +610,7 @@ def base_id(eid: str) -> str:
     return re.sub(r"-r[1-9][0-9]?(\.tcp-\d+)$", r"\1", eid)
 
 
-def endpoint_rows(stack, bands, resolve, selected) -> list:
+def endpoint_rows(stack, bands, resolve, selected, paths=None) -> list:
     """The candidate rows of one endpoint, for each instance of the stack (`commands.stack_instances`).
     `resolve(band, inst)` is the endpoint's scope. Each band is resolved and DISTINCT scopes are kept,
     never two bands merged into one row: when every band yields the same scope (the common case) there is
@@ -619,7 +619,7 @@ def endpoint_rows(stack, bands, resolve, selected) -> list:
     loopback-only scope without a knob gives no row. A tick on the slot-0 id selects every instance's row."""
     from . import commands
     rows = []
-    for inst in commands.stack_instances(stack):
+    for inst in commands.stack_instances(stack, paths):              # item 7: each listed instance
         per_scope = {}
         for band in bands:
             sc = resolve(band, inst)
