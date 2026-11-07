@@ -4,6 +4,7 @@ the file. Every read-modify-write of config/radios.toml now runs whole under the
 save writes a temp file of its own. Each writer here is held after its read until the other has read too or was
 refused the config flock, so without the lock both read the same list; with it, the second waits and reads the first
 one's row. No timer decides the order."""
+import pytest
 import dataclasses
 import threading
 
@@ -13,6 +14,14 @@ import repo_paths
 from lhpc.core import radio_start, radios, usb_access
 from lhpc.core.paths import Paths
 from lhpc.core.usb_access import Field, Probe
+
+
+@pytest.fixture(autouse=True)
+def _chip_found(monkeypatch):
+    """DEC-W21: the add checks the stick's chip first; these cases are about the list, so the check answers "found"
+    (tests/web/test_w21_add_checks_the_chip.py drives the check itself)."""
+    from lhpc.core.radio_detect import run
+    monkeypatch.setattr(run, "detect_stick", lambda svc, model, port: run.Detected("found", f"{model}: found", "", ""))
 
 STICKS = repo_paths.REPO / "tests" / "data" / "usb_sysfs" / "meshstick"     # the Meshstick on 1-1.3, no serial
 REAL_SCAN = usb_access.scan

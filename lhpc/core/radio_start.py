@@ -367,6 +367,12 @@ def _add_usb(svc, model_id: str, port: str) -> tuple:
         return False, f"the stick on port {port} is already {holder}'s: re-bind {holder} in its card instead", False
     if len(m.bands) != 1:
         return False, f"{m.id} runs {len(m.bands)} bands; adding it needs a band choice", False
+    # DEC-W21: the stick's chip must answer as the picked model's before anything is written (Detect, on its bus).
+    from .radio_detect import run as detect
+    d = detect.detect_stick(svc, m.id, port)
+    if d.outcome != "found":
+        return False, "Not added: " + d.line + ("" if d.outcome == "refused" else
+                                                " — check the model; nothing was written"), False
     try:
         rid = radios.next_id(state.radios, state.retired)
     except ValueError as exc:

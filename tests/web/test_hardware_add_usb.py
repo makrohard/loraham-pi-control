@@ -10,6 +10,14 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.usb_access import Probe
 
+
+@pytest.fixture(autouse=True)
+def _chip_found(monkeypatch):
+    """DEC-W21: the add checks the stick's chip first; these cases are about the list, so the check answers "found"
+    (tests/web/test_w21_add_checks_the_chip.py drives the check itself)."""
+    from lhpc.core.radio_detect import run
+    monkeypatch.setattr(run, "detect_stick", lambda svc, model, port: run.Detected("found", f"{model}: found", "", ""))
+
 STICKS = repo_paths.REPO / "tests" / "data" / "usb_sysfs" / "meshstick"     # the Meshstick on 1-1.3, no serial
 REAL_SCAN = usb_access.scan
 SPI = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"))
