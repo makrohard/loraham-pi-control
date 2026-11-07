@@ -30,6 +30,17 @@
         {{ cmdbox('network-ap-firewall', nv.ap_firewall.commands|join('\n')) }}{% else %}.{% endif %}
       </div>
     {% endif %}
+    {% if nv.authorized and nv.ap_cidr %}
+      {# NA: the AP's IPv4 subnet, one setting; the change needs its confirm phrase (as `lhpc network`). #}
+      <form method="post" action="{{ url_for('network_action', op='ap-cidr') }}" class="act" id="network-ap-cidr">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label>AP subnet <input type="text" name="ap_cidr" value="{{ nv.ap_cidr }}" size="18"
+               spellcheck="false" autocomplete="off"></label>
+        <label>type <code>{{ nv.ap_cidr_confirm }}</code> <input type="text" name="confirm_phrase" value="" size="16"
+               autocomplete="off"></label>
+        <button type="submit" class="act">Change AP subnet</button>
+      </form>
+    {% endif %}
     {% if nv.authorized and nv.mode == 'client' %}
       <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

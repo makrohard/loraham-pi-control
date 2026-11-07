@@ -95,7 +95,7 @@ def test_b10_the_lowest_free_id(tmp_path, monkeypatch):
 
 def test_b9_no_free_id(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
-    monkeypatch.setattr(radios, "next_id", lambda rows: (_ for _ in ()).throw(ValueError("all 99 radio ids are taken")))
+    monkeypatch.setattr(radios, "next_id", lambda rows, retired=(): (_ for _ in ()).throw(ValueError("all 99 radio ids are taken")))
     assert radio_start.add_usb(_svc(tmp_path), "meshstick-1262", "1-1.3") == (False, "all 99 radio ids are taken", False)
 
 

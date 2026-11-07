@@ -45,6 +45,7 @@ from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
 from lhpc.core import validators
+from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
@@ -410,6 +411,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         body = ("409 Conflict: a stored configuration file is unreadable or malformed. It was left "
                 "untouched for inspection. Repair or remove it (config/*.toml under the runtime root), "
                 "then retry.\n")
+        if getattr(exc, "reason", "") == _config.AP_CIDR_INVALID:   # W17: the recovery needs no console page
+            body += ("The access point subnet (network.ap_cidr) is invalid: reset it on the box with\n"
+                     f"  lhpc network --ap-cidr default --confirm-phrase {_AP_CIDR_CONFIRM}\n")
         return Response(body, status=409, mimetype="text/plain")
 
     def _runtime_root() -> str:
@@ -547,7 +551,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/api/tasks/dismiss")
     def tasks_dismiss():
-        # Close a FAILED (red) banner (never unsafe/running). CSRF-guarded; durable.
+        # Close a FAILED banner, or hide an UNSAFE one (UX: never a running one). CSRF-guarded; durable.
         if not _csrf_ok():
             abort(400)
         ok = service.task_dismiss(request.form.get("kind", ""), request.form.get("run_id", ""),
@@ -1268,7 +1272,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # respond-first: the detached finalize helper does the activation.
         if not _csrf_ok():
             abort(400)
-        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap") \
+        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap", "ap-cidr") \
                 or not service.network_supported():
             abort(404)
         back = redirect(url_for("stacks_overview", open="network")
@@ -1284,6 +1288,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return back
         if op == "forget":
             res = service.network_forget(request.form.get("uuid", ""))
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "ap-cidr":
+            # NA: the AP subnet setting through the one apply (phrase first, then the value; never stripped).
+            res = service.network_set_ap_cidr(request.form.get("ap_cidr", ""),
+                                              request.form.get("confirm_phrase", "").strip())
             flash(res.summary, "ok" if res.ok else "warn")
             return back
         if op == "retry":
@@ -2037,7 +2047,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
         from lhpc.core import radio_start
-        return render_template("hardware.html", view=radio_start.hardware_view(service))
+        return render_template("hardware.html", view=radio_start.hardware_view(service),
+                               stop_first=radio_start.stop_first)
 
     @app.post("/hardware/bind")
     def hardware_bind():
@@ -2058,6 +2069,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         ok, msg, box = radio_start.add_usb(service, request.form.get("model", ""), request.form.get("port", ""))
         flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
         return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+
+    @app.get("/hardware/remove/<rid>")
+    def hardware_remove_confirm(rid: str):
+        """DEC-W39: the confirm step of Remove radio: what goes, what stays; the refusal instead while it runs."""
+        from lhpc.core import radio_start
+        return render_template("hardware_remove.html", plan=radio_start.remove_plan(service, rid),
+                               stop_first=radio_start.stop_first)
+
+    @app.post("/hardware/remove")
+    def hardware_remove():
+        """DEC-W39: remove one radio's row; only with its confirm phrase, else nothing changes."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        res = radio_start.remove_radio(service, request.form.get("rid", ""), request.form.get("confirm_phrase", ""))
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hardware_view"))
 
     @app.post("/hardware")
     def hardware_set():

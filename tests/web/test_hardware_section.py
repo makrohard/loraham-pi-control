@@ -17,6 +17,8 @@ def _box(web, tmp_path, monkeypatch, rows=ROWS, access=Probe.PRESENT):
     radios_fixture.write(tmp_path, rows)
     monkeypatch.setattr(usb_access, "scan", lambda *a, **k: REAL_SCAN(STICKS))
     monkeypatch.setattr(usb_access, "node_access", lambda *a, **k: access)
+    monkeypatch.setattr(usb_access, "rule_state", lambda *a, **k: usb_access.RuleState.MISSING)   # stub: not the host's /etc
+    monkeypatch.setattr(usb_access, "plugdev", lambda *a, **k: usb_access.Membership.ABSENT)      # stub: not the host's groups
     return web()
 
 

@@ -18,6 +18,7 @@ from . import (
     runtime_fs,
     source_fs,
     source_registry,
+    task_hide,
     validators,
     web_client,
 )
@@ -1296,7 +1297,7 @@ class MaintenanceOpsMixin:
             if hint:
                 item["hint"] = hint
             out.append(item)
-        return out
+        return task_hide.visible(out, dismissed)      # UX: an unsafe item the operator hid stays hidden
 
     # ---- banner dismiss / recover (all durable-confirmed; unsafe/running never ✕-dismissible) ----
     def _dismissed_path(self):
@@ -1324,11 +1325,11 @@ class MaintenanceOpsMixin:
 
     @invalidates_snapshot
     def task_dismiss(self, kind: str, run_id: str, attempt_id: str = "") -> bool:
-        """Dismiss a FAILED (never unsafe/running) terminal banner. Durable; returns success only on a
-        confirmed write/unlink."""
+        """Dismiss a FAILED terminal banner, or hide an UNSAFE one of any kind (UX: task_hide; never a running one).
+        Durable; returns success only on a confirmed write/unlink."""
         from . import jobresult
-        if not run_id:
-            return False
+        if (hid := task_hide.dismiss_unsafe(self, kind, run_id, attempt_id)) is not None or not run_id:
+            return bool(hid)
         if kind == "job":
             rec = jobresult.read_one(self._paths, run_id)
             if rec is None or rec.get("attempt_id") != attempt_id:

@@ -1798,6 +1798,11 @@ def test_headers_are_stripped_and_evidence_set(tmp_path):
     assert 'proxy_set_header Forwarded "";' in conf
     assert "proxy_set_header X-LHPC-Peer $lhpc_peer;" in conf
     assert "proxy_set_header X-LHPC-Client-Verify $ssl_client_verify;" in conf
+    # DEC-W11-2: the verified client's DN for the power-action record, set (so a client-sent copy is overwritten)
+    # in the same location as the verify result; the app trusts it only when the verify result is SUCCESS.
+    assert conf.count("proxy_set_header X-LHPC-Client-DN $ssl_client_s_dn;") == conf.count(
+        "proxy_set_header X-LHPC-Client-Verify $ssl_client_verify;")
+    assert "proxy_set_header X-LHPC-Client-DN $ssl_client_s_dn;" in conf
     assert "geo $lhpc_peer {" in conf and "127.0.0.0/8 loopback;" in conf
     assert "server unix:" in conf and "lhpc-web.sock" in conf       # backend is the unix socket
 

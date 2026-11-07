@@ -11,7 +11,7 @@
 # unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted
 # BEFORE the script is ever granted root. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]
 #   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing
 #     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (every board; each radio drives its CS as a GPIO, the kernel does not claim CE0/CE1)
 #     hardware-cs  kernel chip selects, no overlay: dtparam=spi=on only  (LoRaHAM / Uputronics: radios on CE0 = GPIO 8 and CE1 = GPIO 7; the kernel serialises every transfer. Not for Waveshare, CS 21)
@@ -27,12 +27,18 @@
 #                        itself appears only on AP-managed boxes — desktop images pass
 #                        this flag). polkitd is installed unless BOTH power AND network
 #                        controls are opted out.
+#     --no-usb-setup     do NOT write the USB radios' udev rule (/etc/udev/rules.d/90-lhpc-usb-radio.rules) or
+#                        grant plugdev; the console's Hardware section then offers the same
+#                        setup as a copybox. No kernel module is blacklisted either way.
 # Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·
 #             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·
 #             7 hardware group grant failed · 8 system nginx.service could not be confirmed stopped ·
 #             9 systemd unit files could not be inspected, or a packaged service could not
 #             be disabled (fail-closed — a competing service may be active) ·
-#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).
+#             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·
+#             11 the time source did not come up · 12 the service-call helper cannot run
+#             (no `timeout`, no readable /proc/uptime, or its own files) ·
+#             13 the USB setup could not write its udev rule or run udevadm.
 #             Steps that can legitimately fail on a CLEAN
 #             image (no packaged meshtasticd unit) are GUARDED — the script runs under
 #             `set -e`, so an unguarded one would abort before this summary.
@@ -55,7 +61,7 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]" >&2
 	echo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2
 }
 
@@ -65,6 +71,9 @@ OPERATOR_USER=""
 NO_SWAPFILE=""
 NO_POWER=""
 NO_NETWORK=""
+NO_USB=""
+LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup's path prefix (a test seam; empty = /)
+SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
@@ -78,6 +87,7 @@ while [ $# -gt 0 ]; do
 		--no-swapfile) NO_SWAPFILE=1; shift ;;
 		--no-power-controls) NO_POWER=1; shift ;;
 		--no-network-controls) NO_NETWORK=1; shift ;;
+		--no-usb-setup) NO_USB=1; shift ;;
 		--with-gui) WITH_GUI=1; shift ;;
 		--with-gps) WITH_GPS=1; shift ;;
 		--no-time-source) NO_TIME_SOURCE=1; shift ;;
@@ -267,13 +277,180 @@ case "$SPI_MODE" in
 		fi ;;
 esac
 
+# --- bounded system-service calls (BOOTSTRAP-RETRY-TABLES-v5) -------------------------------------
+# Each retried systemctl call runs under `timeout`; a call that timed out is retried only after its
+# state was read again; the bounds use the first field of /proc/uptime, never the wall clock (this
+# run restarts chrony). Exit 12 = this helper cannot run (no `timeout`, no clock, its own files).
+SVC_UPTIME="${SVC_UPTIME:-/proc/uptime}"
+svc_plumb() {   # the helper's own failure: exit 12 with the reason
+	echo "ERROR: the service-call helper cannot run: $1. (exit 12)" >&2
+	exit 12
+}
+for _sv in SVC_CALL_BOUND_S:90 SVC_RETRIES:4 SVC_RETRY_PAUSE_S:5 SVC_READ_BOUND_S:60 SVC_KILL_GRACE_S:5 SVC_READS_PER_CHECK_D:2 SVC_READS_PER_CHECK_R:1 SVC_SCRIPT_BOUND_S:1800; do
+	_sn=${_sv%%:*}
+	_sx=${!_sn-${_sv#*:}}
+	case "$_sx" in ''|*[!0123456789]*)
+		echo "ERROR: $_sn must be 1 to 6 ASCII digits, at least 1 (got '$_sx')." >&2; exit 2 ;;
+	esac
+	if [ "${#_sx}" -gt 6 ] || [ "$((10#$_sx))" -lt 1 ]; then
+		echo "ERROR: $_sn must be 1 to 6 ASCII digits, at least 1 (got '$_sx')." >&2; exit 2
+	fi
+	printf -v "$_sn" '%s' "$((10#$_sx))"
+done
+# the totals per call (section 2): D = a disable, R = a restart with its baseline read (SVC_CALL_BOUND_S SVC_RETRIES SVC_RETRY_PAUSE_S SVC_READ_BOUND_S SVC_KILL_GRACE_S SVC_READS_PER_CHECK_D SVC_READS_PER_CHECK_R SVC_SCRIPT_BOUND_S)
+SVC_TOTAL_BOUND_D_S=$(( SVC_RETRIES * ((SVC_CALL_BOUND_S + SVC_KILL_GRACE_S) + SVC_READS_PER_CHECK_D * (SVC_READ_BOUND_S + SVC_KILL_GRACE_S)) + (SVC_RETRIES - 1) * SVC_RETRY_PAUSE_S ))
+SVC_TOTAL_BOUND_R_S=$(( (SVC_READ_BOUND_S + SVC_KILL_GRACE_S) + SVC_RETRIES * ((SVC_CALL_BOUND_S + SVC_KILL_GRACE_S) + SVC_READS_PER_CHECK_R * (SVC_READ_BOUND_S + SVC_KILL_GRACE_S)) + (SVC_RETRIES - 1) * SVC_RETRY_PAUSE_S ))
+command -v timeout >/dev/null 2>&1 || svc_plumb "coreutils' timeout is not installed"
+svc_now() {   # whole seconds of the monotonic clock; status 12 when it cannot be read or is malformed
+	local u='' r=0
+	read -r u _ < "$SVC_UPTIME" || r=$?
+	[ "$r" -eq 0 ] || return 12
+	case "$u" in ''|.*|*.*.*|*[!0123456789.]*) return 12 ;; esac
+	u=${u%%.*}
+	[ -n "$u" ] && [ "${#u}" -le 12 ] || return 12
+	printf '%s\n' "$((10#$u))"
+}
+_st=0; _sx=$(svc_now) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "the clock $SVC_UPTIME cannot be read"
+# the run's accounting (the per-run bound) and the stderr buffer: fresh files, made once
+_st=0; SVC_ACCT=$(mktemp) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"
+_st=0; SVC_ERRF=$(mktemp) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"
+printf '0\n' > "$SVC_ACCT" || svc_plumb "the accounting file cannot be written"
+export SVC_ACCT
+_PLUMB_FAILED=""   # a deferred 12 (the packaged-service step, the time-source step), reported last
+svc_acct_add() {   # add $1 s to the run's total: 0 below the bound, 5 at or above it, 12 for a bad file
+	local v='' r=0
+	[ -f "$SVC_ACCT" ] && [ ! -L "$SVC_ACCT" ] || return 12
+	v=$(cat "$SVC_ACCT") || r=$?
+	[ "$r" -eq 0 ] || return 12
+	case "$v" in ''|*[!0123456789]*) return 12 ;; esac
+	[ "${#v}" -le 6 ] || return 12
+	v=$((10#$v + $1))
+	printf '%s\n' "$v" > "$SVC_ACCT" || return 12
+	[ "$v" -lt "$SVC_SCRIPT_BOUND_S" ] || return 5
+}
+svc_attempt() {   # svc_attempt BOUND ARGS...: one bounded systemctl call. Sets SVC_OUT and SVC_LAST (its last
+	# stderr line, or "no answer within BOUND s"). Returns 0 done, 1 refused (an rc that is not a timeout),
+	# 3 timed out (systemd's "Connection timed out", or no answer within BOUND), 5 the run's bound reached,
+	# 12 plumbing (timeout itself failed, or a helper file or the clock).
+	local b=$1 t0 t1 rc=0 a=0
+	shift
+	t0=$(svc_now) || return 12
+	SVC_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$b" systemctl "$@" 2>"$SVC_ERRF") || rc=$?
+	SVC_RC=$rc
+	t1=$(svc_now) || return 12
+	SVC_LAST=$(tail -n 1 "$SVC_ERRF") || return 12
+	[ ! -s "$SVC_ERRF" ] || cat "$SVC_ERRF" >&2 || return 12
+	svc_acct_add "$((t1 - t0))" || a=$?
+	[ "$a" -ne 12 ] || return 12
+	case "$rc" in
+		0) return 0 ;;
+		124|137) SVC_LAST="no answer within ${b} s"; [ "$a" -eq 0 ] || return 5; return 3 ;;
+		125|126|127) return 12 ;;
+	esac
+	[ "$a" -eq 0 ] || return 5
+	case "$SVC_LAST" in *'Connection timed out') return 3 ;; esac
+	return 1
+}
+svc_read_retry() {   # svc_read_retry ARGS...: an idempotent read, retried on a timeout within SVC_RETRIES and
+	# SVC_TOTAL_BOUND_D_S. Returns as svc_attempt; SVC_TRIES = the attempts made.
+	local i=1 r t0 now
+	t0=$(svc_now) || return 12
+	while :; do
+		r=0; svc_attempt "$SVC_READ_BOUND_S" "$@" || r=$?
+		SVC_TRIES=$i
+		[ "$r" -eq 3 ] || return "$r"
+		[ "$i" -lt "$SVC_RETRIES" ] || return 3
+		now=$(svc_now) || return 12
+		[ $((now - t0 + SVC_RETRY_PAUSE_S)) -lt "$SVC_TOTAL_BOUND_D_S" ] || return 3
+		sleep "$SVC_RETRY_PAUSE_S" || return 12
+		i=$((i + 1))
+	done
+}
+svc_present() {   # svc_present UNIT: 0 present, 1 absent, 2 unknown (never read as absent), 12 plumbing.
+	# Absent needs a successful unfiltered listing AND the unit's own listing answering rc 1 with nothing.
+	local r=0
+	svc_read_retry list-unit-files --no-legend || r=$?
+	[ "$r" -ne 12 ] || return 12
+	[ "$r" -eq 0 ] || return 2
+	r=0; svc_read_retry list-unit-files --no-legend "$1" || r=$?
+	[ "$r" -ne 12 ] || return 12
+	if [ "$r" -eq 0 ] && [ -n "$SVC_OUT" ]; then return 0; fi
+	if [ "$r" -eq 1 ] && [ "$SVC_RC" -eq 1 ] && [ -z "$SVC_OUT" ] && [ -z "$SVC_LAST" ]; then return 1; fi
+	return 2
+}
+svc_state() {   # svc_state UNIT: one bounded read of the unit's state, classified. Sets SVC_UF, SVC_AS and
+	# SVC_STATE: done (disabled or masked, and inactive or failed), todo (something to disable or stop), gone (no
+	# unit file, inactive), unknown (a failed read, a job in flight, a value no rule decides). 12 = plumbing.
+	local r=0 v
+	SVC_UF=""; SVC_AS=""; SVC_STATE=unknown
+	svc_attempt "$SVC_READ_BOUND_S" show --property=UnitFileState --property=ActiveState --value "$1" || r=$?
+	[ "$r" -ne 12 ] || return 12
+	[ "$r" -eq 0 ] || return 0
+	for v in $SVC_OUT; do
+		case "$v" in
+			active|reloading|inactive|failed|activating|deactivating) SVC_AS=$v ;;
+			*) SVC_UF=$v ;;
+		esac
+	done
+	case "$SVC_UF:$SVC_AS" in
+		:inactive) SVC_STATE=gone ;;
+		disabled:inactive|disabled:failed|masked:inactive|masked:failed|masked-runtime:inactive|masked-runtime:failed) SVC_STATE=done ;;
+		enabled:active|enabled:reloading|enabled:inactive|enabled:failed|enabled-runtime:active|enabled-runtime:reloading|enabled-runtime:inactive|enabled-runtime:failed|linked:active|linked:reloading|linked:inactive|linked:failed|linked-runtime:active|linked-runtime:reloading|linked-runtime:inactive|linked-runtime:failed) SVC_STATE=todo ;;
+		disabled:active|disabled:reloading|masked:active|masked:reloading|masked-runtime:active|masked-runtime:reloading) SVC_STATE=todo ;;
+	esac
+	return 0
+}
+svc_disable() {   # svc_disable UNIT: `disable --now`, each round reading the state first (a timed-out call
+	# that took effect is NOOP, a half-done one is called again). 0 done (SVC_DONE: disabled, already,
+	# confirmed, absent), 1 refused, 2 the state stays unknown, 3 no answer, 5 the run's bound, 12 plumbing.
+	local n=0 r t0 now
+	SVC_TRIES=0; SVC_DONE=""; SVC_LAST=""
+	t0=$(svc_now) || return 12
+	while :; do
+		n=$((n + 1))
+		r=0; svc_state "$1" || r=$?
+		[ "$r" -ne 12 ] || return 12
+		case "$SVC_STATE" in
+			done) [ "$SVC_TRIES" -eq 0 ] && SVC_DONE=already || SVC_DONE=confirmed; return 0 ;;
+			gone)
+				r=0; svc_present "$1" || r=$?
+				[ "$r" -ne 12 ] || return 12
+				if [ "$r" -eq 1 ]; then SVC_DONE=absent; return 0; fi
+				r=2 ;;
+			todo)
+				SVC_TRIES=$((SVC_TRIES + 1)); r=0
+				svc_attempt "$SVC_CALL_BOUND_S" disable --now "$1" || r=$?
+				case "$r" in 0) SVC_DONE=disabled; return 0 ;; 1|5|12) return "$r" ;; esac ;;
+			*) r=2 ;;
+		esac
+		[ "$n" -lt "$SVC_RETRIES" ] || return "$r"
+		now=$(svc_now) || return 12
+		[ $((now - t0 + SVC_RETRY_PAUSE_S)) -lt "$SVC_TOTAL_BOUND_D_S" ] || return "$r"
+		sleep "$SVC_RETRY_PAUSE_S" || return 12
+	done
+}
+
 # systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,
 # not after): the disable steps below need it to find a competing system nginx.service and
-# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.
-if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then
+# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched. The listing is
+# idempotent, so a timed-out one is retried within the bounds (L1, rows 10, 11, 29).
+if ! command -v systemctl >/dev/null 2>&1; then
 	echo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
 	exit 8
 fi
+_l1=0; svc_read_retry list-unit-files --no-legend || _l1=$?
+case "$_l1" in
+	0) ;;
+	12) svc_plumb "a systemctl call could not be run" ;;
+	3) echo "ERROR: cannot inspect systemd unit files: systemd gave no answer in $SVC_TRIES attempt(s) (last: $SVC_LAST). Refusing to continue so the system stays untouched." >&2; exit 8 ;;
+	5) echo "ERROR: cannot inspect systemd unit files: the run's bound for service calls ($SVC_SCRIPT_BOUND_S s) is reached (last: $SVC_LAST). Refusing to continue." >&2; exit 8 ;;
+	*)
+	echo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
+		exit 8 ;;
+esac
 
 # Operator for the group grants / power controls: explicit --operator-user, else SUDO_USER
 # when run under sudo, else the invoking user. NEVER grant to root; require a real account.
@@ -292,8 +469,7 @@ if [ "$(id -u "$OP")" -eq 0 ]; then
 fi
 
 unit_present() {
-	systemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable
-	[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent
+	svc_present "$1"
 }
 
 # --- APT packages (merged; installed FIRST so curl/etc. exist before the blocks below) ----
@@ -344,20 +520,24 @@ apt-get install -y --no-install-recommends \
 nginx_rc=0; unit_present nginx.service || nginx_rc=$?
 case "$nginx_rc" in
 	0)
-		# Only ANNOUNCE a change if there is one: an already-disabled+inactive unit is
-		# reported as such rather than claiming we 'disabled' it.
-		if systemctl is-enabled --quiet nginx.service 2>/dev/null || systemctl is-active --quiet nginx.service 2>/dev/null; then
-			if systemctl disable --now nginx.service; then
-				echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the lhpc-nginx user unit; the nginx PACKAGE stays installed)."
-			else
-				echo "ERROR: could not stop/disable the system nginx.service. A root nginx still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2
-				exit 8
-			fi
-		else
-			echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."
-		fi ;;
+		# The state is read before every call (rows 1-5, 15-17): only a change is announced, a
+		# timed-out call that took effect is confirmed by the read, a read that fails is never done.
+		_d=0; svc_disable nginx.service || _d=$?
+		case "$_d" in
+			0) case "$SVC_DONE" in
+				disabled) echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the lhpc-nginx user unit; the nginx PACKAGE stays installed)." ;;
+				confirmed) echo "[bootstrap-deps] the system nginx.service is disabled and stopped (confirmed by a read after a call that timed out)." ;;
+				absent) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;
+				*) echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change." ;;
+			esac ;;
+			12) svc_plumb "a systemctl call for nginx.service could not be run" ;;
+			1) echo "ERROR: could not stop/disable the system nginx.service ($SVC_LAST). A root nginx still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2; exit 8 ;;
+			2) echo "ERROR: cannot confirm the state of nginx.service (last: ${SVC_LAST:-a state outside the known values}). Refusing to continue with a possibly-active root nginx." >&2; exit 8 ;;
+			*) echo "ERROR: could not stop/disable the system nginx.service: no answer after $SVC_TRIES call(s) within the bounds (last: $SVC_LAST). A root nginx may still own the web ports. Resolve this and re-run." >&2; exit 8 ;;
+		esac ;;
 	1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports." >&2; exit 8 ;;
+	12) svc_plumb "a systemctl call for nginx.service could not be run" ;;
+	*) echo "ERROR: could not inspect systemd unit files — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports." >&2; exit 8 ;;
 esac
 
 # --- GUI-only dependencies (opt-in: --with-gui) ---------------------------------------------
@@ -386,7 +566,12 @@ fi
 
 # --- time source (chrony + gpsd; opt out with --no-time-source) ------------------------------
 if [ -z "$NO_TIME_SOURCE" ]; then
-	if sh -s <<'LHPC_TIME_SOURCE'
+	# Row 28: the child gets the bounds and a fresh, empty marker file for its status 12.
+	_st=0; TS_MARK=$(mktemp) || _st=$?
+	[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"
+	export TS_MARK SVC_CALL_BOUND_S SVC_RETRIES SVC_RETRY_PAUSE_S SVC_READ_BOUND_S SVC_KILL_GRACE_S
+	ts_rc=0
+	sh -s <<'LHPC_TIME_SOURCE' || ts_rc=$?
 set -eu
 
 # Did anything that the feature PROMISES fail? On a box with a running systemd, the
@@ -396,6 +581,63 @@ set -eu
 # container/image build with no systemd, daemon activation is genuinely not possible and
 # stays best-effort -- that branch never sets this.
 TS_FAILED=0
+
+# Bounded service calls (BOOTSTRAP-RETRY-TABLES-v5 rows 18-20, 28): each systemctl call runs under `timeout`, and a
+# timed-out one is called again within SVC_RETRIES. A timed-out restart counts as done only when the unit is active
+# and its own ActiveEnterTimestampMonotonic moved past a baseline read before the first call (an unknown baseline
+# never counts as moved). Status 12 is the helper's own plumbing: TS_PLUMB is set, the step goes on, and the verdict
+# exits 12 (the bootstrap reads it from the marker file $TS_MARK). The bounds default to the bootstrap's.
+SVC_CALL_BOUND_S="${SVC_CALL_BOUND_S:-90}"; SVC_RETRIES="${SVC_RETRIES:-4}"; SVC_RETRY_PAUSE_S="${SVC_RETRY_PAUSE_S:-5}"
+SVC_READ_BOUND_S="${SVC_READ_BOUND_S:-60}"; SVC_KILL_GRACE_S="${SVC_KILL_GRACE_S:-5}"
+TS_PLUMB=0; TS_LAST=""; TS_TRIES=0
+ts_plumb() { TS_PLUMB=1; echo "[bootstrap-deps] ERROR: the service-call helper cannot run: $1" >&2; }
+command -v timeout >/dev/null 2>&1 || ts_plumb "coreutils' timeout is not installed"
+ts_call() {   # ts_call BOUND ARGS...: 0 done, 1 refused, 3 no answer, 12 plumbing; TS_OUT, TS_LAST (last stderr line)
+  _b=$1; shift; _rc=0
+  _e=$(mktemp) || return 12
+  TS_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$_b" systemctl "$@" 2>"$_e") || _rc=$?
+  TS_LAST=$(tail -n 1 "$_e"); rm -f "$_e"
+  case "$_rc" in
+    0) return 0 ;;
+    124|137) TS_LAST="no answer within $_b s"; return 3 ;;
+    125|126|127) return 12 ;;
+  esac
+  case "$TS_LAST" in *'Connection timed out') return 3 ;; esac
+  return 1
+}
+ts_base() {   # ts_base UNIT: TS_TS and TS_AS from one bounded read; 0 accepted, 2 not, 12 plumbing
+  TS_TS=""; TS_AS=""; _r=0
+  ts_call "$SVC_READ_BOUND_S" show --property=ActiveEnterTimestampMonotonic --property=ActiveState --value "$1" || _r=$?
+  [ "$_r" -ne 12 ] || return 12
+  [ "$_r" -eq 0 ] || return 2
+  for _v in $TS_OUT; do
+    case "$_v" in *[!0123456789]*) TS_AS=$_v ;; *) TS_TS=$_v ;; esac
+  done
+  case "$TS_AS" in active|reloading|inactive|failed|activating|deactivating) ;; *) return 2 ;; esac
+  [ -n "$TS_TS" ] || return 2
+  return 0
+}
+ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout. 0 done, 1 refused, 3 no answer,
+  # 12 plumbing; TS_TRIES = the calls made
+  _base=""; _n=0; _r=0
+  if [ "$1" = restart ]; then
+    ts_base "$2" || _r=$?
+    [ "$_r" -ne 12 ] || return 12
+    [ "$_r" -ne 0 ] || _base=$TS_TS
+  fi
+  while [ "$_n" -lt "$SVC_RETRIES" ]; do
+    _n=$((_n + 1)); TS_TRIES=$_n; _r=0
+    ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
+    [ "$_r" -eq 3 ] || return "$_r"
+    sleep "$SVC_RETRY_PAUSE_S"
+    if [ "$1" = restart ] && [ -n "$_base" ]; then
+      _r=0; ts_base "$2" || _r=$?
+      [ "$_r" -ne 12 ] || return 12
+      if [ "$_r" -eq 0 ] && [ "$TS_AS" = active ] && [ "$TS_TS" != "$_base" ]; then return 0; fi
+    fi
+  done
+  return 3
+}
 
 # Every path is a seam with its real value as the default, so the test harness can point
 # the whole step at a tmp tree. On a real box nothing sets these and the defaults apply.
@@ -604,9 +846,18 @@ esac
 #   - conditioning the restart on "we just edited the file" makes the failure permanent:
 #     on the retry the file already has -n, so nothing would ever restart it again.
 # Rerunning setup is the documented repair, so it must repair this too.
-systemctl enable gpsd >/dev/null 2>&1 || true
-if ! systemctl restart gpsd >/dev/null 2>&1; then
+# The enable is idempotent and retried; only a status 12 is never swallowed (row 18).
+_r=0; ts_svc enable gpsd || _r=$?
+case "$_r" in
+  0) ;;
+  12) ts_plumb "systemctl enable gpsd" ;;
+  *) [ ! -d "$SYSTEMD_RUNDIR" ] || echo "[bootstrap-deps] NOTE: enable gpsd: $TS_LAST; the restart below decides." ;;
+esac
+_r=0; ts_svc restart gpsd || _r=$?
+[ "$_r" -ne 12 ] || { ts_plumb "systemctl restart gpsd"; _r=0; }
+if [ "$_r" -ne 0 ]; then
   if [ -d "$SYSTEMD_RUNDIR" ]; then
+    [ "$_r" -ne 3 ] || echo "[bootstrap-deps] WARNING: systemd gave no answer to restart gpsd after $TS_TRIES call(s) ($TS_LAST)." >&2
     echo "[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be" >&2
     echo "[bootstrap-deps]          available until it is: sudo systemctl status gpsd" >&2
     TS_FAILED=1
@@ -615,7 +866,15 @@ if ! systemctl restart gpsd >/dev/null 2>&1; then
     echo "[bootstrap-deps]       sudo systemctl enable --now gpsd"
   fi
 fi
-if ! systemctl restart chrony >/dev/null 2>&1; then
+_r=0; ts_svc restart chrony || _r=$?
+[ "$_r" -ne 12 ] || { ts_plumb "systemctl restart chrony"; _r=0; }
+if [ "$_r" -eq 3 ] && [ -d "$SYSTEMD_RUNDIR" ]; then
+  # A timeout is not a refusal: systemd never answered, so do not blame chrony's configuration (row 20).
+  echo "[bootstrap-deps] ERROR: systemd gave no answer to restart chrony after $TS_TRIES call(s)" >&2
+  echo "[bootstrap-deps]        ($TS_LAST), and systemd-timesyncd has been removed, so this box may" >&2
+  echo "[bootstrap-deps]        have NO time daemon. See: sudo systemctl status chrony" >&2
+  TS_FAILED=1
+elif [ "$_r" -ne 0 ]; then
   # Distinguish the two reasons, because they need opposite reactions and the previous
   # wording covered both with 'no action is needed'. On a box with a live systemd, a
   # refused start is chronyd REJECTING the configuration -- and since this run already
@@ -637,6 +896,15 @@ fi
 # The verdict. `set -eu` cannot carry this: every failure above is deliberately caught so
 # the remaining steps still run (a box that got chrony but not gpsd is better off than
 # one that got neither). What must NOT happen is reporting success over it.
+# The helper's plumbing first (row 28): it never folds into TS_FAILED. The marker tells the bootstrap that
+# this 12 is the helper's, and whether the time source failed as well.
+if [ "$TS_PLUMB" -ne 0 ]; then
+  if [ -n "${TS_MARK:-}" ] && [ -f "$TS_MARK" ] && [ ! -L "$TS_MARK" ]; then
+    { echo plumb; [ "$TS_FAILED" -eq 0 ] || echo failed; } > "$TS_MARK"
+  fi
+  echo "[bootstrap-deps] time source setup INCOMPLETE - the service-call helper could not run." >&2
+  exit 12
+fi
 if [ "$TS_FAILED" -ne 0 ]; then
   echo "[bootstrap-deps] time source setup INCOMPLETE - see the errors above." >&2
   exit 1
@@ -659,6 +927,12 @@ touch -d 2026-09-14 "$CLOCK_EPOCH"
 # Only now: this run did everything it promised.
 install -D -m 0644 /dev/null "$TS_STAMP"
 LHPC_TIME_SOURCE
+	_mark=""; if [ -f "$TS_MARK" ] && [ ! -L "$TS_MARK" ]; then _mark=$(cat "$TS_MARK"); fi
+	if [ "$ts_rc" -eq 12 ] && { [ "$_mark" = plumb ] || [ "$_mark" = "$(printf 'plumb\nfailed')" ]; }; then
+		echo "ERROR: the service-call helper could not run in the time-source step (exit 12 at the end)." >&2
+		_PLUMB_FAILED=1
+		[ "$_mark" = plumb ] || BOOTSTRAP_FAILED=1
+	elif [ "$ts_rc" -eq 0 ]
 	then
 		echo "[bootstrap-deps] time source: chrony disciplines the clock (this REPLACED systemd-timesyncd); gpsd feeds it GPS time when a receiver is attached."
 	else
@@ -957,6 +1231,46 @@ else
 	_GROUPS_FAILED=1
 fi
 
+# --- USB radios: udev rule and plugdev grant (opt-out: --no-usb-setup) --------------------
+if [ -n "$NO_USB" ]; then
+	echo "[bootstrap-deps] USB setup: skipped (--no-usb-setup); the console's Hardware section offers it."
+else
+# --- USB radios: udev rule and plugdev grant (written by LHPC) ------------------------------
+_lhpc_usb_write() {    # <dir> <path> <text>: a temp file in <dir>, mode 0644, renamed into place
+	_lhpc_t=$(mktemp "$1/.lhpc-usb.XXXXXX") || return 1
+	if printf '%s' "$3" > "$_lhpc_t" && chmod 0644 "$_lhpc_t" && mv -f "$_lhpc_t" "$2"; then
+		return 0
+	fi
+	rm -f "$_lhpc_t"
+	return 1
+}
+if ! _lhpc_usb_write "${LHPC_USB_ROOT}"/etc/udev/rules.d "${LHPC_USB_ROOT}"/etc/udev/rules.d/90-lhpc-usb-radio.rules '# Written by LHPC'"'"'s bootstrap from its radio model table; a re-run replaces it.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev"
+'; then
+	echo "ERROR: [usb-setup] could not write ${LHPC_USB_ROOT}/etc/udev/rules.d/90-lhpc-usb-radio.rules" >&2
+	exit 13
+fi
+echo "[usb-setup] wrote ${LHPC_USB_ROOT}/etc/udev/rules.d/90-lhpc-usb-radio.rules"
+if [ -d "$SYSTEMD_RUNDIR" ]; then
+	if ! udevadm control --reload-rules; then
+		echo "ERROR: [usb-setup] udevadm control --reload-rules failed" >&2
+		exit 13
+	fi
+	if ! udevadm trigger --subsystem-match=usb --action=add; then
+		echo "ERROR: [usb-setup] udevadm trigger --subsystem-match=usb --action=add failed" >&2
+		exit 13
+	fi
+else
+	echo "[usb-setup] no running system (an image build): udev reads the rule at the first boot."
+fi
+if usermod -aG plugdev "$OP"; then
+	echo "[usb-setup] granted plugdev to $OP; it takes effect at the next log-in."
+else
+	echo "ERROR: [usb-setup] could not grant plugdev to $OP; the USB radios stay out of reach until it is granted." >&2
+	_GROUPS_FAILED=1
+fi
+fi
+
 # --- power controls: polkit rule for the console's Reboot/Shut down (opt-out) ------------
 if [ -n "$NO_POWER" ]; then
 	echo "[bootstrap-deps] power controls: skipped (--no-power-controls)."
@@ -1000,14 +1314,20 @@ _DISABLE_FAILED=""
 unit_rc=0; unit_present meshtasticd.service || unit_rc=$?
 case "$unit_rc" in
 	0)
-		if systemctl disable --now meshtasticd; then
-			echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)."
-		else
-			echo "ERROR: could not stop/disable the OS-packaged meshtasticd — it still competes with the lhpc-managed one. Resolve this and re-run." >&2
-			_DISABLE_FAILED=1
-		fi ;;
+		_d=0; svc_disable meshtasticd.service || _d=$?   # rows 9, 30: as nginx, the failure deferred (9)
+		case "$_d" in
+			0) case "$SVC_DONE" in
+				disabled) echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)." ;;
+				confirmed) echo "[bootstrap-deps] the OS-packaged meshtasticd is disabled and stopped (confirmed by a read after a call that timed out)." ;;
+				absent) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
+				*) echo "[bootstrap-deps] the OS-packaged meshtasticd is already disabled — nothing to change." ;;
+			esac ;;
+			12) echo "ERROR: the service-call helper could not run for meshtasticd (exit 12 at the end)." >&2; _PLUMB_FAILED=1 ;;
+			*) echo "ERROR: could not stop/disable the OS-packaged meshtasticd ($SVC_LAST) — it still competes with the lhpc-managed one. Resolve this and re-run." >&2; _DISABLE_FAILED=1 ;;
+		esac ;;
 	1) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
+	12) echo "ERROR: the service-call helper could not run for meshtasticd (exit 12 at the end)." >&2; _PLUMB_FAILED=1 ;;
+	*) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
 esac
 
 if [ -n "$_GROUPS_FAILED" ]; then
@@ -1027,5 +1347,9 @@ fi
 if [ -n "$_DISABLE_FAILED" ]; then
 	echo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2
 	exit 9
+fi
+if [ -n "$_PLUMB_FAILED" ]; then
+	echo "[bootstrap-deps] the service-call helper could not run (see above)." >&2
+	exit 12
 fi
 echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 5-6."

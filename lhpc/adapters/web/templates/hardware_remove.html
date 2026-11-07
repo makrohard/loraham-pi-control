@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Remove {{ plan.rid }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+<section class="card" id="hardware-remove">
+  <header><h2>Hardware</h2></header>
+  <div class="body">
+    {% if plan.row is none %}
+      <p class="depnote depnote-warn">Not removed: {{ plan.reason }}.</p>
+    {% elif plan.activity %}
+      <p class="depnote depnote-warn">{{ plan.rid }} runs: {{ stop_first(plan.rid, plan.activity) }}.</p>
+    {% else %}
+      <form method="post" action="{{ url_for('hardware_remove') }}" class="inline">
+        <p>Remove {{ plan.rid }} ({{ plan.row.model }})?</p>
+        <dl class="remove-facts" id="remove-facts">
+          <dt>State</dt><dd>{{ plan.facts.state }}</dd>
+          <dt>Binding</dt><dd>{{ plan.facts.binding }}</dd>
+          <dt>Kept folders</dt><dd>{% for k in plan.facts.kept %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% else %}none on disk{% endfor %}</dd>
+        </dl>
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="rid" value="{{ plan.rid }}">
+        <input type="hidden" name="confirm_phrase" value="remove-{{ plan.rid }}">
+        <button type="submit" class="danger">Remove</button>
+      </form>
+    {% endif %}
+    <a class="button" href="{{ url_for('hardware_view') }}">Cancel</a>
+  </div>
+</section>
+{% endblock %}

@@ -1,4 +1,4 @@
-"""USB radios on the host: the udev rule and modprobe texts from the radio model table, the sysfs scan of
+"""USB radios on the host: the udev rule text from the radio model table, the sysfs scan of
 the sticks, the device-node access check and the data of the doctor's host lines. Pure functions over an
 injectable root (sysfs defaults to /sys); unused until the USB bootstrap and doctor (stage L7).
 
@@ -22,7 +22,6 @@ from pathlib import Path
 from lhpc.core.radio_models import TRANSPORTS
 
 RULES_PATH = "/etc/udev/rules.d/90-lhpc-usb-radio.rules"
-MODPROBE_PATH = "/etc/modprobe.d/lhpc-usb-radio.conf"
 GROUP = "plugdev"
 CH341_MODULE = "spi_ch341"
 CH341_DRIVER = "spi-ch341"
@@ -32,9 +31,11 @@ LIBUSB_SONAME = "libusb-1.0.so.0"
 SUPPORTED_X86 = (("debian", "13"), ("ubuntu", "24.04"))
 X86_MACHINES = ("x86_64", "amd64")
 PI_MACHINES = ("aarch64", "arm64", "armv7l", "armv6l")
+# No module blacklist and no `modprobe -r` (W226): the daemon's CH341 library detaches the kernel driver of a stick
+# it opens (at libpinedio b0694ec8: of every 1a86:5512 it visits while it searches for its serial), so no host-wide
+# blacklist is needed and CH341 bridges of other ids keep their driver.
 RELOAD_COMMANDS = (("udevadm", "control", "--reload-rules"),
-                   ("udevadm", "trigger", "--subsystem-match=usb", "--action=add"),
-                   ("modprobe", "-r", CH341_MODULE))
+                   ("udevadm", "trigger", "--subsystem-match=usb", "--action=add"))
 
 _HEX4 = re.compile(r"[0-9a-f]{4}")
 _NUM = re.compile(r"[1-9][0-9]{0,2}")
@@ -310,16 +311,15 @@ def udev_rules_text(models: dict) -> str:
         "".join(line + "\n" for line in lines)
 
 
-def modprobe_text() -> str:
-    """The modprobe file; it applies to every CH341 SPI bridge on the host, so the script prints it."""
-    return f"# Written by LHPC's bootstrap for its USB radios; applies to the whole host.\nblacklist {CH341_MODULE}\n"
-
-
 def host_setup(models: dict) -> HostSetup:
-    """The one source of the bootstrap's USB steps and of the copybox: the files, the reload commands
-    (`modprobe -r` only matters while the module is loaded) and the group."""
-    return HostSetup(((RULES_PATH, udev_rules_text(models)), (MODPROBE_PATH, modprobe_text())),
-                     RELOAD_COMMANDS, GROUP)
+    """The one source of the bootstrap's USB step and of the copybox: the udev rule file, the udev reload and
+    trigger, and the group."""
+    return HostSetup(((RULES_PATH, udev_rules_text(models)),), RELOAD_COMMANDS, GROUP)
+
+
+def setup_needed(rule: RuleState, member: Membership) -> bool:
+    """The USB host setup still has to run: the rule is not current, or plugdev is neither held nor granted."""
+    return not (rule is RuleState.CURRENT and member in (Membership.MEMBER, Membership.PENDING))
 
 
 def rule_state(models: dict, etc_root: Path | str = "/") -> RuleState:

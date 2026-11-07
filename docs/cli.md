@@ -24,7 +24,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
+- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [network](#network) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
 - [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
@@ -195,6 +195,26 @@ daemon briefly per candidate board and reports whether the chip responds; the bo
 during init). Detect is refused, naming the stack, while a stack that drives the radio itself
 (Meshtastic, Reticulum) runs on that band.
 
+#### hardware remove
+Remove one radio from the hardware list (`config/radios.toml`):
+
+```
+lhpc hardware remove r3                              # dry run: what goes, what stays; nothing changes
+lhpc hardware remove r3 --confirm-phrase remove-r3   # remove r3
+```
+
+- It is refused while the radio runs: its own daemon, or a stack on it. The refusal names each
+  ("stop meshcore and stop its daemon, then remove r2"). The Hardware page greys its Remove with the same line.
+- What goes: the radio's row, its binding to the stick, and the daemon settings on that row.
+- What stays: the stick (plugged in, it shows up again as a new stick), the other radios and their
+  stacks, the per-band stack settings (`config/stacks/`), and the RF logs already written (`logs/<rid>/`).
+- The id stays reserved: `retired = ["r3"]` in `config/radios.toml`. No later radio gets it, so logs
+  and ports stay unambiguous; a row that uses it is refused.
+- A stack that ran on the radio before the last reboot is not restored at the next boot; the boot
+  restore skips it with "radio r3 no longer exists".
+
+Web: Hardware › the radio › Remove asks "Remove r3 (<model>)?" with Remove and Cancel.
+
 ---
 
 ### gps
@@ -229,6 +249,19 @@ lhpc autostart on            # re-enable (the default)
 ```
 
 ---
+
+### network
+The access point's IPv4 subnet, one setting (`[network] ap_cidr`, default `10.42.0.0/24`) for the AP profile's
+address (its first host, e.g. `10.42.0.1`), the firewall's AP rules and the console hint. Web: the **Network** panel.
+The command is the way back when a subnet change leaves the console out of reach.
+
+```
+lhpc network --ap-cidr 10.43.0.0/24 --confirm-phrase change-ap-subnet   # a private /16 to /28 subnet
+lhpc network --ap-cidr default --confirm-phrase change-ap-subnet        # back to 10.42.0.0/24
+```
+The firewall's AP subnet moves with the setting when it equals the old setting; one set apart with
+`lhpc firewall --ap-cidr` stays, and the switch to AP is refused until the two agree. Apply the firewall, then
+switch to AP mode.
 
 ### firewall
 Managed **nftables firewall**: `lhpc` renders the ruleset, you apply it with one sudo command.

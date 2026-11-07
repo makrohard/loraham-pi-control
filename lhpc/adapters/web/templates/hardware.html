@@ -40,6 +40,14 @@
             {% endif %}
           </div>
         {% endif %}
+        <div class="body radio-remove">
+          {% if r.activity %}
+            <button type="button" class="danger" disabled data-remove-blocked="{{ r.rid }}">Remove radio…</button>
+            <p class="muted">{{ stop_first(r.rid, r.activity) }}</p>
+          {% else %}
+            <a class="button danger" href="{{ url_for('hardware_remove_confirm', rid=r.rid) }}">Remove radio…</a>
+          {% endif %}
+        </div>
       </div>
     {% else %}
       <p class="muted">No radio in the hardware list.</p>
