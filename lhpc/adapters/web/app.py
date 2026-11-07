@@ -547,7 +547,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/api/tasks/dismiss")
     def tasks_dismiss():
-        # Close a FAILED (red) banner (never unsafe/running). CSRF-guarded; durable.
+        # Close a FAILED banner, or hide an UNSAFE one (UX: never a running one). CSRF-guarded; durable.
         if not _csrf_ok():
             abort(400)
         ok = service.task_dismiss(request.form.get("kind", ""), request.form.get("run_id", ""),
@@ -1268,7 +1268,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # respond-first: the detached finalize helper does the activation.
         if not _csrf_ok():
             abort(400)
-        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap") \
+        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap", "ap-cidr") \
                 or not service.network_supported():
             abort(404)
         back = redirect(url_for("stacks_overview", open="network")
@@ -1284,6 +1284,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return back
         if op == "forget":
             res = service.network_forget(request.form.get("uuid", ""))
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "ap-cidr":
+            # NA: the AP subnet setting through the one apply (phrase first, then the value; never stripped).
+            res = service.network_set_ap_cidr(request.form.get("ap_cidr", ""),
+                                              request.form.get("confirm_phrase", "").strip())
             flash(res.summary, "ok" if res.ok else "warn")
             return back
         if op == "retry":

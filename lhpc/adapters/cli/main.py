@@ -822,6 +822,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_fw.add_argument("--recommended", action="store_true",
                       help="Safe preset: secure-default, no direct access, AP off, overrides cleared")
 
+    # NA: the AP subnet setting, the console's Network panel field; the recovery path when a subnet change leaves
+    # the console unreachable. The one apply (network_set_ap_cidr) checks the phrase first, then the value.
+    p_net = sub.add_parser("network", help="The access point's IPv4 subnet (network.ap_cidr)")
+    p_net.add_argument("--ap-cidr", required=True, metavar="CIDR|default",
+                       help="Private IPv4 subnet, /16 to /28, e.g. 10.43.0.0/24; 'default' = 10.42.0.0/24")
+    from lhpc.core.ap_network import AP_CIDR_CONFIRM
+    p_net.add_argument("--confirm-phrase", default="",
+                       help=f"Type '{AP_CIDR_CONFIRM}' to confirm the change")
+
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
     p_daemon.add_argument("--set", metavar="KEY=VALUE", dest="set_kv",
@@ -1530,6 +1539,8 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "_gps-bridge":
         from lhpc.core import gps_bridge as _gpsb
         return _gpsb.run(args.consumer, svc._paths, state=args.state)
+    if args.command == "network":
+        return _render(svc.network_set_ap_cidr(args.ap_cidr, args.confirm_phrase))
     if args.command == "firewall":
         import json as _json
 

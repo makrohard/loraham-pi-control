@@ -24,7 +24,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
+- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [network](#network) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
 - [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
@@ -229,6 +229,19 @@ lhpc autostart on            # re-enable (the default)
 ```
 
 ---
+
+### network
+The access point's IPv4 subnet, one setting (`[network] ap_cidr`, default `10.42.0.0/24`) for the AP profile's
+address (its first host, e.g. `10.42.0.1`), the firewall's AP rules and the console hint. Web: the **Network** panel.
+The command is the way back when a subnet change leaves the console out of reach.
+
+```
+lhpc network --ap-cidr 10.43.0.0/24 --confirm-phrase change-ap-subnet   # a private /16 to /28 subnet
+lhpc network --ap-cidr default --confirm-phrase change-ap-subnet        # back to 10.42.0.0/24
+```
+The firewall's AP subnet moves with the setting when it equals the old setting; one set apart with
+`lhpc firewall --ap-cidr` stays, and the switch to AP is refused until the two agree. Apply the firewall, then
+switch to AP mode.
 
 ### firewall
 Managed **nftables firewall**: `lhpc` renders the ruleset, you apply it with one sudo command.

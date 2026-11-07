@@ -201,9 +201,12 @@ def test_job_dismiss_and_recover(tmp_path, monkeypatch):
     assert not svc.task_dismiss("job", _JLOG, "wrong")   # stale attempt refused
     assert svc.task_dismiss("job", _JLOG, _JA)
     assert jobresult.read_one(svc._paths, _JLOG) is None
-    # unsafe job -> NOT dismissible, but Recover rewrites it to failed
+    # unsafe job -> the ✕ HIDES it (UX X5/X8): its record stays unsafe and untouched; Recover still rewrites it
     _job(svc, "unsafe")
-    assert not svc.task_dismiss("job", _JLOG, _JA)        # unsafe never ✕-dismissible
+    assert svc.task_dismiss("job", _JLOG, _JA)
+    assert jobresult.read_one(svc._paths, _JLOG)["state"] == "unsafe"
+    assert [t for t in svc.running_tasks() if t.get("run_id") == _JLOG] == []
+    assert svc.task_dismiss("job", _JLOG, _JA)            # idempotent: hidden after the call (X8)
     assert svc.task_recover("job", _JLOG, _JA)
     assert jobresult.read_one(svc._paths, _JLOG)["state"] == "failed"
 

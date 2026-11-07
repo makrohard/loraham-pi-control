@@ -357,10 +357,11 @@ def test_ap_subnet_imports_only_the_cidr_validator():
     assert loaded("lhpc.core.ap_subnet") == loaded("lhpc.core.validators") | {"lhpc.core.ap_subnet"}
 
 
-def test_no_existing_module_imports_ap_subnet():
-    """The module is added unwired: it exists, and no module under lhpc/ imports it. A whole-
-    package negative invariant no driven path can prove (tests/README rule 1 exception); the
-    change that wires it into the consumers replaces this test."""
+def test_only_the_setting_and_its_apply_import_ap_subnet():
+    """The one validator has exactly two importers under lhpc/: the config loader and writer (the stored
+    setting) and ap_network (the apply, the AP start's gate and the hint); every consumer goes through them,
+    never a second parse. A whole-package invariant no driven path can prove (tests/README rule 1
+    exception); it replaces the "added unwired" check of the tests' first commit, as that check said."""
     assert (REPO / "lhpc" / "core" / "ap_subnet.py").is_file()
     importers = []
     for path in sorted((REPO / "lhpc").rglob("*.py")):
@@ -374,7 +375,7 @@ def test_no_existing_module_imports_ap_subnet():
                 names = [node.module or ""] + [a.name for a in node.names]
             if any(n == "ap_subnet" or n.endswith(".ap_subnet") for n in names):
                 importers.append(str(path.relative_to(REPO)))
-    assert importers == []
+    assert sorted(set(importers)) == ["lhpc/core/ap_network.py", "lhpc/core/config.py"]
 
 
 # ==== the stored setting (config/local.toml [network] ap_cidr) =======================================
