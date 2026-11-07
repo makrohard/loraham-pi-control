@@ -18,6 +18,8 @@
   guide for a 433 MHz CH341A + RFM98PW stick.
 - Stack instances: kiss, meshcore and chat can also run on other radios as `<stack>@<rid>` (up to 7 per stack, ports
   +10 per slot): `lhpc stack add-instance|remove-instance`; `start|stop|restart <stack>@<rid>` act on that one alone.
+- Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
+  back that instance alone, and a removed instance's record starts nothing.
 
 Fixed
 
