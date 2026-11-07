@@ -16,6 +16,8 @@
   identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
 - Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
   guide for a 433 MHz CH341A + RFM98PW stick.
+- Stack instances: kiss, meshcore and chat can also run on other radios as `<stack>@<rid>` (up to 7 per stack, ports
+  +10 per slot): `lhpc stack add-instance|remove-instance`; `start|stop|restart <stack>@<rid>` act on that one alone.
 
 Fixed
 
