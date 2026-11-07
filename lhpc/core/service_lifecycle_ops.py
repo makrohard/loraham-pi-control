@@ -1206,8 +1206,8 @@ class LifecycleOpsMixin:
         # nothing) and before the first spawn: the RX/TX window is cleared at the start boundary,
         # SCOPED to the band set the lock bundle covers — a 433 client clears 433 only, an
         # all-active daemon start every arbitrated band, a non-radio start nothing.
-        for _b in sorted(self._operation_bands(target, band, radio, "start")):
-            self.clear_daemon_feed(_b)
+        for _b in sorted(self._operation_bands(target, band, radio, "start")):   # G1-C21 note 1: the start's radio
+            self.clear_daemon_feed(_b, radio_start.client_rid(self, self._owner_stack_id(target), _b, prep.inst))
 
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]
