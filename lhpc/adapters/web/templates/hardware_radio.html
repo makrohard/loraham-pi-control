@@ -19,7 +19,7 @@
         and cooling. Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
     {% endif %}
     {% if hp.mismatch %}<p class="depnote depnote-warn" id="hw-hp-mismatch">High-power switch, {{ r.band }} MHz: {{ hp.mismatch }}</p>{% endif %}
-    <p><a href="{{ url_for('logs_view', target='loraham-daemon', job=r.rid ~ '/rf-daemon.log') }}" id="hw-rflog">RF log</a></p>
+    {% for l in rflogs %}<p id="hw-rflog">{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a href="{{ url_for('logs_view', target=l.target, job=l.job) }}">RF log</a>{% endif %}</p>{% endfor %}
     {% if r.choices and r.choices.items %}
       <form method="post" action="{{ url_for('hardware_bind') }}" id="hw-rebind">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

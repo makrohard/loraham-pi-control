@@ -2978,6 +2978,12 @@ class LifecycleOpsMixin:
         lines.extend(self._required_post_outcomes(comp_id))
         return lines
 
+    def _daemon_installed(self, dstat) -> bool:
+        """`dstat` (the daemon's ComponentStatus) is installed: a source tree, the binary channel (source-less), or anything
+        RUNNING, which is installed by definition (source_state alone read a binary-installed running daemon as absent)."""
+        return bool(dstat) and (dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
+                                or self.binary_covers(self.DAEMON_ID) or dstat.run_state in (RunState.RUNNING, RunState.DEGRADED))
+
     def radio_overview(self) -> list[dict]:
         """Per-band view for the radio dashboard: daemon/radio config (if running),
         which stack (+ its components) is up on that band, and which stacks can be
@@ -2989,13 +2995,7 @@ class LifecycleOpsMixin:
         dstat = live.get(self.DAEMON_ID)
         daemon_proc = dstat.run_state.value if dstat else "unknown"
         daemon_up = bool(dstat and dstat.run_state in up)
-        # "Installed" is not only a SOURCE tree: the daemon can be installed from the binary
-        # channel (source-less), and anything RUNNING is installed by definition. Keying this off
-        # source_state alone made a binary-installed, running daemon render "Daemon not installed".
-        daemon_installed = bool(dstat) and (
-            dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
-            or self.binary_covers(self.DAEMON_ID)
-            or daemon_up)
+        daemon_installed = self._daemon_installed(dstat)
         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
         # LIVERSSI only, and this renders on every dashboard load -> the PASSIVE read. A scan here
         # would destroy an arriving frame just to draw a signal bar.

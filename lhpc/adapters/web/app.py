@@ -1053,6 +1053,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                               if any(h in member_ids for h in c.holders)],
                 "jobs": _jobs,
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
+                # W250: what Home's band card showed for a running stack: its RF log on its band, its tools' launch lines
+                "rflog": ({"target": _e.writer, "job": _e.job(), "band": service.running_band(stack.id, "") or None}
+                          if rollup[stack.id] in _RUNNING and (_e := _rflog.entry(stack.id)) and not _e.banded else None),
+                "tools": [(c.id, c.name, service.manual_start_command(c)) for c in stack.components
+                          if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
                 "inline": inline,
             }
             if _row_needs_body(inline, only_sid):
@@ -2091,7 +2096,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         r = radio_start.radio_detail(service, rid)
         if r is None:
             abort(404)
-        return render_template("hardware_radio.html", r=r, models=radio_models.load(),
+        from lhpc.core import rflog
+        dstat = next((ss.components.get(service.DAEMON_ID) for ss in service.build_snapshot().stacks
+                      if service.DAEMON_ID in ss.components), None)     # F8: no RF-log link without an installed daemon
+        rf = ([x for x in radio_start.daemon_rf_links(service, rflog.entry("daemon"), r["band"])
+               if x.get("error") or x["job"].startswith(r["rid"] + "/")] if service._daemon_installed(dstat) else [])
+        return render_template("hardware_radio.html", r=r, models=radio_models.load(), rflogs=rf,
                                hp=service.high_power_state(r["band"]), detect=session.pop("hw_detect", None))
 
     @app.get("/hardware/add")
@@ -2099,7 +2109,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """W257: Add Hardware: each plugged-in stick no radio holds (its model picked here), and one HAT row."""
         from lhpc.core import radio_models, radio_start
         models, sticks, view = radio_models.load(), {}, radio_start.hardware_view(service)
-        valid = view["kind"] == "valid"                  # an unreadable list offers nothing to add (the POST refuses too)
+        valid = view["kind"] in ("valid", "absent")      # the first radio is added here; an unreadable list offers nothing
         for mid, c in view["addable"] if valid else ():
             sticks.setdefault(c.port, {"port": c.port, "label": c.label, "models": []})["models"].append(models[mid])
         boards = []                     # (model:variant, label): a variant is named only where the band does not pick it

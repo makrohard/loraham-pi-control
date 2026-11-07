@@ -150,9 +150,12 @@ def test_the_high_power_warning_and_mismatch_show_on_the_detail_page_and_in_the_
     assert re.search(r'data-rid="r2">.*?⚠ high-power switch: saved on, the running daemon reports off', page)
 
 
-def test_the_detail_page_links_the_radios_rf_log(web, tmp_path, monkeypatch):
-    page = _box(web, tmp_path, monkeypatch).get("/hardware/radio/r2").get_data(as_text=True)
-    assert 'id="hw-rflog"' in page and "job=r2/rf-daemon.log" in html.unescape(page)
+@pytest.mark.parametrize("installed", [True, False])
+def test_the_detail_page_links_the_radios_rf_log_while_a_daemon_is_installed(web, tmp_path, monkeypatch, installed):
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: installed)
+    page = html.unescape(_box(web, tmp_path, monkeypatch).get("/hardware/radio/r2").get_data(as_text=True))
+    assert ("job=r2/rf-daemon.log" in page) is installed and ("job=r1/" not in page)
 
 
 def test_home_without_hardware_points_at_add_hardware(web, tmp_path, monkeypatch):

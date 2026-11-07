@@ -157,7 +157,7 @@
             {# Not-proxied web UI. Link the DIRECT listener only where it's up for this viewer
                (w.direct_addr set by the adapter); ABSENT is its own state (down, not local-only). #}
             {% if w.direct_addr %}
-              <span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
+              <span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl iface-web" href="{{ w.direct_scheme }}://{{ w.direct_addr }}" target="_blank" rel="noopener">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
             {% elif w.mode_note %}
               <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="{{ w.mode_note }}">not served in this mode</a> <span class="pill">not proxied</span>
             {% elif w.comp_state == 'stopped' %}
