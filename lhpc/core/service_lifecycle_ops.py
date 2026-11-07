@@ -569,7 +569,6 @@ class LifecycleOpsMixin:
         return ("no radio hardware configured — choose your board in the daemon Hardware settings "
                 "before starting a radio stack")
 
-    @invalidates_snapshot
     def radio_mode_block(self, target: str) -> str:
         """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
         A band-switchable stack stays available if ANY of its bands is active (uses the RAW declared

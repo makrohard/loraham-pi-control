@@ -2098,15 +2098,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def hardware_add_page():
         """W257: Add Hardware: each plugged-in stick no radio holds (its model picked here), and one HAT row."""
         from lhpc.core import radio_models, radio_start
-        models, sticks = radio_models.load(), {}
-        for mid, c in radio_start.hardware_view(service)["addable"]:
+        models, sticks, view = radio_models.load(), {}, radio_start.hardware_view(service)
+        valid = view["kind"] == "valid"                  # an unreadable list offers nothing to add (the POST refuses too)
+        for mid, c in view["addable"] if valid else ():
             sticks.setdefault(c.port, {"port": c.port, "label": c.label, "models": []})["models"].append(models[mid])
         boards = []                     # (model:variant, label): a variant is named only where the band does not pick it
         for m in (m for m in models.values() if m.transport == "spi"):
             keyed = [v for v in m.variants if not v.band] if len(m.variants) > 1 else []
             boards += [(f"{m.id}:{v.key}", f"{m.label} ({v.key})") for v in keyed] or [(f"{m.id}:", m.label)]
-        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards,
-                               detect=session.pop("hw_detect", None))
+        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards, valid=valid,
+                               list_state=view, detect=session.pop("hw_detect", None))
 
     @app.post("/hardware/add-hat")
     def hardware_add_hat():
