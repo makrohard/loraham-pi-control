@@ -491,7 +491,7 @@ class StopOpsMixin:
                 # maps the primary choice to its CONCRETE band, so "" never travels onward for a
                 # band-switchable stack and no inner frame can reinterpret it; "" survives only for a
                 # genuinely bandless stack, which nothing downstream can reinterpret either.
-                _rband = self._restart_ensure_band(target, band)   # issue #5: before the shared guard
+                _rband = self._restart_ensure_band(target, band, inst)   # issue #5: before the shared guard
                 with self._config_stable():
                     # PREFLIGHT the saved identity BEFORE lock planning, the guard, owner handling
                     # or any stop: a restart must never stop a running stack only to be refused by

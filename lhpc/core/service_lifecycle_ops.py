@@ -702,7 +702,7 @@ class LifecycleOpsMixin:
         # config stability, then the lifecycle/resource bundle.
         try:
             with self._admit_and_acquire_guards("start", target, band, stop_owners,
-                                                _ensured) as (_op_band, _order, _radio):
+                                                _ensured, inst=inst) as (_op_band, _order, _radio):
                 # The outer recheck under every lock: identity enforcement
                 # FIRST, then the MeshCore position snapshot (the one position decision of this
                 # start, passed down rather than re-queried, so a restart asks exactly once) —
@@ -730,15 +730,15 @@ class LifecycleOpsMixin:
                 PathContainmentError, _ohs.OneStoreError) as exc:
             return self._guard_refusal("start", target, exc)
 
-    def _restart_ensure_band(self, target: str, band: str) -> str:
+    def _restart_ensure_band(self, target: str, band: str, inst=None) -> str:
         """A restart's band, resolved under admission, after the openHop-file step that must run before
         the restart's shared config-stability guard (`openhop_store.restart_ensure`)."""
-        _ohs.restart_ensure(self, target)
+        _ohs.restart_ensure(self, target, inst)
         return self.operation_band(target, band)
 
     @contextlib.contextmanager
     def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool,
-                                  ensured: bool = False):
+                                  ensured: bool = False, inst=None):
         """The guards of an applied start: task admission → config stability → the lifecycle/
         resource bundle (LOCK ORDER), yielding `(op_band, order, radio)` resolved between them.
         ONE effective band for the WHOLE operation, resolved ONCE under admission and never
@@ -749,7 +749,7 @@ class LifecycleOpsMixin:
         with self._admission_guard(op, target):
             op_band = self.operation_band(target, band)
             if not ensured:                              # issue #5: admitted, before the shared guard
-                _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)))
+                _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)), inst=inst)
             with self._config_stable():
                 order, radio = self._order_radio(target, op_band)
                 with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
@@ -1118,7 +1118,7 @@ class LifecycleOpsMixin:
                            f"'{bl['holder_stack']}' ({bl['holder']})")
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
-        details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target)]
+        details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
         return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst else ''}': {len(order)} component(s) in order.",
                             details=details,
                             next_commands=[f"lhpc stack start {target}"
@@ -1662,7 +1662,7 @@ class LifecycleOpsMixin:
         if ok and (_spi := self._spi_shared_warning(target, band, radio)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
             warned = {"spi_warning": _spi}        # the console's start banner shows it too
-        if ok and (_ohw := _ohs.start_warnings(self, target)):
+        if ok and (_ohw := _ohs.start_warnings(self, target, prep.inst)):
             out = [*out, *(f"  [warning] {w}" for w in _ohw)]
             warned = {**warned, "openhop_warnings": _ohw}   # the stack page's start note too
         return ActionResult(ok, summary, details=out, results=tuple(results), data=warned,
