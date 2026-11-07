@@ -422,7 +422,7 @@ def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), f
     if fb_given:
         notes.append(f"the interactive marker's {fallback_rid} is not a candidate (ignored)")
     t = _pick(cands, where)
-    return Target(t.outcome, t.rid, "; ".join([t.reason, *notes]), t.candidates, t.next_command)
+    return Target(t.outcome, t.rid, "; ".join([t.reason, *notes]), t.candidates, t.next_command, t.kind)   # L20
 
 
 def stop_targets(rid, procs, owned_pids) -> StopPlan:

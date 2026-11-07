@@ -53,3 +53,11 @@ def test_only_the_several_radios_refusal_carries_its_kind(tmp_path):
     svc = _svc(tmp_path, TWO_868)
     assert radio_start.band_rid(svc, "868").kind == radio_daemon.SEVERAL
     assert radio_start.band_rid(svc, "433").kind == ""
+
+
+def test_the_band_less_path_keeps_the_several_kind(tmp_path):
+    # Ledger L20: resolve_target without a band (a stack's start with no saved band) adds its notes to the refusal
+    # and rebuilt the Target without `kind`, so a several-radios refusal there lost it.
+    svc = _svc(tmp_path, TWO_868)
+    t = radio_daemon.resolve_target(radios.load(svc._paths), radio_models.load(), lambda _r, _m: True)
+    assert (t.outcome, t.kind, t.candidates) == ("refuse", radio_daemon.SEVERAL, ("r1", "r2")), t
