@@ -1496,6 +1496,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service.dismiss_dep_note(service.dependency_overview())
         return redirect(request.referrer or url_for("stacks_overview"))
 
+    def _radio_arg(band: str) -> str:
+        """Item 16 (DEC-W53): the radio a daemon view is addressed to (`rid`), "" without one; a rid that is no enabled
+        radio of `band` is a 404 with the reason, never a 500."""
+        from lhpc.core import radio_start
+        rid = request.values.get("rid", "")
+        _key, why = radio_start.view_radio(service, band, rid)
+        if why:
+            abort(make_response(jsonify(error=why), 404))
+        return rid
+
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):
         # The dashboard's per-band column polls this every 3 s. It is a GET, so by this app's
@@ -1504,12 +1514,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # whose CAD scan destroyed frames in flight and cost ~46 % of reception at SF12/BW125.
         if band not in ALLOWED_BANDS:
             abort(404)
-        view = service.daemon_view(band)
-        channel = service.daemon_channel(band) if view.reachable else {}
-        return jsonify(band=band, reachable=view.reachable, ready=view.ready,
+        rid = _radio_arg(band)
+        view = service.daemon_view(band, rid)
+        channel = service.daemon_channel(band, rid) if view.reachable else {}
+        return jsonify(band=band, rid=rid, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state, status=view.status,
                        stats=view.stats, channel=channel,
-                       feed=service.daemon_feed(band, 40))
+                       feed=service.daemon_feed(band, 40, rid))
 
     @app.get("/api/daemon/<band>/feed")
     def daemon_feed_api(band: str):
@@ -1518,7 +1529,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # 3 s. Nothing here touches the radio.
         if band not in ALLOWED_BANDS:
             abort(404)
-        return jsonify(band=band, feed=service.daemon_feed(band, 40))
+        rid = _radio_arg(band)
+        return jsonify(band=band, rid=rid, feed=service.daemon_feed(band, 40, rid))
 
     @app.post("/api/daemon/<band>/scan")
     def daemon_scan_api(band: str):
@@ -1533,9 +1545,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        view = service.daemon_view(band)
-        channel = service.daemon_channel_scan(band) if view.reachable else {}
-        return jsonify(band=band, reachable=view.reachable, channel=channel)
+        rid = _radio_arg(band)
+        view = service.daemon_view(band, rid)
+        channel = service.daemon_channel_scan(band, rid) if view.reachable else {}
+        return jsonify(band=band, rid=rid, reachable=view.reachable, channel=channel)
 
     @app.get("/api/daemon/<band>/socket")
     def daemon_socket_api(band: str):
@@ -1544,8 +1557,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
         if band not in ALLOWED_BANDS:
             abort(404)
-        line = service.daemon_socket_line(band)
-        return jsonify(band=band, line=line, reachable=bool(line))
+        rid = _radio_arg(band)
+        line = service.daemon_socket_line(band, rid)
+        return jsonify(band=band, rid=rid, line=line, reachable=bool(line))
 
     @app.post("/radio/<band>/set")
     def radio_set(band: str):
