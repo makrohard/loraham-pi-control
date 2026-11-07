@@ -422,13 +422,14 @@ def test_schedule_rejects_malformed_and_ambiguous():
 
 
 def test_schedule_spacing_measured():
-    """The scheduled delays are really HONOURED between deliveries: four sends arrive, and each
-    gap is at least the interval that step asked for.
+    """The scheduled delays are really HONOURED: four sends arrive, and send k arrives no earlier
+    than the sum of the intervals before it, measured from before the launcher started.
 
-    Lower bounds only. An upper bound ("the early cadence stays under 0.6 s") tests the machine,
-    not LHPC — a stalled runner breaks it with the product behaving perfectly. That the tail is
-    the LONGER window is proven here by its own lower bound, and the exact precomputed cadence
-    is asserted structurally in `test_schedule_renders_precomputed_intervals`.
+    The schedule is a CLOCK (attempt k starts at t0 + sum(intervals[:k])), so one late send
+    shortens the gap to the next: a per-gap bound tests the machine's load, not LHPC. The
+    cumulative bound holds under any load, since t0 is taken inside the launcher, after `before`.
+    Lower bounds only, for the same reason; the exact cadence is asserted structurally in
+    `test_schedule_renders_precomputed_intervals`.
     """
     import socket, threading, time as _t
     port = _free_port()
@@ -445,15 +446,15 @@ def test_schedule_spacing_measured():
 
     t = threading.Thread(target=run, daemon=True); t.start()
     assert listening.wait(10.0), "listener never came up"
+    before = _t.monotonic()
     assert _run_launcher([{"kind": "tcp_send", "port": port, "data": "x\n", "optional": True,
                            "schedule": [[2, 0.2], [2, 0.8]]}]) == 0
     t.join(10)
     assert len(stamps) == 4
-    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
-    # Stamps are taken at accept() on the listener, so accept-side jitter on the earlier send
-    # can shorten a measured gap below the sleep the runner actually took: 10 % tolerance.
-    for gap, want in zip(gaps, (0.2, 0.2, 0.8)):
-        assert gap >= want * 0.9, f"gap {gap:.3f}s is shorter than the {want}s it asked for"
+    # accept() returns after the connect, so a stamp is never earlier than its send started.
+    for k, due in ((1, 0.2), (2, 0.4), (3, 1.2)):
+        got = stamps[k] - before
+        assert got >= due, f"send {k} arrived {got:.3f}s after the start, before its {due}s"
 
 
 @pytest.mark.slow                                      # ~3.5 s of real timed retries
