@@ -31,7 +31,7 @@ CASES = [
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "433", "r1", ""),
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "868", "r2", ""),
     (radios_fixture.RADIOS, "meshcom-bridge", "", None, "2 radios can run it for this stack: r1 (low), r2 (high); name one"),
-    (TWO_433, "meshcom-bridge", "433", None, "2 radios can run it on 433 MHz: r1 (a), r2 (b); name one"),
+    (TWO_433, "meshcom-bridge", "433", "r1", ""),       # DEC-W16: slot 0 runs on the band's first unlisted radio
     (TWO_433, "loraham-kiss-tnc", "868", None, "no enabled radio on 868 MHz"),
     (NO_LIST, "graywolf", "433", "", ""),              # not a daemon client: slot 0 without a radio, any list
     (TWO_433, "graywolf", "", "", ""),
@@ -69,12 +69,17 @@ def test_an_unresolved_radio_template_never_renders(tmp_path):
     assert "/tmp/loraf-r7.sock" in argv and not any("{rid}" in a for a in argv)
 
 
-@pytest.mark.parametrize("rows,band,why", [(NO_LIST, "433", "no hardware list"),
-                                           ((), "433", "no enabled radio on 433 MHz"),
-                                           (TWO_433, "433", "2 radios can run it on 433 MHz: r1 (a), r2 (b); name one")])
-def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path, monkeypatch, rows, band, why):
+@pytest.mark.parametrize("rows,band,listed,why", [
+    (NO_LIST, "433", None, "no hardware list"),
+    ((), "433", None, "no enabled radio on 433 MHz"),
+    # DEC-W16: two radios no longer refuse slot 0 (it runs on r1); with both listed it has no radio left.
+    (TWO_433, "433", 'kiss = ["r1", "r2"]\n', "every enabled radio of 433 MHz holds a listed instance of kiss (r1, r2): "
+                                              "start one of them as kiss@<rid>")])
+def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path, monkeypatch, rows, band, listed, why):
     # Through the public start: the TNC's refusal is BLOCKED with the reason; nothing is launched.
     svc = _svc(tmp_path, rows)
+    if listed:
+        (tmp_path / "config" / "instances.toml").write_text(listed)
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))

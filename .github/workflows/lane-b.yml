@@ -1,0 +1,139 @@
+# Lane B: the Pi OS arm64 guest in QEMU on the arm64 runner (the H16 second environment for the
+# operator texts). One job, from-topic: a fresh guest installs the pushed head itself. QB-1, the spike that
+# measured the boot, has run and is recorded; its job is gone. The guest is QEMU virt with Debian 13's generic arm64 kernel, initrd and
+# modules on the unchanged Raspberry Pi OS Lite (Trixie) root filesystem: a full VM with its own
+# kernel, systemd, udev, apt and a real filesystem.
+name: lane-b
+
+on:
+  # A workflow file dispatches only once it exists on main; until then a push runs it. A lane run is the push of the
+  # head to prove to its own ref (git push origin <sha>:refs/heads/cons/lane-b-run-<n>), so the head's branch never
+  # starts the 5-hour job by itself.
+  push:
+    branches: [cons/lane-b-run-*]
+
+permissions:
+  contents: read
+
+jobs:
+  # The from-topic job (a stated lane deviation): a fresh guest, the install from the pushed head (that commit's own
+  # bootstrap-deps.sh and manual block), the reboot, then the units line; it proves the head on Pi OS. U0 (the update from a released tag) is not in this lane: a later plan item, with its target as
+  # an input, once (B) and (D) are released.
+  topic:
+    name: from-topic
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    env:
+      FROM: ${{ github.sha }}
+      PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+      PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
+      DEB_URL: https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-generic-arm64-20261021-2638.qcow2
+      DEB_SHA512: 0720988fd560dfa1d2975c4a1e4c39e3903ffd0f68e75be9e171f889cdbb53b7763dc9c54e951afc34055c6110b3b415196778e468a50bf26d294730a7f8eabe
+      EV: ${{ github.workspace }}/topic
+      LF: ${{ github.workspace }}/topic-launch-failure
+      # DEC-W55: TCG is a slow test machine, not a product bound: a manager reload takes ~29 s here (lane run 11)
+      SVC_CALL_BOUND_S: "300"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The runner (M1)
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/laneb" >> "$GITHUB_ENV"
+          mkdir -p "$EV" "$RUNNER_TEMP/laneb"
+          # Each writer this job may start has its state record, none, before anything runs.
+          for w in qemu.pid runner-sampler.pid; do
+            printf 'none\n' > "$RUNNER_TEMP/laneb/$w.state.tmp"; mv -f "$RUNNER_TEMP/laneb/$w.state.tmp" "$RUNNER_TEMP/laneb/$w.state"
+          done
+          if [ -e /dev/kvm ]; then kvm=present; else kvm=absent; fi
+          { uname -a; nproc; free -m; echo "kvm=$kvm"; } | tee "$EV/runner.txt"
+
+      - name: QEMU from the runner OS
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          retry 3 sudo -n apt-get update -q
+          retry 3 sudo -n apt-get install -y -q qemu-system-arm qemu-utils
+          qemu-system-aarch64 --version | tee "$EV/qemu-version.txt"
+
+      - name: The pinned images (M2), verified before any use
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          cd "$WORK"
+          retry 3 curl -fsSL -o pios.img.xz "$PIOS_URL"
+          retry 3 curl -fsSL -o deb.qcow2 "$DEB_URL"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify pios.img.xz sha256 "$PIOS_SHA256"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify deb.qcow2 sha512 "$DEB_SHA512"
+          xz -d pios.img.xz
+          qemu-img convert -O raw deb.qcow2 deb.raw
+          ssh-keygen -q -t ed25519 -N '' -f key
+          printf 'pios=%s\npios_sha256=%s\ndeb=%s\ndeb_sha512=%s\n' "$PIOS_URL" "$PIOS_SHA256" "$DEB_URL" "$DEB_SHA512" > "$EV/image.txt"
+
+      - name: The install from the topic at ${{ env.FROM }}
+        run: bash .github/lane-b/topic.sh "$FROM"
+
+      - name: Stop the guest, redaction check, checksum the evidence
+        id: evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          # Every writer into the evidence (the QEMU console, the runner sampler) is gone before the scan and the sums;
+          # one that cannot be shown stopped blocks the upload.
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          # The runner runs this step with bash -e: a bare grep exiting 1 (no hit) would end it.
+          redact() { local rc; if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$1"; then rc=0; else rc=$?; fi
+            case $rc in
+              0) echo "redaction: a key or a password form in $1"; return 1 ;;
+              1) return 0 ;;
+              *) echo "redaction: the check itself failed (grep rc $rc)"; return 1 ;;
+            esac; }
+          # The writers as the stop finds them (the live proof of their state records and publications, LBS-D3): each
+          # state record and each pidfile byte by byte (od -c), before any stop.
+          mkdir -p "$EV/writers"
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            if [ -e "$w.state" ]; then cp "$w.state" "$EV/writers/" || exit 1; fi
+            if [ -e "$w" ]; then od -c "$w" > "$EV/writers/${w##*/}.od" || exit 1; else echo absent > "$EV/writers/${w##*/}.od"; fi
+          done
+          lf=0
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            r=0; stop_writer "$w" || r=$?
+            case $r in
+              0) ;;
+              3) lf=1 ;;
+              *) echo "evidence: a writer still runs or cannot be checked ($w)"; exit 1 ;;
+            esac
+          done
+          # A failed qemu launch (LBS-D2): only the launch-failure capture leaves the job (what the launch printed,
+          # the state records, the pidfile state), never the scan and sums of the rest; the step fails.
+          if [ "$lf" = 1 ]; then
+            mkdir -p "$LF"
+            for f in qemu-launch.log qemu.pid.state runner-sampler.pid.state; do
+              if [ -e "$WORK/$f" ]; then cp "$WORK/$f" "$LF/$f" || exit 1; fi
+            done
+            if [ -e "$WORK/qemu.pid" ]; then echo "qemu.pid: present" > "$LF/qemu.pid.txt"; else echo "qemu.pid: absent" > "$LF/qemu.pid.txt"; fi
+            redact "$LF" || exit 1
+            echo "launchfail=1" >> "$GITHUB_OUTPUT"
+            echo "evidence: the qemu launch failed: only the launch-failure capture is uploaded"; exit 1
+          fi
+          redact "$EV" || exit 1
+          cd "$EV" || exit 1
+          find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS || { echo "evidence: the sums failed"; exit 1; }
+          # The sums list every file once, and there is at least one.
+          n=$(find . -type f ! -name SHA256SUMS | wc -l) || exit 1
+          m=$(wc -l < SHA256SUMS) || exit 1
+          [ "$n" -gt 0 ] && [ "$n" -eq "$m" ] || { echo "evidence: SHA256SUMS lists $m lines for $n files"; exit 1; }
+
+      # Uploads also after a failed run, never after a failed redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outcome == 'success'
+        with:
+          name: topic-from-topic
+          path: topic
+
+      # A failed qemu launch uploads only its launch-failure capture (LBS-D2), after its own redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outputs.launchfail == '1'
+        with:
+          name: topic-launch-failure
+          path: topic-launch-failure

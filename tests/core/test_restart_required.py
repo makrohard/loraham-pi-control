@@ -229,7 +229,7 @@ class _StoppedLife:
     def owned_running(self):
         return {}                                        # no ownership records (status reads them)
 
-    def stop(self, comp, band=None):
+    def stop(self, comp, band=None, rid=None):
         from lhpc.core.outcomes import CompResult, Outcome
         return CompResult(component=comp.id, action="stop", outcome=Outcome.STOPPED,
                           summary="scripted")

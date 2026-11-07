@@ -57,8 +57,8 @@ def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     assert (state, items) == ("done", [("kiss", "433", "succeeded")])
     assert j["items"][0]["result"] == {"ok": True, "summary": "Run applied for 'kiss'."}
     # the prior boot's record (pid 999999) is gone; the new launch's record has the same shape
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
-                                   "state/boot-restore.json", "state/daemon-feed-floor-433",
+    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+                                   "state/boot-restore.json", "state/daemon-feed-floor-433-r1",
                                    "state/running/kiss.band"],
                          "removed": [], "changed": [EVIDENCE]}
     assert box.owned() == ["loraham-kiss-tnc"]
@@ -173,8 +173,8 @@ def test_failed_after_the_hook_consumes_the_evidence(kiss_box, prior_boot, run_o
         {"component": "loraham-kiss-tnc", "outcome": "unverified",
          "reason": "ready endpoint(s) never came up (127.0.0.1:8001: absent (family=ipv4)); "
                    "cleanup: stopped"}]
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
-                                   "state/boot-restore.json", "state/daemon-feed-floor-433"],
+    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+                                   "state/boot-restore.json", "state/daemon-feed-floor-433-r1"],
                          "removed": [EVIDENCE], "changed": []}
     assert box.owned() == []
 

@@ -119,21 +119,25 @@ def test_r9_a_row_value_equal_to_the_default_still_wins_over_the_legacy_value(tm
     assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=1500"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=250")]
 
 
-def test_r1_control_two_enabled_radios_on_a_band_apply_the_stacks_value(tmp_path):
-    """CONTROL: the band names no one radio, so neither row value is sent; the stack's value goes to the band socket."""
+def test_r1_control_two_enabled_radios_on_a_band_apply_nothing(tmp_path):
+    """CONTROL: the band names no one radio, so no value is sent at all: neither row value, nor the stack's, which
+    went to the 0.13.x band socket before ledger L27 (DEC-W27); the refusal names the radios."""
     R = _radios().Radio
     rows = [R("r1", "a", "uputronics", "868", ce="ce0", dp=(("CADWAIT", "100"),)),
             R("r2", "b", "uputronics", "868", ce="ce1", dp=(("CADWAIT", "300"),))]
     res, sets = _apply(tmp_path, rows, {"dp_868_CADWAIT": "900"}, "868",
                        sockets={"/tmp/loraconf868.sock": ("-", "868"), **RID_SOCKETS})
-    assert res.ok, (res.summary, res.details)
-    assert sets == [("/tmp/loraconf868.sock", "SET CADWAIT=900"), ("/tmp/loraconf868.sock", "SET CADIDLE=250")]
+    from lhpc.core import radio_daemon
+    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 868 MHz: 2 radios can run it on "
+                                            f"868 MHz: r1 (a), r2 (b); {radio_daemon.SHARED_BAND_TEXT}")
+    assert sets == []
 
 
 @pytest.mark.parametrize("case", ["no list", "invalid list", "radio disabled"])
 def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(tmp_path, case):
-    """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value; the
-    stack's value goes to the 0.13.x band socket."""
+    """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value. Without
+    a list the stack's value goes to the 0.13.x band socket (the upgrade case); with a list that names no one radio
+    for the band, nothing is sent (ledger L27, DEC-W27)."""
     R = _radios().Radio
     rows = {"no list": None, "invalid list": None,
             "radio disabled": [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False, dp=(("CADWAIT", "100"),)),
@@ -142,8 +146,14 @@ def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(
     res, sets = _apply(tmp_path, rows, {"dp_433_CADWAIT": "700"}, "433",
                        sockets={"/tmp/loraconf433.sock": ("-", "433"), **RID_SOCKETS},
                        raw="[[radio]]\nid = 7\n" if case == "invalid list" else None)
-    assert res.ok, (res.summary, res.details)
-    assert sets == [("/tmp/loraconf433.sock", "SET CADWAIT=700"), ("/tmp/loraconf433.sock", "SET CADIDLE=250")]
+    if case == "no list":
+        assert res.ok, (res.summary, res.details)
+        assert sets == [("/tmp/loraconf433.sock", "SET CADWAIT=700"), ("/tmp/loraconf433.sock", "SET CADIDLE=250")]
+    else:
+        assert not res.ok and res.summary.split(": ")[0] == "the hardware list names no one radio for 433 MHz", res.summary
+        if case == "radio disabled":
+            assert res.summary == "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz"
+        assert sets == []
 
 
 @pytest.mark.parametrize("key,value", [("cadrssi_433", "zzz"), ("ocp_433", "nope"), ("cadmon_433", "maybe")])
@@ -232,43 +242,55 @@ def test_p5_a_start_refuses_exactly_when_a_pid_is_or_cannot_be_told_from_the_dae
 
 # ---- item 3: a boot-restore band item kept only when its band resolves to its radio ----------------------------
 
-def _plan(rows, items):
+def _plan(rows, items, listed=None):
     from lhpc.core import radio_daemon
-    return radio_daemon.restore_plan(items, rows)
+    return radio_daemon.restore_plan(items, rows, listed)
 
 
 def test_b1_a_disabled_radio_does_not_share_the_band(tmp_path):
     R = _radios().Radio
+    item = {"target": "kiss", "band": "433", "rid": "r1"}
     kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "waveshare-sx1262", "433", enabled=False)],
-                          [{"target": "kiss", "band": "433", "rid": "r1"}])
-    assert len(kept) == 1 and refused == []
+                          [item])
+    assert kept == [item] and refused == []
 
 
 @pytest.mark.parametrize("band", ["433", "868"])
 def test_b2_a_band_less_item_with_a_radio_is_kept(band):
     R = _radios().Radio
-    kept, refused = _plan([R("r1", "a", "loraham", band)], [{"target": "reticulum", "band": "", "rid": "r1"}])
-    assert len(kept) == 1 and refused == []
+    item = {"target": "reticulum", "band": "", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", band)], [item])
+    assert kept == [item] and refused == []
 
 
 def test_b3_a_radio_now_on_another_band_is_refused_naming_both_bands():
     R = _radios().Radio
-    kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "loraham", "868")],
-                          [{"target": "kiss", "band": "868", "rid": "r1"}])
-    assert kept == [] and "433" in refused[0][1] and "868" in refused[0][1]
+    item = {"target": "kiss", "band": "868", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", "433"), R("r2", "b", "loraham", "868")], [item])
+    assert kept == [] and [it for it, _why in refused] == [item]
+    assert "433" in refused[0][1] and "868" in refused[0][1]
 
 
 @pytest.mark.parametrize("seed", range(30))
-def test_b4_a_band_item_is_kept_exactly_when_its_bands_enabled_radios_are_its_radio(seed):
+def test_b4_a_slot0_band_item_is_kept_exactly_when_its_radio_is_slot0s_of_its_band(seed):
+    """Seeded lists of 1-4 radios, some disabled (an all-disabled list included), some listed for kiss; the item names
+    any of them. Since 7e (DEC-W49) the band resolves to slot 0's radio: its lowest enabled rid not listed (DEC-W16)."""
     R = _radios().Radio
     rng = random.Random(seed)  # noqa: S311 - a seeded, repeatable test input, no secret
     rows = [R(f"r{i}", f"n{i}", "loraham", rng.choice(["433", "868"]), enabled=rng.random() < 0.7)
             for i in range(1, rng.randint(2, 5))]
-    enabled = [r for r in rows if r.enabled]
-    if not enabled:
-        return
-    r = rng.choice(enabled)
-    band = rng.choice(["433", "868"])
-    kept, refused = _plan(rows, [{"target": "kiss", "band": band, "rid": r.id}])
-    want = [x.id for x in rows if x.enabled and x.band == band] == [r.id]
-    assert (len(kept) == 1) is want and (len(refused) == 1) is (not want)
+    r = rng.choice(rows)
+    listed = {"kiss": frozenset(x.id for x in rows if rng.random() < 0.3)}
+    item = {"target": "kiss", "band": rng.choice(["433", "868"]), "rid": r.id}
+    kept, refused = _plan(rows, [item], listed)
+    free = [x.id for x in rows if x.enabled and x.band == item["band"] and x.id not in listed["kiss"]]
+    want = r.enabled and r.band == item["band"] and free[:1] == [r.id]
+    assert (kept, [it for it, _why in refused]) == (([item], []) if want else ([], [item]))
+
+
+def test_b5_in_an_all_disabled_list_the_item_is_refused_as_disabled():
+    R = _radios().Radio
+    item = {"target": "kiss", "band": "433", "rid": "r1"}
+    kept, refused = _plan([R("r1", "a", "loraham", "433", enabled=False),
+                           R("r2", "b", "loraham", "868", enabled=False)], [item])
+    assert kept == [] and refused == [(item, "radio r1 is disabled")]

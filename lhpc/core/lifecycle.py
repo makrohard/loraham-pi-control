@@ -18,6 +18,7 @@ verifies it via the daemon's STATS counter — never a continuous transmission.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import platform
@@ -471,7 +472,7 @@ class Lifecycle:
             # BAND-SCOPED log: the daemon runs one instance PER BAND simultaneously, and they must
             # not append to one shared file (it mixes bands and doubles the volume the RX/TX feed
             # has to scan). `band` is "" for band-agnostic components -> the plain name.
-            log = self.logs_dir() / f"start-{comp.id}{('-' + band) if band else ''}.log"
+            log = self.logs_dir() / radio_start.start_log_name(comp.id, band, inst.rid)        # item 16: by radio
             runtime_fs.ensure_dir(self.paths, self.logs_dir())
         except (OSError, PathContainmentError) as exc:
             return StartLaunch(False, "", f"runtime log setup failed: {exc}")
@@ -536,7 +537,7 @@ class Lifecycle:
             return StartLaunch(False, str(log), str(exc))
         status = self._observe_and_record(stack, comp, pid, band, argv,
                                           requested_target=requested_target,
-                                          start_scope=start_scope, rid=inst.rid)
+                                          start_scope=start_scope, rid=inst.rid, slot=inst.slot)
         if status == "ok":
             return StartLaunch(True, str(log))
         # Not owned. Distinguish a clean failure (residual verified gone) from an
@@ -551,19 +552,20 @@ class Lifecycle:
 
     def _observe_and_record(self, stack: Stack, comp: Component, pid: int | None,
                             band: str, intended_argv: list[str], *,
-                            requested_target: str = "", start_scope: str = "", rid: str = "") -> str:
+                            requested_target: str = "", start_scope: str = "", rid: str = "", slot: int = 0) -> str:
         """Observe the launched pid's identity then persist ownership. Returns:
           * "ok"         — identity observed AND a durable ownership record persisted;
           * "ceased"     — could not be owned, but the residual process is verified gone;
           * "unverified" — could not be owned AND the residual process could NOT be
                            proven ceased (a leaked process — typed UNVERIFIED upstream).
         With OBSERVE_TIMEOUT_S=0 (tests) it records directly."""
+        extra = {"rid": rid, "slot": slot} if rid else None       # the instance's radio and slot (L5, 7e)
         if self.OBSERVE_TIMEOUT_S <= 0:
             # Capture a COMPLETE identity first and pass it to both record and cleanup,
             # so the zero-observation path follows the SAME no-signal-without-identity
             # rule as the normal path.
             ident = self._capture_identity(pid)
-            if self.record_launch(stack, comp, pid, band, ident=ident, extra={"rid": rid} if rid else None,
+            if self.record_launch(stack, comp, pid, band, ident=ident, extra=extra,
                                   requested_target=requested_target,
                                   start_scope=start_scope):
                 return "ok"
@@ -593,7 +595,7 @@ class Lifecycle:
                 if (self._identity_complete(launch_ident) and obs_ident is not None
                         and str(obs_ident.get("starttime")) != str(launch_ident.get("starttime"))):
                     return "unverified"
-                if self.record_launch(stack, comp, pid, band, ident=obs_ident, extra={"rid": rid} if rid else None,
+                if self.record_launch(stack, comp, pid, band, ident=obs_ident, extra=extra,
                                       requested_target=requested_target,
                                       start_scope=start_scope):
                     return "ok"
@@ -1158,7 +1160,7 @@ class Lifecycle:
         return valid, issues, "ok"
 
     def owned_records(self, comp_id: str, band: str | None = None,
-                      role: str | None = "") -> list[dict]:
+                      role: str | None = "", rid: str | None = None) -> list[dict]:
         """Records for a component, optionally scoped to a band (a band-less `""` record matches any
         band request). `role` selects the record class: "" = MAIN launches (default — so status and
         the ordinary stop never see auxiliary runners), "post" = detached post-start runners,
@@ -1172,6 +1174,8 @@ class Lifecycle:
             if role is not None and rec.get("role", "") != role:
                 continue
             if band is not None and rec.get("band") not in (band, ""):
+                continue
+            if rid is not None and rec.get("rid", "") != rid:      # item 7c2: one instance's launches only
                 continue
             out.append(rec)
         return out
@@ -1380,7 +1384,8 @@ class Lifecycle:
                 pass                    # best-effort: an orphan is inert, never ownership evidence
         return notes, unverified
 
-    def stop(self, comp: Component, band: str | None = None) -> CompResult:
+    def stop(self, comp: Component, band: str | None = None, rid: str | None = None,
+             exclude_rids=(), token=None, endpoints=None) -> CompResult:
         """Stop the LHPC-owned launch(es) for this component (optionally one band),
         returning a TYPED outcome.
 
@@ -1405,18 +1410,20 @@ class Lifecycle:
             return CompResult(component=comp.id, action="stop", outcome=outcome,
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
-        recs = self.owned_records(comp.id, band)
+        recs = [r for r in self.owned_records(comp.id, band, rid=rid) if r.get("rid", "") not in exclude_rids]
+        # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never slot 0's that still serve.
+        ep_comp = comp if endpoints is None else dataclasses.replace(comp, endpoints=tuple(endpoints))
         if not recs:
             # No ownership record. A matching foreign process is MANUAL_REQUIRED; a
             # lingering readiness endpoint means the stop is NOT verified (never claim
             # ALREADY_STOPPED while a ready=true endpoint is still present).
             if comp.process is not None:
-                pm = probe_process(self.system, comp.process)
-                if pm.pids:
+                pm = probe_process(self.system, comp.process, instance=token)    # 7c2b: this instance's own
+                if pm.pids and (token is not None or not (rid or exclude_rids)):
                     return result(Outcome.MANUAL_REQUIRED,
                                   "a matching process is running but not owned by LHPC — "
                                   f"stop it yourself: kill {' '.join(map(str, pm.pids))}")
-            gone, lingering = self._await_ready_endpoints_gone(comp)
+            gone, lingering = self._await_ready_endpoints_gone(ep_comp)
             if not gone:
                 return result(Outcome.ENDPOINT_STILL_PRESENT,
                               "no owned process, but readiness endpoint(s) still present: "
@@ -1469,7 +1476,7 @@ class Lifecycle:
         # grace so a child that outlives the tracked wrapper by a beat (e.g. run.sh's
         # backgrounded qemu closing its 12323 listener) converges to STOPPED instead of a
         # spurious ENDPOINT_STILL_PRESENT.
-        gone, lingering = self._await_ready_endpoints_gone(comp)
+        gone, lingering = self._await_ready_endpoints_gone(ep_comp)
         if not gone:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "
@@ -1494,11 +1501,11 @@ class Lifecycle:
             except Exception:
                 pass
 
-    def start_log(self, comp: Component, band: str = "") -> Path | None:
-        """The captured process log for `comp`, band-aware. A band-scoped start writes
-        `start-<id>-<band>.log`; a band-agnostic one writes `start-<id>.log`. Resolution order:
+    def start_log(self, comp: Component, band: str = "", rid: str = "") -> Path | None:
+        """The captured process log for `comp`, band-aware. A start on a radio writes `start-<id>-<band>-<rid>.log`
+        (item 16, radio_start.start_log_name); a band-agnostic one writes `start-<id>.log`. Resolution order:
 
-          1. the EXACT band's log, when the caller knows the band (the RX/TX feed, `?band=`);
+          1. the EXACT log of radio `rid`, or of the band's first radio, when the caller knows the band;
           2. else the NEWEST `start-<id>-*.log` — a band-less caller (`lhpc logs`, the GUI "logs"
              link) has no band to offer and must not come up empty for a banded component;
           3. else the band-agnostic name `start-<id>.log` (what a band-less start writes).
@@ -1508,7 +1515,7 @@ class Lifecycle:
         """
         d = self.logs_dir()
         if band:
-            p = d / f"start-{comp.id}-{band}.log"
+            p = d / radio_start.start_log_name(comp.id, band, rid or "".join(radio_start.band_rids(self.paths, band)[:1]))
             if p.is_file():
                 return p
         prefix = f"start-{comp.id}-"
@@ -1637,7 +1644,9 @@ class Lifecycle:
     # socket (`daemon_control.conf_socket`): the band's radio's `lora-<rid>.sock` at stage L5 (W3), else 0.13.x's.
     def raw_socket(self, band: str) -> str:
         from .daemon_control import _prefer_run_socket
-        key = radio_start.key_for(self.paths, band)
+        key = radio_start.socket_key(self.paths, band)
+        if not key:                                                    # ledger L27: the list names no one radio
+            return ""
         name = f"lora-{key}" if key != band else f"lora{band}"
         return _prefer_run_socket(f"/run/loraham/{name}.sock", f"/tmp/{name}.sock")
 
@@ -1647,8 +1656,8 @@ class Lifecycle:
         fails closed to None rather than being parsed raw (P0.4)."""
         from . import daemon_control
         try:
-            stats = daemon_control._query(self.system, radio_start.key_for(self.paths, band), b"GET STATS\n", "STATS")
-        except OSError:
+            stats = daemon_control._query(self.system, radio_start.socket_key(self.paths, band), b"GET STATS\n", "STATS")
+        except (OSError, ValueError):                                  # ValueError: no socket (InvalidBand, L27)
             return None
         val = stats.get("TXOK")
         if val is None:
@@ -1669,6 +1678,8 @@ class Lifecycle:
         """Send exactly one frame on `band` via the daemon's raw socket and verify
         TXOK++ via its CONF STATS. Real RF. The caller MUST confirm and ensure a
         dummy load is attached."""
+        if (why := radio_start.socket_refusal(self.paths, band)):      # ledger L27: never the 0.13.x band socket
+            return TxTestResult(False, band, None, None, f"refused: {why}")
         before = self._stats_txok(band)
         try:
             # Raw data socket: bytes written are transmitted as one LoRa frame.

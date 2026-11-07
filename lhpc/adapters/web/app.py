@@ -40,14 +40,21 @@ from flask import (
 )
 
 from lhpc.adapters.web.oneshot import OneShot
+from lhpc.core import auto_install_form, validators, web_client
 from lhpc.core import config as _config
+from lhpc.core import hotplug as _hotplug
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
-from lhpc.core import validators
+from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
-from lhpc.core.status import rollup_states, stack_dependencies, summarize
+from lhpc.core.status import (
+    component_note,
+    rollup_states,
+    stack_dependencies,
+    summarize,
+)
 from lhpc.version import __version__
 
 _RUNNING = ("running", "degraded")
@@ -410,21 +417,36 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         body = ("409 Conflict: a stored configuration file is unreadable or malformed. It was left "
                 "untouched for inspection. Repair or remove it (config/*.toml under the runtime root), "
                 "then retry.\n")
+        if getattr(exc, "reason", "") == _config.AP_CIDR_INVALID:   # W17: the recovery needs no console page
+            body += ("The access point subnet (network.ap_cidr) is invalid: reset it on the box with\n"
+                     f"  lhpc network --ap-cidr default --confirm-phrase {_AP_CIDR_CONFIRM}\n")
         return Response(body, status=409, mimetype="text/plain")
 
     def _runtime_root() -> str:
         return str(service.runtime_root)  # display only
 
+    def _attention_banner() -> list:
+        """W272: Home's "Needs attention" lines; a fault in the collector shows no banner, never an error page (the rows
+        still show every condition)."""
+        from lhpc.core import attention
+        try:
+            return attention.banner(service)
+        except Exception:
+            return []
+
+    @app.post("/attention/dismiss")
+    def attention_dismiss():
+        """W273: the banner's one ✕ hides the set it shows until that set changes (+20 dBm stays)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import attention
+        if not attention.dismiss(service):
+            flash("The attention list could not be closed right now; try again", "warn")
+        return redirect(url_for("dashboard"))
+
     @app.get("/")
     def dashboard():
-        # Radio-centric overview: one column per band (433/868) with daemon/radio
-        # config, live monitor, the stack running on it, and a start-stack control.
-        radios = service.radio_overview()
-        # An interactive app that's been launched (marked) but isn't detected running
-        # yet -> the operator is about to run it in a terminal; poll faster so the
-        # dash flips to "running" quickly instead of waiting for the slow refresh.
-        pending_interactive = any(not s.get("running") and not s.get("blocker")
-                                  for r in radios for s in r["interactive"])
+        # W250/DEC-W57: Home is its banners, the Webserver box and the System box (the radios: /hardware).
         # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
@@ -498,7 +520,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             maintenance_failing = [("record", "", f"{type(exc).__name__}: {exc}")]
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
-            radios=radios, pending_interactive=pending_interactive, webservers=webservers,
+            webservers=webservers,
             firewall=firewall, security_pill=security_pill, fw_reapply=fw_reapply,
             maintenance_failing=maintenance_failing,
             # The host the browser used to reach the console — a proxied web-UI link points here on
@@ -516,6 +538,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
+            hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
+            attention=_attention_banner(),                        # W272/W273: the "Needs attention" banner
             # Each power button renders ONLY when logind authorizes ITS action (cached
             # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
             # box shows nothing, and the dep panel offers the copybox.
@@ -547,7 +571,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/api/tasks/dismiss")
     def tasks_dismiss():
-        # Close a FAILED (red) banner (never unsafe/running). CSRF-guarded; durable.
+        # Close a FAILED banner, or hide an UNSAFE one (UX: never a running one). CSRF-guarded; durable.
         if not _csrf_ok():
             abort(400)
         ok = service.task_dismiss(request.form.get("kind", ""), request.form.get("run_id", ""),
@@ -627,7 +651,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             starting=starting, starting_run=starting_run,
             spawn_failed=spawn_failed, dep_preflight=service.auto_install_dep_preflight(),
             log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS,
-            rows=service.auto_install_rows())
+            rows=(_rows := service.auto_install_rows()),
+            ai_form=auto_install_form.view(_rows, session.get(auto_install_form.SESSION_KEY)))
 
     _TX_CONFIRM_TTL_S = 300.0
     # Single use of an RF confirmation, held in THIS web process (one process, waitress threads): the
@@ -712,6 +737,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         selection, canonical = _parse_ai_selection()
+        session[auto_install_form.SESSION_KEY] = auto_install_form.to_session(selection)   # W206: the page keeps it
         errs = service.auto_install_check_selection(selection)
         if errs:
             flash(errs[0], "warn")
@@ -1011,6 +1037,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
+                "web_client": web_client.view(service) if stack.id == web_client.DAEMON else {},   # item 12
                 "fetched_ver": (_fv := (service.fetched_version_state(stack.id)
                                         if buildable else {})),
                 # Reuse _fv's installed instead of a second fetched_version_state read.
@@ -1025,6 +1052,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
                 "jobs": _jobs,
+                "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
+                # W250: what Home's band card showed for a running stack: its RF log on its band, its tools' launch lines
+                "rflog": ({"target": _e.writer, "job": _e.job(), "band": service.running_band(stack.id, "") or None}
+                          if rollup[stack.id] in _RUNNING and (_e := _rflog.entry(stack.id)) and not _e.banded else None),
+                "tools": [(c.id, c.name, service.manual_start_command(c)) for c in stack.components
+                          if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
                 "inline": inline,
             }
             if _row_needs_body(inline, only_sid):
@@ -1050,7 +1083,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "deps_report": service.deps_report(stack.id),
                     "needs_build": service.unbuilt_components(stack.id),
                     "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
-                    "daemon_params": service.daemon_params_view(stack.id, band),
+                    "daemon_params": service.daemon_params_view(stack.id, band, _view_rid(stack.id, band)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
@@ -1119,11 +1152,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None
 
-    def _stacks_context(band="", *, hw_probe=None, only_sid=None, cfg_sid=""):
+    def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
-        with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
-        it inline; the lazy partial passes None — the transient belongs to the whole-page render).
+        with a missing var.
         `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
         fw_status, listeners = _render_wide_reads()
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
@@ -1181,17 +1213,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "operator_callsign_legacy": service.operator_callsign_legacy(),
             "operator_callsign_suggestion": service.operator_callsign_correction(),
             "restored_open": restored_open,
-            "hw_probe": hw_probe,
             "confirm": None,
         }
         return ctx, groups, snapshot
 
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
-        # cached-only — no live git/network/identity on a GET. hw_probe is popped (consumed once).
+        # cached-only — no live git/network/identity on a GET.
         ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
-                                                 cfg_sid=request.args.get("cfg", ""),
-                                                  hw_probe=session.pop("hw_probe", None))
+                                                 cfg_sid=request.args.get("cfg", ""))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
         # expanding any row; the per-stack Settings carry only their own `use_gps` switch.
@@ -1268,7 +1298,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # respond-first: the detached finalize helper does the activation.
         if not _csrf_ok():
             abort(400)
-        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap") \
+        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap", "ap-cidr") \
                 or not service.network_supported():
             abort(404)
         back = redirect(url_for("stacks_overview", open="network")
@@ -1284,6 +1314,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return back
         if op == "forget":
             res = service.network_forget(request.form.get("uuid", ""))
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "ap-cidr":
+            # NA: the AP subnet setting through the one apply (phrase first, then the value; never stripped).
+            res = service.network_set_ap_cidr(request.form.get("ap_cidr", ""),
+                                              request.form.get("confirm_phrase", "").strip())
             flash(res.summary, "ok" if res.ok else "warn")
             return back
         if op == "retry":
@@ -1334,7 +1370,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             plan = service.power_action(kind, apply=False)
             return render_template("power_confirm.html", kind=kind,
                                    question=plan.summary, details=plan.details)
-        res = service.power_action(kind, apply=True)
+        # DEC-W11: the record names the client only by a certificate nginx verified (it sets both headers)
+        _dn = request.headers.get("X-LHPC-Client-DN", "") if request.headers.get("X-LHPC-Client-Verify") == "SUCCESS" else ""
+        res = service.power_action(kind, apply=True, client=_dn)
         flash(res.summary + ((" " + "; ".join(d.strip() for d in res.details))
                             if res.details else ""),
               "ok" if res.ok else "warn")
@@ -1454,6 +1492,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service.dismiss_interactive(stack_id)
         return redirect(url_for("dashboard"))
 
+    @app.post("/hardware/changes/dismiss")
+    def hardware_changes_dismiss():
+        """W249/DEC-W42: the hotplug banner's ✕ deletes exactly the lines it showed."""
+        if not _csrf_ok():
+            abort(400)
+        if not _hotplug.dismiss(service, request.form.getlist("id")):
+            flash("The hardware changes could not be closed right now (busy); try again", "warn")
+        return redirect(url_for("dashboard"))
+
     @app.post("/welcome/dismiss")
     def welcome_dismiss():
         if not _csrf_ok():
@@ -1470,6 +1517,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service.dismiss_dep_note(service.dependency_overview())
         return redirect(request.referrer or url_for("stacks_overview"))
 
+    def _radio_arg(band: str) -> str:
+        """Item 16 (DEC-W53): the radio a daemon view is addressed to (`rid`), "" without one; a rid that is no enabled
+        radio of `band` is a 404 with the reason, never a 500."""
+        from lhpc.core import radio_start
+        rid = request.values.get("rid", "")
+        _key, why = radio_start.view_radio(service, band, rid)
+        if why:
+            abort(make_response(jsonify(error=why), 404))
+        return rid
+
+    def _view_rid(stack_id: str, band: str) -> str:
+        """The radio the opened daemon panel shows (`dp=<stack>&rid=rN`, item 16); "" (the band's view) for another
+        stack's panel, or a rid that is no enabled radio (of `band` when one is given): the page never fails on it."""
+        from lhpc.core import radio_start
+        rid = request.args.get("rid", "")
+        if not rid or request.args.get("dp") != stack_id:
+            return ""
+        _inst, rband, why = radio_start.daemon_radio(service, rid)
+        return "" if why or (band and rband != band) else rid
+
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):
         # The dashboard's per-band column polls this every 3 s. It is a GET, so by this app's
@@ -1478,12 +1545,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # whose CAD scan destroyed frames in flight and cost ~46 % of reception at SF12/BW125.
         if band not in ALLOWED_BANDS:
             abort(404)
-        view = service.daemon_view(band)
-        channel = service.daemon_channel(band) if view.reachable else {}
-        return jsonify(band=band, reachable=view.reachable, ready=view.ready,
+        rid = _radio_arg(band)
+        view = service.daemon_view(band, rid)
+        channel = service.daemon_channel(band, rid) if view.reachable else {}
+        return jsonify(band=band, rid=rid, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state, status=view.status,
                        stats=view.stats, channel=channel,
-                       feed=service.daemon_feed(band, 40))
+                       feed=service.daemon_feed(band, 40, rid))
 
     @app.get("/api/daemon/<band>/feed")
     def daemon_feed_api(band: str):
@@ -1492,7 +1560,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # 3 s. Nothing here touches the radio.
         if band not in ALLOWED_BANDS:
             abort(404)
-        return jsonify(band=band, feed=service.daemon_feed(band, 40))
+        rid = _radio_arg(band)
+        return jsonify(band=band, rid=rid, feed=service.daemon_feed(band, 40, rid))
 
     @app.post("/api/daemon/<band>/scan")
     def daemon_scan_api(band: str):
@@ -1507,9 +1576,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        view = service.daemon_view(band)
-        channel = service.daemon_channel_scan(band) if view.reachable else {}
-        return jsonify(band=band, reachable=view.reachable, channel=channel)
+        rid = _radio_arg(band)
+        view = service.daemon_view(band, rid)
+        channel = service.daemon_channel_scan(band, rid) if view.reachable else {}
+        return jsonify(band=band, rid=rid, reachable=view.reachable, channel=channel)
 
     @app.get("/api/daemon/<band>/socket")
     def daemon_socket_api(band: str):
@@ -1518,8 +1588,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
         if band not in ALLOWED_BANDS:
             abort(404)
-        line = service.daemon_socket_line(band)
-        return jsonify(band=band, line=line, reachable=bool(line))
+        rid = _radio_arg(band)
+        line = service.daemon_socket_line(band, rid)
+        return jsonify(band=band, rid=rid, line=line, reachable=bool(line))
 
     @app.post("/radio/<band>/set")
     def radio_set(band: str):
@@ -1604,7 +1675,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             missing_deps=(_gate["block"] if _gate else None),
             optional_deps=(_gate["warn"] if _gate else None),
             frm=frm, cancel_href=cancel_href,
-            source_choices=(service.allowed_channels(service.stack_of(target) or target)
+            source_choices=(web_client.SELECTORS if target == web_client.COMPONENT and op == "update" else
+                            service.allowed_channels(service.stack_of(target) or target)
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
             offer_source=bool(plan.data.get("offer_source")),
@@ -1974,11 +2046,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = request.form.get("band", "")
         return band, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
-    def _dp_back(stack_id: str, band: str):
+    def _dp_back(stack_id: str, band: str, rid: str = ""):
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
         # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
         # `open=<stack_id>` forces the row and the anchor scrolls to it.
-        return redirect(url_for("stacks_overview", band=band or None,
+        return redirect(url_for("stacks_overview", band=band or None, rid=rid or None,      # item 16: its radio
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 
@@ -2036,8 +2108,83 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """B5: the Hardware section — each radio of the hardware list, its daemon on its own socket, the USB
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
+        from lhpc.core import radio_models, radio_start
+        view = radio_start.hardware_view(service)        # DEC-W57: a band's +20 dBm state shows in its radios' rows
+        hp = {b: service.high_power_state(b) for b in {r["band"] for r in view["rows"]}}
+        return render_template("hardware.html", view=view, models=radio_models.load(), hp=hp)
+
+    @app.get("/hardware/radio/<rid>")
+    def hardware_radio(rid: str):
+        """W257: one radio's detail: its facts and problems, Re-bind (a USB radio), Detect and Remove."""
+        from lhpc.core import radio_models, radio_start
+        r = radio_start.radio_detail(service, rid)
+        if r is None:
+            abort(404)
+        from lhpc.core import rflog
+        dstat = next((ss.components.get(service.DAEMON_ID) for ss in service.build_snapshot().stacks
+                      if service.DAEMON_ID in ss.components), None)     # F8: no RF-log link without an installed daemon
+        rf = ([x for x in radio_start.daemon_rf_links(service, rflog.entry("daemon"), r["band"])
+               if x.get("error") or x["job"].startswith(r["rid"] + "/")] if service._daemon_installed(dstat) else [])
+        return render_template("hardware_radio.html", r=r, models=radio_models.load(), rflogs=rf,
+                               hp=service.high_power_state(r["band"]), detect=session.pop("hw_detect", None))
+
+    @app.get("/hardware/add")
+    def hardware_add_page():
+        """W257: Add Hardware: each plugged-in stick no radio holds (its model picked here), and one HAT row."""
+        from lhpc.core import radio_models, radio_start
+        models, sticks, view = radio_models.load(), {}, radio_start.hardware_view(service)
+        valid = view["kind"] in ("valid", "absent")      # the first radio is added here; an unreadable list offers nothing
+        for mid, c in view["addable"] if valid else ():
+            sticks.setdefault(c.port, {"port": c.port, "label": c.label, "models": []})["models"].append(models[mid])
+        boards = []                     # (model:variant, label): a variant is named only where the band does not pick it
+        for m in (m for m in models.values() if m.transport == "spi"):
+            keyed = [v for v in m.variants if not v.band] if len(m.variants) > 1 else []
+            boards += [(f"{m.id}:{v.key}", f"{m.label} ({v.key})") for v in keyed] or [(f"{m.id}:", m.label)]
+        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards, valid=valid,
+                               list_state=view, detect=session.pop("hw_detect", None))
+
+    @app.post("/hardware/add-hat")
+    def hardware_add_hat():
+        """W257: add one HAT (SPI) radio to the list (radio_start.add_hat: its own checks and lock)."""
+        if not _csrf_ok():
+            abort(400)
         from lhpc.core import radio_start
-        return render_template("hardware.html", view=radio_start.hardware_view(service))
+        model, _, variant = request.form.get("board", "").partition(":")
+        ok, msg = radio_start.add_hat(service, model, request.form.get("band", ""), variant)
+        flash(msg, "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") if ok else url_for("hardware_add_page"))
+
+    @app.post("/hardware/enabled")
+    def hardware_enabled():
+        """W257/W252: the list row's one button, Disable or Enable (radio_start.set_enabled: its own checks)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        ok, msg = radio_start.set_enabled(service, request.form.get("rid", ""), request.form.get("enabled") == "on")
+        flash(msg, "ok" if ok else "warn")
+        return redirect(url_for("hardware_view"))
+
+    @app.post("/hardware/detect")
+    def hardware_detect():
+        """DEC-W43 W3: Detect a chip without its daemon (radio_detect.run, whose refusals are the only guard); the
+        result line shows once, next to the button it was pressed on (kept for one render, like the probe)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core.radio_detect import run
+        f, kind = request.form, request.form.get("kind", "")
+        if kind == "radio":
+            key, res = f.get("rid", ""), run.detect_radio(service, f.get("rid", ""))
+        elif kind == "stick":
+            key, res = "port-" + f.get("port", ""), run.detect_stick(service, f.get("model", ""), f.get("port", ""))
+        elif kind == "board":
+            model, _, variant = f.get("board", "").partition(":")
+            key, res = "board", run.detect_board(service, model, variant, f.get("band", ""))
+        else:
+            abort(400)
+        session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line}
+        back = f.get("back", "")              # W257: back to the page Detect was pressed on, a /hardware page only
+        ok_back = back.startswith("/hardware") and "//" not in back and "\\" not in back
+        return redirect((back if ok_back else url_for("hardware_view")) + "#detect-" + key)
 
     @app.post("/hardware/bind")
     def hardware_bind():
@@ -2045,9 +2192,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         from lhpc.core import radio_start
-        ok, msg, box = radio_start.bind_usb(service, request.form.get("rid", ""), request.form.get("port", ""))
-        flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
-        return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+        rid = request.form.get("rid", "")
+        ok, msg, box = radio_start.bind_usb(service, rid, request.form.get("port", ""))
+        flash(msg + (" — run the USB setup on the Hardware page to give this account access" if box else ""),
+              "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") + "#usb-setup" if box else url_for("hardware_radio", rid=rid))
 
     @app.post("/hardware/add")
     def hardware_add():
@@ -2057,7 +2206,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         from lhpc.core import radio_start
         ok, msg, box = radio_start.add_usb(service, request.form.get("model", ""), request.form.get("port", ""))
         flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
+        if not ok:
+            return redirect(url_for("hardware_add_page"))
         return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+
+    @app.get("/hardware/remove/<rid>")
+    def hardware_remove_confirm(rid: str):
+        """DEC-W39: the confirm step of Remove radio: what goes, what stays; the refusal instead while it runs."""
+        from lhpc.core import radio_start
+        return render_template("hardware_remove.html", plan=radio_start.remove_plan(service, rid),
+                               stop_first=radio_start.stop_first)
+
+    @app.post("/hardware/remove")
+    def hardware_remove():
+        """DEC-W39: remove one radio's row; only with its confirm phrase, else nothing changes."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        res = radio_start.remove_radio(service, request.form.get("rid", ""), request.form.get("confirm_phrase", ""))
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hardware_view"))
 
     @app.post("/hardware")
     def hardware_set():
@@ -2076,17 +2244,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.set_high_power(request.form.get("band", ""), request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
-                        + "#stack-settings-daemon")
-
-    @app.post("/hardware/probe")
-    def hardware_probe():
-        if not _csrf_ok():
-            abort(400)
-        pr = service.probe_hardware(request.form.get("band", ""), request.form.get("hw", ""))
-        # Stash for INLINE rendering under the Detect button (not a top-level flash banner).
-        session["hw_probe"] = {"present": pr.present, "busy": pr.busy,
-                               "message": pr.message, "diagnostic": pr.diagnostic}
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 
@@ -2111,9 +2268,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, values = _daemon_param_form()
-        result = service.save_daemon_params(stack_id, band, values)
+        rid = _radio_arg(band)
+        result = service.save_daemon_params(stack_id, band, values, rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/apply")
     def daemon_params_apply(stack_id: str):
@@ -2122,17 +2280,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, values = _daemon_param_form()
-        save = service.save_daemon_params(stack_id, band, values)   # persist first
+        rid = _radio_arg(band)
+        save = service.save_daemon_params(stack_id, band, values, rid)   # persist first
         if not save.ok:
             flash(save.summary, "warn")
-            return _dp_back(stack_id, band)
-        result = service.apply_daemon_params(stack_id, band)         # then push live
+            return _dp_back(stack_id, band, rid)
+        result = service.apply_daemon_params(stack_id, band, rid)         # then push live
         # Truthful: partial/total apply failure flashes as a warning (never green), and the
         # timing override stays saved regardless.
         flash("Saved. Apply live: " + result.summary
               + (" — " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/reset")
     def daemon_params_reset(stack_id: str):
@@ -2141,9 +2300,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band = request.form.get("band", "")
-        result = service.reset_daemon_params(stack_id, band)
+        rid = _radio_arg(band)
+        result = service.reset_daemon_params(stack_id, band, rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band)
+        return _dp_back(stack_id, band, rid)
 
     @app.post("/stacks/<stack_id>/mode")
     def stack_mode_save(stack_id: str):

@@ -24,7 +24,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
+- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [network](#network) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
 - [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
@@ -195,6 +195,37 @@ daemon briefly per candidate board and reports whether the chip responds; the bo
 during init). Detect is refused, naming the stack, while a stack that drives the radio itself
 (Meshtastic, Reticulum) runs on that band.
 
+#### hardware detect
+Ask the chip of one radio in the hardware list whether it answers, on that radio's own lines or stick:
+
+```
+lhpc hardware detect r1      # OK    r1: SX127x found (version 0x12)
+```
+
+- It is refused before any bus opens while the radio's daemon runs ("Detect refused: r1's daemon is running.
+  Stop it first."), and while a stack that drives the radio itself runs on its band.
+- Exit status: 0 found, 1 not found or refused, 2 a usage error.
+
+#### hardware remove
+Remove one radio from the hardware list (`config/radios.toml`):
+
+```
+lhpc hardware remove r3                              # dry run: what goes, what stays; nothing changes
+lhpc hardware remove r3 --confirm-phrase remove-r3   # remove r3
+```
+
+- It is refused while the radio runs: its own daemon, or a stack on it. The refusal names each
+  ("stop meshcore and stop its daemon, then remove r2"). The Hardware page greys its Remove with the same line.
+- What goes: the radio's row, its binding to the stick, and the daemon settings on that row.
+- What stays: the stick (plugged in, it shows up again as a new stick), the other radios and their
+  stacks, the per-band stack settings (`config/stacks/`), and the RF logs already written (`logs/<rid>/`).
+- The id stays reserved: `retired = ["r3"]` in `config/radios.toml`. No later radio gets it, so logs
+  and ports stay unambiguous; a row that uses it is refused.
+- A stack that ran on the radio before the last reboot is not restored at the next boot; the boot
+  restore skips it with "radio r3 no longer exists".
+
+Web: Hardware › the radio › Remove asks "Remove r3 (<model>)?" with Remove and Cancel.
+
 ---
 
 ### gps
@@ -230,6 +261,19 @@ lhpc autostart on            # re-enable (the default)
 
 ---
 
+### network
+The access point's IPv4 subnet, one setting (`[network] ap_cidr`, default `10.42.0.0/24`) for the AP profile's
+address (its first host, e.g. `10.42.0.1`), the firewall's AP rules and the console hint. Web: the **Network** panel.
+The command is the way back when a subnet change leaves the console out of reach.
+
+```
+lhpc network --ap-cidr 10.43.0.0/24 --confirm-phrase change-ap-subnet   # a private /16 to /28 subnet
+lhpc network --ap-cidr default --confirm-phrase change-ap-subnet        # back to 10.42.0.0/24
+```
+The firewall's AP subnet moves with the setting when it equals the old setting; one set apart with
+`lhpc firewall --ap-cidr` stays, and the switch to AP is refused until the two agree. Apply the firewall, then
+switch to AP mode.
+
 ### firewall
 Managed **nftables firewall**: `lhpc` renders the ruleset, you apply it with one sudo command.
 Model, modes and the Config/Boot/Live dimensions: [firewall](firewall.md). Web: the controller
@@ -261,9 +305,26 @@ A single daemon process serving both bands stops on both when the other band has
 the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
 stopped. `--band` on a stop is for the daemon only (another stack is refused):
 `lhpc stack stop daemon --band <band>` stops the daemon on that band and its clients there — the
-remedy a held band names. A start of a
+remedy a held band names; on a band two radios share it stops each radio's daemon and the clients on them.
+`lhpc stack restart <stack> --band <band>` restarts on that band. `lhpc stack {start|stop|restart} daemon
+--radio rN` acts on the daemon of radio rN alone (its clients first on a stop); it is not combined with `--band`. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.
+
+**Instances on another radio.** A stack can also run on other radios, as `<stack>@<rid>`
+(`rid` is the radio's id in `config/radios.toml`). Only kiss, meshcore and chat can; every other
+stack is refused with its reason (for example, voice has one sound card).
+- `lhpc stack add-instance <stack> <rid>` lists `<stack>@<rid>` at the stack's next free slot (1 to 7)
+  in `config/instances.toml`. Only LHPC writes that file.
+- `lhpc stack remove-instance <stack> <rid>` removes it; a running instance is refused (stop it first).
+  Its slot stays reserved, so no other instance's ports move.
+- `lhpc stack start|stop|restart <stack>@<rid>` acts on that instance alone, on its radio's band. An
+  instance's ports are the stack's own plus 10 per slot (kiss-tnc at slot 1: 8011).
+- A plain `lhpc stack start <stack>` is slot 0, today's instance. It runs on the first enabled radio
+  of its band that holds no listed instance of the stack. When the band has several radios, the start
+  says which one it chose, for example `kiss starts on r2 (433 MHz); kiss@r1 is a separate instance`.
+  It is refused when every radio of the band holds a listed instance; start one of them as
+  `<stack>@<rid>`. A plain `lhpc stack stop <stack>` stops slot 0 alone; listed instances keep running.
 
 `lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows

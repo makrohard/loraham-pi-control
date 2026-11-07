@@ -53,7 +53,7 @@ def _restore_service(tmp_path, monkeypatch, starts):
     monkeypatch.setattr(ControllerService, "boot_restore_enabled", lambda self: (True, ""))
 
     def start(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-              _before_start_locked=None, _operator=True, position=None, position_note=""):
+              _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         starts.append((target, band))
         if _before_start_locked is not None:
             refusal = _before_start_locked()
@@ -78,7 +78,9 @@ def test_d15_an_item_on_a_gone_radio_is_refused_and_the_restore_continues_with_t
 
 
 @pytest.mark.parametrize("op", ["stop", "restart"])
-def test_w1_11_the_refused_per_band_stop_of_a_shared_band_signals_nothing(tmp_path, monkeypatch, op):
+def test_w1_11_a_per_band_stop_of_a_shared_band_never_signals_a_daemon_lhpc_does_not_own(tmp_path, monkeypatch, op):
+    # Item 16 (DEC-W53 (2)) replaces W1-11's refusal: the stop of a shared band is no longer refused; it still never
+    # signals a daemon process without its ownership record (both here have none).
     _hardware_list(tmp_path, [_radio("r1", "a", "uputronics", "868", ce="ce0"), _radio("r2", "b", "uputronics", "868", ce="ce1")])
     svc = ControllerService(system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r1"],
                                                              101: ["loraham_daemon", "--radio", "868", "--id", "r2"]}
@@ -87,5 +89,5 @@ def test_w1_11_the_refused_per_band_stop_of_a_shared_band_signals_nothing(tmp_pa
     monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(("kill", pid, sig)))
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append(("killpg", pgid, sig)))
     res = getattr(svc, op)("daemon", apply=True, band="868")
-    assert not res.ok and "r1" in res.summary and "r2" in res.summary, res.summary
+    assert "share it" not in res.summary, res.summary
     assert signals == []

@@ -203,7 +203,7 @@ def test_writes_are_refused_while_running_or_with_an_unverified_stop(env, monkey
     monkeypatch.setattr(svc, "stack_running", lambda sid: False)
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
     monkeypatch.setattr(type(svc._lifecycle()), "owned_records",
-                        lambda self, cid: [{"component": cid, "boot_id": "boot-now"}])
+                        lambda self, cid, rid=None: [{"component": cid, "boot_id": "boot-now"}])
     assert ops.save_rows(svc, {"repeater_name": "New"}).endswith(ops.UNVERIFIED)
     assert helper.file()["repeater.node_name"] == "Relay"
 
@@ -384,7 +384,7 @@ def _held_start_svc(tmp_path, monkeypatch):
     monkeypatch.setattr(ops, "_helper", helper)
     entered, release = threading.Event(), threading.Event()
 
-    def held_readiness(self, comp):
+    def held_readiness(self, comp, inst=None):
         entered.set()
         assert release.wait(30)
         return True, ["held by the test"]
@@ -546,7 +546,7 @@ def test_a_save_committed_before_the_first_starts_lock_is_migrated_not_lost(env,
     _set_mode_repeater(svc, "Relay")
     run, seen = ops.ensure, []
 
-    def barrier(svc_, legacy, airtime_default):
+    def barrier(svc_, legacy, airtime_default, inst=None):
         seen.append(legacy)                               # the production branch: read under the lock
         r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Newer", "file_airtime": "7"})   # legacy store
         assert r.ok, (r.summary, r.details)
@@ -705,7 +705,7 @@ def test_a_nested_repeater_start_without_the_restarts_step_is_refused(env, monke
 
 def _records(svc, monkeypatch, recs, boot="boot-now"):
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: boot)
-    monkeypatch.setattr(type(svc._lifecycle()), "owned_records", lambda self, cid: list(recs))
+    monkeypatch.setattr(type(svc._lifecycle()), "owned_records", lambda self, cid, rid=None: list(recs))
 
 
 def test_a_record_of_an_earlier_boot_does_not_block_the_start(env, monkeypatch):
@@ -737,7 +737,7 @@ def _repeater_start(svc, monkeypatch, recs):
     svc._invalidate_config()
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
     monkeypatch.setattr(type(svc._lifecycle()), "owned_records",          # the node's records only
-                        lambda self, cid, band=None, role="": list(recs) if cid == mm.NODE_ID else [])
+                        lambda self, cid, band=None, role="", rid=None: list(recs) if cid == mm.NODE_ID else [])
     res = svc.start(mm.STACK_ID, apply=True)
     return res, " ".join([res.summary, *res.details])
 

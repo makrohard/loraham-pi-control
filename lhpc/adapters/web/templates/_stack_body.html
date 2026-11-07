@@ -27,6 +27,10 @@
     <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
       <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
   {% endfor %}
+  {# W272: the stack's warnings in its own row, like jobs: a degraded or failed component's reason, a feed without a fix #}
+  {% for cid, note in g.notes %}<p class="depnote depnote-warn" data-note="{{ cid }}">⚠ {{ cid }}: {{ note }}</p>{% endfor %}
+  {% if g.rflog %}<p class="links"><a class="pill" href="{{ url_for('logs_view', target=g.rflog.target, job=g.rflog.job, band=g.rflog.band) }}">RF log</a></p>{% endif %}
+  {% for cid, name, cmd in g.tools %}<div class="muted">{{ name }} — run local:</div>{{ cmdbox('runc-' ~ cid, cmd) }}{% endfor %}
 
   {% if g.interactive %}
     {{ cmdbox('appcmd-' ~ g.stack.id, g.command) }}
@@ -141,6 +145,7 @@
                   {% if comp.kind.value == 'library' and comp.source %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
                   {% elif comp.optional and comp.kind.value != 'library' %}<span class="pill">optional</span>{% endif %}
                   <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+                  {% if st.evidence.get('gps.fix') == 'no-fix' %}<span class="ver ver-yellow" data-state="no-fix" title="{{ st.evidence.get('gps.feed', '') }}">no fix yet</span>{% endif %}
                   {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
                      owned by its own stack's row, so it has no entry here. #}
                   {% if comp.id in g.update_states and comp.source and comp.source.remote %}
@@ -171,6 +176,25 @@
                     {# Last button: per-component remote freshness probe. #}
                     {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
                   </div>
+                  {% if comp.id == 'meshtastic-web' and g.web_client %}{% set wc = g.web_client %}
+                    {# Item 12: switch the web client's line (binary / stable / dev) from here. Switch opens the
+                       plan page (the exact version, or why not); nothing is installed before Confirm. #}
+                    <form method="post" action="{{ url_for('action') }}" class="act" id="webclient-line">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="op" value="update">
+                      <input type="hidden" name="target" value="meshtastic-web">
+                      <p>Web client: {% if wc.installed %}<span class="pill mono">{{ wc.installed }}</span> — {{ wc.line }}
+                        {%- if wc.state == 'behind' %} <span class="ver ver-yellow" data-state="behind">behind the pin {{ wc.pin }}</span>{% endif %}
+                        {%- if wc.unproven %} <span class="ver ver-yellow" data-state="unproven">unproven for this meshtasticd</span>{% endif %}
+                        {%- else %}<span class="pill">not installed</span>{% endif %}</p>
+                      <label>line
+                        <select name="source" aria-label="Web client line">
+                          {% for o in wc.options %}<option value="{{ o.line }}"{% if o.line == (wc.line or 'binary') %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.label }}{% if o.disabled %} — {{ o.disabled }}{% endif %}</option>{% endfor %}
+                        </select>
+                      </label>
+                      <button type="submit">Switch</button>
+                    </form>
+                  {% endif %}
                   <details class="advcfg">
                     <summary>Info</summary>
                     <div class="body">{% with comp = comp, st = st, conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}</div>
@@ -229,21 +253,17 @@
     </div>
   </details>
 
-  {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts ===== #}
-  {% if g.main %}
-    <details class="advcfg">
-      <summary>Info</summary>
-      <div class="body">
-        {% with comp = g.main[0], st = g.main[1], conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}
-        {% if g.conflicts %}
-          <h3>Resource conflicts</h3>
-          <ul class="clean">{% for c in g.conflicts %}
-            <li{% if c.observed %} class="conflict"{% endif %}>{{ c.message }}{% if c.observed %} <strong>[OBSERVED]</strong>{% endif %}</li>
-          {% endfor %}</ul>
-        {% endif %}
-      </div>
+  {% if g.stack.id == "daemon" %}
+    {# W251/W245: the daemon's entries read Install, Hardware, Settings, Info; Hardware is its own page #}
+    <details class="advcfg" id="stack-hardware-daemon">
+      <summary>Hardware</summary>
+      <div class="body"><p><a href="{{ url_for('hardware_view') }}">Open Hardware ›</a> the radios: add a stick or a HAT,
+        bind, problems, Detect, remove.</p></div>
     </details>
   {% endif %}
+
+  {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts; the daemon's comes last (W251) ===== #}
+  {% if g.main and g.stack.id != "daemon" %}{% include "_stack_info.html" %}{% endif %}
 
   {# ===== Settings (existing partial — reused, not duplicated) ===== #}
   {% with stack = g.stack, view = g.view, config_groups = g.config_groups, settings_id = 'stack-settings-' ~ g.stack.id %}
@@ -256,6 +276,7 @@
       {% include "_daemon_params.html" %}
     {% endwith %}
   {% endif %}
+  {% if g.main and g.stack.id == "daemon" %}{% include "_stack_info.html" %}{% endif %}
 
   {# ===== Password — for a stack whose manifest declares where its app (or LHPC) stores its
      web-UI password, and for MeshCom's HMAC password. The stored VALUE is shown here, on the

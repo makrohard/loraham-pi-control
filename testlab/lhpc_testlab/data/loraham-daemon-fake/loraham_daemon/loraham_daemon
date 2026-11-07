@@ -378,20 +378,40 @@ def _air(fake, conns, sender, payload, status):
         _receive(fake, others, payload)
 
 
+class _MissingValue(Exception):
+    pass
+
+
+def _value(argv, opt):
+    """The value after `opt`; _MissingValue when `opt` is the last word (exit 2, never the RF log's exit 1)."""
+    i = argv.index(opt) + 1
+    if i >= len(argv):
+        raise _MissingValue(opt)
+    return argv[i]
+
+
 def main(argv):
+    try:
+        return _main(argv)
+    except _MissingValue as exc:
+        print(f"testlab fake loraham_daemon: option '{exc.args[0]}' requires an argument", file=sys.stderr)
+        return 2
+
+
+def _main(argv):
     if "--version" in argv:
         print("loraham_daemon testlab-fake (v112-protocol)")
         return 0
     band, rid = "433", ""
     if "--radio" in argv:
-        band = argv[argv.index("--radio") + 1]
+        band = _value(argv, "--radio")
     if "--id" in argv:
-        rid = argv[argv.index("--id") + 1]
+        rid = _value(argv, "--id")
         if not re.fullmatch(r"r[1-9][0-9]?", rid):
             print(f"testlab fake loraham_daemon: --id {rid!r} is not r1..r99", file=sys.stderr)
             return 2
     if "--rflog-path" in argv:                   # as the real daemon: its RF log is opened at init, or it exits
-        path = argv[argv.index("--rflog-path") + 1]
+        path = _value(argv, "--rflog-path")
         try:
             open(path, "a").close()
         except OSError as exc:

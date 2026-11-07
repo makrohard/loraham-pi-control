@@ -38,6 +38,7 @@ class PreparedStart:
     optional_ids: frozenset
     gui_optional_ids: frozenset
     nonmain_interactive_ids: frozenset
+    inst: object = None   # item 7c2: the listed instance (commands.Instance, slot k >= 1) being started; None = slot 0
 
     @property
     def target_is_stack(self) -> bool:
@@ -47,14 +48,14 @@ class PreparedStart:
 def prepare_start(*, target: str, band: str, cfg_band: str, op_band: str, order, radio: str,
                   tx: str | None, start_sid: str, target_is_stack: bool, params: dict, file_over: dict,
                   position: dict | None, position_note: str,
-                  stop_owners: bool) -> PreparedStart:
+                  stop_owners: bool, inst=None) -> PreparedStart:
     """The prepared-start value from its resolved inputs; derives the ownership scope and the
     component classes the verdict reads from the run order."""
     return PreparedStart(
         target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order, radio=radio,
         tx=tx, start_sid=start_sid, scope="stack" if target_is_stack else "component",
         params=params, file_over=file_over, position=position, position_note=position_note,
-        stop_owners=stop_owners,
+        stop_owners=stop_owners, inst=inst,
         optional_ids=frozenset(c.id for _, c in order if c.optional),
         gui_optional_ids=frozenset(c.id for _, c in order if c.gui_optional),
         nonmain_interactive_ids=frozenset(c.id for s, c in order

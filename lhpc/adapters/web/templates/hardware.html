@@ -1,66 +1,48 @@
 {% extends "base.html" %}
 {% block title %}Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+{% with here = "" %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-section">
-  <header><h2>Hardware: the radios</h2></header>
+  <header><h2>The radios</h2></header>
   <div class="body">
-    <p class="muted">The hardware list (config/radios.toml) names the radios; a daemon starts for each band the board
-      setup serves, as that band's radio on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
-    <p class="muted" id="hardware-shared-band">A band with two enabled radios starts no daemon: set <code>enabled = false</code>
-      on one of them in config/radios.toml (the <code>&lt;stack&gt;@&lt;rid&gt;</code> form is not in 0.14.0).</p>
+    <p class="muted" id="hardware-list-notice">The hardware list (config/radios.toml) has one row per radio; each enabled
+      radio runs its own daemon on its own sockets.</p>
     {% if view.kind != "valid" %}
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>
     {% endif %}
-    {% for r in view.rows %}
-      <div class="card radio-card" data-rid="{{ r.rid }}">
-        <header>
-          <h3>{{ r.rid }} — {{ r.name }} <span class="pill">{{ r.model }}, {{ r.band }} MHz, {{ r.transport }}</span>
-            {% if not r.enabled %}<span class="pill">disabled</span>{% endif %}</h3>
-          <span class="badge badge-{{ 'running' if r.ready else ('degraded' if r.reachable else 'stopped') }}">
-            {% if r.ready %}daemon usable (READY){% elif r.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span>
-        </header>
-        {% if r.choices is not none %}
-          <div class="body">
-            <p>Bound to: {% if r.usb_serial %}serial <code>{{ r.usb_serial }}</code>{% elif r.usb_port %}port
-              <code>{{ r.usb_port }}</code> (no serial){% else %}nothing yet{% endif %}</p>
-            {% if r.choices.reason %}<p class="depnote depnote-warn">{{ r.choices.reason }}</p>{% endif %}
-            {% if r.choices.items %}
-              <form method="post" action="{{ url_for('hardware_bind') }}">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="rid" value="{{ r.rid }}">
-                <ul class="usb-choices">
-                {% for c in r.choices.items %}
-                  <li><label><input type="radio" name="port" value="{{ c.port }}"{% if not c.selectable %} disabled{% endif %}>
-                    {{ c.label }}{% if c.why %} — {{ c.why }}{% endif %}</label></li>
-                {% endfor %}
-                </ul>
-                <button type="submit">Bind {{ r.rid }} to the chosen stick</button>
-              </form>
-            {% endif %}
-          </div>
-        {% endif %}
-      </div>
+    {% if view.rows %}
+    <table class="hwlist" id="hw-list">
+      <thead><tr><th>Radio</th><th>Model</th><th>Band</th><th>Stick</th><th>State</th><th></th></tr></thead>
+      <tbody>
+      {% for r in view.rows %}
+        <tr class="hwrow{{ '' if r.enabled else ' off' }}" data-rid="{{ r.rid }}">
+          <td><a class="idlink" href="{{ url_for('hardware_radio', rid=r.rid) }}">{{ r.rid }}<span class="det">details ›</span></a>
+            <span class="muted">{{ r.name }}</span></td>
+          <td>{{ models[r.model].label if r.model in models else r.model }}</td>
+          <td>{{ r.band }} MHz</td>
+          <td>{% if r.transport == "spi" %}HAT (SPI){% elif r.usb_serial %}serial {{ r.usb_serial }}{% elif r.usb_port %}port {{ r.usb_port }}{% else %}—{% endif %}</td>
+          <td>{% if r.enabled %}<span class="state-on">enabled</span>{% else %}disabled{% endif %}
+            {% for p in r.problems %}<span class="note-bad">⚠ {{ p }}</span>{% endfor %}
+            {% if hp[r.band].warn %}<span class="note-bad">⚠ +20 dBm permission enabled on {{ r.band }} MHz</span>{% endif %}
+            {% if hp[r.band].mismatch %}<span class="note-bad">⚠ high-power switch: {{ hp[r.band].mismatch }}</span>{% endif %}</td>
+          <td class="act">
+            <form method="post" action="{{ url_for('hardware_enabled') }}" class="inline">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="rid" value="{{ r.rid }}">
+              <input type="hidden" name="enabled" value="{{ 'off' if r.enabled else 'on' }}">
+              <button type="submit">{{ 'Disable' if r.enabled else 'Enable' }}</button>
+            </form></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
     {% else %}
       <p class="muted">No radio in the hardware list.</p>
-    {% endfor %}
-    {% if view.kind == "valid" and view.addable %}
-      <section class="cfgsec" id="usb-add">
-        <h3>Add a USB radio</h3>
-        <p class="muted">A stick of a known USB model that no radio holds yet: add it as a new radio of the list.</p>
-        <ul class="usb-addable">
-        {% for model_id, c in view.addable %}
-          <li data-add-port="{{ c.port }}">{{ c.label }} ({{ model_id }})
-            <form method="post" action="{{ url_for('hardware_add') }}" class="inline">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="model" value="{{ model_id }}">
-              <input type="hidden" name="port" value="{{ c.port }}">
-              <button type="submit">Add as a new radio</button>
-            </form></li>
-        {% endfor %}
-        </ul>
-      </section>
     {% endif %}
+    <p><a class="button" href="{{ url_for('hardware_add_page') }}" id="hw-add">Add Hardware</a></p>
+    <p class="muted" id="hardware-shared-band">Two radios on one band each run their own daemon: address one by its radio id
+      (<code>lhpc stack stop daemon --radio rN</code>).</p>
     {% if view.copybox %}
       <section class="cfgsec" id="usb-setup">
         <h3>USB setup</h3>

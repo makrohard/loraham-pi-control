@@ -73,7 +73,7 @@ def test_stop_when_nothing_runs(kiss_box, run_op):
                                        ("loraham-kiss-tnc", "already_stopped"),
                                        ("loraham-daemon", "stopped")]}
     assert run.phases == STOP_LOCKS + SIGNAL + RELEASE_DAEMON + FINAL
-    assert run.files == {"added": ["state/daemon-feed-floor-433", "state/stop-intent/kiss.json"],
+    assert run.files == {"added": ["state/daemon-feed-floor-433-r1", "state/stop-intent/kiss.json"],
                          "removed": [], "changed": []}
 
 

@@ -10,6 +10,14 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.usb_access import Probe
 
+
+@pytest.fixture(autouse=True)
+def _chip_found(monkeypatch):
+    """DEC-W21: the add checks the stick's chip first; these cases are about the list, so the check answers "found"
+    (tests/web/test_w21_add_checks_the_chip.py drives the check itself)."""
+    from lhpc.core.radio_detect import run
+    monkeypatch.setattr(run, "detect_stick", lambda svc, model, port: run.Detected("found", f"{model}: found", "", ""))
+
 STICKS = repo_paths.REPO / "tests" / "data" / "usb_sysfs" / "meshstick"     # the Meshstick on 1-1.3, no serial
 REAL_SCAN = usb_access.scan
 SPI = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"))
@@ -34,7 +42,7 @@ def _svc(tmp_path):
 def test_b2_a_serialless_stick_becomes_r3_on_its_port(web, tmp_path, monkeypatch, csrf):
     _env(tmp_path, monkeypatch)
     c = web()
-    page = " ".join(c.get("/hardware").get_data(as_text=True).split())
+    page = " ".join(c.get("/hardware/add").get_data(as_text=True).split())          # Add Hardware (W257)
     assert 'data-add-port="1-1.3"' in page
     r = c.post("/hardware/add", data={"_csrf": csrf(c), "model": "meshstick-1262", "port": "1-1.3"})
     assert r.status_code in (302, 303) and r.headers["Location"].endswith("/hardware")
@@ -44,8 +52,8 @@ def test_b2_a_serialless_stick_becomes_r3_on_its_port(web, tmp_path, monkeypatch
     assert (r3.id, r3.name, r3.model, r3.band, r3.usb_serial, r3.usb_port, r3.enabled) == (
         "r3", NAME, "meshstick-1262", "868", "", "1-1.3", True)
     page = " ".join(c.get("/hardware").get_data(as_text=True).split())
-    assert "r3 added: meshstick-1262 on 868 MHz, port 1-1.3 (no serial)" in page
-    assert 'data-add-port="1-1.3"' not in page and 'data-rid="r3"' in page   # held now: no longer addable
+    assert "r3 added: meshstick-1262 on 868 MHz, port 1-1.3 (no serial)" in page and 'data-rid="r3"' in page
+    assert 'data-add-port="1-1.3"' not in " ".join(c.get("/hardware/add").get_data(as_text=True).split())   # held now
 
 
 @pytest.mark.parametrize("rows,want", [
@@ -95,7 +103,7 @@ def test_b10_the_lowest_free_id(tmp_path, monkeypatch):
 
 def test_b9_no_free_id(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
-    monkeypatch.setattr(radios, "next_id", lambda rows: (_ for _ in ()).throw(ValueError("all 99 radio ids are taken")))
+    monkeypatch.setattr(radios, "next_id", lambda rows, retired=(): (_ for _ in ()).throw(ValueError("all 99 radio ids are taken")))
     assert radio_start.add_usb(_svc(tmp_path), "meshstick-1262", "1-1.3") == (False, "all 99 radio ids are taken", False)
 
 

@@ -11,7 +11,7 @@ from .model import ComponentKind, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
-from .service_lifecycle_ops import _daemon_presence, _ohs
+from .service_lifecycle_ops import _daemon_presence, _ohs, instances, radio_start
 from .snapshot_memo import invalidates_snapshot
 
 
@@ -120,7 +120,7 @@ class StopOpsMixin:
     @invalidates_snapshot
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "", release_daemon: bool = True, auto_install_ctx=None,
-             *, _operator: bool = True) -> ActionResult:
+             *, _operator: bool = True, inst=None) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
@@ -141,11 +141,11 @@ class StopOpsMixin:
             cascade = True
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
-                                   release_daemon=release_daemon)
+                                   release_daemon=release_daemon, inst=inst)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
-                                      release_daemon=release_daemon, _operator=_operator)
+                                      release_daemon=release_daemon, _operator=_operator and inst is None, inst=inst)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
                 # `_operator` is False on every internal route (cascade dependents, the daemon
                 # band release, owner stops for a start, restart's stop leg, uninstall/clean,
@@ -168,7 +168,7 @@ class StopOpsMixin:
                              or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
                                     and (self.stack_of(r.component) or r.stack) == target
                                     for r in (res.results or ())))):
-                    self._write_stop_intent([target])
+                    self._write_stop_intent([f"{target}@{inst.rid}" if inst is not None and inst.slot else target])
                 return res
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
@@ -176,7 +176,7 @@ class StopOpsMixin:
 
     def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
                    band: str = "", release_daemon: bool = True,
-                   _operator: bool = False) -> ActionResult:
+                   _operator: bool = False, inst=None) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -216,7 +216,7 @@ class StopOpsMixin:
                                     details=det, results=tuple(results),
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
-        dependents = self.stop_dependents(_sid or target, bands=stopped_bands)
+        dependents = radio_start.daemon_dependents(self, _sid or target, (band if _daemon_band_stop else "") if target_is_daemon else None, inst, stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
                 for _, c in items if c.units and not c.run_argv]
@@ -260,8 +260,8 @@ class StopOpsMixin:
         blocked_deps: list[str] = []            # dependents whose stop did not verify
         if cascade:
             interactive_deps = [dep for dep in dependents
-                                if (self.stack(dep) and self.stack(dep).main_component
-                                    and self.stack(dep).main_component.interactive)]
+                                if (self.stack(dep.partition("@")[0]) and self.stack(dep.partition("@")[0]).main_component
+                                    and self.stack(dep.partition("@")[0]).main_component.interactive)]
             if interactive_deps:
                 for dep in interactive_deps:
                     results.append(CompResult(component=dep, stack=dep, action="stop",
@@ -287,7 +287,7 @@ class StopOpsMixin:
                     # band-scoped DAEMON stop (band switch) names no dependent for good —
                     # tombstoning them dropped stacks from restore the operator never stopped. A
                     # client's stop with its band (the console's) is the operator's (finding 143).
-                    dep_res = self.stop(dep, apply=True, release_daemon=False,
+                    dep_res = self.stop(dep.partition("@")[0], apply=True, release_daemon=False, inst=instances.resolve(self, dep)[1],
                                         _operator=_operator and not (
                                             band and self._is_daemon_target(target)))
                     results.append(CompResult(component=dep, stack=dep, action="stop",
@@ -328,9 +328,9 @@ class StopOpsMixin:
             # signals ONLY the owned instance(s) serving that band. Record-driven +
             # identity-verified inside Lifecycle.stop, which returns a typed result.
             if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
-                cr = life.stop(comp, band=band)
+                cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             else:
-                cr = life.stop(comp)
+                cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
             results.append(cr)
             own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"
@@ -346,7 +346,7 @@ class StopOpsMixin:
             active_bands = self._operation_bands(target, "", "", "stop")
         # Clear band/interactive markers after the target's OWN verified cessation — even if the
         # later daemon-release fails, a stopped client must never look running.
-        if sid and own_ok:
+        if sid and own_ok and not getattr(inst, "slot", 0):              # 7c2b: slot 0's markers, never an instance's
             # Only the BAND OWNER's cessation retires the band marker: stopping an
             # optional client (sideband, lxmd) must not wipe it while `rns` is still
             # on 868 — that erases the stack's band evidence and the dashboard has
@@ -433,7 +433,7 @@ class StopOpsMixin:
     @invalidates_snapshot
     def restart(self, target: str, apply: bool = False, stop_owners: bool = False,
                 band: str = "", cascade: bool = False, *,
-                _before_restart_locked=None) -> ActionResult:
+                _before_restart_locked=None, inst=None) -> ActionResult:
         """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
         DIRECT call gets the same coordination as CLI/web. A restart runs the SAVED configuration
         (no per-launch values); its plan (`apply=False`) combines the start plan with the stop's
@@ -467,7 +467,7 @@ class StopOpsMixin:
             if (_pf_err := self._position_refusal(target, "restart")[0]) is not None:
                 return _pf_err
             return self._restart_impl(target, apply=False, stop_owners=stop_owners, band=band,
-                                      cascade=cascade)
+                                      cascade=cascade, inst=inst)
         # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
         # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
         # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433). It uses THE
@@ -491,7 +491,7 @@ class StopOpsMixin:
                 # maps the primary choice to its CONCRETE band, so "" never travels onward for a
                 # band-switchable stack and no inner frame can reinterpret it; "" survives only for a
                 # genuinely bandless stack, which nothing downstream can reinterpret either.
-                _rband = self._restart_ensure_band(target, band)   # issue #5: before the shared guard
+                _rband = self._restart_ensure_band(target, band, inst)   # issue #5: before the shared guard
                 with self._config_stable():
                     # PREFLIGHT the saved identity BEFORE lock planning, the guard, owner handling
                     # or any stop: a restart must never stop a running stack only to be refused by
@@ -521,7 +521,7 @@ class StopOpsMixin:
                         return self._restart_impl(target, apply=True,
                                                   stop_owners=stop_owners, band=_rband,
                                                   cascade=cascade, position=_position,
-                                                  position_note=_pos_note)
+                                                  position_note=_pos_note, inst=inst)
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
                 PathContainmentError, _ohs.OneStoreError) as exc:
             return self._guard_refusal("restart", target, exc)
@@ -545,26 +545,26 @@ class StopOpsMixin:
 
     def _restart_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                       band: str = "", cascade: bool = False, position: dict | None = None,
-                      position_note: str = "") -> ActionResult:
+                      position_note: str = "", inst=None) -> ActionResult:
         """Applied restarts run the WHOLE preflight→stop→start transition under the configuration-
         stability guard, so a concurrent save can never change the inputs mid-transition (and a valid
         target is never stopped only to be rejected by the later start). A direct/internal apply=True
         call cannot bypass it; dry-run holds no long-lived guard."""
         if not apply:
             return self._restart_impl_inner(target, apply=False, stop_owners=stop_owners,
-                                            band=band, cascade=cascade)
+                                            band=band, cascade=cascade, inst=inst)
         try:
             with self._config_stable():                          # re-entrant (no-op if restart() holds it)
                 return self._restart_impl_inner(target, apply=True, stop_owners=stop_owners,
                                                 band=band, cascade=cascade, position=position,
-                                                position_note=position_note)
+                                                position_note=position_note, inst=inst)
         except (AdmissionRefused, SourceTxnBlocked, OSError, PathContainmentError) as exc:
             return self._guard_refusal("restart", target, exc)
 
     def _restart_impl_inner(self, target: str, apply: bool = False, stop_owners: bool = False,
                             band: str = "", cascade: bool = False,
                             position: dict | None = None,
-                            position_note: str = "") -> ActionResult:
+                            position_note: str = "", inst=None) -> ActionResult:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
         restart doesn't move a band-switchable stack back to its default band).
@@ -590,17 +590,17 @@ class StopOpsMixin:
             # to eliminate, and the preflight then materialized the inherited global over a deliberate
             # local callsign. It also split the dry-run plan from the applied band.)
             band = self.operation_band(target, band)
-        if (_r := self._restart_preflight(target, band, stop_owners, cascade, apply)) is not None:
+        if (_r := self._restart_preflight(target, band, stop_owners, cascade, apply, inst)) is not None:
             return _r
         if not apply:
-            return self._restart_preview(target, band, cascade)
+            return self._restart_preview(target, band, cascade, inst)
         # OPTIONAL components that are UP inside the stack (MeshChat beside rns, an optional
         # client started by name) come back after the restart: a stack start raises only the
         # run order, so before 0.9.2 `lhpc stack restart reticulum` left a running MeshChat
         # stopped (F-R3, reticulum-rnode-test-2026-09-24). Captured BEFORE the stop leg — after
         # it nothing is running — and re-raised by name after the stack is back.
         _optional_up = self._running_optional_components(target) if self.stack(target) else []
-        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False)
+        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False, inst=inst)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
             # the failed-stop typed results as the restart evidence.
@@ -611,11 +611,11 @@ class StopOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, stop_owners=stop_owners, band=band,
-                         position=position, position_note=position_note, _ensured=True)
+                         position=position, position_note=position_note, _ensured=True, inst=inst)
         return self._restore_optional(target, band, stopped, res, _optional_up)
 
     def _restart_preflight(self, target: str, band: str, stop_owners: bool, cascade: bool,
-                           apply: bool):
+                           apply: bool, inst=None):
         """PREFLIGHT of a restart, plan and apply alike, BEFORE the stop: every refusal the start that
         follows would take (except MeshCore's position refusal, taken by public `restart` before, as
         before) — never stop a running target, then find the start refused. Returns it, or None."""
@@ -648,14 +648,14 @@ class StopOpsMixin:
                 _ex = {target} if self.stack(target) else set()
                 if self._restart_stops_dependents(target, cascade):
                     _ex |= set(self._stop_impl(target, apply=False, cascade=cascade,
-                                               band=_rband).data.get("dependents") or [])
+                                               band=_rband, inst=inst).data.get("dependents") or [])
             if (_r := self._start_preflight_refusal(target, _pre_order, _rband, radio, "restart",
                                                     check_blockers=_check, render=apply,
                                                     exclude_holders=_ex)) is not None:
                 return _r
         return None
 
-    def _restart_preview(self, target: str, band: str, cascade: bool) -> ActionResult:
+    def _restart_preview(self, target: str, band: str, cascade: bool, inst=None) -> ActionResult:
         """The restart PLAN (after its preflight passed). Advisory only: the apply decides
         everything again under its own guards and never reads this result."""
         # THE COMBINED restart plan: the start plan (preflight, blockers, identity — a refusal
@@ -667,12 +667,12 @@ class StopOpsMixin:
         # controller/GUI/mode/band refusals the public `start()`/`stop()` would repeat, and
         # going through them again would drop the request memo and the snapshot between the
         # two legs — a second full assessment inside the web Restart click.
-        res = self._start_impl(target, apply=False, band=band)
+        res = self._start_impl(target, apply=False, band=band, inst=inst)
         if not res.ok:
             return ActionResult(False, res.summary.replace("start", "restart", 1),
                                 details=res.details, data=res.data,
                                 next_commands=res.next_commands)
-        stp = self._stop_impl(target, apply=False, band=band)
+        stp = self._stop_impl(target, apply=False, band=band, inst=inst)
         data = dict(res.data)
         data["dependents"] = list(stp.data.get("dependents") or [])
         data["other_bands"] = list(stp.data.get("other_bands") or [])

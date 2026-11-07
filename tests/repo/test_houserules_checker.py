@@ -446,3 +446,25 @@ def test_a_range_cannot_weaken_the_checker_that_judges_it(repo, env):
     assert p.returncode == 1 and "BASE PROGRAM" in base_part
     rows = {line.split()[0]: line.split()[-1] for line in base_part.splitlines()[1:] if line.strip()}
     assert rows["patterns"] == "HARD"
+
+
+def test_the_release_bot_is_an_allowed_author(repo):
+    # L50 / DEC-W46: the maintainer's release bot bumps versions; its commits are expected.
+    _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, author="lhpc-release-bot")
+    rc, rows = _run(repo, "--fact", "More.")
+    assert (rc, rows["attribution"]) == (0, "OK")
+
+
+def test_an_excepted_commit_is_not_judged_by_its_author(repo, monkeypatch, capsys):
+    # L50 / DEC-W46: one commit is excepted by its full sha (ALLOWED_COMMITS); its author is then not judged.
+    import importlib.util
+    _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, author="someone")
+    spec = importlib.util.spec_from_file_location("check_houserules_l50", CHECKER)
+    hr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hr)
+    monkeypatch.chdir(repo)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setattr(hr, "ALLOWED_COMMITS", {sha}, raising=False)   # red-before: no such set yet
+    hr.main(["base..HEAD", "--fact", "More."])
+    rows = {line.split()[0]: line.split()[-1] for line in capsys.readouterr().out.splitlines()[1:] if line.strip()}
+    assert rows["attribution"] == "OK"

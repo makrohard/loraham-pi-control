@@ -6,8 +6,8 @@
   starts per served band as that band's radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
   setup as one command; a start is refused by name when the stick or its access is missing.
-- A stick added next to the board's 868 radio: a band with two enabled radios starts no daemon: set
-  `enabled = false` on one of them in config/radios.toml (the `<stack>@<rid>` form is not in 0.14.0).
+- A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
+  radio id (`lhpc stack stop daemon --radio rN`).
 - LoRaHAM daemon v1.4.0 (3ffee009, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 98b656bf).
@@ -24,6 +24,12 @@
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;
   an old `start-<comp>-<band>.log` stays until the next start, and `lhpc logs` shows it until then.
+- README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
+  after the reboot; the German block installs from the lock file like the English one.
+- `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
+  rc it returned, instead of only its last output line.
+- Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
+  not reported as failed while it still completes.
 
 Upgrading from 0.13.x
 

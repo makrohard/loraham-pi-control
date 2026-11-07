@@ -53,8 +53,8 @@ def test_plan_then_apply_happy_path(kiss_box, run_op):
     assert run.res.details[-1] == ("  [verified] loraham-kiss-tnc: started; ready endpoint(s) up "
                                    "(127.0.0.1:8001: present (family=ipv4))")
     assert run.kinds == ["admission", "lock", "recheck", "mutate", "verify", "final"]
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
-                                   "state/daemon-feed-floor-433",
+    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+                                   "state/daemon-feed-floor-433-r1",
                                    "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json",
                                    "state/running/kiss.band"],
                          "removed": [], "changed": []}
@@ -173,8 +173,8 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
     assert run.phases == KISS_LOCKS + RECHECK + [
         "recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
         "verify:endpoints:loraham-kiss-tnc", "mutate:signal:loraham-kiss-tnc"]
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
-                                   "state/daemon-feed-floor-433"], "removed": [], "changed": []}
+    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+                                   "state/daemon-feed-floor-433-r1"], "removed": [], "changed": []}
     assert box.owned() == []
 
 
@@ -229,7 +229,7 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
         "outcomes": [("loraham-daemon", "verified"), ("loraham-chat", "manual_required")]}
     assert run.phases[-4:] == ["recheck:identity", "recheck:preflight", "mutate:feed-floor:433",
                                "mutate:config-files:loraham-chat"]
-    assert run.files == {"added": ["config/files/lorachat.conf", "state/daemon-feed-floor-433",
+    assert run.files == {"added": ["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
                                    "state/interactive/chat.show"], "removed": [], "changed": []}
     assert box.owned() == []
 
@@ -242,4 +242,5 @@ def test_a_started_client_records_its_radio(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields["ok"], run.fields
     recs = [json.loads(p.read_text()) for p in (box.root / "state" / "owned").glob("*.json")]
-    assert {r["component"]: r.get("rid") for r in recs if r.get("role") == ""} == {"loraham-kiss-tnc": "r1"}
+    assert {r["component"]: (r.get("rid"), r.get("slot")) for r in recs if r.get("role") == ""} == {
+        "loraham-kiss-tnc": ("r1", 0)}                               # 7e: and its instance's slot, 0

@@ -20,7 +20,6 @@ from pathlib import Path
 from lhpc.core import radio_daemon, radios
 from lhpc.core.usb_access import (
     CH341_MODULE,
-    MODPROBE_PATH,
     USB_TRANSPORT,
     Binding,
     Library,
@@ -49,6 +48,7 @@ BOOT_ID_RE = re.compile(r"[0-9a-f-]{36}")
 HOTPLUG_ACTIVE = "[CH341] unplug-wait active: a lost stick is waited for (libusb hotplug)"
 HOTPLUG_NONE = "[CH341] note: libusb offers no usable hotplug here; a lost stick exits 5 as before"
 _COPYBOX_PATH_RE = re.compile(r"[A-Za-z0-9._/+-]+")    # a path the copybox line can quote as it stands
+_ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 
 # ---- records ---------------------------------------------------------------------------------------
@@ -200,47 +200,48 @@ def _account_ok(user) -> bool:
     return type(user) is str and bool(USER_RE.fullmatch(user)) and user != "root"
 
 
-def usb_setup_text(user, models, *, root="/", standalone=False) -> str:
-    """The bootstrap's USB block, built on `host_setup(models)`: the udev rule and modprobe files, the udevadm
-    reload and trigger, `modprobe -r` while the module is loaded, and the plugdev grant. `user` is "$OP" (the
-    scaffold) or a literal account name, else ValueError. Its own failures exit 13; a failed grant sets
-    `_GROUPS_FAILED`, which only the standalone block turns into exit 7."""
+def usb_setup_text(user, models, *, root="/", standalone=False, root_env=None) -> str:
+    """The USB block, built on `host_setup(models)`: the udev rule file, the udevadm reload and trigger, and the
+    plugdev grant; no module blacklist (W226). `user` is "$OP" (the scaffold) or a literal account name, else
+    ValueError. `root_env` (the bootstrap's form, "$OP" only) names a shell variable that prefixes every path at run
+    time instead of `root`, and runs udevadm only on a running system (`$SYSTEMD_RUNDIR` exists): on an image build
+    udev reads the rule at the first boot. Its own failures exit 13; a failed grant sets `_GROUPS_FAILED`, which only
+    the standalone block turns into exit 7."""
     if user != SCAFFOLD_USER and not _account_ok(user):
         raise ValueError(f"{user!r} is not a usable account name")
+    if root_env is not None and (user != SCAFFOLD_USER or not _ENV_NAME_RE.fullmatch(root_env)):
+        raise ValueError(f"root_env {root_env!r} needs the scaffold user and a shell variable name")
     setup = host_setup(models)
-    base = str(root).rstrip("/")
     q = shlex.quote
-    out = ["# --- USB radios: udev rule, CH341 module blacklist, plugdev grant (written by LHPC) ----------",
+    base = str(root).rstrip("/")
+    prefix = base if root_env is None else f"${{{root_env}}}"     # the path's prefix as an echo shows it
+
+    def sh(path):                                                 # the path as one shell word
+        return q(base + path) if root_env is None else f'"${{{root_env}}}"{q(path)}'
+
+    def shown(path):
+        return prefix + path
+    out = ["# --- USB radios: udev rule and plugdev grant (written by LHPC) ------------------------------",
            *_WRITE_FN]
     for path, text in setup.files:
-        target = base + path
-        if path == MODPROBE_PATH:
-            out.append(f'echo "[usb-setup] {CH341_MODULE} is blacklisted for the whole host: no CH341 SPI bridge '
-                       f'on it uses that kernel driver from now on."')
-        out += [f"if ! _lhpc_usb_write {q(os.path.dirname(target))} {q(target)} {q(text)}; then",
-                f'\techo "ERROR: [usb-setup] could not write {target}" >&2',
+        out += [f"if ! _lhpc_usb_write {sh(os.path.dirname(path))} {sh(path)} {q(text)}; then",
+                f'\techo "ERROR: [usb-setup] could not write {shown(path)}" >&2',
                 f"\texit {BLOCK_EXIT}",
                 "fi",
-                f'echo "[usb-setup] wrote {target}"']
-    modules = f"{base}/sys/module"
+                f'echo "[usb-setup] wrote {shown(path)}"']
+    run = []
     for argv in setup.commands:
         cmd = " ".join(argv)
-        run = [f"if ! {cmd}; then",
-               f'\techo "ERROR: [usb-setup] {cmd} failed" >&2',
-               f"\texit {BLOCK_EXIT}",
-               "fi"]
-        if argv == ("modprobe", "-r", CH341_MODULE):
-            out += [f"if ! [ -d {q(modules)} ] || ! [ -r {q(modules)} ]; then",
-                    f'\techo "ERROR: [usb-setup] {modules} cannot be read" >&2',
-                    f"\texit {BLOCK_EXIT}",
-                    "fi",
-                    f"if [ -e {q(modules + '/' + CH341_MODULE)} ]; then",
-                    *("\t" + line for line in run),
-                    "else",
-                    f'\techo "[usb-setup] {CH341_MODULE} is not loaded: nothing to unload"',
-                    "fi"]
-        else:
-            out += run
+        run += [f"if ! {cmd}; then",
+                f'\techo "ERROR: [usb-setup] {cmd} failed" >&2',
+                f"\texit {BLOCK_EXIT}",
+                "fi"]
+    if root_env is None:
+        out += run
+    else:
+        out += ['if [ -d "$SYSTEMD_RUNDIR" ]; then', *("\t" + line for line in run), "else",
+                '\techo "[usb-setup] no running system (an image build): udev reads the rule at the first boot."',
+                "fi"]
     out += [f'if usermod -aG {setup.group} "{user}"; then',
             f'\techo "[usb-setup] granted {setup.group} to {user}; it takes effect at the next log-in."',
             "else",
@@ -319,8 +320,7 @@ DOCTOR_TEXTS = {
     "rule_missing": "USB udev rule: missing (run the copybox)",
     "rule_stale": "USB udev rule: stale, the model table changed since it was written (run the copybox)",
     "rule_unknown": "USB udev rule: cannot be read",
-    "module_present": f"{CH341_MODULE} kernel module: loaded (it holds CH341 bridges; the USB radios need it "
-                      "unloaded)",
+    "module_present": f"{CH341_MODULE} kernel module: loaded (the daemon detaches it at start)",
     "module_absent": f"{CH341_MODULE} kernel module: not loaded",
     "module_unknown": f"{CH341_MODULE} kernel module: cannot be judged (/sys/module unreadable)",
     "plugdev_member": "group plugdev: the controller has it",
@@ -332,8 +332,8 @@ DOCTOR_TEXTS = {
     "libusb_unknown": "libusb: cannot be judged ({detail}); detect is off",
     "listing_unknown": "USB devices: the device list cannot be read",
     "device_unreadable": "port {port}: a device that cannot be read (it may be a stick)",
-    "binding_present": f"port {{port}}: the kernel driver {CH341_MODULE} holds the stick (the daemon cannot "
-                       "claim it)",
+    "binding_present": f"port {{port}}: the kernel driver {CH341_MODULE} holds the stick (the daemon detaches it "
+                       "at start)",
     "binding_absent": "port {port}: no kernel driver holds the stick",
     "binding_other": "port {port}: the kernel driver {driver} holds the stick",
     "binding_unknown": "port {port}: the stick's kernel driver cannot be judged",

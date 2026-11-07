@@ -31,7 +31,9 @@ SERIALLESS = radios.Radio("r2", "stick", "meshstick-1262", "868", usb_port="1-1.
     (radios.Radio("r2", "stick", "meshstick-1262", "868", usb_port="1-1.9"), Probe.PRESENT, STICKS,
      "r2: no stick on port 1-1.9: plug the stick into port 1-1.9"),
     (SERIALLESS, Probe.PRESENT, "/nonexistent-sys", "r2: USB devices cannot be listed"),
-    (radios.Radio("r2", "stick", "meshstick-1262", "868", usb_serial="CHE1W868"), Probe.ABSENT, STICKS, ""),
+    # DEC-W35: the start opens the stick by the port its serial is listed on, so a serial not plugged in refuses
+    (radios.Radio("r2", "stick", "meshstick-1262", "868", usb_serial="CHE1W868"), Probe.ABSENT, STICKS,
+     "r2: no stick with serial CHE1W868 is plugged in"),
 ])
 def test_a_usb_radios_start_plan_carries_the_precheck(tmp_path, monkeypatch, row, access, sticks, refusal):
     svc = _svc(tmp_path, row, monkeypatch, access, sticks)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass
 
+from . import svc_retry_sh
 from .lifecycle import (
     GROUP_MISSING_HINT,
     GROUP_RESTART_CMD,
@@ -402,6 +403,65 @@ def chrony_dropin_text() -> str:
     )
 
 
+_TS_HELPER = """# Bounded service calls (BOOTSTRAP-RETRY-TABLES-v5 rows 18-20, 28): each systemctl call runs under `timeout`, and a
+# timed-out one is called again within SVC_RETRIES. A timed-out restart counts as done only when the unit is active
+# and its own ActiveEnterTimestampMonotonic moved past a baseline read before the first call (an unknown baseline
+# never counts as moved). Status 12 is the helper's own plumbing: TS_PLUMB is set, the step goes on, and the verdict
+# exits 12 (the bootstrap reads it from the marker file $TS_MARK). The bounds default to the bootstrap's.
+SVC_CALL_BOUND_S="${SVC_CALL_BOUND_S:-90}"; SVC_RETRIES="${SVC_RETRIES:-4}"; SVC_RETRY_PAUSE_S="${SVC_RETRY_PAUSE_S:-5}"
+SVC_READ_BOUND_S="${SVC_READ_BOUND_S:-60}"; SVC_KILL_GRACE_S="${SVC_KILL_GRACE_S:-5}"
+TS_PLUMB=0; TS_LAST=""; TS_TRIES=0
+ts_plumb() { TS_PLUMB=1; echo "[bootstrap-deps] ERROR: the service-call helper cannot run: $1" >&2; }
+command -v timeout >/dev/null 2>&1 || ts_plumb "coreutils' timeout is not installed"
+ts_call() {   # ts_call BOUND ARGS...: 0 done, 1 refused, 3 no answer, 12 plumbing; TS_OUT, TS_LAST (last stderr line)
+  _b=$1; shift; _rc=0
+  _e=$(mktemp) || return 12
+  TS_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$_b" systemctl "$@" 2>"$_e") || _rc=$?
+  TS_LAST=$(tail -n 1 "$_e"); rm -f "$_e"
+  case "$_rc" in
+    0) return 0 ;;
+    124|137) TS_LAST="no answer within $_b s"; return 3 ;;
+    125|126|127) return 12 ;;
+  esac
+  case "$TS_LAST" in *'Connection timed out') return 3 ;; esac
+  return 1
+}
+ts_base() {   # ts_base UNIT: TS_TS and TS_AS from one bounded read; 0 accepted, 2 not, 12 plumbing
+  TS_TS=""; TS_AS=""; _r=0
+  ts_call "$SVC_READ_BOUND_S" show --property=ActiveEnterTimestampMonotonic --property=ActiveState --value "$1" || _r=$?
+  [ "$_r" -ne 12 ] || return 12
+  [ "$_r" -eq 0 ] || return 2
+  for _v in $TS_OUT; do
+    case "$_v" in *[!0123456789]*) TS_AS=$_v ;; *) TS_TS=$_v ;; esac
+  done
+  case "$TS_AS" in active|reloading|inactive|failed|activating|deactivating) ;; *) return 2 ;; esac
+  [ -n "$TS_TS" ] || return 2
+  return 0
+}
+ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout. 0 done, 1 refused, 3 no answer,
+  # 12 plumbing; TS_TRIES = the calls made
+  _base=""; _n=0; _r=0
+  if [ "$1" = restart ]; then
+    ts_base "$2" || _r=$?
+    [ "$_r" -ne 12 ] || return 12
+    [ "$_r" -ne 0 ] || _base=$TS_TS
+  fi
+  while [ "$_n" -lt "$SVC_RETRIES" ]; do
+    _n=$((_n + 1)); TS_TRIES=$_n; _r=0
+    ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
+    [ "$_r" -eq 3 ] || return "$_r"
+    [ "$_n" -ge "$SVC_RETRIES" ] || sleep "$SVC_RETRY_PAUSE_S"     # no pause after the last attempt (G1-C8)
+    if [ "$1" = restart ] && [ -n "$_base" ]; then
+      _r=0; ts_base "$2" || _r=$?
+      [ "$_r" -ne 12 ] || return 12
+      if [ "$_r" -eq 0 ] && [ "$TS_AS" = active ] && [ "$TS_TS" != "$_base" ]; then return 0; fi
+    fi
+  done
+  return 3
+}
+"""
+
+
 def time_source_setup_sh() -> str:
     """The whole privileged setup, as ONE shell script fed to `sh -s` through a QUOTED heredoc.
 
@@ -421,6 +481,8 @@ def time_source_setup_sh() -> str:
         "# container/image build with no systemd, daemon activation is genuinely not possible and\n"
         "# stays best-effort -- that branch never sets this.\n"
         "TS_FAILED=0\n"
+        "\n"
+        + _TS_HELPER +
         "\n"
         "# Every path is a seam with its real value as the default, so the test harness can point\n"
         "# the whole step at a tmp tree. On a real box nothing sets these and the defaults apply.\n"
@@ -617,9 +679,18 @@ def time_source_setup_sh() -> str:
         "#   - conditioning the restart on \"we just edited the file\" makes the failure permanent:\n"
         "#     on the retry the file already has -n, so nothing would ever restart it again.\n"
         "# Rerunning setup is the documented repair, so it must repair this too.\n"
-        "systemctl enable gpsd >/dev/null 2>&1 || true\n"
-        "if ! systemctl restart gpsd >/dev/null 2>&1; then\n"
+        "# The enable is idempotent and retried; only a status 12 is never swallowed (row 18).\n"
+        "_r=0; ts_svc enable gpsd || _r=$?\n"
+        "case \"$_r\" in\n"
+        "  0) ;;\n"
+        "  12) ts_plumb \"systemctl enable gpsd\" ;;\n"
+        "  *) [ ! -d \"$SYSTEMD_RUNDIR\" ] || echo \"[bootstrap-deps] NOTE: enable gpsd: $TS_LAST; the restart below decides.\" ;;\n"
+        "esac\n"
+        "_r=0; ts_svc restart gpsd || _r=$?\n"
+        "[ \"$_r\" -ne 12 ] || { ts_plumb \"systemctl restart gpsd\"; _r=0; }\n"
+        "if [ \"$_r\" -ne 0 ]; then\n"
         "  if [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
+        "    [ \"$_r\" -ne 3 ] || echo \"[bootstrap-deps] WARNING: systemd gave no answer to restart gpsd after $TS_TRIES call(s) ($TS_LAST).\" >&2\n"
         "    echo \"[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be\" >&2\n"
         "    echo \"[bootstrap-deps]          available until it is: sudo systemctl status gpsd\" >&2\n"
         "    TS_FAILED=1\n"
@@ -628,7 +699,15 @@ def time_source_setup_sh() -> str:
         "    echo \"[bootstrap-deps]       sudo systemctl enable --now gpsd\"\n"
         "  fi\n"
         "fi\n"
-        "if ! systemctl restart chrony >/dev/null 2>&1; then\n"
+        "_r=0; ts_svc restart chrony || _r=$?\n"
+        "[ \"$_r\" -ne 12 ] || { ts_plumb \"systemctl restart chrony\"; _r=0; }\n"
+        "if [ \"$_r\" -eq 3 ] && [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
+        "  # A timeout is not a refusal: systemd never answered, so do not blame chrony's configuration (row 20).\n"
+        "  echo \"[bootstrap-deps] ERROR: systemd gave no answer to restart chrony after $TS_TRIES call(s)\" >&2\n"
+        "  echo \"[bootstrap-deps]        ($TS_LAST), and systemd-timesyncd has been removed, so this box may\" >&2\n"
+        "  echo \"[bootstrap-deps]        have NO time daemon. See: sudo systemctl status chrony\" >&2\n"
+        "  TS_FAILED=1\n"
+        "elif [ \"$_r\" -ne 0 ]; then\n"
         "  # Distinguish the two reasons, because they need opposite reactions and the previous\n"
         "  # wording covered both with 'no action is needed'. On a box with a live systemd, a\n"
         "  # refused start is chronyd REJECTING the configuration -- and since this run already\n"
@@ -650,6 +729,15 @@ def time_source_setup_sh() -> str:
         "# The verdict. `set -eu` cannot carry this: every failure above is deliberately caught so\n"
         "# the remaining steps still run (a box that got chrony but not gpsd is better off than\n"
         "# one that got neither). What must NOT happen is reporting success over it.\n"
+        "# The helper's plumbing first (row 28): it never folds into TS_FAILED. The marker tells the bootstrap that\n"
+        "# this 12 is the helper's, and whether the time source failed as well.\n"
+        "if [ \"$TS_PLUMB\" -ne 0 ]; then\n"
+        "  if [ -n \"${TS_MARK:-}\" ] && [ -f \"$TS_MARK\" ] && [ ! -L \"$TS_MARK\" ]; then\n"
+        "    { echo plumb; [ \"$TS_FAILED\" -eq 0 ] || echo failed; } > \"$TS_MARK\"\n"
+        "  fi\n"
+        "  echo \"[bootstrap-deps] time source setup INCOMPLETE - the service-call helper could not run.\" >&2\n"
+        "  exit 12\n"
+        "fi\n"
         "if [ \"$TS_FAILED\" -ne 0 ]; then\n"
         "  echo \"[bootstrap-deps] time source setup INCOMPLETE - see the errors above.\" >&2\n"
         "  exit 1\n"
@@ -757,6 +845,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     disk swap) and cannot be provisioned, the script exits 4; `--no-swapfile` is the way to proceed
     without it. Output is deterministic (packages sorted) so the shipped snapshot is stable.
     lhpc NEVER runs these."""
+    # W226: the USB step; loading deps alone never loads usb_access, rendering the script does
+    from . import radio_models, usb_flow
+
+    usb_models = radio_models.load()
+    usb_rules_path = usb_flow.host_setup(usb_models).files[0][0]
     # GUI-ONLY commands are bucketed separately and emitted behind --with-gui; they are NEVER part
     # of the default package list (a headless image must not grow an X/Wayland dev chain).
     gui_pkgs: list[str] = []
@@ -861,7 +954,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
         " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source]"
-        " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]",
+        " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls] [--no-usb-setup]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (every board; each radio drives its CS as a GPIO, the kernel does not"
@@ -881,13 +974,19 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#                        itself appears only on AP-managed boxes — desktop images pass",
         "#                        this flag). polkitd is installed unless BOTH power AND network",
         "#                        controls are opted out.",
+        "#     --no-usb-setup     do NOT write the USB radios' udev rule (" + usb_rules_path + ") or",
+        "#                        grant plugdev; the console's Hardware section then offers the same",
+        "#                        setup as a copybox. No kernel module is blacklisted either way.",
         "# Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·",
         "#             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·",
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
         " stopped ·",
         "#             9 systemd unit files could not be inspected, or a packaged service could not",
         "#             be disabled (fail-closed — a competing service may be active) ·",
-        "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).",
+        "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·",
+        "#             11 the time source did not come up · 12 the service-call helper cannot run",
+        "#             (no `timeout`, no readable /proc/uptime, or its own files) ·",
+        "#             13 the USB setup could not write its udev rule or run udevadm.",
         "#             Steps that can legitimately fail on a CLEAN",
         "#             image (no packaged meshtasticd unit) are GUARDED — the script runs under",
         "#             `set -e`, so an unguarded one would abort before this summary.",
@@ -926,7 +1025,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
         ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source]'
         ' [--keep-wifi-powersave]'
-        ' [--no-power-controls] [--no-network-controls]" >&2',
+        ' [--no-power-controls] [--no-network-controls] [--no-usb-setup]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -937,6 +1036,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'NO_SWAPFILE=""',
         'NO_POWER=""',
         'NO_NETWORK=""',
+        'NO_USB=""',
+        'LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup\'s path prefix (a test seam; empty = /)',
+        'SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
         'WITH_GPS=""',
@@ -950,6 +1052,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
         '\t\t--no-power-controls) NO_POWER=1; shift ;;',
         '\t\t--no-network-controls) NO_NETWORK=1; shift ;;',
+        '\t\t--no-usb-setup) NO_USB=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
         '\t\t--with-gps) WITH_GPS=1; shift ;;',
         '\t\t--no-time-source) NO_TIME_SOURCE=1; shift ;;',
@@ -1168,17 +1271,32 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "esac",
         "")
 
+    out(*svc_retry_sh.parent_lines())
     if any(pkg == "nginx" or pkg.startswith("nginx-") for pkg in apt_pkgs) or disable_blocks:
+        _l1_msg = ('\techo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it'
+                   " reachable?). Bootstrap must check for a competing system nginx.service (and any packaged"
+                   " meshtasticd.service) before it can safely proceed — refusing to continue so the system"
+                   ' stays untouched. Resolve systemd access and re-run." >&2')
         out("# systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,",
             "# not after): the disable steps below need it to find a competing system nginx.service and",
-            "# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.",
-            "if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then",
-            '\techo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it'
-            " reachable?). Bootstrap must check for a competing system nginx.service (and any packaged"
-            " meshtasticd.service) before it can safely proceed — refusing to continue so the system"
-            ' stays untouched. Resolve systemd access and re-run." >&2',
+            "# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched. The listing is",
+            "# idempotent, so a timed-out one is retried within the bounds (L1, rows 10, 11, 29).",
+            "if ! command -v systemctl >/dev/null 2>&1; then",
+            _l1_msg,
             "\texit 8",
             "fi",
+            "_l1=0; svc_read_retry list-unit-files --no-legend || _l1=$?",
+            'case "$_l1" in',
+            "\t0) ;;",
+            '\t12) svc_plumb "a systemctl call could not be run" ;;',
+            '\t3) echo "ERROR: cannot inspect systemd unit files: systemd gave no answer in $SVC_TRIES'
+            ' attempt(s) (last: $SVC_LAST). Refusing to continue so the system stays untouched." >&2; exit 8 ;;',
+            '\t5) echo "ERROR: cannot inspect systemd unit files: the run\'s bound for service calls'
+            ' ($SVC_SCRIPT_BOUND_S s) is reached (last: $SVC_LAST). Refusing to continue." >&2; exit 8 ;;',
+            "\t*)",
+            _l1_msg,
+            "\t\texit 8 ;;",
+            "esac",
             "")
 
     # $OP is needed by the hardware-group grants AND by the power/network-controls rules. With
@@ -1205,7 +1323,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     if groups_csv:
         out(*_op_lines, "")
     else:
-        out('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ]; then')
+        out('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ] || [ -z "$NO_USB" ]; then')   # W226: the USB grant needs $OP
         out(*("\t" + ln for ln in _op_lines))
         out("fi", "")
 
@@ -1224,10 +1342,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     #      active. So systemd is first probed for queryability (an unfiltered listing); if THAT
     #      fails we return 2 (inspection failed) and the caller ABORTS rather than assuming absence.
     #
-    # Returns: 0 present · 1 genuinely absent · 2 inspection failed.
+    # Returns: 0 present · 1 genuinely absent · 2 inspection failed · 12 the helper's plumbing. Both listings are
+    # bounded, retried calls whose status is kept (rows 12-14): absent is only the measured "rc 1 with nothing".
     out("unit_present() {",
-        '\tsystemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable',
-        '\t[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent',
+        '\tsvc_present "$1"',
         "}",
         "")
 
@@ -1266,24 +1384,31 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
                 "nginx_rc=0; unit_present nginx.service || nginx_rc=$?",
                 'case "$nginx_rc" in',
                 "\t0)",
-                "\t\t# Only ANNOUNCE a change if there is one: an already-disabled+inactive unit is",
-                "\t\t# reported as such rather than claiming we 'disabled' it.",
-                "\t\tif systemctl is-enabled --quiet nginx.service 2>/dev/null"
-                " || systemctl is-active --quiet nginx.service 2>/dev/null; then",
-                "\t\t\tif systemctl disable --now nginx.service; then",
-                '\t\t\t\techo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the'
-                ' lhpc-nginx user unit; the nginx PACKAGE stays installed)."',
-                "\t\t\telse",
-                '\t\t\t\techo "ERROR: could not stop/disable the system nginx.service. A root nginx still'
-                ' owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run."'
-                " >&2",
-                "\t\t\t\texit 8",
-                "\t\t\tfi",
-                "\t\telse",
-                '\t\t\techo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."',
-                "\t\tfi ;;",
+                "\t\t# The state is read before every call (rows 1-5, 15-17): only a change is announced, a",
+                "\t\t# timed-out call that took effect is confirmed by the read, a read that fails is never done.",
+                "\t\t_d=0; svc_disable nginx.service || _d=$?",
+                '\t\tcase "$_d" in',
+                '\t\t\t0) case "$SVC_DONE" in',
+                '\t\t\t\tdisabled) echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the'
+                ' lhpc-nginx user unit; the nginx PACKAGE stays installed)." ;;',
+                '\t\t\t\tconfirmed) echo "[bootstrap-deps] the system nginx.service is disabled and stopped'
+                ' (confirmed by a read after a call that timed out)." ;;',
+                '\t\t\t\tabsent) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;',
+                '\t\t\t\t*) echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change." ;;',
+                "\t\t\tesac ;;",
+                '\t\t\t12) svc_plumb "a systemctl call for nginx.service could not be run" ;;',
+                '\t\t\t1) echo "ERROR: could not stop/disable the system nginx.service ($SVC_LAST). A root nginx'
+                ' still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2;'
+                " exit 8 ;;",
+                '\t\t\t2) echo "ERROR: cannot confirm the state of nginx.service (last: ${SVC_LAST:-a state outside'
+                ' the known values}). Refusing to continue with a possibly-active root nginx." >&2; exit 8 ;;',
+                '\t\t\t*) echo "ERROR: could not stop/disable the system nginx.service: no answer after'
+                ' $SVC_TRIES call(s) within the bounds (last: $SVC_LAST). A root nginx may still own the web'
+                ' ports. Resolve this and re-run." >&2; exit 8 ;;',
+                "\t\tesac ;;",
                 '\t1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;',
-                '\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system'
+                '\t12) svc_plumb "a systemctl call for nginx.service could not be run" ;;',
+                '\t*) echo "ERROR: could not inspect systemd unit files — cannot confirm the system'
                 ' nginx.service is stopped. Refusing to continue with a possibly-active root nginx'
                 ' holding the web ports." >&2; exit 8 ;;',
                 "esac",
@@ -1344,7 +1469,12 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     # anything. Rendered from the SAME helper the dependency-panel copybox uses.
     out("# --- time source (chrony + gpsd; opt out with --no-time-source) ------------------------------",
         'if [ -z "$NO_TIME_SOURCE" ]; then',
-        "\tif sh -s <<'LHPC_TIME_SOURCE'")
+        "\t# Row 28: the child gets the bounds and a fresh, empty marker file for its status 12.",
+        '\t_st=0; TS_MARK=$(mktemp) || _st=$?',
+        '\t[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"',
+        "\texport TS_MARK SVC_CALL_BOUND_S SVC_RETRIES SVC_RETRY_PAUSE_S SVC_READ_BOUND_S SVC_KILL_GRACE_S",
+        "\tts_rc=0",
+        "\tsh -s <<'LHPC_TIME_SOURCE' || ts_rc=$?")
     # NOT indented: `sh -s <<'X'` is a QUOTED, non-dash heredoc, so every byte reaches the inner
     # shell verbatim. Indenting the body would push the NESTED terminators (LHPC_DROPIN, LHPC_AWK)
     # off column 0 -- where the inner shell never recognises them -- and would prepend tabs to the
@@ -1355,6 +1485,13 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         # The setup exits nonzero when a promise it makes could not be established on a box that
         # CAN establish it (see TS_FAILED). Announcing success over that is the exact failure the
         # live matrix caught: the box had no time daemon and the script said so was fine.
+        # A 12 is the helper's only when the marker says so (row 28); any other nonzero is the time source's.
+        '\t_mark=""; if [ -f "$TS_MARK" ] && [ ! -L "$TS_MARK" ]; then _mark=$(cat "$TS_MARK"); fi',
+        '\tif [ "$ts_rc" -eq 12 ] && { [ "$_mark" = plumb ] || [ "$_mark" = "$(printf \'plumb\\nfailed\')" ]; }; then',
+        '\t\techo "ERROR: the service-call helper could not run in the time-source step (exit 12 at the end)." >&2',
+        "\t\t_PLUMB_FAILED=1",
+        '\t\t[ "$_mark" = plumb ] || BOOTSTRAP_FAILED=1',
+        '\telif [ "$ts_rc" -eq 0 ]',
         "\tthen",
         '\t\techo "[bootstrap-deps] time source: chrony disciplines the clock (this REPLACED'
         ' systemd-timesyncd); gpsd feeds it GPS time when a receiver is attached."',
@@ -1702,6 +1839,19 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "fi",
             "")
 
+    # USB radios (W226): the udev rule for each USB model's vid:pid and the plugdev grant, from the SAME source the
+    # Hardware section's copybox renders (usb_flow.usb_setup_text). No module blacklist: the daemon's CH341 library
+    # detaches the kernel driver of the sticks it opens. Opt-out --no-usb-setup; the block's own failure exits 13, a failed
+    # grant joins _GROUPS_FAILED (exit 7 at the end, like the hardware groups).
+    out("# --- USB radios: udev rule and plugdev grant (opt-out: --no-usb-setup) --------------------",
+        'if [ -n "$NO_USB" ]; then',
+        '\techo "[bootstrap-deps] USB setup: skipped (--no-usb-setup); the console\'s Hardware section offers it."',
+        "else")
+    for ln in usb_flow.usb_setup_text(usb_flow.SCAFFOLD_USER, usb_models,
+                                      root_env="LHPC_USB_ROOT").rstrip("\n").split("\n"):
+        out(ln)                         # never indented: the rule text is a quoted string over several lines
+    out("fi", "")
+
     # Power controls: the polkit rule that authorizes $OP for the console's Reboot / Shut down
     # buttons (logind action ids). polkitd itself rides the merged apt transaction above via
     # $POLKIT_PKG. The rule text is the SAME source the dependency-panel copybox renders
@@ -1760,15 +1910,24 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             out(f"unit_rc=0; unit_present {svc_unit} || unit_rc=$?",
                 'case "$unit_rc" in',
                 "\t0)",
-                "\t\tif " + b.replace("\n", "\n\t\t") + "; then",
-                f'\t\t\techo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)."',
-                "\t\telse",
-                f'\t\t\techo "ERROR: could not stop/disable the OS-packaged {unit} — it still competes'
-                ' with the lhpc-managed one. Resolve this and re-run." >&2',
-                "\t\t\t_DISABLE_FAILED=1",
-                "\t\tfi ;;",
+                f"\t\t_d=0; svc_disable {svc_unit} || _d=$?   # rows 9, 30: as nginx, the failure deferred (9)",
+                '\t\tcase "$_d" in',
+                '\t\t\t0) case "$SVC_DONE" in',
+                f'\t\t\t\tdisabled) echo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)." ;;',
+                f'\t\t\t\tconfirmed) echo "[bootstrap-deps] the OS-packaged {unit} is disabled and stopped'
+                ' (confirmed by a read after a call that timed out)." ;;',
+                f'\t\t\t\tabsent) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
+                f'\t\t\t\t*) echo "[bootstrap-deps] the OS-packaged {unit} is already disabled — nothing to change." ;;',
+                "\t\t\tesac ;;",
+                f'\t\t\t12) echo "ERROR: the service-call helper could not run for {unit} (exit 12 at the end)."'
+                " >&2; _PLUMB_FAILED=1 ;;",
+                f'\t\t\t*) echo "ERROR: could not stop/disable the OS-packaged {unit} ($SVC_LAST) — it still'
+                ' competes with the lhpc-managed one. Resolve this and re-run." >&2; _DISABLE_FAILED=1 ;;',
+                "\t\tesac ;;",
                 f'\t1) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
-                f'\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
+                f'\t12) echo "ERROR: the service-call helper could not run for {unit} (exit 12 at the end)." >&2;'
+                " _PLUMB_FAILED=1 ;;",
+                f'\t*) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
                 f' {unit} is stopped. Refusing to continue." >&2; exit 9 ;;',
                 "esac", "")
         else:
@@ -1808,6 +1967,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'if [ -n "$_DISABLE_FAILED" ]; then',
         '\techo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2',
         "\texit 9",
+        "fi",
+        # 12 last (rows 28, 30): the helper's own plumbing, after every meaningful failure above.
+        'if [ -n "$_PLUMB_FAILED" ]; then',
+        '\techo "[bootstrap-deps] the service-call helper could not run (see above)." >&2',
+        "\texit 12",
         "fi",
         'echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies '
         'SPI + groups + PATH — see README steps 5-6."')

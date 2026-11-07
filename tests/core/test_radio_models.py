@@ -33,7 +33,8 @@ usb = { vid = "1a86", pid = "5512", product = "Fake" }
 
 def test_the_shipped_table_loads():
     models = radio_models.load()
-    assert set(models) == {"loraham", "uputronics", "waveshare-sx1262", "meshstick-1262"}
+    assert set(models) == {"loraham", "uputronics", "waveshare-sx1262", "meshstick-1262", "pinedio-usb-1262",
+                           "ch341-rfm98pw-433"}
     assert [v.band for v in models["loraham"].variants] == ["433", "868"]
     assert models["uputronics"].variant("ce1").preset == "uputronics-ce1"
 
@@ -92,7 +93,10 @@ def _daemon_profiles() -> dict:
         for preset in re.findall(r'"([\w-]+)"\) == 0', head):
             out[preset] = {}
             for band in radio_models.BANDS:
-                conds = {"band == 433": band == "433", "band != 868": band != "868", "ce0": preset.endswith("0")}
+                conds = {"band == 433": band == "433", "band != 868": band != "868", "ce0": preset.endswith("0"),
+                         "band != 433": band != "433",                       # daemon 1.4.0's band guards
+                         "!pi_band(band)": band not in ("433", "868"),
+                         "!usb_sx1262_band(band)": band not in ("868", "915")}
                 taken, got, guard = [], {}, None
                 for s in (line.strip() for line in rest.splitlines()):
                     if guard is not None:
@@ -146,6 +150,7 @@ def test_every_variant_claims_the_daemons_pins_and_chip():
 
 def test_the_rows_name_exactly_the_daemons_presets():
     # T-M3: every preset the daemon knows at the pin has a row, and no row names one it does not know.
-    known = re.search(r'daemon_hardware_profile_known\(void\)\s*\{\s*return "([^"]*)";', FIXTURE.read_text())
+    known = re.search(r'daemon_hardware_profile_known\(void\)\s*\{\s*return ((?:"[^"]*"\s*)+);', FIXTURE.read_text())
+    listed = "".join(re.findall(r'"([^"]*)"', known.group(1)))        # adjacent literals are one C string
     named = {v.preset for m in radio_models.load().values() for v in m.variants}
-    assert named == set(known.group(1).split(", ")) == set(_daemon_profiles())
+    assert named == set(listed.split(", ")) == set(_daemon_profiles())

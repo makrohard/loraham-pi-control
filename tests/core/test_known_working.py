@@ -489,7 +489,7 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
                      "remote": "https://github.com/jgromes/RadioLib",
                      "source_rel": "src/RadioLib", "strategy": ""},
         "libch341": {"commit": "3" * 40, "selector": "pinned",
-                     "remote": "https://github.com/pine64/libch341-spi-userspace",
+                     "remote": "https://github.com/makrohard/libch341-spi-userspace",
                      "source_rel": "src/libch341-spi-userspace", "strategy": ""},
     }, {"confirmed_at": 1.0})
     seen = []
@@ -505,7 +505,7 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
                          "remote": "https://github.com/jgromes/RadioLib",
                          "source_rel": "src/RadioLib", "strategy": ""},
             "libch341": {"commit": "7" * 40, "selector": "pinned",
-                         "remote": "https://github.com/pine64/libch341-spi-userspace",
+                         "remote": "https://github.com/makrohard/libch341-spi-userspace",
                          "source_rel": "src/libch341-spi-userspace", "strategy": ""},
         }, {"confirmed_at": 2.0})
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")

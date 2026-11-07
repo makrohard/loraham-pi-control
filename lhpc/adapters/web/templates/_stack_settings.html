@@ -11,51 +11,7 @@
   <div class="body">
     {% if view.hw_setups %}
       <section class="cfgsec">
-        <h3>Hardware</h3>
-        <p class="depnote" id="hardware-list-notice">The hardware list names the radios; a daemon starts for each band
-          the board setup serves. This page's board choice names the served bands until the Hardware section
-          replaces it.</p>
-        <p class="muted">Which physical radio board(s) this box has. This fixes the served band(s). Until a real
-          setup is chosen the daemon
-          refuses to start. Use <strong>Detect</strong> to probe a candidate board (its LED lights while
-          the radio initialises).</p>
-        {% if not view.hardware_configured %}
-          <p class="depnote depnote-warn">No radio hardware configured — pick your board below to enable
-            the daemon.</p>
-        {% endif %}
-        <form method="post" action="{{ url_for('hardware_set') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <label>Hardware setup
-            <select name="hardware">
-              {% for sid, label in view.hw_setups %}
-                <option value="{{ sid }}"{% if sid == view.hardware %} selected{% endif %}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <button type="submit">Save hardware</button>
-        </form>
-        <form method="post" action="{{ url_for('hardware_probe') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <label>Detect
-            <select name="band">
-              <option value="433">433 MHz</option>
-              <option value="868">868 MHz</option>
-            </select>
-          </label>
-          <label>as
-            <select name="hw">
-              <option value="loraham">LoRaHAM</option>
-              <option value="uputronics-ce0">Uputronics CE0</option>
-              <option value="uputronics-ce1">Uputronics CE1</option>
-              <option value="waveshare-sx1262">Waveshare SX1262</option>
-            </select>
-          </label>
-          <button type="submit">Detect</button>
-        </form>
-        {% if hw_probe %}
-          <p class="depnote depnote-{{ 'ok' if hw_probe.present else ('warn' if hw_probe.busy else 'bad') }}">
-            {{ hw_probe.message }}{% if hw_probe.diagnostic %} — {{ hw_probe.diagnostic }}{% endif %}</p>
-        {% endif %}
+        {# DEC-W57: the board setup is the Hardware page's (Add Hardware's HAT row; `lhpc hardware <setup>` stays). #}
         {% if view.high_power %}
           {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-band control, not
              a generic run-param row — this page renders none of the daemon's run params. Saved

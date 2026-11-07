@@ -64,9 +64,9 @@ def _block(tmp_path, **kw):
     return _uf().usb_setup_text("$OP", MODELS, root=str(tmp_path / "root"), **kw)
 
 
-# ---- B-1: the two files ------------------------------------------------------------------------
+# ---- B-1: the rule file -------------------------------------------------------------------------
 
-def test_b1_the_rule_and_modprobe_files_are_written_with_the_librarys_text_mode_0644(tmp_path):
+def test_b1_the_rule_file_is_written_with_the_librarys_text_mode_0644(tmp_path):
     ua = _ua()
     r, root, _ = _run(tmp_path, _block(tmp_path))
     assert r.returncode == 0, r.stderr
@@ -92,7 +92,7 @@ def test_b1_the_root_is_fixed_at_render_time_not_read_from_the_environment(tmp_p
     assert "$ROOT" not in text and "${ROOT" not in text
 
 
-# ---- B-2, B-3: the commands -------------------------------------------------------------------------
+# ---- B-2: the commands ------------------------------------------------------------------------------
 
 def test_b2_udevadm_reload_and_trigger_run_after_the_files(tmp_path):
     r, _, calls = _run(tmp_path, _block(tmp_path))
@@ -104,29 +104,6 @@ def test_b2_udevadm_reload_and_trigger_run_after_the_files(tmp_path):
 def test_b2_a_failing_udevadm_exits_13_naming_it(tmp_path):
     r, _, _ = _run(tmp_path, _block(tmp_path), fail=("udevadm",))
     assert r.returncode == 13 and "udevadm" in (r.stdout + r.stderr)
-
-
-def test_b3_modprobe_r_runs_only_while_the_module_is_loaded(tmp_path):
-    _, _, calls = _run(tmp_path, _block(tmp_path), module_loaded=False)
-    assert not [c for c in calls if c.startswith("modprobe")]
-
-
-def test_b3_a_loaded_module_is_removed(tmp_path):
-    r, _, calls = _run(tmp_path, _block(tmp_path), module_loaded=True)
-    assert r.returncode == 0 and "modprobe -r spi_ch341" in calls
-
-
-def test_b3_a_failing_modprobe_exits_13(tmp_path):
-    r, _, _ = _run(tmp_path, _block(tmp_path), module_loaded=True, fail=("modprobe",))
-    assert r.returncode == 13
-
-
-def test_b3_an_unreadable_sys_module_exits_13(tmp_path):
-    root = tmp_path / "root"
-    (root / "sys").mkdir(parents=True)
-    (root / "sys" / "module").write_text("not a directory", encoding="utf-8")
-    r, _, _ = _run(tmp_path, _block(tmp_path))
-    assert r.returncode == 13
 
 
 # ---- B-4: the plugdev grant ----------------------------------------------------------------------
@@ -155,16 +132,7 @@ def test_b4_the_scaffold_block_leaves_the_exit_to_the_scaffold(tmp_path):
     assert "groups_failed=[]" not in r.stdout
 
 
-# ---- B-5: the effect line; B-6: a re-run --------------------------------------------------------
-
-def test_b5_the_effect_of_the_blacklist_is_printed_before_the_modprobe_file_is_written(tmp_path):
-    r, _, _ = _run(tmp_path, _block(tmp_path))
-    assert "spi_ch341" in r.stdout
-    lines = _block(tmp_path).splitlines()
-    write = next(i for i, x in enumerate(lines) if "lhpc-usb-radio.conf" in x and ">" in x)
-    said = [i for i, x in enumerate(lines) if "spi_ch341" in x and x.lstrip().startswith(("echo", "printf"))]
-    assert said and said[0] < write          # an output line, not the /sys check, comes before the write
-
+# ---- B-6: a re-run --------------------------------------------------------
 
 def test_b6_a_rerun_rewrites_the_same_bytes_and_exits_0(tmp_path):
     first, root, _ = _run(tmp_path, _block(tmp_path))

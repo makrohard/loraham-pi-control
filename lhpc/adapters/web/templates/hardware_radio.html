@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_hw_macros.html" import detect_result, hidden with context %}
+{% block title %}{{ r.rid }} — Hardware — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+{% with here = r.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
+<section class="card" id="hardware-radio" data-rid="{{ r.rid }}">
+  <header><h2>{{ r.rid }} — {{ r.name }}</h2></header>
+  <div class="body">
+    <dl class="facts">
+      <dt>Model</dt><dd>{{ models[r.model].label if r.model in models else r.model }}</dd>
+      <dt>Band</dt><dd>{{ r.band }} MHz</dd>
+      <dt>Stick</dt><dd>{% if r.transport == "spi" %}HAT on the Pi's SPI bus{% elif r.usb_serial %}serial {{ r.usb_serial }}{% elif r.usb_port %}port {{ r.usb_port }} (no serial){% else %}not bound{% endif %}</dd>
+      <dt>State</dt><dd>{% if r.enabled %}<span class="state-on">enabled</span>{% else %}disabled{% endif %}</dd>
+    </dl>
+    {% for p in r.problems %}<p class="note-bad">⚠ {{ p }}</p>{% endfor %}
+    {% if hp.warn %}
+      <p class="depnote depnote-warn" id="hw-hp-warn">⚠ SX127x +20 dBm permission is enabled on {{ r.band }} MHz. This does
+        not report the selected TX power. At +20 dBm obey the 1 % duty-cycle and 3:1 VSWR limits and provide suitable supply
+        and cooling. Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
+    {% endif %}
+    {% if hp.mismatch %}<p class="depnote depnote-warn" id="hw-hp-mismatch">High-power switch, {{ r.band }} MHz: {{ hp.mismatch }}</p>{% endif %}
+    {% for l in rflogs %}<p id="hw-rflog">{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a href="{{ url_for('logs_view', target=l.target, job=l.job) }}">RF log</a>{% endif %}</p>{% endfor %}
+    {% if r.choices and r.choices.items %}
+      <form method="post" action="{{ url_for('hardware_bind') }}" id="hw-rebind">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="rid" value="{{ r.rid }}">
+        <p><strong>Re-bind to:</strong></p>
+        {% if r.choices.reason %}<p class="depnote depnote-warn">{{ r.choices.reason }}</p>{% endif %}
+        <ul class="usb-choices">
+        {% for c in r.choices.items %}
+          <li><label><input type="radio" name="port" value="{{ c.port }}"{% if not c.selectable %} disabled{% endif %}>
+            {{ c.label }}{% if c.why %} — {{ c.why }}{% endif %}</label></li>
+        {% endfor %}
+        </ul>
+        <button type="submit">Re-bind</button>
+      </form>
+    {% endif %}
+    <div class="acts">
+      <form method="post" action="{{ url_for('hardware_detect') }}" class="inline" id="detect-{{ r.rid }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {{ hidden([("kind", "radio"), ("rid", r.rid), ("back", url_for('hardware_radio', rid=r.rid))]) }}
+        <button type="submit">Detect</button>
+      </form>
+      {% if r.activity %}
+        <button type="button" class="danger" disabled data-remove-blocked="{{ r.rid }}">Remove</button>
+        <span class="muted">Refused while it runs: {{ r.stop_first }}.</span>
+      {% else %}
+        <a class="button danger" href="{{ url_for('hardware_remove_confirm', rid=r.rid) }}">Remove</a>
+      {% endif %}
+    </div>
+    {{ detect_result(r.rid) }}
+    <p><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
+  </div>
+</section>
+{% endblock %}

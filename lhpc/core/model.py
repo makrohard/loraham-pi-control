@@ -600,7 +600,7 @@ class WebPage:
         return f"#stack-webserver-{self.page_id}"
 
 
-def web_pages(stack: Stack, instances=None) -> tuple:
+def web_pages(stack: Stack, instances=None, paths=None) -> tuple:
     """The stack's proxied web pages — one per component that declares a client http/https
     endpoint (its first such endpoint), for each of the stack's `instances` (commands.Instance;
     None = `commands.stack_instances`, its one instance at slot 0 until L5). Empty for a stack
@@ -618,7 +618,7 @@ def web_pages(stack: Stack, instances=None) -> tuple:
     out: list = []
     ordered = ([c for c in stack.components if c.id != stack.main]
                + [c for c in stack.components if c.id == stack.main])
-    for inst in commands.stack_instances(stack) if instances is None else instances:
+    for inst in commands.stack_instances(stack, paths) if instances is None else instances:
         slot_k = inst is not None and inst.slot > 0
         first_of_instance = True
         for comp in ordered:

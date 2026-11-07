@@ -2,7 +2,8 @@
 
 The box's one Wi-Fi radio is either its **own access point** (NetworkManager profile `lhpc-ap`;
 the box is `10.42.0.1`) or a **client** of your WLAN. The console's **Network** panel switches
-between the two, with the AP as the automatic way home.
+between the two, with the AP as the automatic way home. The AP's subnet is a setting (default
+`10.42.0.0/24`, the box on its first host): the Network panel or [`lhpc network`](cli.md#network).
 
 ## Contents
 

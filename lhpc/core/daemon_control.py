@@ -175,6 +175,10 @@ def _prefer_run_socket(run: str, tmp: str) -> str:
 _RID = re.compile(r"r[1-9][0-9]?")
 
 
+# radio_start.socket_key's "" (ledger L27): a hardware list exists and does not name one radio for the band.
+NO_SOCKET = "no daemon socket: the hardware list names no one radio for this band"
+
+
 def _valid_key(key) -> bool:
     """A daemon key: a band 433/868 (a 0.13.x daemon) or a radio id r1..r99 (stage L5), as conf_socket takes."""
     return is_valid_band(key) or (isinstance(key, str) and _RID.fullmatch(key) is not None)
@@ -284,7 +288,7 @@ def read_view(system: System, band: str) -> DaemonView:
     destructive scan into a generic status read, which is exactly how the defect arose."""
     view = DaemonView(band=band, reachable=False)
     if not _valid_key(band):
-        view.error = f"invalid band {band!r}"
+        view.error = NO_SOCKET if band == "" else f"invalid band {band!r}"
         return view
     try:
         view.status = _query(system, band, b"GET STATUS\n", "STATUS")
@@ -572,7 +576,7 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
     if err:
         return False, False, err
     if not _valid_key(band):
-        return False, False, f"invalid band {band!r}"
+        return False, False, NO_SOCKET if band == "" else f"invalid band {band!r}"
     key, value = key.upper(), canonical_value(key, value).upper()   # the validated token, canonical
     sock = conf_socket(band)                     # band already validated above
     try:

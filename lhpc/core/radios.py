@@ -73,6 +73,7 @@ class State:
     kind: str
     radios: tuple = ()
     reasons: tuple = field(default=())
+    retired: tuple = ()        # DEC-W39: the ids of removed radios, never given again
 
     @property
     def startable(self) -> bool:
@@ -131,15 +132,45 @@ def load_text(text: str, models: dict | None = None) -> State:
     except (tomllib.TOMLDecodeError, RecursionError, ValueError) as exc:      # never BaseException (Q9)
         return State(INVALID, reasons=(f"{FILE[-1]} is not valid TOML ({type(exc).__name__}: {exc})",))
     rows = data.get("radio", [])
-    if set(data) - {"radio"} or not isinstance(rows, list):
+    if set(data) - {"radio", "retired"} or not isinstance(rows, list):
         return State(INVALID, reasons=(f"{FILE[-1]} holds only [[radio]] rows",))
+    retired = data.get("retired", [])
+    if why := _retired_error(retired):
+        return State(INVALID, reasons=(why,))
+    retired = tuple(retired)
     radios, reasons = [], []
     for i, row in enumerate(rows, 1):
         r, why = _row(row, i)
         (reasons.append(why) if why else radios.append(r))
     if not reasons:
-        reasons = check(radios, models)
-    return State(INVALID, reasons=tuple(reasons)) if reasons else State(VALID, radios=tuple(radios))
+        reasons = check(radios, models, retired)
+    return (State(INVALID, reasons=tuple(reasons)) if reasons
+            else State(VALID, radios=tuple(radios), retired=retired))
+
+
+def _retired_error(retired) -> str:
+    """DEC-W39: `retired` is a list of distinct radio ids; the reason it is not, or ""."""
+    if not isinstance(retired, list) or not all(isinstance(x, str) and _ID.fullmatch(x) for x in retired):
+        return f"{FILE[-1]}: retired must be a list of radio ids r1 … r99"
+    if len(set(retired)) != len(retired):
+        return f"{FILE[-1]}: retired names an id twice"
+    return ""
+
+
+def stored_retired(paths) -> tuple | None:
+    """The reserved ids the file holds now (DEC-W39), read on their own so a save that is not given them keeps them:
+    () when there is no file; None when the file is there but cannot be read, is no TOML, or its `retired` is not a
+    valid list (G1-C4: a save must not write over ids it could not read)."""
+    p = None
+    try:
+        p = path(paths)
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None if p is None or exists_at_all(p) else ()
+    except (OSError, UnicodeDecodeError, PathContainmentError, tomllib.TOMLDecodeError, RecursionError, ValueError):
+        return None
+    retired = data.get("retired", [])
+    return None if _retired_error(retired) else tuple(retired)
 
 
 def _row(row, i):
@@ -160,7 +191,7 @@ def _row(row, i):
     return Radio(**base, dp=dp), ""
 
 
-def check(radios, models: dict | None = None) -> list:
+def check(radios, models: dict | None = None, retired: tuple = ()) -> list:
     """The save checks over the whole list (A §2.2, B4-D3a); [] when the list holds. Each reason names its row."""
     models = radio_models.load() if models is None else models
     out = []
@@ -172,6 +203,8 @@ def check(radios, models: dict | None = None) -> list:
             out.append(f"{r.id!r}: an id is r1 … r99")
         elif r.id in ids:
             out.append(f"{r.id}: the id is used twice")
+        elif r.id in retired:
+            out.append(f"{r.id}: the id is reserved: a removed radio's id is never given again (DEC-W39)")
         ids.setdefault(r.id, r)
         if not (isinstance(r.name, str) and _NAME.fullmatch(r.name)):
             out.append(f"{r.id}: the name {r.name!r} must be 1-12 characters of letters, digits, space . _ -")
@@ -288,9 +321,9 @@ def _claims(radios, models):
     return out
 
 
-def next_id(radios) -> str:
-    """The lowest free id (A:123); ValueError when r1 … r99 are all taken."""
-    used = {r.id for r in radios}
+def next_id(radios, retired: tuple = ()) -> str:
+    """The lowest free id (A:123), never a reserved one (DEC-W39); ValueError when r1 … r99 are all taken."""
+    used = {r.id for r in radios} | set(retired)
     for n in range(1, MAX_RADIOS + 1):
         if f"r{n}" not in used:
             return f"r{n}"
@@ -312,10 +345,12 @@ def default_name(radios, model) -> str:
     return name
 
 
-def render(radios) -> str:
+def render(radios, retired: tuple = ()) -> str:
     """The file text for `radios`, one [[radio]] table each, fields in a fixed order. Empty strings of the model
-    settings and None settings are omitted; a set false is written (Q8)."""
+    settings and None settings are omitted; a set false is written (Q8). The reserved ids lead (DEC-W39)."""
     out = ["# The hardware list (LHPC): one [[radio]] per radio. Edited by the Hardware section and `lhpc hardware`.", ""]
+    if retired:
+        out += ["retired = [" + ", ".join(_toml(x) for x in retired) + "]   # removed radios: never given again", ""]
     for r in radios:
         out.append("[[radio]]")
         for k in (*_BASE_KEYS, *_SETTING_KEYS):
@@ -336,13 +371,17 @@ def _toml(v):
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def save(paths, radios, models: dict | None = None) -> list:
+def save(paths, radios, models: dict | None = None, retired: tuple | None = None) -> list:
     """Check the whole list, then write it whole. Returns [] on success, else the reasons. Before the rename the old
-    file stays byte-unchanged; a failure after it is reported as written, not durable (Q1)."""
-    reasons = check(radios, models)
+    file stays byte-unchanged; a failure after it is reported as written, not durable (Q1). `retired` None keeps the
+    reserved ids the file holds (DEC-W39), so no writer that is not about them can drop them."""
+    retired = stored_retired(paths) if retired is None else tuple(retired)
+    if retired is None:
+        return [f"{FILE[-1]} cannot be read, so its reserved ids (retired) are unknown; nothing written"]
+    reasons = check(radios, models, retired)
     if reasons:
         return reasons
-    text = render(radios)
+    text = render(radios, retired)
     if load_text(text, models).kind != VALID:            # the rendered file must read back as this list
         return ["the rendered hardware list does not read back (a bug; nothing written)"]
     try:

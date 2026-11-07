@@ -44,7 +44,7 @@ def test_lhpcs_values_replace_its_keys_and_the_users_stay():
     assert conf["storage"]["storage_dir"] == "/rt/state/openhop" and "kiss" not in conf
     assert conf["glass"] == {"enabled": True, "cert_store_dir": "/rt/state/openhop/glass"}
     assert conf["setup_completed"] is True
-    assert conf["repeater"]["security"] == {"admin_password": "p" * 15, "jwt_secret": "j" * 64}
+    assert conf["repeater"]["security"] == {"admin_password": "p" * 15, "jwt_secret": "j" * 64, "jwt_expiry_minutes": 720}
     # one store and the user's: untouched
     assert conf["repeater"]["node_name"] == "Relay 1" and conf["repeater"]["mode"] == "monitor"
     assert conf["duty_cycle"]["max_airtime_per_minute"] == 3600

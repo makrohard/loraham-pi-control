@@ -674,7 +674,21 @@ def build_parser() -> argparse.ArgumentParser:
             from lhpc.core.daemon_control import ALLOWED_BANDS
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Stop the daemon on this band only (daemon only)")
+        elif action == "restart":
+            # Package item 14: a per-band restart, as start and stop take; the service refuses a band two radios
+            # share (band_refusal, the stop's W1-11 rule) and a band the box or the stack cannot serve.
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Restart on this band (the daemon of that band, or a band-switchable stack)")
+        if action in ("start", "stop", "restart"):          # item 16: one radio's daemon of a shared band
+            sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio only (daemon only)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
+    # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
+    for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
+                          ("remove-instance", "Remove <stack>@<rid>; its slot stays reserved, no port moves")):
+        sp = stack_sub.add_parser(action, help=ahelp)
+        sp.add_argument("stack", help="Stack id (kiss, meshcore or chat)")
+        sp.add_argument("rid", help="Radio id of the hardware list (r1..r99)")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
@@ -746,8 +760,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hw = sub.add_parser("hardware",
                           help="Show or set the radio hardware setup (which board(s) the box has)")
-    p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
-                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
+    p_hw.add_argument("setup", nargs="?", choices=(*_HW_SETUPS, "remove", "detect"),
+                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list); "
+                           "`remove <rid>` removes one radio of the hardware list; `detect <rid>` asks its chip")
+    p_hw.add_argument("rid", nargs="?", help="with remove or detect: the radio id (r1 … r99)")
+    p_hw.add_argument("--confirm-phrase", default="", dest="hw_confirm_phrase",
+                      help="with remove: remove-<rid>; without it the remove is a dry run that changes nothing")
     # The per-band +20 dBm permission lives beside the hardware setup (daemon 1.2.0 --high-power):
     # `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
     # for the switch. Saves and marks the daemon restart-required; restarts nothing.
@@ -821,6 +839,15 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Endpoint ids allowed DIRECT access, comma/space separated; \"\" = none")
     p_fw.add_argument("--recommended", action="store_true",
                       help="Safe preset: secure-default, no direct access, AP off, overrides cleared")
+
+    # NA: the AP subnet setting, the console's Network panel field; the recovery path when a subnet change leaves
+    # the console unreachable. The one apply (network_set_ap_cidr) checks the phrase first, then the value.
+    p_net = sub.add_parser("network", help="The access point's IPv4 subnet (network.ap_cidr)")
+    p_net.add_argument("--ap-cidr", required=True, metavar="CIDR|default",
+                       help="Private IPv4 subnet, /16 to /28, e.g. 10.43.0.0/24; 'default' = 10.42.0.0/24")
+    from lhpc.core.ap_network import AP_CIDR_CONFIRM
+    p_net.add_argument("--confirm-phrase", default="",
+                       help=f"Type '{AP_CIDR_CONFIRM}' to confirm the change")
 
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
@@ -1406,21 +1433,45 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if (args.stack_action == "stop" and getattr(args, "band", "")
+        if (args.stack_action == "stop" and getattr(args, "band", "") and "@" not in args.stack
                 and args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon")):
             # Fail closed: for any other stack a band would only skip the operator's stop intent,
             # so boot restore would start it again (finding 140's review).
             print("lhpc stack stop: --band applies to the daemon only (a stack's own stop needs no "
                   "band)", file=sys.stderr)
             return 2
+        if args.stack_action in ("add-instance", "remove-instance"):
+            from lhpc.core import instances
+            fn = instances.add_instance if args.stack_action == "add-instance" else instances.remove_instance
+            return _render(fn(svc, args.stack, args.rid))
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
+            from lhpc.core import instances
             from lhpc.core.outcomes import manual_required_only
+            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts, stops and restarts on its radio's band.
+            sid, inst, iband, why = instances.resolve(svc, args.stack)
+            if inst is not None and args.stack_action == "poststart":
+                why = f"lhpc stack poststart {args.stack}: not for an instance in this build"
+            if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
+                print(f"ERR   {why}", file=sys.stderr)
+                return 1
+            if inst is not None and getattr(args, "band", "") and args.band != iband:
+                print(f"ERR   {args.stack} runs on {iband} MHz (its radio's band), not {args.band}", file=sys.stderr)
+                return 2
+            if getattr(args, "radio", ""):
+                if sid not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon") or inst or args.band:
+                    print("ERR   --radio applies to the daemon only, without --band", file=sys.stderr)
+                    return 2
+                from lhpc.core import radio_start
+                inst, iband, why = radio_start.daemon_radio(svc, args.radio)
+                if why:
+                    print(f"ERR   {why}", file=sys.stderr)
+                    return 1
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, args.stack, apply=a,
-                                     band=getattr(args, "band", ""), stop_owners=stop_owners)
+                res = svc.run_action(args.stack_action, sid, apply=a, band=iband or getattr(args, "band", ""),
+                                     stop_owners=stop_owners, inst=inst)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
@@ -1438,7 +1489,7 @@ def _run(argv: list[str] | None = None) -> int:
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
         print("usage: lhpc stack <action> <stack> [--yes]\n"
-              "lhpc stack: an action is required (start|stop|restart|poststart)",
+              "lhpc stack: an action is required (start|stop|restart|poststart|add-instance|remove-instance)",
               file=sys.stderr)
         return 2
     if args.command == "kill":
@@ -1492,6 +1543,18 @@ def _run(argv: list[str] | None = None) -> int:
                 print("  failed stacks are NOT retried — restart them with:  lhpc stack start <id>")
         return 0
     if args.command == "hardware":
+        if args.setup in ("remove", "detect") or args.rid:
+            if (args.setup not in ("remove", "detect") or not args.rid or args.high_power or args.ocp
+                    or (args.setup == "detect" and args.hw_confirm_phrase)):
+                print("ERR   usage: lhpc hardware remove <rid> [--confirm-phrase remove-<rid>] | lhpc hardware detect <rid>")
+                return 2
+            if args.setup == "detect":                       # W4 (DEC-W43): the chip of one listed radio
+                from lhpc.core.radio_detect import run as detect
+                from lhpc.core.services import ActionResult as _AR
+                found = detect.detect_radio(svc, args.rid)
+                return _render(_AR(found.outcome == "found", found.line))
+            from lhpc.core import radio_start
+            return _render(radio_start.remove_radio(svc, args.rid, args.hw_confirm_phrase))
         if args.high_power:
             if args.setup:
                 print("ERR   --high-power and a hardware setup are separate settings — one at a time")
@@ -1530,6 +1593,8 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "_gps-bridge":
         from lhpc.core import gps_bridge as _gpsb
         return _gpsb.run(args.consumer, svc._paths, state=args.state)
+    if args.command == "network":
+        return _render(svc.network_set_ap_cidr(args.ap_cidr, args.confirm_phrase))
     if args.command == "firewall":
         import json as _json
 

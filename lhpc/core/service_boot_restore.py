@@ -167,7 +167,7 @@ class BootRestoreOpsMixin:
         except (OSError, PathContainmentError):
             return None
 
-    def _classify_boot_evidence(self, cur_boot: str):
+    def _classify_boot_evidence(self, cur_boot: str, listed=None):
         """(evidence, skipped, integrity_issues, dir_state). Same-boot stamped records are NEVER
         evidence; a record whose boot stamp is empty (the boot id was unreadable when it was
         written) is evidence only when its process is provably gone (`verify_owned`)."""
@@ -189,13 +189,11 @@ class BootRestoreOpsMixin:
                 launch_id=rec["launch_id"], stack=rec.get("stack", ""),
                 component=rec.get("component", ""), band=rec.get("band", ""),
                 launched_at=float(rec.get("launched_at", 0)),
-                rid=boot_restore.rid_of(rec.get("rid")),
+                rid=boot_restore.rid_of(rec.get("rid")), slot=boot_restore.slot_of(rec.get("slot")),
                 start_scope=rec.get("start_scope", ""),
                 requested_target=rec.get("requested_target", "")))
-        # OPERATOR STOP INTENT beats leftover evidence (see the section note above). The skipped
-        # records are pruned by the CALLER; the intent is cleared only by an applied operator start. The
-        # skipped records are pruned by the caller (they are dead prior-boot leftovers), and
-        # the standing intent is cleared only by an applied operator start.
+        # OPERATOR STOP INTENT beats leftover evidence (see the section note above), per instance key (7e). The
+        # skipped records are pruned by the CALLER; the intent is cleared only by an applied operator start.
         intents = self._stop_intent_stacks()
         if intents is None:
             skipped.extend({"stack": ev.stack, "reason": self.INTENTS_UNREADABLE_REASON,
@@ -204,11 +202,10 @@ class BootRestoreOpsMixin:
         elif intents:
             kept = []
             for ev in evidence:
-                if ev.stack in intents:
-                    # NOT pruned here: like every other skip reason, the CALLER prunes —
-                    # after the admission gates and with the journal in place (deleting inside classification destroyed evidence even when the run was
-                    # subsequently disabled, outside the journalled prune pattern).
-                    skipped.append({"stack": ev.stack,
+                if (key := boot_restore.instance_key(ev.stack, ev.rid, listed or {}, ev.slot)) in intents:
+                    # NOT pruned here: like every other skip reason, the CALLER prunes, after the admission gates and
+                    # with the journal in place (a prune inside classification destroyed a later-disabled run's evidence).
+                    skipped.append({"stack": key,
                                     "reason": self.INTENT_SKIP_REASON,
                                     "evidence_ids": [ev.launch_id]})
                 else:
@@ -351,7 +348,8 @@ class BootRestoreOpsMixin:
             if not ok:
                 return ActionResult(False, f"Boot restore blocked: {why}.")
 
-        evidence, skipped, issues, dir_state = self._classify_boot_evidence(cur_boot)
+        listed, unlisted_why = boot_restore.listed_instances(self._paths)               # 7e: instance keys
+        evidence, skipped, issues, dir_state = self._classify_boot_evidence(cur_boot, listed)
         if dir_state == "unsafe":
             return ActionResult(False, "Boot restore blocked: state/owned/ is unsafe "
                                        "(containment/symlink failure) — nothing was consumed.")
@@ -367,9 +365,9 @@ class BootRestoreOpsMixin:
         metas = self._boot_stack_metas()
         markers = {sid: self._boot_marker_view(sid) for sid in
                    {e.stack for e in evidence}}
-        plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
+        plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID, listed)
         plan.skipped.extend(skipped)
-        boot_restore.radio_filter(plan, radios.load(self._paths).radios)      # D14/D15, stage L5
+        boot_restore.radio_filter(plan, radios.load(self._paths).radios, listed, unlisted_why)   # D14/D15, 7e
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),
@@ -565,7 +563,7 @@ class BootRestoreOpsMixin:
         if ok and _target:
             # A3 (D): a stack installed over the pin check was started under that exact, still
             # active acceptance — the journal names it (component ids and the two commits only).
-            _ov = self.binary_active_override(_target)
+            _ov = self.binary_active_override(_target.partition("@")[0])
             if _ov:
                 item["result"]["override"] = _ov
         if not ok:
@@ -596,8 +594,10 @@ class BootRestoreOpsMixin:
         return "failed", mine.summary or r.summary
 
     def _boot_run_stack_item(self, journal, item) -> None:
-        res = self.start(item["target"], apply=True, band=item.get("band", ""),
-                         _before_start_locked=self._boot_claim_hook(journal, item))
+        sid, inst, band, why = boot_restore.resolve_item(self, item)        # 7e: a listed instance on its radio
+        hook = self._boot_claim_hook(journal, item)      # an unresolvable item is claimed, then failed with its why
+        res = (hook() or ActionResult(False, why)) if why else self.start(
+            sid, apply=True, band=band or item.get("band", ""), _before_start_locked=hook, inst=inst)
         # The parts the operator started on their own, AFTER the stack and only when it started;
         # the item stays `attempting` meanwhile, and the ONE settle below records them with the
         # stack's result. A crash here leaves `attempting`: recovery consumes it, starts nothing.
@@ -606,7 +606,7 @@ class BootRestoreOpsMixin:
             if self._boot_start_ok(res):
                 parts = []
                 for cid in item["components"]:
-                    r = self.start(cid, apply=True, band=item.get("band", ""))
+                    r = self.start(cid, apply=True, band=item.get("band", ""), inst=inst)
                     outcome, reason = self._boot_part_outcome(cid, r)
                     parts.append({"component": cid, "outcome": outcome, "reason": reason})
             else:

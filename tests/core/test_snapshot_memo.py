@@ -325,7 +325,9 @@ _READ_PATH_WRITERS = frozenset({
 _TMP = __import__("re").compile(r"\..+\.tmp-\d+-[0-9a-f]+")     # runtime_fs's atomic temp names
 _READ_ONLY_COMMANDS = (("systemctl", "show"), ("systemctl", "is-system-running"),
                        ("systemctl", "--user", "is-system-running"), ("systemctl", "is-active"),
-                       ("systemctl", "is-enabled"))
+                       ("systemctl", "is-enabled"),
+                       ("chronyc", "-n", "-c", "sources"),      # item 13: the doctor's GPS-time line reads chrony's sources
+                       ("pgrep", "-x", "gpsd"))                 # ... and looks for a gpsd process
 # The tty ioctls that only read a device (its mode, line state, window, queues or settings).
 # Every other request counts as a write — an unknown one too (TIOCSSOFTCAR changes CLOCAL).
 _TTY_READS = frozenset(getattr(__import__("termios"), n) for n in (

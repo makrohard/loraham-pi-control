@@ -397,3 +397,16 @@ def test_build_refusal_names_the_stop_when_meshcore_is_healthy_and_running(tmp_p
     assert not res.ok and "stop the stack first" in res.summary and "reboot" not in res.summary
     assert res.next_commands == ["lhpc stack stop meshcore --yes"]
     assert res.data.get("reason") == "meshcore-plugins"
+
+
+def test_prep_refuses_on_a_listed_instances_current_boot_marker(tmp_path, monkeypatch):
+    # 7d: a meshcore instance on another radio keeps its repeater state under state/<rid>/openhop, so its manager's
+    # marker is there; the installation is shared, so that marker blocks it like slot 0's.
+    svc = _svc(tmp_path)
+    _boot(monkeypatch, tmp_path, BOOT_A)
+    p = tmp_path / "state" / "r3" / "openhop" / mp.MARKER_NAME
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"version": 1, "boot_id": BOOT_A}))
+    r = svc.controller_uninstall_prep()
+    assert not r.ok and r.data.get("prep_blocked") == "meshcore_plugins", r.summary
+    assert f"  marker: {p}" in r.details

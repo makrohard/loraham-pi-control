@@ -39,7 +39,7 @@ import socket
 import time
 from typing import ClassVar
 
-from . import runtime_fs
+from . import ap_network, runtime_fs
 from .paths import PathContainmentError
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -47,6 +47,7 @@ from .snapshot_memo import invalidates_snapshot
 
 class NetworkOpsMixin:
     AP_PROFILE: ClassVar[str] = "lhpc-ap"
+    AP_CIDR_CONFIRM: ClassVar[str] = ap_network.AP_CIDR_CONFIRM
     NETWORK_OP_KEY: ClassVar[str] = "controller-network-op"
     # Pending record TTL recovers ABANDONED/CRASHED helpers only (the helper removes the
     # record in `finally` on every completion path); the helper's own budget stays
@@ -227,24 +228,8 @@ class NetworkOpsMixin:
         return {"interface": iface, "cidr": cidr, "saved": saved, "live": live, "line": line,
                 "commands": cmds}
 
-    def _fw_ap_live(self, iface: str, cidr: str) -> bool:
-        """The AP rules for (iface, cidr) are in force: the root helper's fresh, verified receipt
-        is for the candidate it accepted, and that candidate enables exactly this AP. Unrelated
-        firewall changes (a saved intent not yet applied, a stale helper revision) do not count
-        against the AP, and every unreadable or mismatched piece reads as not live."""
-        import json as _json
-
-        from . import firewall as _fw
-        receipt = self._fw_read_receipt()
-        if not receipt or receipt.get("verdict") != "verified" or not self._fw_receipt_fresh(receipt):
-            return False
-        try:
-            accepted = _json.loads(self._system.fs.read_text(_fw.CANDIDATE_DEST, 256 * 1024) or "")
-            if _fw.intent_hash(accepted) != receipt.get("intent_hash"):
-                return False
-        except (OSError, ValueError, TypeError, AttributeError):
-            return False
-        return accepted.get("ap") == {"enabled": True, "interface": iface, "cidr": cidr}
+    def _fw_ap_live(self, iface: str, cidr: str) -> bool:      # the receipt's AP rules for (iface, cidr), ap_network
+        return ap_network.fw_ap_live(self, iface, cidr)
 
     def _network_authorized(self) -> bool:
         """Cached logind-style verdict on `nmcli general permissions`: both required NM
@@ -368,6 +353,8 @@ class NetworkOpsMixin:
         view["mode"] = ("ap" if act.get("name") == self.AP_PROFILE
                         else ("client" if act else "off"))
         view["ap_firewall"] = self.ap_firewall_gap()        # CO-16: an AP nobody can join
+        view["ap_cidr"] = ap_network.effective(self)        # NA: the Network panel's AP subnet field
+        view["ap_cidr_confirm"] = ap_network.AP_CIDR_CONFIRM
         view["active"] = act
         view["ethernet"] = self._nm_ethernet(listed)
         if view["mode"] == "ap":
@@ -891,6 +878,13 @@ class NetworkOpsMixin:
         return (("pending", cmd, res.summary + note) if cmd
                 else ("error", "", res.summary + note))
 
+    def ap_cidr(self) -> str:                                         # NA: the setting, else the default
+        return ap_network.effective(self)
+
+    @invalidates_snapshot
+    def network_set_ap_cidr(self, value: str, confirm: str) -> ActionResult:    # NA: the one apply (ap_network)
+        return ap_network.set_ap_cidr(self, value, confirm)
+
     @invalidates_snapshot
     def network_ap_now(self, apply: bool = False) -> ActionResult:
         """Switch back to the box's own AP (operator ruling: client mode needs a way home).
@@ -906,7 +900,7 @@ class NetworkOpsMixin:
                 "  [warn] this box leaves the Wi-Fi NOW — your session on this network "
                 "ends",
                 f"  [your device] reconnect your phone/PC to the box's own Wi-Fi "
-                f"('{socket.gethostname()}') and open https://10.42.0.1:8443",
+                f"('{socket.gethostname()}') and open https://{ap_network.first_host(self)}:8443",
             ]
             if self._net_preferred().get("uuid"):
                 details.append("  [note] the preferred-network flag is CLEARED — the box "
@@ -919,6 +913,8 @@ class NetworkOpsMixin:
             return ActionResult(False, "network controls are not available on this box")
         if ap is None:
             return ActionResult(False, "no AP profile found on this box")
+        if (refusal := ap_network.ap_start_gate(self)) is not None:     # NA/C9: the candidate subnet first
+            return refusal
         # CO-16: an AP its clients cannot join strands the operator. Save the AP rules for this
         # profile (unprivileged); they go live only with the root apply, so refuse until then.
         gap = self.ap_firewall_gap()
@@ -974,7 +970,7 @@ class NetworkOpsMixin:
             self._net_view_invalidate()
             return ActionResult(True, "Switching to AP mode NOW — reconnect your device "
                                       f"to '{socket.gethostname()}' and open "
-                                      "https://10.42.0.1:8443")
+                                      f"https://{ap_network.first_host(self)}:8443")
 
     # ---- prefer / forget / retry -----------------------------------------------------
 

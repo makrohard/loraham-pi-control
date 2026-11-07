@@ -372,7 +372,7 @@ def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
     assert "sources.list.d" not in script and "opensuse" not in script
     assert "dtparam=spi=on" in script                        # SPI / config.txt
     assert "usermod -aG" in script                           # group grants
-    assert "systemctl disable --now meshtasticd" in script   # system-meshtasticd disable
+    assert "svc_disable meshtasticd.service" in script       # system-meshtasticd disable (the bounded call)
     # NOT a venv-level pip install, and no leaked absolute dev path
     assert "-m pip install" not in script
     assert "/home/" not in script

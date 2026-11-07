@@ -50,8 +50,10 @@ class OneStoreError(ValueError):
     """A one-store read or write could not be done; nothing legacy was removed."""
 
 
-def file_path(paths) -> Path:
-    return Path(paths.runtime_root) / "state" / "openhop" / "config.yaml"
+def file_path(paths, inst=None) -> Path:
+    """openHop's file of `inst` (slot 0 when None): state/openhop/config.yaml, a listed instance's under state/<rid>/ (7d)."""
+    from .commands import SLOT0
+    return Path(paths.runtime_root) / (inst or SLOT0).subst("state/{instance_dir}openhop") / "config.yaml"
 
 
 def _python(svc) -> Path:
@@ -73,10 +75,10 @@ def _helper(svc, *args: str, stdin: str = "") -> str:
     return proc.stdout
 
 
-def read(svc, keys) -> dict:
-    if not file_path(svc._paths).exists():
+def read(svc, keys, inst=None) -> dict:
+    if not file_path(svc._paths, inst).exists():
         return dict.fromkeys(keys)
-    return json.loads(_helper(svc, "get", str(file_path(svc._paths)), *keys))
+    return json.loads(_helper(svc, "get", str(file_path(svc._paths, inst)), *keys))
 
 
 def to_row(name: str, value):
@@ -97,24 +99,31 @@ def to_file(name: str, text: str):
     return round(float(text) * scale) if scale else text
 
 
-def blocked(svc) -> str:
-    """'' when LHPC may write the file (no node process, no unverified stop), else the reason."""
+def blocked(svc, inst=None) -> str:
+    """'' when LHPC may write the file (no node process, no unverified stop), else the reason. A listed instance
+    (7d) looks at its own process and records only; slot 0 as before."""
     svc.build_snapshot(fresh=True)
-    if svc.stack_running(STACK_ID):
+    rid = inst.rid if inst is not None and inst.slot else None
+    if rid is None and svc.stack_running(STACK_ID):
         return RUNNING
+    if rid is not None:
+        from . import instances
+        if instances.instance_runs(svc, svc.stack(STACK_ID).component(NODE_ID), inst, instances.resolve(
+                svc, f"{STACK_ID}@{rid}")[2]):
+            return RUNNING
     # A record stamped with an EARLIER boot has no live process: it is a reboot's leftover (the very
     # evidence boot restore claims), not an unverified stop. Unstamped records, an unreadable boot id
     # and same-boot records still count (the rule of boot restore's evidence, fail closed).
     from .lifecycle import current_boot_id
     boot = current_boot_id()
     if any(not (boot and rec.get("boot_id") and rec["boot_id"] != boot)
-           for rec in svc._lifecycle().owned_records(NODE_ID)):
+           for rec in svc._lifecycle().owned_records(NODE_ID, rid=rid)):
         return UNVERIFIED
     return ""
 
 
-def _set(svc, values: dict) -> None:
-    _helper(svc, "set", str(file_path(svc._paths)), stdin=json.dumps(values))
+def _set(svc, values: dict, inst=None) -> None:
+    _helper(svc, "set", str(file_path(svc._paths, inst)), stdin=json.dumps(values))
 
 
 _ROWS_SEEN: dict = {}          # file path -> ((inode, mtime_ns, size), every row key's value)
@@ -182,26 +191,28 @@ def save_rows(svc, values: dict) -> str:
     return ""
 
 
-def ensure(svc, legacy, airtime_default: str) -> None:
+def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
     """Before a repeater-mode start: every one-store key present in openHop's file. `legacy` maps
     row name -> the pre-issue-5 stored value (or ''); None reads the stored values INSIDE the lock,
     so a save committed before it is migrated, never removed unread. Legacy copies are removed only
-    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact."""
+    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact. A listed instance
+    (7d) writes its own file, mints its own secrets and removes nothing: the legacy copies are slot 0's."""
+    own = inst is not None and inst.slot
     with cfgmod.config_lock(svc._paths):
-        why = blocked(svc)
+        why = blocked(svc, inst)
         if why:
             raise OneStoreError(why)
         if legacy is None:
             svc._invalidate_config()                     # the committed store, read under the lock
             legacy = {n: svc._stored_param_value(STACK_ID, "file", NODE_ID, n)
                       for n in ("repeater_name", "repeater_mode", "airtime")}
-        have = read(svc, [k for k, _s in ROWS.values()])
+        have = read(svc, [k for k, _s in ROWS.values()], inst)
         missing = {}
         for name, (key, _scale) in ROWS.items():
             if have.get(key) is not None:
                 continue
             value = legacy.get(name, "")
-            if not value and name in _SECRET_ROWS:
+            if not value and name in _SECRET_ROWS and not own:
                 value = _mci.read_secret(svc._paths, _SECRET_ROWS[name])
             if not value:
                 value = _mint(name, airtime_default)
@@ -213,10 +224,12 @@ def ensure(svc, legacy, airtime_default: str) -> None:
         if have.get("repeater.node_name") is None and "repeater.node_name" not in missing:
             raise OneStoreError("set the repeater name in LHPC Settings (Repeater) first")
         if missing:
-            _set(svc, missing)
-        _helper(svc, "sync", str(file_path(svc._paths)))
+            _set(svc, missing, inst)
+        _helper(svc, "sync", str(file_path(svc._paths, inst)))
         # usable by upstream's start rules (the host's own check, one seam) before any legacy goes
-        _helper(svc, "check", str(file_path(svc._paths)))
+        _helper(svc, "check", str(file_path(svc._paths, inst)))
+        if own:
+            return
         # durable: now the legacy copies go, for every key the file holds
         for filename in _SECRET_ROWS.values():
             _mci.remove_secret(svc._paths, filename)
@@ -241,7 +254,7 @@ def for_start(svc, target: str) -> bool:
     return target in (STACK_ID, NODE_ID) and repeater_on(svc.meshcore_mode())
 
 
-def start_ensure(svc, target: str, nested: bool = False) -> None:
+def start_ensure(svc, target: str, nested: bool = False, inst=None) -> None:
     """The start's step, after admission and before its shared config guard: `ensure` with the
     legacy stack-config values, read under ensure's lock. Any failure refuses the start as a
     OneStoreError. A repeater start nested under a held guard must come from a restart that ran
@@ -253,12 +266,12 @@ def start_ensure(svc, target: str, nested: bool = False) -> None:
                             "a nested repeater start needs the restart's step first")
     _c, p, _e = svc._param_ref(STACK_ID, "file", f"{NODE_ID}.airtime")
     try:
-        ensure(svc, None, p.default if p is not None else "10")
+        ensure(svc, None, p.default if p is not None else "10", inst)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise OneStoreError(f"openHop's config file: {exc}") from exc
 
 
-def restart_ensure(svc, target: str) -> None:
+def restart_ensure(svc, target: str, inst=None) -> None:
     """A restart's step, after admission and BEFORE its shared config-stability guard: the start
     nested under that guard cannot take the exclusive lock `ensure` needs (a second descriptor would
     wait for the guard), so it skips `start_ensure`. With every one-store key in openHop's file there
@@ -267,22 +280,22 @@ def restart_ensure(svc, target: str) -> None:
     if not for_start(svc, target):
         return
     try:
-        complete = file_path(svc._paths).exists() and all(
-            v is not None for v in read(svc, [k for k, _s in ROWS.values()]).values())
+        complete = file_path(svc._paths, inst).exists() and all(
+            v is not None for v in read(svc, [k for k, _s in ROWS.values()], inst).values())
     except (OSError, ValueError, subprocess.SubprocessError):
         complete = False                             # unreadable: ensure reports it
     if complete:
         # read-only, before any stop: openHop's own loader + the rule, as a plain start checks it. Legacy copies a
         # crash left between the file write and their removal stay until the next plain start (the file wins).
         try:
-            _helper(svc, "check", str(file_path(svc._paths)))
+            _helper(svc, "check", str(file_path(svc._paths, inst)))
         except (OSError, subprocess.SubprocessError) as exc:
             raise OneStoreError(f"openHop's config file: {exc}") from exc
         return
-    if blocked(svc):
+    if blocked(svc, inst):
         raise OneStoreError("the first repeater-mode start moves the repeater settings into openHop's "
                             "file: stop the stack, then start it")
-    start_ensure(svc, target)
+    start_ensure(svc, target, inst=inst)
 
 
 def split_saves(svc, target: str, params: list) -> tuple:
@@ -368,14 +381,14 @@ def password_view(svc, comp) -> dict | None:
             "note": comp.ui_password_note}
 
 
-def start_warnings(svc, target: str) -> list:
+def start_warnings(svc, target: str, inst=None) -> list:
     """The `[warning]` lines of a repeater-mode start (plan DELTA-2 a): a repeater name equal to the
     operator callsign, or a dashboard password outside LHPC's rule, written the upstream way is neither
     refused nor overwritten, only shown. [] when there is no file yet or it cannot be read (the ensure step reports that)."""
-    if not for_start(svc, target) or not file_path(svc._paths).exists():
+    if not for_start(svc, target) or not file_path(svc._paths, inst).exists():
         return []
     try:
-        got = read(svc, ["repeater.node_name", "repeater.security.admin_password"])
+        got = read(svc, ["repeater.node_name", "repeater.security.admin_password"], inst)
     except (OSError, ValueError, subprocess.SubprocessError):
         return []
     out = []

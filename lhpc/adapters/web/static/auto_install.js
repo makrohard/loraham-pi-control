@@ -133,11 +133,9 @@
 })();
 
 /* Selection-table assistance (convenience only — the server does the authoritative refuse+warn):
- * - the "All" master row sets every applicable (enabled) row of its column;
- * - dependency assistance: a mandatory-and-not-ready dependency of a checked stack is force-checked
- *   AND disabled (released when nothing needs it); an optional/already-ready dependency is nudged on
- *   when its dependant is checked but stays editable;
- * - a disabled-but-checked Install box is re-enabled on submit so it still POSTs its value. */
+ * the "All" master row sets every applicable (enabled) row of its column. W206: no box checks another
+ * (no dependency auto-enabling) — on an update a dependency must not be pulled in; a skipped dependency
+ * that is not ready is refused by the server, naming it. */
 (function () {
   "use strict";
   var form = document.getElementById("ai-form");
@@ -145,12 +143,6 @@
   if (!form || !table) return;
   function rows() { return table.querySelectorAll('tr[data-stack]'); }
   function cell(row, cls) { return row.querySelector("." + cls); }
-  function depsOf(row) {
-    try { return JSON.parse(row.getAttribute("data-deps") || "[]"); } catch (e) { return []; }
-  }
-  var byId = {};
-  rows().forEach(function (r) { byId[r.getAttribute("data-stack")] = r; });
-
   function bindAll(masterId, rowCls, isSelect) {
     var m = document.getElementById(masterId);
     if (!m) return;
@@ -173,7 +165,6 @@
           el.checked = m.checked;
         }
       });
-      if (rowCls === "ai-install") recompute();
       if (isSelect) {
         syncAllChannels();                   // a master channel change may disable rows' tests
         m.value = "";                        // an action, not a state: never claim a channel the rows may not have
@@ -215,53 +206,4 @@
   bindAll("ai-all-version", "ai-version", true);
   syncAllChannels();                          // initial state (binary is the default for some)
 
-  function recompute() {
-    // start from a clean slate: re-enable every Install box, then re-derive forced ones
-    rows().forEach(function (r) { var b = cell(r, "ai-install"); if (b) b.disabled = false; });
-    var checked = {}, queue = [], seen = {};
-    rows().forEach(function (r) {
-      var b = cell(r, "ai-install"), sid = r.getAttribute("data-stack");
-      if (b && b.checked) { checked[sid] = true; queue.push(sid); }
-    });
-    while (queue.length) {
-      var sid = queue.shift();
-      if (seen[sid]) continue; seen[sid] = true;
-      var row = byId[sid];
-      if (!row) continue;
-      depsOf(row).forEach(function (d) {
-        var depRow = byId[d.stack], b = depRow && cell(depRow, "ai-install");
-        if (!b) return;
-        if (d.mandatory && !d.ready) {          // FORCE: needed and not yet built
-          b.checked = true; b.disabled = true;
-          if (!seen[d.stack]) queue.push(d.stack);
-        }
-      });
-    }
-  }
-
-  function nudge(sid) {                          // one-shot recommend on check (stays editable)
-    var row = byId[sid];
-    if (!row) return;
-    depsOf(row).forEach(function (d) {
-      if (d.mandatory && !d.ready) return;       // handled by recompute (forced)
-      var depRow = byId[d.stack], b = depRow && cell(depRow, "ai-install");
-      if (b && !b.disabled && !b.checked) { b.checked = true; nudge(d.stack); }
-    });
-  }
-
-  rows().forEach(function (r) {
-    var b = cell(r, "ai-install");
-    if (!b) return;
-    b.addEventListener("change", function () {
-      if (b.checked) nudge(r.getAttribute("data-stack"));
-      recompute();
-    });
-  });
-  form.addEventListener("submit", function () {
-    rows().forEach(function (r) {
-      var b = cell(r, "ai-install");
-      if (b && b.disabled && b.checked) b.disabled = false;   // disabled boxes don't POST
-    });
-  });
-  recompute();
 })();

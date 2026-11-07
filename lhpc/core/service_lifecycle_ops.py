@@ -15,6 +15,7 @@ from . import config as _config
 from . import (
     daemon_control,
     gps,
+    instances,
     procident,
     radio_start,
     runtime_fs,
@@ -43,6 +44,7 @@ from .start_plan import (
     rollback_ids,
     verify_start,
 )
+from .status import component_note
 
 # docs/architecture.md, SPI policy: the maintainer's wording, shown where the pair is admitted.
 SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmitting at the same "
@@ -235,7 +237,7 @@ class LifecycleOpsMixin:
     def _meshcore_mode_refusal(self, target: str):
         return _meshcore_mode.start_refusal(self, target)      # the rules: meshcore_mode.py
 
-    def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
+    def _ready_endpoints_present(self, comp, inst=None) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
         (all_present, evidence-lines). Only endpoints explicitly marked ready
         participate — reference/client/data endpoints never gate."""
@@ -244,7 +246,7 @@ class LifecycleOpsMixin:
         from .probes.unixsock import probe_socket
         # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
         # repeater modes) — the SAME selection ongoing status applies.
-        ready = [e for e in _mm.expected_endpoints(comp, self.meshcore_mode()) if e.ready]
+        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode()), inst) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -341,7 +343,7 @@ class LifecycleOpsMixin:
                         f"{req.note or 'disable it'}{cmd}")
         return ""
 
-    def run_blockers(self, target: str, band: str = "", radio: str = "") -> list[dict]:
+    def run_blockers(self, target: str, band: str = "", radio: str = "", inst=None) -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
         use that a RUNNING component of another stack is *actually* using. Radio
         bands are matched by the band each side really uses (a multi-band stack on
@@ -369,7 +371,7 @@ class LifecycleOpsMixin:
                     continue
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith("loraham.radio.")):
-                    claims[r.key] = c.id
+                    claims[instances.claim_key(r, inst)] = c.id     # 7a: the target instance's own key
         for b in needed_bands:
             claims.setdefault(resources_mod.radio_claim(b), target)
         # The GPS receiver is a DYNAMIC claim (which device, if any, comes from the resolved
@@ -434,8 +436,8 @@ class LifecycleOpsMixin:
                         rb = resources_mod.radio_band(r.key)
                         if rb in active and resources_mod.radio_claim(rb) in claims:
                             add(sid, c.id, resources_mod.radio_claim(rb))
-                    elif r.key in claims:
-                        add(sid, c.id, r.key)
+                    else:                              # G1-C7 B5: a running instance's derived key too
+                        [add(sid, c.id, k) for k in sorted(instances.running_claim_keys(self, sid, c, r) & claims.keys())]
                 # same-frequency rule: another APP stack competing for a band we need. Exclude the
                 # daemon STACK (it provides the radio). Also skip it entirely when the TARGET is the
                 # daemon: its own dependent clients are consumers of the radio it provides, not
@@ -567,45 +569,6 @@ class LifecycleOpsMixin:
         return ("no radio hardware configured — choose your board in the daemon Hardware settings "
                 "before starting a radio stack")
 
-    @invalidates_snapshot
-    def probe_hardware(self, band: str, hw_preset: str):
-        """Bounded, safe hardware probe for the daemon Hardware page: spawn the daemon for
-        (band, hw_preset) and report present / absent (+ the daemon's chip diagnostic) / busy. Guards:
-        valid band, known preset, daemon BUILT. Reuses the real runtime lock dir so an already-running
-        daemon on the band reports BUSY, never gets its radio stolen. A direct-radio stack (meshtastic,
-        reticulum) holds no daemon lock, so the probe takes the band's start locks like a daemon start
-        and refuses, naming the stack, while one owns the band."""
-        from . import config as _config
-        from . import reslock
-        from .probes import hardware as hwprobe
-        if band not in self.RADIO_BANDS:
-            return hwprobe.ProbeResult(False, False, f"invalid band {band!r}")
-        if hw_preset not in _config.HW_PRESETS:
-            return hwprobe.ProbeResult(False, False, f"unknown hardware preset {hw_preset!r}")
-        s = self.stack("daemon")
-        comp = s.main_component if s else None
-        if comp is None or comp.source is None:
-            return hwprobe.ProbeResult(False, False, "daemon component not found")
-        if not self.is_built(comp):
-            return hwprobe.ProbeResult(False, False, "daemon not built — build it first (lhpc build daemon)")
-        life = self._lifecycle()
-        src = life.source_dir(comp)
-        binary = str(src / comp.bin) if comp.bin else str(src / "loraham_daemon" / "loraham_daemon")
-        runtime_dir = str(self._paths.runtime_root / "state" / "loraham")
-        try:
-            with self._keys_guard("hardware-probe", "daemon",
-                                  ["lifecycle.daemon", "claim." + radio_start.claim_key(self._paths, band)]):
-                owner = self._direct_radio_owners({band}).get(band)
-                if owner:
-                    return hwprobe.ProbeResult(
-                        False, True, f"{band} MHz is in use by {self.stack_of(owner) or owner} — "
-                                     "stop it before detecting")
-                return hwprobe.probe_radio(self._system, binary, str(src), band, hw_preset,
-                                           runtime_dir=runtime_dir,
-                                           label=_config.hw_preset_label(hw_preset))
-        except reslock.ResourceBusy as busy:
-            return hwprobe.ProbeResult(False, True, f"{band} MHz is busy ({busy}); try again")
-
     def radio_mode_block(self, target: str) -> str:
         """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
         A band-switchable stack stays available if ANY of its bands is active (uses the RAW declared
@@ -656,7 +619,7 @@ class LifecycleOpsMixin:
     def start(self, target: str, apply: bool = False, stop_owners: bool = False,
               band: str = "", auto_install_ctx=None, *,
               _before_start_locked=None, _operator: bool = True, _ensured: bool = False,
-              position: dict | None = None, position_note: str = "") -> ActionResult:
+              position: dict | None = None, position_note: str = "", inst=None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         A start runs EXACTLY the saved configuration: there are no per-launch values (Settings is the only place configuration changes). The plan (`apply=False`) and the apply take
@@ -694,13 +657,13 @@ class LifecycleOpsMixin:
             if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
                                                 position_note)[0]) is not None:
                 return _r
-            return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band)
+            return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band, inst=inst)
         # The guards: admission FIRST (outside the config-stability guard and before every
         # mutation, so a start refused by a pending self-update/uninstall changes NOTHING), then
         # config stability, then the lifecycle/resource bundle.
         try:
             with self._admit_and_acquire_guards("start", target, band, stop_owners,
-                                                _ensured) as (_op_band, _order, _radio):
+                                                _ensured, inst=inst) as (_op_band, _order, _radio):
                 # The outer recheck under every lock: identity enforcement
                 # FIRST, then the MeshCore position snapshot (the one position decision of this
                 # start, passed down rather than re-queried, so a restart asks exactly once) —
@@ -719,24 +682,24 @@ class LifecycleOpsMixin:
                 # The launch's five phases (`_start_coordinator`), on the IMMUTABLE resolved
                 # band — never the raw argument a marker change could re-resolve differently.
                 _res = self._start_impl(target, apply=True, stop_owners=stop_owners,
-                                        band=_op_band, position=position, position_note=_pos_note)
+                                        band=_op_band, position=position, position_note=_pos_note, inst=inst)
                 # The operator's stop intent, from the launch's result.
                 if _operator and self._start_supersedes_stop_intent(target, _res):
-                    self._clear_stop_intent(target)
+                    self._clear_stop_intent(f"{target}@{inst.rid}" if inst is not None and inst.slot else target)
                 return _res
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
                 PathContainmentError, _ohs.OneStoreError) as exc:
             return self._guard_refusal("start", target, exc)
 
-    def _restart_ensure_band(self, target: str, band: str) -> str:
+    def _restart_ensure_band(self, target: str, band: str, inst=None) -> str:
         """A restart's band, resolved under admission, after the openHop-file step that must run before
         the restart's shared config-stability guard (`openhop_store.restart_ensure`)."""
-        _ohs.restart_ensure(self, target)
+        _ohs.restart_ensure(self, target, inst)
         return self.operation_band(target, band)
 
     @contextlib.contextmanager
     def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool,
-                                  ensured: bool = False):
+                                  ensured: bool = False, inst=None):
         """The guards of an applied start: task admission → config stability → the lifecycle/
         resource bundle (LOCK ORDER), yielding `(op_band, order, radio)` resolved between them.
         ONE effective band for the WHOLE operation, resolved ONCE under admission and never
@@ -747,7 +710,7 @@ class LifecycleOpsMixin:
         with self._admission_guard(op, target):
             op_band = self.operation_band(target, band)
             if not ensured:                              # issue #5: admitted, before the shared guard
-                _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)))
+                _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)), inst=inst)
             with self._config_stable():
                 order, radio = self._order_radio(target, op_band)
                 with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
@@ -785,17 +748,17 @@ class LifecycleOpsMixin:
 
     def _start_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                     band: str = "", position: dict | None = None,
-                    position_note: str = "") -> ActionResult:
+                    position_note: str = "", inst=None) -> ActionResult:
         """Applied starts run under the configuration-stability guard so saved config is a stable
         snapshot from the first read through generation/launch/post-start — a direct/internal
         apply=True call cannot skip it. Dry-run holds no long-lived guard. A guard/read failure is
         a TYPED failure returned BEFORE any lifecycle side effect."""
         if not apply:
             prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
-                                                     position_note, apply=False)
+                                                     position_note, apply=False, inst=inst)
             return prep if isinstance(prep, ActionResult) else self._start_preview(prep)
         try:
-            return self._start_coordinator(target, stop_owners, band, position, position_note)
+            return self._start_coordinator(target, stop_owners, band, position, position_note, inst)
         except (AdmissionRefused, SourceTxnBlocked, OSError, PathContainmentError) as exc:
             # The config-stability guard itself busy (e.g. an auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refused typed rather than hang or crash.
@@ -807,8 +770,8 @@ class LifecycleOpsMixin:
         planned and launched 868, and a daemon preview promised 433 while the launch clamped it to
         868). Returns a refusal or None; a bandless request keeps resolving normally, and plan and
         apply take this same decision because both go through the public entry."""
-        if (op in ("stop", "restart") and (_s := radio_start.shared_band_refusal(self, target, band, op))) or op == "stop":
-            return _s      # W1-11: only a band two radios share refuses a stop or restart's stop leg (a stray stays stoppable)
+        if op == "stop":
+            return None    # a stop is never refused by its band (item 16: a shared band stops each radio's daemon)
         if not band:
             return None
         active = self.active_bands()
@@ -871,7 +834,7 @@ class LifecycleOpsMixin:
         return None
 
     def _start_coordinator(self, target: str, stop_owners: bool, band: str,
-                           position: dict | None, position_note: str) -> ActionResult:
+                           position: dict | None, position_note: str, inst=None) -> ActionResult:
         """THE APPLIED START as its five phases in order. PHASE 1 here is the configuration-
         stability guard, re-entrant: the public `start` already holds admission, config
         stability and the lifecycle bundle; a direct `_start_impl` apply holds this one only.
@@ -895,7 +858,7 @@ class LifecycleOpsMixin:
         MeshCore position) and the boot-restore claim."""
         with self._config_stable():                                             # PHASE 1
             prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
-                                                     position_note, apply=True)  # PHASE 2
+                                                     position_note, apply=True, inst=inst)  # PHASE 2
             if isinstance(prep, ActionResult):
                 return prep                 # a refusal, or the already-healthy no-op
             run = StartRun(out=[], results=[], presented=set(), daemon_launched=set(),
@@ -924,7 +887,7 @@ class LifecycleOpsMixin:
 
     def _prepare_from_fresh_evidence(self, target: str, band: str, stop_owners: bool,
                                      position: dict | None, position_note: str, *,
-                                     apply: bool):
+                                     apply: bool, inst=None):
         """PHASE 2 PREPARE: every input of the start resolved once from the saved configuration — on
         the apply under the stability guard `_start_coordinator` takes first, on the plan (`_start_impl`,
         `apply=False`) without it — and the launch's refusals, before its first stop or spawn: the
@@ -960,7 +923,7 @@ class LifecycleOpsMixin:
         # already_healthy and the radio stays put). Refuse with the reason and the commands that actually switch it.
         _sid = self.stack_of(target) or target
         _live = self.running_band(_sid, "")
-        if band and _live and band != _live and self.stack_bands(_sid) \
+        if band and _live and band != _live and self.stack_bands(_sid) and not getattr(inst, "slot", 0) \
                 and self._band_owner_is_up(_sid):
             return ActionResult(
                 False,
@@ -1004,14 +967,14 @@ class LifecycleOpsMixin:
             target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
             radio=radio, tx=tx, start_sid=start_sid, target_is_stack=self.stack(target) is not None,
             params=params, file_over=file_over, position=position, position_note=position_note,
-            stop_owners=stop_owners)
+            stop_owners=stop_owners, inst=inst)
         if not apply:
             return prep
         # No-side-effect Start FIRST — BEFORE any owner handling: if EVERY requested component is
         # already healthy, return ALREADY_HEALTHY immediately. Never run blockers for mutation,
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
-        if self._order_already_healthy(order, radio):
+        if instances.already_healthy(self, target, order, radio, inst, cfg_band):  # 7c2: this instance's own
             # Only components the health predicate actually JUDGED may be reported 'already running':
             # a non-main interactive component was satisfied by its marker (its command was presented —
             # nothing is running under lhpc), and a GUI-skipped gui_optional component is not runnable
@@ -1105,21 +1068,21 @@ class LifecycleOpsMixin:
                 details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
         # The apply's firewall gate and ambiguity refusal, behind the apply's own healthy
         # shortcut; blockers stay plan details (the web's owner-confirm flow reads them).
-        if not self._order_already_healthy(order, radio) and (
+        if not instances.already_healthy(self, target, order, radio, prep.inst, cfg_band) and (
                 _r := self._start_preflight_refusal(target, order, band, radio, "start",
                                                     check_blockers=False,
                                                     render=False)) is not None:
             return _r
-        blockers = self.run_blockers(target, band, radio)
+        blockers = self.run_blockers(target, band, radio, prep.inst)
         for bl in blockers:
             details.append(f"  [conflict] {bl['resource']} is held by running stack "
                            f"'{bl['holder_stack']}' ({bl['holder']})")
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
-        details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target)]
-        return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
+        details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
+        return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst else ''}': {len(order)} component(s) in order.",
                             details=details,
-                            next_commands=[f"lhpc stack start {target}"
+                            next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst else f"lhpc stack start {target}"
                                            + (f" --band {band}" if band else "") + " --yes"],
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})
@@ -1141,7 +1104,7 @@ class LifecycleOpsMixin:
         # component-scoped start must never be widened into a whole-stack boot restore.
         _req_target, _req_scope = target, prep.scope
         life = run.life
-        blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
+        blockers = self.run_blockers(target, band, radio, prep.inst) if prep.stop_owners else []
         if blockers:
             prelude = []
             unstopped = []
@@ -1163,7 +1126,7 @@ class LifecycleOpsMixin:
             for o in sorted({bl["holder_stack"] for bl in blockers} - {daemon_sid}):
                 stop_owner(o)
             if not unstopped and any(bl["holder_stack"] == daemon_sid for bl in blockers):
-                left = [bl for bl in self.run_blockers(target, band, radio)
+                left = [bl for bl in self.run_blockers(target, band, radio, prep.inst)
                         if bl["holder_stack"] == daemon_sid]
                 bands = sorted({bl.get("band", "") for bl in left})
                 # One daemon process serving both bands stops both on a per-band stop: refuse
@@ -1248,7 +1211,7 @@ class LifecycleOpsMixin:
             return self._overrides_for_comp(target, "file", file_over, comp_id)
 
         for stack, comp in order:
-            state = st_index[comp.id].run_state
+            state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state)   # 7c2
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
             # A DEGRADED component (process up but a ready endpoint missing) must not
             # be treated as healthy and must not trigger a duplicate launch. A GPS feed is judged
@@ -1269,7 +1232,8 @@ class LifecycleOpsMixin:
                 _known = {r["launch_id"] for r in life.owned_records(comp.id)}
                 dlines, dok, dgate = self._ensure_daemon(life, stack, comp, running, radio,
                                                          start_sid, requested_target=_req_target,
-                                                         start_scope=_req_scope)
+                                                         start_scope=_req_scope,
+                                                         rid=radio_start.client_rid(self, start_sid, radio, prep.inst))
                 daemon_launched |= {r["band"] for r in life.owned_records(comp.id)
                                     if r["launch_id"] not in _known}
                 out.extend(dlines)
@@ -1338,7 +1302,7 @@ class LifecycleOpsMixin:
                 # absent config — the same three-status handling as the sibling write sites.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                                 position=position)
+                                                 position=position, inst=prep.inst)
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1421,7 +1385,7 @@ class LifecycleOpsMixin:
                 # present a command as ready-to-run.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                                 position=position)
+                                                 position=position, inst=prep.inst)
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1433,8 +1397,7 @@ class LifecycleOpsMixin:
                 # component's pre_steps otherwise never execute: their only caller is
                 # `life.start`, which is exactly what this branch skips. Voice's terminal
                 # variant resolves its shared loraham_voice.conf from dirname(argv0), so
-                # without its `config/files` symlink the command we print here fails with
-                # ENOENT.
+                # without its `config/files` symlink the command we print here fails with ENOENT.
                 if comp.pre_steps:
                     from . import commands
                     try:
@@ -1493,7 +1456,7 @@ class LifecycleOpsMixin:
             # stale or absent configuration.
             if comp.config_file:
                 cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
-                                             position=position)
+                                             position=position, inst=prep.inst)
                 mine = [w for w in cw if w.component == comp.id]
                 bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                 if bad:
@@ -1512,7 +1475,7 @@ class LifecycleOpsMixin:
             # required post-start log, and the detached post runner's log all get a
             # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
             announcer = self._log_announcer(comp.id, out)
-            inst, why = radio_start.client_instance(self, comp, cfg_band or comp.band)   # a fixed-band client: its band
+            inst, why = radio_start.client_instance(self, comp, cfg_band or comp.band, prep.inst, out)   # 7c2: the instance
             if why:
                 record(comp, stack, Outcome.BLOCKED, why)
                 continue
@@ -1554,7 +1517,7 @@ class LifecycleOpsMixin:
                 # (`auto` softens exactly the upstream-missing states — see _gps_feed_admission.)
                 ready_ok, ev = self._gps_feed_admission(comp)
                 if not ready_ok:
-                    cleanup = life.stop(comp, band=cfg_band)
+                    cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                     record(comp, stack, Outcome.UNVERIFIED,
                            f"GPS feed never reached its source ({ev}); cleanup: "
                            + ("stopped" if cleanup.outcome == Outcome.STOPPED
@@ -1562,9 +1525,9 @@ class LifecycleOpsMixin:
                     continue
                 summary = f"started; {ev}"
             elif comp.readiness == "endpoint":
-                ready_ok, ev = self._ready_endpoints_present(comp)
+                ready_ok, ev = self._ready_endpoints_present(comp, inst)
                 if not ready_ok:
-                    cleanup = life.stop(comp, band=cfg_band)
+                    cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                     record(comp, stack, Outcome.UNVERIFIED,
                            f"ready endpoint(s) never came up ({'; '.join(ev)})"
                            + self._conflicting_service_hint(comp)
@@ -1581,7 +1544,7 @@ class LifecycleOpsMixin:
             required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band,
                                                              announce=announcer)
             if required_ok is False:
-                cleanup = life.stop(comp, band=cfg_band)
+                cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                 record(comp, stack, Outcome.UNVERIFIED,
                        f"required post-start failed: {post_summary}; cleanup: "
                        + ("stopped" if cleanup.outcome == Outcome.STOPPED
@@ -1597,7 +1560,7 @@ class LifecycleOpsMixin:
             # client started with band=868 must not write that marker while `rns` is
             # tuned to 433, or status, the dashboard, arbitration and per-band config
             # all describe a band the radio is not on.
-            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands):
+            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands) and not getattr(prep.inst, "slot", 0):   # slot 0's marker
                 band_ok = self._set_running_band(stack.id, cfg_band)
             if band_ok:
                 record(comp, stack, Outcome.VERIFIED, summary)
@@ -1606,7 +1569,7 @@ class LifecycleOpsMixin:
                 # outcome: later arbitration falls back to the DECLARED band, so a node
                 # actually on 433 reads as 868 and a second 433 owner can be admitted.
                 # Stop what we just started rather than run a radio we cannot account for.
-                cleanup = life.stop(comp, band=cfg_band)
+                cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                 record(comp, stack, Outcome.UNVERIFIED,
                        summary + "; running-band marker could not be persisted — "
                        + ("started process stopped again (no durable band evidence)"
@@ -1661,7 +1624,7 @@ class LifecycleOpsMixin:
         if ok and (_spi := self._spi_shared_warning(target, band, radio)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
             warned = {"spi_warning": _spi}        # the console's start banner shows it too
-        if ok and (_ohw := _ohs.start_warnings(self, target)):
+        if ok and (_ohw := _ohs.start_warnings(self, target, prep.inst)):
             out = [*out, *(f"  [warning] {w}" for w in _ohw)]
             warned = {**warned, "openhop_warnings": _ohw}   # the stack page's start note too
         return ActionResult(ok, summary, details=out, results=tuple(results), data=warned,
@@ -2044,7 +2007,7 @@ class LifecycleOpsMixin:
         return "daemon readiness/TX gating failed"
 
     def _ensure_daemon(self, life, stack, comp, running, radio, start_sid, *,
-                       requested_target: str = "", start_scope: str = ""):
+                       requested_target: str = "", start_scope: str = "", rid: str = ""):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
 
         "Running" means the band's CONF socket is reachable, not merely that a
@@ -2063,15 +2026,20 @@ class LifecycleOpsMixin:
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
         needed, owned = self._daemon_arbitrated_bands(radio)
-        views = {b: daemon_control.read_view(self._system, radio_start.daemon_key(self, b)) for b in needed}
+        units, why = radio_start.daemon_units(self, needed, rid)      # item 16: `rid` alone, else each radio
+        if why:
+            return [f"  [BLOCKED] daemon: {why}"], False, ""
+        views = {u: daemon_control.read_view(self._system, radio_start.daemon_key(self, u[1] or u[0])) for u in units}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
         #   READY (retain) | reachable-not-READY (fail) | CONF-down-but-process-claims-it (fail, do
         #   NOT relaunch/SET) | truly absent (safe to launch).
-        claimed = self._daemon_claimed_bands()
-        not_ready = [b for b in needed if views[b].reachable and not views[b].ready]
-        claimed_down = [b for b in needed if not views[b].reachable and b in claimed]
-        absent = [b for b in needed if not views[b].reachable and b not in claimed]
+        claimed = {u for u in units if radio_start.daemon_claimed(self, *u)}
+        not_ready = [u for u in units if views[u].reachable and not views[u].ready]
+        claimed_down = [u for u in units if not views[u].reachable and u in claimed]
+        absent = [u for u in units if not views[u].reachable and u not in claimed]
+        on = {b: [u for u in units if u[0] == b] for b in needed}             # a band's own radios name the line
+        lab = {u: u[0] if len(on[u[0]]) == 1 else f"{u[0]} ({u[1]})" for u in units}
         lines, ok_all, gate = [], True, ""
         # Band arbitration: skip bands a running radio-direct stack owns (meshtastic-<band> and
         # daemon-<band> are the SAME physical radio) — serve only the free band(s) instead of colliding,
@@ -2088,18 +2056,18 @@ class LifecycleOpsMixin:
         # away — the skip line already explains a band-owned narrowing).
         if (radio or "") == "" and not owned and set(needed) != set(ALLOWED_BANDS):
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
-        for b in not_ready:
-            ok_all = False
+        for u in not_ready:
+            ok_all, b = False, lab[u]
             # A bare RADIO=FAILED leaves the operator with nothing to do (a MeshCom start
             # blocked on it for an hour). Name the two causes that actually produce it on this
             # hardware: another process clocking the SHARED SPI bus while the daemon probes the chip
             # (the daemon's /run/lock/loraham serialises its own instances, never a foreign binary),
             # and an RF front-end wedged from an earlier run — which only a power cycle clears.
             lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
-                         f"{views[b].radio_state or 'unknown'} (not READY) — dependent launch blocked")
-            lines.append(f"    | {self._radio_not_ready_hint(b)}")
-        for b in claimed_down:
-            ok_all = False
+                         f"{views[u].radio_state or 'unknown'} (not READY) — dependent launch blocked")
+            lines.append(f"    | {self._radio_not_ready_hint(u[0])}")
+        for u in claimed_down:
+            ok_all, b = False, lab[u]
             lines.append(f"  [fail] daemon on {b}: CONF socket unreachable but a daemon process "
                          f"still holds the radio — not relaunched (resolve the stuck instance first)")
         failed: set = set()
@@ -2121,45 +2089,23 @@ class LifecycleOpsMixin:
             # both` (a mode the operator may still start manually); it runs an independent
             # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
             # I5 (A §1): one at a time, each READY or failed before the next; a failure stops no other.
-            for b in sorted(absent):
-                # Stage L5: the band's one enabled radio (W1-3/4/5) and its start plan from the hardware list:
-                # --id, --hw from the model, the radio's own settings and RF-log path (W7-1, W7-7, W7-8).
-                t = radio_start.daemon_rid(self, b)
-                params, refusal, _notes = radio_start.start_plan(self, t.rid) if t.rid else (None, t.reason, ())
-                if params is None or refusal:
-                    lines.append(f"  [BLOCKED] daemon on {b}: {refusal}")
-                    failed.add(b)
-                    continue
-                dparams = {**dict(self.stack_config("daemon")), **params}
-                res = life.start(stack, comp, dparams, band=b,
-                                 requested_target=requested_target,
-                                 start_scope=start_scope)
-                base = f"start daemon {t.rid} --radio {b}"
-                if not res.ok:
-                    lines.append(f"  [fail] {base}: {res.detail}")
-                    failed.add(b)
-                    continue
-                lines.append(f"  [ok] {base}")
-                if not self._verify_band_up(b):
-                    failed.add(b)
-                    lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
-                                 f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
-                elif why := radio_start.verify_identity(self, t.rid):
-                    failed.add(b)                                         # W3-7: refused, never signalled
-                    lines.append(f"  [fail] daemon {t.rid}: {why}")
+            for u in absent:
+                if not radio_start.ensure_radio(self, life, stack, comp, u, lab[u], lines,
+                                                requested_target=requested_target, start_scope=start_scope):
+                    failed.add(u)
         # Apply, once per band that is now READY (retained, or started and verified above; the
         # failed bands were reported above and are skipped).
-        for b in needed:
-            if b in not_ready or b in claimed_down or b in failed:
-                continue                      # failed bands: no retain, no CONF SET
-            if b not in absent:               # retained; a started band was verified above
-                lines.append(f"  [ok] daemon already serving {b}")
+        for u in units:
+            b = u[0]
+            if u in not_ready or u in claimed_down or u in failed:
+                continue                      # failed radios: no retain, no CONF SET
+            if u not in absent:               # retained; a started radio was verified above
+                lines.append(f"  [ok] daemon already serving {lab[u]}")
                 # A band already serving ANOTHER running stack must NOT be reconfigured — a daemon
                 # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
                 # band (its config is whatever that client needs). Freshly-started bands still get
                 # this start's params applied.
-                daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
-                others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != start_sid]
+                others, own = radio_start.radio_clients(self, b, u[1], start_sid)    # G1-C18: on this radio
                 if others:
                     lines.append(f"  [keep] {b} in use by {', '.join(others)} — daemon "
                                  f"config left unchanged")
@@ -2171,11 +2117,11 @@ class LifecycleOpsMixin:
                 # tuned — the band goes silent while every status still reads healthy, and only a
                 # restart of the app recovers it. Starting a second component (kiss-serial next to
                 # a running kiss-tnc) must therefore leave the band's config alone.
-                if self._stack_running_on_band(start_sid, b):
+                if own:
                     lines.append(f"  [keep] {b} already served for '{start_sid}' — daemon "
                                  f"config left unchanged")
                     continue
-            plines, tx_ok, pgate = self._apply_stack_daemon_params(start_sid, b)
+            plines, tx_ok, pgate = self._apply_stack_daemon_params(start_sid, b, u[1])
             lines.extend(plines)
             if pgate:
                 gate = gate or pgate            # the stack's config, not the daemon: not a failure here
@@ -3032,6 +2978,12 @@ class LifecycleOpsMixin:
         lines.extend(self._required_post_outcomes(comp_id))
         return lines
 
+    def _daemon_installed(self, dstat) -> bool:
+        """`dstat` (the daemon's ComponentStatus) is installed: a source tree, the binary channel (source-less), or anything
+        RUNNING, which is installed by definition (source_state alone read a binary-installed running daemon as absent)."""
+        return bool(dstat) and (dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
+                                or self.binary_covers(self.DAEMON_ID) or dstat.run_state in (RunState.RUNNING, RunState.DEGRADED))
+
     def radio_overview(self) -> list[dict]:
         """Per-band view for the radio dashboard: daemon/radio config (if running),
         which stack (+ its components) is up on that band, and which stacks can be
@@ -3043,13 +2995,7 @@ class LifecycleOpsMixin:
         dstat = live.get(self.DAEMON_ID)
         daemon_proc = dstat.run_state.value if dstat else "unknown"
         daemon_up = bool(dstat and dstat.run_state in up)
-        # "Installed" is not only a SOURCE tree: the daemon can be installed from the binary
-        # channel (source-less), and anything RUNNING is installed by definition. Keying this off
-        # source_state alone made a binary-installed, running daemon render "Daemon not installed".
-        daemon_installed = bool(dstat) and (
-            dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
-            or self.binary_covers(self.DAEMON_ID)
-            or daemon_up)
+        daemon_installed = self._daemon_installed(dstat)
         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
         # LIVERSSI only, and this renders on every dashboard load -> the PASSIVE read. A scan here
         # would destroy an arriving frame just to draw a signal bar.
@@ -3085,11 +3031,10 @@ class LifecycleOpsMixin:
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads
                     # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
-                    booting = (c.id in live and live[c.id].run_state in up
-                               and self._component_booting(c.id))
+                    booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
                     comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
-                          "interactive": c.interactive,
+                          "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
                           # Interactive components (GUI/CLI/REPL) are run by the
                           # operator, never by lhpc — show the command to copy.
                           "command": self.manual_start_command(c) if c.interactive else "",
@@ -3280,7 +3225,7 @@ class LifecycleOpsMixin:
     @invalidates_snapshot
     def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", purge: bool = False) -> ActionResult:
+                   band: str = "", purge: bool = False, inst=None) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
@@ -3292,10 +3237,10 @@ class LifecycleOpsMixin:
             "update": lambda: self.update(target, apply=apply, source=source,
                                           build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
-            "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band),
-            "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),
+            "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band, inst=inst),
+            "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band, inst=inst),
             "restart": lambda: self.restart(target, apply=apply, stop_owners=stop_owners,
-                                            band=band, cascade=cascade),
+                                            band=band, cascade=cascade, inst=inst),
             "poststart": lambda: self.poststart(target, apply=apply, band=band),
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
@@ -3321,24 +3266,24 @@ class LifecycleOpsMixin:
 
     # ---- daemon monitoring + live settings -------------------------------
 
-    def daemon_view(self, band: str) -> daemon_control.DaemonView:
+    def daemon_view(self, band: str, rid: str = "") -> daemon_control.DaemonView:
         """Read-only STATUS/STATS for a band — passive, never touches the radio.
 
         `.channel` is empty by design; ask for channel data explicitly (see below)."""
-        return daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_channel(self, band: str) -> dict[str, str]:
+    def daemon_channel(self, band: str, rid: str = "") -> dict[str, str]:
         """CHANNEL fields WITHOUT a CAD scan — safe to call on a timer."""
-        return daemon_control.read_channel_passive(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_channel_passive(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_channel_scan(self, band: str) -> dict[str, str]:
+    def daemon_channel_scan(self, band: str, rid: str = "") -> dict[str, str]:
         """CHANNEL fields WITH a real CAD scan — DESTRUCTIVE to a frame in flight.
 
         Operator-invoked only (`lhpc daemon <band>`, the console's "Scan now"). Never on a timer."""
-        return daemon_control.read_channel_scan(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_channel_scan(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_socket_line(self, band: str) -> str:
+    def daemon_socket_line(self, band: str, rid: str = "") -> str:
         """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor
         ('' when the band is invalid or the socket is unreachable). Read-only, fail-closed."""
-        return daemon_control.read_socket_line(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_socket_line(self._system, radio_start.daemon_key(self, rid or band))
 

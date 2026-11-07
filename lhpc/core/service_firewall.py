@@ -126,7 +126,7 @@ class FirewallOpsMixin:
         for stk, comp, ep in mapped:                  # rows per instance and band: _fw.endpoint_rows
             bands = (self.stack_bands(stk.id) if hasattr(self, "stack_bands") else ()) or ("",)
             endpoints += _fw.endpoint_rows(stk, bands, lambda b, i, s=stk, c=comp, e=ep:
-                                           self._fw_resolve_scope(s, c, e, band=b, inst=i), selected)
+                                           self._fw_resolve_scope(s, c, e, band=b, inst=i), selected, self._paths)
 
         proxy = self._fw_proxy_ingress(cfg,
                                        ap_managed=bool(getattr(fwcfg, "ap_enabled", False)))

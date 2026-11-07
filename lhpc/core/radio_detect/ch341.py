@@ -56,20 +56,39 @@ class UsbError(OSError):
         self.code = code
 
 
+def _by_port(listed, serial: str, port: tuple) -> list:
+    """With a port the stick on it is the target, whatever the others are (P2, DEC-W35): another stick's
+    unreadable serial, or a second stick without one, never blocks it. A readable serial must be the row's (the
+    first 8 characters); an unreadable one proceeds by port (a stick whose descriptors stall)."""
+    hits = [d for d in listed if d.port == port]
+    if len(hits) > 1:
+        raise DetectRefused(f"more than one stick is listed on port {'.'.join(map(str, port))}")
+    if hits and hits[0].readable and serial and (hits[0].serial or "")[:8] != serial[:8]:
+        raise DetectRefused(f"the stick on port {'.'.join(map(str, port))} has serial "
+                            f"{hits[0].serial[:8] if hits[0].serial else '(none)'}, not {serial[:8]}")
+    if hits and hits[0].readable and not serial and hits[0].serial is not None:
+        raise DetectRefused(f"the stick on port {'.'.join(map(str, port))} has serial {hits[0].serial[:8]}; "
+                            "this radio is the stick without one")
+    return hits
+
+
 def select(usb, vid: int, pid: int, *, serial: str = "", port: tuple = ()):
-    """The claimed handle of the configured stick, or DetectRefused. `usb` lists, claims and releases."""
+    """The claimed handle of the configured stick, or DetectRefused. `usb` lists, claims and releases. With a
+    `port` the stick on that port is selected (`_by_port`); without one, by serial, refused while any stick of
+    unknown identity could be the one asked for."""
     listed = usb.devices(vid, pid)
-    if any(not d.readable for d in listed):
-        raise DetectRefused("a connected stick's identity cannot be read (no access, or its serial failed); "
-                            "unplug it or fix its access")
-    if serial:
+    port = tuple(port)
+    if port:
+        hits = _by_port(listed, serial, port)
+        what = f"port {'.'.join(map(str, port))}"
+    elif serial:
+        if any(not d.readable for d in listed):
+            raise DetectRefused("a connected stick's identity cannot be read (no access, or its serial failed); "
+                                "unplug it or fix its access")
         hits = [d for d in listed if d.serial and d.serial[:8] == serial[:8]]
         what = f"serial {serial[:8]}"
     else:
-        hits = [d for d in listed if d.serial is None and d.port == tuple(port)]
-        what = f"port {'.'.join(map(str, port))}"
-        if hits and sum(d.serial is None for d in listed) > 1:
-            raise DetectRefused("more than one stick without a serial is connected; unplug the others")
+        raise DetectRefused("the radio names neither a serial nor a port")
     if not hits:
         raise DetectRefused(f"no stick with {what} is connected")
     if len(hits) > 1:
@@ -83,7 +102,12 @@ def select(usb, vid: int, pid: int, *, serial: str = "", port: tuple = ()):
             raise DetectRefused("the stick was removed during selection") from exc
         raise DetectRefused(f"the stick cannot be opened: {exc}") from exc
     try:
-        same = (handle.serial() or None, handle.port()) == (hits[0].serial, hits[0].port)
+        # A target of unknown serial (chosen by port) is re-checked by its port alone: its serial read failed
+        # before and would fail again; the others by serial and port.
+        if hits[0].readable:
+            same = (handle.serial() or None, handle.port()) == (hits[0].serial, hits[0].port)
+        else:
+            same = handle.port() == hits[0].port
     except UsbError as exc:
         usb.release(handle)
         raise DetectRefused(f"the stick cannot be re-checked: {exc}") from exc
@@ -121,7 +145,11 @@ class Ch341Bus:
         if self._busy is None:
             return False
         self._h.write(bytes([GET_INPUT]))
-        return bool(self._h.read(6)[0] & (1 << self._busy))
+        o = self._h.read(6)
+        # the bridge's whole input word, as libch341's poll thread builds it: D0-D7, then the status bits (ERR 8,
+        # PEMP 9, INT# 10, SLCT 11); the PINE64's BUSY is SLCT (T1.3, measured on box H)
+        word = ((o[2] & 0x80) << 16) | ((o[1] & 0xEF) << 8) | o[0]
+        return bool(word & (1 << self._busy))
 
     def transfer(self, out: bytes) -> bytes:
         self._line(self._cs, 0)

@@ -67,7 +67,7 @@ main = "loraham-daemon"
   # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
   # the file is per band and named by lhpc — the daemon never derives a path itself.
   # Structured (shell-free) execution (W7-9: the daemon has no `run` shorthand; run_argv is its only command).
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "{param:rflog_path}", "{param:id}", "{param:usb_serial}"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "{param:rflog_path}", "{param:id}", "{param:usb_port}"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
   # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
@@ -83,7 +83,7 @@ main = "loraham-daemon"
   # `lhpc_testlab.release.install_build`), because every fetching step — pip, git, a package
   # mirror — fails the same typed way when the network does, and a wrong freeze costs weeks.
   # The Meshstick library is optional on a source build (default: included): build.sh finds the
-  # pine64 clone itself — the managed one is its sibling `../libch341-spi-userspace` — and builds the
+  # library clone itself — the managed one is its sibling `../libch341-spi-userspace` — and builds the
   # daemon without the library when there is none. It accepts a tree only at exactly the locked
   # commit, unmodified, so a copy elsewhere ($HOME/libch341-spi-userspace is tried first) is the same
   # content. No PINEDIO_DIR: a set one that is absent fails the build.
@@ -124,16 +124,17 @@ main = "loraham-daemon"
     default = ""
     label = "Radio id (this process; injected, L5)"
     [[stack.component.param]]
-    name = "usb_serial"
+    name = "usb_port"
     kind = "str"
-    arg = "--usb-serial"
+    arg = "--usb-port"
     default = ""
-    label = "USB stick serial selector, first 8 characters (this process; injected, L5)"
+    label = "USB stick port, the one its serial is listed on now (this process; injected, DEC-W35)"
     [[stack.component.param]]
     name = "hw"
     kind = "enum"
     # W7-7 / T-M3: exactly the presets of the model table (lhpc/data/radio_models.toml); a test fails when they differ.
-    choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262", "meshstick-1262"]
+    choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262", "meshstick-1262",
+               "pinedio-usb-1262", "ch341-rfm98pw-433"]
     # Friendly labels for the GUI (the wire value still submits). `loraham` is the daemon's renamed
     # dual-module preset.
     default = "loraham"
@@ -267,8 +268,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "660be550e3af762120f41a02d48b53af45ad109c"
-    pin_tag = "v1.3.1"
+    pin_commit = "3ffee0094541237a9faf51098f489b49f91746af"
+    pin_tag = "v1.4.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -358,7 +359,7 @@ main = "loraham-daemon"
   id = "libch341"
   name = "libch341-spi-userspace"
   kind = "library"
-  purpose = "pine64's CH341 USB-to-SPI library; the daemon's build.sh builds it into lib/libloraham-ch341.so (the ELECROW Meshstick)."
+  purpose = "The CH341 USB-to-SPI library (makrohard's fork of pine64's); the daemon's build.sh builds it into lib/libloraham-ch341.so (the USB sticks)."
   tx_capable = false
   # A pure checkout (no build steps of its own) the daemon's build.sh compiles when it is present
   # (the source channel's USB support: optional, adopted by default), from exactly the commit in the
@@ -373,9 +374,10 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/libch341-spi-userspace"
-    # pine64 tags no release: the commit alone is the pin.
-    pin_commit = "b0694ec84091b293cb1e97e00a821ff88353274f"
-    remote = "https://github.com/pine64/libch341-spi-userspace"
+    # makrohard's fork of pine64's library (its main: the selection fixes and pinedio_init_at_port,
+    # daemon 1.4.0's lock); untagged, so the commit alone is the pin.
+    pin_commit = "98b656bfce45596b04d55cd2fb6af31af1805652"
+    remote = "https://github.com/makrohard/libch341-spi-userspace"
     branch = "main"
 
 # =====================================================================
@@ -420,8 +422,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "660be550e3af762120f41a02d48b53af45ad109c"
-    pin_tag = "v1.3.1"
+    pin_commit = "3ffee0094541237a9faf51098f489b49f91746af"
+    pin_tag = "v1.4.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -990,7 +992,7 @@ main = "loraham-kiss-tnc"
     scheme = "serial"
 
     [[stack.component.resource]]
-    key = "serial.loraham-kiss"
+    key = "serial.loraham-kiss{instance_suffix}"
     kind = "serial"
     mode = "exclusive"
 

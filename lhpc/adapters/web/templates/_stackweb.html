@@ -27,7 +27,7 @@
   <div class="body">
     {# The URL is a LINK here, not in the summary above (a11y: no interactive element
        inside a <summary> toggle). #}
-    {% if (sw.cfg.enabled or sw.pending_disable) and sw.posture %}<p class="wsopen"><a class="wsurl" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}</a></p>{% endif %}
+    {% if (sw.cfg.enabled or sw.pending_disable) and sw.posture %}<p class="wsopen"><a class="wsurl iface-web" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}" target="_blank" rel="noopener">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}</a></p>{% endif %}
 
     {# STANDING security fact, not a one-off flash: the upstream answers on a non-loopback interface,
        so nginx is not the only door — whatever `mode`/`auth` say. #}
