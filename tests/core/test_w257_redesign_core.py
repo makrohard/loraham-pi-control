@@ -140,3 +140,37 @@ def test_an_explicit_variant_is_kept_even_when_every_variant_carries_a_band(tmp_
     ok, msg = radio_start.add_hat(svc, "loraham", "433", "433")
     assert (ok, msg) == (True, "r2 added: loraham (433) on 433 MHz")
     assert _ids(tmp_path)[-1] == ("r2", "loraham", "433", "433")
+
+
+# ---- (4) set_enabled: the list row's Disable/Enable ---------------------------------------------------------------
+
+def _enabled(tmp_path, rid):
+    return next(r.enabled for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == rid)
+
+
+def test_a_stopped_radio_is_disabled_and_enabled_again(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "low", "loraham", "433"),))
+    assert radio_start.set_enabled(svc, "r1", False) == (True, "r1 disabled") and _enabled(tmp_path, "r1") is False
+    assert radio_start.set_enabled(svc, "r1", True) == (True, "r1 enabled") and _enabled(tmp_path, "r1") is True
+
+
+def test_a_running_radio_is_not_disabled_and_says_what_to_stop(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "low", "loraham", "433"),))
+    monkeypatch.setattr(radio_start, "daemon_running", lambda svc, radio, procs=None: True)
+    before = (tmp_path / "config" / "radios.toml").read_bytes()
+    assert radio_start.set_enabled(svc, "r1", False) == (False, "Not disabled: stop its daemon, then disable r1")
+    assert (tmp_path / "config" / "radios.toml").read_bytes() == before
+
+
+def test_an_enable_the_list_refuses_writes_nothing_and_names_why(tmp_path, monkeypatch):
+    # the list's own save checks decide (pin claims count disabled rows too, so today no state trips only on enable)
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "low", "loraham", "433", enabled=False),))
+    monkeypatch.setattr(radios, "save", lambda *a, **k: ["r1: a reason of the list"])
+    assert radio_start.set_enabled(svc, "r1", True) == (False, "Not enabled: r1: a reason of the list")
+
+
+def test_an_unknown_radio_is_refused_and_the_reserved_ids_stay(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "low", "loraham", "433"),))
+    assert radios.save(svc._paths, radios.load(svc._paths).radios, retired=("r2",)) == []
+    assert radio_start.set_enabled(svc, "r9", False) == (False, "Not disabled: there is no radio r9")
+    assert radio_start.set_enabled(svc, "r1", False)[0] and radios.load(svc._paths).retired == ("r2",)
