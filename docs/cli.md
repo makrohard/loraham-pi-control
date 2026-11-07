@@ -156,6 +156,7 @@ lhpc config <stack> --reset [--yes]    # reset this stack's settings to defaults
 lhpc config <stack> --daemon-param KEY=VALUE   # persist a band-scoped daemon param (repeatable)
 lhpc config <stack> --apply-daemon     # apply saved daemon params to the running daemon
 lhpc config <stack> --reset-daemon     # reset daemon params
+lhpc config <stack>@<rid> [<param> [<value>]] | --reset   # a listed instance's own settings (config/stacks/<stack>@<rid>.toml)
 lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identity
 ```
 

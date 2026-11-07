@@ -255,6 +255,22 @@ def resolve(svc, target: str):
     return sid, inst, radio.band, ""
 
 
+def own_rid(inst) -> str:
+    """A listed instance's radio id, whose own settings file it has (DEC-W60); "" for slot 0 or no instance."""
+    return inst.rid if inst is not None and inst.slot else ""
+
+
+def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
+    """(stored, bandless): the saved settings a component of stack `sid` reads. Slot 0: its band's file and the
+    band-less file (the stack-level params), as before; a listed instance: its own `config/stacks/<sid>@<rid>.toml`
+    for both (DEC-W60) — nothing of slot 0's is shared, an instance without its file runs on the defaults."""
+    if inst is not None and inst.slot:
+        own = svc._stack_config_cached(sid, inst.rid)
+        return own, own
+    stored = svc._stack_config_cached(sid, cfg_band)
+    return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
+
+
 def listed_rids(paths, sid: str) -> frozenset:
     """The radio ids the stack's listed instances run on (reserved slots left out)."""
     return frozenset(rid for _k, rid in listed(load(paths), sid))
@@ -427,3 +443,56 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     b = svc.running_band(sid, comp.band or band) or comp.band or band
     rid, _why = slot0_radio(svc._paths, sid, b)
     return {"exclude_rids": tuple(taken), "token": _token(svc, comp, commands.Instance(0, rid), b) if rid else None}
+
+
+def log_runs(svc, e, rid: str) -> bool:
+    """7f: the RF log badge of a listed instance's own log `<rid>/rf-<x>.log`: that instance's run state."""
+    _sid, inst, band, why = resolve(svc, f"{e.owner}@{rid}")
+    comp = svc.stack(e.owner).component(e.writer) if svc.stack(e.owner) else None
+    return not why and comp is not None and instance_runs(svc, comp, inst, band)
+
+
+def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
+    """The MeshCore RF decoder's mode, secrets and stores: slot 0's (the mode its log is written in), or a listed
+    instance's own (7f: its mode, config/secrets/<rid>, state/<rid>/…), never slot 0's."""
+    from . import meshcore_mode
+    own = (rid,) if rid else ()
+    mode = meshcore_mode.normalize(svc.meshcore_mode(resolve(svc, f"{sid}@{rid}")[1])) if rid else svc._rflog_meshcore_mode()
+    return ["--mode", mode, "--secrets", str(svc._paths.under("config", "secrets", *own)),
+            "--store", str(svc._paths.under("state", *own, "meshcore", "companion.db")),
+            "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
+
+
+def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
+    """7f: the RF log page's stack-row entries of entry `e`'s listed instances on `band`, each its own `<rid>/<file>`."""
+    from . import radio_start, rflog
+    out = []
+    for rid in sorted(listed_rids(svc._paths, e.owner), key=lambda r: int(r[1:])):
+        job = f"{rid}/{job_name}"
+        if radio_start.rf_band(svc, rid) == band and rflog.by_job(job):
+            out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",
+                        "current": job == shown_job})
+    return out
+
+
+def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
+    """7f, DEC-W40: the Settings page's radio chooser of stack `sid`, one entry per enabled radio of its bands
+    ("rN · band"): a listed instance opens its own settings (`radio=`); slot 0's radio of a band opens slot 0's on
+    that band (`band=`, so a band-switchable stack's slot 0 moves there); any other radio of a stack that may run
+    instances is greyed with "add instance". `radio` is the shown instance's rid ("" for slot 0)."""
+    stack = svc.stack(sid)
+    bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
+    rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
+    listed, shown = listed_rids(svc._paths, sid), inst.rid if inst is not None and inst.slot else ""
+    out = []
+    for r in rows:
+        label = f"{r.id} · {r.band}"
+        if r.id in listed:
+            out.append({"label": label, "radio": r.id, "band": "", "sel": shown == r.id, "disabled": False})
+        elif slot0_radio(svc._paths, sid, r.band)[0] == r.id:
+            out.append({"label": label, "radio": "", "band": r.band, "sel": not shown and r.band == (band or r.band),
+                        "disabled": False})
+        elif sid in MAY:
+            out.append({"label": f"{label} · add instance", "disabled": True, "sel": False,
+                        "title": f"no {sid} instance on {r.id}: add one to use it"})
+    return {"radio": shown, "radio_choices": out if len(out) > 1 or listed else []}

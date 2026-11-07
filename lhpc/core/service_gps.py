@@ -668,7 +668,7 @@ class GpsOpsMixin:
         finally:
             fh.close()
 
-    def gps_enabled_for(self, target: str) -> bool:
+    def gps_enabled_for(self, target: str, inst=None) -> bool:
         """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
 
         Stored and read BANDLESSLY. "Does this box report its position" is a property of the
@@ -686,7 +686,7 @@ class GpsOpsMixin:
         if not stack_id:
             return False
         try:
-            cfg = self._stack_config_cached(stack_id)          # bandless
+            cfg = self._stack_config_cached(stack_id, inst.rid if inst is not None and inst.slot else "")   # bandless; an instance's own
         except (OSError, ValueError, KeyError, ConfigError):
             return False
         raw = str(cfg.get("use_gps", "")).strip().lower()

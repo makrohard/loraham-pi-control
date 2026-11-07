@@ -509,7 +509,7 @@ def test_the_airtime_row_shows_any_duty_cycle_the_start_accepts(env, monkeypatch
     """5s R8-F2: openHop's file may hold any duty cycle its own code runs with (a negative, NaN, +inf, true);
     the stopped Settings row renders each, scaled where it can be, else as the file holds it."""
     svc, _helper = env
-    monkeypatch.setattr(ops, "_rows", lambda _svc: {"duty_cycle.max_airtime_per_minute": stored})
+    monkeypatch.setattr(ops, "_rows", lambda _svc, _inst=None: {"duty_cycle.max_airtime_per_minute": stored})
     assert ops.row_value(svc, "airtime", "7") == shown
 
 

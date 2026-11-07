@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
+from . import instances as _instances
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _openhop_store
@@ -219,7 +220,7 @@ class ParamsConfigMixin:
                     "default": p.default})
         return out
 
-    def config_param_groups(self, target: str, band: str = "") -> list[dict]:
+    def config_param_groups(self, target: str, band: str = "", inst=None) -> list[dict]:
         """Per-component Config rows (run THEN file params) for the settings-page 3-col panel — each
         row carries its OWN component-aware field (`c_`/`f_` scheme), API key, and component-scoped
         value (never masked by a same-named sibling). A group is flagged `is_dep` when it is not the
@@ -235,7 +236,7 @@ class ParamsConfigMixin:
         # empty form default (reset = inherit), inheritance as placeholder/note, never in the
         # input.
         id_rows = {(r["comp"], r["kind"], r["name"]): r
-                   for r in self.identity_resolution(target, band)}
+                   for r in self.identity_resolution(target, band, inst)}
         cfg_band = self._config_band(target, band)
         groups: list[dict] = []
         for c in self._target_components(target):
@@ -250,9 +251,9 @@ class ParamsConfigMixin:
                 idrec = id_rows.get((c.id, kind, p.name))
                 default = ("" if idrec else
                            self._op_subst(band_default(p, cfg_band or band, self.config().radio)))
-                value = (self._stored_param_value(target, kind, c.id, p.name, cfg_band)
+                value = (self._stored_param_value(target, kind, c.id, p.name, cfg_band, inst)   # 7f: an instance's own
                          if idrec else
-                         self._resolved_param_value(target, kind, c.id, p.name, cfg_band))
+                         self._resolved_param_value(target, kind, c.id, p.name, cfg_band, inst))
                 field = self._config_field(target, kind, c.id, p.name)
                 key = self._param_key(target, kind, c.id, p.name)
                 id_hint, id_note = self._identity_note(idrec, value)
@@ -369,14 +370,14 @@ class ParamsConfigMixin:
         return out
 
     def _stored_param_value(self, target: str, kind: str, comp_id: str, name: str,
-                            band: str = "") -> str:
+                            band: str = "", inst=None) -> str:
         """Like `_resolved_param_value` but STORED-ONLY: "" when nothing was explicitly saved,
         never the (operator-substituted) default. Identity fields resolve through this so an
         inherited value is never mistaken for — or round-tripped into — a saved local one."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         use_band = "" if (cfg_band and name in _BANDLESS_STACK_PARAMS) else cfg_band
-        stored = self._stack_config_cached(self._owner_stack_id(target), use_band)
+        stored, _bandless = _instances.stores(self, self._owner_stack_id(target), use_band, inst)   # 7f: its own
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -384,18 +385,18 @@ class ParamsConfigMixin:
         return "" if val is None else str(val)
 
     def _resolved_param_value(self, target: str, kind: str, comp_id: str, name: str,
-                              band: str = "") -> str:
+                              band: str = "", inst=None) -> str:
         """The component's OWN persisted value (component-scoped, else a UNIQUE flat) or its
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # 7f: its own
         if cfg_band and name in _BANDLESS_STACK_PARAMS:
             # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
             # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
             # then display, and which the next bundle save writes back as "at default -> remove",
             # silently clearing the switch while editing something unrelated.
-            stored = self._stack_config_cached(self._owner_stack_id(target), "")
+            stored = bandless
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -405,7 +406,7 @@ class ParamsConfigMixin:
             bd = band_default(p, cfg_band or band, self.config().radio) if p is not None else ""
             val = self._op_subst(bd)
         if kind == "file" and comp_id == MESHCORE_COMPONENT and name in _openhop_store.ROWS:
-            return _openhop_store.row_value(self, name, str(val))    # issue #5: the file wins
+            return _openhop_store.row_value(self, name, str(val), inst)    # issue #5: the file wins
         return str(val)
 
     def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
@@ -630,18 +631,15 @@ class ParamsConfigMixin:
                             f"component-scoped value for '{comp.id}'")
         return None
 
-    def stack_config(self, target: str, band: str = "") -> dict:
+    def stack_config(self, target: str, band: str = "", inst=None) -> dict:
         """Effective run config for `target` (and band): the component-scoped saved value, else a
         UNIQUE flat value, else the per-band/manifest default (operator `{callsign}`
         tokens substituted in DEFAULTS only — a saved value is used verbatim). An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
-        # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); read from the
-        # banded file they would launch at their default whatever the operator saved.
-        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
-                    if cfg_band else stored)
+        # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); a listed instance's in its own.
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -908,7 +906,7 @@ class ParamsConfigMixin:
 
     @invalidates_snapshot
     def save_config_bundle(self, target: str, *, values: dict | None = None,
-                           band: str = "", remotes: dict | None = None,
+                           band: str = "", remotes: dict | None = None, inst=None,
                            _allow_managed_params: frozenset = frozenset(),
                            _identity_guard: bool = False) -> ActionResult:
         """Validate the WHOLE Config-page submission, then persist it as ONE
@@ -950,7 +948,7 @@ class ParamsConfigMixin:
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
         _ohs_pending = _openhop_store.pending_rows(clean_params)        # gate 2 r1 F3: judged on these
-        _no, clean_params, targets, _ohs_recheck = _openhop_store.split_saves(self, target, clean_params)  # issue #5
+        _no, clean_params, targets, _ohs_recheck = _openhop_store.split_saves(self, target, clean_params, inst)  # issue #5
         if _no is not None:
             return _no
         local_path = self._paths.runtime_root / "config" / "local.toml"
@@ -967,7 +965,7 @@ class ParamsConfigMixin:
                                    {vid: (vurl or None) for vid, vurl in patch.items()})
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
-        cfg_band = self._config_band(target, band)
+        cfg_band, own = self._config_band(target, band), _instances.own_rid(inst)   # 7f: an instance's own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -998,7 +996,7 @@ class ParamsConfigMixin:
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
                                    else self._param_default_canon(ch.param, cfg_band, band)),
-            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band))
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band) and not own)
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
@@ -1052,7 +1050,7 @@ class ParamsConfigMixin:
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
-        def _render_stack(pth, tgt=sid, b=cfg_band, setv=stack_set, rmv=stack_remove):
+        def _render_stack(pth, tgt=sid, b=own or cfg_band, setv=stack_set, rmv=stack_remove):
             # AUTHORITATIVE RECHECK, inside the transaction (the caller's
             # accept/refuse decision was taken before this lock, so a concurrent global-identity
             # clear could land in between and the submission was persisted and only THEN refused).
@@ -1071,13 +1069,13 @@ class ParamsConfigMixin:
             merged = config_save.overlay(current, setv, rmv)
             if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged, _ohs_pending)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
-            if sid == _meshcore_mode.STACK_ID and (_why := _openhop_store.chat_name_refusal(self, current, merged)):
+            if sid == _meshcore_mode.STACK_ID and (_why := _openhop_store.chat_name_refusal(self, current, merged, inst)):
                 raise ConfigError(_why)                                    # issue #5, same rollback
             if sid == _reticulum_interfaces.STACK_ID and (
                     _why := self._reticulum_internet_save_refusal(merged)):
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
-        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
+        targets.append(("stack", _stack_config_path(self._paths, sid, own or cfg_band), _render_stack, 0o644))
         if bandless_set or bandless_remove:
             # SECOND transactional target: autostart flags land in the band-less file.
             def _render_auto(pth, tgt=sid, setv=bandless_set, rmv=bandless_remove):
@@ -1102,7 +1100,7 @@ class ParamsConfigMixin:
         # consumer; and whether the committed change is even on the band that consumer reads.
         # Every payload is rendered before any is written, so this reads the pre-save values
         # regardless of where it sits in the target list.
-        if clean_params:
+        if clean_params and not own:                    # the restart marker is slot 0's
             targets.append(self._restart_marker_target(target, sid, band, cfg_band, clean_params,
                                                        modes, _live_seen))
         try:
@@ -1492,18 +1490,19 @@ class ParamsConfigMixin:
             return f"could not preserve the MeshCore identity: {exc}"
         return ""
 
-    def _controller_secret(self, name: str) -> str:
+    def _controller_secret(self, name: str, inst=None) -> str:
         """Resolve a `secret_file` FileParam to its value, creating it if this is first use.
 
         Config generation is the ONE place allowed to mint a MeshCore identity: every other
         caller adopts only. An unusable existing key raises rather than being replaced.
         """
         from . import meshcore_identity
+        rid = inst.rid if inst is not None and inst.slot else ""      # 7f: a listed instance's own, never slot 0's
         if name == meshcore_identity.IDENTITY_FILENAME:
-            return meshcore_identity.ensure_identity(self._paths,
-                                                     self.meshcore_identity_candidates())
+            return meshcore_identity.ensure_identity(self._paths, () if rid else self.meshcore_identity_candidates(),
+                                                     rid=rid)
         if name == meshcore_identity.REPEATER_JWT_FILENAME:
-            return meshcore_identity.ensure_password(self._paths, name)
+            return meshcore_identity.ensure_password(self._paths, name, rid)
         raise ValueError(f"unknown controller secret {name!r}")
 
     def _snapshot_or_none(self):
@@ -1632,15 +1631,13 @@ class ParamsConfigMixin:
         # Owner-stack scoped for a stack target; JUST the targeted component for a direct component.
         return [c for c in self._target_components(target) if c.config_file]
 
-    def file_config_values(self, target: str, band: str = "") -> dict:
+    def file_config_values(self, target: str, band: str = "", inst=None) -> dict:
         """Stored file-config values (component-scoped `__f__<comp>__<name>`, else a UNIQUE flat
         `file_<name>`), falling back to the per-band default, then the FileParam default. An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
-        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
-                    if cfg_band else stored)          # STACK-LEVEL params: the band-less store
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
@@ -1670,7 +1667,7 @@ class ParamsConfigMixin:
         so the comparison has to fold case itself."""
         return value.strip().casefold() in {p.casefold() for p in self._IDENTITY_PLACEHOLDERS}
 
-    def _identity_fields(self, target: str) -> list[dict]:
+    def _identity_fields(self, target: str, inst=None) -> list[dict]:
         """EVERY operator-identity field CALL/node enforcement guards (a stack may have more
         than one — Meshtastic requires both its long and short node names). Scoped to the
         target: a STACK target inspects every component; a direct COMPONENT target only that
@@ -1694,14 +1691,14 @@ class ParamsConfigMixin:
                             "default": str(getattr(p, "default", "") or "")})
         from . import meshcore_mode as _mm
         if (any(r["comp"] == _mm.NODE_ID for r in out)
-                and not _mm.chat_identity_required(self.meshcore_mode())):
+                and not _mm.chat_identity_required(self.meshcore_mode(inst))):
             # Repeater-only: no Companion runs, so the chat node's name is not an identity to
             # enforce (the repeater's own name is checked by `meshcore_mode.start_refusal`).
             out = [r for r in out if not (r["comp"] == _mm.NODE_ID and r["name"] == "node_name")]
         out.sort(key=lambda r: r["enforce"] != "licensed")
         return out
 
-    def meshcore_mode(self) -> str:
+    def meshcore_mode(self, inst=None) -> str:
         """The MeshCore stack's SAVED (desired) mode (`meshcore_mode.MODES`), read from the node's
         `mode` setting exactly like every other param — the mode the next start runs in. `chat`
         (the default, the mode every box ran before the setting existed) when the stack or the
@@ -1712,6 +1709,8 @@ class ParamsConfigMixin:
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is None or not any(p.name == "mode" for p in fc.params):
             return _mm.DEFAULT_MODE
+        if inst is not None and inst.slot:                  # 7f: a listed instance's own mode (DEC-W52)
+            return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
 
     def meshcore_running_mode(self) -> str:
@@ -1899,7 +1898,7 @@ class ParamsConfigMixin:
         except validators.ValidationError as exc:
             return "", str(exc)
 
-    def identity_resolution(self, target: str, band: str = "") -> list[dict]:
+    def identity_resolution(self, target: str, band: str = "", inst=None) -> list[dict]:
         """THE authoritative effective-identity resolution of the SAVED configuration — every
         consumer (start plan + apply gates, Settings views, CLI hints, TX tests) reads precedence
         from here. The explicit local value is the STORED one (`_stored_param_value`), never the
@@ -1920,10 +1919,10 @@ class ParamsConfigMixin:
         from . import validators
         out = []
         global_call = str(self.config().operator.callsign or "").strip()
-        for rec in self._identity_fields(target):
+        for rec in self._identity_fields(target, inst):
             kind = "run" if rec["kind"] == "run" else "file"
             explicit = self._stored_param_value(target, kind, rec["comp"], rec["name"],
-                                                band).strip()
+                                                band, inst).strip()
             validate = validators._NAMED.get(rec["validator"])
             row = dict(rec)
             row.update({"explicit": explicit, "effective": "", "source": "missing",
@@ -1984,7 +1983,7 @@ class ParamsConfigMixin:
             out.append(row)
         return out
 
-    def _materialize_inherited_identity(self, target: str, band: str) -> tuple[dict, dict]:
+    def _materialize_inherited_identity(self, target: str, band: str, inst=None) -> tuple[dict, dict]:
         """AFTER enforcement approved a start/restart: (run_values, file_values), API-keyed, with
         the EFFECTIVE value for every licensed identity field that inherits the global operator
         callsign — the ONE launch-time overlay on the saved configuration, never persisted (the
@@ -1993,7 +1992,7 @@ class ParamsConfigMixin:
         refusal gate just approved."""
         p: dict = {}
         fo: dict = {}
-        for r in self.identity_resolution(target, band):
+        for r in self.identity_resolution(target, band, inst):
             if r["source"] != "global":
                 continue
             kind = "run" if r["kind"] == "run" else "file"
@@ -2007,13 +2006,13 @@ class ParamsConfigMixin:
         rows = self.identity_resolution(target, band)
         return rows[0]["effective"] if rows else ""
 
-    def enforce_identity(self, target: str, band: str = "") -> tuple[bool, list, str]:
+    def enforce_identity(self, target: str, band: str = "", inst=None) -> tuple[bool, list, str]:
         """Whether `target` may start given its identity rules, judged on the SAVED configuration
         (the plan and the locked apply share it). Returns (ok, fields, message): `fields` is
         EVERY Settings field to highlight (Meshtastic has two required names) and `message`
         names every problem. Delegates entirely to `identity_resolution` — the one
         precedence/validation path all consumers share."""
-        rows = self.identity_resolution(target, band)
+        rows = self.identity_resolution(target, band, inst)
         bad = [r for r in rows if r["problem"]]
         if not bad:
             return (True, [r["field"] for r in rows], "")
@@ -2136,7 +2135,7 @@ class ParamsConfigMixin:
                     out = out.replace(token, value)
             return out
 
-        stored = self.file_config_values(target, band)
+        stored = self.file_config_values(target, band, inst)
         over = overrides or {}
         written: list[ConfigWrite] = []
         for c in self._file_config_components(target):
@@ -2185,7 +2184,7 @@ class ParamsConfigMixin:
                     # authorised. Empty -> `omit_if_empty` drops the key (and any stale one).
                     values[p.name] = str((position or {}).get(p.name, "") or "")
                     continue
-                if c.id == MESHCORE_COMPONENT and (_oh := _openhop_store.rendered(self, p.name, target)) is not None:
+                if c.id == MESHCORE_COMPONENT and (_oh := _openhop_store.rendered(self, p.name, target, inst)) is not None:
                     values[p.name] = _oh                # issue #5: one-store rows, derived use_gps
                     continue
                 if getattr(p, "secret_file", ""):
@@ -2206,7 +2205,7 @@ class ParamsConfigMixin:
                         values[p.name] = ""            # blank -> the base is left untouched
                         continue
                     try:
-                        values[p.name] = self._controller_secret(p.secret_file)
+                        values[p.name] = self._controller_secret(p.secret_file, inst)
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
                         break
@@ -2409,20 +2408,20 @@ class ParamsConfigMixin:
         runtime_fs.atomic_write(self._paths, target, text, 0o644)
 
     @invalidates_snapshot
-    def reset_config(self, target: str, band: str = "") -> ActionResult:
+    def reset_config(self, target: str, band: str = "", inst=None) -> ActionResult:
         """Reset a stack/band's NORMAL Config-page settings (run params, file config, autostart)
         to defaults. Owns ONLY those keys — daemon-profile `dp_*` overrides, another band's
         overrides, and unrelated manual scalars are PRESERVED (use the daemon panel's own Reset
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band = self._config_band(target, band)
+        cfg_band, own = self._config_band(target, band), _instances.own_rid(inst)   # 7f: an instance's own file alone
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
         # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
         # reset of one band owns that file too; a band-less stack has only the one.
-        files = [cfg_band, ""] if cfg_band else [""]
+        files = [own] if own else ([cfg_band, ""] if cfg_band else [""])
         cleared: list = []
         _gps_busy: dict = {}
 
@@ -2463,8 +2462,8 @@ class ParamsConfigMixin:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
                 ("stack", _stack_config_path(self._paths, target, b),
-                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
-                self._restart_marker_target(target, target, band, cfg_band, params, set(), {})])
+                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + ([] if own else [
+                self._restart_marker_target(target, target, band, cfg_band, params, set(), {})]))
             if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:

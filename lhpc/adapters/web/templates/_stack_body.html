@@ -285,7 +285,7 @@
      malformed shows the reason instead of a value. ===== #}
   {% for c in g.ui_creds_list %}
     <details class="advcfg" id="stack-password-{{ c.component_id }}">
-      <summary>Password{% if g.ui_creds_list|length > 1 %} — {{ c.name }}{% endif %}</summary>
+      <summary>Password{% if g.ui_creds_list|length > 1 %} — {{ c.name }}{% endif %}{% if c.instance %} — {{ c.instance }}{% endif %}</summary>
       <div class="body">
         {% if c.hmac %}
           <p>{{ c.name }} authenticates its mesh clients with the <strong>HMAC password</strong>

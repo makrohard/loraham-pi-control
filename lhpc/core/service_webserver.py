@@ -651,7 +651,7 @@ class WebserverOpsMixin:
             return "absent"
         return _ws.listener_scope(self._system, swc.port, listeners)
 
-    def ui_credentials_list(self, stack_id: str) -> list:
+    def ui_credentials_list(self, stack_id: str, inst=None) -> list:
         """`ui_credentials` for EVERY component of the stack that declares a password file, each
         naming its component — the stack's Password sub-sections. Independent of web pages: a
         backend that mints the login for a sibling's UI still gets its section. The MeshCom
@@ -661,9 +661,9 @@ class WebserverOpsMixin:
         st = self.stack(stack_id)
         out = []
         for c in (st.components if st else ()):
-            creds = self.ui_credentials(stack_id, c.id) if c.ui_password_file else {}
-            if creds:                                   # {} = no login in the current mode
-                out.append({"component_id": c.id, "name": c.name, **creds})
+            creds = self.ui_credentials(stack_id, c.id, inst) if c.ui_password_file else {}
+            if creds:                                   # {} = no login in the current mode; 7f: an instance's own
+                out.append({"component_id": c.id, "name": c.name, "instance": f"{stack_id}@{inst.rid}" if inst and inst.slot else "", **creds})
         hmac_on = self.hmac_status(stack_id) if hasattr(self, "hmac_status") else None
         if hmac_on is not None:
             comp = self._hmac_component(stack_id)
@@ -723,7 +723,7 @@ class WebserverOpsMixin:
             return path, True, None, "the stored password file holds no usable password"
         return path, True, first, ""
 
-    def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
+    def ui_credentials(self, stack_id: str, component_id: str = "", inst=None) -> dict:
         """A stack's SELF-GENERATED web-UI login, ready to render on the stack page (
         the Password section SHOWS the stored password — the page is authenticated, and the
         value never enters a marker, a log, a flash, an ActionResult or a JSON API).
@@ -744,11 +744,11 @@ class WebserverOpsMixin:
                 continue
             if not c.ui_password_file:
                 continue
-            if (_oh := _openhop_store.password_view(self, c)) is not None:
+            if (_oh := _openhop_store.password_view(self, c, inst)) is not None:
                 return _oh                                  # issue #5: openHop's own file
             normalize = _mci.password_normalizer(c.ui_password_file)
             path, exists, value, reason = self._read_stored_password(
-                tuple(p for p in c.ui_password_file.split("/") if p), normalize)
+                tuple(p for p in (inst.subst(c.ui_password_file_template) if inst and inst.slot else c.ui_password_file).split("/") if p), normalize)
             return {"user": c.ui_user or "admin",
                     "path": str(path) if path else "",
                     "exists": exists,

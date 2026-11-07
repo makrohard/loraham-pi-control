@@ -89,7 +89,7 @@ def expected_endpoints(comp, mode) -> list:
     return out
 
 
-def start_refusal(svc, target: str):
+def start_refusal(svc, target: str, inst=None):
     """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
     (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
     and a repeater mode without the repeater's own node name. One rule set (this module); the
@@ -98,7 +98,7 @@ def start_refusal(svc, target: str):
     from .service_base import ActionResult
     if target not in (STACK_ID, NODE_ID, *CLIENT_IDS):
         return None
-    mode = svc.meshcore_mode()
+    mode = svc.meshcore_mode(inst)                  # 7f: a listed instance's own (DEC-W60)
     if target in CLIENT_IDS and svc._meshcore_node_live():
         # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
         # mode (status and stop verification judge by the same running mode).
@@ -110,7 +110,7 @@ def start_refusal(svc, target: str):
             details=[f"lhpc config {STACK_ID} mode chat+repeater   # keep the repeater, "
                      "run the chat node inside it"])
     if target in (STACK_ID, NODE_ID) and repeater_on(mode):
-        name = svc._resolved_param_value(STACK_ID, "file", NODE_ID, "repeater_name")
+        name = svc._resolved_param_value(STACK_ID, "file", NODE_ID, "repeater_name", inst=inst)
         try:
             validators.node_name(name, field="repeater name")
         except validators.ValidationError as exc:

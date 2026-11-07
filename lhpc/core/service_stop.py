@@ -451,7 +451,7 @@ class StopOpsMixin:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         if (_bref := self.band_refusal(target, band, "restart")) is not None:
             return _bref            # plan and apply take the SAME decision on an explicit band
@@ -460,9 +460,9 @@ class StopOpsMixin:
             # The apply's preflight, in its order and on its band: identity, saved launch values,
             # MeshCore position.
             _rband = self.operation_band(target, band)
-            if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
+            if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
                 return _pf_err
-            if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+            if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
                 return _pf_err
             if (_pf_err := self._position_refusal(target, "restart")[0]) is not None:
                 return _pf_err
@@ -496,10 +496,10 @@ class StopOpsMixin:
                     # PREFLIGHT the saved identity BEFORE lock planning, the guard, owner handling
                     # or any stop: a restart must never stop a running stack only to be refused by
                     # the start that follows.
-                    if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
+                    if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
                         return _pf_err
                     _order, _radio = self._order_radio(target, _rband)
-                    if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+                    if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
                         return _pf_err
                     with self._lifecycle_guard("restart", target, _rband,
                                                stop_owners=stop_owners, cascade=cascade,
@@ -580,7 +580,7 @@ class StopOpsMixin:
         # degrading to stop-only, exactly the promise this method documents).
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         if not band:
             # THE ONE resolver, same as public restart(), start() and the identity form (otherwise
@@ -624,9 +624,9 @@ class StopOpsMixin:
         _rband = self.operation_band(target, band)
         if (_r := self._start_static_refusal(target, "restart")) is not None:
             return _r
-        if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
+        if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
             return _pf_err
-        if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+        if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
             return _pf_err
         # The dependency band rule: a chain member of another stack live on a different band.
         # `stop_owners` cannot clear that state: owner-stop acts on resource-conflict HOLDERS, and

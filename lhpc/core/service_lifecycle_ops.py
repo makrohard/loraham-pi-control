@@ -234,8 +234,8 @@ class LifecycleOpsMixin:
                 return getattr(st, "run_state", None) in (RunState.RUNNING, RunState.DEGRADED)
         return False
 
-    def _meshcore_mode_refusal(self, target: str):
-        return _meshcore_mode.start_refusal(self, target)      # the rules: meshcore_mode.py
+    def _meshcore_mode_refusal(self, target: str, inst=None):
+        return _meshcore_mode.start_refusal(self, target, inst)      # the rules: meshcore_mode.py
 
     def _ready_endpoints_present(self, comp, inst=None) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
@@ -246,7 +246,7 @@ class LifecycleOpsMixin:
         from .probes.unixsock import probe_socket
         # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
         # repeater modes) — the SAME selection ongoing status applies.
-        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode()), inst) if e.ready]
+        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode(inst)), inst) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -638,7 +638,7 @@ class LifecycleOpsMixin:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         from . import reslock
         if auto_install_ctx is not None:
@@ -655,7 +655,7 @@ class LifecycleOpsMixin:
             _ob = self.operation_band(target, band)
             _order, _radio = self._order_radio(target, _ob)
             if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
-                                                position_note)[0]) is not None:
+                                                position_note, inst)[0]) is not None:
                 return _r
             return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band, inst=inst)
         # The guards: admission FIRST (outside the config-stability guard and before every
@@ -670,7 +670,7 @@ class LifecycleOpsMixin:
                 # before the boot-restore claim, the feed clearing and any other mutation.
                 # The inner PREPARE remains the authoritative backstop for direct callers.
                 _r, position, _pos_note = self._start_outer_refusal(
-                    target, _order, _op_band, _radio, position, position_note)
+                    target, _order, _op_band, _radio, position, position_note, inst)
                 if _r is not None:
                     return _r
                 # BOOT-RESTORE CLAIM HOOK: every lock held, nothing mutated yet. A refusal
@@ -900,7 +900,7 @@ class LifecycleOpsMixin:
                                 next_commands=["lhpc list"])
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
-        if (_r := self._meshcore_mode_refusal(target)) is not None:
+        if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         if (_r := self._start_static_refusal(target, "start")) is not None:
             return _r
@@ -950,7 +950,7 @@ class LifecycleOpsMixin:
         # so a refused start is known before anything is queued; the public `start()` re-checks it
         # under the locks as the authoritative, race-safe backstop immediately before mutation.
         _id_band = self._launch_band_hint(target, band)
-        id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band, inst)
         if not id_ok:
             return ActionResult(False, f"Cannot start '{target}': {id_msg}",
                                 data={"enforce_fields": id_fields},
@@ -958,10 +958,10 @@ class LifecycleOpsMixin:
         # The approved identity must actually LAUNCH: a licensed field that inherits the global
         # operator callsign carries it as a launch value (never persisted) so argv/config-file
         # rendering and post-steps use what enforcement just approved — on the launch band.
-        params, file_over = self._materialize_inherited_identity(target, _id_band)
+        params, file_over = self._materialize_inherited_identity(target, _id_band, inst)   # 7f: an instance's own
         # SAVED launch values the launch would reject refuse here too — plan and apply alike,
         # before owner stops or config generation (a restart preflights the same check).
-        if (_cfg_err := self._saved_launch_refusal(target, band, "start")) is not None:
+        if (_cfg_err := self._saved_launch_refusal(target, band, "start", inst)) is not None:
             return _cfg_err
         prep = prepare_start(
             target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
@@ -1046,7 +1046,7 @@ class LifecycleOpsMixin:
                                    "the terminal variant is the fallback for boxes "
                                    "without a graphical environment")
                     continue
-                cmd = self.manual_start_command(comp)
+                cmd = self.manual_start_command(comp, prep.inst)
                 details.append(f"  [manual] {comp.id} is interactive — the daemon is "
                                "ensured, then run it yourself in a terminal:")
                 details.append(f"    {cmd}")
@@ -1423,7 +1423,7 @@ class LifecycleOpsMixin:
                     # regeneration — say so instead of implying it applied.
                     record(comp, stack, Outcome.MANUAL_REQUIRED,
                            f"interactive — run it yourself in a terminal{marker_note}:",
-                           command=self.manual_start_command(comp),
+                           command=self.manual_start_command(comp, prep.inst),
                            note="an already-running instance keeps its previous config "
                                 "until you restart it")
                 continue
@@ -1468,7 +1468,7 @@ class LifecycleOpsMixin:
             # store) so a stored sibling run parameter can never leak into another component's argv
             # through a name collision. The only launch-time overlay is an inherited identity
             # (`_materialize_inherited_identity`), handed to its own component only.
-            comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            comp_cfg = dict(self.stack_config(comp.id, cfg_band, prep.inst))      # DEC-W60: an instance its own
             if _target_is_stack or comp.id == target:
                 comp_cfg.update(self._overrides_for_comp(target, "run", params, comp.id))
             # ONE announcer per component (dedup within it): the start capture log, the
@@ -2171,7 +2171,7 @@ class LifecycleOpsMixin:
         daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
         return [d for d in self.stop_dependents(daemon_sid, bands={band}) if d != sid]
 
-    def _saved_launch_refusal(self, target: str, band: str, op: str):
+    def _saved_launch_refusal(self, target: str, band: str, op: str, inst=None):
         """The typed refusal for SAVED launch values the launch itself would reject, or None.
         A dry expansion of every run-order component's argv through the launch's own expander
         (`commands.expand_argv`, the same validators, the same component-scoped config the launch
@@ -2185,7 +2185,7 @@ class LifecycleOpsMixin:
             return None
         hint = self._launch_band_hint(target, band)
         cfg_band = self._config_band(target, hint)
-        run_over, _file_over = self._materialize_inherited_identity(target, hint)
+        run_over, _file_over = self._materialize_inherited_identity(target, hint, inst)
         operator, runtime = self.config().operator, str(self._paths.runtime_root)
         is_stack = self.stack(target) is not None
         for _stack, comp in order:
@@ -2194,7 +2194,7 @@ class LifecycleOpsMixin:
             # launch input, so a stale key there must not refuse every client stack.
             if not comp.run_argv or comp.id == self.DAEMON_ID:
                 continue
-            cfg = dict(self.stack_config(comp.id, cfg_band))
+            cfg = dict(self.stack_config(comp.id, cfg_band, inst))           # G1-C24 B1: an instance's own
             if is_stack or comp.id == target:
                 cfg.update(self._overrides_for_comp(target, "run", run_over, comp.id))
             # The source path only feeds `{source}` token substitution here — values, not paths,
@@ -2279,10 +2279,10 @@ class LifecycleOpsMixin:
         vals[_ri.NETKEY] = key if isinstance(key, str) else ""
         return _ri.problem(vals), _ri.reason(vals)
 
-    def _identity_refusal(self, target: str, band: str, op: str):
+    def _identity_refusal(self, target: str, band: str, op: str, inst=None):
         """The typed refusal for an unusable SAVED identity, or None — the one wording the start
         plan, the restart preflight and the locked apply-side recheck share."""
-        id_ok, id_fields, id_msg = self.enforce_identity(target, band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, band, inst)
         if id_ok:
             return None
         return ActionResult(False, f"Cannot {op} '{target}': {id_msg}",
@@ -2309,12 +2309,12 @@ class LifecycleOpsMixin:
         return None, position, note
 
     def _start_outer_refusal(self, target: str, order, band: str, radio: str,
-                             position: dict | None, note: str):
+                             position: dict | None, note: str, inst=None):
         """`(refusal or None, position, note)`: the public start's identity and MeshCore position
         decision, taken by the plan and the apply at the same point and in the same order.
         `order` is None/empty for an unknown target or nothing to run — `_start_impl` reports
         that properly, so no snapshot is taken then; nor for an already-healthy no-op."""
-        if order and (_r := self._identity_refusal(target, band, "start")) is not None:
+        if order and (_r := self._identity_refusal(target, band, "start", inst)) is not None:
             return _r, position, note
         if position is None and order and not self._order_already_healthy(order, radio):
             return self._position_refusal(target, "start")
@@ -2715,7 +2715,7 @@ class LifecycleOpsMixin:
                 + ";B:" + ",".join(booting)
                 + ";M:" + self.radio_mode())      # mode switch reflows the columns -> force a reload
 
-    def manual_start_command(self, comp) -> str:
+    def manual_start_command(self, comp, inst=None) -> str:
         """The command the operator runs in a terminal to start an interactive
         component (the controller never starts these itself). Rendered from the
         SAME structured command spec, shell-quoted — values are individual argv
@@ -2731,12 +2731,12 @@ class LifecycleOpsMixin:
         # The saved values a start would use, resolved as `_saved_launch_refusal` does: the band
         # the stack runs (or was presented) on, its stored config and the inherited identity.
         sid = self.stack_of(comp.id) or comp.id
-        hint = self._launch_band_hint(sid, "")
+        hint = radio_start.rf_band(self, inst.rid) if inst is not None and inst.slot else self._launch_band_hint(sid, "")
         band = self._config_band(sid, hint)
-        params = dict(self.stack_config(comp.id, band))
-        run_over, _file_over = self._materialize_inherited_identity(sid, hint)
+        params = dict(self.stack_config(comp.id, band, inst))          # 7f: a listed instance's own values and radio
+        run_over, _file_over = self._materialize_inherited_identity(sid, hint, inst)
         params.update(self._overrides_for_comp(sid, "run", run_over, comp.id))
-        inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band)   # W3: the radio's sockets
+        inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band, inst)   # W3: the radio's sockets
         cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst) if inst else ""
         if not cmd:
             return f"(no run command: {_why})" if _why else "(no run command)"

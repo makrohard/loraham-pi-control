@@ -2102,8 +2102,8 @@ def _stack_config_path(paths: Paths, stack_id: str, band: str = "") -> Path:
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
     sid = validators.path_component(stack_id, field="stack id")
-    if band:
-        band = validators.band(band, allow_both=True)
+    if band:      # a band, or a listed instance's radio id (DEC-W60: an instance's own settings, `<id>@<rid>.toml`)
+        band = band if re.fullmatch(r"r[1-9][0-9]?", band) else validators.band(band, allow_both=True)
     name = f"{sid}@{band}.toml" if band else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.

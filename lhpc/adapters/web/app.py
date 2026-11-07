@@ -43,6 +43,7 @@ from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import auto_install_form, validators, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
+from lhpc.core import instances as _instances
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
@@ -977,6 +978,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # which also decided which per-band config a Save would write.
             sband = (band if (cfg_sid and stack.id == cfg_sid)
                      else service.running_band(stack.id, ""))
+            _inst, _iband = _settings_instance(stack.id, request.args.get("radio", "") if stack.id == cfg_sid else "")
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
                    if not main or c.id != main.id]
@@ -1084,14 +1086,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                           fw_status=fw_status),
                     # One Password sub-section per component that declares where its self-generated
                     # UI password lives — independent of web pages.
-                    "ui_creds_list": service.ui_credentials_list(stack.id),
+                    "ui_creds_list": service.ui_credentials_list(stack.id, _inst),   # 7f: the shown instance's own
                     "pin_refusal": service.binary_install_refusal(stack.id),
                     "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
-                    "command": service.manual_start_command(main) if interactive else "",
+                    "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                    "view": service.config_view(stack.id, sband),
-                    "config_groups": service.config_param_groups(stack.id, sband),
+                    "view": {**service.config_view(stack.id, _iband or sband),
+                             **_instances.settings_choice(service, stack.id, sband, _inst)},   # 7f, DEC-W40
+                    "config_groups": service.config_param_groups(stack.id, _iband or sband, _inst),
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
@@ -2026,7 +2029,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band = request.form.get("band", "")
+        inst, iband = _settings_instance(stack_id, request.form.get("radio", ""), refuse=True)
+        band = iband or request.form.get("band", "")
         view = service.config_view(stack_id, band)
         # Fold each submitted Config-page field (`c_`/`f_`, component-qualified when the name
         # collides) into the canonical API key (`name` or `component.name`; file keys carry the
@@ -2040,7 +2044,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 v = request.form.get(f["field"], f["default"])
             values[f"file_{f['key']}" if f["kind"] == "file" else f["key"]] = v
         # Auto-start toggles for the stack's optional components.
-        for opt in view["optional"]:
+        for opt in [] if inst else view["optional"]:        # 7f: auto-start and remotes are slot 0's
             if not opt.get("startable", True):
                 continue                       # listed as run-on-demand: no auto-start key
             values[f"autostart_{opt['id']}"] = (
@@ -2049,7 +2053,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # the default). The whole submission is validated and persisted as ONE
         # all-or-recoverable transaction — no per-remote sequential writes.
         remotes = None
-        if view["sources"]:
+        if view["sources"] and not inst:
             remotes = {}
             for src in view["sources"]:
                 field = request.form.get("remote_" + src["id"], src["remote"])
@@ -2059,11 +2063,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # at the LAUNCH boundary, which refuses to start without a resolvable identity; the row
         # here carries the problem note, and the next Start sends the operator back to this row.
         result = service.save_config_bundle(
-            stack_id, values=values, band=band, remotes=remotes)
+            stack_id, values=values, band=band, remotes=remotes, inst=inst)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)
-                        + "#stack-settings-" + stack_id)
+        return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
+                                cfg=stack_id) + "#stack-settings-" + stack_id)
+
+    def _settings_instance(stack_id, rid, refuse=False):
+        """7f: (the listed instance `<stack>@<rid>` a Settings page or form names, its radio's band), (None, "") for
+        slot 0; a form naming a radio without an instance is a 404, a page falls back to slot 0."""
+        if not rid:
+            return None, ""
+        _sid, inst, band, why = _instances.resolve(service, f"{stack_id}@{rid}")
+        if why and refuse:
+            abort(make_response(why, 404))
+        return (None, "") if why else (inst, band)
 
     def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
         from lhpc.core import daemon_params as _dp
@@ -2352,11 +2366,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band = request.form.get("band", "")
-        result = service.reset_config(stack_id, band)
+        inst, iband = _settings_instance(stack_id, request.form.get("radio", ""), refuse=True)
+        band = iband or request.form.get("band", "")
+        result = service.reset_config(stack_id, band, inst)
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)
-                        + "#stack-settings-" + stack_id)
+        return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
+                                cfg=stack_id) + "#stack-settings-" + stack_id)
 
     @app.get("/healthz")
     def healthz():
