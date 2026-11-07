@@ -1,6 +1,5 @@
-"""Ledger L23: a radio's daemon RF-log link never turns a logs/ that cannot be listed into "no files". Such a logs/ is
-one warning pill naming it, no link; an absent logs/ simply has no files. Since the redesign (W257) the link is on the
-radio's own page, /hardware/radio/<rid>. logs/ is made a regular file, so
+"""Ledger L23: the dashboard's daemon RF-log links never turn a logs/ that cannot be listed into "no files". Such a
+logs/ is one warning pill naming it, no link; an absent logs/ simply has no files. logs/ is made a regular file, so
 listing it fails (NotADirectoryError) for any user, root included."""
 import radios_fixture
 
@@ -10,16 +9,14 @@ DAEMONS = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"],     # the li
 
 
 def _dashboard(web, tmp_path):
-    """Both radios' pages, as one text (r1 on 433, r2 on 868)."""
-    c = web(cmdlines=DAEMONS)
-    return "".join(c.get(f"/hardware/radio/{rid}").get_data(as_text=True) for rid in ("r1", "r2"))
+    return web(cmdlines=DAEMONS).get("/").get_data(as_text=True)
 
 
 def test_a_logs_path_that_cannot_be_listed_is_named_not_shown_as_no_files(web, tmp_path):
     radios_fixture.write(tmp_path)                                # r1 on 433, r2 on 868
     (tmp_path / "logs").write_text("not a directory")
     page = _dashboard(web, tmp_path)
-    assert page.count(ERROR) == 2, page.count(ERROR)              # one per radio's page (r1 and r2)
+    assert page.count(ERROR) == 2, page.count(ERROR)              # one per band's row (433 and 868)
 
 
 def test_an_absent_logs_directory_has_no_files_and_no_warning(web, tmp_path):

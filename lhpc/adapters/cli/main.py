@@ -622,6 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("--web-result", default="", help=argparse.SUPPRESS)
     p_ss.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
     p_ss.add_argument("--band", default="", help=argparse.SUPPRESS)
+    p_ss.add_argument("--radio", default="", help=argparse.SUPPRESS)       # W286: one radio's daemon
     p_ss.add_argument("--stop-owners", action="store_true", help=argparse.SUPPRESS)
     p_ss.add_argument("--cascade", action="store_true", help=argparse.SUPPRESS)
     p_ss.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
@@ -1374,7 +1375,7 @@ def _run(argv: list[str] | None = None) -> int:
         from lhpc.core.services import ActionResult as _AR
         op = "restart" if args.restart else "start"
         web, aid = args.web_result or "", args.attempt_id or ""
-        if web != f"web-{op}-{args.target}.log":              # strictly bound to web-<op>-<target>.log
+        if web != f"web-{op}-{args.target}" + (f"-{args.radio}" if args.radio else "") + ".log":   # bound to it
             print(f"web {op}: result name is not bound to this target — refusing.")
             return 3
         if not webjob_gate.verify_tracked(svc._paths, web, op, args.target, aid, _os.getpid()):
@@ -1384,6 +1385,14 @@ def _run(argv: list[str] | None = None) -> int:
             print(f"web {op}: could not clear the startup flag — refusing (no mutation).")
             return 3
 
+        inst = None
+        if args.radio:
+            from lhpc.core import radio_start
+            inst, _band, why = radio_start.daemon_radio(svc, args.radio)
+            if why:
+                jobresult.terminalize(svc._paths, web, aid, "failed", detail=why[:400])
+                return 1
+
         def _admitted():
             if jobresult.mark_running(svc._paths, web, aid):
                 return None
@@ -1391,11 +1400,11 @@ def _run(argv: list[str] | None = None) -> int:
                               "superseded — nothing was changed.")
         if op == "start":
             res = svc.start(args.target, apply=True, stop_owners=args.stop_owners,
-                            band=args.band, _before_start_locked=_admitted)
+                            band=args.band, _before_start_locked=_admitted, inst=inst)
         else:
             res = svc.restart(args.target, apply=True, stop_owners=args.stop_owners,
                               band=args.band, cascade=args.cascade,
-                              _before_restart_locked=_admitted)
+                              _before_restart_locked=_admitted, inst=inst)
         rc = _render(res)
         ok = res.ok or manual_required_only(res.results)
         notes = svc.start_notes(res)

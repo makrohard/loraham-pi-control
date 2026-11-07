@@ -235,17 +235,17 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
         svc._set_running_band("meshtastic", "868")
         return svc
     c = web(service_factory=factory)
-    # Redesign (W250/W257): a radio's own RF log is on its page (the rid names the file: no band to carry); a running
-    # stack's RF log, on its band, on the stack's Apps row.
-    r1, r2 = (parse(c.get(f"/hardware/radio/{rid}").get_data(as_text=True)) for rid in ("r1", "r2"))
-    mesh = parse(c.get("/stacks/meshtastic/body").get_data(as_text=True))
-    kiss = parse(c.get("/stacks/kiss/body").get_data(as_text=True))
-    assert len(_links(r1, "loraham-daemon", "r1/rf-daemon.log")) == 1
-    assert not _links(mesh, "meshtastic", "rf-meshtastic.log", "433")
-    assert len(_links(r2, "loraham-daemon", "r2/rf-daemon.log")) == 1
-    assert len(_links(mesh, "meshtastic", "rf-meshtastic.log", "868")) == 1
-    assert not _links(kiss, "loraham-kiss-tnc", "rf-kiss.log", "868")      # not running
-    r = c.get(_links(mesh, "meshtastic", "rf-meshtastic.log", "868")[0]["href"])
+    doc = parse(c.get("/").get_data(as_text=True))
+    col433 = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
+    col868 = doc.within(doc.find("div", **{"data-radio-band": "868"})[0])
+    # Every link carries the card's band, so the page opens on it (the stack's running band, not
+    # its manifest default).
+    assert len(_links(col433, "loraham-daemon", "r1/rf-daemon.log", "433")) == 1
+    assert not _links(col433, "meshtastic", "rf-meshtastic.log", "433")
+    assert len(_links(col868, "loraham-daemon", "r2/rf-daemon.log", "868")) == 1
+    assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "868")) == 1
+    assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "868")    # not running
+    r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "868")[0]["href"])
     assert r.status_code == 200
     # The empty state as a typed field: the page's viewer data reports no file (the empty path).
     d = c.get("/api/rflog/meshtastic?job=rf-meshtastic.log").get_json()
@@ -270,8 +270,10 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
         svc._set_running_band("reticulum", "433")
         return svc
     c = web(service_factory=factory)
-    # Redesign (W250): the RF-log link moved off Home (its own test below); the page and its forms are reached by it.
-    doc = parse(c.get("/logs/rns?job=rf-reticulum.log&band=433").get_data(as_text=True))
+    col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
+    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "rf-reticulum.log", "433")
+    assert len(link) == 1
+    doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
     assert [a.text for a in _row(doc, "RF log bands").find("a", **{"aria-current": "page"})] == ["433"]
     assert doc.within(doc.by_id("rflog-switch")).field_default("band") == "433"
     r = c.post(url, data={"_csrf": csrf(c), "job": "rf-reticulum.log", "band": "433", **data})
@@ -376,7 +378,6 @@ def test_a_run_log_page_keeps_the_plain_viewer(web):
     assert not doc.by_id("rfview") and not doc.by_id("rf-decrypt") and doc.by_id("logbox")
     scripts = _scripts(doc)
     assert any(s.endswith("/logs.js") for s in scripts) and not any(s.endswith("/rflog.js") for s in scripts)
-
 
 
 def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):

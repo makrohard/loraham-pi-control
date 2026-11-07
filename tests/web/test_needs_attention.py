@@ -82,13 +82,13 @@ def test_an_unsafe_task_is_listed(web, tmp_path, monkeypatch):
 
 def test_nothing_is_listed_for_a_stack_the_operator_stopped(web, tmp_path, monkeypatch):
     page = _home(web, _svc(tmp_path, monkeypatch))
-    assert 'id="needs-attention"' not in page and "radiogrid" not in page and 'class="card radio-col' not in page
+    assert 'id="needs-attention"' not in page     # W285: Home keeps its radio cards (DEC-W57's removal withdrawn)
 
 
 def test_one_x_hides_the_set_until_it_changes(web, tmp_path, monkeypatch, csrf):
     svc = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
     c = web(service_factory=lambda: svc)
-    assert c.post("/attention/dismiss", data={"_csrf": csrf(c, "/")}).status_code == 302
+    assert _dismiss_shown(c, csrf).status_code == 302
     assert _lines(c.get("/").get_data(as_text=True)) == []                  # the same set: hidden
     svc2 = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.FAILED})
     assert [line for _h, line in _lines(_home(web, svc2))] == ["MeshCore (OpenHop) is failed"]   # a new set shows again
@@ -97,7 +97,7 @@ def test_one_x_hides_the_set_until_it_changes(web, tmp_path, monkeypatch, csrf):
 def test_the_high_power_line_comes_back_on_every_visit(web, tmp_path, monkeypatch, csrf):
     svc = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED}, hp=("433",))
     c = web(service_factory=lambda: svc)
-    assert c.post("/attention/dismiss", data={"_csrf": csrf(c, "/")}).status_code == 302
+    assert _dismiss_shown(c, csrf).status_code == 302
     page = c.get("/").get_data(as_text=True)
     assert _lines(page) == [("/hardware/radio/r1", "+20 dBm permission enabled on 433 MHz")]
     assert 'action="/attention/dismiss"' not in page                       # nothing left to close
@@ -115,3 +115,41 @@ def test_a_fault_in_the_collector_shows_no_banner_never_an_error_page(web, tmp_p
     monkeypatch.setattr(attention, "conditions", lambda s: 1 / 0)
     r = web(service_factory=lambda: svc).get("/")
     assert r.status_code == 200 and 'id="needs-attention"' not in r.get_data(as_text=True)
+
+
+def _dismiss_shown(c, csrf):
+    """The ✕ as the page offers it: its form's fields (the shown set's identity included) posted back."""
+    page = c.get("/").get_data(as_text=True)
+    form = re.search(r'<form method="post" action="/attention/dismiss".*?</form>', page, re.S).group(0)
+    fields = dict(re.findall(r'name="([^"]+)" value="([^"]*)"', form))
+    return c.post("/attention/dismiss", data={**fields, "_csrf": csrf(c, "/")})
+
+
+def test_c23_b1_a_fault_that_recovers_and_returns_shows_again(web, tmp_path, monkeypatch, csrf):
+    # Gate 1 C23 B1: the ✕ hid {MeshCore degraded}; it recovered (nothing listed), then degraded again: it shows.
+    svc = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
+    c = web(service_factory=lambda: svc)
+    assert _dismiss_shown(c, csrf).status_code == 302 and _lines(c.get("/").get_data(as_text=True)) == []
+    assert _lines(_home(web, _svc(tmp_path, monkeypatch))) == []                         # recovered
+    again = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
+    assert [line for _h, line in _lines(_home(web, again))] == ["MeshCore (OpenHop) is degraded"]
+
+
+def test_c23_b2_the_x_hides_the_set_it_showed_never_one_that_arrived_since(web, tmp_path, monkeypatch, csrf):
+    # Gate 1 C23 B2: the page showed {degraded}; before the ✕ is pressed an unsafe task arrives. The ✕ hides the shown
+    # set only, so the new set (degraded + unsafe) stays visible.
+    svc = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
+    c = web(service_factory=lambda: svc)
+    page = c.get("/").get_data(as_text=True)
+    form = re.search(r'<form method="post" action="/attention/dismiss".*?</form>', page, re.S).group(0)
+    fields = dict(re.findall(r'name="([^"]+)" value="([^"]*)"', form))
+    _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED},
+         tasks=[{"kind": "job", "run_id": "j1", "state": "unsafe", "label": "Build kiss", "href": "/jobs/j1"}])
+    c.post("/attention/dismiss", data={**fields, "_csrf": csrf(c, "/")})
+    assert len(_lines(c.get("/").get_data(as_text=True))) == 2
+
+
+def test_c23_a_posted_identity_that_is_no_set_identity_hides_nothing(web, tmp_path, monkeypatch, csrf):
+    c = web(service_factory=lambda: _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED}))
+    c.post("/attention/dismiss", data={"_csrf": csrf(c, "/"), "set": "x" * 4096})
+    assert _lines(c.get("/").get_data(as_text=True)) and not (tmp_path / "state" / "attention-dismissed").exists()

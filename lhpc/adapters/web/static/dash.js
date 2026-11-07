@@ -1,5 +1,5 @@
-// Radio dashboard live updater. For each per-band column it polls the read-only
-// daemon API and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
+// Radio dashboard live updater. For each radio card (W285/W286: one per radio, its band a property) it polls
+// the read-only daemon API of that radio and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
 // Same-origin only. The polling is read-only and, since 0.7.0, genuinely passive: it asks the
 // daemon for channel data WITHOUT a CAD scan, because a scan destroys a frame in flight. The one
 // action this file takes is the explicit "Scan now" button, which is a POST with a CSRF token.
@@ -17,21 +17,23 @@
 
   // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
   // while rendering is a failure, which the caller answers with the slow interval.
-  function poll(band) {
-    return fetch("/api/daemon/" + encodeURIComponent(band))
+  // A card's element ids end in its radio's id (its band's on a card without a radio: a stray band).
+  function poll(band, rid) {
+    var key = rid || band;
+    return fetch("/api/daemon/" + encodeURIComponent(band) + (rid ? "?rid=" + encodeURIComponent(rid) : ""))
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
-        var badge = document.getElementById("rd-badge-" + band);
+        var badge = document.getElementById("rd-badge-" + key);
         if (badge) {
           badge.textContent = d.reachable ? "daemon live" : "daemon offline";
           badge.className = "badge badge-" + (d.reachable ? "running" : "stopped");
         }
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
-        var meter = document.getElementById("rd-rssi-" + band);
+        var meter = document.getElementById("rd-rssi-" + key);
         if (meter && rssi !== "") meter.value = rssi;
-        set("rd-rssiv-" + band, rssi || "?");
+        set("rd-rssiv-" + key, rssi || "?");
         if (d.channel) {
           // CADSCAN=0 means NO CAD verdict was taken — this poll is deliberately passive so it
           // cannot cost reception. Never render CADSTATE as a verdict in that case: show a dash
@@ -39,23 +41,23 @@
           // information (a received packet is waiting) and is shown as-is.
           var scanned = d.channel.CADSCAN === "1";
           var cad = d.channel.CADSTATE || "?";
-          set("rd-cad-" + band, (scanned || cad === "PENDING") ? cad : "—");
-          set("rd-pktrssi-" + band, d.channel.PACKETRSSI || "?");
+          set("rd-cad-" + key, (scanned || cad === "PENDING") ? cad : "—");
+          set("rd-pktrssi-" + key, d.channel.PACKETRSSI || "?");
         }
         if (d.status) {
-          if (d.status.TXMODE) { set("rd-txmode-" + band, d.status.TXMODE); }
-          set("rd-tx-" + band, d.status.TX || "?");
-          if (d.status.RADIO) set("rd-radio-" + band, d.status.RADIO);
-          if (d.status.CADRSSI) set("rd-cadrssi-" + band, d.status.CADRSSI);
-          if (d.status.CADWAIT) set("rd-cadwait-" + band, d.status.CADWAIT);
+          if (d.status.TXMODE) { set("rd-txmode-" + key, d.status.TXMODE); }
+          set("rd-tx-" + key, d.status.TX || "?");
+          if (d.status.RADIO) set("rd-radio-" + key, d.status.RADIO);
+          if (d.status.CADRSSI) set("rd-cadrssi-" + key, d.status.CADRSSI);
+          if (d.status.CADWAIT) set("rd-cadwait-" + key, d.status.CADWAIT);
         }
         if (d.stats) {
-          set("rd-rx-" + band, d.stats.RX || "?");
-          set("rd-txok-" + band, d.stats.TXOK || "?");
-          set("rd-txerr-" + band, d.stats.TXERR || "?");
-          set("rd-uptime-" + band, (d.stats.UPTIME || "?") + " s");
+          set("rd-rx-" + key, d.stats.RX || "?");
+          set("rd-txok-" + key, d.stats.TXOK || "?");
+          set("rd-txerr-" + key, d.stats.TXERR || "?");
+          set("rd-uptime-" + key, (d.stats.UPTIME || "?") + " s");
         }
-        var feed = document.getElementById("rd-feed-" + band);
+        var feed = document.getElementById("rd-feed-" + key);
         if (feed) {
           // Only rewrite when the content actually changed — replacing textContent
           // every tick re-renders the <pre> and makes it flicker.
@@ -67,12 +69,12 @@
       .then(function () { return true; }, function () { return false; });
   }
 
-  // The discipline of taskbanner.js, per band: no timer while the page is hidden, never a second
+  // The discipline of taskbanner.js, per radio: no timer while the page is hidden, never a second
   // request while one is still out (a slow daemon answer is not overlapped), and after a failure a
   // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
   var POLL_MS = 3000, ERROR_MS = 15000;
   cols.forEach(function (col) {
-    var band = col.getAttribute("data-radio-band");
+    var band = col.getAttribute("data-radio-band"), rid = col.getAttribute("data-radio-rid") || "";
     var timer = null, polling = false;
 
     function clearTimer() {
@@ -89,7 +91,7 @@
       clearTimer();
       if (polling || document.hidden) return;   // hidden: the visibilitychange handler refreshes
       polling = true;
-      poll(band).then(function (ok) {
+      poll(band, rid).then(function (ok) {
         polling = false;
         schedule(ok ? POLL_MS : ERROR_MS);
       });
@@ -107,7 +109,8 @@
   // starts/stops, the daemon comes up/down, an interactive app is launched). We
   // poll a cheap signature and reload just on change — so the page doesn't reflow
   // (and the monitor windows don't flash) every tick. Live fields (RSSI/feed/…)
-  // already update in place above.
+  // already update in place above. Poll faster while an interactive app is pending
+  // so it flips to "running" quickly after the operator starts it in a terminal.
   // NOTE: this block (and the restore above it) runs even with ZERO radio columns —
   // the System box and the signature reload exist on a radio-less dashboard too.
   //
@@ -129,6 +132,7 @@
   var grid = document.querySelector("[data-dash-sig]");
   if (grid) {
     var sig = grid.getAttribute("data-dash-sig");
+    var pending = grid.getAttribute("data-pending-interactive") === "1";
     setInterval(function () {
       if (document.hidden) return;
       fetch("/api/dash-signature")
@@ -155,7 +159,7 @@
           }
         })
         .catch(function () { /* transient */ });
-    }, 10000);
+    }, pending ? 2000 : 10000);
   }
 
   // "Scan now": ONE real CAD measurement, on explicit click only.
@@ -166,12 +170,13 @@
   Array.prototype.forEach.call(
     document.querySelectorAll("[data-scan-band]"), function (btn) {
       btn.addEventListener("click", function () {
-        var band = btn.getAttribute("data-scan-band");
-        var cell = document.getElementById("rd-cad-" + band);
+        var band = btn.getAttribute("data-scan-band"), rid = btn.getAttribute("data-scan-rid") || "";
+        var cell = document.getElementById("rd-cad-" + (rid || band));
         var token = btn.getAttribute("data-csrf") || "";
         if (!band || !token) return;
         var body = new URLSearchParams();
         body.set("_csrf", token);
+        if (rid) body.set("rid", rid);
         btn.disabled = true;
         if (cell) cell.textContent = "scanning…";
         fetch("/api/daemon/" + encodeURIComponent(band) + "/scan",

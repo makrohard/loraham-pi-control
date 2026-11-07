@@ -3156,22 +3156,21 @@ class LifecycleOpsMixin:
                 "conflict": self._radio_competitors(
                     running + [e for e in interactive if e.get("running")]),
             })
-        # Strays (§6): a daemon still live on a band the current mode EXCLUDES — the likely leftover
-        # the day after a mode switch. Surface it so it stays visible + stoppable (lhpc never auto-
-        # kills). M-2: if it is the SAME process as an active band's daemon (a dual-band PID),
+        # Strays (§6): a daemon still live on a band the current mode EXCLUDES (a mode switch's leftover), kept visible
+        # and stoppable (lhpc never auto-kills). M-2: the SAME process as an active band's daemon (a dual-band PID):
         # disclose that stopping it stops the active band too.
         active = list(self.active_bands())
         active_pids = {b: set(self._daemon_pids_for_band(b)) for b in active}
         for band in self.RADIO_BANDS:
             if band in active:
                 continue
-            dv = dvs[band]
-            if not dv.reachable:
-                continue                                   # nothing live on this excluded band
+            dv, live = dvs[band], [x for x in radio_start.band_radios(self, band) if x["reachable"]]
+            if not dv.reachable and not live:
+                continue                                   # nothing live on this excluded band (W292: nor a radio's)
             shared_with = sorted(b for b, pids in active_pids.items()
                                  if pids & set(self._daemon_pids_for_band(band)))
             out.append({
-                "band": band, "stray": True, "shared_with": shared_with, "radios": [],
+                "band": band, "stray": True, "shared_with": shared_with, "radios": live,   # W292: a card per live radio
                 "daemon": {
                     "reachable": dv.reachable, "occupied": dv.reachable, "ready": dv.ready,
                     "usable": dv.ready, "radio_state": dv.radio_state or None,

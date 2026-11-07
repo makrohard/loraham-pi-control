@@ -342,12 +342,12 @@ class JobsOpsMixin:
 
     @invalidates_snapshot
     def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
-                        cascade: bool = False):
+                        cascade: bool = False, rid: str = ""):
         """Spawn a DETACHED web start/restart (the hidden `lhpc _stack-start` verb) and return
         `(job_log_name, admission, reason)` like `spawn_web_job` — except that an admission refusal
         is typed `admission_blocked` (not `blocked`): the web flashes per the admission and returns
-        immediately; the task banner follows the job (`web-start-<target>.log`
-        / `web-restart-<target>.log`, never the `start-<x>.log` process-log namespace `spawn_job`
+        immediately; the task banner follows the job (`web-start-<target>[-<rid>].log` / `web-restart-…`, the rid
+        naming one radio's daemon, W286; never the `start-<x>.log` process-log namespace `spawn_job`
         truncates). One attempt per log: a second Start while one runs is a typed refusal. The child
         proves it was tracked (`webjob_gate`), then runs the ordinary locked `start()`/`restart()`
         with a hook that marks the attempt RUNNING under every lock and before any mutation — a
@@ -377,7 +377,7 @@ class JobsOpsMixin:
             _adm.close()
             return None, "blocked", "a task is starting right now (admission contended) — retry"
         try:
-            name = f"web-{op}-{target}"
+            name = f"web-{op}-{target}" + (f"-{rid}" if rid else "")
             log, aid = name + ".log", uuid.uuid4().hex
             if not jobresult.reserve(self._paths, log, aid, op, target,
                                      self.stack_of(target) or target, []):
@@ -389,8 +389,7 @@ class JobsOpsMixin:
             with jobresult.settle_on_raise(self._paths, log, aid):
                 argv = [sys.executable, "-m", "lhpc", "_stack-start", target,
                         "--web-result", log, "--attempt-id", aid]
-                if band:
-                    argv += ["--band", band]
+                argv += (["--band", band] if band else []) + (["--radio", rid] if rid else [])
                 if stop_owners:
                     argv.append("--stop-owners")
                 if cascade and op == "restart":          # the confirmed "Stop dependents & restart"

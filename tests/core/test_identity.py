@@ -1494,7 +1494,7 @@ def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     started = []
     monkeypatch.setattr(type(svc), "spawn_start_job",
-                        lambda self, op, target, band="", stop_owners=False, cascade=False:
+                        lambda self, op, target, band="", stop_owners=False, cascade=False, rid="":
                         started.append(band) or (f"web-{op}-{target}.log", "admitted", ""))
     client, tok = _web(svc, monkeypatch)
     monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("868",))

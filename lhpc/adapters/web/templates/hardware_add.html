@@ -37,6 +37,15 @@
       <p class="muted">Use <strong>Detect</strong> to probe the board first.</p>
     </form>
     {% endif %}
+    {# W292: the board setup (once the daemon's Settings form): it names the band(s) the box serves, and on a box
+       with no hardware list it also writes the list, a dual board's two radios in one step. #}
+    <form method="post" action="{{ url_for('hardware_set') }}" class="hw-addrow" id="hw-setup">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <p><strong>Board setup</strong> <span class="muted">(the board(s) this box has, and so the band(s) it serves;
+        with no hardware list yet it also writes the list, both radios of a dual board at once)</span></p>
+      <label>Hardware setup <select name="hardware">{% for sid, label in setups %}<option value="{{ sid }}"{% if sid == setup %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <button type="submit">Save hardware</button>
+    </form>
     <p><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
   </div>
 </section>

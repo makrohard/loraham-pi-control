@@ -20,6 +20,7 @@
     {% endif %}
     {% if hp.mismatch %}<p class="depnote depnote-warn" id="hw-hp-mismatch">High-power switch, {{ r.band }} MHz: {{ hp.mismatch }}</p>{% endif %}
     {% for l in rflogs %}<p id="hw-rflog">{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a href="{{ url_for('logs_view', target=l.target, job=l.job) }}">RF log</a>{% endif %}</p>{% endfor %}
+    {% if r.choices and r.choices.reason and not r.choices.items %}<p class="depnote depnote-warn">{{ r.choices.reason }}</p>{% endif %}
     {% if r.choices and r.choices.items %}
       <form method="post" action="{{ url_for('hardware_bind') }}" id="hw-rebind">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

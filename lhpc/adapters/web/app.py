@@ -434,19 +434,32 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return []
 
+    def _set_key(items) -> str:
+        from lhpc.core import attention
+        return attention.set_key(items)
+
     @app.post("/attention/dismiss")
     def attention_dismiss():
         """W273: the banner's one ✕ hides the set it shows until that set changes (+20 dBm stays)."""
         if not _csrf_ok():
             abort(400)
         from lhpc.core import attention
-        if not attention.dismiss(service):
+        if not attention.dismiss(service, request.form.get("set", "")):
             flash("The attention list could not be closed right now; try again", "warn")
         return redirect(url_for("dashboard"))
 
     @app.get("/")
     def dashboard():
-        # W250/DEC-W57: Home is its banners, the Webserver box and the System box (the radios: /hardware).
+        # Radio-centric overview: one card per radio (W285/W286: "r1 · 868"), grouped by band, with its daemon,
+        # live monitor, the band's stacks and a start-stack control.
+        radios = service.radio_overview()
+        # An interactive app that's been launched (marked) but isn't detected running yet, or a radio's daemon
+        # start/restart job still running -> poll faster so the dash shows the outcome quickly.
+        tasks, dsid = service.running_tasks(), service.stack_of(service.DAEMON_ID) or "daemon"
+        jobs = {t.get("run_id") for t in tasks if t.get("kind") == "job" and t.get("state") == "running"}
+        pending_interactive = (any(not s.get("running") and not s.get("blocker") for r in radios for s in r["interactive"])
+                               or any(f"web-{op}-{dsid}-{x['rid']}.log" in jobs
+                                      for r in radios for x in r["radios"] for op in ("start", "restart")))
         # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
@@ -520,7 +533,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             maintenance_failing = [("record", "", f"{type(exc).__name__}: {exc}")]
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
-            webservers=webservers,
+            radios=radios, pending_interactive=pending_interactive, webservers=webservers,
             firewall=firewall, security_pill=security_pill, fw_reapply=fw_reapply,
             maintenance_failing=maintenance_failing,
             # The host the browser used to reach the console — a proxied web-UI link points here on
@@ -535,11 +548,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             restart_required=restart_required,
             welcome=service.auto_install_welcome(),
             welcome_dismissed=service.welcome_note_dismissed(),
-            tasks=service.running_tasks(),
+            tasks=tasks,
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
-            attention=_attention_banner(),                        # W272/W273: the "Needs attention" banner
+            attention=(_att := _attention_banner()),              # W272/W273: the "Needs attention" banner
+            attention_set=_set_key(_att),                         # C23 B2: the ✕ posts the identity of the set shown
             # Each power button renders ONLY when logind authorizes ITS action (cached
             # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
             # box shows nothing, and the dep panel offers the copybox.
@@ -1645,13 +1659,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, band=band or None)
                         + "#stack-settings-" + sid)
 
-    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None):
+    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None, inst=None, rid=""):
         """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
         (a resource conflict that stops another stack's owner, dependents a restart takes down) —
         a routine Start/Restart runs directly (Start means start). Install/update/clean
         keep their confirmation (source selector, typed clean)."""
         if plan is None:
-            plan = service.run_action(op, target, apply=False, source=source, band=band)
+            plan = service.run_action(op, target, apply=False, source=source, band=band, inst=inst)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
         # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
         # BUILD dependencies gate the SOURCE channel only — a download needs no toolchain
@@ -1665,7 +1679,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template(
             "confirm.html", version=__version__,
             op=op, target=target, plan=plan, tx=("tx" in op),
-            source=source, band=band,
+            source=source, band=band, rid=rid,
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
             stop_labels=([lbl for lbl, _ in service.owner_stops(plan.data.get("blockers") or [])]
                          if op in ("start", "restart") else None),
@@ -1702,6 +1716,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         band = request.form.get("band", "")    # chosen band for a band-switchable stack
         _submitted_band, confirmed = band, request.form.get("confirmed") == "yes"
+        rid, inst = request.form.get("rid", ""), None
+        if rid:                                 # W286: one radio's daemon (its Home card; the CLI's --radio)
+            from lhpc.core import radio_start
+            if op not in ("start", "stop", "restart") or (service.stack_of(target) or target) != (
+                    service.stack_of(service.DAEMON_ID) or "daemon"):
+                abort(400)
+            inst, band, why = radio_start.daemon_radio(service, rid)
+            if why:
+                flash(f"Cannot {op} the daemon: {why}.", "warn")
+                return _redirect_for(target)
         # ONE CONCRETE OPERATION BAND, frozen HERE on every POST (the Apps dropdown / the running
         # band / the marker / the primary — never a confirm control) and carried as the hidden
         # `band` of a confirmation form. Why it must be frozen: see `operation_band`. A CONFIRMED
@@ -1716,7 +1740,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Either way the consequences on the page were computed for the old band: refuse.
             _live = service.running_band(service.stack_of(target) or target, "")
             _moved = band if band != _submitted_band else (_live if _live and _live != band else "")
-            if confirmed and _submitted_band and _moved:
+            if confirmed and _submitted_band and _moved and not rid:     # a radio's band is its own
                 flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "
                       f"{_moved or 'its fixed band'} — check the plan and confirm again.", "warn")
                 return _redirect_for(target)
@@ -1761,17 +1785,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # from; an identity refusal lands on the Settings row to fix; only a CONSEQUENTIAL
             # choice — another stack's owner to stop, dependents a restart takes down — asks for
             # confirmation. Everything else runs now.
-            plan = service.run_action(op, target, apply=False, band=band)
+            plan = service.run_action(op, target, apply=False, band=band, inst=inst)
             if not plan.ok:
                 if plan.data.get("enforce_fields"):
                     return _settings_back(target, plan, band)
                 flash(f"{plan.summary} {' '.join(plan.details[:6])}", "warn")
                 return _redirect_for(target)
             if plan.data.get("blockers") or plan.data.get("dependents"):
-                return _render_confirm(op, target, band, source, frm, plan=plan)
+                return _render_confirm(op, target, band, source, frm, plan=plan, rid=rid)
         elif not confirmed:
             # Stage 1: show the dry-run plan, options and a confirmation form.
-            return _render_confirm(op, target, band, source, frm)
+            return _render_confirm(op, target, band, source, frm, inst=inst, rid=rid)
         # Stage 2: apply.
         # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
         # a mismatch re-renders the confirm with ZERO mutation.
@@ -1812,7 +1836,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # while the job runs and the page reloads once when it ends. Blocked = typed refusal.
             job, admission, reason = service.spawn_start_job(op, target, band=band,
                                                              stop_owners=stop_owners,
-                                                             cascade=cascade)
+                                                             cascade=cascade, rid=rid)
             if job is None:                             # blocked, or admission_blocked (typed)
                 flash(reason or f"{op} could not start.", "warn")
             elif admission == "pending":
@@ -1823,7 +1847,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       "in the banner.", "ok")
             return _redirect_for(target)
         result = service.run_action(op, target, apply=True, source=source,
-                                    cascade=cascade, band=band, purge=purge)
+                                    cascade=cascade, band=band, purge=purge, inst=inst)
         if op == "update" and not result.ok and _pin_refusal(result):
             # The inline Update's pin refusal is shown on the confirm page itself, with the same
             # ways out (self-update first) as the dry run's — not flattened into a flash.
@@ -2141,7 +2165,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             keyed = [v for v in m.variants if not v.band] if len(m.variants) > 1 else []
             boards += [(f"{m.id}:{v.key}", f"{m.label} ({v.key})") for v in keyed] or [(f"{m.id}:", m.label)]
         return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards, valid=valid,
-                               list_state=view, detect=session.pop("hw_detect", None))
+                               list_state=view, detect=session.pop("hw_detect", None),
+                               setups=service.hw_setups(), setup=service.hardware_setup())     # W292: the board setup
 
     @app.post("/hardware/add-hat")
     def hardware_add_hat():
@@ -2196,7 +2221,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         ok, msg, box = radio_start.bind_usb(service, rid, request.form.get("port", ""))
         flash(msg + (" — run the USB setup on the Hardware page to give this account access" if box else ""),
               "ok" if ok else "warn")
-        return redirect(url_for("hardware_view") + "#usb-setup" if box else url_for("hardware_radio", rid=rid))
+        from lhpc.core import radios
+        known = rid in {r.id for r in radios.load(service._paths).radios}      # C23: never a redirect to a 404
+        return redirect(url_for("hardware_view") + "#usb-setup" if box
+                        else url_for("hardware_radio", rid=rid) if known else url_for("hardware_view"))
 
     @app.post("/hardware/add")
     def hardware_add():
@@ -2233,8 +2261,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.set_hardware_setup(request.form.get("hardware", ""))
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
-                        + "#stack-settings-daemon")
+        return redirect(url_for("hardware_add_page") + "#hw-setup")          # W292: the form is Add Hardware's
 
     @app.post("/hardware/high-power")
     def hardware_high_power():

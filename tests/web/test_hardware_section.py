@@ -3,6 +3,7 @@ asserted on rendered pages and on the saved hardware list."""
 import re
 import radios_fixture
 import repo_paths
+from htmlq import parse
 
 from lhpc.core import radios, usb_access
 from lhpc.core.paths import Paths
@@ -77,6 +78,26 @@ def test_a_bind_without_the_token_is_refused(web, tmp_path, monkeypatch):
     assert c.post("/hardware/bind", data={"rid": "r2", "port": "1-1.3"}).status_code == 400
 
 
+def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypatch):
+    # W285/W286: one Home card per radio ("r1 · 433"), its band a property of the radio (B5's list in a band card before).
+    from lhpc.core.services import ControllerService
+    radios_fixture.write(tmp_path)
+    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    doc = parse(web().get("/").get_data(as_text=True))
+    cards = doc.find("div", class_="radio-col")
+    assert [(c["data-radio-rid"], c["data-radio-band"]) for c in cards] == [("r1", "433"), ("r2", "868")]
+    assert [doc.within(c).find("h2")[0].text.strip() for c in cards] == ["r1 · 433", "r2 · 868"]
+
+
+def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):
+    # PKT-D20 item 5 / item 16: the Hardware page says what a band-addressed refusal of a shared band says, rendered,
+    # and the command it names exists (`lhpc stack stop daemon --radio rN`, test_16_radio_stop.py).
+    import html
+    page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
+    assert ("Two radios on one band each run their own daemon: address one by its radio id "
+            "(lhpc stack stop daemon --radio rN).") in page
+
+
 def test_the_hardware_list_has_a_row_per_radio_naming_its_band(web, tmp_path, monkeypatch):
     # Redesign (W250/W257): the radio cards left Home; the Hardware list has one row per radio, naming its band.
     from lhpc.core.services import ControllerService
@@ -88,12 +109,3 @@ def test_the_hardware_list_has_a_row_per_radio_naming_its_band(web, tmp_path, mo
     for band, rid in (("433", "r1"), ("868", "r2")):
         row = re.search(rf'<tr class="hwrow"[^>]*data-rid="{rid}".*?</tr>', page, re.S).group(0)
         assert f"{band} MHz" in _text(re.sub(r"<[^>]+>", " ", row))
-
-
-def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):
-    # PKT-D20 item 5 / item 16: the Hardware page says what a band-addressed refusal of a shared band says, rendered,
-    # and the command it names exists (`lhpc stack stop daemon --radio rN`, test_16_radio_stop.py).
-    import html
-    page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
-    assert ("Two radios on one band each run their own daemon: address one by its radio id "
-            "(lhpc stack stop daemon --radio rN).") in page

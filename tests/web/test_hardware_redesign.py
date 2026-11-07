@@ -187,3 +187,24 @@ def test_a_running_radio_is_not_disabled_from_its_row(web, tmp_path, monkeypatch
     _post(c, csrf, "/hardware/enabled", rid="r1", enabled="off")
     assert "Not disabled: stop its daemon, then disable r1" in html.unescape(c.get("/hardware").get_data(as_text=True))
     assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r1").enabled is True
+
+
+def test_c23_the_rebind_reason_shows_without_any_choice(web, tmp_path, monkeypatch):
+    # Gate 1 C23 note 1: a USB radio with no stick to choose still shows why.
+    real = radio_start.radio_detail
+
+    def detail(svc, rid):
+        d = real(svc, rid)
+        if d is not None and rid == "r3":
+            d["choices"] = type("C", (), {"items": [], "reason": "no stick of this model is plugged in"})()
+        return d
+    monkeypatch.setattr(radio_start, "radio_detail", detail)
+    page = _box(web, tmp_path, monkeypatch).get("/hardware/radio/r3").get_data(as_text=True)
+    assert "no stick of this model is plugged in" in page
+
+
+def test_c23_a_failed_bind_of_an_unknown_radio_lands_on_a_page_that_exists(web, tmp_path, monkeypatch, csrf):
+    # Gate 1 C23 note 2: the bind refuses r9 (no such radio); the redirect goes to the list, which shows the reason.
+    c = _box(web, tmp_path, monkeypatch)
+    r = _post(c, csrf, "/hardware/bind", rid="r9", port="1-1.3")
+    assert r.headers["Location"].endswith("/hardware") and c.get(r.headers["Location"]).status_code == 200

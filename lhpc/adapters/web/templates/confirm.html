@@ -50,6 +50,7 @@
           <input type="hidden" name="target" value="{{ target }}">
           <input type="hidden" name="confirmed" value="yes">
           {% if band %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
+          {% if rid %}<input type="hidden" name="rid" value="{{ rid }}">{% endif %}
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}
             <p class="depnote depnote-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's

@@ -6,8 +6,7 @@ only meshcore-gps (its gpsd had lost the device), "listener absent" was the stop
 now carries its reason (status.component_note: the GPS feed's note, else the absent listeners), and a web-UI row whose
 component is stopped says so; a running component whose listener is absent keeps "listener absent".
 
-Driven through the Apps row body GET /stacks/meshcore/body (W250/DEC-W57: the stack rows and their notes left Home for Apps), the snapshot stood
-in for (the states are the prober's: tests of status).
+Driven through GET / with the snapshot stood in for (the states are the prober's: tests of status).
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from lhpc.core.status import Snapshot, StackStatus
 LOST = "source not delivering (gpsd: device activation failed)"
 
 
-def _dash(web, tmp_path, monkeypatch, states, evidence=None, absent=(), proxied=False, page="/stacks/meshcore/body"):
+def _dash(web, tmp_path, monkeypatch, states, evidence=None, absent=(), proxied=False):
     """GET / with the meshcore stack in `states` (component id -> RunState), `evidence` per component, the
     endpoints of the components in `absent` observed absent, and the web UI's page proxied when `proxied`."""
     if proxied:
@@ -41,13 +40,11 @@ def _dash(web, tmp_path, monkeypatch, states, evidence=None, absent=(), proxied=
         ss.components[comp.id] = cs
     snap.stacks.append(ss)
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *a, **k: snap)
-    return parse(web(service_factory=lambda: svc).get(page).get_data(as_text=True))
+    return parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
 
 
 def _notes(doc):
-    """{component: its note} from the Apps rows' `p.depnote[data-note]`, "⚠ <component>: <note>"."""
-    return {el["data-note"]: el.text.strip().partition(": ")[2] for el in doc.find("p", class_="depnote")
-            if el.has_attr("data-note")}
+    return {el["data-note"]: el.text.strip() for el in doc.find("span", class_="muted") if el.has_attr("data-note")}
 
 
 UP, DEG, STOP = RunState.RUNNING, RunState.DEGRADED, RunState.STOPPED
@@ -79,12 +76,12 @@ def test_r2_a_degraded_component_without_a_feed_note_names_its_absent_listener(w
 def test_r3_the_stopped_web_ui_reads_web_ui_stopped(web, tmp_path, monkeypatch, proxied):
     """RED before: "listener absent" (direct) or the proxy's link alone (proxied) while the component was stopped."""
     doc = _dash(web, tmp_path, monkeypatch, {"meshcore-node": UP, "meshcore-gps": UP, "meshcore-webui": STOP},
-                proxied=proxied, page="/")                           # Home's Webserver box lists the web UIs
+                proxied=proxied)
     assert [el.tag for el in _stopped(doc)] == (["span"] if proxied else ["a"])
 
 
 def test_r4_control_a_running_web_ui_without_its_listener_keeps_listener_absent(web, tmp_path, monkeypatch):
-    doc = _dash(web, tmp_path, monkeypatch, {"meshcore-node": UP, "meshcore-gps": UP, "meshcore-webui": UP}, page="/")
+    doc = _dash(web, tmp_path, monkeypatch, {"meshcore-node": UP, "meshcore-gps": UP, "meshcore-webui": UP})
     assert _stopped(doc) == []
     assert [a for a in doc.find("a", class_="wsurl") if a.text.strip() == "listener absent"]
 

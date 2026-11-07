@@ -9,10 +9,9 @@ from lhpc.core.services import ControllerService
 
 class _Boom(ControllerService):
     """A service whose dashboard read raises a NON-typed error (simulating an unexpected
-    escape past the typed service boundary). Since W250 Home no longer reads the radio overview: the read is
-    the restart-required box's, which Home reads unguarded."""
+    escape past the typed service boundary)."""
 
-    def restart_required_stacks(self):
+    def radio_overview(self):
         raise RuntimeError("unexpected internal explosion with secrets in the traceback")
 
 
