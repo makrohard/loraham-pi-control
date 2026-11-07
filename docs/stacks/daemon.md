@@ -5,7 +5,7 @@ one `loraham_daemon` process per served band (433/868 MHz). It never transmits o
 
 | | |
 |---|---|
-| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (makrohard's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the ELECROW Meshstick; an optional build input (source checkout), adopted by default; never started |
+| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (the project's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the ELECROW Meshstick; an optional build input (source checkout), adopted by default; never started |
 | Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `makrohard/libch341-spi-userspace`, the fork carrying the serial/port selection fix, at 98b656bf (the commit in the daemon's `.github/ci/libpinedio.lock`) |
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
