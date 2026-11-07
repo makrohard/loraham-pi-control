@@ -18,6 +18,7 @@ verifies it via the daemon's STATS counter — never a continuous transmission.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import platform
@@ -1382,7 +1383,8 @@ class Lifecycle:
                 pass                    # best-effort: an orphan is inert, never ownership evidence
         return notes, unverified
 
-    def stop(self, comp: Component, band: str | None = None, rid: str | None = None) -> CompResult:
+    def stop(self, comp: Component, band: str | None = None, rid: str | None = None,
+             exclude_rids=(), token=None, endpoints=None) -> CompResult:
         """Stop the LHPC-owned launch(es) for this component (optionally one band),
         returning a TYPED outcome.
 
@@ -1407,18 +1409,20 @@ class Lifecycle:
             return CompResult(component=comp.id, action="stop", outcome=outcome,
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
-        recs = self.owned_records(comp.id, band, rid=rid)
+        recs = [r for r in self.owned_records(comp.id, band, rid=rid) if r.get("rid", "") not in exclude_rids]
+        # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never slot 0's that still serve.
+        ep_comp = comp if endpoints is None else dataclasses.replace(comp, endpoints=tuple(endpoints))
         if not recs:
             # No ownership record. A matching foreign process is MANUAL_REQUIRED; a
             # lingering readiness endpoint means the stop is NOT verified (never claim
             # ALREADY_STOPPED while a ready=true endpoint is still present).
             if comp.process is not None:
-                pm = probe_process(self.system, comp.process)
-                if pm.pids:
+                pm = probe_process(self.system, comp.process, instance=token)    # 7c2b: this instance's own
+                if pm.pids and (token is not None or not (rid or exclude_rids)):
                     return result(Outcome.MANUAL_REQUIRED,
                                   "a matching process is running but not owned by LHPC — "
                                   f"stop it yourself: kill {' '.join(map(str, pm.pids))}")
-            gone, lingering = self._await_ready_endpoints_gone(comp)
+            gone, lingering = self._await_ready_endpoints_gone(ep_comp)
             if not gone:
                 return result(Outcome.ENDPOINT_STILL_PRESENT,
                               "no owned process, but readiness endpoint(s) still present: "
@@ -1471,7 +1475,7 @@ class Lifecycle:
         # grace so a child that outlives the tracked wrapper by a beat (e.g. run.sh's
         # backgrounded qemu closing its 12323 listener) converges to STOPPED instead of a
         # spurious ENDPOINT_STILL_PRESENT.
-        gone, lingering = self._await_ready_endpoints_gone(comp)
+        gone, lingering = self._await_ready_endpoints_gone(ep_comp)
         if not gone:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "

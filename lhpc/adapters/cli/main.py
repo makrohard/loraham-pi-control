@@ -1418,7 +1418,7 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if (args.stack_action == "stop" and getattr(args, "band", "")
+        if (args.stack_action == "stop" and getattr(args, "band", "") and "@" not in args.stack
                 and args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon")):
             # Fail closed: for any other stack a band would only skip the operator's stop intent,
             # so boot restore would start it again (finding 140's review).
@@ -1434,10 +1434,10 @@ def _run(argv: list[str] | None = None) -> int:
 
             from lhpc.core import instances
             from lhpc.core.outcomes import manual_required_only
-            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts on its radio's band (stop/restart: 7c2b).
+            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts, stops and restarts on its radio's band.
             sid, inst, iband, why = instances.resolve(svc, args.stack)
-            if inst is not None and args.stack_action != "start":
-                why = f"lhpc stack {args.stack_action} {args.stack}: an instance is started only, in this build"
+            if inst is not None and args.stack_action == "poststart":
+                why = f"lhpc stack poststart {args.stack}: not for an instance in this build"
             if why:
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1

@@ -205,6 +205,11 @@ def remove_instance(svc, sid: str, rid: str):
             have = list(state.slots.get(sid, ()) if isinstance(sid, str) else ())
             if not isinstance(rid, str) or not rid or rid not in have:
                 return ActionResult(False, f"{sid}@{rid} is not a listed instance")
+            _sid, inst, band, _why = resolve(svc, f"{sid}@{rid}")
+            if inst is not None and any(instance_runs(svc, c, inst, band) for c in svc.stack(sid).components
+                                        if c.process is not None):
+                return ActionResult(False, f"Cannot remove {sid}@{rid}: it is running — stop it first",
+                                    next_commands=[f"lhpc stack stop {sid}@{rid}"])
             k = have.index(rid)
             have[k] = ""
             reasons = save(svc._paths, {**state.slots, sid: tuple(have)})
@@ -372,3 +377,19 @@ def claim_key(claim, inst) -> str:
     if inst is None or not inst.slot or not getattr(claim, "key_template", ""):
         return claim.key
     return inst.subst(claim.key_template)
+
+
+def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
+    """The keyword arguments a component's Lifecycle.stop takes for one instance (item 7c2b): for `<stack>@<rid>`
+    its rid, its process token and its own endpoints; for slot 0 of a stack with listed instances every record but
+    the listed instances' (exclude_rids) and slot 0's token; otherwise none (today's whole-component stop)."""
+    if inst is not None and inst.slot:
+        rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
+        return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),
+                "endpoints": endpoints_for(comp.endpoints, inst)}
+    taken = listed_rids(svc._paths, sid)
+    if not taken:
+        return {}
+    b = svc.running_band(sid, comp.band or band) or comp.band or band
+    rid, _why = slot0_radio(svc._paths, sid, b)
+    return {"exclude_rids": tuple(taken), "token": _token(svc, comp, commands.Instance(0, rid), b) if rid else None}

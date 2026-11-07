@@ -6,56 +6,10 @@ by its ownership records' rid, the matcher kill.py uses. The CLI runs on a FakeS
 runtime root: the daemon's CONF socket answers READY, the launch is recorded (Lifecycle.start), and a component's
 readiness port is a declared listener."""
 import pytest
-import radios_fixture
+from radios_fixture import R1, R2, R3, kiss_on as _kiss_on
 
 from lhpc.adapters.cli import main as cli
-from lhpc.core import commands, radio_start, radios
-from lhpc.core.lifecycle import Lifecycle, StartLaunch
-from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem, Listener
-from lhpc.core.services import ControllerService
-
-R1, R2 = radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "wave", "waveshare-sx1262", "433")
-R3 = radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")
-READY = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r3")}
-
-
-@pytest.fixture
-def box(tmp_path, monkeypatch, capsys):
-    """box(rows, listed, procs, ports) -> run(*argv) -> (rc, out, launches)."""
-    def make(rows, listed, procs=None, ports=()):
-        radios_fixture.write(tmp_path, rows)
-        assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
-        if listed:
-            (tmp_path / "config" / "instances.toml").write_text(listed)
-        for name, value in (("hardware_configured", lambda self: True), ("active_bands", lambda self: ["433", "868"]),
-                            ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
-                            ("_source_present", lambda self, c: True), ("_verify_band_up", lambda self, b: True)):
-            monkeypatch.setattr(ControllerService, name, value)
-        monkeypatch.setattr(radio_start, "verify_identity", lambda svc, rid: "")
-        launches = []
-
-        def launch(self, stack, comp, params=None, band="", **kw):
-            inst = kw.get("inst") or commands.SLOT0
-            launches.append((comp.id, band, inst.slot, inst.rid))
-            return StartLaunch(True, "")
-        monkeypatch.setattr(Lifecycle, "start", launch)
-        system = FakeSystem(unix_replies=READY, cmdlines_data=procs or {},
-                            listeners=[Listener(family="ipv4", ip="127.0.0.1", port=p, inode=i)
-                                       for i, p in enumerate(ports, 1)]).system
-        real = ControllerService
-        monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: real(system=system, paths=Paths(runtime_root=tmp_path)))
-
-        def run(*argv):
-            rc = cli.main(["stack", *argv, "--yes"])
-            return rc, capsys.readouterr().out, launches
-        return run
-    return make
-
-
-def _kiss_on(rid):                                     # a kiss-tnc process of radio `rid`, by its instance token
-    return ["loraham-kiss-tnc", "--data-socket", f"/tmp/loraf-{rid}.sock"]
-
+from lhpc.core import commands, radio_start
 
 def test_a_listed_instance_starts_on_its_radio_as_its_slot(box):
     rc, out, launches = box((R1, R3), 'kiss = ["r3"]\n', ports=(8011,))("start", "kiss@r3")
@@ -97,7 +51,7 @@ def test_slot_0_is_refused_when_every_radio_of_its_band_is_listed(box):
 
 @pytest.mark.parametrize("argv,why", [
     (("start", "kiss@r9"), "kiss@r9 is not a listed instance (lhpc stack add-instance kiss r9)"),
-    (("stop", "kiss@r3"), "lhpc stack stop kiss@r3: an instance is started only, in this build"),
+    (("poststart", "kiss@r3"), "lhpc stack poststart kiss@r3: not for an instance in this build"),
 ])
 def test_the_cli_refuses_an_unlisted_or_not_yet_supported_instance(box, capsys, argv, why):
     box((R1, R3), 'kiss = ["r3"]\n')

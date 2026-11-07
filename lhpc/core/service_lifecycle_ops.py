@@ -3293,9 +3293,9 @@ class LifecycleOpsMixin:
                                           build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band, inst=inst),
-            "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),
+            "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band, inst=inst),
             "restart": lambda: self.restart(target, apply=apply, stop_owners=stop_owners,
-                                            band=band, cascade=cascade),
+                                            band=band, cascade=cascade, inst=inst),
             "poststart": lambda: self.poststart(target, apply=apply, band=band),
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
