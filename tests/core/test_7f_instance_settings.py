@@ -121,3 +121,22 @@ def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_sett
     assert own["repeater.node_name"] == "Relay Four" and len(own["repeater.identity_key"]) == 64
     assert not ops.file_path(svc._paths).exists()
     assert svc._stored_param_value("meshcore", "file", "meshcore-node", "repeater_name") == "Slot Zero"
+
+
+def test_an_instances_openhop_gps_switch_is_its_own(tmp_path):
+    # G1-C24 B2: slot 0 reports its position (use_gps on, the default); meshcore@r4 has it off in its own file, and
+    # its generated repeater section says off
+    import tomllib
+    rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4", "b", "uputronics", "868", ce="ce1"))
+    radios_fixture.write(tmp_path, rows)
+    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
+    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R4",
+                                                        "use_gps": "off"}, band="r4")
+    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R2"})
+    svc.write_config_files("meshcore", "868")
+    svc.write_config_files("meshcore", "868", inst=inst)
+    files = tmp_path / "config" / "files"
+    assert tomllib.loads((files / "meshcore.toml").read_text())["repeater"]["use_gps"] == "on"
+    assert tomllib.loads((files / "r4" / "meshcore.toml").read_text())["repeater"]["use_gps"] == "off"

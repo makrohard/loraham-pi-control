@@ -958,10 +958,10 @@ class LifecycleOpsMixin:
         # The approved identity must actually LAUNCH: a licensed field that inherits the global
         # operator callsign carries it as a launch value (never persisted) so argv/config-file
         # rendering and post-steps use what enforcement just approved — on the launch band.
-        params, file_over = self._materialize_inherited_identity(target, _id_band)
+        params, file_over = self._materialize_inherited_identity(target, _id_band, inst)   # 7f: an instance's own
         # SAVED launch values the launch would reject refuse here too — plan and apply alike,
         # before owner stops or config generation (a restart preflights the same check).
-        if (_cfg_err := self._saved_launch_refusal(target, band, "start")) is not None:
+        if (_cfg_err := self._saved_launch_refusal(target, band, "start", inst)) is not None:
             return _cfg_err
         prep = prepare_start(
             target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
@@ -2171,7 +2171,7 @@ class LifecycleOpsMixin:
         daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
         return [d for d in self.stop_dependents(daemon_sid, bands={band}) if d != sid]
 
-    def _saved_launch_refusal(self, target: str, band: str, op: str):
+    def _saved_launch_refusal(self, target: str, band: str, op: str, inst=None):
         """The typed refusal for SAVED launch values the launch itself would reject, or None.
         A dry expansion of every run-order component's argv through the launch's own expander
         (`commands.expand_argv`, the same validators, the same component-scoped config the launch
@@ -2185,7 +2185,7 @@ class LifecycleOpsMixin:
             return None
         hint = self._launch_band_hint(target, band)
         cfg_band = self._config_band(target, hint)
-        run_over, _file_over = self._materialize_inherited_identity(target, hint)
+        run_over, _file_over = self._materialize_inherited_identity(target, hint, inst)
         operator, runtime = self.config().operator, str(self._paths.runtime_root)
         is_stack = self.stack(target) is not None
         for _stack, comp in order:
@@ -2194,7 +2194,7 @@ class LifecycleOpsMixin:
             # launch input, so a stale key there must not refuse every client stack.
             if not comp.run_argv or comp.id == self.DAEMON_ID:
                 continue
-            cfg = dict(self.stack_config(comp.id, cfg_band))
+            cfg = dict(self.stack_config(comp.id, cfg_band, inst))           # G1-C24 B1: an instance's own
             if is_stack or comp.id == target:
                 cfg.update(self._overrides_for_comp(target, "run", run_over, comp.id))
             # The source path only feeds `{source}` token substitution here — values, not paths,

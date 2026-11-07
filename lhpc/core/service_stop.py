@@ -462,7 +462,7 @@ class StopOpsMixin:
             _rband = self.operation_band(target, band)
             if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
                 return _pf_err
-            if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+            if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
                 return _pf_err
             if (_pf_err := self._position_refusal(target, "restart")[0]) is not None:
                 return _pf_err
@@ -499,7 +499,7 @@ class StopOpsMixin:
                     if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
                         return _pf_err
                     _order, _radio = self._order_radio(target, _rband)
-                    if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+                    if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
                         return _pf_err
                     with self._lifecycle_guard("restart", target, _rband,
                                                stop_owners=stop_owners, cascade=cascade,
@@ -626,7 +626,7 @@ class StopOpsMixin:
             return _r
         if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
             return _pf_err
-        if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+        if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
             return _pf_err
         # The dependency band rule: a chain member of another stack live on a different band.
         # `stop_owners` cannot clear that state: owner-stop acts on resource-conflict HOLDERS, and

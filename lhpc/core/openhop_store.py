@@ -334,7 +334,7 @@ def rendered(svc, name: str, target: str, inst=None):
     if name in ROWS:
         return ""
     if name == "openhop_use_gps":
-        return "on" if svc.gps_enabled_for(target) else "off"
+        return "on" if svc.gps_enabled_for(target, inst) else "off"     # G1-C24 B2: an instance's own
     if name == "chat_node_id":                          # the pure repeater's handle, never secret
         try:
             return key_id(_mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.slot else ""))

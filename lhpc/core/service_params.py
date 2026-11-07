@@ -1983,7 +1983,7 @@ class ParamsConfigMixin:
             out.append(row)
         return out
 
-    def _materialize_inherited_identity(self, target: str, band: str) -> tuple[dict, dict]:
+    def _materialize_inherited_identity(self, target: str, band: str, inst=None) -> tuple[dict, dict]:
         """AFTER enforcement approved a start/restart: (run_values, file_values), API-keyed, with
         the EFFECTIVE value for every licensed identity field that inherits the global operator
         callsign — the ONE launch-time overlay on the saved configuration, never persisted (the
@@ -1992,7 +1992,7 @@ class ParamsConfigMixin:
         refusal gate just approved."""
         p: dict = {}
         fo: dict = {}
-        for r in self.identity_resolution(target, band):
+        for r in self.identity_resolution(target, band, inst):
             if r["source"] != "global":
                 continue
             kind = "run" if r["kind"] == "run" else "file"
