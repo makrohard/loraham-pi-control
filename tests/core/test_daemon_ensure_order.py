@@ -2,7 +2,7 @@
 waits for each to be READY or failed before the next; a radio that fails (launch or verify) does
 not stop the others: each is reported, `ok_all` is False. At L3 a radio is a band. The fakes stand
 in for the launch (`Lifecycle.start`) and the CONF socket (read and verify); the order is the one
-the code calls them in."""
+the code calls them in. Since item 16 a radio's daemon is verified on its own socket key, its rid."""
 import pytest
 
 from lhpc.core import daemon_control, radio_start, radios
@@ -37,12 +37,12 @@ def ensure(tmp_path, monkeypatch):
     monkeypatch.setattr(radio_start, "verify_identity", lambda svc, rid: "")      # ID=/BOUND= hold (tested apart)
     for name, value in (("hardware_configured", lambda self: True),
                         ("_daemon_arbitrated_bands", lambda self, radio: (["433", "868"], {})),
-                        ("_daemon_claimed_bands", lambda self: set()),
                         ("_source_present", lambda self, comp: True),
                         ("binary_behind", lambda self, comp: None),
                         ("is_built", lambda self, comp: True),
-                        ("_apply_stack_daemon_params", lambda self, sid, b: ([], True, ""))):
+                        ("_apply_stack_daemon_params", lambda self, sid, b, rid="": ([], True, ""))):
         monkeypatch.setattr(ControllerService, name, value)
+    monkeypatch.setattr(radio_start, "_daemon_procs", lambda svc: [])                 # no daemon process holds a radio
 
     def run(fail_launch=(), fail_verify=()):
         def verify(self, b):
@@ -58,20 +58,20 @@ def ensure(tmp_path, monkeypatch):
 
 def test_each_daemon_is_verified_before_the_next_is_launched(ensure):
     calls, _lines, ok = ensure()
-    assert calls == [("launch", "433"), ("verify", "433"), ("launch", "868"), ("verify", "868")]
+    assert calls == [("launch", "433"), ("verify", "r1"), ("launch", "868"), ("verify", "r2")]
     assert ok
 
 
 def test_a_failed_launch_does_not_stop_the_next_radio(ensure):
     # A behaviour change (I11): today the first failed launch returned at once.
     calls, lines, ok = ensure(fail_launch={"433"})
-    assert ("launch", "868") in calls and ("verify", "868") in calls
+    assert ("launch", "868") in calls and ("verify", "r2") in calls
     assert not ok and any("start daemon r1 --radio 433" in ln and "[fail]" in ln for ln in lines)
 
 
 def test_a_failed_verify_does_not_stop_the_next_radio(ensure):
-    calls, lines, ok = ensure(fail_verify={"433"})
-    assert calls == [("launch", "433"), ("verify", "433"), ("launch", "868"), ("verify", "868")]
+    calls, lines, ok = ensure(fail_verify={"r1"})
+    assert calls == [("launch", "433"), ("verify", "r1"), ("launch", "868"), ("verify", "r2")]
     assert not ok and any("433 CONF socket never came up" in ln for ln in lines)
 
 

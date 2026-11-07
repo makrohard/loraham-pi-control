@@ -14,10 +14,10 @@
 <section class="card" id="hardware-section">
   <header><h2>Hardware: the radios</h2></header>
   <div class="body">
-    <p class="muted">The hardware list (config/radios.toml) names the radios; a daemon starts for each band the board
-      setup serves, as that band's radio on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
-    <p class="muted" id="hardware-shared-band">A band with two enabled radios starts no daemon: set <code>enabled = false</code>
-      on one of them in config/radios.toml.</p>
+    <p class="muted">The hardware list (config/radios.toml) names the radios; each enabled radio of the list runs its own
+      daemon on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
+    <p class="muted" id="hardware-shared-band">Two radios on one band each run their own daemon: address one by its radio id
+      (<code>lhpc stack stop daemon --radio rN</code>).</p>
     {% if view.kind != "valid" %}
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>

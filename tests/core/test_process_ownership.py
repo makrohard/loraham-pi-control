@@ -796,7 +796,7 @@ def _daemon_failed_start(tmp_path, monkeypatch, daemon_up_before: bool, a_argv=N
     daemon = svc.stack("daemon")
 
     def ensure(self, life, stack, comp, running, radio, start_sid, *,
-               requested_target="", start_scope=""):
+               requested_target="", start_scope="", rid=""):
         if not life.owned_records(comp.id):
             assert life.start(stack, comp, {}, band="433").ok
         return ["  [ok] start daemon --radio 433"], True, ""

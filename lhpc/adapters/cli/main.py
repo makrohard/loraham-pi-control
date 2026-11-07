@@ -680,6 +680,8 @@ def build_parser() -> argparse.ArgumentParser:
             from lhpc.core.daemon_control import ALLOWED_BANDS
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Restart on this band (the daemon of that band, or a band-switchable stack)")
+        if action in ("start", "stop", "restart"):          # item 16: one radio's daemon of a shared band
+            sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio only (daemon only)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
     # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
     for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
@@ -1457,6 +1459,15 @@ def _run(argv: list[str] | None = None) -> int:
             if inst is not None and getattr(args, "band", "") and args.band != iband:
                 print(f"ERR   {args.stack} runs on {iband} MHz (its radio's band), not {args.band}", file=sys.stderr)
                 return 2
+            if getattr(args, "radio", ""):
+                if sid not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon") or inst or args.band:
+                    print("ERR   --radio applies to the daemon only, without --band", file=sys.stderr)
+                    return 2
+                from lhpc.core import radio_start
+                inst, iband, why = radio_start.daemon_radio(svc, args.radio)
+                if why:
+                    print(f"ERR   {why}", file=sys.stderr)
+                    return 1
 
             def _run(a, stop_owners=False):
                 res = svc.run_action(args.stack_action, sid, apply=a, band=iband or getattr(args, "band", ""),

@@ -37,9 +37,9 @@ this release.
   list for the setup (one radio per band) when there is none; an existing list is never changed by it.
 - **USB radios:** the console's Hardware page (`/hardware`) lists each radio with its own daemon's state, adds a
   listed USB stick as a new radio, binds a radio to a stick, and offers the one-time USB setup as one command.
-- **Two radios on one band:** a band with two enabled radios starts no daemon: set `enabled = false` on one of
-  them in `config/radios.toml`. A client start on such a band, and a
-  per-band stop of it, are refused naming both radios.
+- **Two radios on one band:** two radios on one band each run their own daemon: address one by its radio id
+  (`lhpc stack stop daemon --radio rN`). A client starts its own radio's daemon; a per-band stop stops the clients
+  on the band's radios, then each radio's daemon.
 - x86 hosts: not yet verified.
 
 ## Settings

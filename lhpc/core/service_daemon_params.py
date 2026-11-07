@@ -14,24 +14,24 @@ from .snapshot_memo import invalidates_snapshot
 
 class DaemonParamsMixin:
 
-    def _apply_tx_mode(self, band: str, tx: str) -> tuple[bool, str]:
+    def _apply_tx_mode(self, band: str, tx: str, rid: str = "") -> tuple[bool, str]:
         """Apply a REQUIRED daemon TX mode and verify it by READBACK. Returns
         (ok, detail). A failed SET, or a readback that is absent/mismatched/
         malformed/timed-out, is a failure that gates every dependent — never a
         warning-success. Skips the SET only when the mode already matches."""
         want = tx.upper()
-        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for TX-mode set (RADIO={state})"
         if view.status.get("TXMODE", "").upper() == want:
             return True, f"TXMODE already {want}"
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), "TXMODE", tx)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), "TXMODE", tx)
         if not ok:
             return False, f"SET TXMODE={want} rejected: {detail}"
         waited = 0.0
         while True:                              # bounded read-only readback
-            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
             got = v.status.get("TXMODE", "").upper() if v.reachable else ""
             if got == want:
                 return True, f"SET TXMODE={want} confirmed by readback"
@@ -49,24 +49,24 @@ class DaemonParamsMixin:
         except (TypeError, ValueError):
             return False
 
-    def _apply_conf_param(self, band: str, key: str, want) -> tuple[bool, str]:
+    def _apply_conf_param(self, band: str, key: str, want, rid: str = "") -> tuple[bool, str]:
         """Apply a numeric daemon LBT param (CADIDLE/CADWAIT, ms) and verify by READBACK.
         Returns (ok, detail). NON-GATING tuning: a failure is only reported (never blocks the
         dependent) because the daemon still does LBT at its current value. Skips the SET when
         the value already matches."""
         want = str(want).strip()
-        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for {key} set (RADIO={state})"
         if self._cadidle_eq(view.status.get(key), want):
             return True, f"{key} already {want}ms"
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, want)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), key, want)
         if not ok:
             return False, f"SET {key}={want} rejected: {detail}"
         waited = 0.0
         while True:                              # bounded read-only readback
-            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
             got = v.status.get(key) if v.reachable else None
             if self._cadidle_eq(got, want):
                 return True, f"SET {key}={want}ms confirmed by readback"
@@ -77,15 +77,15 @@ class DaemonParamsMixin:
 
     # -- per-stack daemon radio parameters (see core/daemon_params.py) ------
 
-    def _apply_daemon_param(self, band: str, key: str, value: str) -> tuple[bool, str]:
+    def _apply_daemon_param(self, band: str, key: str, value: str, rid: str = "") -> tuple[bool, str]:
         """Apply one daemon param at `band`. TXMODE and CAD timing are confirmed by readback;
         radio params (FREQ/SF/BW/…) are SET once — the daemon never echoes them, so they are
         reported SENT-but-unconfirmed (non-gating)."""
         if key == "TXMODE":
-            return self._apply_tx_mode(band, value)
+            return self._apply_tx_mode(band, value, rid)
         if key in ("CADWAIT", "CADIDLE"):
-            return self._apply_conf_param(band, key, value)
-        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+            return self._apply_conf_param(band, key, value, rid)
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for {key} (RADIO={state})"
@@ -95,7 +95,7 @@ class DaemonParamsMixin:
             err = self._live_power_error(band, value, view.status)
             if err:
                 return False, err
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, value)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), key, value)
         return ok, detail
 
     def _live_power_error(self, band: str, value: str, status: dict) -> str | None:
@@ -344,7 +344,7 @@ class DaemonParamsMixin:
                             details=[detail], next_commands=[f"lhpc daemon {band}"],
                             data={"confirmed": confirmed})
 
-    def _daemon_param_applies(self, stack_id: str, band: str) -> dict:
+    def _daemon_param_applies(self, stack_id: str, band: str, rid: str = "") -> dict:
         """The daemon params lhpc APPLIES for this stack+band — the effective value (the radio's row dp_* over the
         persisted override over the source default; W5-6) of EVERY param that has one. Applied
         ONCE after the daemon is up and before the stack's own components start; the app then
@@ -355,7 +355,7 @@ class DaemonParamsMixin:
             return {}
         if band not in daemon_control.ALLOWED_BANDS:
             return {}
-        ov = {**self._daemon_param_overrides(stack_id, band), **radio_start.row_dp(self, band)}   # the row wins
+        ov = {**self._daemon_param_overrides(stack_id, band), **radio_start.row_dp(self, band, rid)}   # the row wins
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             eff = ov.get(name) or daemon_params.default_value(stack_id, band, name)
@@ -363,21 +363,21 @@ class DaemonParamsMixin:
                 out[name] = eff
         return out
 
-    def _apply_stack_daemon_params(self, stack_id: str, band: str) -> tuple[list, bool, str]:
+    def _apply_stack_daemon_params(self, stack_id: str, band: str, rid: str = "") -> tuple[list, bool, str]:
         """Apply the stack's SAVED daemon params to a READY band, once. Returns (lines, tx_ok,
         gate): TXMODE is gating (the app needs its mode); radio params (sent-unconfirmed) and CAD
         tuning are non-gating. `gate` names a refusal that is about THIS stack's configuration,
         not the daemon (the POWER=20 permission): the daemon is fine and untouched, the stack
         is not started — so the caller must not report the daemon as failed."""
         lines, tx_ok = [], True
-        applies = self._daemon_param_applies(stack_id, band)
+        applies = self._daemon_param_applies(stack_id, band, rid)
         # Preflight an explicit POWER=20 BEFORE the batch: a permission mismatch is known from
         # the daemon's own STATUS without touching the radio, and refusing here avoids a
         # half-retuned daemon. This one failure is START-GATING — the whole point of the
         # high-power switch is explicit authorisation, so knowingly starting the app without it
         # would not be truthful configuration. Every other radio-param failure stays warn-only.
         if str(applies.get("POWER", "")).strip() == "20":
-            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
             err = (self._live_power_error(band, "20", view.status) if view.reachable
                    else f"daemon not serving {band} MHz")
             if err:
@@ -387,7 +387,7 @@ class DaemonParamsMixin:
                 return lines, False, (f"{stack_id} requests POWER=20 on {band} MHz without the "
                                       "running daemon's high-power permission")
         for key, val in applies.items():
-            ok, detail = self._apply_daemon_param(band, key, val)
+            ok, detail = self._apply_daemon_param(band, key, val, rid)
             gating = key == "TXMODE"                     # the app needs its mode; radio/CAD not
             if gating:
                 tx_ok = ok
