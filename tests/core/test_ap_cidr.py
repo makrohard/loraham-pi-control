@@ -640,6 +640,66 @@ def test_one_setting_drives_the_profile_firewall_and_hint(tmp_path, monkeypatch,
     assert f"https://{first}:8443" in res.summary and "10.42.0.1" not in res.summary
 
 
+def _phrase(svc):
+    """The apply's own confirm phrase, read from the service (the literal is the service's, not the test's)."""
+    return type(svc).AP_CIDR_CONFIRM
+
+
+def test_an_auto_saved_old_subnet_follows_the_apply_and_the_ap_start_proceeds(tmp_path, monkeypatch):
+    """C9 rule (round 5): the AP start of an earlier version saved the profile's subnet 10.42.0.0/24 into the
+    firewall config. It equals the previous effective setting (the default), so the one apply moves it to the
+    candidate with the setting; the AP start then proceeds. (A 0.13.x box upgrading is this case.)"""
+    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, profile_addr="10.42.0.1/24", live_for="10.43.0.0/24")
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr=TODAY)
+    svc._invalidate_config()
+    res = svc.network_set_ap_cidr("10.43.0.0/24", _phrase(svc))
+    assert res.ok, res.summary
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall.ap_cidr == "10.43.0.0/24"
+    assert cfgmod.load_config(svc._paths).network.ap_cidr == "10.43.0.0/24"
+    res = svc.network_ap_now(apply=True)
+    assert res.ok, res.summary
+    assert nm.addr == "10.43.0.1/24" and spawned and AP_UUID in spawned[0]
+
+
+def test_a_second_change_follows_again_and_the_ap_start_proceeds(tmp_path, monkeypatch):
+    """C9 rule (round 5): after a first change the firewall's AP subnet is the first candidate, which is the
+    previous effective setting at the second change, so it follows again."""
+    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, profile_addr="10.42.0.1/24", live_for="192.168.77.16/28")
+    assert svc.network_set_ap_cidr("10.43.0.0/24", _phrase(svc)).ok
+    res = svc.network_set_ap_cidr("192.168.77.16/28", _phrase(svc))
+    assert res.ok, res.summary
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall.ap_cidr == "192.168.77.16/28"
+    res = svc.network_ap_now(apply=True)
+    assert res.ok, res.summary
+    assert nm.addr == "192.168.77.17/28" and spawned
+
+
+def test_a_firewall_subnet_apart_from_the_setting_is_kept_and_the_ap_start_refuses_naming_both(tmp_path,
+                                                                                           monkeypatch):
+    """C9 rule (round 5): a firewall AP subnet that differs from the previous effective setting was chosen apart
+    from the setting (`lhpc firewall --ap-cidr`). The apply keeps it; the AP start refuses, names both values and
+    the command that aligns them, and changes nothing."""
+    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, profile_addr="10.42.0.1/24", live_for="10.43.0.0/24")
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr="192.168.4.0/24")
+    svc._invalidate_config()
+    assert svc.network_set_ap_cidr("10.43.0.0/24", _phrase(svc)).ok
+    svc._invalidate_config()
+    fw_before = cfgmod.load_config(svc._paths).firewall
+    assert fw_before.ap_cidr == "192.168.4.0/24"
+    res = svc.network_ap_now(apply=True)
+    assert not res.ok
+    assert res.data.get("reason") == "ap-firewall-subnet-differs"
+    text = " ".join([res.summary, *res.details, *(res.next_commands or [])])
+    assert "10.43.0.0/24" in text and "192.168.4.0/24" in text, text
+    assert "lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.43.0.0/24" in text, text
+    assert _modified(nm) == [] and nm.addr == "10.42.0.1/24"
+    assert spawned == [] and not svc._net_pending_path().exists()
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall == fw_before
+
+
 def test_the_open_hint_follows_the_setting(tmp_path, monkeypatch):
     """C14: the user-visible 10.42.0.1 literals of the AP switch
     (dev:service_network.py:909/:977 at 6c69faa2) read the setting."""
