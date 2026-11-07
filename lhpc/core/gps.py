@@ -426,13 +426,13 @@ MARKER_MAX_AGE_S = 60.0
 
 
 def marker_is_fresh(got: dict, now: float, max_age: float = MARKER_MAX_AGE_S) -> bool:
-    """Was this readiness marker refreshed within `max_age` seconds of `now`? A missing,
-    non-numeric or non-positive `updated` is never fresh."""
-    try:
-        updated = float(got.get("updated", 0) or 0)
-    except (TypeError, ValueError):
-        return False
-    return not (updated <= 0 or (now - updated) > max_age)
+    """Was this readiness marker refreshed within `max_age` seconds of `now`? `updated` must be a
+    real number (an int or float, never a bool or a string; the bridge writes int(time.time()))
+    and finite. Up to `max_age` ahead of `now` is still fresh (a clock stepped back);
+    further ahead is not this run's refresh. NaN compares false both ways, so it is refused
+    before any comparison (L24 F1)."""
+    updated = got.get("updated")
+    return _finite(updated) and -max_age <= now - updated <= max_age
 
 
 PID_MAX_LIMIT = 1 << 22         # the kernel's highest possible pid (PID_MAX_LIMIT on 64-bit Linux)
@@ -579,8 +579,16 @@ def monitor_label(state: str) -> str:
 
 
 def _finite(x) -> bool:
+    """A real, finite number: an int or float, never a bool. An integer too large for a float
+    (a JSON or TOML literal of hundreds of digits) is not finite here; math.isfinite would
+    raise OverflowError on it (L24 F1)."""
     import math
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    try:
+        return math.isfinite(x)
+    except OverflowError:
+        return False
 
 
 def _nmea_coord(value: bytes, hemi: bytes, is_lat: bool) -> float | None:
