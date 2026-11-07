@@ -56,3 +56,15 @@ def test_the_panel_shows_the_effective_subnet(box):
     form = doc.by_id("network-ap-cidr")
     assert form is not None, "no AP subnet form on the Network panel"
     assert doc.within(form).find("input", name="ap_cidr")[0]["value"] == "192.168.77.16/28"
+
+
+def test_the_panel_post_of_default_recovers_from_a_bad_stored_value(box, csrf):
+    svc, c = box
+    token = csrf(c)                 # the page was open before the value went bad: every page now answers 409
+    p = svc._paths.runtime_root / "config" / "local.toml"
+    p.write_text('[network]\nap_cidr = "8.8.8.0/24"\n', encoding="utf-8")
+    p.chmod(0o600)
+    r = c.post("/network/ap-cidr", data={"_csrf": token, "ap_cidr": "default",
+                                         "confirm_phrase": type(svc).AP_CIDR_CONFIRM})
+    assert r.status_code in (302, 303)
+    assert _stored(svc) == "10.42.0.0/24"

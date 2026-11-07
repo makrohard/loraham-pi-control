@@ -57,7 +57,10 @@ def set_ap_cidr(svc, value: str, confirm: str) -> ActionResult:
     if confirm != AP_CIDR_CONFIRM:
         return ActionResult(False, f"Not changed: type the confirm phrase '{AP_CIDR_CONFIRM}' to change the AP "
                                    "subnet", data={"reason": "confirm-phrase"})
-    cfg = svc.config()
+    try:
+        cfg = svc.config()
+    except cfgmod.ConfigError as exc:
+        return _recover(svc, value, exc)
     if not cfg.network.valid:
         return ActionResult(False, "Not changed: the local configuration cannot be read, so network.ap_cidr is "
                                    "unknown", data={"reason": "config-unreadable"})
@@ -89,6 +92,29 @@ def set_ap_cidr(svc, value: str, confirm: str) -> ActionResult:
                        "AP start refuses until they agree")
     return ActionResult(True, f"AP subnet set to {stored}; switch to AP mode to apply it to the access point",
                         details=details, next_commands=svc._fw_apply_lines())
+
+
+def _recover(svc, value: str, exc: Exception) -> ActionResult:
+    """The configuration does not load (for one, a bad stored network.ap_cidr): only `default` is applied, by
+    clearing the key through the local-table writer, which never loads the effective configuration. The previous
+    subnet is unknown, so the firewall's AP subnet is left as it is."""
+    if value != "default":
+        return ActionResult(False, f"Not changed: the configuration does not load: {exc}",
+                            next_commands=[f"lhpc network --ap-cidr default --confirm-phrase {AP_CIDR_CONFIRM}"],
+                            data={"reason": "config-unreadable"})
+    try:
+        cfgmod.set_network(svc._paths, ap_cidr="default")
+    except cfgmod.ConfigError as exc2:
+        return ActionResult(False, f"Not changed: {exc2}", data={"reason": "config-unreadable"})
+    svc._invalidate_config()
+    try:
+        svc.config()
+    except cfgmod.ConfigError as exc2:
+        return ActionResult(False, f"network.ap_cidr cleared, but the configuration still does not load: {exc2}",
+                            data={"reason": "config-unreadable"})
+    return ActionResult(True, f"AP subnet set to {ap_subnet.DEFAULT} (the stored value was cleared)",
+                        details=["  [setting] network.ap_cidr = default",
+                                 "  [firewall] its AP subnet is left as it is: check it with `lhpc firewall`"])
 
 
 def _ap_interface(svc) -> str:

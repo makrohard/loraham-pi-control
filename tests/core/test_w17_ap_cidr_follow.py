@@ -43,3 +43,44 @@ def test_the_apply_re_renders_the_firewall_with_the_subnet_it_moves(tmp_path, sa
     want = "10.43.0.0/24" if follows else saved
     assert cfgmod.load_config(svc._paths).firewall.ap_cidr == want
     assert _rendered_ap(tmp_path) == {"enabled": True, "interface": "wlan0", "cidr": want}
+
+
+# ---- the recovery path from a bad stored value (follow-up of W17: a recovery command works from the broken state) ----
+
+def _bad_stored(tmp_path):
+    p = tmp_path / "config" / "local.toml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[operator]\ncallsign = "XX0XXA"\n\n[network]\nap_cidr = "8.8.8.0/24"\n', encoding="utf-8")
+    p.chmod(0o600)
+    return p
+
+
+def test_the_apply_of_default_clears_a_bad_stored_value(tmp_path):
+    p = _bad_stored(tmp_path)
+    with pytest.raises(cfgmod.ConfigError):
+        cfgmod.load_config(Paths(runtime_root=tmp_path))
+    svc = _svc(tmp_path)
+    res = svc.network_set_ap_cidr("default", type(svc).AP_CIDR_CONFIRM)
+    assert res.ok, res.summary
+    cfg = cfgmod.load_config(Paths(runtime_root=tmp_path))
+    assert cfg.network.ap_cidr == "10.42.0.0/24" and cfg.operator.callsign == "XX0XXA"
+    assert "ap_cidr" not in p.read_text(encoding="utf-8")
+
+
+def test_the_apply_of_a_value_from_a_bad_stored_value_is_refused_naming_the_way_out(tmp_path):
+    p = _bad_stored(tmp_path)
+    before = p.read_bytes()
+    svc = _svc(tmp_path)
+    res = svc.network_set_ap_cidr("10.43.0.0/24", type(svc).AP_CIDR_CONFIRM)
+    assert not res.ok and "--ap-cidr default" in " ".join([res.summary, *res.details, *res.next_commands])
+    assert p.read_bytes() == before
+
+
+def test_the_cli_recovers_from_a_bad_stored_value(tmp_path, monkeypatch, capsys):
+    from lhpc.adapters.cli.main import main
+    _bad_stored(tmp_path)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    rc = main(["network", "--ap-cidr", "default", "--confirm-phrase", "change-ap-subnet"])
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+    assert cfgmod.load_config(Paths(runtime_root=tmp_path)).network.ap_cidr == "10.42.0.0/24"
