@@ -1072,7 +1072,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                           fw_status=fw_status),
                     # One Password sub-section per component that declares where its self-generated
                     # UI password lives — independent of web pages.
-                    "ui_creds_list": service.ui_credentials_list(stack.id),
+                    "ui_creds_list": service.ui_credentials_list(stack.id, _inst),   # 7f: the shown instance's own
                     "pin_refusal": service.binary_install_refusal(stack.id),
                     "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
                     "command": service.manual_start_command(main) if interactive else "",
