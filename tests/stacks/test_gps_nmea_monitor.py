@@ -290,6 +290,18 @@ def test_tail_is_bounded_and_concurrent_feed_snapshot_is_safe():
 
 # --- the bridge's monitor socket over a FIFO device ------------------------------------------
 
+# The pump's own events (L32, W231). Every pump-side object of `_fifo_bridge` notifies this after it changes —
+# the consumer output after a write, the readiness marker after a state write, the monitor tee after a feed —
+# so `_until` wakes on what the pump did, never on a clock.
+_PUMPED = threading.Condition()
+_HANG_GUARD_S = 60.0
+
+
+def _pumped():
+    with _PUMPED:
+        _PUMPED.notify_all()
+
+
 def _fifo_bridge(tmp_path, monitor_ok=True):
     from lhpc.core.gps_bridge import MonitorServer, Readiness, _Output, _pump_nmea
     paths = Paths(runtime_root=tmp_path)
@@ -303,10 +315,24 @@ def _fifo_bridge(tmp_path, monitor_ok=True):
 
         def write(self, data):
             self.data += data
+            _pumped()
+
+    class Notifying(Readiness):
+        def write(self):
+            super().write()          # also a write a test patched onto Readiness
+            _pumped()
+
+    class Tee(MonitorServer):
+        fed = 0
+
+        def feed(self, line):
+            super().feed(line)
+            self.fed += 1
+            _pumped()
 
     out = Collect()
-    ready = Readiness(str(tmp_path / "state" / "gps" / "meshcom" / "readiness.json"), paths)
-    monitor = MonitorServer("meshcom", paths)
+    ready = Notifying(str(tmp_path / "state" / "gps" / "meshcom" / "readiness.json"), paths)
+    monitor = Tee("meshcom", paths)
     if not monitor_ok:
         # force the publish to fail: a regular FILE where the state dir must be
         (tmp_path / "state" / "gps").mkdir(parents=True)
@@ -319,11 +345,16 @@ def _fifo_bridge(tmp_path, monitor_ok=True):
     return paths, fifo, out, ready, monitor, stop, t
 
 
-def _until(pred, timeout=5.0):
-    """Poll an observable until it holds or the deadline passes; the caller asserts after."""
-    deadline = time.monotonic() + timeout
-    while not pred() and time.monotonic() < deadline:
-        time.sleep(0.02)
+def _until(pred, ready=None, out=None):
+    """Wait until the pump makes `pred` hold: woken by the pump's own events (_PUMPED), never by a clock. The
+    60 s bound is a hang guard only: past it the test FAILS here, naming the pump's state, instead of a later
+    assert reading a half-done state (L32: a 5 s wall-clock deadline was the wait before)."""
+    with _PUMPED:
+        if _PUMPED.wait_for(pred, timeout=_HANG_GUARD_S):
+            return
+    pytest.fail(f"the pump did not get there in {_HANG_GUARD_S:.0f} s: "
+                f"readiness={getattr(ready, 'state', '?')!r}/{getattr(ready, 'detail', '')!r}, "
+                f"output={len(getattr(out, 'data', b'') or b'')} bytes")
 
 
 def _ask_monitor(path):
@@ -383,14 +414,14 @@ def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path
         with open(fifo, "wb", buffering=0) as w:
             for line in (GGA_3D, GSA_3D, GSV_1, GSV_2):
                 w.write(line + b"\r\n")
-            _until(lambda: len(_ask_monitor(monitor.path)["nmea"]) >= 4)
+            _until(lambda: monitor.fed >= 4, ready, out)       # the tee has all four
             got = _ask_monitor(monitor.path)
         assert got["state"] == "3d" and got["sats_seen"] == 7 and len(got["nmea"]) == 4
         assert oct(os.stat(monitor.path).st_mode & 0o777) == "0o600"
         assert oct(os.stat(os.path.dirname(monitor.path)).st_mode & 0o777) == "0o700"
         assert GGA_3D + b"\r\n" in out.data                    # the consumer got its bytes
         marker = short_tmp_path / "state" / "gps" / "meshcom" / "readiness.json"
-        _until(lambda: marker.exists() and json.loads(marker.read_text())["state"] == "ready")
+        _until(lambda: marker.exists() and json.loads(marker.read_text())["state"] == "ready", ready, out)
         m = json.loads(marker.read_text())
         assert _marker_problems(m) == [] and m["state"] == "ready" and m["detail"] == ""
     finally:
@@ -406,9 +437,9 @@ def test_monitor_failure_never_touches_the_feed(tmp_path):
         assert not monitor.enabled
         with open(fifo, "wb", buffering=0) as w:
             w.write(GGA_3D + b"\r\n")
-            _until(lambda: GGA_3D + b"\r\n" in out.data and ready.state != "starting")
-        assert GGA_3D + b"\r\n" in out.data
-        assert ready.state in ("connected", "running", "starting", "ready")
+            _until(lambda: GGA_3D + b"\r\n" in out.data and ready.state != "starting", ready, out)
+            assert GGA_3D + b"\r\n" in out.data                 # asserted before the writer closes
+            assert ready.state in ("connected", "running", "ready")
         monitor.feed(b"\xff\xfe")                              # the tee never raises
     finally:
         stop.set()
@@ -437,11 +468,11 @@ def test_feed_output_is_byte_identical_with_and_without_a_monitor_client(short_t
     try:
         with open(fifo, "wb", buffering=0) as w:
             w.write(GGA_3D + b"\r\n")
-            _until(lambda: GGA_3D + b"\r\n" in out.data)
+            _until(lambda: GGA_3D + b"\r\n" in out.data, ready, out)
             before = out.data
             _ask_monitor(monitor.path)
             w.write(GSA_3D + b"\r\n")
-            _until(lambda: GSA_3D + b"\r\n" in out.data)
+            _until(lambda: GSA_3D + b"\r\n" in out.data, ready, out)
         assert out.data == before + GSA_3D + b"\r\n"
     finally:
         stop.set()
