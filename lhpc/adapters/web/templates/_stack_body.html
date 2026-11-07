@@ -141,6 +141,7 @@
                   {% if comp.kind.value == 'library' and comp.source %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
                   {% elif comp.optional and comp.kind.value != 'library' %}<span class="pill">optional</span>{% endif %}
                   <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+                  {% if st.evidence.get('gps.fix') == 'no-fix' %}<span class="ver ver-yellow" data-state="no-fix" title="{{ st.evidence.get('gps.feed', '') }}">no fix yet</span>{% endif %}
                   {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
                      owned by its own stack's row, so it has no entry here. #}
                   {% if comp.id in g.update_states and comp.source and comp.source.remote %}

@@ -81,3 +81,36 @@ def clock_refusal(reason: str, what: str) -> str:
     proceed anyway -- a refusal the operator cannot act on is a dead end, not a safeguard."""
     return (f"refusing to {what}: {reason}. Nothing was changed. "
             f"Fix the clock (see `lhpc doctor`), or accept the risk with {CLOCK_OVERRIDE_FLAG}.")
+
+
+def gps_time_line(runner) -> list[str]:
+    """The doctor's GPS-time line (F2): [] when there is nothing to say. Read-only: `chronyc -n -c sources` (the `#`
+    row named GPS; field 5 is its reach), `pgrep -x gpsd` (a gpsd process) and `systemctl is-active gpsd.service`.
+    - reach 0, a gpsd process, the unit not active: the trap of the 11-02 field boot, a gpsd started by hand as a
+      user; it serves positions but cannot write chrony's root-only SHM, so the clock never follows the GPS;
+    - reach 0 with the unit active: chrony has no GPS samples yet (a receiver without a fix);
+    - unreadable chronyc: "not known", never "fine"; no chronyc at all (exit 127), no GPS refclock, samples arriving,
+      or no gpsd running: nothing to say."""
+    try:
+        r = runner.run(["chronyc", "-n", "-c", "sources"], 2.0)
+        proc = runner.run(["pgrep", "-x", "gpsd"], 2.0)
+        unit = runner.run(["systemctl", "is-active", "gpsd.service"], 2.0)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["  gps time: not known (chronyc could not run)"]
+    if r.returncode == 127:
+        return []
+    if r.returncode != 0:
+        return ["  gps time: not known (chronyc sources unreadable)"]
+    rows = [ln.split(",") for ln in r.stdout.splitlines()]
+    gps = [f for f in rows if len(f) > 5 and f[0] == "#" and f[2] == "GPS"]
+    if not gps or gps[0][5] not in ("0", ""):
+        return []
+    service = unit.returncode == 0 and unit.stdout.strip() == "active"
+    if service:
+        return ["  gps time: chrony has no GPS samples yet (gpsd runs as its service; the receiver may have no fix)"]
+    if proc.returncode == 0:
+        return ["  gps time: a gpsd runs outside its systemd service and chrony has no GPS samples (reach 0) — a gpsd "
+                "started by hand cannot feed chrony; stop it and run `sudo systemctl start gpsd`"]
+    return []
