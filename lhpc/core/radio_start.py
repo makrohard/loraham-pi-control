@@ -180,12 +180,19 @@ def radio_activity(svc, radio, procs=None) -> list:
     """DEC-W39: what runs on `radio`, the ONE answer the remove's refusal, its confirm page and the card's greyed
     button all use: "its daemon" when its CONF socket answers or a process is (or cannot be told from) its daemon,
     then every running stack _radio_users names. [] = nothing runs on it."""
+    daemon = ["its daemon"] if daemon_running(svc, radio, procs) else []
+    return [*_radio_users(svc, radio), *daemon]
+
+
+def daemon_running(svc, radio, procs=None) -> bool:
+    """Whether `radio`'s daemon runs, the one answer Remove and Detect use (DEC-W39, DEC-W43): its CONF socket
+    answers, or a process is its daemon (`--id <rid>`, a no-id daemon on its band) or cannot be told from one."""
     from . import daemon_control
     procs = _daemon_procs(svc) if procs is None else procs
-    mine = [p for p in procs if p.kind == "unknown" or (p.kind == "id" and p.rid == radio.id)
-            or (p.kind == "no-id" and p.band == radio.band)]
-    daemon = ["its daemon"] if mine or daemon_control.read_view(svc._system, radio.id).reachable else []
-    return [*_radio_users(svc, radio), *daemon]
+    if any(p.kind == "unknown" or (p.kind == "id" and p.rid == radio.id) or (p.kind == "no-id" and p.band == radio.band)
+           for p in procs):
+        return True
+    return daemon_control.read_view(svc._system, radio.id).reachable
 
 
 def stop_first(rid: str, activity: list) -> str:
