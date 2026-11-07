@@ -1270,7 +1270,8 @@ class LifecycleOpsMixin:
                 _known = {r["launch_id"] for r in life.owned_records(comp.id)}
                 dlines, dok, dgate = self._ensure_daemon(life, stack, comp, running, radio,
                                                          start_sid, requested_target=_req_target,
-                                                         start_scope=_req_scope)
+                                                         start_scope=_req_scope,
+                                                         rid=radio_start.client_rid(self, start_sid, radio, prep.inst))
                 daemon_launched |= {r["band"] for r in life.owned_records(comp.id)
                                     if r["launch_id"] not in _known}
                 out.extend(dlines)
@@ -2044,7 +2045,7 @@ class LifecycleOpsMixin:
         return "daemon readiness/TX gating failed"
 
     def _ensure_daemon(self, life, stack, comp, running, radio, start_sid, *,
-                       requested_target: str = "", start_scope: str = ""):
+                       requested_target: str = "", start_scope: str = "", rid: str = ""):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
 
         "Running" means the band's CONF socket is reachable, not merely that a
@@ -2063,15 +2064,19 @@ class LifecycleOpsMixin:
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
         needed, owned = self._daemon_arbitrated_bands(radio)
-        views = {b: daemon_control.read_view(self._system, radio_start.daemon_key(self, b)) for b in needed}
+        # Item 16: one daemon per radio — `rid` alone for a client's start, else each enabled radio of each band.
+        units = radio_start.daemon_units(self, needed, rid)
+        views = {u: daemon_control.read_view(self._system, radio_start.daemon_key(self, u[1] or u[0])) for u in units}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
         #   READY (retain) | reachable-not-READY (fail) | CONF-down-but-process-claims-it (fail, do
         #   NOT relaunch/SET) | truly absent (safe to launch).
-        claimed = self._daemon_claimed_bands()
-        not_ready = [b for b in needed if views[b].reachable and not views[b].ready]
-        claimed_down = [b for b in needed if not views[b].reachable and b in claimed]
-        absent = [b for b in needed if not views[b].reachable and b not in claimed]
+        claimed = {u for u in units if radio_start.daemon_claimed(self, *u)}
+        not_ready = [u for u in units if views[u].reachable and not views[u].ready]
+        claimed_down = [u for u in units if not views[u].reachable and u in claimed]
+        absent = [u for u in units if not views[u].reachable and u not in claimed]
+        on = {b: [u for u in units if u[0] == b] for b in needed}             # a band's own radios name the line
+        lab = {u: u[0] if len(on[u[0]]) == 1 else f"{u[0]} ({u[1]})" for u in units}
         lines, ok_all, gate = [], True, ""
         # Band arbitration: skip bands a running radio-direct stack owns (meshtastic-<band> and
         # daemon-<band> are the SAME physical radio) — serve only the free band(s) instead of colliding,
@@ -2088,18 +2093,18 @@ class LifecycleOpsMixin:
         # away — the skip line already explains a band-owned narrowing).
         if (radio or "") == "" and not owned and set(needed) != set(ALLOWED_BANDS):
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
-        for b in not_ready:
-            ok_all = False
+        for u in not_ready:
+            ok_all, b = False, lab[u]
             # A bare RADIO=FAILED leaves the operator with nothing to do (a MeshCom start
             # blocked on it for an hour). Name the two causes that actually produce it on this
             # hardware: another process clocking the SHARED SPI bus while the daemon probes the chip
             # (the daemon's /run/lock/loraham serialises its own instances, never a foreign binary),
             # and an RF front-end wedged from an earlier run — which only a power cycle clears.
             lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
-                         f"{views[b].radio_state or 'unknown'} (not READY) — dependent launch blocked")
-            lines.append(f"    | {self._radio_not_ready_hint(b)}")
-        for b in claimed_down:
-            ok_all = False
+                         f"{views[u].radio_state or 'unknown'} (not READY) — dependent launch blocked")
+            lines.append(f"    | {self._radio_not_ready_hint(u[0])}")
+        for u in claimed_down:
+            ok_all, b = False, lab[u]
             lines.append(f"  [fail] daemon on {b}: CONF socket unreachable but a daemon process "
                          f"still holds the radio — not relaunched (resolve the stuck instance first)")
         failed: set = set()
@@ -2121,39 +2126,18 @@ class LifecycleOpsMixin:
             # both` (a mode the operator may still start manually); it runs an independent
             # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
             # I5 (A §1): one at a time, each READY or failed before the next; a failure stops no other.
-            for b in sorted(absent):
-                # Stage L5: the band's one enabled radio (W1-3/4/5) and its start plan from the hardware list:
-                # --id, --hw from the model, the radio's own settings and RF-log path (W7-1, W7-7, W7-8).
-                t = radio_start.daemon_rid(self, b)
-                params, refusal, _notes = radio_start.launch_plan(self, t.rid) if t.rid else (None, t.reason, ())
-                if params is None or refusal:
-                    lines.append(f"  [BLOCKED] daemon on {b}: {refusal}")
-                    failed.add(b)
-                    continue
-                dparams = {**dict(self.stack_config("daemon")), **params}
-                res = life.start(stack, comp, dparams, band=b,
-                                 requested_target=requested_target,
-                                 start_scope=start_scope)
-                base = f"start daemon {t.rid} --radio {b}"
-                if not res.ok:
-                    lines.append(f"  [fail] {base}: {res.detail}")
-                    failed.add(b)
-                    continue
-                lines.append(f"  [ok] {base}")
-                if not self._verify_band_up(b):
-                    failed.add(b)
-                    lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
-                                 f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
-                elif why := radio_start.verify_identity(self, t.rid):
-                    failed.add(b)                                         # W3-7: refused, never signalled
-                    lines.append(f"  [fail] daemon {t.rid}: {why}")
+            for u in absent:
+                if not radio_start.ensure_radio(self, life, stack, comp, u, lab[u], lines,
+                                                requested_target=requested_target, start_scope=start_scope):
+                    failed.add(u)
         # Apply, once per band that is now READY (retained, or started and verified above; the
         # failed bands were reported above and are skipped).
-        for b in needed:
-            if b in not_ready or b in claimed_down or b in failed:
-                continue                      # failed bands: no retain, no CONF SET
-            if b not in absent:               # retained; a started band was verified above
-                lines.append(f"  [ok] daemon already serving {b}")
+        for u in units:
+            b = u[0]
+            if u in not_ready or u in claimed_down or u in failed:
+                continue                      # failed radios: no retain, no CONF SET
+            if u not in absent:               # retained; a started radio was verified above
+                lines.append(f"  [ok] daemon already serving {lab[u]}")
                 # A band already serving ANOTHER running stack must NOT be reconfigured — a daemon
                 # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
                 # band (its config is whatever that client needs). Freshly-started bands still get
@@ -2175,7 +2159,7 @@ class LifecycleOpsMixin:
                     lines.append(f"  [keep] {b} already served for '{start_sid}' — daemon "
                                  f"config left unchanged")
                     continue
-            plines, tx_ok, pgate = self._apply_stack_daemon_params(start_sid, b)
+            plines, tx_ok, pgate = self._apply_stack_daemon_params(start_sid, b, u[1])
             lines.extend(plines)
             if pgate:
                 gate = gate or pgate            # the stack's config, not the daemon: not a failure here
