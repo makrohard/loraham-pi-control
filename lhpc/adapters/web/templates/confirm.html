@@ -42,7 +42,9 @@
       {% if plan.ok and missing_deps %}
         <p class="muted">Install the dependencies above, then start the {{ op }} again.</p>
       {% elif plan.ok %}
-        <form method="post" action="{{ url_for('action') }}">
+        {# W203: a confirmed stop (and clean, uninstall, …) runs inside this POST, so the page would sit
+           unchanged until it ends. confirm.js disables the button and shows its busy label on submit. #}
+        <form method="post" action="{{ url_for('action') }}" data-busy-form>
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="{{ op }}">
           <input type="hidden" name="target" value="{{ target }}">
@@ -97,7 +99,11 @@
           <hr class="sep">
           <div class="confirm-btns">
             <a class="btnlink cancel" href="{{ cancel_href }}">Cancel</a>
-            <button type="submit">{% if blockers %}Stop owner(s) &amp; {{ op }}{% elif stop_deps and op != 'stop' %}Stop dependents &amp; {{ op }}{% elif stop_deps %}Stop dependents &amp; {{ target }}{% elif op in ('start', 'restart') %}{{ op | capitalize }}{% else %}Apply {{ op }}{% endif %}</button>
+            {% set busy_word = {'stop': 'Stopping', 'start': 'Starting', 'restart': 'Restarting',
+                                'update': 'Updating', 'install': 'Installing', 'uninstall': 'Uninstalling',
+                                'build': 'Building', 'test': 'Testing', 'test-tx': 'Testing',
+                                'clean': 'Cleaning'}.get(op, 'Working') %}
+            <button type="submit" data-busy-label="{{ busy_word }}… the page updates when it is done">{% if blockers %}Stop owner(s) &amp; {{ op }}{% elif stop_deps and op != 'stop' %}Stop dependents &amp; {{ op }}{% elif stop_deps %}Stop dependents &amp; {{ target }}{% elif op in ('start', 'restart') %}{{ op | capitalize }}{% else %}Apply {{ op }}{% endif %}</button>
           </div>
         </form>
         {% if commands %}
@@ -143,4 +149,7 @@
       {% endif %}
     </div>
   </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='confirm.js') }}" defer></script>
 {% endblock %}
