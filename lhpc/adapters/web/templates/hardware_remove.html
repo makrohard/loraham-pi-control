@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Remove {{ plan.rid }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+{% with here = "Remove " ~ plan.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-remove">
   <header><h2>Hardware</h2></header>
   <div class="body">

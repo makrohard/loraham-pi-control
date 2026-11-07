@@ -2,6 +2,7 @@
 {% from "_hw_macros.html" import detect_result, hidden with context %}
 {% block title %}{{ r.rid }} — Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+{% with here = r.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-radio" data-rid="{{ r.rid }}">
   <header><h2>{{ r.rid }} — {{ r.name }}</h2></header>
   <div class="body">

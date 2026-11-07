@@ -1,0 +1,5 @@
+{# W245: where the Hardware pages sit: Home › Apps › Daemon › Hardware [› `here`]. `here` is the last crumb, if any. #}
+<nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
+  <a href="{{ url_for('stacks_overview') }}">Apps</a> ›
+  <a href="{{ url_for('stacks_overview', open='daemon') }}#stack-hardware-daemon">Daemon</a> ›
+  {% if here %}<a href="{{ url_for('hardware_view') }}">Hardware</a> › <span class="here">{{ here }}</span>{% else %}<span class="here">Hardware</span>{% endif %}</nav>

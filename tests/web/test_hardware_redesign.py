@@ -107,3 +107,25 @@ def test_the_old_daemon_spawn_detect_is_gone(web, tmp_path, monkeypatch, csrf):
     c = _box(web, tmp_path, monkeypatch)
     assert c.post("/hardware/probe", data={"_csrf": csrf(c, "/hardware"), "band": "433"}).status_code in (404, 405)
     assert "hardware/probe" not in c.get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("url,here", [("/hardware", "Hardware"), ("/hardware/radio/r2", "r2"),
+                                      ("/hardware/add", "Add Hardware"), ("/hardware/remove/r2", "Remove r2")])
+def test_each_hardware_page_says_where_it_sits(web, tmp_path, monkeypatch, url, here):
+    # W245: Home › Apps › Daemon › Hardware [› here], each crumb but the last a link.
+    page = _text(_box(web, tmp_path, monkeypatch).get(url).get_data(as_text=True))
+    crumbs = re.search(r'<nav class="crumbs"[^>]*>(.*?)</nav>', page).group(1)
+    assert re.findall(r">([^<>›]+)</a>", crumbs)[:3] == ["Home", "Apps", "Daemon"]
+    assert crumbs.rstrip().endswith(f'<span class="here">{here}</span>'), crumbs
+
+
+def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, monkeypatch):
+    # W251: the daemon's own entries in that order, Hardware a link to its page; another stack keeps Info before Settings.
+    c = _box(web, tmp_path, monkeypatch)
+    page = c.get("/stacks?open=daemon").get_data(as_text=True)
+    ids = [f'id="stack-{e}-daemon"' for e in ("install", "hardware", "settings", "info")]
+    assert all(i in page for i in ids) and [page.index(i) for i in ids] == sorted(page.index(i) for i in ids), ids
+    kiss = c.get("/stacks?open=kiss").get_data(as_text=True)
+    assert kiss.index('id="stack-info-kiss"') < kiss.index('id="stack-settings-kiss"')     # unchanged elsewhere
+    hw = page[page.index('id="stack-hardware-daemon"'):]
+    assert 'href="/hardware"' in hw[:600]

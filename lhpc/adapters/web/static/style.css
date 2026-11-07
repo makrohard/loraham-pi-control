@@ -796,3 +796,5 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .hwlist .off { color: var(--muted); }
 .state-on { color: var(--ok); font-weight: 600; }
 .note-bad { display: block; color: var(--bad); font-size: .88rem; }
+.crumbs { font-size: .9rem; margin: 0 0 .8rem; color: var(--muted); }
+.crumbs .here { color: var(--ink); font-weight: 600; }

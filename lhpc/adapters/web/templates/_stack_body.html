@@ -249,21 +249,17 @@
     </div>
   </details>
 
-  {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts ===== #}
-  {% if g.main %}
-    <details class="advcfg">
-      <summary>Info</summary>
-      <div class="body">
-        {% with comp = g.main[0], st = g.main[1], conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}
-        {% if g.conflicts %}
-          <h3>Resource conflicts</h3>
-          <ul class="clean">{% for c in g.conflicts %}
-            <li{% if c.observed %} class="conflict"{% endif %}>{{ c.message }}{% if c.observed %} <strong>[OBSERVED]</strong>{% endif %}</li>
-          {% endfor %}</ul>
-        {% endif %}
-      </div>
+  {% if g.stack.id == "daemon" %}
+    {# W251/W245: the daemon's entries read Install, Hardware, Settings, Info; Hardware is its own page #}
+    <details class="advcfg" id="stack-hardware-daemon">
+      <summary>Hardware</summary>
+      <div class="body"><p><a href="{{ url_for('hardware_view') }}">Open Hardware ›</a> the radios: add a stick or a HAT,
+        bind, problems, Detect, remove.</p></div>
     </details>
   {% endif %}
+
+  {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts; the daemon's comes last (W251) ===== #}
+  {% if g.main and g.stack.id != "daemon" %}{% include "_stack_info.html" %}{% endif %}
 
   {# ===== Settings (existing partial — reused, not duplicated) ===== #}
   {% with stack = g.stack, view = g.view, config_groups = g.config_groups, settings_id = 'stack-settings-' ~ g.stack.id %}
@@ -276,6 +272,7 @@
       {% include "_daemon_params.html" %}
     {% endwith %}
   {% endif %}
+  {% if g.main and g.stack.id == "daemon" %}{% include "_stack_info.html" %}{% endif %}
 
   {# ===== Password — for a stack whose manifest declares where its app (or LHPC) stores its
      web-UI password, and for MeshCom's HMAC password. The stored VALUE is shown here, on the

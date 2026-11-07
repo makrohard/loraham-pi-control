@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+{% with here = "" %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-section">
   <header><h2>The radios</h2></header>
   <div class="body">

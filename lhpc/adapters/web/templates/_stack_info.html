@@ -1,0 +1,13 @@
+{# A stack's Info entry: its main component's evidence (no action buttons) and its conflicts. Needs `g`. #}
+    <details class="advcfg" id="stack-info-{{ g.stack.id }}">
+      <summary>Info</summary>
+      <div class="body">
+        {% with comp = g.main[0], st = g.main[1], conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}
+        {% if g.conflicts %}
+          <h3>Resource conflicts</h3>
+          <ul class="clean">{% for c in g.conflicts %}
+            <li{% if c.observed %} class="conflict"{% endif %}>{{ c.message }}{% if c.observed %} <strong>[OBSERVED]</strong>{% endif %}</li>
+          {% endfor %}</ul>
+        {% endif %}
+      </div>
+    </details>
