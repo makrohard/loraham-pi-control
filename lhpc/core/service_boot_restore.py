@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from . import boot_restore, instances, known_working, radios, runtime_fs, updater_units
+from . import boot_restore, known_working, radios, runtime_fs, updater_units
 from .boot_restore import Evidence, MarkerView, StackMeta
 from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
@@ -594,7 +594,7 @@ class BootRestoreOpsMixin:
         return "failed", mine.summary or r.summary
 
     def _boot_run_stack_item(self, journal, item) -> None:
-        sid, inst, band, why = instances.resolve(self, item["target"])      # 7e: a listed instance on its radio
+        sid, inst, band, why = boot_restore.resolve_item(self, item)        # 7e: a listed instance on its radio
         hook = self._boot_claim_hook(journal, item)      # an unresolvable item is claimed, then failed with its why
         res = (hook() or ActionResult(False, why)) if why else self.start(
             sid, apply=True, band=band or item.get("band", ""), _before_start_locked=hook, inst=inst)
