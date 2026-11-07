@@ -115,3 +115,26 @@ def test_a_firewall_that_cannot_follow_rolls_the_setting_back(tmp_path, monkeypa
                                             "the AP subnet stays 10.42.0.0/24")
     svc._invalidate_config()
     assert cfgmod.load_config(svc._paths).network.ap_cidr == "10.42.0.0/24"
+
+
+def test_a_rollback_that_fails_says_so_and_names_the_way_back(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    assert svc.firewall_configure(ap_enabled=True, ap_interface="wlan0", ap_cidr="10.42.0.0/24").ok
+    svc._invalidate_config()
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(ControllerService, "firewall_configure", lambda self, **kw: ActionResult(False, "render failed"))
+    real = cfgmod.set_network
+    calls = []
+
+    def set_network(paths, *, ap_cidr):
+        calls.append(ap_cidr)
+        if len(calls) > 1:                                  # the rollback write fails
+            raise cfgmod.ConfigError("local.toml is busy")
+        return real(paths, ap_cidr=ap_cidr)
+    monkeypatch.setattr(cfgmod, "set_network", set_network)
+    res = svc.network_set_ap_cidr("10.43.0.0/24", type(svc).AP_CIDR_CONFIRM)
+    assert (res.ok, res.data["reason"]) == (False, "rollback-failed")
+    assert res.summary == ("The firewall's AP subnet could not follow (render failed) and the setting could not be set "
+                           "back (local.toml is busy): network.ap_cidr is 10.43.0.0/24, the firewall's AP subnet may "
+                           "differ")
+    assert res.next_commands == ["lhpc network --ap-cidr 10.42.0.0/24 --confirm-phrase change-ap-subnet"]
