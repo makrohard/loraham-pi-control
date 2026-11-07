@@ -121,7 +121,11 @@ class Ch341Bus:
         if self._busy is None:
             return False
         self._h.write(bytes([GET_INPUT]))
-        return bool(self._h.read(6)[0] & (1 << self._busy))
+        o = self._h.read(6)
+        # the bridge's whole input word, as libch341's poll thread builds it: D0-D7, then the status bits (ERR 8,
+        # PEMP 9, INT# 10, SLCT 11); the PINE64's BUSY is SLCT (T1.3, measured on box H)
+        word = ((o[2] & 0x80) << 16) | ((o[1] & 0xEF) << 8) | o[0]
+        return bool(word & (1 << self._busy))
 
     def transfer(self, out: bytes) -> bytes:
         self._line(self._cs, 0)

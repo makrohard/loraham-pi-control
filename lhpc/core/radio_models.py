@@ -20,6 +20,10 @@ _MODEL_KEYS = {"id", "label", "short", "transport", "chip", "bands", "power_max_
                "variant", "usb", "direct"}
 _VARIANT_KEYS = {"key", "preset", "band", "pins"}
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A USB stick's pins are its CH341 bridge's lines (T1.4b point 7): D0-D7, plus the two status pins the bridge
+# reports in its input word: INT# (10) as an interrupt, SLCT (11) as a read line.
+_USB_D_LINES = frozenset(range(8))
+_USB_STATUS = {"irq": 10, "gpio": 11}
 
 
 class ModelError(ValueError):
@@ -83,14 +87,14 @@ def _model(row: dict) -> RadioModel:
     need((usb is not None) == (row["transport"] == "usb-ch341"), "usb", "is required for a USB model and only there")
     need(usb is None or {"vid", "pid"} <= set(usb) <= {"vid", "pid", "product"}, "usb",
          "must hold vid and pid, and may hold product")
-    variants = tuple(_variant(v, where, bands) for v in row.get("variant", []))
+    variants = tuple(_variant(v, where, bands, row["transport"]) for v in row.get("variant", []))
     need(bool(variants), "variant", "is required")
     need(len({v.key for v in variants}) == len(variants), "variant", "keys must differ")
     return RadioModel(row["id"], row["label"], row["short"], row["transport"], row["chip"], tuple(bands),
                       row["power_max_dbm"], row["high_power_switch"], variants, usb, row.get("direct"))
 
 
-def _variant(v: dict, where: str, bands: list) -> Variant:
+def _variant(v: dict, where: str, bands: list, transport: str = "spi") -> Variant:
     pins = v.get("pins", {})
     bad = (set(v) - _VARIANT_KEYS or not isinstance(v.get("key"), str) or not isinstance(v.get("preset"), str)
            or v.get("band", "") not in ("", *bands))
@@ -98,7 +102,15 @@ def _variant(v: dict, where: str, bands: list) -> Variant:
         raise ModelError(f"{where}: variant {v.get('key')!r} must hold key, preset, an optional band of the "
                          "model and pins")
     for name, pin in pins.items():
-        if name not in PIN_FIELDS or type(pin) is not int or not 0 <= pin <= 27:
+        if name not in PIN_FIELDS or type(pin) is not int:
+            raise ModelError(f"{where}: variant {v['key']!r} pin {name}={pin!r}: a pin is one of "
+                             f"{', '.join(PIN_FIELDS)}")
+        if transport == "usb-ch341":
+            if pin not in _USB_D_LINES and pin != _USB_STATUS.get(name):
+                extra = f" or {_USB_STATUS[name]}" if name in _USB_STATUS else ""
+                raise ModelError(f"{where}: variant {v['key']!r} pin {name}={pin}: a USB stick's {name} is a bridge "
+                                 f"line D0-D7{extra}")
+        elif not 0 <= pin <= 27:
             raise ModelError(f"{where}: variant {v['key']!r} pin {name}={pin!r}: a pin is one of "
                              f"{', '.join(PIN_FIELDS)} on a BCM line 0-27")
     return Variant(v["key"], v["preset"], v.get("band", ""), dict(pins))
