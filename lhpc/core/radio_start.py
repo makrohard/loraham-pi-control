@@ -31,11 +31,19 @@ def start_plan(svc, rid: str) -> tuple:
         settings = _settings(svc, radio, model)
     except ValueError as exc:
         return None, str(exc), ()
-    refusal = (radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model)
-               or ensure_rf_dir(svc, radio.id) or "")
+    refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
     params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
     return params, refusal, settings.notes
+
+
+def launch_plan(svc, rid: str) -> tuple:
+    """start_plan for the launch itself (package item 26): the plan, then the radio's RF log directory (ensure_rf_dir)
+    created right before its daemon is spawned, only for a plan with no refusal. A plan alone writes nothing."""
+    params, refusal, notes = start_plan(svc, rid)
+    if params is not None and not refusal:
+        refusal = ensure_rf_dir(svc, rid)
+    return params, refusal, notes
 
 
 def _settings(svc, radio, model):
