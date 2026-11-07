@@ -435,12 +435,17 @@ def marker_is_fresh(got: dict, now: float, max_age: float = MARKER_MAX_AGE_S) ->
     return not (updated <= 0 or (now - updated) > max_age)
 
 
+PID_MAX_LIMIT = 1 << 22         # the kernel's highest possible pid (PID_MAX_LIMIT on 64-bit Linux)
+
+
 def marker_owner_pid(got: dict) -> int | None:
     """The feed pid a readiness marker names, or None. The pid is REQUIRED, not a bonus: the
     bridge writes it on every refresh, so a marker without one is not from a feed we are running.
-    `bool` is an `int` in Python — True would otherwise sail through as "pid 1", always alive."""
+    `bool` is an `int` in Python — True would otherwise sail through as "pid 1", always alive.
+    A pid above PID_MAX_LIMIT names no process; asking the kernel about one of 2**31 or more
+    raised OverflowError on every status read while such a marker existed."""
     pid = got.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid <= PID_MAX_LIMIT:
         return None
     return pid
 
