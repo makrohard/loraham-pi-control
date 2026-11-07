@@ -355,7 +355,7 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
-                     "activity": radio_activity(svc, r, procs)})
+                     "activity": radio_activity(svc, r, procs), "problems": _problems(r, usb, v, found)})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None
@@ -364,6 +364,75 @@ def hardware_view(svc) -> dict:
         if usb_access.setup_needed(usb_access.rule_state(models), usb_access.plugdev(effective, configured)):
             box = usb_flow.copybox(svc._paths, _account(), models)
     return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
+
+
+def _problems(radio, usb: bool, view, found) -> list:
+    """W257: a row's short notes, read-only facts in a fixed order (no Detect, no bus): its daemon offline (enabled,
+    the CONF socket does not answer), then its stick not plugged in. A wrong band or a USB row with no binding never
+    reaches here: the list's own checks make such a list invalid, and an invalid list has no rows."""
+    out = ["daemon offline"] if radio.enabled and not view.reachable else []
+    if usb:
+        _port, why = stick_port(radio.usb_serial, radio.usb_port, found)
+        if why.startswith("no stick"):
+            out.append(f"stick not plugged in: serial {radio.usb_serial[:radios.SERIAL_PREFIX]}" if radio.usb_serial
+                       else f"stick not plugged in on port {radio.usb_port}")
+        elif why:
+            out.append(why)
+    return out
+
+
+def radio_detail(svc, rid: str):
+    """W257: the detail page of radio `rid`: its hardware_view row plus what Remove would do and what to stop first,
+    and whether Detect is offered; None when the list holds no such radio (the route's 404)."""
+    row = next((r for r in hardware_view(svc)["rows"] if r["rid"] == rid), None)
+    if row is None:
+        return None
+    plan = remove_plan(svc, rid)
+    return {**row, "remove": {"facts": plan.get("facts", {}), "activity": plan.get("activity", [])},
+            "stop_first": stop_first(rid, row["activity"]) if row["activity"] else "", "detect": True}
+
+
+def add_hat(svc, model_id: str, band: str, variant: str = "") -> tuple:
+    """W257: Add Hardware's HAT row: one SPI radio added to the list, under its lock (W217)."""
+    return _with_list_lock(svc._paths, lambda why: (False, f"Not added: {why}"), _add_hat, svc, model_id, band, variant)
+
+
+def _add_hat(svc, model_id: str, band: str, variant: str) -> tuple:
+    """(ok, message). The model must be a board (SPI) model with a variant for `band`; `variant` names it when the
+    model has more than one (Uputronics ce0 / ce1), stored as the row's `ce`. The new row takes the next free
+    non-reserved id (DEC-W39) and `<short> <band>`; the list's own checks decide the rest (a claimed pin refuses)."""
+    state = radios.load(svc._paths)
+    if state.kind == radios.ABSENT:
+        return False, "Not added: there is no hardware list: set it up first (lhpc hardware <setup>)"
+    if state.kind != radios.VALID:
+        return False, "Not added: the hardware list is not valid: " + "; ".join(state.reasons)
+    models = radio_models.load()
+    m = models.get(model_id) if isinstance(model_id, str) else None
+    if m is None:
+        return False, f"Not added: there is no model {model_id!r}"
+    if m.transport != "spi":
+        return False, f"Not added: {m.id} is not a board (SPI) model"
+    fits = [v for v in m.variants if band in m.bands and (not v.band or v.band == band)]
+    if not fits:
+        return False, f"Not added: {m.id} has no variant for {band} MHz"
+    if not variant and len(fits) > 1:
+        return False, f"Not added: {m.id} needs a variant ({', '.join(v.key for v in fits)})"
+    v = next((x for x in fits if x.key == variant), None) if variant else fits[0]
+    if v is None:
+        return False, f"Not added: {m.id} has no variant {variant!r} for {band} MHz"
+    several = len(m.variants) > 1 and not all(x.band for x in m.variants)
+    try:
+        rid = radios.next_id(state.radios, state.retired)
+    except ValueError as exc:
+        return False, f"Not added: {exc}"
+    name = f"{m.short} {band}"
+    if any(r.name.casefold() == name.casefold() for r in state.radios):
+        name = radios.default_name(state.radios, m)
+    row = radios.Radio(rid, name, m.id, band, ce=v.key if several else "")
+    reasons = radios.save(svc._paths, (*state.radios, row), models)
+    if reasons:
+        return False, "Not added: " + "; ".join(reasons)
+    return True, f"{rid} added: {m.id}" + (f" ({v.key})" if several else "") + f" on {band} MHz"
 
 
 def _holder(rows, choice) -> str:
