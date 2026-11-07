@@ -35,3 +35,17 @@ def test_a_hashable_non_string_names_its_type_too(tmp_path, value, kind):
 def test_a_string_outside_the_catalog_keeps_its_message(tmp_path):
     res = _set(tmp_path, "nosuch")
     assert (res.ok, res.summary) == (False, "unknown hardware setup 'nosuch'")
+
+
+class _S(str):
+    """A str subclass: the contract is an EXACT str (`type(x) is str`), so a subclass is refused like any non-str."""
+
+
+@pytest.mark.parametrize("value,kind", [(True, "bool"), (1.5, "float"), (_S("loraham"), "_S")])
+def test_the_contract_is_an_exact_str(tmp_path, value, kind):
+    # Ledger L18: bool is an int subclass and _S a str subclass; neither is a setup name, even one that equals a
+    # catalog entry ("loraham").
+    res = _set(tmp_path, value)
+    assert (res.ok, res.summary) == (False, f"unknown hardware setup {value!r}: a setup is named by a string "
+                                            f"(got {kind})")
+    assert sorted(p.name for p in (tmp_path / "config").iterdir()) == []
