@@ -25,6 +25,8 @@ Upgrading from 0.13.x
 
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
+- 0.13.x per-band daemon settings stay in effect for every radio of that band; saving a radio's settings panel
+  stores that radio's own values in its row of config/radios.toml.
 
 Fixed
 
