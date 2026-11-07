@@ -3,21 +3,40 @@
 ## 0.14.0
 
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
-  starts per served band as that band's radio, with its own sockets, `--id` and RF log. Old setups are not converted.
+  starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
   setup as one command; a start is refused by name when the stick or its access is missing.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
   radio id (`lhpc stack stop daemon --radio rN`).
-- LoRaHAM daemon v1.3.1 (660be550, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
+- LoRaHAM daemon v1.4.0 (3ffee009, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
-- Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
-  `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
+- Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 98b656bf).
+  Source builds need `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch it before `lhpc build daemon`.
+- Update: a libch341 checkout LHPC cloned from pine64 is re-cloned from the fork on `lhpc update`, not refused as
+  identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
+- Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
+  guide for a 433 MHz CH341A + RFM98PW stick.
+- Stack instances: kiss, meshcore and chat can also run on other radios as `<stack>@<rid>` (up to 7 per stack, ports
+  +10 per slot): `lhpc stack add-instance|remove-instance`; `start|stop|restart <stack>@<rid>` act on that one alone.
+- Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
+  back that instance alone, and a removed instance's record starts nothing.
+- Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
+  in its row of config/radios.toml.
+- Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;
+  an old `start-<comp>-<band>.log` stays until the next start, and `lhpc logs` shows it until then.
 - README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
   after the reboot; the German block installs from the lock file like the English one.
 - `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
   rc it returned, instead of only its last output line.
 - Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
   not reported as failed while it still completes.
+
+Upgrading from 0.13.x
+
+- Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
+  (or `sudo modprobe spi_ch341`).
+- 0.13.x per-band daemon settings stay in effect for every radio of that band; saving a radio's settings panel
+  stores that radio's own values in its row of config/radios.toml.
 
 Fixed
 

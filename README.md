@@ -368,7 +368,8 @@ A stack with a login of its own creates it on its **first start** (**Apps → *s
 
 ## Configure & run stacks
 
-*Home* shows what runs, the radios and links to each stack's web UI; *Apps* has one row per stack:
+*Home* shows the banners (*Needs attention* among them), the Webserver box and the System box; the radios are under
+*Apps › Daemon › Hardware*. *Apps* has one row per stack:
 Settings, Start/Stop, logs, Password. The console: [operations](docs/operations.md#operating-the-console).
 
 <details><summary><em>The same from the CLI</em></summary>

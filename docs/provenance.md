@@ -114,6 +114,14 @@ replaces, so switching the client never touches meshtasticd.
 | `dev` | the latest lab-built snapshot of upstream `main` (it may trail `main` by one weekly build) | as `stable` |
 | `pinned` | refused: the web client has no compiled lane | — |
 
+In the console, the meshtastic stack's **Web client** control shows the installed client and its
+line, and offers the three lines: *binary* (the known-working pin), *stable* (the newest build
+paired with your meshtasticd) and *dev* (the newest nightly paired with it). Where the box has no
+binary index, stable and dev are greyed out with the reason. **Switch** opens the plan page, which
+names the exact version that line would install, or why there is none, and **Confirm** installs
+it; nothing is installed before Confirm. The control itself shows no stable or dev version number:
+that is read from the index only when you ask for that line, never when the page loads.
+
 `lhpc update meshtastic-web --source binary|stable|dev --yes` switches it in seconds; a bare
 `lhpc update meshtastic-web` and a rebuild keep the recorded choice. A `stable`/`dev` entry is taken
 only when its smoke ran against the installed meshtasticd commit; none is a refusal naming
