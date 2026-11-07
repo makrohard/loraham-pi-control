@@ -242,7 +242,8 @@ def test_dashboard_unconfigured_shows_configure_banner(tmp_path):
     app = create_app(service_factory=lambda: svc)
     app.config["SESSION_COOKIE_SECURE"] = False
     body = app.test_client().get("/").get_data(as_text=True)
-    assert "No radio hardware is configured" in body
+    assert "No radio hardware is set up yet." in body                     # Home's setup banner (W250)
+    assert 'href="/hardware/add"' in body                                 # it opens Add Hardware
 
 
 def test_stacks_page_renders_when_unconfigured(tmp_path):
@@ -255,8 +256,10 @@ def test_stacks_page_renders_when_unconfigured(tmp_path):
     r = app.test_client().get("/stacks?open=daemon&cfg=daemon")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "Hardware setup" in body                              # the selector is present
     assert "Radio hardware" in body                              # per-stack "configure" note shown
+    # DEC-W57: the board selector is Add Hardware's HAT row now; it renders with no hardware configured.
+    add = app.test_client().get("/hardware/add")
+    assert add.status_code == 200 and 'id="hw-addhat"' in add.get_data(as_text=True)
 
 
 def test_footer_shows_current_hardware_friendly(tmp_path):

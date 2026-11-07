@@ -206,15 +206,18 @@ def test_get_routes_make_no_network_calls(tmp_path, web):
     assert not offenders, f"GET routes ran network commands: {offenders}"
 
 
-def test_radio_dashboard_has_two_band_columns(web):
-    body = web(guard=ReadOnlyGuard).get("/").get_data(as_text=True)
-    doc = parse(body)
-    assert doc.find("div", class_="radiogrid")
-    assert doc.find("div", **{"data-radio-band": "433"}) and doc.find("div", **{"data-radio-band": "868"})
-    assert "433 MHz" in body and "868 MHz" in body
-    # per-band: a start-stack control and a radio-config link
-    assert 'name="op" value="start"' in body
-    assert "Radio config" in body or "daemon offline" in body
+def test_radio_dashboard_has_two_band_columns(web, tmp_path):
+    # W250/W257: the two band columns left Home: the Hardware list has a row per radio with its band, the daemon's
+    # Apps row its start control, and each radio's page its daemon's state.
+    import radios_fixture
+    radios_fixture.write(tmp_path)                                     # r1 on 433, r2 on 868
+    c = web(guard=ReadOnlyGuard)
+    listing = c.get("/hardware").get_data(as_text=True)
+    assert 'data-rid="r1"' in listing and 'data-rid="r2"' in listing
+    assert "433 MHz" in listing and "868 MHz" in listing
+    assert 'name="op" value="start"' in c.get("/stacks/daemon/body").get_data(as_text=True)
+    for rid in ("r1", "r2"):
+        assert "daemon offline" in c.get(f"/hardware/radio/{rid}").get_data(as_text=True)
 
 
 def test_config_page_route_gone_content_on_stack(web):
@@ -1448,38 +1451,13 @@ _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
 _DAEMON_UP = {100: ["loraham_daemon", "--radio", "433"]}
 
 
-@pytest.mark.parametrize("state,cmdlines,socks", [
-    ("ready", {}, {"/tmp/loraconf433.sock": _RDY}),
-    ("occupied", {}, {"/tmp/loraconf433.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}),
-    ("offline-installed", _DAEMON_UP, {}),
-], ids=["ready", "occupied", "offline-installed"])
-def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
-    """One link block per band card, defined once, in every state the daemon is installed in.
-    While the daemon serves the band each entry is on its own line in the maintainer's order:
-    the Stop form, then "Radio config", then the log links ("Daemon log", the RF logs); otherwise
-    the links sit right after the daemon's Start form."""
-    c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
-    doc = parse(c.get("/").get_data(as_text=True))
-    col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
-    assert len(forms) == 1, "exactly one daemon control on the card"
-    links = [p for p in col.find("p") if col.within(p).find("a", href="/logs/loraham-daemon?band=433")]
-    assert len(links) == 1                                                 # the block with the log links
-    if state in ("ready", "occupied"):
-        heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
-        assert len(heads) == 1 and heads[0].index == forms[0].end + 1     # Stop, then Radio config
-        assert links[0].index == heads[0].end + 1                          # then the log links
-    else:
-        assert links[0].index == forms[0].end + 1
-    log = col.within(links[0]).find("a", href="/logs/loraham-daemon?band=433")
-    assert log and log[0].text == "Daemon log"
-
-
-def test_the_radio_card_has_no_log_links_without_a_daemon(web):
-    doc = parse(web().get("/").get_data(as_text=True))
-    col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    assert not col.find("a", href="/logs/loraham-daemon?band=433")
-    assert not [a for a in col.find("a") if (a["href"] or "").startswith("/logs/")]
+def test_the_radio_card_has_no_log_links_without_a_daemon(web, tmp_path):
+    # W257: the radio card's log links are on the radio's own page.
+    import radios_fixture
+    radios_fixture.write(tmp_path)
+    doc = parse(web().get("/hardware/radio/r1").get_data(as_text=True))
+    assert not doc.find("a", href="/logs/loraham-daemon?band=433")
+    assert not [a for a in doc.find("a") if (a["href"] or "")[:6] == "/logs/"]
 
 
 def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):
@@ -1493,7 +1471,8 @@ def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):
     _cfg.save_hardware_setup(svc._paths, "loraham")
     doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
     link = doc.find("a", href="/stacks?open=daemon&cfg=daemon#stack-settings-daemon")
-    assert link and link[0].text == "Radio config"
+    # W250: the radio cards' "Radio config" left Home; every page's footer names the radio hardware and opens it.
+    assert link and link[0].text.strip() == "LoRaHAM dual-module (SX1278 + RFM95)"
 
 
 def test_controller_logs_page_and_header_link(tmp_path, web):
@@ -2900,7 +2879,7 @@ def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, m
         if ss.stack.id == "meshtastic":
             ss.components["meshtastic"].run_state = RunState.RUNNING
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
-    page = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
+    page = web(service_factory=lambda: svc).get("/stacks/meshtastic/body").get_data(as_text=True)   # its Apps row (W250)
     assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli"' in page
     assert "lhpc meshtastic --help" in page
     assert "Use the meshtastic CLI through lhpc" not in page
@@ -2929,42 +2908,6 @@ def test_the_notice_link_opens_the_firewall_apply_section(web):
         assert doc.by_id(id_).has_attr("open") and doc.by_id(id_)["data-force-open"] == "1", id_
     doc = parse(client.get("/stacks?open=firewall", headers={"Host": "127.0.0.1"}).get_data(as_text=True))
     assert doc.present("firewall-apply") and not doc.by_id("firewall-apply").has_attr("open")
-
-
-_KISS_PROC = ["loraham-kiss-tnc", "--radio", "433"]
-_GRAYWOLF_PROC = ["graywolf", "state/graywolf/graywolf.db"]
-
-
-def _band_column(web, tmp_path, running):
-    """The dashboard's 433 column with the given stacks REALLY running (their processes on the
-    fake, their band markers set, a configured radio so the band cards render) — the real
-    `radio_overview()`, not a hand-built copy of its shape."""
-    from lhpc.core import config as _cfg
-    paths = Paths(runtime_root=tmp_path)
-    _cfg.save_hardware_setup(paths, "loraham")
-    procs = {"kiss": _KISS_PROC, "graywolf": _GRAYWOLF_PROC}
-    svc = ControllerService(system=FakeSystem(cmdlines_data={100 + i: procs[s] for i, s in enumerate(running)}).system,
-                            paths=paths)
-    for sid in running:
-        svc._set_running_band(sid, "433")
-    assert [s["id"] for r in svc.radio_overview() if r["band"] == "433" for s in r["running"]] == list(running)
-    doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
-    return doc, doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-
-
-def test_the_running_card_rules_off_one_stack_from_the_next(tmp_path, web):
-    """Two stacks sharing a radio ran together as one wall of text. A rule separates them —
-    BETWEEN the entries only: never above the first, never below the last, and never in a card
-    that shows a single stack (a trailing rule reads as 'something is missing here')."""
-    doc, col = _band_column(web, tmp_path, ("kiss", "graywolf"))
-    stacks, rules = col.find("div", class_="runstack"), col.find("hr")
-    assert len(stacks) == 2 and len(rules) == 1, "one rule between two stacks"
-    assert doc.index(stacks[0]) < doc.index(rules[0]) < doc.index(stacks[1]), \
-        "the rule sits between the two stacks, never above the first or after the last"
-
-    doc, col = _band_column(web, tmp_path, ("kiss",))
-    assert len(col.find("div", class_="runstack")) == 1
-    assert not col.find("hr"), "a single running stack needs no separator"
 
 
 def test_an_inline_update_that_needs_a_build_starts_the_detached_build(web, csrf, monkeypatch):

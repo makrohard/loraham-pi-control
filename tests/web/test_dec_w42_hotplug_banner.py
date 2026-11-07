@@ -221,7 +221,12 @@ def test_a_hardware_list_that_does_not_read_back_records_nothing(web, tmp_path, 
 
 
 def test_the_scan_is_taken_under_the_stores_lock(web, tmp_path, monkeypatch):
-    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    # The banner's own render (hotplug.banner): Home also scans USB for its other banners since W272.
+    from lhpc.core import hotplug
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    _c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
     lock, held = tmp_path / "state" / "hotplug.json.lock", []
 
     def scan(*a, **k):
@@ -233,5 +238,5 @@ def test_the_scan_is_taken_under_the_stores_lock(web, tmp_path, monkeypatch):
                 held.append(True)
         return Scan(usb.listing, tuple(usb.devices))
     monkeypatch.setattr(usb_access, "scan", scan)
-    _lines(c)
+    hotplug.banner(ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
     assert held == [True]

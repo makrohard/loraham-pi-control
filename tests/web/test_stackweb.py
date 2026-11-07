@@ -833,8 +833,9 @@ def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_pat
     # from the loopback fallback).
     r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
     assert r.status_code == 200
-    links = parse(r.get_data(as_text=True)).find("a", class_="iface-web")
-    assert [a["href"] for a in links] == ["https://localhost:8444/"]
+    # W250: the radio cards' web-UI link left Home; the Webserver box's row of the running stack links it.
+    links = [a for a in parse(r.get_data(as_text=True)).find("a", class_="wsurl") if ":8444" in (a["href"] or "")]
+    assert [a["href"] for a in links] == ["https://localhost:8444"]
 
 
 def test_drift_local_mode_but_exposed_listener_is_truthfully_remote(tmp_path):

@@ -77,16 +77,17 @@ def test_a_bind_without_the_token_is_refused(web, tmp_path, monkeypatch):
     assert c.post("/hardware/bind", data={"rid": "r2", "port": "1-1.3"}).status_code == 400
 
 
-def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypatch):
+def test_the_hardware_list_has_a_row_per_radio_naming_its_band(web, tmp_path, monkeypatch):
+    # Redesign (W250/W257): the radio cards left Home; the Hardware list has one row per radio, naming its band.
     from lhpc.core.services import ControllerService
     radios_fixture.write(tmp_path)
     monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
-    page = web().get("/").get_data(as_text=True)
-    cols = {b: page[page.index(f'data-radio-band="{b}"'):] for b in ("433", "868")}
-    cols["433"] = cols["433"][:cols["433"].index('data-radio-band="868"')]
+    page = web().get("/hardware").get_data(as_text=True)
+    rows = re.findall(r'<tr class="hwrow"[^>]*data-rid="(r\d+)".*?</tr>', page, re.S)
+    assert rows == ["r1", "r2"]
     for band, rid in (("433", "r1"), ("868", "r2")):
-        assert f'id="radio-cards-{band}"' in cols[band] and cols[band].count('class="radio-card"') == 1
-        assert f'data-rid="{rid}"' in cols[band]
+        row = re.search(rf'<tr class="hwrow"[^>]*data-rid="{rid}".*?</tr>', page, re.S).group(0)
+        assert f"{band} MHz" in _text(re.sub(r"<[^>]+>", " ", row))
 
 
 def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):

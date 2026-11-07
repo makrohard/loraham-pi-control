@@ -21,6 +21,17 @@ def _page(c, path=DAEMON_PAGE):
     return parse(c.get(path).get_data(as_text=True))
 
 
+def _radio_page(web, tmp_path, model, status):
+    """Radio r1's page (the redesign's place of the radio card's banner, W257) with r1 of `model` on 433 whose daemon
+    answers `status`."""
+    import radios_fixture
+
+    from lhpc.core import radios
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", model, "433", **({"ce": "ce0"} if model == "uputronics" else {})),))
+    fs = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": status.replace(b"STATUS ", b"STATUS ID=r1 BOUND=- ", 1)})
+    return parse(web(system=fs.system, paths=Paths(runtime_root=tmp_path)).get("/hardware/radio/r1").get_data(as_text=True))
+
+
 def _client(web, tmp_path, setup, status):
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, setup)
@@ -54,8 +65,12 @@ def test_banner_keys_on_the_running_sx127x_permission(web, tmp_path):
     doc = _page(c)
     assert doc.present("hp-warn-433")                     # running ON, saved off: banner stays
     assert doc.present("hp-mismatch-433") and "saved off" in doc.text
-    assert _page(c, "/").present("rd-hp-433")
     assert doc.present("dp-hp-daemon")                    # the daemon-params panel too
+
+
+def test_the_radio_page_warns_on_the_running_sx127x_permission(web, tmp_path):
+    # Moved from Home's radio card (rd-hp-433, W250/W257): the radio's own page carries the banner.
+    assert _radio_page(web, tmp_path, "uputronics", _status("SX127x", "1")).present("hw-hp-warn")
 
 
 @pytest.mark.contract
@@ -63,5 +78,11 @@ def test_no_sx127x_banner_on_an_sx1262(web, tmp_path):
     c, _ = _client(web, tmp_path, "waveshare-433", _status("SX1262", "1"))
     doc = _page(c)
     assert not doc.present("hp-warn-433") and not doc.present("dp-hp-daemon")
-    assert not _page(c, "/").present("rd-hp-433")
+
     assert doc.present("high-power-daemon")               # the same control exists on every preset
+
+
+@pytest.mark.contract
+def test_no_sx127x_warning_on_an_sx1262_radio_page(web, tmp_path):
+    # Moved from Home's radio card (W250/W257).
+    assert not _radio_page(web, tmp_path, "waveshare-sx1262", _status("SX1262", "1")).present("hw-hp-warn")
