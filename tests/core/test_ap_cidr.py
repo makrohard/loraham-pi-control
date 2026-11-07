@@ -663,10 +663,17 @@ def test_an_auto_saved_old_subnet_follows_the_apply_and_the_ap_start_proceeds(tm
 
 
 def test_a_second_change_follows_again_and_the_ap_start_proceeds(tmp_path, monkeypatch):
-    """C9 rule (round 5): after a first change the firewall's AP subnet is the first candidate, which is the
-    previous effective setting at the second change, so it follows again."""
-    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, profile_addr="10.42.0.1/24", live_for="192.168.77.16/28")
+    """C9 rule (round 5): a first change, then the AP start, which saves the first candidate as the firewall's AP
+    subnet (nothing was saved); at the second change that saved subnet is the previous effective setting, so it
+    follows again and the next AP start proceeds."""
+    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, profile_addr="10.42.0.1/24", live_for="10.43.0.0/24")
+    live = {("wlan0", "10.43.0.0/24"), ("wlan0", "192.168.77.16/28")}     # the root apply made each live in turn
+    monkeypatch.setattr(svc, "_fw_ap_live", lambda iface, cidr: (iface, cidr) in live)
     assert svc.network_set_ap_cidr("10.43.0.0/24", _phrase(svc)).ok
+    assert svc.network_ap_now(apply=True).ok
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall.ap_cidr == "10.43.0.0/24"
+    spawned.clear()
     res = svc.network_set_ap_cidr("192.168.77.16/28", _phrase(svc))
     assert res.ok, res.summary
     svc._invalidate_config()
