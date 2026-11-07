@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Hardware — LoRaHAM Pi Control{% endblock %}
+{% macro detect_button(key, fields) %}
+  <form method="post" action="{{ url_for('hardware_detect') }}" class="inline" id="detect-{{ key }}">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    {% for name, value in fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <button type="submit">Detect</button>
+  </form>
+  {% if detect and detect.key == key %}
+    <p class="depnote depnote-{{ {'found': 'ok', 'refused': 'bad'}.get(detect.outcome, 'info') }}" data-detect="{{ detect.outcome }}">{{ detect.line }}</p>
+  {% endif %}
+{% endmacro %}
 {% block content %}
 <section class="card" id="hardware-section">
   <header><h2>Hardware: the radios</h2></header>
@@ -40,6 +50,7 @@
             {% endif %}
           </div>
         {% endif %}
+        <div class="body radio-detect">{{ detect_button(r.rid, [("kind", "radio"), ("rid", r.rid)]) }}</div>
         <div class="body radio-remove">
           {% if r.activity %}
             <button type="button" class="danger" disabled data-remove-blocked="{{ r.rid }}">Remove radio…</button>
@@ -64,7 +75,8 @@
               <input type="hidden" name="model" value="{{ model_id }}">
               <input type="hidden" name="port" value="{{ c.port }}">
               <button type="submit">Add as a new radio</button>
-            </form></li>
+            </form>
+            {{ detect_button("port-" ~ c.port, [("kind", "stick"), ("model", model_id), ("port", c.port)]) }}</li>
         {% endfor %}
         </ul>
       </section>

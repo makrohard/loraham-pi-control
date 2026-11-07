@@ -2059,7 +2059,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
         from lhpc.core import radio_start
         return render_template("hardware.html", view=radio_start.hardware_view(service),
-                               stop_first=radio_start.stop_first)
+                               stop_first=radio_start.stop_first, detect=session.pop("hw_detect", None))
+
+    @app.post("/hardware/detect")
+    def hardware_detect():
+        """DEC-W43 W3: Detect a chip without its daemon (radio_detect.run, whose refusals are the only guard); the
+        result line shows once, next to the button it was pressed on (kept for one render, like the probe)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core.radio_detect import run
+        f, kind = request.form, request.form.get("kind", "")
+        if kind == "radio":
+            key, res = f.get("rid", ""), run.detect_radio(service, f.get("rid", ""))
+        elif kind == "stick":
+            key, res = "port-" + f.get("port", ""), run.detect_stick(service, f.get("model", ""), f.get("port", ""))
+        elif kind == "board":
+            key = f"board-{f.get('model', '')}-{f.get('band', '')}"
+            res = run.detect_board(service, f.get("model", ""), f.get("variant", ""), f.get("band", ""))
+        else:
+            abort(400)
+        session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line}
+        return redirect(url_for("hardware_view") + "#detect-" + key)
 
     @app.post("/hardware/bind")
     def hardware_bind():

@@ -37,7 +37,7 @@ def test_the_section_lists_each_radio_and_a_usb_radios_sticks(web, tmp_path, mon
 
 def test_an_spi_only_list_offers_no_usb_setup(web, tmp_path, monkeypatch):
     page = _box(web, tmp_path, monkeypatch, rows=ROWS[:1]).get("/hardware").get_data(as_text=True)
-    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'name="rid"' not in page   # no bind, no setup
+    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'action="/hardware/bind"' not in page   # no bind, no setup
     assert 'id="usb-add"' in page and 'data-add-port="1-1.3"' in page             # B: the stick can be added
 
 
