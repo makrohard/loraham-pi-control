@@ -371,8 +371,10 @@ def _prepare(tmp_path, modules, pub):
         (work / "droot" / "lib" / "modules" / m).mkdir(parents=True)
     (work / "key.pub").write_text(pub)
     stub = _stub(tmp_path, **{"qemu-img": "exit 0",
+                              # sfdisk reads its stdin like the real one: a stub that exits unread lets the
+                              # `echo | sudo sfdisk` pipeline die of SIGPIPE (141) under pipefail when it exits first
                               "sudo": 'shift; case "$1" in losetup) echo /dev/loop9;; blkid) echo 4f8a6b1c-02;; '
-                                      'tee) cat > /dev/null;; *) exit 0;; esac'})
+                                      'tee|sfdisk) cat > /dev/null;; *) exit 0;; esac'})
     return subprocess.run(["bash", "-c", f'set -euo pipefail; . {LANE / "guest.sh"}; prepare'], capture_output=True,
                           text=True, env={"WORK": str(work), "EV": str(ev), "PATH": f"{stub}:/usr/bin:/bin"})
 

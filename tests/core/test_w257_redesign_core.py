@@ -174,3 +174,25 @@ def test_an_unknown_radio_is_refused_and_the_reserved_ids_stay(tmp_path, monkeyp
     assert radios.save(svc._paths, radios.load(svc._paths).radios, retired=("r2",)) == []
     assert radio_start.set_enabled(svc, "r9", False) == (False, "Not disabled: there is no radio r9")
     assert radio_start.set_enabled(svc, "r1", False)[0] and radios.load(svc._paths).retired == ("r2",)
+
+
+# ---- (5) attention: what the dashboard's "Needs attention" banner shows (W273), from `problems` -------------------
+
+def test_attention_names_an_offline_daemon_only_while_a_stack_needs_it(tmp_path, monkeypatch):
+    rows = (radios.Radio("r1", "low", "loraham", "433"),)
+    svc = _svc(tmp_path, monkeypatch, rows)                                         # offline, nothing runs on it
+    assert _row(radio_start.hardware_view(svc), "r1")["attention"] == []
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
+    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, default="": "433")
+    assert _row(radio_start.hardware_view(svc), "r1")["attention"] == ["daemon offline while kiss needs it"]
+
+
+def test_attention_names_a_stick_not_plugged_in(tmp_path, monkeypatch):
+    rows = (radios.Radio("r2", "stick", "meshstick-1262", "868", usb_serial="26073012"),)
+    svc = _svc(tmp_path, monkeypatch, rows, ready=("r2",))
+    assert _row(radio_start.hardware_view(svc), "r2")["attention"] == ["stick not plugged in: serial 26073012"]
+
+
+def test_a_working_radio_needs_no_attention(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch, (radios.Radio("r1", "low", "loraham", "433"),), ready=("r1",))
+    assert _row(radio_start.hardware_view(svc), "r1")["attention"] == []

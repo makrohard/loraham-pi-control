@@ -85,7 +85,15 @@ def set_ap_cidr(svc, value: str, confirm: str) -> ActionResult:
         res = svc.firewall_configure(ap_enabled=fw.ap_enabled, ap_interface=fw.ap_interface, ap_cidr=stored)
         svc._invalidate_config()
         if not res.ok:                          # G1-C10: the setting goes back, so the two never disagree
-            cfgmod.set_network(svc._paths, ap_cidr="default" if previous == ap_subnet.DEFAULT else previous)
+            try:
+                cfgmod.set_network(svc._paths, ap_cidr="default" if previous == ap_subnet.DEFAULT else previous)
+            except (ap_subnet.ApSubnetError, cfgmod.ConfigError) as exc:
+                svc._invalidate_config()
+                return ActionResult(False, f"The firewall's AP subnet could not follow ({res.summary}) and the setting "
+                                           f"could not be set back ({exc}): network.ap_cidr is {stored}, the firewall's "
+                                           "AP subnet may differ", details=res.details,
+                                    next_commands=[f"lhpc network --ap-cidr {previous} --confirm-phrase "
+                                                   f"{AP_CIDR_CONFIRM}"], data={"reason": "rollback-failed"})
             svc._invalidate_config()
             return ActionResult(False, f"Not changed: the firewall's AP subnet could not follow ({res.summary}); the "
                                        f"AP subnet stays {previous}", details=res.details,

@@ -12,6 +12,12 @@
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
+- README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
+  after the reboot; the German block installs from the lock file like the English one.
+- `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
+  rc it returned, instead of only its last output line.
+- Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
+  not reported as failed while it still completes.
 
 Fixed
 
