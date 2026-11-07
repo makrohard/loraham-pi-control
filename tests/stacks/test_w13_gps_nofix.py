@@ -149,3 +149,16 @@ def test_r6_control_a_feed_reachable_without_a_fix_still_starts(tmp_path):
     comp = next(c for c in svc.stack("meshtastic").components if c.id == "meshtastic-gps")
     _marker(tmp_path, _feed("connected"))
     assert svc._gps_feed_ready(comp)[0] is True
+
+
+@pytest.mark.parametrize("missing", ["pgrep", "systemctl"])
+def test_r7_reach_0_with_the_gpsd_checks_unrunnable_says_not_known(missing):
+    """chronyc reports reach 0 but `pgrep` or `systemctl` cannot run: the line says so, never nothing."""
+    from lhpc.core import clock
+
+    class Runner:
+        def run(self, argv, timeout=None):
+            if argv[0] == missing:
+                raise FileNotFoundError(argv[0])
+            return {"chronyc": _src("0"), "pgrep": PROC, "systemctl": ACTIVE}[argv[0]]
+    assert clock.gps_time_line(Runner()) == ["  gps time: chrony has no GPS samples (reach 0); whether gpsd runs is not known"]

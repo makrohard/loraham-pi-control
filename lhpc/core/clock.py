@@ -93,8 +93,6 @@ def gps_time_line(runner) -> list[str]:
       or no gpsd running: nothing to say."""
     try:
         r = runner.run(["chronyc", "-n", "-c", "sources"], 2.0)
-        proc = runner.run(["pgrep", "-x", "gpsd"], 2.0)
-        unit = runner.run(["systemctl", "is-active", "gpsd.service"], 2.0)
     except FileNotFoundError:
         return []
     except OSError:
@@ -107,6 +105,11 @@ def gps_time_line(runner) -> list[str]:
     gps = [f for f in rows if len(f) > 5 and f[0] == "#" and f[2] == "GPS"]
     if not gps or gps[0][5] not in ("0", ""):
         return []
+    try:
+        proc = runner.run(["pgrep", "-x", "gpsd"], 2.0)
+        unit = runner.run(["systemctl", "is-active", "gpsd.service"], 2.0)
+    except OSError:
+        return ["  gps time: chrony has no GPS samples (reach 0); whether gpsd runs is not known"]
     service = unit.returncode == 0 and unit.stdout.strip() == "active"
     if service:
         return ["  gps time: chrony has no GPS samples yet (gpsd runs as its service; the receiver may have no fix)"]
