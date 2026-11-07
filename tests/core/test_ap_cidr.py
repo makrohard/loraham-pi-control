@@ -579,18 +579,23 @@ def test_stored_setting_and_ap_apply_agree_on_the_candidate(tmp_path, monkeypatc
     assert nm.addr == "10.43.0.1/24", "the AP profile's address is not in the candidate network"
     assert svc.firewall_candidate()["ap"]["cidr"] == "10.43.0.0/24"
     assert res.ok, res.summary
+    # C9 (OPEN-1 reading): the gate is evaluated after the operation's firewall apply step and holds when the
+    # firewall's AP subnet is SAVED for the candidate and LIVE for it (the stub `live_for`); the saved half:
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall.ap_cidr == "10.43.0.0/24", "the firewall AP subnet is not saved for the candidate"
     assert spawned and AP_UUID in spawned[0]
 
 
-@pytest.mark.parametrize("saved, live_for", [(TODAY, TODAY), ("10.43.0.0/24", None)],
-                         ids=["old-rules-saved-and-live", "candidate-saved-not-live"])
+@pytest.mark.parametrize("saved, live_for", [(TODAY, TODAY), ("10.43.0.0/24", None), (TODAY, "10.43.0.0/24")],
+                         ids=["old-rules-saved-and-live", "candidate-saved-not-live", "old-saved-candidate-live"])
 @pytest.mark.parametrize("profile_addr", ["", "10.42.0.1/24"])
 def test_the_ap_start_refuses_a_candidate_the_live_rules_do_not_cover(tmp_path, monkeypatch,
                                                                        profile_addr, saved, live_for):
     """C9 (the maintainer's CO-16 ruling: a non-usable AP is a bad bug): the gate must hold for the
     stored candidate 10.43.0.0/24 (saved AND live) before anything is modified. Two refusals: the
     rules saved and live cover only the OLD subnet 10.42.0.0/24; or the rules are saved for the
-    candidate but not live. Either way the switch is REFUSED naming the candidate, and nothing
+    candidate but not live; or the rules are live for the candidate while the saved (by hand) firewall AP
+    subnet is the OLD one (the saved half of the gate: a subnet saved by hand is never overridden). Either way the switch is REFUSED naming the candidate, and nothing
     changes: no nmcli modify of the AP profile, its address unchanged, no finalize helper spawned,
     no pending record, the stored firewall config and the firewall's AP subnet as before."""
     svc, nm, spawned = _ap_box(tmp_path, monkeypatch, local='[network]\nap_cidr = "10.43.0.0/24"\n',
@@ -630,6 +635,8 @@ def test_one_setting_drives_the_profile_firewall_and_hint(tmp_path, monkeypatch,
     assert res.ok, res.summary
     assert nm.addr == address
     assert svc.firewall_candidate()["ap"]["cidr"] == cidr
+    svc._invalidate_config()                                       # C9's saved half, as T-NA4
+    assert cfgmod.load_config(svc._paths).firewall.ap_cidr == cidr
     assert f"https://{first}:8443" in res.summary and "10.42.0.1" not in res.summary
 
 
