@@ -1334,7 +1334,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             plan = service.power_action(kind, apply=False)
             return render_template("power_confirm.html", kind=kind,
                                    question=plan.summary, details=plan.details)
-        res = service.power_action(kind, apply=True)
+        # DEC-W11: the record names the client only by a certificate nginx verified (it sets both headers)
+        _dn = request.headers.get("X-LHPC-Client-DN", "") if request.headers.get("X-LHPC-Client-Verify") == "SUCCESS" else ""
+        res = service.power_action(kind, apply=True, client=_dn)
         flash(res.summary + ((" " + "; ".join(d.strip() for d in res.details))
                             if res.details else ""),
               "ok" if res.ok else "warn")
