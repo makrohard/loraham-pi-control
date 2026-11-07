@@ -1,7 +1,7 @@
 # USB radios
 
 A USB radio is a LoRa module behind a CH341 USB-to-SPI bridge. The [daemon](stacks/daemon.md) drives
-it over USB with pine64's CH341 library; no Pi GPIO or SPI line is used. Each stick is one radio of the
+it over USB with the CH341 library (makrohard's fork of pine64's); no Pi GPIO or SPI line is used. Each stick is one radio of the
 hardware list (`config/radios.toml`), added and bound on the console's Hardware page (`/hardware`).
 
 ## Contents
