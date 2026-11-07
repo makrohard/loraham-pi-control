@@ -1342,8 +1342,9 @@ def test_unprovable_checkout_refuses_without_retiring_the_binary(tmp_path, monke
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
     rec = binary_receipt(svc)
     _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon",
-              dirty=(kind == "dirty"),
-              remote=("https://elsewhere.invalid/other.git" if kind == "wrong-remote" else None))
+              dirty=(kind == "dirty"))
+    if kind == "wrong-remote":     # re-pointed by hand: origin != the recorded remote (a recorded one is LHPC's clone)
+        git(tmp_path / DAEMON_PATH, "remote", "set-url", "origin", "https://elsewhere.invalid/other.git")
     monkeypatch.setattr(ControllerService, "binary_retire",
                         lambda *a, **k: pytest.fail("the binary must not be touched"))
     res = svc.install("daemon", apply=True, source="pinned")

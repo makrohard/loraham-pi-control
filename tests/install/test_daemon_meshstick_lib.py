@@ -39,10 +39,10 @@ def _tar(tmp_path, members):
     return out
 
 
-def test_the_pine64_source_is_a_pinned_optional_checkout_beside_the_daemon():
+def test_the_library_source_is_a_pinned_optional_checkout_beside_the_daemon():
     st = _daemon()
     lib = next(c for c in st.components if c.id == "libch341")
-    assert lib.source.remote == "https://github.com/pine64/libch341-spi-userspace"
+    assert lib.source.remote == "https://github.com/makrohard/libch341-spi-userspace"
     assert lib.source.branch == "main" and lib.source.path == "src/libch341-spi-userspace"
     assert len(lib.source.pin_commit) == 40 and not lib.build_steps and lib.optional
     assert [r.check_file for r in lib.requires] == ["/usr/include/libusb-1.0/libusb.h"]

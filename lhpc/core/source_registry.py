@@ -202,7 +202,10 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
         if rec.remote and _norm_remote(actual) != _norm_remote(rec.remote):
             return None, (f"identity drift: origin {actual or '(none)'!r} != recorded "
                           f"remote {rec.remote!r} — refusing")
-        if effective and _norm_remote(actual) != _norm_remote(effective):
+        # The manifest moving its remote (no local.toml override) is not drift: the origin = the
+        # recorded remote and the commit check below prove LHPC's clone; the update re-clones.
+        moved = bool(rec.remote and rec.resolved_commit) and comp.id not in config.remotes
+        if effective and not moved and _norm_remote(actual) != _norm_remote(effective):
             return None, (f"identity drift: origin {actual or '(none)'!r} != configured "
                           f"remote {effective!r} — refusing")
         proven = bool(actual)                     # a positive, non-vacuous origin match

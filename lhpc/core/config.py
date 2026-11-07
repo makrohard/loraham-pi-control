@@ -207,6 +207,8 @@ HW_PRESET_LABELS = {
     "uputronics-ce1": "Uputronics CE1",
     "waveshare-sx1262": "Waveshare SX1262",
     "meshstick-1262": "ELECROW Meshstick",
+    "pinedio-usb-1262": "PINE64 USB LoRa adapter",
+    "ch341-rfm98pw-433": "CH341 + RFM98PW 433 build",
 }
 
 
@@ -224,6 +226,8 @@ HW_PRESET_FAMILY = {
     "uputronics-ce1": "sx127x",
     "waveshare-sx1262": "sx1262",
     "meshstick-1262": "sx1262",     # the model table's chip (radio_models.toml); a test holds the two equal
+    "pinedio-usb-1262": "sx1262",
+    "ch341-rfm98pw-433": "sx127x",
 }
 
 

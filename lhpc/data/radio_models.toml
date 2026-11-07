@@ -86,3 +86,35 @@ direct = { module = "sx1262", spidev = "ch341" }
   key = "default"
   preset = "meshstick-1262"
   pins = { cs = 0, irq = 6, rst = 2, gpio = 4, rxen = 1 }
+
+[[model]]
+id = "pinedio-usb-1262"
+label = "PINE64 USB LoRa adapter (SX1262, USB)"
+short = "pine64"
+transport = "usb-ch341"
+chip = "sx1262"
+bands = ["868"]
+power_max_dbm = 14
+high_power_switch = false
+usb = { vid = "1a86", pid = "5512" }
+
+  [[model.variant]]
+  key = "default"
+  preset = "pinedio-usb-1262"
+  pins = { cs = 0, irq = 10, gpio = 11 }
+
+[[model]]
+id = "ch341-rfm98pw-433"
+label = "CH341 + RFM98PW 433 build (SX127x, USB)"
+short = "rfm98"
+transport = "usb-ch341"
+chip = "sx127x"
+bands = ["433"]
+power_max_dbm = 17
+high_power_switch = true
+usb = { vid = "1a86", pid = "5512" }
+
+  [[model.variant]]
+  key = "default"
+  preset = "ch341-rfm98pw-433"
+  pins = { cs = 0, irq = 6, rst = 2, gpio = 4 }
