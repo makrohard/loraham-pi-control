@@ -1,0 +1,332 @@
+# Lane B: the Pi OS arm64 guest in QEMU on the arm64 runner (the H16 second environment for the
+# operator texts). QB-1, the spike: boot the guest without KVM and measure it. Dispatch (and a push
+# to a spike branch); no other lane changes. The guest is QEMU virt with Debian 13's generic arm64 kernel, initrd and
+# modules on the unchanged Raspberry Pi OS Lite (Trixie) root filesystem: a full VM with its own
+# kernel, systemd, udev, apt and a real filesystem.
+name: lane-b
+
+on:
+  workflow_dispatch:
+  # A workflow file dispatches only once it exists on main; until then the spike branch runs it.
+  push:
+    branches: [cons/lane-b-spike-*]
+
+permissions:
+  contents: read
+
+jobs:
+  qb1:
+    # QB-1 has run (its evidence is recorded); a push to the spike branch runs the from-topic job only.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm   # native aarch64: same-architecture TCG, no nested emulation
+    # The boot bound is 20 min; downloads, preparation and captures fit in the rest.
+    timeout-minutes: 60
+    env:
+      PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+      PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
+      DEB_URL: https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-generic-arm64-20261021-2638.qcow2
+      DEB_SHA512: 0720988fd560dfa1d2975c4a1e4c39e3903ffd0f68e75be9e171f889cdbb53b7763dc9c54e951afc34055c6110b3b415196778e468a50bf26d294730a7f8eabe
+      BOOT_BOUND_S: "1200"
+      EV: ${{ github.workspace }}/qb1
+      LF: ${{ github.workspace }}/qb1-launch-failure
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The runner (M1)
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/laneb" >> "$GITHUB_ENV"
+          mkdir -p "$EV" "$RUNNER_TEMP/laneb"
+          # Each writer this job may start has its state record, none, before anything runs (qb1 starts no sampler).
+          printf 'none\n' > "$RUNNER_TEMP/laneb/qemu.pid.state.tmp"; mv -f "$RUNNER_TEMP/laneb/qemu.pid.state.tmp" "$RUNNER_TEMP/laneb/qemu.pid.state"
+          { uname -a; nproc; free -m; ls -l /dev/kvm 2>&1 || true; } | tee "$EV/runner.txt"
+          k=$(uname -r)
+          [ -n "$k" ] || { echo "the runner kernel read empty" >&2; exit 1; }
+          printf '%s\n' "$k" > "$EV/runner-kernel.txt"
+          if [ -e /dev/kvm ]; then kvm=present; else kvm=absent; fi
+          echo "kvm=$kvm" | tee -a "$EV/runner.txt"
+
+      - name: QEMU from the runner OS
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          retry 3 sudo -n apt-get update -q
+          retry 3 sudo -n apt-get install -y -q qemu-system-arm qemu-utils
+          qemu-system-aarch64 --version | tee "$EV/qemu-version.txt"
+
+      - name: The pinned images (M2), verified before any use
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          cd "$WORK"
+          retry 3 curl -fsSL -o pios.img.xz "$PIOS_URL"
+          retry 3 curl -fsSL -o deb.qcow2 "$DEB_URL"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify pios.img.xz sha256 "$PIOS_SHA256"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify deb.qcow2 sha512 "$DEB_SHA512"
+          s=$(date +%s); xz -d pios.img.xz; e=$(date +%s); echo "decompress_s=$(( e - s ))" | tee "$EV/image.txt"
+          qemu-img convert -O raw deb.qcow2 deb.raw
+          printf 'pios=%s\npios_sha256=%s\ndeb=%s\ndeb_sha512=%s\n' "$PIOS_URL" "$PIOS_SHA256" "$DEB_URL" "$DEB_SHA512" >> "$EV/image.txt"
+
+      - name: Prepare the guest (test-only; stated in the self-audit)
+        # The Debian kernel, initrd and modules go into the Pi OS root filesystem; a user with a per-run
+        # key and ssh enabled. No Pi firmware runs under QEMU virt, so the Pi OS first-boot files are
+        # recorded, not used.
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          ssh-keygen -q -t ed25519 -N '' -f key
+          pl=$(sudo -n losetup -fP --show pios.img); dl=$(sudo -n losetup -fP --show deb.raw)
+          mkdir -p pboot proot droot
+          sudo -n mount "${pl}p1" pboot; sudo -n mount "${pl}p2" proot; sudo -n mount "${dl}p1" droot
+          if [ -e proot/usr/bin/cloud-init ]; then ci=present; else ci=absent; fi
+          { echo "bootfs:"; ls pboot; echo "cloud-init: $ci"; } | tee "$EV/first-boot.txt"
+          # Exactly one kernel modules directory in the Debian image: its version names the kernel and initrd to take.
+          mods=(droot/lib/modules/*)
+          [ "${#mods[@]}" -eq 1 ] && [ -d "${mods[0]}" ] || { echo "not exactly one modules directory: ${mods[*]}" >&2; exit 1; }
+          ver=${mods[0]##*/}
+          sudo -n cp "droot/boot/vmlinuz-$ver" vmlinuz; sudo -n cp "droot/boot/initrd.img-$ver" initrd
+          sudo -n chmod 0644 vmlinuz initrd
+          sudo -n cp -a "droot/lib/modules/$ver" proot/lib/modules/
+          echo "guest_kernel=$ver" | tee -a "$EV/image.txt"
+          sudo -n chroot proot useradd -m -s /bin/bash -G sudo lhpc
+          u=$(sudo -n chroot proot id -u lhpc); gid=$(sudo -n chroot proot id -g lhpc)
+          sudo -n install -d -m 0700 -o "$u" -g "$gid" proot/home/lhpc/.ssh
+          sudo -n install -m 0600 -o "$u" -g "$gid" key.pub proot/home/lhpc/.ssh/authorized_keys
+          echo 'lhpc ALL=(ALL) NOPASSWD:ALL' | sudo -n tee proot/etc/sudoers.d/010-lane-b >/dev/null
+          sudo -n chroot proot systemctl enable ssh
+          sudo -n blkid -s PARTUUID -o value "${pl}p2" > partuuid
+          sudo -n umount pboot proot droot
+          sudo -n losetup -d "$pl" "$dl"
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          partuuid_ok partuuid
+
+      - name: Boot without KVM to ssh (M3)
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          partuuid_ok partuuid
+          pu=$(cat partuuid)
+          t0=$(now)
+          wstate "$WORK/qemu.pid" launching
+          qemu-system-aarch64 -M virt -accel tcg -cpu max -smp 4 -m 4G \
+            -kernel vmlinuz -initrd initrd \
+            -append "root=PARTUUID=$pu rw rootwait console=ttyAMA0" \
+            -drive file=pios.img,format=raw,if=virtio \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -display none -serial "file:$EV/console.log" -daemonize -pidfile qemu.pid 2>> qemu-launch.log
+          # Bounded twice: the clock (a failed read stops the wait) and the number of polls.
+          i=0
+          until ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=5 -i key -p 2222 lhpc@127.0.0.1 true; do
+            n=$(now) || { echo "the clock cannot be read" | tee "$EV/boot.txt"; exit 1; }
+            i=$(( i + 1 ))
+            if [ $(( n - t0 )) -ge "$BOOT_BOUND_S" ] || [ "$i" -gt $(( BOOT_BOUND_S / 5 + 1 )) ]; then
+              echo "no ssh within ${BOOT_BOUND_S} s" | tee "$EV/boot.txt"; exit 1
+            fi
+            sleep 5
+          done
+          n=$(now)
+          echo "boot_s=$(( n - t0 ))" | tee "$EV/boot.txt"
+
+      - name: The guest is the guest (M4)
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          g() { ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i key -p 2222 lhpc@127.0.0.1 "$@"; }
+          mkdir -p "$EV/guest"
+          g uname -m > "$EV/guest/machine"
+          g uname -r > "$EV/guest/kernel"
+          g cat /etc/os-release > "$EV/guest/os_release"
+          g 'test -f /etc/rpi-issue && echo yes || echo no' > "$EV/guest/rpi_issue"
+          { g uname -a; g 'systemctl is-system-running || true'; g free -m; g nproc; } > "$EV/guest/facts.txt"
+          # The runner kernel recorded in M1 must still be the runner kernel: read, non-empty, equal to a fresh read.
+          hk=$(cat "$EV/runner-kernel.txt"); fresh=$(uname -r)
+          [ -n "$hk" ] && [ "$hk" = "$fresh" ] || { echo "the recorded runner kernel is empty or not the runner's ('$hk' vs '$fresh')" >&2; exit 1; }
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$hk" "$EV/guest"
+
+      - name: Stop the guest, redaction check, checksum the evidence
+        id: evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          # Every writer into the evidence (the QEMU console; qb1 starts no sampler) is gone before the scan and the
+          # sums; one that cannot be shown stopped blocks the upload.
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          # The runner runs this step with bash -e: a bare grep exiting 1 (no hit) would end it.
+          redact() { local rc; if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$1"; then rc=0; else rc=$?; fi
+            case $rc in
+              0) echo "redaction: a key or a password form in $1"; return 1 ;;
+              1) return 0 ;;
+              *) echo "redaction: the check itself failed (grep rc $rc)"; return 1 ;;
+            esac; }
+          # The writers as the stop finds them (the live proof of their state records and publications, LBS-D3): each
+          # state record and each pidfile byte by byte (od -c), before any stop.
+          mkdir -p "$EV/writers"
+          for w in "$WORK/qemu.pid"; do
+            if [ -e "$w.state" ]; then cp "$w.state" "$EV/writers/" || exit 1; fi
+            if [ -e "$w" ]; then od -c "$w" > "$EV/writers/${w##*/}.od" || exit 1; else echo absent > "$EV/writers/${w##*/}.od"; fi
+          done
+          lf=0
+          for w in "$WORK/qemu.pid"; do
+            r=0; stop_writer "$w" || r=$?
+            case $r in
+              0) ;;
+              3) lf=1 ;;
+              *) echo "evidence: a writer still runs or cannot be checked ($w)"; exit 1 ;;
+            esac
+          done
+          # A failed qemu launch (LBS-D2): only the launch-failure capture leaves the job (what the launch printed,
+          # the state records, the pidfile state), never the scan and sums of the rest; the step fails.
+          if [ "$lf" = 1 ]; then
+            mkdir -p "$LF"
+            for f in qemu-launch.log qemu.pid.state runner-sampler.pid.state; do
+              if [ -e "$WORK/$f" ]; then cp "$WORK/$f" "$LF/$f" || exit 1; fi
+            done
+            if [ -e "$WORK/qemu.pid" ]; then echo "qemu.pid: present" > "$LF/qemu.pid.txt"; else echo "qemu.pid: absent" > "$LF/qemu.pid.txt"; fi
+            redact "$LF" || exit 1
+            echo "launchfail=1" >> "$GITHUB_OUTPUT"
+            echo "evidence: the qemu launch failed: only the launch-failure capture is uploaded"; exit 1
+          fi
+          redact "$EV" || exit 1
+          cd "$EV" || exit 1
+          find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS || { echo "evidence: the sums failed"; exit 1; }
+          # The sums list every file once, and there is at least one.
+          n=$(find . -type f ! -name SHA256SUMS | wc -l) || exit 1
+          m=$(wc -l < SHA256SUMS) || exit 1
+          [ "$n" -gt 0 ] && [ "$n" -eq "$m" ] || { echo "evidence: SHA256SUMS lists $m lines for $n files"; exit 1; }
+
+      # Uploads also after a failed run, never after a failed redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outcome == 'success'
+        with:
+          name: qb1-spike
+          path: qb1
+
+      # A failed qemu launch uploads only its launch-failure capture (LBS-D2), after its own redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outputs.launchfail == '1'
+        with:
+          name: qb1-launch-failure
+          path: qb1-launch-failure
+
+  # The from-topic job (a stated lane deviation): a fresh guest, the install from cons/laneb-findings-r1 at its sha
+  # (that commit's own bootstrap-deps.sh and manual block), the reboot, then the units line; it proves the topic's
+  # fixes on Pi OS. U0 (the update from a released tag) is not in this lane: a later plan item, with its target as
+  # an input, once (B) and (D) are released.
+  topic:
+    name: from-topic
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    env:
+      FROM: a57974e3bd7b2f853c5adeec74c3b0103de6bb6d
+      PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+      PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
+      DEB_URL: https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-generic-arm64-20261021-2638.qcow2
+      DEB_SHA512: 0720988fd560dfa1d2975c4a1e4c39e3903ffd0f68e75be9e171f889cdbb53b7763dc9c54e951afc34055c6110b3b415196778e468a50bf26d294730a7f8eabe
+      EV: ${{ github.workspace }}/topic
+      LF: ${{ github.workspace }}/topic-launch-failure
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The runner (M1)
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/laneb" >> "$GITHUB_ENV"
+          mkdir -p "$EV" "$RUNNER_TEMP/laneb"
+          # Each writer this job may start has its state record, none, before anything runs.
+          for w in qemu.pid runner-sampler.pid; do
+            printf 'none\n' > "$RUNNER_TEMP/laneb/$w.state.tmp"; mv -f "$RUNNER_TEMP/laneb/$w.state.tmp" "$RUNNER_TEMP/laneb/$w.state"
+          done
+          if [ -e /dev/kvm ]; then kvm=present; else kvm=absent; fi
+          { uname -a; nproc; free -m; echo "kvm=$kvm"; } | tee "$EV/runner.txt"
+
+      - name: QEMU from the runner OS
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          retry 3 sudo -n apt-get update -q
+          retry 3 sudo -n apt-get install -y -q qemu-system-arm qemu-utils
+          qemu-system-aarch64 --version | tee "$EV/qemu-version.txt"
+
+      - name: The pinned images (M2), verified before any use
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          cd "$WORK"
+          retry 3 curl -fsSL -o pios.img.xz "$PIOS_URL"
+          retry 3 curl -fsSL -o deb.qcow2 "$DEB_URL"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify pios.img.xz sha256 "$PIOS_SHA256"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify deb.qcow2 sha512 "$DEB_SHA512"
+          xz -d pios.img.xz
+          qemu-img convert -O raw deb.qcow2 deb.raw
+          ssh-keygen -q -t ed25519 -N '' -f key
+          printf 'pios=%s\npios_sha256=%s\ndeb=%s\ndeb_sha512=%s\n' "$PIOS_URL" "$PIOS_SHA256" "$DEB_URL" "$DEB_SHA512" > "$EV/image.txt"
+
+      - name: The install from the topic at ${{ env.FROM }}
+        run: bash .github/lane-b/topic.sh "$FROM"
+
+      - name: Stop the guest, redaction check, checksum the evidence
+        id: evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          # Every writer into the evidence (the QEMU console, the runner sampler) is gone before the scan and the sums;
+          # one that cannot be shown stopped blocks the upload.
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          # The runner runs this step with bash -e: a bare grep exiting 1 (no hit) would end it.
+          redact() { local rc; if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$1"; then rc=0; else rc=$?; fi
+            case $rc in
+              0) echo "redaction: a key or a password form in $1"; return 1 ;;
+              1) return 0 ;;
+              *) echo "redaction: the check itself failed (grep rc $rc)"; return 1 ;;
+            esac; }
+          # The writers as the stop finds them (the live proof of their state records and publications, LBS-D3): each
+          # state record and each pidfile byte by byte (od -c), before any stop.
+          mkdir -p "$EV/writers"
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            if [ -e "$w.state" ]; then cp "$w.state" "$EV/writers/" || exit 1; fi
+            if [ -e "$w" ]; then od -c "$w" > "$EV/writers/${w##*/}.od" || exit 1; else echo absent > "$EV/writers/${w##*/}.od"; fi
+          done
+          lf=0
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            r=0; stop_writer "$w" || r=$?
+            case $r in
+              0) ;;
+              3) lf=1 ;;
+              *) echo "evidence: a writer still runs or cannot be checked ($w)"; exit 1 ;;
+            esac
+          done
+          # A failed qemu launch (LBS-D2): only the launch-failure capture leaves the job (what the launch printed,
+          # the state records, the pidfile state), never the scan and sums of the rest; the step fails.
+          if [ "$lf" = 1 ]; then
+            mkdir -p "$LF"
+            for f in qemu-launch.log qemu.pid.state runner-sampler.pid.state; do
+              if [ -e "$WORK/$f" ]; then cp "$WORK/$f" "$LF/$f" || exit 1; fi
+            done
+            if [ -e "$WORK/qemu.pid" ]; then echo "qemu.pid: present" > "$LF/qemu.pid.txt"; else echo "qemu.pid: absent" > "$LF/qemu.pid.txt"; fi
+            redact "$LF" || exit 1
+            echo "launchfail=1" >> "$GITHUB_OUTPUT"
+            echo "evidence: the qemu launch failed: only the launch-failure capture is uploaded"; exit 1
+          fi
+          redact "$EV" || exit 1
+          cd "$EV" || exit 1
+          find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS || { echo "evidence: the sums failed"; exit 1; }
+          # The sums list every file once, and there is at least one.
+          n=$(find . -type f ! -name SHA256SUMS | wc -l) || exit 1
+          m=$(wc -l < SHA256SUMS) || exit 1
+          [ "$n" -gt 0 ] && [ "$n" -eq "$m" ] || { echo "evidence: SHA256SUMS lists $m lines for $n files"; exit 1; }
+
+      # Uploads also after a failed run, never after a failed redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outcome == 'success'
+        with:
+          name: topic-from-topic
+          path: topic
+
+      # A failed qemu launch uploads only its launch-failure capture (LBS-D2), after its own redaction check.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.evidence.outputs.launchfail == '1'
+        with:
+          name: topic-launch-failure
+          path: topic-launch-failure
