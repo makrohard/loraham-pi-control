@@ -108,3 +108,11 @@ def test_a_stray_daemon_on_a_band_the_box_does_not_serve_stays_stoppable(box, mo
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
     assert svc.stop("daemon", apply=True, band="868").ok
     assert stops == [("loraham-daemon", "868", None, ())]
+
+
+def test_a_bandless_daemon_stop_stops_every_client_instance_too(box):
+    # G1-C18 (1): `lhpc stack stop daemon` without a band left kiss@r2 running (only slot 0 was stopped).
+    svc, stops = box
+    assert svc.stop("daemon", apply=True).ok
+    assert stops == [*((c, None, None, ("r2",)) for c in KISS), *((c, None, "r2", ()) for c in KISS),
+                     ("loraham-daemon", None, None, ())]

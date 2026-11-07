@@ -492,11 +492,27 @@ def daemon_radio(svc, rid: str) -> tuple:
     return daemon_inst(rid), row.band, ""
 
 
-def daemon_dependents(svc, sid: str, band: str, inst, stopped_bands) -> list:
-    """The dependents a daemon stop stops first: by radio (radio_dependents) for a stop of a band's daemons the
-    hardware list names, else the running dependents of the stopped bands, as before item 16."""
-    by_radio = radio_dependents(svc, band, inst) if band else None
-    return svc.stop_dependents(sid, bands=stopped_bands) if by_radio is None else by_radio
+def daemon_dependents(svc, sid: str, band, inst, stopped_bands) -> list:
+    """The dependents a stop of `sid` stops first. For the daemon (`band` not None) by radio, as instance keys
+    (radio_dependents): on `band`'s radios, or with band "" on every radio of the list (G1-C18), else, when the list
+    names no radio there, by band as before item 16. For any other stack (`band` None): its running dependents."""
+    if band is not None:
+        bands = [band] if band else sorted({r.band for r in radios.load(svc._paths).radios if r.enabled})
+        found = [radio_dependents(svc, b, inst) for b in bands]
+        if found and None not in found:
+            return list(dict.fromkeys(d for f in found for d in f))         # each key once, in band order
+    return svc.stop_dependents(sid, bands=stopped_bands)
+
+
+def radio_clients(svc, band: str, rid: str, sid: str) -> tuple:
+    """Item 16 (G1-C18): (the other stacks' running clients, does stack `sid` itself run) on radio `rid`, the radio
+    whose retained daemon a start would set: activity on another radio of the band keeps nothing. By band when no
+    radio is named or the list names none."""
+    on = radio_dependents(svc, band, daemon_inst(rid)) if rid else None
+    if on is None:
+        daemon_sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
+        return [d for d in svc.stop_dependents(daemon_sid, bands={band}) if d != sid], svc._stack_running_on_band(sid, band)
+    return [d for d in on if d.partition("@")[0] != sid], any(d.partition("@")[0] == sid for d in on)
 
 
 def radio_dependents(svc, band: str, inst=None):
@@ -523,16 +539,19 @@ def radio_dependents(svc, band: str, inst=None):
     return out
 
 
-def daemon_units(svc, bands, rid: str = "") -> list:
-    """Item 16: the (band, rid) daemons a start makes ready, one per radio, in band then rid order: `rid` alone on
-    its band; else every enabled radio of each band. A band without one gives (band, ""), whose launch is refused
-    with band_rid's reason (no hardware list, no enabled radio)."""
+def daemon_units(svc, bands, rid: str = "") -> tuple:
+    """Item 16: (the (band, rid) daemons a start makes ready, one per radio, in band then rid order; "") — `rid`
+    alone on its band, else every enabled radio of each band. A band without one gives (band, ""), whose launch is
+    refused with band_rid's reason (no hardware list, no enabled radio). A `rid` that is no enabled radio of the
+    bands is refused: ([], why) (G1-C18), never every radio's start."""
     rows = radios.load(svc._paths).radios
     out = []
     for b in bands:
         on = [r.id for r in sorted(rows, key=lambda r: int(r.id[1:])) if r.enabled and r.band == b]
-        out += [(b, x) for x in ([rid] if rid in on else on)] or [(b, "")]
-    return out
+        out += [(b, rid)] if rid in on else [] if rid else [(b, x) for x in on] or [(b, "")]
+    if rid and not out:
+        return [], f"{rid} is no enabled radio of {' or '.join(bands)} MHz"
+    return out, ""
 
 
 def daemon_inst(rid: str):

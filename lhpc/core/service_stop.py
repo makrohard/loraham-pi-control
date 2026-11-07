@@ -216,7 +216,7 @@ class StopOpsMixin:
                                     details=det, results=tuple(results),
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
-        dependents = radio_start.daemon_dependents(self, _sid or target, band if _daemon_band_stop else "", inst, stopped_bands)
+        dependents = radio_start.daemon_dependents(self, _sid or target, (band if _daemon_band_stop else "") if target_is_daemon else None, inst, stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
                 for _, c in items if c.units and not c.run_argv]

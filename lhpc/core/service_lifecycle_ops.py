@@ -2065,8 +2065,9 @@ class LifecycleOpsMixin:
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
         needed, owned = self._daemon_arbitrated_bands(radio)
-        # Item 16: one daemon per radio — `rid` alone for a client's start, else each enabled radio of each band.
-        units = radio_start.daemon_units(self, needed, rid)
+        units, why = radio_start.daemon_units(self, needed, rid)      # item 16: `rid` alone, else each radio
+        if why:
+            return [f"  [BLOCKED] daemon: {why}"], False, ""
         views = {u: daemon_control.read_view(self._system, radio_start.daemon_key(self, u[1] or u[0])) for u in units}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
@@ -2143,8 +2144,7 @@ class LifecycleOpsMixin:
                 # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
                 # band (its config is whatever that client needs). Freshly-started bands still get
                 # this start's params applied.
-                daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
-                others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != start_sid]
+                others, own = radio_start.radio_clients(self, b, u[1], start_sid)    # G1-C18: on this radio
                 if others:
                     lines.append(f"  [keep] {b} in use by {', '.join(others)} — daemon "
                                  f"config left unchanged")
@@ -2156,7 +2156,7 @@ class LifecycleOpsMixin:
                 # tuned — the band goes silent while every status still reads healthy, and only a
                 # restart of the app recovers it. Starting a second component (kiss-serial next to
                 # a running kiss-tnc) must therefore leave the band's config alone.
-                if self._stack_running_on_band(start_sid, b):
+                if own:
                     lines.append(f"  [keep] {b} already served for '{start_sid}' — daemon "
                                  f"config left unchanged")
                     continue
