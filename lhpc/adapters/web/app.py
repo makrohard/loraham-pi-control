@@ -40,7 +40,7 @@ from flask import (
 )
 
 from lhpc.adapters.web.oneshot import OneShot
-from lhpc.core import auto_install_form, validators
+from lhpc.core import auto_install_form, validators, web_client
 from lhpc.core import config as _config
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
@@ -1013,6 +1013,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
+                "web_client": web_client.view(service) if stack.id == web_client.DAEMON else {},   # item 12
                 "fetched_ver": (_fv := (service.fetched_version_state(stack.id)
                                         if buildable else {})),
                 # Reuse _fv's installed instead of a second fetched_version_state read.
@@ -1608,7 +1609,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             missing_deps=(_gate["block"] if _gate else None),
             optional_deps=(_gate["warn"] if _gate else None),
             frm=frm, cancel_href=cancel_href,
-            source_choices=(service.allowed_channels(service.stack_of(target) or target)
+            source_choices=(web_client.SELECTORS if target == web_client.COMPONENT and op == "update" else
+                            service.allowed_channels(service.stack_of(target) or target)
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
             offer_source=bool(plan.data.get("offer_source")),

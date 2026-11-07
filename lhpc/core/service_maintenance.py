@@ -1834,8 +1834,8 @@ class MaintenanceOpsMixin:
             return ActionResult(
                 False, f"'{target}' is installed from a binary — switching to the "
                        f"{source} source channel is an install, not an update.",
-                next_commands=[f"lhpc install {target} --source {source} --yes"],
-                data={"channel": "binary"})
+                next_commands=[f"lhpc install {target} --source {source} --yes"], data={"channel": "binary"},
+                details=[web_client.SWITCH_HINT] if target == web_client.DAEMON else [])
         all_items = self._with_source(target)
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(

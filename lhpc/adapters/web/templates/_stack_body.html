@@ -171,6 +171,25 @@
                     {# Last button: per-component remote freshness probe. #}
                     {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
                   </div>
+                  {% if comp.id == 'meshtastic-web' and g.web_client %}{% set wc = g.web_client %}
+                    {# Item 12: switch the web client's line (binary / stable / dev) from here. Switch opens the
+                       plan page (the exact version, or why not); nothing is installed before Confirm. #}
+                    <form method="post" action="{{ url_for('action') }}" class="act" id="webclient-line">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="op" value="update">
+                      <input type="hidden" name="target" value="meshtastic-web">
+                      <p>Web client: {% if wc.installed %}<span class="pill mono">{{ wc.installed }}</span> — {{ wc.line }}
+                        {%- if wc.state == 'behind' %} <span class="ver ver-yellow" data-state="behind">behind the pin {{ wc.pin }}</span>{% endif %}
+                        {%- if wc.unproven %} <span class="ver ver-yellow" data-state="unproven">unproven for this meshtasticd</span>{% endif %}
+                        {%- else %}<span class="pill">not installed</span>{% endif %}</p>
+                      <label>line
+                        <select name="source" aria-label="Web client line">
+                          {% for o in wc.options %}<option value="{{ o.line }}"{% if o.line == (wc.line or 'binary') %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.label }}{% if o.disabled %} — {{ o.disabled }}{% endif %}</option>{% endfor %}
+                        </select>
+                      </label>
+                      <button type="submit">Switch</button>
+                    </form>
+                  {% endif %}
                   <details class="advcfg">
                     <summary>Info</summary>
                     <div class="body">{% with comp = comp, st = st, conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}</div>

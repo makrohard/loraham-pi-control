@@ -84,8 +84,9 @@
               <select name="source">
                 {% for ch in source_choices %}
                   <option value="{{ ch }}" {% if source==ch %}selected{% endif %}>
-                    {{ {'dev':'Development','stable':'Latest stable','pinned':'Known working',
-                        'binary':'Binary (prebuilt)'}.get(ch, ch) }}</option>
+                    {%- if target == 'meshtastic-web' %}{{ ch }}{# item 12: his plain words #}
+                    {%- else %}{{ {'dev':'Development','stable':'Latest stable','pinned':'Known working',
+                        'binary':'Binary (prebuilt)'}.get(ch, ch) }}{% endif %}</option>
                 {% endfor %}
               </select>
             </label>
