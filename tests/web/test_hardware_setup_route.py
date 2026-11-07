@@ -72,10 +72,14 @@ def test_a_refused_choice_changes_nothing(box, csrf, tmp_path, token):
     assert _start(svc, launched) == [("433", "waveshare-sx1262")]
 
 
-def test_the_old_board_choice_says_the_hardware_list_decides(box):
-    # B4-D26 (stage L5): the page states, in plain words, what the hardware list and the board setup each do.
+def test_the_hardware_page_says_what_the_hardware_list_decides(box):
+    # B4-D26 (stage L5), moved with the board choice (DEC-W57): the Hardware page states, in plain words, what the
+    # hardware list does; the daemon page's board choice is gone.
+    import re
     client, _svc, _launched = box
-    html = client.get("/stacks/daemon", follow_redirects=True).get_data(as_text=True)
-    assert ("The hardware list names the radios; a daemon starts for each band the board setup serves. This page's "
-            "board choice names the served bands until the Hardware section replaces it.") in " ".join(html.split())
+    html = client.get("/hardware").get_data(as_text=True)
+    notice = re.search(r'<p[^>]*id="hardware-list-notice"[^>]*>(.*?)</p>', html, re.S)
+    assert notice and " ".join(re.sub(r"<[^>]+>", "", notice.group(1)).split()) == (
+        "The hardware list (config/radios.toml) has one row per radio; each enabled radio runs its own daemon on its "
+        "own sockets.")
     assert "preset each radio launches with" not in html
