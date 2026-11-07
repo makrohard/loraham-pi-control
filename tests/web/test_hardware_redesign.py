@@ -168,3 +168,22 @@ def test_home_without_hardware_points_at_add_hardware(web, tmp_path, monkeypatch
 def test_the_daemon_settings_hold_no_board_setup_any_more(web, tmp_path, monkeypatch):
     page = _box(web, tmp_path, monkeypatch).get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
     assert 'action="/hardware"' not in page and 'name="hardware"' not in page
+
+
+def test_the_row_button_disables_and_enables_a_radio_for_real(web, tmp_path, monkeypatch, csrf):
+    # The real set_enabled under the route: r2 (nothing runs on it) is disabled in the saved list, then enabled again.
+    from lhpc.core.paths import Paths
+    c = _box(web, tmp_path, monkeypatch)
+    _post(c, csrf, "/hardware/enabled", rid="r2", enabled="off")
+    assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r2").enabled is False
+    assert "r2 disabled" in c.get("/hardware").get_data(as_text=True)
+    _post(c, csrf, "/hardware/enabled", rid="r2", enabled="on")
+    assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r2").enabled is True
+
+
+def test_a_running_radio_is_not_disabled_from_its_row(web, tmp_path, monkeypatch, csrf):
+    from lhpc.core.paths import Paths
+    c = _box(web, tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(4242, "id", rid="r1", band="433")])
+    _post(c, csrf, "/hardware/enabled", rid="r1", enabled="off")
+    assert "Not disabled: stop its daemon, then disable r1" in html.unescape(c.get("/hardware").get_data(as_text=True))
+    assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r1").enabled is True
