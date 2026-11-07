@@ -20,6 +20,10 @@
   +10 per slot): `lhpc stack add-instance|remove-instance`; `start|stop|restart <stack>@<rid>` act on that one alone.
 - Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
   back that instance alone, and a removed instance's record starts nothing.
+- Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
+  in its row of config/radios.toml.
+- Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;
+  an old `start-<comp>-<band>.log` stays until the next start, and `lhpc logs` shows it until then.
 
 Upgrading from 0.13.x
 
