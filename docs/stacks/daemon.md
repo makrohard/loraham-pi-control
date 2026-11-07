@@ -43,6 +43,44 @@ this release.
   per-band stop of it, are refused naming both radios.
 - x86 hosts: not yet verified.
 
+### The list file
+
+`config/radios.toml` holds only `[[radio]]` rows. The console and `lhpc hardware` write it; a hand edit is
+checked whole at every read. A list that cannot be read, is not valid TOML, or breaks any rule below is
+*invalid*, and no daemon starts until it is fixed (the reasons name their row).
+
+| field | required | value |
+|---|---|---|
+| `id` | yes | `r1` … `r99`; given once, the lowest free number, never renamed |
+| `name` | yes | 1–12 letters, digits, space `.` `_` `-`; unique, case ignored |
+| `model` | yes | a model of the model table (`lhpc/data/radio_models.toml`), e.g. `loraham`, `meshstick-1262` |
+| `band` | yes | `433` or `868`, one the model has |
+| `enabled` | no | `true` (default) / `false` |
+| `ce` | for a model with more than one variant on that band | the variant key (Uputronics: `ce0` / `ce1`) |
+| `usb_serial` | a USB stick with a serial | 8–64 characters, bytes 0x21–0x7E without `{` `}`; unique in its first 8 (the daemon compares 8) |
+| `usb_port` | a USB stick without a serial, only then | the sysfs bus-port, like `1-1.3`; at most one such stick |
+| `high_power` | no | `true` / `false`; only on a model with a high-power switch |
+| `txmode` · `cadmon` · `cadrssi` | no | `managed`/`direct` · `off`/`on` · an integer −130…0 |
+| `ocp_ma` | no | `"auto"` or a value the chip represents ([settings](#settings)) |
+| `dp_<PARAM>` | no | a [radio parameter](#radio-parameters) for this radio's daemon, as a string; an integer without a leading zero or `+` |
+
+Types are exact: `enabled = "true"` or `cadrssi = "-90"` is refused. The pins of every SPI row (enabled or
+not) must not overlap.
+
+**A field left out is not set** and is resolved at the daemon's start:
+- `txmode`, `cadmon`, `cadrssi` and `high_power` take the band's old setting (`tx_<band>`, `cadmon_<band>`, …)
+  when there is one, else the default. An old `hipower_<band>` is not carried to a model without a high-power
+  switch.
+- `ocp_ma` takes the old `ocp_<band>`, else `auto`.
+- A `dp_<PARAM>` left out takes the old per-band value (`dp_<band>_<PARAM>`) when every client stack that holds it
+  agrees; when they disagree, or a value is empty or not valid for the chip, it is not carried, and the start
+  names it.
+- A carried old value that breaks its rule refuses the start, naming the value and where it came from; it is
+  never silently replaced.
+
+A field that is set wins, `false` included. The row's `dp_` values reach that radio's daemon after READY and on
+every Apply. Nothing is written back to the file at a start.
+
 ## Settings
 
 **Hardware setup** — `lhpc hardware <setup>` or the console's daemon *Hardware* section sets the
