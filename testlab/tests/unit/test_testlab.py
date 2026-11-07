@@ -350,7 +350,7 @@ def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
 # --- fake daemon protocol conformance ----------------------------------------------------
 
 
-def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid="", extra=()):
+def _spawn_fake_daemon(tmp_path, procs, band="433", radio="READY", air=(), rid="", extra=(), wait_s=5):
     sockdir = tmp_path / "socks"
     sockdir.mkdir(exist_ok=True)
     root = tmp_path / "droot"
@@ -365,15 +365,58 @@ def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid="", extr
     from lhpc_testlab import data_path
     script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))
     proc = subprocess.Popen([sys.executable, script, "--radio", band, *(["--id", rid] if rid else []), *extra], env=env)
+    procs.append(proc)                       # owned by the fake_daemon fixture from here on
     conf = sockdir / (f"loraconf-{rid}.sock" if rid else f"loraconf{band}.sock")    # stage L5: the radio's socket
     import time as _t
-    deadline = _t.monotonic() + 5
+    deadline = _t.monotonic() + wait_s
     while _t.monotonic() < deadline:
         if conf.exists():
             break
         _t.sleep(0.05)
-    assert conf.exists(), "fake daemon did not open its socket"
-    return proc, sockdir, root
+    if not conf.exists():
+        _stop(proc)
+        raise AssertionError("fake daemon did not open its socket")
+    return sockdir, root
+
+
+def _stop(proc):
+    """Stop and reap a spawned fake daemon: SIGTERM, then SIGKILL when it is still there after 5 s."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+@pytest.fixture
+def fake_daemon(tmp_path):
+    """`fake_daemon(**kw)` spawns the fake daemon (_spawn_fake_daemon) and owns it: the finalizer stops and reaps
+    every one the test started, also when the test or the spawn's own socket wait failed, and fails the teardown
+    naming any that survived."""
+    procs = []
+
+    def spawn(**kw):
+        return _spawn_fake_daemon(tmp_path, procs, **kw)
+    spawn.procs = procs
+    yield spawn
+    for proc in procs:
+        _stop(proc)
+    assert [p.pid for p in procs if p.poll() is None] == [], "a fake daemon survived its test"
+
+
+def test_a_fake_daemon_that_never_opens_its_socket_is_stopped_and_reaped(fake_daemon, tmp_path, monkeypatch):
+    """The leak of 2026-11-07: a fake that never served its socket (an older fake, without --id) failed the spawn's
+    wait before the test held it, and kept running. This one also ignores SIGTERM, so the stop must kill it."""
+    import lhpc_testlab
+    silent = tmp_path / "silent"
+    silent.write_text("import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.pause()\n")
+    monkeypatch.setattr(lhpc_testlab, "data_path", lambda *parts: silent)
+    with pytest.raises(AssertionError, match=r"^fake daemon did not open its socket$"):
+        fake_daemon(rid="r1", wait_s=0.5)
+    [proc] = fake_daemon.procs
+    assert proc.returncode == -signal.SIGKILL
 
 
 def _conf(sockdir, band, cmd: bytes) -> str:
@@ -388,57 +431,49 @@ def _conf(sockdir, band, cmd: bytes) -> str:
 
 
 @pytest.mark.slow
-def test_fake_daemon_conf_lines_satisfy_daemon_control(tmp_path):
+def test_fake_daemon_conf_lines_satisfy_daemon_control(fake_daemon, tmp_path):
     """Every GET reply is one line of non-empty KEY=VALUE tokens (lhpc's _query fails
     closed on bare/duplicate tokens); SET grammar answers OK/ERR per the v112 daemon."""
-    proc, sockdir, _root = _spawn_fake_daemon(tmp_path)
-    try:
-        for cmd, prefix in ((b"GET STATUS", "STATUS"), (b"GET STATS", "STATS"),
-                            (b"GET CHANNEL", "CHANNEL")):
-            line = _conf(sockdir, "433", cmd)
-            assert line.endswith("\n") and line.count("\n") == 1
-            head, *tokens = line.strip().split(" ")
-            assert head == prefix and tokens
-            keys = [t.split("=")[0] for t in tokens]
-            assert all("=" in t and t.split("=", 1)[1] != "" for t in tokens), tokens
-            assert len(keys) == len(set(keys))                 # no duplicates
-        assert "RADIO=READY" in _conf(sockdir, "433", b"GET STATUS")
-        assert _conf(sockdir, "433", b"SET TXRESULT=1") == "OK\n"
-        assert "TXRESULT=1" in _conf(sockdir, "433", b"GET STATUS")
-        assert _conf(sockdir, "433", b"SET TXRESULT=9") == "ERR INVALID\n"
-        assert _conf(sockdir, "433", b"SET NOPE=1") == "ERR UNKNOWN\n"
-        assert _conf(sockdir, "433", b"SET MODE=") == "ERR MALFORMED\n"
-        assert _conf(sockdir, "433",
-                     b"SET MODE=LORA FREQ=433.775 SF=12 BW=125") == "OK\n"
-        assert "MODE=LORA" in _conf(sockdir, "433", b"GET CHANNEL")
-        assert _conf(sockdir, "433", b"SET CADRSSI=-90") == "OK\n"
-        assert _conf(sockdir, "433", b"SET CADWAIT=10") == "ERR INVALID\n"
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    sockdir, _root = fake_daemon()
+    for cmd, prefix in ((b"GET STATUS", "STATUS"), (b"GET STATS", "STATS"),
+                        (b"GET CHANNEL", "CHANNEL")):
+        line = _conf(sockdir, "433", cmd)
+        assert line.endswith("\n") and line.count("\n") == 1
+        head, *tokens = line.strip().split(" ")
+        assert head == prefix and tokens
+        keys = [t.split("=")[0] for t in tokens]
+        assert all("=" in t and t.split("=", 1)[1] != "" for t in tokens), tokens
+        assert len(keys) == len(set(keys))                 # no duplicates
+    assert "RADIO=READY" in _conf(sockdir, "433", b"GET STATUS")
+    assert _conf(sockdir, "433", b"SET TXRESULT=1") == "OK\n"
+    assert "TXRESULT=1" in _conf(sockdir, "433", b"GET STATUS")
+    assert _conf(sockdir, "433", b"SET TXRESULT=9") == "ERR INVALID\n"
+    assert _conf(sockdir, "433", b"SET NOPE=1") == "ERR UNKNOWN\n"
+    assert _conf(sockdir, "433", b"SET MODE=") == "ERR MALFORMED\n"
+    assert _conf(sockdir, "433",
+                 b"SET MODE=LORA FREQ=433.775 SF=12 BW=125") == "OK\n"
+    assert "MODE=LORA" in _conf(sockdir, "433", b"GET CHANNEL")
+    assert _conf(sockdir, "433", b"SET CADRSSI=-90") == "OK\n"
+    assert _conf(sockdir, "433", b"SET CADWAIT=10") == "ERR INVALID\n"
 
 
 @pytest.mark.slow
-def test_fake_daemon_serves_its_radios_sockets_with_an_id(tmp_path):
+def test_fake_daemon_serves_its_radios_sockets_with_an_id(fake_daemon, tmp_path):
     """Stage L5 (0.14.0, REL14-D26): started as lhpc starts a radio's daemon (`--radio 433 --id r1`), the fake
     serves that radio's three sockets and names itself in STATUS (ID=r1 BOUND=-, the real daemon's contract),
     which lhpc's start waits for; without --id it keeps the 0.13.x band names (the other cases here)."""
     import socket as _s
-    proc, sockdir, _root = _spawn_fake_daemon(tmp_path, rid="r1")
-    try:
-        assert sorted(p.name for p in sockdir.iterdir()) == ["lora-r1.sock", "loraconf-r1.sock", "loraf-r1.sock"]
-        c = _s.socket(_s.AF_UNIX)
-        c.settimeout(5)
-        c.connect(str(sockdir / "loraconf-r1.sock"))
-        c.sendall(b"GET STATUS\n")
-        line = c.recv(4096).decode()
-        c.close()
-        head, *tokens = line.split()
-        assert (head, tokens[:3]) == ("STATUS", ["ID=r1", "BOUND=-", "RADIO=READY"]), line
-        assert len({t.split("=")[0] for t in tokens}) == len(tokens)          # no duplicate keys
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    sockdir, _root = fake_daemon(rid="r1")
+    assert sorted(p.name for p in sockdir.iterdir()) == ["lora-r1.sock", "loraconf-r1.sock", "loraf-r1.sock"]
+    c = _s.socket(_s.AF_UNIX)
+    c.settimeout(5)
+    c.connect(str(sockdir / "loraconf-r1.sock"))
+    c.sendall(b"GET STATUS\n")
+    line = c.recv(4096).decode()
+    c.close()
+    head, *tokens = line.split()
+    assert (head, tokens[:3]) == ("STATUS", ["ID=r1", "BOUND=-", "RADIO=READY"]), line
+    assert len({t.split("=")[0] for t in tokens}) == len(tokens)          # no duplicate keys
 
 
 def test_fake_daemon_exits_when_its_rf_log_cannot_be_opened(tmp_path):
@@ -455,15 +490,11 @@ def test_fake_daemon_exits_when_its_rf_log_cannot_be_opened(tmp_path):
 
 
 @pytest.mark.slow
-def test_fake_daemon_opens_its_rf_log_and_serves(tmp_path):
+def test_fake_daemon_opens_its_rf_log_and_serves(fake_daemon, tmp_path):
     path = tmp_path / "logs" / "r1" / "rf-daemon.log"
     path.parent.mkdir(parents=True)
-    proc, _sockdir, _root = _spawn_fake_daemon(tmp_path, rid="r1", extra=("--rflog-path", str(path)))
-    try:
-        assert path.is_file()                                  # opened (created) at init, before serving
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    fake_daemon(rid="r1", extra=("--rflog-path", str(path)))
+    assert path.is_file()                                  # opened (created) at init, before serving
 
 
 @pytest.mark.parametrize("rid", ["r0", "r100", "R1", "r01", "x", "r1/..", "", "r\u0661", "r1\u0662", "r1\n"])
@@ -497,89 +528,77 @@ def _frame(sock):
 
 
 @pytest.mark.slow
-def test_fake_daemon_framed_tx_result_and_rx_injection(tmp_path):
+def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     """Framed 0x02 TX -> TX_RESULT 0x04 (status/flags/seq, only after SET TXRESULT=1),
     TXOK visible in GET STATS; queued RX arrives as one 0x01 frame with the 4-byte
     metadata header and the 3C FF 01 TNC2 payload; TX is captured to tx.jsonl."""
     import socket as _s
     import struct as _st
-    proc, sockdir, root = _spawn_fake_daemon(tmp_path)
-    try:
-        f = _s.socket(_s.AF_UNIX)
-        f.settimeout(8)
-        f.connect(str(sockdir / "lora433f.sock"))
-        _conf(sockdir, "433", b"SET TXRESULT=1")
-        f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
-        resp = _frame(f)
-        assert resp[0] == 0x04 and _st.unpack("<H", resp[1:3])[0] == 4
-        status, flags, seq = _st.unpack("<BBH", resp[3:7])
-        assert status == 0 and flags & 0x01 and seq == 1
-        assert "TXOK=1" in _conf(sockdir, "433", b"GET STATS")
-        (root / "state" / "testlab" / "rx-queue" / "433" / "0001.json").write_text(
-            json.dumps({"preset": "aprs-position"}))
-        rx = _frame(f)
-        assert rx[0] == 0x01
-        ln = _st.unpack("<H", rx[1:3])[0]
-        rssi, snr = _st.unpack("<hh", rx[3:7])
-        assert rssi == -9500 and snr == 800
-        assert rx[7:10] == b"\x3c\xff\x01"
-        assert b"DL0LAB-9>APDR16" in rx[10:3 + ln]
-        assert not list((root / "state" / "testlab" / "rx-queue" / "433").glob("*"))
-        tx = (root / "state" / "testlab" / "tx.jsonl").read_text()
-        assert '"result": "OK"' in tx and '"band": "433"' in tx
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    sockdir, root = fake_daemon()
+    f = _s.socket(_s.AF_UNIX)
+    f.settimeout(8)
+    f.connect(str(sockdir / "lora433f.sock"))
+    _conf(sockdir, "433", b"SET TXRESULT=1")
+    f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
+    resp = _frame(f)
+    assert resp[0] == 0x04 and _st.unpack("<H", resp[1:3])[0] == 4
+    status, flags, seq = _st.unpack("<BBH", resp[3:7])
+    assert status == 0 and flags & 0x01 and seq == 1
+    assert "TXOK=1" in _conf(sockdir, "433", b"GET STATS")
+    (root / "state" / "testlab" / "rx-queue" / "433" / "0001.json").write_text(
+        json.dumps({"preset": "aprs-position"}))
+    rx = _frame(f)
+    assert rx[0] == 0x01
+    ln = _st.unpack("<H", rx[1:3])[0]
+    rssi, snr = _st.unpack("<hh", rx[3:7])
+    assert rssi == -9500 and snr == 800
+    assert rx[7:10] == b"\x3c\xff\x01"
+    assert b"DL0LAB-9>APDR16" in rx[10:3 + ln]
+    assert not list((root / "state" / "testlab" / "rx-queue" / "433").glob("*"))
+    tx = (root / "state" / "testlab" / "tx.jsonl").read_text()
+    assert '"result": "OK"' in tx and '"band": "433"' in tx
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("air", [("433",), ()])
-def test_fake_daemon_air_carries_a_transmission_to_the_other_clients_only(tmp_path, air):
+def test_fake_daemon_air_carries_a_transmission_to_the_other_clients_only(fake_daemon, tmp_path, air):
     """The virtual air for two radio clients on one band: a TX from one arrives once, as
     RX, at the other — never back at the sender. Without "air" nothing is forwarded."""
     import socket as _s
     import struct as _st
-    proc, sockdir, _root = _spawn_fake_daemon(tmp_path, air=air)
-    try:
-        a, b = _s.socket(_s.AF_UNIX), _s.socket(_s.AF_UNIX)
-        for s in (a, b):
-            s.settimeout(2)
-            s.connect(str(sockdir / "lora433f.sock"))
-        b.sendall(b"\x09" + _st.pack("<H", 0))         # its 0x03 reply proves b is accepted
-        assert _frame(b)[0] == 0x03
-        a.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
-        if air:
-            rx = _frame(b)
-            assert rx[0] == 0x01 and rx[7:] == b"hello"
-        else:
-            with pytest.raises(_s.timeout):
-                _frame(b)
-        a.settimeout(1)
-        with pytest.raises(_s.timeout):                  # the sender hears nothing
-            _frame(a)
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    sockdir, _root = fake_daemon(air=air)
+    a, b = _s.socket(_s.AF_UNIX), _s.socket(_s.AF_UNIX)
+    for s in (a, b):
+        s.settimeout(2)
+        s.connect(str(sockdir / "lora433f.sock"))
+    b.sendall(b"\x09" + _st.pack("<H", 0))         # its 0x03 reply proves b is accepted
+    assert _frame(b)[0] == 0x03
+    a.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
+    if air:
+        rx = _frame(b)
+        assert rx[0] == 0x01 and rx[7:] == b"hello"
+    else:
+        with pytest.raises(_s.timeout):
+            _frame(b)
+    a.settimeout(1)
+    with pytest.raises(_s.timeout):                  # the sender hears nothing
+        _frame(a)
 
 
 @pytest.mark.slow
-def test_fake_daemon_radio_failed_refuses_tx(tmp_path):
+def test_fake_daemon_radio_failed_refuses_tx(fake_daemon, tmp_path):
     import socket as _s
     import struct as _st
-    proc, sockdir, _root = _spawn_fake_daemon(tmp_path, radio="FAILED")
-    try:
-        assert "RADIO=FAILED" in _conf(sockdir, "433", b"GET STATUS")
-        assert _conf(sockdir, "433", b"SET FREQ=433.775") == "ERR RADIO_NOT_READY\n"
-        f = _s.socket(_s.AF_UNIX)
-        f.settimeout(5)
-        f.connect(str(sockdir / "lora433f.sock"))
-        _conf(sockdir, "433", b"SET TXRESULT=1")
-        f.sendall(b"\x02" + _st.pack("<H", 2) + b"hi")
-        resp = _frame(f)
-        assert resp[0] == 0x04 and resp[3] == 3                # RADIO_NOT_READY
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    sockdir, _root = fake_daemon(radio="FAILED")
+    assert "RADIO=FAILED" in _conf(sockdir, "433", b"GET STATUS")
+    assert _conf(sockdir, "433", b"SET FREQ=433.775") == "ERR RADIO_NOT_READY\n"
+    f = _s.socket(_s.AF_UNIX)
+    f.settimeout(5)
+    f.connect(str(sockdir / "lora433f.sock"))
+    _conf(sockdir, "433", b"SET TXRESULT=1")
+    f.sendall(b"\x02" + _st.pack("<H", 2) + b"hi")
+    resp = _frame(f)
+    assert resp[0] == 0x04 and resp[3] == 3                # RADIO_NOT_READY
 
 
 # --- stale-process refusal, injection exclusivity, the power guard -----------------------
