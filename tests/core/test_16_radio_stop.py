@@ -92,3 +92,19 @@ def test_the_cli_addresses_one_radios_daemon(cli, action):
 def test_the_cli_refuses_a_radio_it_cannot_address(cli, argv, rc, why):
     got, out, calls = cli(*argv)
     assert (got, calls) == (rc, []) and out.err == f"ERR   {why}\n"
+
+
+def test_a_listed_instance_that_does_not_run_is_not_stopped(box, monkeypatch):
+    svc, stops = box
+    monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: False)
+    assert svc.stop("daemon", apply=True, band="433", inst=radio_start.daemon_inst("r2")).ok
+    assert stops == [("loraham-daemon", "433", "r2", ())]
+
+
+def test_a_stray_daemon_on_a_band_the_box_does_not_serve_stays_stoppable(box, monkeypatch):
+    # A stop is never refused by its band: a daemon left on 868 after the list moved to 433 is still stopped.
+    svc, stops = box
+    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433"])
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
+    assert svc.stop("daemon", apply=True, band="868").ok
+    assert stops == [("loraham-daemon", "868", None, ())]
