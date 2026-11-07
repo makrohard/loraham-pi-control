@@ -70,15 +70,16 @@ def check_sockets(radios, socket_dir: str) -> list:
     return out
 
 
-def daemon_params(radio, model, settings, *, rf_log: str) -> dict:
-    """The daemon component's per-process params for its run_argv (D13, T-D1, T-CO9)."""
+def daemon_params(radio, model, settings, *, rf_log: str, usb_port: str = "") -> dict:
+    """The daemon component's per-process params for its run_argv (D13, T-D1, T-CO9). A USB stick is opened by
+    `usb_port`, the port its serial is listed on now (DEC-W35, daemon 1.4.0 `--usb-port`); "" for SPI."""
     v = radios_mod.variant(radio, model)
     if v is None:
         raise ValueError(f"{radio.id}: no variant of {model.id} for band {radio.band}")
     return {"radio": radio.band, "hw": v.preset, "txmode": settings.txmode, "cadmon": settings.cadmon,
             "cadrssi": str(settings.cadrssi), "hipower": "on" if settings.hipower else "off",
             "ocp": str(radios_mod.effective_ocp(settings)), "rf_log": rf_log, "id": radio.id,
-            "usb_serial": radio.usb_serial[:radios_mod.SERIAL_PREFIX] if radio.usb_serial else "",
+            "usb_port": usb_port,
             "rflog_path": "{runtime}/logs/" + radio.id + "/rf-daemon.log"}
 
 
@@ -168,21 +169,20 @@ def _pct_decode(text: str):
     return out.decode("latin-1")
 
 
-def check_bound(status: dict, radio, model) -> str | None:
-    """BOUND= after READY against the stored binding (H10, A:170-176)."""
-    if model.transport == "spi":
-        want = "-"
-    elif radio.usb_serial:
-        want = "serial:" + radio.usb_serial[:radios_mod.SERIAL_PREFIX]
-    else:
-        want = "port:" + radio.usb_port
+def check_bound(status: dict, radio, model, port: str = "") -> str | None:
+    """BOUND= after READY against the binding (H10, A:170-176), in daemon 1.4.0's form `<serial>@<port>` (`-` no
+    serial, `?` unreadable). `port` is the port the start resolved (DEC-W35). A serial row needs its serial (its
+    first 8 characters), or `?` (the library could not read it) on exactly that port; a serial-less row `-` on it."""
     raw = status.get("BOUND")
-    if raw is not None and raw == want == "-":
-        return None
-    if isinstance(raw, str) and ":" in raw:
-        kind, _, value = raw.partition(":")
-        decoded = _pct_decode(value)
-        if decoded is not None and f"{kind}:{decoded}" == want:
+    if model.transport == "spi":
+        return None if raw == "-" else f"wrong stick at start: expected -, got {raw if raw is not None else 'missing'}"
+    serial = radio.usb_serial[:radios_mod.SERIAL_PREFIX] if radio.usb_serial else "-"
+    want = f"{serial}@{port}"
+    if isinstance(raw, str) and "@" in raw:
+        got, _, got_port = raw.rpartition("@")
+        got_serial = _pct_decode(got)                  # bytes outside !..~, "%" and "@" come as %XX (conf-protocol.md)
+        if got_serial is not None and got_port == port and port and (
+                got_serial == serial or (radio.usb_serial and got_serial == "?")):
             return None
     return f"wrong stick at start: expected {want}, got {raw if raw is not None else 'missing'}"
 

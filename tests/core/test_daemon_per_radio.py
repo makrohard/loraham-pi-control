@@ -90,16 +90,18 @@ def _settings(**kw):
     return cls(**base)
 
 
-def test_daemon_params_for_a_stick_pass_the_serial_prefix_and_the_preset():
-    p = _rd().daemon_params(_stick("r3", "ABCDEFGHIJ"), MODELS["meshstick-1262"], _settings(), rf_log="on")
+def test_daemon_params_for_a_stick_pass_its_current_port_and_the_preset():
+    # DEC-W35: the stick is opened by the port the start resolved (daemon 1.4.0 --usb-port), never --usb-serial
+    p = _rd().daemon_params(_stick("r3", "ABCDEFGHIJ"), MODELS["meshstick-1262"], _settings(), rf_log="on",
+                            usb_port="3-1")
     assert p["radio"] == "868" and p["hw"] == "meshstick-1262" and p["id"] == "r3"
-    assert p["usb_serial"] == "ABCDEFGH"                     # D13: the first 8 characters
+    assert p["usb_port"] == "3-1" and "usb_serial" not in p
     assert p["rflog_path"] == "{runtime}/logs/r3/rf-daemon.log"
 
 
-def test_daemon_params_for_the_serialless_stick_pass_no_selector():
-    p = _rd().daemon_params(_stick("r3", port="1-1.3"), MODELS["meshstick-1262"], _settings(), rf_log="on")
-    assert p["usb_serial"] == ""
+def test_daemon_params_for_an_spi_radio_pass_no_port():
+    p = _rd().daemon_params(_r("r1"), MODELS["loraham"], _settings(), rf_log="on")
+    assert p["usb_port"] == ""
 
 
 @pytest.mark.parametrize("hipower,ocp,want", [(False, "auto", "100"), (True, "auto", "140"),
@@ -232,24 +234,30 @@ def test_d10_a_wrong_or_missing_id_is_a_wrong_daemon():
 
 
 def _bound_cases():
-    s = ("meshstick-1262", {"usb_serial": "ABCDEFGHXYZ"})
-    n = ("meshstick-1262", {"usb_port": "1-1.3"})
-    p = ("loraham", {})
+    # daemon 1.4.0: BOUND=<serial>@<port> (`-` no serial, `?` unreadable); the port is the one the start resolved
+    s = ("meshstick-1262", {"usb_serial": "ABCDEFGHXYZ"}, "1-1.2")
+    a = ("meshstick-1262", {"usb_serial": "A@BCDEFG"}, "1-1.2")          # a serial may hold an "@" or a "%":
+    c = ("meshstick-1262", {"usb_serial": "AB%CDEFG"}, "1-1.2")          # BOUND writes them as %40 / %25
+    n = ("meshstick-1262", {"usb_port": "1-1.3"}, "1-1.3")
+    p = ("loraham", {}, "")
     return [
-        (s, "serial:ABCDEFGH", True), (s, "serial:ABCDEFGX", False), (s, None, False),
-        (s, "port:1-1.3", False), (s, "serial:ABC%44EFGH", True), (s, "serial:ABC%4GEFGH", False),
-        (n, "port:1-1.3", True), (n, "port:1-1.4", False), (n, None, False), (n, "serial:ABCDEFGH", False),
-        (p, "-", True), (p, "serial:ABCDEFGH", False), (p, None, False),
+        (s, "ABCDEFGH@1-1.2", True), (s, "ABCDEFGX@1-1.2", False), (s, None, False),
+        (s, "ABCDEFGH@1-1.4", False), (s, "?@1-1.2", True), (s, "?@1-1.4", False), (s, "-@1-1.2", False),
+        (s, "serial:ABCDEFGH", False), (a, "A%40BCDEFG@1-1.2", True), (c, "AB%25CDEFG@1-1.2", True),
+        (c, "AB%ZZEFGH@1-1.2", False), (s, "ABC%44EFGH@1-1.2", True),
+        (n, "-@1-1.3", True), (n, "-@1-1.4", False), (n, None, False), (n, "ABCDEFGH@1-1.3", False),
+        (n, "?@1-1.3", False), (n, "port:1-1.3", False),
+        (p, "-", True), (p, "ABCDEFGH@1-1.2", False), (p, None, False),
     ]
 
 
 @pytest.mark.parametrize("case", _bound_cases(), ids=lambda c: f"{c[0][0]}-{c[1]}-{c[2]}")
 def test_h10_bound_after_ready(case):
-    (model, kw), bound, ok = case
+    (model, kw, port), bound, ok = case
     band = "868" if model == "meshstick-1262" else "433"
     radio = _r("r1", model=model, band=band, **kw)
     status = {} if bound is None else {"BOUND": bound}
-    got = _rd().check_bound(status, radio, MODELS[model])
+    got = _rd().check_bound(status, radio, MODELS[model], port)
     assert (got is None) == ok, (bound, got)
 
 

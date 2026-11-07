@@ -33,7 +33,11 @@ def start_plan(svc, rid: str) -> tuple:
         return None, str(exc), ()
     refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
-    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
+    port = ""
+    if model.transport != "spi":                       # DEC-W35: the daemon opens the stick by its port now
+        port, why = stick_port(radio.usb_serial, radio.usb_port)
+        refusal = refusal or (f"{radio.id}: {why}" if why else "")
+    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log, usb_port=port)
     return params, refusal, settings.notes
 
 
@@ -97,6 +101,27 @@ def ensure_rf_dir(svc, rid: str) -> str:
 
 
 USB_SETUP_HINT = "set up USB access first: the Hardware section's USB setup (a copy-paste command)"
+
+
+def stick_port(serial: str, port: str, scan=None) -> tuple:
+    """DEC-W35: (port, "") of a USB radio's stick now, or ("", why). A serial is resolved to the port sysfs lists it
+    on (the stick may have been replugged anywhere); a serial-less radio's stick is its stored port, which must be
+    listed. Start, verify and Detect all use this one answer."""
+    from . import usb_access
+    found = usb_access.scan() if scan is None else scan
+    if found.listing is not usb_access.Probe.PRESENT:
+        return "", "the USB device list cannot be read"
+    if serial:
+        ports = [d.port for d in found.devices if d.serial.state is usb_access.Probe.PRESENT
+                 and d.serial.value[:radios.SERIAL_PREFIX] == serial[:radios.SERIAL_PREFIX]]
+        if not ports:
+            return "", f"no stick with serial {serial[:radios.SERIAL_PREFIX]} is plugged in"
+        if len(ports) > 1:
+            return "", f"more than one stick reports serial {serial[:radios.SERIAL_PREFIX]}"
+        return ports[0], ""
+    if not any(d.port == port for d in found.devices):
+        return "", f"no stick is plugged in on port {port}"
+    return port, ""
 
 
 def usb_precheck(radio, model) -> str:
@@ -603,7 +628,9 @@ def verify_identity(svc, rid: str) -> str:
     radio = next((r for r in state.radios if r.id == rid), None)
     if radio is None:
         return f"radio {rid} is no longer in the hardware list"
-    return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
+    model = radio_models.load()[radio.model]
+    port = stick_port(radio.usb_serial, radio.usb_port)[0] if model.transport != "spi" else ""
+    return radio_daemon.check_bound(status, radio, model, port) or ""
 
 
 def shared_band_refusal(svc, target: str, band: str, op: str):

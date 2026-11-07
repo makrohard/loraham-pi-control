@@ -58,23 +58,9 @@ def _port_tuple(port: str) -> tuple:
 
 
 def _stick_port(serial: str, port: str):
-    """(port, "") of the stick to open, or ("", why): a serial is resolved to its current port on sysfs (DEC-W35);
-    a serial-less radio's stick is its stored port, which must be listed."""
-    from ..usb_access import Probe
-    found = _scan()
-    if found.listing is not Probe.PRESENT:
-        return "", "the USB device list cannot be read"
-    if serial:
-        ports = [d.port for d in found.devices if d.serial.state is Probe.PRESENT
-                 and d.serial.value[:8] == serial[:8]]
-        if not ports:
-            return "", f"no stick with serial {serial[:8]} is plugged in"
-        if len(ports) > 1:
-            return "", f"more than one stick reports serial {serial[:8]}"
-        return ports[0], ""
-    if not any(d.port == port for d in found.devices):
-        return "", f"no stick is plugged in on port {port}"
-    return port, ""
+    """(port, "") of the stick to open, or ("", why): radio_start.stick_port on this module's scan (DEC-W35)."""
+    from .. import radio_start
+    return radio_start.stick_port(serial, port, _scan())
 
 
 def _search(bus, chip: str):
