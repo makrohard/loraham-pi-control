@@ -3266,24 +3266,24 @@ class LifecycleOpsMixin:
 
     # ---- daemon monitoring + live settings -------------------------------
 
-    def daemon_view(self, band: str) -> daemon_control.DaemonView:
+    def daemon_view(self, band: str, rid: str = "") -> daemon_control.DaemonView:
         """Read-only STATUS/STATS for a band — passive, never touches the radio.
 
         `.channel` is empty by design; ask for channel data explicitly (see below)."""
-        return daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_channel(self, band: str) -> dict[str, str]:
+    def daemon_channel(self, band: str, rid: str = "") -> dict[str, str]:
         """CHANNEL fields WITHOUT a CAD scan — safe to call on a timer."""
-        return daemon_control.read_channel_passive(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_channel_passive(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_channel_scan(self, band: str) -> dict[str, str]:
+    def daemon_channel_scan(self, band: str, rid: str = "") -> dict[str, str]:
         """CHANNEL fields WITH a real CAD scan — DESTRUCTIVE to a frame in flight.
 
         Operator-invoked only (`lhpc daemon <band>`, the console's "Scan now"). Never on a timer."""
-        return daemon_control.read_channel_scan(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_channel_scan(self._system, radio_start.daemon_key(self, rid or band))
 
-    def daemon_socket_line(self, band: str) -> str:
+    def daemon_socket_line(self, band: str, rid: str = "") -> str:
         """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor
         ('' when the band is invalid or the socket is unreachable). Read-only, fail-closed."""
-        return daemon_control.read_socket_line(self._system, radio_start.daemon_key(self, band))
+        return daemon_control.read_socket_line(self._system, radio_start.daemon_key(self, rid or band))
 

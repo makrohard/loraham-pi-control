@@ -1121,7 +1121,7 @@ def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path, web):
     assert j["band"] == "433" and j["reachable"] is True
     assert j["line"].startswith("STATUS")              # one raw, sanitised status line
     # 868 has no reply -> fail-closed, not reachable
-    assert c.get("/api/daemon/868/socket").get_json() == {"band": "868", "line": "", "reachable": False}
+    assert c.get("/api/daemon/868/socket").get_json() == {"band": "868", "rid": "", "line": "", "reachable": False}   # item 16: rid named
     assert c.get("/api/daemon/999/socket").status_code == 404       # band validated -> no arbitrary path
     assert c.post("/api/daemon/433/socket").status_code == 405       # read-only (GET only)
 

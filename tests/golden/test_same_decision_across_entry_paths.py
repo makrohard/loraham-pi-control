@@ -63,7 +63,7 @@ pytestmark = pytest.mark.needs_session
 PATHS = ("cli", "web", "job", "boot")
 _BOOKKEEPING = re.compile(r"^(state/(jobresults|jobs|owned|locks)/|state/boot-restore\.json$|"
                           r"logs/web-|config/secrets/web_session\.key$|config/\.lock$|state/hotplug\.json\.lock$)")
-KISS_STARTED = ["logs/start-loraham-kiss-tnc-433.log", "state/daemon-feed-floor-433",
+KISS_STARTED = ["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1",
                 "state/running/kiss.band"]
 
 
@@ -490,7 +490,7 @@ def test_tx_without_high_power_permission(entry):
     permission is BLOCKED on every path (no path's plan checks it; each apply does), nothing
     spawned."""
     res = _all(entry, "start", "kiss", _tx_without_permission)
-    _same(res, started=False, refusal="blocked", files=["state/daemon-feed-floor-433"], live=[])
+    _same(res, started=False, refusal="blocked", files=["state/daemon-feed-floor-433-r1"], live=[])
     assert _renders(res) == FAILED_AFTER_ADMISSION
 
 
@@ -525,7 +525,7 @@ def test_interactive_launch(entry):
     res = _all(entry, "start", "chat", _chat_installed,
                evidence=("chat", "loraham-daemon", "433"))
     _same(res, started=True, refusal="manual_required", live=[],
-          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433",
+          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
                  "state/interactive/chat.show"])
     assert _renders(res) == SUCCEEDED
 
@@ -538,7 +538,7 @@ def test_unverified_termination(entry):
     exits 0: its driver completed)."""
     res = _all(entry, "start", "kiss", lambda b: b.endpoint_never_up())
     _same(res, started=False, refusal="unverified", live=[],
-          files=["logs/start-loraham-kiss-tnc-433.log", "state/daemon-feed-floor-433"])
+          files=["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"])
     assert _renders(res) == FAILED_AFTER_ADMISSION
 
 
@@ -549,7 +549,7 @@ def test_restart_of_an_interactive_stack(entry):
     Boot-restore never restarts."""
     res = _all(entry, "restart", "chat", _chat_installed)
     _same(res, started=True, refusal="manual_required", live=[],
-          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433",
+          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
                  "state/interactive/chat.show"])
     assert _renders(res) == {
         "cli": {"rc": 0},
