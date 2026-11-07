@@ -154,19 +154,15 @@ class JobsOpsMixin:
             if err:
                 return None, "blocked", err
             comps = [c for _, c in items]
-            # BUILD: the one selection and order (`build_plan`); the parallel per-component jobs
-            # then build one round — a provider and its consumer never in the same round (the
-            # consumer would race the provider's artifact). While a provider is not built, this
-            # round builds it and the operator builds again once it finishes.
+            # BUILD: one round of the build plan after the GUI decision `lhpc build` takes (web_build, W205);
+            # the parallel per-component jobs then build that round.
             build_dep_note = ""
             by_all = {c.id: c for st in self.stacks() for c in st.components}
             if op == "build":
-                ordered = build_plan.order(build_plan.select(comps, self.stack(target)))
-                comps, again = build_plan.web_round(ordered, self.is_built)
-                if again:
-                    names = ", ".join(c.name for c in comps)
-                    build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
-                                      "to build the rest once it finishes.")
+                from . import web_build
+                comps, build_dep_note, why = web_build.round_for(self, comps, self.stack(target))
+                if why:
+                    return None, "blocked", why
             src_paths = {c.source.path for c in comps if c.source}
             src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
