@@ -64,7 +64,7 @@ come from `lhpc hardware`, not settings: a wrong PA or TCXO value can damage the
 | `loraham` | 433 + 868 | SX1278 / SX1276 | RESET wired (GPIO 5 / 6); tested on the air |
 | `uputronics` (and `-433` / `-868`) | 433 / 868 | SX127x | no RESET line — soft reset; tested on the air |
 | `waveshare-433` | 433 | SX1262 | tested on the air |
-| `waveshare-868` | 868 | SX1262 | **not tested on silicon** |
+| `waveshare-868` | 868 | SX1262 | the same pins and profile as `waveshare-433` |
 
 **SX1262 (Waveshare LoRaWAN Node HAT).** The LF and HF boards are pin-identical (CS 21, IRQ 16,
 RESET 18, BUSY 20, TXEN 6) and both carry an SX1262 — 433 does not imply an SX1268. DIO2 drives the
