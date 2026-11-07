@@ -119,21 +119,25 @@ def test_r9_a_row_value_equal_to_the_default_still_wins_over_the_legacy_value(tm
     assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=1500"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=250")]
 
 
-def test_r1_control_two_enabled_radios_on_a_band_apply_the_stacks_value(tmp_path):
-    """CONTROL: the band names no one radio, so neither row value is sent; the stack's value goes to the band socket."""
+def test_r1_control_two_enabled_radios_on_a_band_apply_nothing(tmp_path):
+    """CONTROL: the band names no one radio, so no value is sent at all: neither row value, nor the stack's, which
+    went to the 0.13.x band socket before ledger L27 (DEC-W27); the refusal names the radios."""
     R = _radios().Radio
     rows = [R("r1", "a", "uputronics", "868", ce="ce0", dp=(("CADWAIT", "100"),)),
             R("r2", "b", "uputronics", "868", ce="ce1", dp=(("CADWAIT", "300"),))]
     res, sets = _apply(tmp_path, rows, {"dp_868_CADWAIT": "900"}, "868",
                        sockets={"/tmp/loraconf868.sock": ("-", "868"), **RID_SOCKETS})
-    assert res.ok, (res.summary, res.details)
-    assert sets == [("/tmp/loraconf868.sock", "SET CADWAIT=900"), ("/tmp/loraconf868.sock", "SET CADIDLE=250")]
+    from lhpc.core import radio_daemon
+    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 868 MHz: 2 radios can run it on "
+                                            f"868 MHz: r1 (a), r2 (b); {radio_daemon.SHARED_BAND_TEXT}")
+    assert sets == []
 
 
 @pytest.mark.parametrize("case", ["no list", "invalid list", "radio disabled"])
 def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(tmp_path, case):
-    """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value; the
-    stack's value goes to the 0.13.x band socket."""
+    """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value. Without
+    a list the stack's value goes to the 0.13.x band socket (the upgrade case); with a list that names no one radio
+    for the band, nothing is sent (ledger L27, DEC-W27)."""
     R = _radios().Radio
     rows = {"no list": None, "invalid list": None,
             "radio disabled": [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False, dp=(("CADWAIT", "100"),)),
@@ -142,8 +146,14 @@ def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(
     res, sets = _apply(tmp_path, rows, {"dp_433_CADWAIT": "700"}, "433",
                        sockets={"/tmp/loraconf433.sock": ("-", "433"), **RID_SOCKETS},
                        raw="[[radio]]\nid = 7\n" if case == "invalid list" else None)
-    assert res.ok, (res.summary, res.details)
-    assert sets == [("/tmp/loraconf433.sock", "SET CADWAIT=700"), ("/tmp/loraconf433.sock", "SET CADIDLE=250")]
+    if case == "no list":
+        assert res.ok, (res.summary, res.details)
+        assert sets == [("/tmp/loraconf433.sock", "SET CADWAIT=700"), ("/tmp/loraconf433.sock", "SET CADIDLE=250")]
+    else:
+        assert not res.ok and res.summary.split(": ")[0] == "the hardware list names no one radio for 433 MHz", res.summary
+        if case == "radio disabled":
+            assert res.summary == "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz"
+        assert sets == []
 
 
 @pytest.mark.parametrize("key,value", [("cadrssi_433", "zzz"), ("ocp_433", "nope"), ("cadmon_433", "maybe")])

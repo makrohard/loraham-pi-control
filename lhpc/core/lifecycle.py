@@ -1637,7 +1637,9 @@ class Lifecycle:
     # socket (`daemon_control.conf_socket`): the band's radio's `lora-<rid>.sock` at stage L5 (W3), else 0.13.x's.
     def raw_socket(self, band: str) -> str:
         from .daemon_control import _prefer_run_socket
-        key = radio_start.key_for(self.paths, band)
+        key = radio_start.socket_key(self.paths, band)
+        if not key:                                                    # ledger L27: the list names no one radio
+            return ""
         name = f"lora-{key}" if key != band else f"lora{band}"
         return _prefer_run_socket(f"/run/loraham/{name}.sock", f"/tmp/{name}.sock")
 
@@ -1647,8 +1649,8 @@ class Lifecycle:
         fails closed to None rather than being parsed raw (P0.4)."""
         from . import daemon_control
         try:
-            stats = daemon_control._query(self.system, radio_start.key_for(self.paths, band), b"GET STATS\n", "STATS")
-        except OSError:
+            stats = daemon_control._query(self.system, radio_start.socket_key(self.paths, band), b"GET STATS\n", "STATS")
+        except (OSError, ValueError):                                  # ValueError: no socket (InvalidBand, L27)
             return None
         val = stats.get("TXOK")
         if val is None:
@@ -1669,6 +1671,8 @@ class Lifecycle:
         """Send exactly one frame on `band` via the daemon's raw socket and verify
         TXOK++ via its CONF STATS. Real RF. The caller MUST confirm and ensure a
         dummy load is attached."""
+        if (why := radio_start.socket_refusal(self.paths, band)):      # ledger L27: never the 0.13.x band socket
+            return TxTestResult(False, band, None, None, f"refused: {why}")
         before = self._stats_txok(band)
         try:
             # Raw data socket: bytes written are transmitted as one LoRa frame.

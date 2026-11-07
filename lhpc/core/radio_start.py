@@ -374,10 +374,34 @@ def daemon_rid(svc, band: str) -> radio_daemon.Target:
 
 
 def daemon_key(svc, band: str) -> str:
-    """The key of a band's daemon sockets (daemon_control.conf_socket): the rid of the band's one enabled radio
-    when the hardware list resolves the band (stage L5, `loraconf-<rid>.sock`); else the band itself, which
-    reaches only a 0.13.x daemon's socket (a start without a hardware list is refused, W1-8)."""
-    return key_for(svc._paths, band)
+    """The key of a band's daemon sockets (daemon_control.conf_socket), every read and every SET: socket_key."""
+    return socket_key(svc._paths, band)
+
+
+def socket_key(paths, band: str) -> str:
+    """The key of a band's daemon SOCKETS (CONF and data): the rid of the band's one enabled radio when the hardware
+    list resolves the band (stage L5, `loraconf-<rid>.sock`); the band itself only when there is NO hardware list (a
+    0.13.x daemon's `loraconf<band>.sock`, the upgrade case); "" — no socket at all — when a list exists and does not
+    resolve the band to one radio (two enabled radios, none, or an invalid list: ledger L27), so no read and no SET
+    ever reaches the 0.13.x band form there. A key that is not a band passes through (a radio id)."""
+    if band not in ("433", "868"):
+        return band
+    state = radios.load(paths)
+    if state.kind == radios.ABSENT:                      # no hardware list: a 0.13.x daemon's band socket
+        return band
+    t = radio_daemon.resolve_target(state, radio_models.load(), lambda _r, _m: True, band=band)
+    return t.rid if t.outcome == "proceed" else ""
+
+
+def socket_refusal(paths, band: str) -> str:
+    """Why `band` has no daemon socket (socket_key ""), naming the radios; "" when it has one."""
+    if band not in ("433", "868") or socket_key(paths, band):
+        return ""
+    state = radios.load(paths)
+    t = radio_daemon.resolve_target(state, radio_models.load(), lambda _r, _m: True, band=band)
+    reason = t.reason.removesuffix("; name one") + (f"; {radio_daemon.SHARED_BAND_TEXT}"
+                                                    if t.kind == radio_daemon.SEVERAL else "")
+    return f"the hardware list names no one radio for {band} MHz: {reason}"
 
 
 def key_for(paths, band: str) -> str:
@@ -400,7 +424,7 @@ def daemon_rf_job(svc, e, band: str):
     """A banded entry's job for `band`: the per-radio entry's file of the band's one radio when the hardware list
     resolves the band (W7-8a), else the 0.13.x band file (read-only legacy, I11)."""
     if e.per_radio:
-        job = e.radio_job(daemon_key(svc, band))
+        job = e.radio_job(key_for(svc._paths, band))           # the file's name, not a socket (L27)
         if job:
             return job
     return e.job(band)

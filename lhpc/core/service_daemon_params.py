@@ -302,9 +302,9 @@ class DaemonParamsMixin:
     def daemon_set(self, band: str, key: str, value: str, apply: bool = False) -> ActionResult:
         # Validate the band at the service boundary too (not only in web routes): a
         # direct CLI/service caller must never reach a constructed arbitrary socket path.
-        if not daemon_control.is_valid_band(band):
-            return ActionResult(False, f"Invalid band '{band}' (allowed: "
-                                f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
+        if not daemon_control.is_valid_band(band) or (why := radio_start.socket_refusal(self._paths, band)):   # L27
+            return ActionResult(False, f"Cannot SET {key.upper()} on {band} MHz: {why}" if daemon_control.is_valid_band(band)
+                                else f"Invalid band '{band}' (allowed: {', '.join(daemon_control.ALLOWED_BANDS)}).")
         if key.upper() == "POWER":
             # Live POWER is decided by the RUNNING daemon's family and permission, not by the
             # saved hardware setup (which may have changed since the process started).
@@ -509,8 +509,8 @@ class DaemonParamsMixin:
                                                f"that band serves {', '.join(others)}",
                                         data={"band": b, "in_use_by": others, "persisted": True})
                 if not daemon_control.read_view(self._system, radio_start.daemon_key(self, b)).reachable:
-                    return ActionResult(False, f"daemon not serving {b} MHz — start it first",
-                                        data={"band": b, "persisted": True})
+                    return ActionResult(False, radio_start.socket_refusal(self._paths, b) or f"daemon not serving {b} MHz — start it first",
+                                        data={"band": b, "persisted": True})   # L27: a band the list names no one radio for
                 applies = self._daemon_param_applies(sid, b)
                 applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
                 for key, val in applies.items():

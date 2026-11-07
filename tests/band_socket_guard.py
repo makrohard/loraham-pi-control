@@ -31,15 +31,10 @@ FORMS = tuple(f"{d}/{name}" for d in ("/tmp", "/run/loraham") for b in ("433", "
 _FORMS = frozenset(FORMS)
 
 _DECOY = "a decoy: a READY on the band socket must NOT read as the radio's"
-_NO_ONE_RADIO = "the band names no one enabled radio, so the band socket is the one asked"
 # exact test id -> (the band sockets it may fake, why)
 DELIBERATE = {
     **{f"tests/stacks/test_daemon_readiness.py::test_verify_band_up_reads_the_bands_radio[{t}]":
        (frozenset({"/tmp/loraconf433.sock"}), _DECOY) for t in ("0.0", "0.5")},
-    "tests/core/test_g2_fixes.py::test_r1_control_two_enabled_radios_on_a_band_apply_the_stacks_value":
-        (frozenset({"/tmp/loraconf868.sock"}), _NO_ONE_RADIO),
-    **{f"tests/core/test_g2_fixes.py::test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value"
-       f"[{c}]": (frozenset({"/tmp/loraconf433.sock"}), _NO_ONE_RADIO) for c in ("invalid list", "radio disabled")},
 }
 
 
