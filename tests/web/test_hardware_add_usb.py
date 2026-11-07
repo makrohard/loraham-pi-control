@@ -42,7 +42,7 @@ def _svc(tmp_path):
 def test_b2_a_serialless_stick_becomes_r3_on_its_port(web, tmp_path, monkeypatch, csrf):
     _env(tmp_path, monkeypatch)
     c = web()
-    page = " ".join(c.get("/hardware").get_data(as_text=True).split())
+    page = " ".join(c.get("/hardware/add").get_data(as_text=True).split())          # Add Hardware (W257)
     assert 'data-add-port="1-1.3"' in page
     r = c.post("/hardware/add", data={"_csrf": csrf(c), "model": "meshstick-1262", "port": "1-1.3"})
     assert r.status_code in (302, 303) and r.headers["Location"].endswith("/hardware")
@@ -52,8 +52,8 @@ def test_b2_a_serialless_stick_becomes_r3_on_its_port(web, tmp_path, monkeypatch
     assert (r3.id, r3.name, r3.model, r3.band, r3.usb_serial, r3.usb_port, r3.enabled) == (
         "r3", NAME, "meshstick-1262", "868", "", "1-1.3", True)
     page = " ".join(c.get("/hardware").get_data(as_text=True).split())
-    assert "r3 added: meshstick-1262 on 868 MHz, port 1-1.3 (no serial)" in page
-    assert 'data-add-port="1-1.3"' not in page and 'data-rid="r3"' in page   # held now: no longer addable
+    assert "r3 added: meshstick-1262 on 868 MHz, port 1-1.3 (no serial)" in page and 'data-rid="r3"' in page
+    assert 'data-add-port="1-1.3"' not in " ".join(c.get("/hardware/add").get_data(as_text=True).split())   # held now
 
 
 @pytest.mark.parametrize("rows,want", [

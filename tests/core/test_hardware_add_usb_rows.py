@@ -187,7 +187,7 @@ def test_the_page_offers_only_free_readable_sticks_of_a_known_model(web, tmp_pat
         _dev("1-1.5", vid=ua.Probe.UNKNOWN),                      # unreadable: not offered
         _dev("1-1.6", vid="0bda"),                                # no known model: not offered
     ], rows=(*_spi(), held))
-    page = web().get("/hardware").get_data(as_text=True)
+    page = web().get("/hardware/add").get_data(as_text=True)    # Add Hardware (W257)
     assert 'data-add-port="1-1.2"' in page                        # measured: the add list's item attribute
     for port in ("1-1.3", "1-1.5", "1-1.6"):
         assert f'data-add-port="{port}"' not in page
@@ -197,7 +197,7 @@ def test_no_add_list_without_a_valid_hardware_list(web, tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch, [_dev("1-1.2", serial="ABCDEFGH12")], rows=None)
     (tmp_path / "config").mkdir(exist_ok=True)
     (tmp_path / "config" / "radios.toml").write_text("[[radio]]\nid = 7\n")
-    assert "data-add-port=" not in web().get("/hardware").get_data(as_text=True)
+    assert "data-add-port=" not in web().get("/hardware/add").get_data(as_text=True)   # Add Hardware (W257)
 
 
 # ---- §2.3: a seeded property over random scans ---------------------------------------------------------

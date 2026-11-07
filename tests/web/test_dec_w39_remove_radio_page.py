@@ -31,15 +31,18 @@ def _file(tmp_path):
     return (tmp_path / "config" / "radios.toml").read_bytes()
 
 
-def test_each_card_links_its_confirm_page(web, tmp_path, monkeypatch):
-    page = _box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)
+def test_each_radios_page_links_its_confirm_page(web, tmp_path, monkeypatch):
+    # Redesign (W257): Remove lives on the radio's own page, which the list links.
+    c = _box(web, tmp_path, monkeypatch)
+    listing = c.get("/hardware").get_data(as_text=True)
     for rid in ("r1", "r2", "r3"):
-        assert f'href="/hardware/remove/{rid}"' in page, rid
+        assert f'href="/hardware/radio/{rid}"' in listing, rid
+        assert f'href="/hardware/remove/{rid}"' in c.get(f"/hardware/radio/{rid}").get_data(as_text=True), rid
 
 
 def test_a_running_radios_button_is_greyed_with_what_to_stop(web, tmp_path, monkeypatch):
     c = _box(web, tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(4242, "id", rid="r1", band="433")])
-    page = _text(c.get("/hardware").get_data(as_text=True))
+    page = _text(c.get("/hardware/radio/r1").get_data(as_text=True))                   # its own page (W257)
     assert 'href="/hardware/remove/r1"' not in page and 'data-remove-blocked="r1"' in page
     assert "stop its daemon, then remove r1" in page
 

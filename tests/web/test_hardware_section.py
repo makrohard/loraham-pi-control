@@ -1,5 +1,6 @@
 """B5 minimum: the Hardware section (GET /hardware, POST /hardware/bind) and the per-radio cards on the dashboard,
 asserted on rendered pages and on the saved hardware list."""
+import re
 import radios_fixture
 import repo_paths
 
@@ -27,18 +28,23 @@ def _text(page):
 
 
 def test_the_section_lists_each_radio_and_a_usb_radios_sticks(web, tmp_path, monkeypatch):
-    page = _text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True))
+    # Redesign (W257): the list names each radio; a radio's binding and its re-bind are on its own page.
+    c = _box(web, tmp_path, monkeypatch)
+    page = _text(c.get("/hardware").get_data(as_text=True))
     assert 'data-rid="r1"' in page and 'data-rid="r2"' in page
-    assert "r2 — stick" in page and "Bound to: port 1-1.9 (no serial)" in page
-    assert 'name="port" value="1-1.3"' in page                         # the Meshstick, selectable
+    detail = _text(re.sub(r"<[^>]+>", " ", c.get("/hardware/radio/r2").get_data(as_text=True)))
+    assert "r2 — stick" in detail and "Stick port 1-1.9 (no serial)" in detail
+    assert 'name="port" value="1-1.3"' in c.get("/hardware/radio/r2").get_data(as_text=True)   # the Meshstick, selectable
     assert 'id="usb-copybox"' in page and "sha256sum -c -" in page     # the USB setup is offered
     assert (tmp_path / "state" / "usb-setup" / "usb-setup.sh").is_file()
 
 
 def test_an_spi_only_list_offers_no_usb_setup(web, tmp_path, monkeypatch):
-    page = _box(web, tmp_path, monkeypatch, rows=ROWS[:1]).get("/hardware").get_data(as_text=True)
-    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'action="/hardware/bind"' not in page   # no bind, no setup
-    assert 'id="usb-add"' in page and 'data-add-port="1-1.3"' in page             # B: the stick can be added
+    c = _box(web, tmp_path, monkeypatch, rows=ROWS[:1])
+    page = c.get("/hardware").get_data(as_text=True)
+    detail = c.get("/hardware/radio/r1").get_data(as_text=True)
+    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'action="/hardware/bind"' not in detail   # no bind, no setup
+    assert 'id="hw-add"' in page and 'data-add-port="1-1.3"' in c.get("/hardware/add").get_data(as_text=True)  # B: addable
 
 
 def test_binding_saves_the_port_of_a_serialless_stick(web, tmp_path, monkeypatch, csrf):
@@ -47,15 +53,15 @@ def test_binding_saves_the_port_of_a_serialless_stick(web, tmp_path, monkeypatch
     assert r.status_code in (302, 303)
     row = next(x for x in radios.load(Paths(runtime_root=tmp_path)).radios if x.id == "r2")
     assert (row.usb_port, row.usb_serial) == ("1-1.3", "")
-    assert "Bound to: port 1-1.3 (no serial)" in _text(c.get("/hardware").get_data(as_text=True))
+    assert "Stick port 1-1.3 (no serial)" in _text(re.sub(r"<[^>]+>", " ", c.get("/hardware/radio/r2").get_data(as_text=True)))
 
 
 def test_binding_without_access_points_at_the_usb_setup(web, tmp_path, monkeypatch, csrf):
     c = _box(web, tmp_path, monkeypatch, access=Probe.ABSENT)
     r = c.post("/hardware/bind", data={"_csrf": csrf(c), "rid": "r2", "port": "1-1.3"})
     assert r.headers["Location"].endswith("/hardware#usb-setup")
-    page = _text(c.get("/hardware").get_data(as_text=True))
-    assert "r2 bound to the stick on port 1-1.3 — run the USB setup below to give this account access" in page
+    page = _text(re.sub(r"<[^>]+>", " ", c.get("/hardware").get_data(as_text=True)))   # the redesign's wording (W257)
+    assert "r2 bound to the stick on port 1-1.3 — run the USB setup on the Hardware page to give this account access" in page
 
 
 def test_a_bind_to_a_port_with_no_stick_is_refused_and_nothing_saved(web, tmp_path, monkeypatch, csrf):

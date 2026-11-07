@@ -13,7 +13,7 @@ from lhpc.core.usb_access import Membership, Probe, RuleState
 STICKS = repo_paths.REPO / "tests" / "data" / "usb_sysfs" / "meshstick"     # the Meshstick on 1-1.3, no serial
 REAL_SCAN = usb_access.scan
 RELOGIN = "plugdev membership is granted but takes effect at its next login (log out and in, or reboot)"
-SETUP = "run the USB setup below to give this account access"
+SETUP = "run the USB setup on the Hardware page to give this account access"     # the redesign's wording (W257)
 
 
 def _box(web, tmp_path, monkeypatch, rows, member):
