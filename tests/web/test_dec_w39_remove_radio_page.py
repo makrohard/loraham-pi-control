@@ -2,6 +2,9 @@
 the same answer the refusal gives); GET /hardware/remove/<rid> is the confirm page (what goes, what stays, the
 restore items); POST /hardware/remove removes only with the phrase, else changes nothing. Asserted on rendered
 pages and on the saved hardware list."""
+import html
+import re
+
 import radios_fixture
 
 from lhpc.core import radio_daemon, radio_start, radios
@@ -46,8 +49,23 @@ def test_the_confirm_page_is_one_question(web, tmp_path, monkeypatch, csrf):
     c = _box(web, tmp_path, monkeypatch)
     page = _text(c.get("/hardware/remove/r3").get_data(as_text=True))
     assert "Remove r3 (meshstick-1262)?" in page and 'name="confirm_phrase" value="remove-r3"' in page
-    assert "What goes" not in page and "What stays" not in page and "logs/r3/" not in page
+    assert "What goes" not in page and "What stays" not in page
     assert ">Cancel</a>" in page
+
+
+def test_the_confirm_page_names_state_binding_and_the_kept_folders(web, tmp_path, monkeypatch):
+    # W253: a small block: state, binding (serial or port) and the kept folders with their real paths.
+    (tmp_path / "logs" / "r3").mkdir(parents=True)
+    (tmp_path / "state" / "kiss" / "r3").mkdir(parents=True)
+    c = _box(web, tmp_path, monkeypatch)
+
+    def facts(rid):
+        m = re.search(r'<dl[^>]*id="remove-facts".*?</dl>', c.get(f"/hardware/remove/{rid}").get_data(as_text=True), re.S)
+        assert m is not None, rid
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", m.group(0))).split())
+    assert facts("r3") == (f"State disabled Binding port 1-1.9 (no serial) Kept folders {tmp_path}/logs/r3 , "
+                           f"{tmp_path}/state/kiss/r3")
+    assert facts("r2") == "State enabled Binding SPI (the board's lines) Kept folders none on disk"
 
 
 def test_the_post_removes_with_the_phrase_only(web, tmp_path, monkeypatch, csrf):

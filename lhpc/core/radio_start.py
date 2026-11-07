@@ -223,7 +223,22 @@ def remove_plan(svc, rid: str) -> dict:
              "the stick itself: plugged in, it shows up again as a new stick",
              "the other radios and their stacks; the per-band stack settings (config/stacks/)"]
     return {"rid": rid, "row": row, "reason": "", "activity": activity, "goes": goes, "stays": stays,
-            "state": state}
+            "state": state, "facts": _remove_facts(svc, row)}
+
+
+def _kept_folders(svc, rid: str) -> list:
+    """W253: the folders of radio `rid` a remove keeps, as they are on disk: logs/<rid> and every state/<x>/<rid>."""
+    root = svc._paths.runtime_root
+    found = [root / "logs" / rid, *sorted(p / rid for p in (root / "state").glob("*") if p.is_dir())]
+    return [str(p) for p in found if p.is_dir() and not p.is_symlink()]
+
+
+def _remove_facts(svc, row) -> dict:
+    """W253: the confirm page's small block: the radio's state, its binding and the folders that are kept."""
+    binding = (f"serial {row.usb_serial}" if row.usb_serial else f"port {row.usb_port} (no serial)" if row.usb_port
+               else "SPI (the board's lines)")
+    return {"state": "enabled" if row.enabled else "disabled", "binding": binding,
+            "kept": _kept_folders(svc, row.id)}
 
 
 def remove_radio(svc, rid: str, confirm: str):
