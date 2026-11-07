@@ -379,7 +379,8 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
-                     "activity": radio_activity(svc, r, procs), "problems": _problems(r, usb, v, found)})
+                     "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
+                     "attention": _attention(pr, _radio_users(svc, r))})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None
@@ -403,6 +404,15 @@ def _problems(radio, usb: bool, view, found) -> list:
         elif why:
             out.append(why)
     return out
+
+
+def _attention(problems: list, users: list) -> list:
+    """W273: the row's notes that need the operator now, for the dashboard's "Needs attention" banner, taken from
+    `problems` (one computation): its daemon offline while a stack on it runs, then its stick not plugged in."""
+    out = []
+    if "daemon offline" in problems and users:
+        out.append(f"daemon offline while {', '.join(users)} need{'s' if len(users) == 1 else ''} it")
+    return out + [p for p in problems if p.startswith("stick not plugged in")]
 
 
 def radio_detail(svc, rid: str):
