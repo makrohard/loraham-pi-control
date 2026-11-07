@@ -5,6 +5,23 @@
 {% block body_class %}{% if radio_mode != 'both' %}dash-narrow{% endif %}{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
+  {% if attention %}
+  {# W272/W273: one banner, one line per important condition, each linked to its row; one ✕ for the set #}
+  <div class="depnote depnote-warn" id="needs-attention">
+    <strong>Needs attention</strong>
+    <ul>{% for c in attention %}<li data-attention="{{ c.key }}"><a href="
+      {%- if c.kind == 'radio' %}{{ url_for('hardware_radio', rid=c.ref) }}
+      {%- elif c.kind == 'stack' %}{{ url_for('stacks_overview', open=c.ref) }}#stackrow-{{ c.ref }}
+      {%- elif c.kind == 'usb' %}{{ url_for('hardware_view') }}#usb-setup
+      {%- else %}{{ c.ref or url_for('dashboard') }}{% endif %}">{{ c.line }}</a></li>{% endfor %}</ul>
+    {% if attention | rejectattr('sticky') | list %}
+    <form method="post" action="{{ url_for('attention_dismiss') }}" class="act dismiss" title="Close">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button type="submit" aria-label="Close the attention list">&times;</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
   {% if hardware_changes and hardware_changes.lines %}
   <div class="depnote depnote-warn" id="hardware-changes">
     <strong>Radio hardware changed</strong> (since you last closed this)
@@ -64,296 +81,13 @@
       {% for task, at, msg in maintenance_failing %}<code>{{ task }}</code>{% if at %} at {{ at }}{% endif %} — {{ msg }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
   {% endif %}
   {% if not hardware_configured %}
-    {% call banner('warn', url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon', 'Configure') %}
-      No radio hardware is configured — pick your board (one or two radios) before the daemon can start.
+    {% call banner('warn', url_for('hardware_add_page'), 'Open Hardware') %}
+      <strong>No radio hardware is set up yet.</strong> No daemon can start until it is (Apps › Daemon › Hardware).
     {% endcall %}
   {% endif %}
-  <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
-       data-dash-sig="{{ dash_sig }}">
-    {% for r in radios %}
-      {# The band's log links, defined once and placed directly under the daemon control in every
-         state the daemon is installed in (never when it is not). An absent file still links; the
-         page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
-      {% set links %}
-        <p class="links">
-          <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
-          <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
-        </p>
-      {% endset %}
-      <div class="card radio-col{{ ' radio-stray' if r.stray }}" data-radio-band="{{ r.band }}">
-        <header>
-          <h2>{{ r.band }} MHz{% if r.stray %} <span class="pill">not in radio mode</span>{% endif %}</h2>
-          <span class="badge badge-{{ 'running' if r.daemon.usable else ('degraded' if r.daemon.occupied else 'stopped') }}" id="rd-badge-{{ r.band }}">
-            {% if r.daemon.usable %}daemon usable (READY){% elif r.daemon.occupied %}daemon occupied ({{ r.daemon.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
-        </header>
-        <div class="body">
-          {% if r.radios %}
-            {# B5: one card per radio of this band (W6-3), each read on its own daemon socket #}
-            <ul class="radio-cards" id="radio-cards-{{ r.band }}">
-            {% for x in r.radios %}
-              <li class="radio-card" data-rid="{{ x.rid }}"><a href="{{ url_for('hardware_view') }}"><strong>{{ x.rid }}</strong></a>
-                {{ x.name }} ({{ x.model }}) — <span class="badge badge-{{ 'running' if x.ready else ('degraded' if x.reachable else 'stopped') }}">{% if x.ready %}daemon usable (READY){% elif x.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span></li>
-            {% endfor %}
-            </ul>
-          {% endif %}
-
-          {% if r.daemon.high_power and r.daemon.high_power.warn %}
-            {# daemon 1.2.0: keyed on the RUNNING family + permission (STATUS), never the saved
-               switch — so it also renders on a stray band after a Hardware change. #}
-            <p class="depnote depnote-warn" id="rd-hp-{{ r.band }}">⚠ SX127x +20 dBm permission is
-              enabled on {{ r.band }} MHz. This does not report the selected TX power. At +20 dBm
-              obey the 1 % duty-cycle and 3:1 VSWR limits and provide suitable supply and cooling.
-              Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
-          {% endif %}
-          {% if r.daemon.high_power and r.daemon.high_power.mismatch %}
-            <p class="depnote depnote-warn" id="rd-hp-mismatch-{{ r.band }}">High-power switch, {{ r.band }} MHz: {{ r.daemon.high_power.mismatch }}</p>
-          {% endif %}
-
-          {% if r.stray %}
-            <div class="depnote depnote-warn">
-              <strong>A daemon is still running on {{ r.band }} MHz, which the current radio mode
-              ({{ radio_mode }}) excludes.</strong>
-              {% if r.shared_with %}
-                It is the <strong>same process</strong> as the {{ r.shared_with|join(', ') }} MHz
-                daemon — stopping it stops {{ r.shared_with|join(', ') }} too.
-              {% else %}
-                Stop it below (lhpc never stops it for you), or switch the radio mode back.
-              {% endif %}
-              <form method="post" action="{{ url_for('action') }}" class="act">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="op" value="stop">
-                <input type="hidden" name="target" value="daemon">
-                <input type="hidden" name="band" value="{{ r.band }}">
-                <input type="hidden" name="from" value="dash">
-                <button type="submit" class="warnbtn">Stop daemon ({{ r.band }})</button>
-              </form>
-              {{ links }}
-            </div>
-          {% else %}
-
-          {% if r.conflict %}
-            <p class="depnote depnote-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
-              {{ r.conflict|join(', ') }} are running together and will fight over the
-              radio tuning. Run only one at a time on this band.</p>
-          {% endif %}
-
-          {# --- radio config (only when the daemon serves this band): one entry per line, in this
-                 order — Stop daemon, Radio config, Daemon log (then the RF logs). --- #}
-          {% if r.daemon.reachable %}
-            <form method="post" action="{{ url_for('action') }}" class="act">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="op" value="stop">
-              <input type="hidden" name="target" value="daemon">
-              <input type="hidden" name="band" value="{{ r.band }}">
-              <input type="hidden" name="from" value="dash">
-              <button type="submit">Stop daemon ({{ r.band }})</button>
-            </form>
-            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a></h3>
-            {{ links }}
-            <details class="monitor" id="monitor-{{ r.band }}" open>
-              <summary>RX-TX Monitor</summary>
-              <table class="monrssi">
-                <tr><th>Live RSSI</th>
-                  <td><meter id="rd-rssi-{{ r.band }}" min="-130" max="0" low="-110" high="-90" optimum="-30"
-                             value="{{ r.daemon.liverssi or '-130' }}"></meter>
-                      <span class="mono" id="rd-rssiv-{{ r.band }}">{{ r.daemon.liverssi or '?' }}</span> dBm</td></tr>
-              </table>
-              <table>
-                <tr><th>Radio</th><td class="mono" id="rd-radio-{{ r.band }}">{{ r.daemon.radio or '?' }}</td>
-                    <th>TX mode</th><td class="mono" id="rd-txmode-{{ r.band }}">{{ r.daemon.txmode or '?' }}</td></tr>
-                {#- CAD state is shown as "—" while nothing has scanned: the dashboard poll is
-                    deliberately passive (a CAD scan destroys a frame in flight, so a status page
-                    must not run one). "Scan now" takes a real measurement on request. The daemon's
-                    listen-before-talk is UNAFFECTED — it still gates every transmission. -#}
-                <tr><th>CAD state</th>
-                    <td class="mono"><span id="rd-cad-{{ r.band }}">—</span>
-                      <button type="button" class="btn-link" data-scan-band="{{ r.band }}"
-                              data-csrf="{{ csrf_token() }}"
-                              title="Take one real CAD measurement. Briefly interrupts reception.">
-                        Scan now</button></td>
-                    <th>TX active</th><td class="mono" id="rd-tx-{{ r.band }}">?</td></tr>
-                <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ r.band }}">?</td>
-                    <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ r.band }}">{{ r.daemon.cadrssi or '?' }}</td></tr>
-                <tr><th>CAD wait</th><td class="mono" id="rd-cadwait-{{ r.band }}">{{ r.daemon.cadwait or '?' }}</td>
-                    <th>Uptime</th><td class="mono" id="rd-uptime-{{ r.band }}">?</td></tr>
-                <tr><th>RX pkts</th><td class="mono" id="rd-rx-{{ r.band }}">?</td>
-                    <th>TX ok / err</th><td class="mono"><span id="rd-txok-{{ r.band }}">?</span> /
-                      <span id="rd-txerr-{{ r.band }}">?</span></td></tr>
-              </table>
-              <pre class="next feed" id="rd-feed-{{ r.band }}">(loading RX/TX activity…)</pre>
-            </details>
-          {% else %}
-            {# This column is about THIS band only — the daemon runs as an
-               independent instance per band, so don't reference the other band. #}
-            {% if not r.daemon.installed %}
-              <p class="muted">Daemon not installed. Install &amp; build the
-                <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
-            {% else %}
-              <p class="muted">Daemon not running on {{ r.band }} MHz. Start a stack below
-                (it auto-starts the daemon for this band), or start the daemon alone:</p>
-              <form method="post" action="{{ url_for('action') }}" class="act">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="op" value="start">
-                <input type="hidden" name="target" value="daemon">
-                <input type="hidden" name="band" value="{{ r.band }}">
-                <input type="hidden" name="from" value="dash">
-                <button type="submit">Start daemon ({{ r.band }} only)</button>
-              </form>
-              {{ links }}
-            {% endif %}
-          {% endif %}
-
-          {# --- running stack(s) on this band --- #}
-          <h3>Running on {{ r.band }}</h3>
-          {% if r.running %}
-            {% for s in r.running %}
-              {# A rule BETWEEN the running stacks of this radio. `loop.first` keeps it out of the
-                 top of the list, and being emitted before each later item keeps it off the end.
-                 The component rows inside each stack get their own, lighter rule (`.complist`). #}
-              {% if not loop.first %}<hr class="runsep">{% endif %}
-              <div class="runstack">
-                <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
-                  <span class="pill">{{ s.id }}</span></p>
-                <ul class="complist">
-                  {% for c in s.components %}
-                    <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
-                      {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
-                      {% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}
-                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
-                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
-                      {% for itf in c.interfaces %}
-                        {% set _settings = url_for('stacks_overview', open=s.id, cfg=s.id) ~ '#stack-settings-' ~ s.id %}
-                        {% if itf.is_web and itf.proxy_scope %}
-                          {# PROXIED web UI: link via the nginx PROXY, per its LIVE scope — exposed →
-                             reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote
-                             or absent → this stack's Settings (Apply), never a dead proxy URL. #}
-                          {% if itf.proxy_scope == 'exposed' and req_host %}
-                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% elif itf.proxy_scope == 'loopback' and peer_loopback %}
-                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://127.0.0.1:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% else %}
-                            <a class="iface iface-local" href="{{ _settings }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings.">{{ itf.label }} · {{ 'proxy not active — Apply' if itf.proxy_scope == 'absent' else 'local only' }}</a>
-                          {% endif %}
-                        {% elif itf.is_web %}
-                          {# Non-proxied web UI: link to the DIRECT endpoint where it's reachable
-                             (exposed → reached host; loopback → local viewer), else Settings. #}
-                          {% if itf.remote_ok and req_host %}
-                            <a class="iface iface-web" href="{{ itf.scheme }}://{{ req_host }}:{{ itf.port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% elif peer_loopback and itf.port %}
-                            <a class="iface iface-web" href="{{ itf.link or (itf.scheme ~ '://127.0.0.1:' ~ itf.port ~ '/') }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% else %}
-                            <a class="iface iface-local" href="{{ _settings }}" title="Reachable only on the Pi itself. Open it there, or expose it in this stack's Settings.">{{ itf.label }} · local only</a>
-                          {% endif %}
-                        {% else %}
-                          {# Non-web (KISS/TCP/serial): a COPYABLE address, never an inert tcp:// link (no
-                             browser handler). Show the host that works for this viewer; a loopback-only
-                             service seen remotely is labelled 'local only'. #}
-                          {% if itf.remote_ok and req_host %}
-                            <span class="iface mono">{{ itf.scheme }}: {{ req_host }}:{{ itf.port }}</span>
-                          {% elif itf.port %}
-                            <span class="iface mono">{{ itf.scheme }}: 127.0.0.1:{{ itf.port }}{% if not peer_loopback %} · local only{% endif %}</span>
-                          {% else %}
-                            <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
-                          {% endif %}
-                        {% endif %}
-                        {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}
-                      {% endfor %}
-                      {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
-                        <form method="post" action="{{ url_for('action') }}" class="act">
-                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                          <input type="hidden" name="op" value="stop">
-                          <input type="hidden" name="target" value="{{ c.id }}">
-                          <input type="hidden" name="from" value="dash">
-                          <button type="submit">Stop</button>
-                        </form>
-                      {% elif c.interactive %}
-                        {# The blocker banner STAYS, but the command is shown UNCONDITIONALLY: an
-                           interactive client is run by the operator in their own terminal, so
-                           hiding it behind an install/build blocker just removes the one thing
-                           they can act on. #}
-                        {% if c.blocker %}
-                          {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ c.blocker }}{% endcall %}
-                        {% endif %}
-                        <div class="muted">Interactive — run local:</div>
-                        {{ cmdbox('runc-' ~ c.id, c.command) }}
-                      {% elif c.optional and c.runnable %}
-                        <form method="post" action="{{ url_for('action') }}" class="act">
-                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                          <input type="hidden" name="op" value="start">
-                          <input type="hidden" name="target" value="{{ c.id }}">
-                          <input type="hidden" name="from" value="dash">
-                          <button type="submit">Run</button>
-                        </form>
-                      {% endif %}</li>
-                  {% endfor %}
-                </ul>
-                <p class="actrow">
-                  <form method="post" action="{{ url_for('action') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                    <input type="hidden" name="op" value="stop">
-                    <input type="hidden" name="target" value="{{ s.id }}">
-                    <input type="hidden" name="from" value="dash">
-                    <button type="submit">Stop</button>
-                  </form>
-                </p>
-              </div>
-            {% endfor %}
-          {% else %}
-            <p class="muted">No stack running on this radio.</p>
-          {% endif %}
-
-          {# --- interactive apps: tracked, but the operator starts them in a terminal --- #}
-          {% if r.interactive %}
-            <h3>Interactive apps</h3>
-            {% for s in r.interactive %}
-              <div class="runstack">
-                {% if s.running %}
-                  <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
-                    <span class="badge badge-running">&#10003; running</span>
-                    <form method="post" action="{{ url_for('action') }}" class="act">
-                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                      <input type="hidden" name="op" value="stop">
-                      <input type="hidden" name="target" value="{{ s.id }}">
-                      <input type="hidden" name="from" value="dash">
-                      <button type="submit">Stop</button>
-                    </form></p>
-                {% else %}
-                  <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
-                    <span class="badge badge-stopped">not running</span>
-                    <form method="post" action="{{ url_for('interactive_dismiss', stack_id=s.id) }}" class="act dismiss" title="Dismiss">
-                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                      <button type="submit" aria-label="Dismiss {{ s.name }}">&times;</button>
-                    </form></p>
-                  {% if s.blocker %}
-                    {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
-                  {% endif %}
-                  <p class="muted">Run local in a terminal (daemon is ensured):</p>
-                  {{ cmdbox('cmd-' ~ s.id, s.command) }}
-                {% endif %}
-              </div>
-            {% endfor %}
-          {% endif %}
-
-          {# --- start another stack on this band --- #}
-          {% if r.startable %}
-            <h3>Start a stack on {{ r.band }}</h3>
-            <form method="post" action="{{ url_for('action') }}" class="startform">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="op" value="start">
-              <input type="hidden" name="band" value="{{ r.band }}">
-              <input type="hidden" name="from" value="dash">
-              <select name="target" aria-label="Stack to start on {{ r.band }}">
-                {% for s in r.startable %}<option value="{{ s.id }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
-              </select>
-              <button type="submit">Start</button>
-            </form>
-          {% endif %}
-
-          {% endif %}{# /r.stray else #}
-        </div>
-      </div>
-    {% endfor %}
-  </div>
+  {# W250/DEC-W57: Home is its banners, the Webserver box and the System box; the radios are under Apps › Daemon ›
+     Hardware. dash.js reloads Home when the dashboard signature changes. #}
+  <div class="dashsig" data-dash-sig="{{ dash_sig }}" hidden></div>
 
   {# Webserver box: LHPC console (always), then per RUNNING stack its web-UI line and a line per other
      open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured

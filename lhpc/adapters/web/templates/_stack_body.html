@@ -27,6 +27,8 @@
     <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
       <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
   {% endfor %}
+  {# W272: the stack's warnings in its own row, like jobs: a degraded or failed component's reason, a feed without a fix #}
+  {% for cid, note in g.notes %}<p class="depnote depnote-warn" data-note="{{ cid }}">⚠ {{ cid }}: {{ note }}</p>{% endfor %}
 
   {% if g.interactive %}
     {{ cmdbox('appcmd-' ~ g.stack.id, g.command) }}

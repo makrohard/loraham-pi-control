@@ -107,8 +107,7 @@
   // starts/stops, the daemon comes up/down, an interactive app is launched). We
   // poll a cheap signature and reload just on change — so the page doesn't reflow
   // (and the monitor windows don't flash) every tick. Live fields (RSSI/feed/…)
-  // already update in place above. Poll faster while an interactive app is pending
-  // so it flips to "running" quickly after the operator starts it in a terminal.
+  // already update in place above.
   // NOTE: this block (and the restore above it) runs even with ZERO radio columns —
   // the System box and the signature reload exist on a radio-less dashboard too.
   //
@@ -127,10 +126,9 @@
       });
     }
   } catch (e) { /* ignore */ }
-  var grid = document.querySelector(".radiogrid");
+  var grid = document.querySelector("[data-dash-sig]");
   if (grid) {
     var sig = grid.getAttribute("data-dash-sig");
-    var pending = grid.getAttribute("data-pending-interactive") === "1";
     setInterval(function () {
       if (document.hidden) return;
       fetch("/api/dash-signature")
@@ -157,7 +155,7 @@
           }
         })
         .catch(function () { /* transient */ });
-    }, pending ? 2000 : 10000);
+    }, 10000);
   }
 
   // "Scan now": ONE real CAD measurement, on explicit click only.

@@ -13,6 +13,13 @@
       <dt>State</dt><dd>{% if r.enabled %}<span class="state-on">enabled</span>{% else %}disabled{% endif %}</dd>
     </dl>
     {% for p in r.problems %}<p class="note-bad">⚠ {{ p }}</p>{% endfor %}
+    {% if hp.warn %}
+      <p class="depnote depnote-warn" id="hw-hp-warn">⚠ SX127x +20 dBm permission is enabled on {{ r.band }} MHz. This does
+        not report the selected TX power. At +20 dBm obey the 1 % duty-cycle and 3:1 VSWR limits and provide suitable supply
+        and cooling. Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
+    {% endif %}
+    {% if hp.mismatch %}<p class="depnote depnote-warn" id="hw-hp-mismatch">High-power switch, {{ r.band }} MHz: {{ hp.mismatch }}</p>{% endif %}
+    <p><a href="{{ url_for('logs_view', target='loraham-daemon', job=r.rid ~ '/rf-daemon.log') }}" id="hw-rflog">RF log</a></p>
     {% if r.choices and r.choices.items %}
       <form method="post" action="{{ url_for('hardware_bind') }}" id="hw-rebind">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

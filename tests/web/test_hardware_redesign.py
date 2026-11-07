@@ -129,3 +129,39 @@ def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, m
     assert kiss.index('id="stack-info-kiss"') < kiss.index('id="stack-settings-kiss"')     # unchanged elsewhere
     hw = page[page.index('id="stack-hardware-daemon"'):]
     assert 'href="/hardware"' in hw[:600]
+
+
+def _hp(monkeypatch, warn=(), mismatch=None):
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "high_power_state", lambda self, band, view=None: {
+        "warn": band in warn, "mismatch": (mismatch or {}).get(band, "")})
+
+
+def test_the_high_power_warning_and_mismatch_show_on_the_detail_page_and_in_the_row(web, tmp_path, monkeypatch):
+    # DEC-W57: what Home's band column showed is now the radio's: the warning and the mismatch on its detail page,
+    # a short note in its row on the list.
+    _hp(monkeypatch, warn=("433",), mismatch={"868": "saved on, the running daemon reports off"})
+    c = _box(web, tmp_path, monkeypatch)
+    r1, r2 = (_text(c.get(f"/hardware/radio/{r}").get_data(as_text=True)) for r in ("r1", "r2"))
+    assert 'id="hw-hp-warn"' in r1 and "+20 dBm permission is enabled on 433 MHz" in r1 and 'id="hw-hp-warn"' not in r2
+    assert "High-power switch, 868 MHz: saved on, the running daemon reports off" in r2
+    page = _text(c.get("/hardware").get_data(as_text=True))
+    assert re.search(r'data-rid="r1">.*?⚠ \+20 dBm permission enabled on 433 MHz.*?data-rid="r2"', page)
+    assert re.search(r'data-rid="r2">.*?⚠ high-power switch: saved on, the running daemon reports off', page)
+
+
+def test_the_detail_page_links_the_radios_rf_log(web, tmp_path, monkeypatch):
+    page = _box(web, tmp_path, monkeypatch).get("/hardware/radio/r2").get_data(as_text=True)
+    assert 'id="hw-rflog"' in page and "job=r2/rf-daemon.log" in html.unescape(page)
+
+
+def test_home_without_hardware_points_at_add_hardware(web, tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: False)
+    page = _text(web().get("/").get_data(as_text=True))
+    assert "No radio hardware is set up yet." in page and 'href="/hardware/add"' in page
+
+
+def test_the_daemon_settings_hold_no_board_setup_any_more(web, tmp_path, monkeypatch):
+    page = _box(web, tmp_path, monkeypatch).get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
+    assert 'action="/hardware"' not in page and 'name="hardware"' not in page

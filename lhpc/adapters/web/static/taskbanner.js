@@ -70,7 +70,7 @@
   // for it would fire on every fresh tab. A tab that cannot remember (no sessionStorage) never
   // reloads: a reload it could not record would repeat on every tick. And, like dash.js, a reload
   // waits while the operator is typing.
-  var dashOwnsReload = !!document.querySelector(".radiogrid");
+  var dashOwnsReload = !!document.querySelector("[data-dash-sig]");
   function changedThePage(t) { return t.state === "done" || (t.state === "failed" && !!t.admitted); }
   function reloadOnFinish(tasks) {
     if (reloading) return;

@@ -49,7 +49,12 @@ from lhpc.core import rflog as _rflog
 from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
-from lhpc.core.status import rollup_states, stack_dependencies, summarize
+from lhpc.core.status import (
+    component_note,
+    rollup_states,
+    stack_dependencies,
+    summarize,
+)
 from lhpc.version import __version__
 
 _RUNNING = ("running", "degraded")
@@ -420,16 +425,28 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _runtime_root() -> str:
         return str(service.runtime_root)  # display only
 
+    def _attention_banner() -> list:
+        """W272: Home's "Needs attention" lines; a fault in the collector shows no banner, never an error page (the rows
+        still show every condition)."""
+        from lhpc.core import attention
+        try:
+            return attention.banner(service)
+        except Exception:
+            return []
+
+    @app.post("/attention/dismiss")
+    def attention_dismiss():
+        """W273: the banner's one ✕ hides the set it shows until that set changes (+20 dBm stays)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import attention
+        if not attention.dismiss(service):
+            flash("The attention list could not be closed right now; try again", "warn")
+        return redirect(url_for("dashboard"))
+
     @app.get("/")
     def dashboard():
-        # Radio-centric overview: one column per band (433/868) with daemon/radio
-        # config, live monitor, the stack running on it, and a start-stack control.
-        radios = service.radio_overview()
-        # An interactive app that's been launched (marked) but isn't detected running
-        # yet -> the operator is about to run it in a terminal; poll faster so the
-        # dash flips to "running" quickly instead of waiting for the slow refresh.
-        pending_interactive = any(not s.get("running") and not s.get("blocker")
-                                  for r in radios for s in r["interactive"])
+        # W250/DEC-W57: Home is its banners, the Webserver box and the System box (the radios: /hardware).
         # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
@@ -503,7 +520,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             maintenance_failing = [("record", "", f"{type(exc).__name__}: {exc}")]
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
-            radios=radios, pending_interactive=pending_interactive, webservers=webservers,
+            webservers=webservers,
             firewall=firewall, security_pill=security_pill, fw_reapply=fw_reapply,
             maintenance_failing=maintenance_failing,
             # The host the browser used to reach the console — a proxied web-UI link points here on
@@ -522,6 +539,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
+            attention=_attention_banner(),                        # W272/W273: the "Needs attention" banner
             # Each power button renders ONLY when logind authorizes ITS action (cached
             # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
             # box shows nothing, and the dep panel offers the copybox.
@@ -1034,6 +1052,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
                 "jobs": _jobs,
+                "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
                 "inline": inline,
             }
             if _row_needs_body(inline, only_sid):
@@ -2061,7 +2080,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
         from lhpc.core import radio_models, radio_start
-        return render_template("hardware.html", view=radio_start.hardware_view(service), models=radio_models.load())
+        view = radio_start.hardware_view(service)        # DEC-W57: a band's +20 dBm state shows in its radios' rows
+        hp = {b: service.high_power_state(b) for b in {r["band"] for r in view["rows"]}}
+        return render_template("hardware.html", view=view, models=radio_models.load(), hp=hp)
 
     @app.get("/hardware/radio/<rid>")
     def hardware_radio(rid: str):
@@ -2071,7 +2092,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if r is None:
             abort(404)
         return render_template("hardware_radio.html", r=r, models=radio_models.load(),
-                               detect=session.pop("hw_detect", None))
+                               hp=service.high_power_state(r["band"]), detect=session.pop("hw_detect", None))
 
     @app.get("/hardware/add")
     def hardware_add_page():
