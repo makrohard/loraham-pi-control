@@ -41,6 +41,7 @@ from flask import (
 
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import config as _config
+from lhpc.core import hotplug as _hotplug
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
@@ -516,6 +517,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
+            hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
             # Each power button renders ONLY when logind authorizes ITS action (cached
             # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
             # box shows nothing, and the dep panel offers the copybox.
@@ -1452,6 +1454,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         service.dismiss_interactive(stack_id)
+        return redirect(url_for("dashboard"))
+
+    @app.post("/hardware/changes/dismiss")
+    def hardware_changes_dismiss():
+        """W249/DEC-W42: the hotplug banner's ✕ deletes exactly the lines it showed."""
+        if not _csrf_ok():
+            abort(400)
+        if not _hotplug.dismiss(service, request.form.getlist("id")):
+            flash("The hardware changes could not be closed right now (busy); try again", "warn")
         return redirect(url_for("dashboard"))
 
     @app.post("/welcome/dismiss")
