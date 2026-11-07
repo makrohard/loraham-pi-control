@@ -674,6 +674,12 @@ def build_parser() -> argparse.ArgumentParser:
             from lhpc.core.daemon_control import ALLOWED_BANDS
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Stop the daemon on this band only (daemon only)")
+        elif action == "restart":
+            # Package item 14: a per-band restart, as start and stop take; the service refuses a band two radios
+            # share (band_refusal, the stop's W1-11 rule) and a band the box or the stack cannot serve.
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Restart on this band (the daemon of that band, or a band-switchable stack)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
