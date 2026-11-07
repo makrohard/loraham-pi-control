@@ -760,10 +760,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hw = sub.add_parser("hardware",
                           help="Show or set the radio hardware setup (which board(s) the box has)")
-    p_hw.add_argument("setup", nargs="?", choices=(*_HW_SETUPS, "remove"),
+    p_hw.add_argument("setup", nargs="?", choices=(*_HW_SETUPS, "remove", "detect"),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list); "
-                           "`remove <rid>` removes one radio of the hardware list")
-    p_hw.add_argument("rid", nargs="?", help="with remove: the radio id (r1 … r99); its id stays reserved")
+                           "`remove <rid>` removes one radio of the hardware list; `detect <rid>` asks its chip")
+    p_hw.add_argument("rid", nargs="?", help="with remove or detect: the radio id (r1 … r99)")
     p_hw.add_argument("--confirm-phrase", default="", dest="hw_confirm_phrase",
                       help="with remove: remove-<rid>; without it the remove is a dry run that changes nothing")
     # The per-band +20 dBm permission lives beside the hardware setup (daemon 1.2.0 --high-power):
@@ -1543,10 +1543,16 @@ def _run(argv: list[str] | None = None) -> int:
                 print("  failed stacks are NOT retried — restart them with:  lhpc stack start <id>")
         return 0
     if args.command == "hardware":
-        if args.setup == "remove" or args.rid:
-            if args.setup != "remove" or not args.rid or args.high_power or args.ocp:
-                print("ERR   usage: lhpc hardware remove <rid> [--confirm-phrase remove-<rid>]")
+        if args.setup in ("remove", "detect") or args.rid:
+            if (args.setup not in ("remove", "detect") or not args.rid or args.high_power or args.ocp
+                    or (args.setup == "detect" and args.hw_confirm_phrase)):
+                print("ERR   usage: lhpc hardware remove <rid> [--confirm-phrase remove-<rid>] | lhpc hardware detect <rid>")
                 return 2
+            if args.setup == "detect":                       # W4 (DEC-W43): the chip of one listed radio
+                from lhpc.core.radio_detect import run as detect
+                from lhpc.core.services import ActionResult as _AR
+                found = detect.detect_radio(svc, args.rid)
+                return _render(_AR(found.outcome == "found", found.line))
             from lhpc.core import radio_start
             return _render(radio_start.remove_radio(svc, args.rid, args.hw_confirm_phrase))
         if args.high_power:

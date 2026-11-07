@@ -195,6 +195,17 @@ daemon briefly per candidate board and reports whether the chip responds; the bo
 during init). Detect is refused, naming the stack, while a stack that drives the radio itself
 (Meshtastic, Reticulum) runs on that band.
 
+#### hardware detect
+Ask the chip of one radio in the hardware list whether it answers, on that radio's own lines or stick:
+
+```
+lhpc hardware detect r1      # OK    r1: SX127x found (version 0x12)
+```
+
+- It is refused before any bus opens while the radio's daemon runs ("Detect refused: r1's daemon is running.
+  Stop it first."), and while a stack that drives the radio itself runs on its band.
+- Exit status: 0 found, 1 not found or refused, 2 a usage error.
+
 #### hardware remove
 Remove one radio from the hardware list (`config/radios.toml`):
 
