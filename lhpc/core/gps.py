@@ -23,6 +23,8 @@ import threading as _threading
 import time
 from dataclasses import dataclass
 
+from .procident import PID_MAX_LIMIT  # the kernel's highest possible pid
+
 # Consumers that can be fed a device-shaped NMEA stream by the bridge. Each gets its OWN
 # bridge instance: no shared process, no reference counting, and the two want different
 # output shapes anyway (a PTY for meshtasticd, a UNIX socket for MeshCom's QEMU UART1).
@@ -433,9 +435,6 @@ def marker_is_fresh(got: dict, now: float, max_age: float = MARKER_MAX_AGE_S) ->
     before any comparison (L24 F1)."""
     updated = got.get("updated")
     return _finite(updated) and -max_age <= now - updated <= max_age
-
-
-PID_MAX_LIMIT = 1 << 22         # the kernel's highest possible pid (PID_MAX_LIMIT on 64-bit Linux)
 
 
 def marker_owner_pid(got: dict) -> int | None:

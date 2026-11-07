@@ -113,6 +113,19 @@ def identity_matches(recorded: dict, pid: int) -> bool:
     return int(recorded.get("starttime", -1)) == now["starttime"]
 
 
+PID_MAX_LIMIT = 1 << 22         # the kernel's highest possible pid (PID_MAX_LIMIT on 64-bit Linux)
+
+
+def marker_pid(rec: dict) -> int:
+    """The pid a marker records, or ValueError: an int (never a bool, a float or a string, which
+    int() once coerced) in 1..PID_MAX_LIMIT. `pid = inf` once raised OverflowError and `pid = [1]`
+    TypeError out of the job listing (L24 F3)."""
+    pid = rec.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or not 0 < pid <= PID_MAX_LIMIT:
+        raise ValueError(f"not a pid: {pid!r}")
+    return pid
+
+
 def stat_start_time(pid: int) -> int:
     """Field 22 of /proc/<pid>/stat (starttime, clock ticks since boot) — the stable half of a
     (pid, start_time) process identity. 0 if unavailable."""

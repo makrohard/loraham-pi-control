@@ -678,9 +678,8 @@ class JobsOpsMixin:
                 # FIFO, never follows a swapped/symlinked marker, never reads unbounded).
                 raw = tomllib.loads(runtime_fs.read_text_regular(
                     self._paths, f, max_bytes=self._JOB_MARKER_MAX))
-                pid = int(raw["pid"])
-            except (OSError, PathContainmentError, KeyError, ValueError,
-                    tomllib.TOMLDecodeError) as exc:
+                pid = procident.marker_pid(raw)          # ValueError unless a real pid (L24 F3)
+            except (OSError, PathContainmentError, ValueError, tomllib.TOMLDecodeError) as exc:
                 if include_unsafe:
                     out.append({"unsafe": True, "name": name,
                                 "reason": f"job marker malformed/unreadable: {exc}"})
@@ -749,7 +748,7 @@ class JobsOpsMixin:
             try:
                 # FULL identity match (PID-reuse-safe), never bare PID liveness: a recycled
                 # pid running an unrelated process is not this job.
-                return procident.identity_matches(raw, int(raw["pid"]))
+                return procident.identity_matches(raw, procident.marker_pid(raw))
             except (KeyError, ValueError, TypeError):
                 return False
         s = self.stack(target)
