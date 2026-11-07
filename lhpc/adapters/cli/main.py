@@ -240,13 +240,13 @@ def _render(result: ActionResult) -> int:
     return 0 if result.ok else 1
 
 
-def _config_rows(svc, stack: str, band: str) -> list[dict]:
+def _config_rows(svc, stack: str, band: str, inst=None) -> list[dict]:
     """Flatten config_param_groups into rows (each carries component/name/value/default/is_identity)."""
-    return [r for g in svc.config_param_groups(stack, band) for r in g["rows"]]
+    return [r for g in svc.config_param_groups(stack, band, inst) for r in g["rows"]]
 
 
-def _config_list(svc, stack: str, band: str) -> int:
-    groups = svc.config_param_groups(stack, band)
+def _config_list(svc, stack: str, band: str, inst=None) -> int:
+    groups = svc.config_param_groups(stack, band, inst)
     if not groups:
         print(f"OK    '{stack}' has no configurable parameters")
         return 0
@@ -308,12 +308,25 @@ def _cmd_config(svc, args) -> int:
     if op_flags:
         print("ERR   --callsign applies only to 'lhpc config operator'")
         return 2
+    from lhpc.core import instances
+    target, (stack, inst, iband, why) = stack, instances.resolve(svc, stack)     # 7f: `<stack>@<rid>`, its own
+    if why:
+        print(f"ERR   {why}")
+        return 1
     if svc.stack(stack) is None:
         print(f"ERR   unknown stack '{stack}'")
         print("\nNext:\n  lhpc list")
         return 1
+    if inst is not None and args.band and args.band != iband:
+        print(f"ERR   {target} runs on {iband} MHz (its radio's band), not {args.band}")
+        return 2
+    args.band = iband or args.band
 
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
+    if daemon_mode and inst is not None:
+        print(f"ERR   {target}'s daemon parameters are its radio's: lhpc stack start|stop daemon --radio {inst.rid} "
+              "addresses that daemon, and its settings are the radio's (the console's daemon card for the radio)")
+        return 2
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
                               ("<param>", positional)) if on]
@@ -322,10 +335,10 @@ def _cmd_config(svc, args) -> int:
         return 2
 
     if args.reset:
-        if not args.yes and not _confirm(f"\nReset {stack} settings to defaults? [y/N] "):
+        if not args.yes and not _confirm(f"\nReset {target} settings to defaults? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(svc.reset_config(stack, args.band))
+        return _render(svc.reset_config(stack, args.band, inst))
 
     if daemon_mode:
         if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
@@ -350,7 +363,7 @@ def _cmd_config(svc, args) -> int:
         return _render(svc.save_daemon_params(stack, args.band, vals))
 
     if args.param is None or args.param == "list":
-        return _config_list(svc, stack, args.band)
+        return _config_list(svc, stack, args.band, inst)
 
     # show / set a single parameter — resolve the name to its canonical key (NO first-match).
     fields = svc.config_param_fields(stack, args.band)
@@ -362,36 +375,36 @@ def _cmd_config(svc, args) -> int:
             print(f"ERR   {hint}")
             return 1
         print(f"ERR   unknown parameter '{args.param}' for '{stack}'")
-        print(f"\nNext:\n  lhpc config {stack}")
+        print(f"\nNext:\n  lhpc config {target}")
         return 1
     if len(matches) > 1:
         forms = sorted({f"{f['component']}.{f['name']}" for f in matches})
         print(f"ERR   '{args.param}' is declared by multiple components — qualify it:")
         for form in forms:
-            print(f"    lhpc config {stack} {form} <value>")
+            print(f"    lhpc config {target} {form} <value>")
         return 1
     fld = matches[0]
-    row = next((r for r in _config_rows(svc, stack, args.band)
+    row = next((r for r in _config_rows(svc, stack, args.band, inst)
                 if r["component"] == fld["component"] and r["name"] == fld["name"]), None)
 
     if args.value is None:                                  # show
-        print(f"OK    {stack} · {fld['component']} · {fld['name']}")
+        print(f"OK    {target} · {fld['component']} · {fld['name']}")
         if row is not None:
             print(f"  value   = {row['value'] or '(empty)'}")
             print(f"  default = {row['default'] or '(empty)'}")
             if row.get("choices"):
                 print(f"  choices = {', '.join(row['choices'])}")
-        print(f"\n  set:  lhpc config {stack} {args.param} <value>")
+        print(f"\n  set:  lhpc config {target} {args.param} <value>")
         return 0
 
     key = f"file_{fld['key']}" if fld["kind"] == "file" else fld["key"]
     # Plain config editing, the CLI counterpart of the Settings page: clearing an identity is
     # allowed and WARNed about below; `lhpc stack start/restart` is what refuses to launch without
     # one, exactly as the web Start/Restart panel does.
-    res = svc.save_config_bundle(stack, values={key: args.value}, band=args.band)
+    res = svc.save_config_bundle(stack, values={key: args.value}, band=args.band, inst=inst)
     rc = _render(res)
     if res.ok and row is not None and row["is_identity"]:
-        ok, _fields, msg = svc.enforce_identity(stack, args.band)
+        ok, _fields, msg = svc.enforce_identity(stack, args.band, inst)
         if not ok:
             print(f"WARN  {msg}")
     return rc
