@@ -39,7 +39,8 @@ def test_by_job_still_knows_the_013x_band_files(band):
 @pytest.mark.parametrize("job", [
     "r0/rf-daemon.log", "r100/rf-daemon.log", "R1/rf-daemon.log", "r01/rf-daemon.log", "r1//rf-daemon.log",
     "r1/../x", "../rf-daemon.log", "r1/../rf-daemon.log", "r1/rf-daemon.log\n", " r1/rf-daemon.log",
-    "logs/r1/rf-daemon.log", "r1/r2/rf-daemon.log", "r1/rf-daemon.log.bak", "r1/rf-kiss.log", "r1\\rf-daemon.log",
+    "logs/r1/rf-daemon.log", "r1/r2/rf-daemon.log", "r1/rf-daemon.log.bak", "r1/rf-meshcom.log", "r1\\rf-daemon.log",
+    "r1/rf-reticulum.log", "r1/rf-meshtastic.log",                       # 7f: no instances of these stacks
     "/r1/rf-daemon.log", "r1/", "rf-daemon.log", "rf-daemon-915.log", "",
 ])
 def test_by_job_refuses_every_other_name(job):

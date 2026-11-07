@@ -438,3 +438,33 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     b = svc.running_band(sid, comp.band or band) or comp.band or band
     rid, _why = slot0_radio(svc._paths, sid, b)
     return {"exclude_rids": tuple(taken), "token": _token(svc, comp, commands.Instance(0, rid), b) if rid else None}
+
+
+def log_runs(svc, e, rid: str) -> bool:
+    """7f: the RF log badge of a listed instance's own log `<rid>/rf-<x>.log`: that instance's run state."""
+    _sid, inst, band, why = resolve(svc, f"{e.owner}@{rid}")
+    comp = svc.stack(e.owner).component(e.writer) if svc.stack(e.owner) else None
+    return not why and comp is not None and instance_runs(svc, comp, inst, band)
+
+
+def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
+    """The MeshCore RF decoder's mode, secrets and stores: slot 0's (the mode its log is written in), or a listed
+    instance's own (7f: its mode, config/secrets/<rid>, state/<rid>/…), never slot 0's."""
+    from . import meshcore_mode
+    own = (rid,) if rid else ()
+    mode = meshcore_mode.normalize(svc.meshcore_mode(resolve(svc, f"{sid}@{rid}")[1])) if rid else svc._rflog_meshcore_mode()
+    return ["--mode", mode, "--secrets", str(svc._paths.under("config", "secrets", *own)),
+            "--store", str(svc._paths.under("state", *own, "meshcore", "companion.db")),
+            "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
+
+
+def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
+    """7f: the RF log page's stack-row entries of entry `e`'s listed instances on `band`, each its own `<rid>/<file>`."""
+    from . import radio_start, rflog
+    out = []
+    for rid in sorted(listed_rids(svc._paths, e.owner), key=lambda r: int(r[1:])):
+        job = f"{rid}/{job_name}"
+        if radio_start.rf_band(svc, rid) == band and rflog.by_job(job):
+            out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",
+                        "current": job == shown_job})
+    return out

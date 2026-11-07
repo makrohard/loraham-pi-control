@@ -29,7 +29,9 @@ from dataclasses import dataclass
 RF_LOG_PARAM = "rf_log"
 RADIO_FILE = "rf-daemon.log"
 _RID = re.compile(r"r[1-9][0-9]?")
-RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/rf-daemon\.log")
+# a radio's own RF log one level under logs/: the daemon's per radio, and a listed instance's of a stack that may run
+# instances (7f: kiss and meshcore write logs/{instance_dir}rf-<x>.log; chat writes none)
+RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/(rf-daemon|rf-kiss|rf-meshcore)\.log")
 GROUP = "RF-Logs"
 ON, OFF = "on", "off"
 MAX_BYTES = 5 * 1024 * 1024         # the writers' cap; LHPC applies it to meshtastic itself
@@ -100,7 +102,8 @@ def by_job(job: str) -> tuple[Entry, str] | None:
                 return e, band
     m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
     if m:
-        e = next((x for x in REGISTRY if x.per_radio), None)
+        name = job.partition("/")[2]
+        e = next((x for x in REGISTRY if (x.per_radio and name == RADIO_FILE) or (not x.banded and x.job() == name)), None)
         if e is not None:
             return e, m.group(1)
     return None

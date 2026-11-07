@@ -43,7 +43,7 @@ def _use(monkeypatch, script, *extra):
     and the only place the argv contract (interpreter, script, paths, never a key) is observable,
     which is why the tests above call it directly as their subject."""
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv",
-                        lambda self, e: ((sys.executable, str(script), *extra), ""))
+                        lambda self, e, rid="": ((sys.executable, str(script), *extra), ""))
 
 
 ECHO = ("for r in reqs:\n"
@@ -124,7 +124,7 @@ def test_reticulum_prefers_the_lxmf_venv_which_carries_rns_and_lxmf(tmp_path):
 def test_a_plaintext_job_is_refused_without_running_anything(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv",
-                        lambda self, e: pytest.fail("must not resolve a decoder"))
+                        lambda self, e, rid="": pytest.fail("must not resolve a decoder"))
     res = svc.rflog_decode("loraham-kiss-tnc", "rf-kiss.log", _records(1))
     assert res["error"] == "not a decodable RF log" and res["records"] == _records(1)
     assert svc.rflog_decode("meshcore-node", "rf-meshtastic.log", [])["error"]    # not this writer's
@@ -170,7 +170,7 @@ def test_the_run_is_bounded_in_time_and_output(tmp_path, monkeypatch):
     assert svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))["error"] == "decoder output too large"
     missing = tmp_path / "gone.py"
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv",
-                        lambda self, e: ((str(tmp_path / "no-such-python"), str(missing)), ""))
+                        lambda self, e, rid="": ((str(tmp_path / "no-such-python"), str(missing)), ""))
     assert svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))["error"].startswith("decoder could not start")
 
 
