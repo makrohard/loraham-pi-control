@@ -140,19 +140,21 @@
       }
       row.querySelector(".ti-view").setAttribute("href", t.href || "#");
 
-      // ✕ (dismiss) for failed; Recover for an unsafe JOB. Rebuild the trailing control on state change.
-      var oldBtn = row.querySelector(".ti-close, .ti-recover");
-      if (oldBtn) row.removeChild(oldBtn);
-      if (t.state === "failed" && !t.no_dismiss) {
+      // Recover for an unsafe JOB; the ✕ (dismiss) for failed and for an unsafe item of every kind (UX, X5),
+      // beside Recover. Rebuild the trailing controls on a state change. The ✕ only hides the item (X8).
+      row.querySelectorAll(".ti-close, .ti-recover").forEach(function (b) { row.removeChild(b); });
+      if (t.state === "unsafe" && t.kind === "job") {
+        var rec = el("button", "ti-recover", "Recover"); rec.setAttribute("type", "button");
+        rec.addEventListener("click", function () { post("/api/tasks/recover", t).then(tick); });
+        row.appendChild(rec);
+      }
+      if (t.state === "unsafe" || (t.state === "failed" && !t.no_dismiss)) {
         var x = el("button", "ti-close", "×"); x.setAttribute("type", "button"); x.title = "Dismiss";
+        x.setAttribute("aria-label", "Dismiss");
         x.addEventListener("click", function () {
           post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) row.parentNode && banner.removeChild(row); });
         });
         row.appendChild(x);
-      } else if (t.state === "unsafe" && t.kind === "job") {
-        var rec = el("button", "ti-recover", "Recover"); rec.setAttribute("type", "button");
-        rec.addEventListener("click", function () { post("/api/tasks/recover", t).then(tick); });
-        row.appendChild(rec);
       }
     });
   }

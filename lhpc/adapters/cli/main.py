@@ -760,8 +760,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hw = sub.add_parser("hardware",
                           help="Show or set the radio hardware setup (which board(s) the box has)")
-    p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
-                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
+    p_hw.add_argument("setup", nargs="?", choices=(*_HW_SETUPS, "remove"),
+                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list); "
+                           "`remove <rid>` removes one radio of the hardware list")
+    p_hw.add_argument("rid", nargs="?", help="with remove: the radio id (r1 … r99); its id stays reserved")
+    p_hw.add_argument("--confirm-phrase", default="", dest="hw_confirm_phrase",
+                      help="with remove: remove-<rid>; without it the remove is a dry run that changes nothing")
     # The per-band +20 dBm permission lives beside the hardware setup (daemon 1.2.0 --high-power):
     # `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
     # for the switch. Saves and marks the daemon restart-required; restarts nothing.
@@ -835,6 +839,15 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Endpoint ids allowed DIRECT access, comma/space separated; \"\" = none")
     p_fw.add_argument("--recommended", action="store_true",
                       help="Safe preset: secure-default, no direct access, AP off, overrides cleared")
+
+    # NA: the AP subnet setting, the console's Network panel field; the recovery path when a subnet change leaves
+    # the console unreachable. The one apply (network_set_ap_cidr) checks the phrase first, then the value.
+    p_net = sub.add_parser("network", help="The access point's IPv4 subnet (network.ap_cidr)")
+    p_net.add_argument("--ap-cidr", required=True, metavar="CIDR|default",
+                       help="Private IPv4 subnet, /16 to /28, e.g. 10.43.0.0/24; 'default' = 10.42.0.0/24")
+    from lhpc.core.ap_network import AP_CIDR_CONFIRM
+    p_net.add_argument("--confirm-phrase", default="",
+                       help=f"Type '{AP_CIDR_CONFIRM}' to confirm the change")
 
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
@@ -1530,6 +1543,12 @@ def _run(argv: list[str] | None = None) -> int:
                 print("  failed stacks are NOT retried — restart them with:  lhpc stack start <id>")
         return 0
     if args.command == "hardware":
+        if args.setup == "remove" or args.rid:
+            if args.setup != "remove" or not args.rid or args.high_power or args.ocp:
+                print("ERR   usage: lhpc hardware remove <rid> [--confirm-phrase remove-<rid>]")
+                return 2
+            from lhpc.core import radio_start
+            return _render(radio_start.remove_radio(svc, args.rid, args.hw_confirm_phrase))
         if args.high_power:
             if args.setup:
                 print("ERR   --high-power and a hardware setup are separate settings — one at a time")
@@ -1568,6 +1587,8 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "_gps-bridge":
         from lhpc.core import gps_bridge as _gpsb
         return _gpsb.run(args.consumer, svc._paths, state=args.state)
+    if args.command == "network":
+        return _render(svc.network_set_ap_cidr(args.ap_cidr, args.confirm_phrase))
     if args.command == "firewall":
         import json as _json
 

@@ -35,7 +35,7 @@ BUDGETS = {
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
     "service_lifecycle_ops.py": (3366, 32),  # co-17: a stored OCP the band's chip cannot represent blocks that band's start
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
-    "service_network.py": (1272, 10),  # co-16: the check that the firewall's AP rules cover the AP
+    "service_network.py": (1272, 12),  # w17-NA: (DEC-W34) +2 public = ap_cidr() + network_set_ap_cidr(), the fixed interface; lines kept by moving _fw_ap_live's body to ap_network.py
     "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),

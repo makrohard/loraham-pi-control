@@ -50,6 +50,11 @@ def _is_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _is_stamp(v) -> bool:
+    """A time stamp: a non-negative int below 2**63 (L24 F7, as selfupdate's)."""
+    return _is_int(v) and 0 <= v < 1 << 63
+
+
 def _is_str(v) -> bool:
     return isinstance(v, str) and len(v) <= _STR_MAX
 
@@ -68,7 +73,7 @@ def _valid_entry(e) -> bool:
     for k in ("remote", "source_path"):
         if k in e and not _is_str(e[k]):
             return False
-    return not ("checked_at" in e and not _is_int(e["checked_at"]))
+    return not ("checked_at" in e and not _is_stamp(e["checked_at"]))
 
 
 def _clean_components(comps) -> dict:
@@ -82,14 +87,14 @@ def _clean_components(comps) -> dict:
 
 def _valid_cache(data) -> bool:
     """Envelope-level schema check. A present `schema_version` must be exactly ours (an unknown or
-    future version is rejected outright); a present `checked_at` must be an int (never a bool)."""
+    future version is rejected outright); a present `checked_at` must be a stamp (_is_stamp)."""
     if not isinstance(data, dict):
         return False
     if "schema_version" in data:
         sv = data["schema_version"]
         if not _is_int(sv) or sv != CACHE_SCHEMA_VERSION:
             return False
-    if "checked_at" in data and not _is_int(data["checked_at"]):
+    if "checked_at" in data and not _is_stamp(data["checked_at"]):
         return False
     return not ("components" in data and not isinstance(data["components"], dict))
 
@@ -126,7 +131,7 @@ def write_cache(paths: Paths, data: dict) -> None:
 def view(paths: Paths) -> dict:
     """The cached, network-free reader for GET pages."""
     data = read_cache(paths)
-    return {"checked_at": data.get("checked_at") if _is_int(data.get("checked_at")) else 0,
+    return {"checked_at": data.get("checked_at") if _is_stamp(data.get("checked_at")) else 0,
             "components": _clean_components(data.get("components"))}
 
 
@@ -148,6 +153,25 @@ def effective_status(entry, current_head: str) -> str:
     if not at or not current_head or at != current_head:
         return UNCHECKED
     return status
+
+
+def pinned_target(paths: Paths, stack, comp, effective_remote) -> str:
+    """The commit a bare Update installs for `comp` when its source follows the PIN, else "".
+
+    A bare Update is "Known working": the operator-confirmed composition's commit, else the manifest pin. A
+    source follows the pin when its ownership record says it was installed from the `pinned` selector; one
+    from dev or stable follows its branch, and one without a valid record keeps the branch tip as before.
+    The freshness check compares the head with this commit instead of the branch tip, which a pinned source
+    never reaches, so an Update offered there could never clear itself (W204, W208)."""
+    from . import known_working, source_registry
+    spec = getattr(comp, "source", None)
+    if spec is None or spec.artifact or stack is None:
+        return ""
+    rec = source_registry.read_record(paths, spec.path)
+    if rec is None or rec.selector != "pinned":
+        return ""
+    entries = known_working.compatible_composition(paths, stack, effective_remote) or {}
+    return (entries.get(comp.id) or {}).get("commit") or spec.pin_commit or ""
 
 
 def record(paths: Paths, results: dict, now: int | None = None) -> dict:

@@ -216,10 +216,13 @@ class StatusProber:
         # ready/not-ready channel the endpoint machinery uses gives DEGRADED on loss and a
         # clean return to RUNNING on recovery, with no restart.
         if comp.readiness == "gps-feed":
-            feed_ready, feed_note = self._gps_feed_ready(comp)
+            feed_ready, feed_note, feed_state = self._gps_feed_verdict(comp)
             has_expected = True
             all_ready = feed_ready
             status.evidence["gps.feed"] = feed_note
+            # F2: a feed reachable without a fix is healthy (a cold receiver takes minutes), but it reads
+            # "no fix" until it has one: the clock cannot follow a fix that does not exist yet.
+            status.evidence["gps.fix"] = {"ready": "fix", "connected": "no-fix"}.get(feed_state, "")
 
         status.run_state = _run_state_for_service(
             unit_states=unit_states,
@@ -313,7 +316,11 @@ class StatusProber:
         return _profile_from_source(src.state)
 
     def _gps_feed_ready(self, comp) -> tuple[bool, str]:
-        """(healthy, note) for a GPS feed, from the marker it writes about its UPSTREAM.
+        """(healthy, note) of `_gps_feed_verdict`."""
+        return self._gps_feed_verdict(comp)[:2]
+
+    def _gps_feed_verdict(self, comp) -> tuple[bool, str, str]:
+        """(healthy, note, the marker's state or "") for a GPS feed, from the marker it writes about its UPSTREAM.
 
         `ready` (sentences flowing) and `connected` (source reachable, no fix yet — a cold
         start can take minutes) both count as healthy. Anything else means the position is not
@@ -329,32 +336,32 @@ class StatusProber:
         # DERIVED from the ONE feed mapping — see gps.FEED_COMPONENTS.
         consumer = consumer_for_component(comp.id)
         if not consumer:
-            return True, "not a GPS feed"
+            return True, "not a GPS feed", ""
         marker = _Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
         try:
             got = runtime_fs.loads_json(runtime_fs.read_text_regular(self._paths, marker,
                                                                     max_bytes=4096))
         except (OSError, ValueError, runtime_fs.PathContainmentError):
-            return False, "no readiness marker"
+            return False, "no readiness marker", ""
         if not isinstance(got, dict):
-            return False, "unreadable readiness marker"
+            return False, "unreadable readiness marker", ""
         # Same rule as the start gate: a marker from a previous run, or one nobody has
         # refreshed, does not describe the feed that is supposed to be running now.
         if not gps.marker_is_fresh(got, time.time(), gps.MARKER_MAX_AGE_S):
-            return False, "readiness marker is stale"
+            return False, "readiness marker is stale", ""
         # A feed killed moments after its last refresh leaves a marker that is still RECENT, so
         # the owning process is what says it is still there — the same rules as the start gate.
         pid = gps.marker_owner_pid(got)
         if pid is None:
-            return False, "readiness marker has no usable owner pid"
+            return False, "readiness marker has no usable owner pid", ""
         if not procident.pid_exists_signal0(pid):
-            return False, "readiness marker is stale (feed is gone)"
+            return False, "readiness marker is stale (feed is gone)", ""
         state = str(got.get("state", ""))
         if state == "ready":
-            return True, f"source live ({got.get('sentences', 0)} sentences)"
+            return True, f"source live ({got.get('sentences', 0)} sentences)", state
         if state == "connected":
-            return True, "source reachable, waiting for a fix"
-        return False, f"source not delivering ({got.get('detail') or state or 'unknown'})"
+            return True, "source reachable, waiting for a fix", state
+        return False, f"source not delivering ({got.get('detail') or state or 'unknown'})", state
 
     def _assess_endpoints(
         self, comp: Component
@@ -536,3 +543,18 @@ def _find(stacks: tuple[Stack, ...], component_id: str) -> Component | None:
         if c:
             return c
     return None
+
+
+def component_note(status) -> str:
+    """One short line on why a component is not plainly running, for the console and `lhpc status` ("" = nothing to
+    add): a GPS feed without a fix (F2); for a degraded or failed component its reason (F3b): the GPS feed's own note,
+    else the listeners that are absent."""
+    ev = getattr(status, "evidence", None) or {}
+    if ev.get("gps.fix") == "no-fix":
+        return "no fix yet (the receiver is reachable)"
+    if getattr(getattr(status, "run_state", None), "value", "") not in ("degraded", "failed"):
+        return ""
+    if ev.get("gps.feed") and ev.get("gps.fix") != "fix":
+        return f"GPS feed: {ev['gps.feed']}"
+    absent = [o.spec.address for o in (getattr(status, "endpoints", None) or ()) if not o.present]
+    return f"listener absent: {', '.join(absent)}" if absent else ""

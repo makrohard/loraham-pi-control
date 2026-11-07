@@ -470,19 +470,13 @@ def test_a_new_usb_row_adds_its_line_and_a_repeated_id_does_not():
         'SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0660", GROUP="plugdev"\n')
 
 
-def test_the_modprobe_text_blacklists_spi_ch341():
-    """B2: the text the bootstrap prints before it writes."""
-    assert ua.modprobe_text() == ("# Written by LHPC's bootstrap for its USB radios; applies to the whole host.\n"
-                                  "blacklist spi_ch341\n")
-
-
 def test_the_host_setup_is_the_one_generator_of_files_commands_and_group():
-    """B3/W10: the script and the copybox read this one value."""
+    """B3/W10: the script and the copybox read this one value; W226: the udev rule only, no module blacklist and no
+    `modprobe -r` (the daemon's CH341 library detaches the kernel driver of a stick it opens)."""
     assert ua.host_setup(MODELS) == ua.HostSetup(
-        (("/etc/udev/rules.d/90-lhpc-usb-radio.rules", HEADER + RULE),
-         ("/etc/modprobe.d/lhpc-usb-radio.conf", ua.modprobe_text())),
-        (("udevadm", "control", "--reload-rules"), ("udevadm", "trigger", "--subsystem-match=usb", "--action=add"),
-         ("modprobe", "-r", "spi_ch341")), "plugdev")
+        (("/etc/udev/rules.d/90-lhpc-usb-radio.rules", HEADER + RULE),),
+        (("udevadm", "control", "--reload-rules"), ("udevadm", "trigger", "--subsystem-match=usb", "--action=add")),
+        "plugdev")
 
 
 # --- doctor-line data (B4-B10; T-U2..T-U4) ---
@@ -769,8 +763,10 @@ def test_an_injected_read_error_is_unknown_never_absent(root, inject, err, read,
 
 def test_only_the_b5_wiring_imports_usb_access():  # rule-1 exception
     """A whole-package invariant no driven path proves: the B5 minimum wires lhpc.core.usb_access through
-    exactly two modules, usb_flow (its pure consumers) and radio_start (the start pre-check, the doctor, the
-    Hardware section); a relative `from . import usb_access` counts. Behavioural twin: the next test."""
+    exactly these modules: usb_flow (its pure consumers), radio_start (the start pre-check, the doctor, the
+    Hardware section), hotplug (the dashboard's hotplug banner, W249, which reads the scan lazily) and
+    radio_detect/run.py (Detect: a stick's serial to its current port, DEC-W43, DEC-W35); a relative
+    `from . import usb_access` counts. Behavioural twin: the next test."""
     importers = []
     for path in (repo_paths.REPO / "lhpc").rglob("*.py"):
         if path.name == "usb_access.py" and path.parent.name == "core":
@@ -781,7 +777,8 @@ def test_only_the_b5_wiring_imports_usb_access():  # rule-1 exception
                      else [])
             if any("usb_access" in n for n in names):
                 importers.append(str(path.relative_to(repo_paths.REPO)))
-    assert sorted(set(importers)) == ["lhpc/core/radio_start.py", "lhpc/core/usb_flow.py"]
+    assert sorted(set(importers)) == ["lhpc/core/hotplug.py", "lhpc/core/radio_detect/run.py",
+                                      "lhpc/core/radio_start.py", "lhpc/core/usb_flow.py"]
 
 
 def test_loading_the_cli_web_and_bootstrap_modules_does_not_load_usb_access():

@@ -154,19 +154,15 @@ class JobsOpsMixin:
             if err:
                 return None, "blocked", err
             comps = [c for _, c in items]
-            # BUILD: the one selection and order (`build_plan`); the parallel per-component jobs
-            # then build one round — a provider and its consumer never in the same round (the
-            # consumer would race the provider's artifact). While a provider is not built, this
-            # round builds it and the operator builds again once it finishes.
+            # BUILD: one round of the build plan after the GUI decision `lhpc build` takes (web_build, W205);
+            # the parallel per-component jobs then build that round.
             build_dep_note = ""
             by_all = {c.id: c for st in self.stacks() for c in st.components}
             if op == "build":
-                ordered = build_plan.order(build_plan.select(comps, self.stack(target)))
-                comps, again = build_plan.web_round(ordered, self.is_built)
-                if again:
-                    names = ", ".join(c.name for c in comps)
-                    build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
-                                      "to build the rest once it finishes.")
+                from . import web_build
+                comps, build_dep_note, why = web_build.round_for(self, comps, self.stack(target))
+                if why:
+                    return None, "blocked", why
             src_paths = {c.source.path for c in comps if c.source}
             src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
@@ -682,9 +678,8 @@ class JobsOpsMixin:
                 # FIFO, never follows a swapped/symlinked marker, never reads unbounded).
                 raw = tomllib.loads(runtime_fs.read_text_regular(
                     self._paths, f, max_bytes=self._JOB_MARKER_MAX))
-                pid = int(raw["pid"])
-            except (OSError, PathContainmentError, KeyError, ValueError,
-                    tomllib.TOMLDecodeError) as exc:
+                pid = procident.marker_pid(raw)          # ValueError unless a real pid (L24 F3)
+            except (OSError, PathContainmentError, ValueError, tomllib.TOMLDecodeError) as exc:
                 if include_unsafe:
                     out.append({"unsafe": True, "name": name,
                                 "reason": f"job marker malformed/unreadable: {exc}"})
@@ -753,7 +748,7 @@ class JobsOpsMixin:
             try:
                 # FULL identity match (PID-reuse-safe), never bare PID liveness: a recycled
                 # pid running an unrelated process is not this job.
-                return procident.identity_matches(raw, int(raw["pid"]))
+                return procident.identity_matches(raw, procident.marker_pid(raw))
             except (KeyError, ValueError, TypeError):
                 return False
         s = self.stack(target)

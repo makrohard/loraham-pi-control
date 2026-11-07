@@ -160,7 +160,8 @@ def test_active_jobs_stale_cleanup_swapped_to_dir_safe(tmp_path, monkeypatch):
     (tmp_path / "logs").mkdir()
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
     # a stale marker: valid TOML, a DEAD/foreign identity so it reaches the cleanup branch
-    (jobs / "stale.job").write_text(_valid_job_marker(999_999_990, log="build-y.log"))
+    assert not os.path.exists("/proc/4194302")                 # a possible pid, not running
+    (jobs / "stale.job").write_text(_valid_job_marker(4_194_302, log="build-y.log"))
     def _raise_isdir(paths, p):
         raise IsADirectoryError(21, "Is a directory")          # simulate swapped-to-dir race
     monkeypatch.setattr(runtime_fs, "unlink", _raise_isdir)
@@ -173,7 +174,8 @@ def test_active_jobs_unchanged_stale_marker_removed(tmp_path):
     # an unchanged stale regular marker (dead identity) is safely removed.
     svc = _svc(tmp_path)
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
-    (jobs / "stale.job").write_text(_valid_job_marker(999_999_991))
+    assert not os.path.exists("/proc/4194303")                 # a possible pid, not running (L24 F3:
+    (jobs / "stale.job").write_text(_valid_job_marker(4_194_303))   # one above PID_MAX_LIMIT is malformed)
     assert svc.active_jobs() == []                             # dead identity -> not active
     assert not (jobs / "stale.job").exists()                   # and cleaned up
 

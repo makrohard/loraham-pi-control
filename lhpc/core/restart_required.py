@@ -15,6 +15,7 @@ marker, the global identity path) stays until the restart.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -82,10 +83,21 @@ def read_marker(paths: Paths, stack_id: str) -> dict | None:
             or not all(_clean(k) and isinstance(v, str) for k, v in launched_v.items())):
         return _unsafe("restart-required marker carries malformed launch values — treat as "
                        "restart required; resolve the marker")
-    if not isinstance(d.get("created_at"), (int, float)):
+    if not _real_time(d.get("created_at")):
         return _unsafe("restart-required marker carries an invalid timestamp — treat "
                        "as restart required; resolve the marker")
     return d
+
+
+def _real_time(v) -> bool:
+    """A finite, non-negative int or float (the writer stores time.time()); never a bool. NaN,
+    ±inf and a 401-digit integer once passed as a valid marker (L24 F6)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(v) and v >= 0
+    except OverflowError:                       # an integer too large for a float
+        return False
 
 
 def _clean(x) -> bool:

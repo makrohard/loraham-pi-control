@@ -181,25 +181,23 @@ def test_dependency_param_override_channel(tmp_path):
 def test_component_booting_tracks_live_post_runner(tmp_path):
     # A running component reads 'booting' while its post-start (--setcall) runner is still alive,
     # then flips to normal once the runner finishes.
-    import subprocess, time
+    import subprocess
     svc = _svc(tmp_path)
     life = svc._lifecycle()
     assert svc._component_booting("meshcom-qemu") is False           # no runner
     p = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:
-        for _ in range(50):
-            idn = life._capture_identity(p.pid)
-            if idn and idn.get("exec") == "sleep":
-                break
-            time.sleep(0.05)
+        # Popen returns only after the child's exec succeeded (CPython's exec-error pipe), so the
+        # identity is `sleep` already: one read, no polling (L32, W231).
+        idn = life._capture_identity(p.pid)
+        assert idn and idn.get("exec") == "sleep", idn
         comp, stack = svc.stack("meshcom").component("meshcom-qemu"), svc.stack("meshcom")
         life.record_launch(stack, comp, p.pid, "", ident=life._capture_identity(p.pid), role="post")
         assert svc._component_booting("meshcom-qemu") is True          # runner alive -> booting
     finally:
         p.terminate(); p.wait()
-    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
-    while svc._component_booting("meshcom-qemu") is not False and time.monotonic() < deadline:
-        time.sleep(0.1)
+    # p.wait() reaped the runner: its /proc entry is gone, and _component_booting reads /proc and the
+    # record directly (no cache), so the answer is due now, not after a clock (L32, W231).
     assert svc._component_booting("meshcom-qemu") is False             # runner gone -> ready
 
 

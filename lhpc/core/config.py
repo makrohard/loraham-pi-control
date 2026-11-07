@@ -29,6 +29,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from .ap_subnet import DEFAULT as _AP_SUBNET_DEFAULT
 from .assets import asset_path
 from .daemon_control import ALLOWED_BANDS
 from .paths import PathContainmentError, Paths
@@ -594,6 +595,39 @@ class FirewallConfig:
     extra_allow: tuple = ()          # tuple of dicts: {proto,family,addr,port,cidr}
 
 
+@dataclass(frozen=True)
+class NetworkConfig:
+    """`[network]` in local.toml (NA): the access point's IPv4 subnet, `ap_cidr`, one setting for the AP profile,
+    the firewall's AP default, the webserver's AP expose default and the certificate hint. Absent = the default.
+    `valid` is False only when the local layer could not be read: the setting is then unknown and its consumers
+    refuse instead of assuming the default."""
+
+    ap_cidr: str = _AP_SUBNET_DEFAULT
+    valid: bool = True
+
+
+# The reason a bad stored network.ap_cidr VALUE carries: the 409 names `lhpc network --ap-cidr default`, which
+# clears it. A [network] that is not a table gets no hint: that clear refuses it (a hand edit is the way out).
+AP_CIDR_INVALID = "network-ap-cidr-invalid"
+
+
+def _parse_network(local: dict, failed: bool) -> NetworkConfig:
+    """The stored `[network] ap_cidr`, validated by ap_subnet; an invalid value of any type is the loader's
+    ConfigError naming network.ap_cidr (never a silent default)."""
+    from . import ap_subnet
+    if failed:
+        return NetworkConfig(ap_cidr=ap_subnet.DEFAULT, valid=False)
+    raw = local.get("network", {})
+    if not isinstance(raw, dict):
+        raise ConfigError(f"network.ap_cidr: [network] is a {type(raw).__name__}, not a table")
+    if "ap_cidr" not in raw:
+        return NetworkConfig(ap_cidr=ap_subnet.DEFAULT)
+    try:
+        return NetworkConfig(ap_cidr=str(ap_subnet.validate(raw["ap_cidr"])))
+    except ap_subnet.ApSubnetError as exc:
+        raise ConfigError(f"network.ap_cidr in local.toml is invalid: {exc}", reason=AP_CIDR_INVALID) from None
+
+
 @dataclass
 class Config:
     """Effective configuration after merging defaults + local overrides."""
@@ -604,6 +638,7 @@ class Config:
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
     boot: BootConfig = field(default_factory=BootConfig)
     gps: GpsConfig = field(default_factory=GpsConfig)   # THE position source for every stack
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
@@ -955,6 +990,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     webserver = _parse_webserver(merged, diagnostics)
     stackweb = _parse_stackweb(merged, diagnostics)
     firewall = _parse_firewall(merged, diagnostics)
+    network = _parse_network(local, local_layer_failed)
     boot = _parse_boot(merged, diagnostics)
     gps = _parse_gps(merged, diagnostics)
     if gps.source == "auto" and gps.auto_listening is None:
@@ -986,6 +1022,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         webserver=webserver,
         stackweb=stackweb,
         firewall=firewall,
+        network=network,
         boot=boot,
         gps=gps,
         sources=sources,
@@ -1380,6 +1417,18 @@ def _write_local_tables(paths: Paths, path: Path, updates: dict) -> Path:
     # Type-safe + fail-closed render (raises before any write on an unsupported value/key).
     _atomic_write(paths, path, render_local_tables(data), mode=0o600)   # local layer: 0600
     return path
+
+
+def set_network(paths: Paths, *, ap_cidr: str) -> str:
+    """NA: store `[network] ap_cidr` (validated by ap_subnet first: a refused value raises and leaves local.toml
+    byte-identical) and return the effective subnet text; "default" removes the key (the effective value is
+    then ap_subnet.DEFAULT)."""
+    from . import ap_subnet
+    value = None if ap_cidr == "default" else str(ap_subnet.validate(ap_cidr))
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        _write_local_tables(paths, path, {"network": {"ap_cidr": value}})
+    return value or ap_subnet.DEFAULT
 
 
 def save_operator_config(paths: Paths, callsign: str) -> Path:

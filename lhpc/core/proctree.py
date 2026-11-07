@@ -180,13 +180,9 @@ def _ownership_state(token: SessionToken, exclude_pid: int) -> str:
     # ABSENT leader falls through to the session-member liveness check. (Without this, the
     # strict-capture change would misread a recycled pid as 'owned' and signal a foreign
     # — or our own — session.)
-    try:
-        os.kill(token.pid, 0)
-        return "unverified"               # live pid, not our self-led leader -> recycled
-    except ProcessLookupError:
-        pass                              # leader genuinely gone
-    except PermissionError:
-        return "unverified"               # exists but not ours -> recycled, don't signal
+    from . import procident
+    if procident.signal0_state(token.pid) != "gone":
+        return "unverified"               # live (ours or not), not our self-led leader -> recycled, don't signal
     return "owned" if session_members(token.sid, exclude_pid) else "ceased"
 
 

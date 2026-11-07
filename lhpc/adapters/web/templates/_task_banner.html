@@ -1,7 +1,8 @@
 {# Running-task indicator (auto-install + HMAC + build/test/install jobs). Server-rendered initial state;
    taskbanner.js re-renders from the read-only /api/tasks. Colours: running=yellow, done=green,
    failed/unsafe=red. The server owns visibility (done expires after 60 s; failed/unsafe STAY). A `failed`
-   banner gets a ✕ (dismiss); an `unsafe` JOB gets a Recover button; unsafe hmac/auto-install keep View →. #}
+   banner gets a ✕ (dismiss); an `unsafe` banner of every kind gets the ✕ too (UX, X5), and an unsafe JOB keeps
+   its Recover button beside it. The ✕ only hides the item (X8): it never starts, recovers or cancels a job. #}
 <div class="taskbanner" id="task-banner" data-csrf="{{ csrf_token() }}">
   {% for t in tasks %}
   <div class="taskitem taskitem-{{ t.state }}" data-key="{{ t.kind }}-{{ t.run_id }}"
@@ -17,7 +18,8 @@
     <a class="ti-view" href="{{ t.href }}">view &rarr;</a>
     {% if t.state == 'unsafe' and t.kind == 'job' %}
     <button type="button" class="ti-recover">Recover</button>
-    {% elif t.state == 'failed' and not t.no_dismiss %}
+    {% endif %}
+    {% if t.state == 'unsafe' or (t.state == 'failed' and not t.no_dismiss) %}
     <button type="button" class="ti-close" title="Dismiss" aria-label="Dismiss">&times;</button>
     {% endif %}
   </div>

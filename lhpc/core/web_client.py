@@ -33,6 +33,8 @@ OLD_ROOT_REL = "build/tools/meshtasticd/web"         # the served root before Tr
 ROOT_REL = "build/tools/meshtastic-web"
 PROVENANCE_REL = ROOT_REL + "/web.provenance"
 _PROVENANCE_MAX = 4096
+# The meshtastic stack's refusal of a source channel on a binary install names the way to the web GUI alone.
+SWITCH_HINT = "  to change only the web GUI's version, use the Web client control (binary / stable / dev) on this page"
 # Set while `install(binary)` runs the component's build: the build fetches the pin even when a
 # stable/dev client is recorded, and the record changes only when that build succeeded.
 _FORCE_BINARY = contextvars.ContextVar("lhpc_web_force_binary", default=False)
@@ -151,6 +153,27 @@ def status(svc) -> str:
     if line and root != str(svc._paths.runtime_root / ROOT_REL / "web"):
         line += f" — not served: meshtasticd's RootPath is {root} (an operator setting)"
     return line
+
+
+def view(svc) -> dict:
+    """The web-client row's control (the Stacks page; read-only, no network): the installed client and the three
+    lines to switch to. The version a stable or dev line would install is the newest index-v3 entry paired with
+    the installed meshtasticd, read only when the operator asks for that line (the plan page), never on a GET.
+    {"installed", "line", "state", "unproven", "pin", "options": [{"line", "label", "disabled"}]}; {} without the
+    component."""
+    comp = component(svc)
+    if comp is None:
+        return {}
+    prov, pin_version = read_provenance(svc._paths), pin(comp)[0]
+    word, unproven = state(prov, pin_version, daemon_commit(svc))
+    no_index = "" if svc.binary_spec(DAEMON) is not None else "no binary index for this box"
+    labels = {"binary": f"binary {pin_version} (known working)",
+              "stable": "stable (the newest build paired with your meshtasticd)",
+              "dev": "dev (the newest nightly paired with your meshtasticd)"}
+    return {"installed": prov.get("web_version", ""), "line": selector(prov) if prov.get("web_version") else "",
+            "state": word, "unproven": unproven, "pin": pin_version,
+            "options": [{"line": s, "label": labels[s], "disabled": "" if s == "binary" else no_index}
+                        for s in SELECTORS]}
 
 
 def install(svc, selector_: str = "", apply: bool = False) -> ActionResult:
