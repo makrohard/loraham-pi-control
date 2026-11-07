@@ -20,6 +20,72 @@ _BOOTSTRAP = _REPO / "bootstrap-deps.sh"
 _USER = getpass.getuser()
 
 
+
+# The measured systemctl of box H (BOOTSTRAP-RETRY-measure-H): a filtered `list-unit-files UNIT` answers rc 0 with a
+# line when the unit is present and rc 1 with nothing when it is absent; `show --property=UnitFileState
+# --property=ActiveState --value` prints ActiveState then UnitFileState (an absent unit: "inactive" and an empty
+# line); `disable --now` leaves the unit disabled and stopped (recorded under $FAKE_SYSTEMCTL_STATE). A plan file
+# ($FAKE_SYSTEMCTL_SCRIPT) scripts single calls per verb (list, show, disable), first line first: timeout, deny,
+# hang, empty (rc 0, no output), absent (rc 1, no output), plumb (rc 125, which `timeout` passes on: the helper's
+# plumbing), ok (the call as without a plan), took (the disable takes effect, then times out), half (disabled but
+# still active, then a timeout), or value:<UnitFileState>:<ActiveState> for a show. Each consumed line is logged to <plan>.log.
+_FAKE_SYSTEMCTL_STATE = r"""st="${FAKE_SYSTEMCTL_STATE:-}"
+last=""; verb=1; for a in "$@"; do [ "$verb" = 1 ] && { verb=0; continue; }; case "$a" in --*) ;; *) last="$a" ;; esac; done
+u="${last%.service}.service"
+plan_take() {
+  [ -n "${FAKE_SYSTEMCTL_SCRIPT:-}" ] || return 1
+  l=$(grep -m1 -n "^$1 " "$FAKE_SYSTEMCTL_SCRIPT") || return 1
+  sed -i "${l%%:*}d" "$FAKE_SYSTEMCTL_SCRIPT"; a="${l#*:}"; a="${a#* }"
+  echo "$1 $a" >> "$FAKE_SYSTEMCTL_SCRIPT.log"; printf '%s' "$a"
+}
+act() {
+  case "$1" in
+    timeout) echo "Failed to $2: Connection timed out" >&2; exit 1 ;;
+    deny) echo "Failed to $2: Access denied" >&2; exit 1 ;;
+    hang) sleep 30; exit 0 ;;
+    empty) exit 0 ;;
+    absent) exit 1 ;;
+    plumb) exit 125 ;;
+  esac
+}
+known() { case " $units " in *" $u "*|*" ${u%.service} "*) return 0 ;; esac; return 1; }
+is_dis() {
+  [ -n "$st" ] && [ -e "$st/disabled/$u" ] && return 0
+  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $u "*|*" ${u%.service} "*) return 0 ;; esac; return 1
+}
+is_stop() {
+  [ -n "$st" ] && [ -e "$st/stopped/$u" ] && return 0
+  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $u "*|*" ${u%.service} "*) return 0 ;; esac; return 1
+}
+mark() { mkdir -p "$st/$1"; : > "$st/$1/$u"; }
+if [ "$1" = "show" ] && [ -n "$last" ]; then
+  if a=$(plan_take show); then
+    case "$a" in value:*) v="${a#value:}"; printf '%s\n%s\n' "${v#*:}" "${v%%:*}"; exit 0 ;; esac
+    act "$a" "get properties"
+  fi
+  known || { printf 'inactive\n\n'; exit 0; }
+  if is_stop; then echo inactive; else echo active; fi
+  if is_dis; then echo disabled; else echo enabled; fi
+  exit 0
+fi
+if [ "$1" = "list-unit-files" ] && [ -n "$last" ]; then
+  if a=$(plan_take list); then act "$a" "list unit files"; fi
+  known && { echo "$u enabled enabled"; exit 0; }
+  exit 1
+fi
+if [ "$1" = "disable" ] && [ -n "$st" ]; then
+  a=$(plan_take disable) || a=""
+  case "$a" in
+    took) mark disabled; mark stopped; act timeout "disable unit" ;;
+    half) mark disabled; act timeout "disable unit" ;;
+    ?*) act "$a" "disable unit" ;;
+  esac
+  case " ${FAKE_SYSTEMCTL_FAIL:-} " in *" $last "*|*" ${last%.service} "*) echo "Failed to disable unit: $last" >&2; exit 1 ;; esac
+  known || { echo "Failed to disable unit: Unit file $u does not exist." >&2; exit 1; }
+  mark disabled; mark stopped; exit 0
+fi
+"""
+
 def _fakebin(tmp_path, *, no_sudo=False):
     b = tmp_path / "fb"; b.mkdir(exist_ok=True)
     apt = tmp_path / "apt.log"; um = tmp_path / "usermod.log"
@@ -52,7 +118,7 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # early downstream `grep -q` match SIGPIPEs the fake to 141 — reproducing the pipefail inversion
     # that a one-line fake hid. Enabling, disabling or restarting a unit not listed FAILS (exit 1) like
     # a clean image, so a restart of a service that was never installed cannot pass unnoticed.
-    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ] && [ -n "${FAKE_SYSTEMCTL_PLAN:-}" ] && [ "$#" -eq 2 ]; then\n  step=$(head -n 1 "$FAKE_SYSTEMCTL_PLAN"); sed -i 1d "$FAKE_SYSTEMCTL_PLAN"; echo "list-unit-files ${step:-ok}" >> "$FAKE_SYSTEMCTL_PLAN.log"\n  case "$step" in\n    timeout) echo "Failed to list unit files: Connection timed out" >&2; exit 1 ;;\n    deny) echo "Failed to list unit files: Access denied" >&2; exit 1 ;;\n    hang) sleep 30 ;;\n  esac\nfi\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\n' + _FAKE_SYSTEMCTL_STATE + 'if [ "$1" = "list-unit-files" ] && [ -n "${FAKE_SYSTEMCTL_PLAN:-}" ] && [ "$#" -eq 2 ]; then\n  step=$(head -n 1 "$FAKE_SYSTEMCTL_PLAN"); sed -i 1d "$FAKE_SYSTEMCTL_PLAN"; echo "list-unit-files ${step:-ok}" >> "$FAKE_SYSTEMCTL_PLAN.log"\n  case "$step" in\n    timeout) echo "Failed to list unit files: Connection timed out" >&2; exit 1 ;;\n    deny) echo "Failed to list unit files: Access denied" >&2; exit 1 ;;\n    hang) sleep 30 ;;\n  esac\nfi\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -252,6 +318,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     if systemctl_broken:
         env["FAKE_SYSTEMCTL_BROKEN"] = "1"             # systemd unqueryable — inspection fails
     env["FAKE_SYSTEMCTL_DISABLED"] = systemctl_disabled  # units that are already disabled+inactive
+    env["FAKE_SYSTEMCTL_STATE"] = str(tmp_path / "systemd-state")   # what a disable left (per unit)
     env.pop("SUDO_USER", None)
     if sudo_user is _SUDO_BASH:
         env["SUDO_USER"] = _USER            # the documented `sudo bash` invocation (default scenario)
@@ -2069,3 +2136,141 @@ def test_timeout_failing_itself_is_exit_12_not_a_refusal(tmp_path, status):
     r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={"PATH": f"{fb}:{tmp_path / 'fb'}:/usr/bin:/bin"})
     assert r.returncode == 12, (r.returncode, r.stderr)
     assert "a systemctl call could not be run" in r.stderr and "apt-get" not in apt
+
+
+
+# --- bounded service calls, the unit-state reads (BOOTSTRAP-RETRY-TABLES-v5 rows 1-5, 8, 12-17, 30) ---------------
+# The nginx check after the apt install and the packaged-meshtasticd step, on the fake systemctl of box H's measured
+# answers, one plan line per scripted call (see _FAKE_SYSTEMCTL_STATE).
+
+def _units_run(tmp_path, plan_lines, units="nginx.service", **env):
+    plan = tmp_path / "systemctl.script"
+    plan.write_text("".join(x + "\n" for x in plan_lines))
+    r, _, apt, _ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units=units,
+                        extra_env={**_FAST, "FAKE_SYSTEMCTL_SCRIPT": str(plan), **env})
+    log = plan.with_name(plan.name + ".log")
+    return r, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_row1_a_timed_out_disable_is_called_again_after_the_state_read(tmp_path):
+    r, log = _units_run(tmp_path, ["disable timeout"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["disable timeout"] and "disabled the system nginx.service" in r.stdout
+
+
+def test_row2_a_disable_that_keeps_timing_out_fails_8_naming_the_calls(tmp_path):
+    r, _log = _units_run(tmp_path, ["disable timeout"] * 2, SVC_RETRIES="2")
+    assert r.returncode == 8
+    assert "no answer after 2 call(s)" in r.stderr and "Connection timed out" in r.stderr
+
+
+def test_row3_a_refused_disable_fails_8_at_once(tmp_path):
+    r, log = _units_run(tmp_path, ["disable deny", "disable deny"])
+    assert r.returncode == 8 and log == ["disable deny"]
+    assert "could not stop/disable the system nginx.service (Failed to disable unit: Access denied)" in r.stderr
+
+
+def test_row4_a_timed_out_disable_that_took_effect_is_confirmed_by_the_read(tmp_path):
+    r, log = _units_run(tmp_path, ["disable took"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["disable took"] and "confirmed by a read after a call that timed out" in r.stdout
+
+
+def test_row5_a_half_done_disable_is_called_again(tmp_path):
+    r, log = _units_run(tmp_path, ["disable half"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["disable half"] and "disabled the system nginx.service" in r.stdout
+
+
+def test_row8_a_unit_that_vanished_is_absent_only_on_a_fresh_listing(tmp_path):
+    r, log = _units_run(tmp_path, ["list ok", "show value::inactive", "list absent"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["list ok", "show value::inactive", "list absent"]
+    assert "no system nginx.service present — nothing to disable" in r.stdout
+
+
+@pytest.mark.parametrize("step", ["deny", "empty", "timeout"])
+def test_row12_13_a_listing_that_fails_or_answers_nothing_is_not_absent(tmp_path, step):
+    r, _log = _units_run(tmp_path, [f"list {step}"] * 3, SVC_RETRIES="3")
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "could not inspect systemd unit files" in r.stderr
+
+
+def test_row12_a_timed_out_listing_is_retried(tmp_path):
+    r, log = _units_run(tmp_path, ["list timeout"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["list timeout"] and "disabled the system nginx.service" in r.stdout
+
+
+def test_row14_an_absent_unit_is_nothing_to_disable(tmp_path):
+    r, _log = _units_run(tmp_path, [], units="")
+    assert r.returncode == 0, r.stderr
+    assert "no system nginx.service present — nothing to disable" in r.stdout
+
+
+@pytest.mark.parametrize("step", ["timeout", "deny", "empty"])
+def test_row15_a_state_read_that_fails_is_never_already_disabled(tmp_path, step):
+    r, _log = _units_run(tmp_path, [f"show {step}"] * 2, SVC_RETRIES="2")
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "cannot confirm the state of nginx.service" in r.stderr and "already disabled" not in r.stdout
+
+
+@pytest.mark.parametrize("value, rc, said", [
+    ("masked:inactive", 0, "already disabled — nothing to change"),
+    ("masked-runtime:failed", 0, "already disabled — nothing to change"),
+    ("enabled-runtime:inactive", 0, "disabled the system nginx.service"),
+    ("linked:active", 0, "disabled the system nginx.service"),
+    ("disabled:active", 0, "disabled the system nginx.service"),
+    ("static:active", 8, "cannot confirm the state of nginx.service"),
+    ("bad:inactive", 8, "cannot confirm the state of nginx.service"),
+    ("enabled:frobbing", 8, "cannot confirm the state of nginx.service"),
+])
+def test_row16_each_state_value_decides_by_its_set(tmp_path, value, rc, said):
+    r, _log = _units_run(tmp_path, [f"show value:{value}"] * 2, SVC_RETRIES="2")
+    assert r.returncode == rc, r.stdout + r.stderr
+    assert said in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("busy", ["activating", "deactivating"])
+def test_row16_a_job_in_flight_is_read_again(tmp_path, busy):
+    r, log = _units_run(tmp_path, [f"show value:enabled:{busy}"])
+    assert r.returncode == 0, r.stderr
+    assert log == [f"show value:enabled:{busy}"] and "disabled the system nginx.service" in r.stdout
+
+
+def test_row17_disabled_and_inactive_is_nothing_to_change(tmp_path):
+    r, log = _units_run(tmp_path, ["show value:disabled:inactive"])
+    assert r.returncode == 0 and log == ["show value:disabled:inactive"]
+    assert "already disabled — nothing to change" in r.stdout
+
+
+def test_row30_the_helpers_plumbing_on_nginx_is_exit_12_at_once(tmp_path):
+    r, _log = _units_run(tmp_path, ["show plumb"])
+    assert r.returncode == 12
+    assert "the service-call helper cannot run" in r.stderr and "nginx.service" in r.stderr
+
+
+def test_row30_the_helpers_plumbing_on_meshtasticd_is_deferred_to_exit_12(tmp_path):
+    r, _log = _units_run(tmp_path, ["show ok", "show plumb"], units="nginx.service meshtasticd.service")
+    assert r.returncode == 12
+    assert "could not run for meshtasticd (exit 12 at the end)" in r.stderr
+    assert r.stderr.rstrip().endswith("[bootstrap-deps] the service-call helper could not run (see above).")
+
+
+def test_row9_the_meshtasticd_disable_keeps_its_deferred_exit_9(tmp_path):
+    r, log = _units_run(tmp_path, ["disable ok", "disable timeout", "disable timeout"],
+                        units="nginx.service meshtasticd.service", SVC_RETRIES="2")
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert log == ["disable ok", "disable timeout", "disable timeout"]
+    assert "could not stop/disable the OS-packaged meshtasticd" in r.stderr
+
+
+def test_row13_absent_needs_the_unfiltered_listing_in_the_same_step(tmp_path):
+    # L1's listing answers, the presence check's own unfiltered listing is refused: the unit's "rc 1, nothing" alone
+    # is not absent, the check is UNKNOWN and the run stops (8) before it can skip a disable.
+    plan = _plan(tmp_path, "ok", "deny")
+    r, _, _apt, _ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units="",
+                         extra_env={**_FAST, "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert _calls(plan)[:2] == ["list-unit-files ok", "list-unit-files deny"]
+    assert "could not inspect systemd unit files" in r.stderr

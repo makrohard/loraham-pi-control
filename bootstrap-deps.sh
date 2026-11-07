@@ -338,6 +338,7 @@ svc_attempt() {   # svc_attempt BOUND ARGS...: one bounded systemctl call. Sets 
 	shift
 	t0=$(svc_now) || return 12
 	SVC_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$b" systemctl "$@" 2>"$SVC_ERRF") || rc=$?
+	SVC_RC=$rc
 	t1=$(svc_now) || return 12
 	SVC_LAST=$(tail -n 1 "$SVC_ERRF") || return 12
 	[ ! -s "$SVC_ERRF" ] || cat "$SVC_ERRF" >&2 || return 12
@@ -365,6 +366,69 @@ svc_read_retry() {   # svc_read_retry ARGS...: an idempotent read, retried on a 
 		[ $((now - t0 + SVC_RETRY_PAUSE_S)) -lt "$SVC_TOTAL_BOUND_D_S" ] || return 3
 		sleep "$SVC_RETRY_PAUSE_S" || return 12
 		i=$((i + 1))
+	done
+}
+svc_present() {   # svc_present UNIT: 0 present, 1 absent, 2 unknown (never read as absent), 12 plumbing.
+	# Absent needs a successful unfiltered listing AND the unit's own listing answering rc 1 with nothing.
+	local r=0
+	svc_read_retry list-unit-files --no-legend || r=$?
+	[ "$r" -ne 12 ] || return 12
+	[ "$r" -eq 0 ] || return 2
+	r=0; svc_read_retry list-unit-files --no-legend "$1" || r=$?
+	[ "$r" -ne 12 ] || return 12
+	if [ "$r" -eq 0 ] && [ -n "$SVC_OUT" ]; then return 0; fi
+	if [ "$r" -eq 1 ] && [ "$SVC_RC" -eq 1 ] && [ -z "$SVC_OUT" ] && [ -z "$SVC_LAST" ]; then return 1; fi
+	return 2
+}
+svc_state() {   # svc_state UNIT: one bounded read of the unit's state, classified. Sets SVC_UF, SVC_AS and
+	# SVC_STATE: done (disabled or masked, and inactive or failed), todo (something to disable or stop), gone (no
+	# unit file, inactive), unknown (a failed read, a job in flight, a value no rule decides). 12 = plumbing.
+	local r=0 v
+	SVC_UF=""; SVC_AS=""; SVC_STATE=unknown
+	svc_attempt "$SVC_READ_BOUND_S" show --property=UnitFileState --property=ActiveState --value "$1" || r=$?
+	[ "$r" -ne 12 ] || return 12
+	[ "$r" -eq 0 ] || return 0
+	for v in $SVC_OUT; do
+		case "$v" in
+			active|reloading|inactive|failed|activating|deactivating) SVC_AS=$v ;;
+			*) SVC_UF=$v ;;
+		esac
+	done
+	case "$SVC_UF:$SVC_AS" in
+		:inactive) SVC_STATE=gone ;;
+		disabled:inactive|disabled:failed|masked:inactive|masked:failed|masked-runtime:inactive|masked-runtime:failed) SVC_STATE=done ;;
+		enabled:active|enabled:reloading|enabled:inactive|enabled:failed|enabled-runtime:active|enabled-runtime:reloading|enabled-runtime:inactive|enabled-runtime:failed|linked:active|linked:reloading|linked:inactive|linked:failed|linked-runtime:active|linked-runtime:reloading|linked-runtime:inactive|linked-runtime:failed) SVC_STATE=todo ;;
+		disabled:active|disabled:reloading|masked:active|masked:reloading|masked-runtime:active|masked-runtime:reloading) SVC_STATE=todo ;;
+	esac
+	return 0
+}
+svc_disable() {   # svc_disable UNIT: `disable --now`, each round reading the state first (a timed-out call
+	# that took effect is NOOP, a half-done one is called again). 0 done (SVC_DONE: disabled, already,
+	# confirmed, absent), 1 refused, 2 the state stays unknown, 3 no answer, 5 the run's bound, 12 plumbing.
+	local n=0 r t0 now
+	SVC_TRIES=0; SVC_DONE=""; SVC_LAST=""
+	t0=$(svc_now) || return 12
+	while :; do
+		n=$((n + 1))
+		r=0; svc_state "$1" || r=$?
+		[ "$r" -ne 12 ] || return 12
+		case "$SVC_STATE" in
+			done) [ "$SVC_TRIES" -eq 0 ] && SVC_DONE=already || SVC_DONE=confirmed; return 0 ;;
+			gone)
+				r=0; svc_present "$1" || r=$?
+				[ "$r" -ne 12 ] || return 12
+				if [ "$r" -eq 1 ]; then SVC_DONE=absent; return 0; fi
+				r=2 ;;
+			todo)
+				SVC_TRIES=$((SVC_TRIES + 1)); r=0
+				svc_attempt "$SVC_CALL_BOUND_S" disable --now "$1" || r=$?
+				case "$r" in 0) SVC_DONE=disabled; return 0 ;; 1|5|12) return "$r" ;; esac ;;
+			*) r=2 ;;
+		esac
+		[ "$n" -lt "$SVC_RETRIES" ] || return "$r"
+		now=$(svc_now) || return 12
+		[ $((now - t0 + SVC_RETRY_PAUSE_S)) -lt "$SVC_TOTAL_BOUND_D_S" ] || return "$r"
+		sleep "$SVC_RETRY_PAUSE_S" || return 12
 	done
 }
 
@@ -404,8 +468,7 @@ if [ "$(id -u "$OP")" -eq 0 ]; then
 fi
 
 unit_present() {
-	systemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable
-	[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent
+	svc_present "$1"
 }
 
 # --- APT packages (merged; installed FIRST so curl/etc. exist before the blocks below) ----
@@ -456,20 +519,24 @@ apt-get install -y --no-install-recommends \
 nginx_rc=0; unit_present nginx.service || nginx_rc=$?
 case "$nginx_rc" in
 	0)
-		# Only ANNOUNCE a change if there is one: an already-disabled+inactive unit is
-		# reported as such rather than claiming we 'disabled' it.
-		if systemctl is-enabled --quiet nginx.service 2>/dev/null || systemctl is-active --quiet nginx.service 2>/dev/null; then
-			if systemctl disable --now nginx.service; then
-				echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the lhpc-nginx user unit; the nginx PACKAGE stays installed)."
-			else
-				echo "ERROR: could not stop/disable the system nginx.service. A root nginx still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2
-				exit 8
-			fi
-		else
-			echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."
-		fi ;;
+		# The state is read before every call (rows 1-5, 15-17): only a change is announced, a
+		# timed-out call that took effect is confirmed by the read, a read that fails is never done.
+		_d=0; svc_disable nginx.service || _d=$?
+		case "$_d" in
+			0) case "$SVC_DONE" in
+				disabled) echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the lhpc-nginx user unit; the nginx PACKAGE stays installed)." ;;
+				confirmed) echo "[bootstrap-deps] the system nginx.service is disabled and stopped (confirmed by a read after a call that timed out)." ;;
+				absent) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;
+				*) echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change." ;;
+			esac ;;
+			12) svc_plumb "a systemctl call for nginx.service could not be run" ;;
+			1) echo "ERROR: could not stop/disable the system nginx.service ($SVC_LAST). A root nginx still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2; exit 8 ;;
+			2) echo "ERROR: cannot confirm the state of nginx.service (last: ${SVC_LAST:-a state outside the known values}). Refusing to continue with a possibly-active root nginx." >&2; exit 8 ;;
+			*) echo "ERROR: could not stop/disable the system nginx.service: no answer after $SVC_TRIES call(s) within the bounds (last: $SVC_LAST). A root nginx may still own the web ports. Resolve this and re-run." >&2; exit 8 ;;
+		esac ;;
 	1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports." >&2; exit 8 ;;
+	12) svc_plumb "a systemctl call for nginx.service could not be run" ;;
+	*) echo "ERROR: could not inspect systemd unit files — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports." >&2; exit 8 ;;
 esac
 
 # --- GUI-only dependencies (opt-in: --with-gui) ---------------------------------------------
@@ -1148,18 +1215,25 @@ NETWORKRULE
 fi
 
 _DISABLE_FAILED=""
+_PLUMB_FAILED=""
 # --- disable an OS-packaged service (lhpc manages its own) --------------------------------
 unit_rc=0; unit_present meshtasticd.service || unit_rc=$?
 case "$unit_rc" in
 	0)
-		if systemctl disable --now meshtasticd; then
-			echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)."
-		else
-			echo "ERROR: could not stop/disable the OS-packaged meshtasticd — it still competes with the lhpc-managed one. Resolve this and re-run." >&2
-			_DISABLE_FAILED=1
-		fi ;;
+		_d=0; svc_disable meshtasticd.service || _d=$?   # rows 9, 30: as nginx, the failure deferred (9)
+		case "$_d" in
+			0) case "$SVC_DONE" in
+				disabled) echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)." ;;
+				confirmed) echo "[bootstrap-deps] the OS-packaged meshtasticd is disabled and stopped (confirmed by a read after a call that timed out)." ;;
+				absent) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
+				*) echo "[bootstrap-deps] the OS-packaged meshtasticd is already disabled — nothing to change." ;;
+			esac ;;
+			12) echo "ERROR: the service-call helper could not run for meshtasticd (exit 12 at the end)." >&2; _PLUMB_FAILED=1 ;;
+			*) echo "ERROR: could not stop/disable the OS-packaged meshtasticd ($SVC_LAST) — it still competes with the lhpc-managed one. Resolve this and re-run." >&2; _DISABLE_FAILED=1 ;;
+		esac ;;
 	1) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
+	12) echo "ERROR: the service-call helper could not run for meshtasticd (exit 12 at the end)." >&2; _PLUMB_FAILED=1 ;;
+	*) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
 esac
 
 if [ -n "$_GROUPS_FAILED" ]; then
@@ -1179,5 +1253,9 @@ fi
 if [ -n "$_DISABLE_FAILED" ]; then
 	echo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2
 	exit 9
+fi
+if [ -n "$_PLUMB_FAILED" ]; then
+	echo "[bootstrap-deps] the service-call helper could not run (see above)." >&2
+	exit 12
 fi
 echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 5-6."

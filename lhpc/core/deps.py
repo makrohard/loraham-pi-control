@@ -1255,10 +1255,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     #      active. So systemd is first probed for queryability (an unfiltered listing); if THAT
     #      fails we return 2 (inspection failed) and the caller ABORTS rather than assuming absence.
     #
-    # Returns: 0 present · 1 genuinely absent · 2 inspection failed.
+    # Returns: 0 present · 1 genuinely absent · 2 inspection failed · 12 the helper's plumbing. Both listings are
+    # bounded, retried calls whose status is kept (rows 12-14): absent is only the measured "rc 1 with nothing".
     out("unit_present() {",
-        '\tsystemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable',
-        '\t[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent',
+        '\tsvc_present "$1"',
         "}",
         "")
 
@@ -1297,24 +1297,31 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
                 "nginx_rc=0; unit_present nginx.service || nginx_rc=$?",
                 'case "$nginx_rc" in',
                 "\t0)",
-                "\t\t# Only ANNOUNCE a change if there is one: an already-disabled+inactive unit is",
-                "\t\t# reported as such rather than claiming we 'disabled' it.",
-                "\t\tif systemctl is-enabled --quiet nginx.service 2>/dev/null"
-                " || systemctl is-active --quiet nginx.service 2>/dev/null; then",
-                "\t\t\tif systemctl disable --now nginx.service; then",
-                '\t\t\t\techo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the'
-                ' lhpc-nginx user unit; the nginx PACKAGE stays installed)."',
-                "\t\t\telse",
-                '\t\t\t\techo "ERROR: could not stop/disable the system nginx.service. A root nginx still'
-                ' owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run."'
-                " >&2",
-                "\t\t\t\texit 8",
-                "\t\t\tfi",
-                "\t\telse",
-                '\t\t\techo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."',
-                "\t\tfi ;;",
+                "\t\t# The state is read before every call (rows 1-5, 15-17): only a change is announced, a",
+                "\t\t# timed-out call that took effect is confirmed by the read, a read that fails is never done.",
+                "\t\t_d=0; svc_disable nginx.service || _d=$?",
+                '\t\tcase "$_d" in',
+                '\t\t\t0) case "$SVC_DONE" in',
+                '\t\t\t\tdisabled) echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the'
+                ' lhpc-nginx user unit; the nginx PACKAGE stays installed)." ;;',
+                '\t\t\t\tconfirmed) echo "[bootstrap-deps] the system nginx.service is disabled and stopped'
+                ' (confirmed by a read after a call that timed out)." ;;',
+                '\t\t\t\tabsent) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;',
+                '\t\t\t\t*) echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change." ;;',
+                "\t\t\tesac ;;",
+                '\t\t\t12) svc_plumb "a systemctl call for nginx.service could not be run" ;;',
+                '\t\t\t1) echo "ERROR: could not stop/disable the system nginx.service ($SVC_LAST). A root nginx'
+                ' still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2;'
+                " exit 8 ;;",
+                '\t\t\t2) echo "ERROR: cannot confirm the state of nginx.service (last: ${SVC_LAST:-a state outside'
+                ' the known values}). Refusing to continue with a possibly-active root nginx." >&2; exit 8 ;;',
+                '\t\t\t*) echo "ERROR: could not stop/disable the system nginx.service: no answer after'
+                ' $SVC_TRIES call(s) within the bounds (last: $SVC_LAST). A root nginx may still own the web'
+                ' ports. Resolve this and re-run." >&2; exit 8 ;;',
+                "\t\tesac ;;",
                 '\t1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;',
-                '\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system'
+                '\t12) svc_plumb "a systemctl call for nginx.service could not be run" ;;',
+                '\t*) echo "ERROR: could not inspect systemd unit files — cannot confirm the system'
                 ' nginx.service is stopped. Refusing to continue with a possibly-active root nginx'
                 ' holding the web ports." >&2; exit 8 ;;',
                 "esac",
@@ -1781,7 +1788,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
-    out('_DISABLE_FAILED=""')
+    out('_DISABLE_FAILED=""', '_PLUMB_FAILED=""')
     for blk in disable_blocks:
         b = _desudo(blk)
         out("# --- disable an OS-packaged service (lhpc manages its own) --------------------------------")
@@ -1804,15 +1811,24 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             out(f"unit_rc=0; unit_present {svc_unit} || unit_rc=$?",
                 'case "$unit_rc" in',
                 "\t0)",
-                "\t\tif " + b.replace("\n", "\n\t\t") + "; then",
-                f'\t\t\techo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)."',
-                "\t\telse",
-                f'\t\t\techo "ERROR: could not stop/disable the OS-packaged {unit} — it still competes'
-                ' with the lhpc-managed one. Resolve this and re-run." >&2',
-                "\t\t\t_DISABLE_FAILED=1",
-                "\t\tfi ;;",
+                f"\t\t_d=0; svc_disable {svc_unit} || _d=$?   # rows 9, 30: as nginx, the failure deferred (9)",
+                '\t\tcase "$_d" in',
+                '\t\t\t0) case "$SVC_DONE" in',
+                f'\t\t\t\tdisabled) echo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)." ;;',
+                f'\t\t\t\tconfirmed) echo "[bootstrap-deps] the OS-packaged {unit} is disabled and stopped'
+                ' (confirmed by a read after a call that timed out)." ;;',
+                f'\t\t\t\tabsent) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
+                f'\t\t\t\t*) echo "[bootstrap-deps] the OS-packaged {unit} is already disabled — nothing to change." ;;',
+                "\t\t\tesac ;;",
+                f'\t\t\t12) echo "ERROR: the service-call helper could not run for {unit} (exit 12 at the end)."'
+                " >&2; _PLUMB_FAILED=1 ;;",
+                f'\t\t\t*) echo "ERROR: could not stop/disable the OS-packaged {unit} ($SVC_LAST) — it still'
+                ' competes with the lhpc-managed one. Resolve this and re-run." >&2; _DISABLE_FAILED=1 ;;',
+                "\t\tesac ;;",
                 f'\t1) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
-                f'\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
+                f'\t12) echo "ERROR: the service-call helper could not run for {unit} (exit 12 at the end)." >&2;'
+                " _PLUMB_FAILED=1 ;;",
+                f'\t*) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
                 f' {unit} is stopped. Refusing to continue." >&2; exit 9 ;;',
                 "esac", "")
         else:
@@ -1852,6 +1868,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'if [ -n "$_DISABLE_FAILED" ]; then',
         '\techo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2',
         "\texit 9",
+        "fi",
+        # 12 last (rows 28, 30): the helper's own plumbing, after every meaningful failure above.
+        'if [ -n "$_PLUMB_FAILED" ]; then',
+        '\techo "[bootstrap-deps] the service-call helper could not run (see above)." >&2',
+        "\texit 12",
         "fi",
         'echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies '
         'SPI + groups + PATH — see README steps 5-6."')
