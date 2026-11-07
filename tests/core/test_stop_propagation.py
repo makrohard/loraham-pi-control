@@ -94,7 +94,7 @@ def test_failed_owner_stop_blocks_start(tmp_path, monkeypatch):
     # lifecycle, which serves stops only, and fail this test) and names the owner that stayed up.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "run_blockers",
-                        lambda self, t, b="", radio="": [{"resource": "radio 433",
+                        lambda self, t, b="", radio="", inst=None: [{"resource": "radio 433",
                                                           "holder_stack": "meshtastic",
                                                           "holder": "meshtastic"}])
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
@@ -119,7 +119,7 @@ def test_a_band_owner_on_the_daemon_is_stopped_per_band(tmp_path, monkeypatch):
                 "holder": "meshcore-node", "band": "868"}
     daemon = {"resource": "loraham.radio.868", "holder_stack": "daemon",
               "holder": "loraham-daemon", "band": "868"}
-    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": (
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="", inst=None: (
         [daemon] if ("meshcore", "") in stops else [meshcore, daemon]))
     monkeypatch.setattr(ControllerService, "stop", lambda self, t, apply=False, band="", **k: (
         stops.append((t, band)), ActionResult(True, "stopped"))[1])
@@ -139,7 +139,7 @@ def _owners_on_868(monkeypatch, stops, meshcore_ok=True):
                 "holder": "meshcore-node", "band": "868"}
     daemon = {"resource": "loraham.radio.868", "holder_stack": "daemon",
               "holder": "loraham-daemon", "band": "868"}
-    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": (
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="", inst=None: (
         [daemon] if ("meshcore", "") in stops else [meshcore, daemon]))
     monkeypatch.setattr(ControllerService, "stop", lambda self, t, apply=False, band="", **k: (
         stops.append((t, band)),
@@ -180,7 +180,7 @@ def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monk
     # only, never the bare `lhpc stack stop daemon` (finding 140).
     from lhpc.core.services import ControllerService
     svc = _svc(tmp_path)
-    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": [
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="", inst=None: [
         {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "loraham-daemon",
          "band": "868"},
         {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "meshcore-node",

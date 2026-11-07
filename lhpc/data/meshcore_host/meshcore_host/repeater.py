@@ -123,6 +123,7 @@ def apply_overlay(conf: dict, cfg: HostConfig) -> dict:
     ofile.put(conf, "glass.cert_store_dir", str(Path(cfg.repeater_state_dir) / "glass"))
     conf["setup_completed"] = True
     ofile.put(conf, "repeater.security.jwt_secret", cfg.jwt_secret)
+    ofile.put(conf, "repeater.security.jwt_expiry_minutes", ofile.JWT_EXPIRY_MINUTES)
     if cfg.use_gps:
         conf["gps"] = {"enabled": True, "source": "file", "source_path": cfg.gps_file,
                        "poll_interval_seconds": 2.0, "stale_after_seconds": 10.0,

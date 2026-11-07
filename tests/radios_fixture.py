@@ -38,3 +38,13 @@ def by_radio(replies: dict) -> dict:
             reply = b"STATUS ID=" + RID[band].encode() + b" BOUND=- " + reply[len(b"STATUS "):]
         out[conf(band)] = reply
     return out
+
+
+# Item 7 (stack instances): three radios, r1 and r2 on 433, a USB stick r3 on 868, with READY CONF replies for r1 and r3.
+R1, R2 = radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "wave", "waveshare-sx1262", "433")
+R3 = radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")
+INSTANCE_READY = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r3")}
+
+
+def kiss_on(rid):                                      # a kiss-tnc process of radio `rid`, by its instance token
+    return ["loraham-kiss-tnc", "--data-socket", f"/tmp/loraf-{rid}.sock"]

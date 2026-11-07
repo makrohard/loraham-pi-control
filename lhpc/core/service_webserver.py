@@ -578,7 +578,7 @@ class WebserverOpsMixin:
         panel says when the upstream is served (`page_mode_note`)."""
         from .model import web_pages
         s = self.stack(stack_id)
-        return tuple(web_pages(s)) if s is not None else ()
+        return tuple(web_pages(s, paths=self._paths)) if s is not None else ()     # item 7: every instance
 
     def page_mode_note(self, page) -> str:
         """One sentence when the page's upstream is NOT served in the saved MeshCore mode (the
@@ -929,8 +929,7 @@ class WebserverOpsMixin:
         mon = self.webserver_monitor(served_via_nginx=served_via_nginx,
                                      listeners=snap, fw_status=fw_status).data or {}
         rows: list[dict] = [{"kind": "console", "name": "LHPC", "posture": mon.get("posture"),
-                             # The port a listener was actually FOUND on — after a saved port move
-                             # that is the old one, and it is what a browser still reaches.
+                             # The port a listener was actually FOUND on (after a saved port move the old one, what a browser reaches)
                              "port": mon.get("live_port") or mon.get("desired", {}).get("port"),
                              "logs_component": None}]
         by_id = {ss.stack.id: ss for ss in self.build_snapshot().stacks}
@@ -941,8 +940,9 @@ class WebserverOpsMixin:
             mst = ss.components.get(stk.main_component.id)
             if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
-            for page in self.stack_web_pages(stk.id):          # one row per proxied page
-                rows.append(self._dashboard_web_row(stk, page, snap, fw_status))
+            for page in self.stack_web_pages(stk.id):          # one row per proxied page; F3b: its component's state
+                cs = ss.components.get(page.component_id)
+                rows.append({**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""})
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
                     if self._is_raw_endpoint(ep):

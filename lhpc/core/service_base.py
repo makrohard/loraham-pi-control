@@ -1,11 +1,17 @@
 """Shared service-layer types and helpers used across the ControllerService facade and its
 service_* mixins: the uniform ActionResult/ConfigWrite result objects, typed control-flow
 exceptions, git-URL canonicalization, and /proc process-identity helpers. Kept dependency-light
-(stdlib only) so every service_* module imports from here without an import cycle."""
+(stdlib, and procident, which imports only the stdlib) so every service_* module imports from here
+without an import cycle."""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
+
+from . import procident
+
+# The (pid, start_time) identity lives in procident (L24 F2); the names stay for the callers.
+_proc_ceased = procident.recorded_ceased
+_proc_start_time = procident.stat_start_time
 
 
 def _canon_git_url(url: str) -> str:
@@ -40,19 +46,6 @@ class _StopRun(Exception):
     stage (keeps the finalization in one place)."""
 
 
-def _proc_start_time(pid: int) -> int:
-    """Field 22 of /proc/<pid>/stat (starttime, clock ticks since boot) — the stable half of a
-    (pid, start_time) process identity. 0 if unavailable."""
-    try:
-        with open(f"/proc/{pid}/stat", "rb") as fh:
-            data = fh.read()
-        # comm (field 2) is parenthesized and may contain spaces/parens — split after the LAST ')'.
-        fields = data[data.rindex(b")") + 2:].split()
-        return int(fields[19])                            # starttime = 22nd overall; index 19 here
-    except (OSError, ValueError, IndexError):
-        return 0
-
-
 def _guard_owner_ints(rec: dict) -> tuple[int, int]:
     """STRICT (pid, start_time) extraction from an uninstall-guard owner record: positive
     integers only. REJECTS booleans (json true would int() to 1), strings, and non-positive
@@ -64,16 +57,6 @@ def _guard_owner_ints(rec: dict) -> tuple[int, int]:
             raise ValueError(f"not a positive integer identity value: {v!r}")
         return v
     return _strict(rec["pid"]), _strict(rec["start_time"])
-
-
-def _proc_ceased(pid, start_time) -> bool:
-    """True when the recorded (pid, start_time) process no longer exists (dead, or the PID was
-    reused by a different process). Conservative: unknown/malformed identity → NOT ceased."""
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    if not os.path.exists(f"/proc/{pid}"):
-        return True
-    return _proc_start_time(pid) != (start_time if isinstance(start_time, int) else -1)
 
 
 class SourceTxnBlocked(Exception):

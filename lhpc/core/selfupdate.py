@@ -390,6 +390,12 @@ def _is_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _is_stamp(v) -> bool:
+    """A time stamp: a non-negative int below 2**63 (never a bool). A negative or 401-digit one
+    once rendered as days ago or "just now" (L24 F7)."""
+    return _is_int(v) and 0 <= v < 1 << 63
+
+
 def _is_bool(v) -> bool:
     return isinstance(v, bool)
 
@@ -402,10 +408,10 @@ _UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
                     "branch": _is_str, "upstream_head": _is_str,
                     "upstream_head_short": _is_str, "upstream_version": _is_str,
                     "ff_blocked": _is_bool}     # absent -> False on read
-_IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_int}
+_IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_stamp}
 # Outcome of the LAST service-mediated apply (the one-click web update) — shown once the
 # console is back so the operator sees what happened while it was down.
-_LAST_APPLY_FIELDS = {"ok": _is_bool, "summary": _is_str, "finished_at": _is_int}
+_LAST_APPLY_FIELDS = {"ok": _is_bool, "summary": _is_str, "finished_at": _is_stamp}
 
 
 def _valid_section(sec, fields) -> bool:
@@ -419,7 +425,7 @@ def _valid_section(sec, fields) -> bool:
 def _valid_cache(data) -> bool:
     """Schema-validate a decoded cache envelope: the root must be a dict; `schema_version`
     must be present and exactly the current one (an absent, unknown or future version is
-    rejected and renders as unchecked); a present `checked_at` must be an int (never a bool);
+    rejected and renders as unchecked); a present `checked_at` must be a stamp (_is_stamp);
     and every consumed `local`/`upstream`/`identity` field must match its type. Unknown extra
     fields are ignored, not rendered."""
     if not isinstance(data, dict):
@@ -427,7 +433,7 @@ def _valid_cache(data) -> bool:
     sv = data.get("schema_version")
     if not _is_int(sv) or sv != CACHE_SCHEMA_VERSION:
         return False                                      # absent/unknown/future, or "1"/true
-    if "checked_at" in data and not _is_int(data["checked_at"]):
+    if "checked_at" in data and not _is_stamp(data["checked_at"]):
         return False
     return (_valid_section(data.get("local"), _LOCAL_FIELDS)
             and _valid_section(data.get("upstream"), _UPSTREAM_FIELDS)

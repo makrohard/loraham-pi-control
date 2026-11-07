@@ -74,7 +74,8 @@ def test_a_manifest_without_tokens_keeps_no_template(tmp_path):
     # (today's manifest) loads with no template on any param, endpoint or claim.
     import repo_paths
     text = (repo_paths.REPO / "lhpc" / "data" / "manifest.example.toml").read_text()
-    text = re.sub(r"\{port(?:_of:[a-z][a-z0-9_-]*)?:(\d+)\}", r"\1", text).replace("{instance_dir}", "")
+    text = re.sub(r"\{port(?:_of:[a-z][a-z0-9_-]*)?:(\d+)\}", r"\1", text).replace("{instance_dir}", "").replace(
+        "{instance_suffix}", "")
     path = tmp_path / "manifest.toml"
     path.write_text(text)
     for c in (c for st in load_manifest(path) for c in st.components):

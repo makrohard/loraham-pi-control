@@ -674,7 +674,19 @@ def build_parser() -> argparse.ArgumentParser:
             from lhpc.core.daemon_control import ALLOWED_BANDS
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Stop the daemon on this band only (daemon only)")
+        elif action == "restart":
+            # Package item 14: a per-band restart, as start and stop take; the service refuses a band two radios
+            # share (band_refusal, the stop's W1-11 rule) and a band the box or the stack cannot serve.
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Restart on this band (the daemon of that band, or a band-switchable stack)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
+    # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
+    for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
+                          ("remove-instance", "Remove <stack>@<rid>; its slot stays reserved, no port moves")):
+        sp = stack_sub.add_parser(action, help=ahelp)
+        sp.add_argument("stack", help="Stack id (kiss, meshcore or chat)")
+        sp.add_argument("rid", help="Radio id of the hardware list (r1..r99)")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
@@ -1419,21 +1431,36 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if (args.stack_action == "stop" and getattr(args, "band", "")
+        if (args.stack_action == "stop" and getattr(args, "band", "") and "@" not in args.stack
                 and args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon")):
             # Fail closed: for any other stack a band would only skip the operator's stop intent,
             # so boot restore would start it again (finding 140's review).
             print("lhpc stack stop: --band applies to the daemon only (a stack's own stop needs no "
                   "band)", file=sys.stderr)
             return 2
+        if args.stack_action in ("add-instance", "remove-instance"):
+            from lhpc.core import instances
+            fn = instances.add_instance if args.stack_action == "add-instance" else instances.remove_instance
+            return _render(fn(svc, args.stack, args.rid))
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
+            from lhpc.core import instances
             from lhpc.core.outcomes import manual_required_only
+            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts, stops and restarts on its radio's band.
+            sid, inst, iband, why = instances.resolve(svc, args.stack)
+            if inst is not None and args.stack_action == "poststart":
+                why = f"lhpc stack poststart {args.stack}: not for an instance in this build"
+            if why:
+                print(f"ERR   {why}", file=sys.stderr)
+                return 1
+            if inst is not None and getattr(args, "band", "") and args.band != iband:
+                print(f"ERR   {args.stack} runs on {iband} MHz (its radio's band), not {args.band}", file=sys.stderr)
+                return 2
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, args.stack, apply=a,
-                                     band=getattr(args, "band", ""), stop_owners=stop_owners)
+                res = svc.run_action(args.stack_action, sid, apply=a, band=iband or getattr(args, "band", ""),
+                                     stop_owners=stop_owners, inst=inst)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
@@ -1451,7 +1478,7 @@ def _run(argv: list[str] | None = None) -> int:
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
         print("usage: lhpc stack <action> <stack> [--yes]\n"
-              "lhpc stack: an action is required (start|stop|restart|poststart)",
+              "lhpc stack: an action is required (start|stop|restart|poststart|add-instance|remove-instance)",
               file=sys.stderr)
         return 2
     if args.command == "kill":

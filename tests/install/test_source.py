@@ -54,7 +54,7 @@ DAEMON_BRANCH = "main"
 
 
 RADIOLIB_REMOTE = "https://github.com/jgromes/RadioLib"
-LIBCH341_REMOTE = "https://github.com/pine64/libch341-spi-userspace"
+LIBCH341_REMOTE = "https://github.com/makrohard/libch341-spi-userspace"
 
 
 A = "a" * 40
@@ -2234,7 +2234,7 @@ def test_malformed_journal_blocks_build_and_uninstall(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     src = paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
-    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional library checkout, adopted by default
     d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ not valid")        # unresolved -> blocks all mutation
     rb = svc.build("daemon", apply=True)
@@ -2247,7 +2247,7 @@ def test_retained_journal_blocks_every_source_op(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     paths.under("src", "loraham-daemon").mkdir(parents=True)
-    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional library checkout, adopted by default
     paths.under("src", "LoRaHAM_Daemon").mkdir(parents=True)
     d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ retained")        # unresolved -> blocks all source ops
@@ -2267,7 +2267,7 @@ def test_source_guard_holds_index_during_handoff(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     paths.under("src", "loraham-daemon").mkdir(parents=True)
-    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional library checkout, adopted by default
     with reslock.operation_lock(paths, "source-txn-index", "adopt", "x"):
         res = svc.build("daemon", apply=True)
     assert not res.ok and "blocked" in res.summary.lower()

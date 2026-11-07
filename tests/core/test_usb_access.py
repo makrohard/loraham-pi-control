@@ -763,9 +763,10 @@ def test_an_injected_read_error_is_unknown_never_absent(root, inject, err, read,
 
 def test_only_the_b5_wiring_imports_usb_access():  # rule-1 exception
     """A whole-package invariant no driven path proves: the B5 minimum wires lhpc.core.usb_access through
-    exactly two modules, usb_flow (its pure consumers) and radio_start (the start pre-check, the doctor, the
-    Hardware section), and Detect adds one: radio_detect/run.py (a stick's serial to its current port, DEC-W43,
-    DEC-W35); a relative `from . import usb_access` counts. Behavioural twin: the next test."""
+    exactly these modules: usb_flow (its pure consumers), radio_start (the start pre-check, the doctor, the
+    Hardware section), hotplug (the dashboard's hotplug banner, W249, which reads the scan lazily) and
+    radio_detect/run.py (Detect: a stick's serial to its current port, DEC-W43, DEC-W35); a relative
+    `from . import usb_access` counts. Behavioural twin: the next test."""
     importers = []
     for path in (repo_paths.REPO / "lhpc").rglob("*.py"):
         if path.name == "usb_access.py" and path.parent.name == "core":
@@ -776,8 +777,8 @@ def test_only_the_b5_wiring_imports_usb_access():  # rule-1 exception
                      else [])
             if any("usb_access" in n for n in names):
                 importers.append(str(path.relative_to(repo_paths.REPO)))
-    assert sorted(set(importers)) == ["lhpc/core/radio_detect/run.py", "lhpc/core/radio_start.py",
-                                      "lhpc/core/usb_flow.py"]
+    assert sorted(set(importers)) == ["lhpc/core/hotplug.py", "lhpc/core/radio_detect/run.py",
+                                      "lhpc/core/radio_start.py", "lhpc/core/usb_flow.py"]
 
 
 def test_loading_the_cli_web_and_bootstrap_modules_does_not_load_usb_access():

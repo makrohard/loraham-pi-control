@@ -324,3 +324,25 @@ def test_a_parent_swapped_after_the_containment_check_cannot_redirect_the_remova
     assert not res.ok
     assert any("[fail] state/graywolf" in ln for ln in res.details), res.details
     assert (outside / "graywolf" / "graywolf.db").read_text() == "not LHPC's"
+
+
+def test_purge_wipes_each_listed_instances_state_and_secrets_and_nothing_beside(tmp_path):
+    # 7d (DEC-W51): meshcore@r3 keeps its state under state/r3/<name> and its secrets under config/secrets/r3/ (the
+    # manifest's {instance_dir} layout). The purge takes exactly the listed instance's, never a decoy beside them
+    # (an unlisted r4, state/r3's other folders, logs/r3) and nothing of slot 0's is left either.
+    svc = _svc(tmp_path)
+    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r3"]\n')
+    inst = ["state/r3/meshcore/companion.db", "state/r3/meshcore-webui/meshcore-webui.db",
+            "state/r3/openhop/repeater.db", "config/secrets/r3/meshcore_identity.key",
+            "config/secrets/r3/openhop_repeater_admin.txt"]
+    decoys = ["state/r4/meshcore/companion.db", "config/secrets/r4/meshcore_identity.key",
+              "state/r3/gps/meshcore/feed", "logs/r3/rf-meshcore.log", "state/r3/kiss/x"]
+    _seed(tmp_path, OWNED["meshcore"] + inst + decoys + KEPT)
+    plan = svc.clean("meshcore")
+    assert any("[remove] state/r3/meshcore " in ln + " " for ln in plan.details), plan.details
+    res = svc.clean("meshcore", apply=True, purge=True)
+    assert res.ok, res.details
+    for rel in OWNED["meshcore"] + inst:
+        assert not (tmp_path / rel).exists(), (rel, res.details)
+    for rel in decoys + KEPT:
+        assert _present(tmp_path / rel), rel

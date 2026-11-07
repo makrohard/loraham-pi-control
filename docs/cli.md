@@ -294,9 +294,25 @@ A single daemon process serving both bands stops on both when the other band has
 the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
 stopped. `--band` on a stop is for the daemon only (another stack is refused):
 `lhpc stack stop daemon --band <band>` stops the daemon on that band and its clients there — the
-remedy a held band names. A start of a
+remedy a held band names. `lhpc stack restart <stack> --band <band>` restarts on that band; on a band
+two enabled radios share, a daemon restart is refused, naming them, as the stop is. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.
+
+**Instances on another radio.** A stack can also run on other radios, as `<stack>@<rid>`
+(`rid` is the radio's id in `config/radios.toml`). Only kiss, meshcore and chat can; every other
+stack is refused with its reason (for example, voice has one sound card).
+- `lhpc stack add-instance <stack> <rid>` lists `<stack>@<rid>` at the stack's next free slot (1 to 7)
+  in `config/instances.toml`. Only LHPC writes that file.
+- `lhpc stack remove-instance <stack> <rid>` removes it; a running instance is refused (stop it first).
+  Its slot stays reserved, so no other instance's ports move.
+- `lhpc stack start|stop|restart <stack>@<rid>` acts on that instance alone, on its radio's band. An
+  instance's ports are the stack's own plus 10 per slot (kiss-tnc at slot 1: 8011).
+- A plain `lhpc stack start <stack>` is slot 0, today's instance. It runs on the first enabled radio
+  of its band that holds no listed instance of the stack. When the band has several radios, the start
+  says which one it chose, for example `kiss starts on r2 (433 MHz); kiss@r1 is a separate instance`.
+  It is refused when every radio of the band holds a listed instance; start one of them as
+  `<stack>@<rid>`. A plain `lhpc stack stop <stack>` stops slot 0 alone; listed instances keep running.
 
 `lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows

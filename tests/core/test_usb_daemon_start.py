@@ -59,6 +59,6 @@ def test_a_shared_band_refuses_the_daemon_start_naming_the_list_not_rid_addressi
     res = svc.start("daemon", apply=True, band="868")
     want = ("[BLOCKED] daemon on 868: 2 radios can run it on 868 MHz: r2 (high), r3 (stick); "
             "a band with two enabled radios starts no daemon: set enabled = false on one of them in "
-            "config/radios.toml (the <stack>@<rid> form is not in 0.14.0)")
+            "config/radios.toml")
     assert [line.strip() for line in res.details] == [want] and spawned == []
     assert "name one" not in want

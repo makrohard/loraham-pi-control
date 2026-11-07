@@ -37,7 +37,7 @@ def test_the_section_lists_each_radio_and_a_usb_radios_sticks(web, tmp_path, mon
 
 def test_an_spi_only_list_offers_no_usb_setup(web, tmp_path, monkeypatch):
     page = _box(web, tmp_path, monkeypatch, rows=ROWS[:1]).get("/hardware").get_data(as_text=True)
-    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'name="rid"' not in page   # no bind, no setup
+    assert 'data-rid="r1"' in page and 'id="usb-setup"' not in page and 'action="/hardware/bind"' not in page   # no bind, no setup
     assert 'id="usb-add"' in page and 'data-add-port="1-1.3"' in page             # B: the stick can be added
 
 
@@ -88,4 +88,4 @@ def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path
     import html
     page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
     assert ("A band with two enabled radios starts no daemon: set enabled = false on one of them in "
-            "config/radios.toml (the <stack>@<rid> form is not in 0.14.0).") in page
+            "config/radios.toml.") in page

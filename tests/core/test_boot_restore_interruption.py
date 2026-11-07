@@ -47,7 +47,7 @@ def boot(tmp_path, monkeypatch):
     started = []
 
     def start(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
-              _before_start_locked=None, _operator=True, position=None, position_note=""):
+              _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         if _before_start_locked is not None:
             refusal = _before_start_locked()
             if refusal is not None:

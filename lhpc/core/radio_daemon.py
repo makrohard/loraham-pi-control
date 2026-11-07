@@ -253,11 +253,14 @@ def old_config_state(paths) -> Tri:
     return Tri.YES if isinstance(data.get("radio"), dict) else Tri.NO
 
 
-def restore_plan(items: list, radios) -> tuple:
+def restore_plan(items: list, radios, listed=None) -> tuple:
     """(kept, refused) of boot-restore items (D14, D15): a pre-0.14.0 band item without `rid` is dropped silently
-    (W12); a band-less item without `rid` is kept; an item whose radio is gone or disabled is refused with its
-    reason; a band item is kept only when its band's enabled radios are exactly its radio (G2-0.14.0-1 item 3: the
-    restore starts by band, which would otherwise launch on another radio); the rest are kept in order."""
+    (W12); a band-less item without `rid` is kept; an item whose radio is gone, disabled or on another band now is
+    refused with its reason. A listed instance's item (`<stack>@<rid>`) starts on its own radio, so that is all it
+    needs. A slot-0 band item starts on slot 0's radio of its band (DEC-W16: the first enabled one not listed for its
+    stack in `listed`, {stack: rids}), so it is kept only while that radio is its own (7e, DEC-W49; it replaces
+    G2-0.14.0-1 item 3's "the band's enabled radios are exactly its radio"). The rest are kept in order."""
+    from .instances import slot0_of
     by_id = {r.id: r for r in radios}
     kept, refused = [], []
     for it in items:
@@ -272,9 +275,12 @@ def restore_plan(items: list, radios) -> tuple:
             refused.append((it, f"radio {rid} no longer exists"))
         elif not r.enabled:
             refused.append((it, f"radio {rid} is disabled"))
-        elif (band := it.get("band")) and (on := [x.id for x in radios if x.enabled and x.band == band]) != [rid]:
-            refused.append((it, f"radio {rid} is on {r.band} MHz now, not {band} MHz" if r.band != band
-                            else f"{band} MHz has {len(on)} enabled radios now ({', '.join(on)})"))
+        elif (band := it.get("band")) and r.band != band:
+            refused.append((it, f"radio {rid} is on {r.band} MHz now, not {band} MHz"))
+        elif band and "@" not in (sid := it.get("target", "")) and (
+                on := slot0_of([x for x in radios if x.enabled and x.band == band], (listed or {}).get(sid, ()))) != rid:
+            refused.append((it, f"slot 0 of {sid} on {band} MHz starts on {on} now, not {rid}" if on
+                            else f"slot 0 of {sid} has no radio on {band} MHz now"))
         else:
             kept.append(it)
     return kept, refused
@@ -289,6 +295,10 @@ class Target:
     reason: str                     # "" when an explicit rid proceeds; else why (incl. the chosen rid)
     candidates: tuple = ()          # the rids considered, radio order
     next_command: str = ""
+    kind: str = ""                  # SEVERAL for "two or more radios can run it" (package item 24); else ""
+
+
+SEVERAL = "several"
 
 
 @dataclass(frozen=True)
@@ -302,8 +312,8 @@ _KINDS = ("id", "no-id", "unknown")
 _LOCKED_FIELDS = ("model", "band", "ce", "usb_serial", "usb_port")
 
 
-def _refuse(reason: str, candidates=(), next_command: str = "") -> Target:
-    return Target("refuse", "", reason, tuple(candidates), next_command)
+def _refuse(reason: str, candidates=(), next_command: str = "", kind: str = "") -> Target:
+    return Target("refuse", "", reason, tuple(candidates), next_command, kind)
 
 
 def _order(radios):
@@ -316,7 +326,7 @@ OLD_CONFIG_TEXT = ("the old [radio] configuration is present and nothing was con
 OLD_CONFIG_UNREADABLE = "the old configuration cannot be read"
 # LEG/PKT-D20: the daemon start's one wording for a shared band, for the refusal, daemon.md and the Hardware page.
 SHARED_BAND_TEXT = ("a band with two enabled radios starts no daemon: set enabled = false on one of them in "
-                    "config/radios.toml (the <stack>@<rid> form is not in 0.14.0)")
+                    "config/radios.toml")
 
 
 def _unstartable(state, old_config) -> Target:
@@ -355,7 +365,7 @@ def _pick(cands, scope: str, stack_hint: str = "<stack>") -> Target:
     if not cands:
         return _refuse(f"no enabled radio {scope}", ids, "lhpc hardware")
     named = ", ".join(f"{r.id} ({r.name})" for r in cands)
-    return _refuse(f"{len(cands)} radios can run it {scope}: {named}; name one", ids, f"{stack_hint}@<rid>")
+    return _refuse(f"{len(cands)} radios can run it {scope}: {named}; name one", ids, f"{stack_hint}@<rid>", SEVERAL)
 
 
 def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), fallback_rid=None,
@@ -418,7 +428,7 @@ def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), f
     if fb_given:
         notes.append(f"the interactive marker's {fallback_rid} is not a candidate (ignored)")
     t = _pick(cands, where)
-    return Target(t.outcome, t.rid, "; ".join([t.reason, *notes]), t.candidates, t.next_command)
+    return Target(t.outcome, t.rid, "; ".join([t.reason, *notes]), t.candidates, t.next_command, t.kind)   # L20
 
 
 def stop_targets(rid, procs, owned_pids) -> StopPlan:

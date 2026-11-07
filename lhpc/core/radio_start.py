@@ -31,11 +31,19 @@ def start_plan(svc, rid: str) -> tuple:
         settings = _settings(svc, radio, model)
     except ValueError as exc:
         return None, str(exc), ()
-    refusal = (radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model)
-               or ensure_rf_dir(svc, radio.id) or "")
+    refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
     params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
     return params, refusal, settings.notes
+
+
+def launch_plan(svc, rid: str) -> tuple:
+    """start_plan for the launch itself (package item 26): the plan, then the radio's RF log directory (ensure_rf_dir)
+    created right before its daemon is spawned, only for a plan with no refusal. A plan alone writes nothing."""
+    params, refusal, notes = start_plan(svc, rid)
+    if params is not None and not refusal:
+        refusal = ensure_rf_dir(svc, rid)
+    return params, refusal, notes
 
 
 def _settings(svc, radio, model):
@@ -492,7 +500,7 @@ def daemon_rid(svc, band: str) -> radio_daemon.Target:
     """band_rid for the daemon start: a shared band's refusal names its next step, the hardware list
     (radio_daemon.SHARED_BAND_TEXT), not the `<stack>@<rid>` form 0.14.0 does not have."""
     t = band_rid(svc, band)
-    if t.outcome == "refuse" and len(t.candidates) > 1:
+    if t.outcome == "refuse" and t.kind == radio_daemon.SEVERAL:       # item 24: the refusal's kind, not its count
         reason = t.reason.removesuffix("; name one")
         return dataclasses.replace(t, reason=f"{reason}; {radio_daemon.SHARED_BAND_TEXT}",
                                    next_command="config/radios.toml")
@@ -500,10 +508,34 @@ def daemon_rid(svc, band: str) -> radio_daemon.Target:
 
 
 def daemon_key(svc, band: str) -> str:
-    """The key of a band's daemon sockets (daemon_control.conf_socket): the rid of the band's one enabled radio
-    when the hardware list resolves the band (stage L5, `loraconf-<rid>.sock`); else the band itself, which
-    reaches only a 0.13.x daemon's socket (a start without a hardware list is refused, W1-8)."""
-    return key_for(svc._paths, band)
+    """The key of a band's daemon sockets (daemon_control.conf_socket), every read and every SET: socket_key."""
+    return socket_key(svc._paths, band)
+
+
+def socket_key(paths, band: str) -> str:
+    """The key of a band's daemon SOCKETS (CONF and data): the rid of the band's one enabled radio when the hardware
+    list resolves the band (stage L5, `loraconf-<rid>.sock`); the band itself only when there is NO hardware list (a
+    0.13.x daemon's `loraconf<band>.sock`, the upgrade case); "" — no socket at all — when a list exists and does not
+    resolve the band to one radio (two enabled radios, none, or an invalid list: ledger L27), so no read and no SET
+    ever reaches the 0.13.x band form there. A key that is not a band passes through (a radio id)."""
+    if band not in ("433", "868"):
+        return band
+    state = radios.load(paths)
+    if state.kind == radios.ABSENT:                      # no hardware list: a 0.13.x daemon's band socket
+        return band
+    t = radio_daemon.resolve_target(state, radio_models.load(), lambda _r, _m: True, band=band)
+    return t.rid if t.outcome == "proceed" else ""
+
+
+def socket_refusal(paths, band: str) -> str:
+    """Why `band` has no daemon socket (socket_key ""), naming the radios; "" when it has one."""
+    if band not in ("433", "868") or socket_key(paths, band):
+        return ""
+    state = radios.load(paths)
+    t = radio_daemon.resolve_target(state, radio_models.load(), lambda _r, _m: True, band=band)
+    reason = t.reason.removesuffix("; name one") + (f"; {radio_daemon.SHARED_BAND_TEXT}"
+                                                    if t.kind == radio_daemon.SEVERAL else "")
+    return f"the hardware list names no one radio for {band} MHz: {reason}"
 
 
 def key_for(paths, band: str) -> str:
@@ -526,7 +558,7 @@ def daemon_rf_job(svc, e, band: str):
     """A banded entry's job for `band`: the per-radio entry's file of the band's one radio when the hardware list
     resolves the band (W7-8a), else the 0.13.x band file (read-only legacy, I11)."""
     if e.per_radio:
-        job = e.radio_job(daemon_key(svc, band))
+        job = e.radio_job(key_for(svc._paths, band))           # the file's name, not a socket (L27)
         if job:
             return job
     return e.job(band)
@@ -544,12 +576,16 @@ def rf_band(svc, key: str) -> str:
 
 def daemon_rf_links(svc, e, band: str) -> list:
     """The dashboard's daemon RF-log links for `band` (W7-8a): rflog.list_jobs over the hardware list and the
-    names in logs/, kept to the radios of `band` and that band's 0.13.x file."""
+    names in logs/, kept to the radios of `band` and that band's 0.13.x file. A logs/ that exists but cannot be
+    listed is one entry naming that (`error`, no job), never "no files" (ledger L23); an absent logs/ has no files."""
     state = radios.load(svc._paths)
     try:
         names = [p.name for p in svc._paths.under("logs").iterdir()]
-    except (OSError, PathContainmentError):
+    except FileNotFoundError:
         names = []
+    except (OSError, PathContainmentError) as exc:
+        return [{"label": "", "target": e.writer, "job": "", "readonly": True,
+                 "error": f"logs/ cannot be listed ({type(exc).__name__})"}]
     mine = {r.id for r in state.radios if r.band == band} if state.startable else set()
     return [{"label": j.label, "target": e.writer, "job": j.job, "readonly": j.readonly}
             for j in rflog.list_jobs(state.radios if state.startable else (), names) if j.key in mine or j.key == band]
@@ -631,13 +667,26 @@ def radio_endpoints(paths, specs) -> list:
             for s in specs for rid in (rids if "{rid}" in s.address else ("",))]
 
 
-def client_instance(svc, comp, band: str) -> tuple:
-    """(instance, refusal) for a component's start (W3, stage L5): a daemon client — a run param whose value
-    template names `{rid}` — runs as the band's one radio's instance (W1-3/4/5); a refusal when the band has no
-    such radio or two. Any other component keeps slot 0 without a radio."""
-    from . import commands
+def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
+    """(instance, refusal) for a component's start (W3, stage L5; item 7c2). A listed instance `inst` (slot k, its
+    radio) is used as given. Otherwise a daemon client — a run param whose value template names `{rid}` — runs as
+    slot 0 on the first enabled radio of its band not listed for its stack (DEC-W16); with several radios there the
+    choice is named in `out` (instances.slot0_note), and when every radio of the band is listed it is refused. Any
+    other component keeps the given instance (default slot 0, without a radio)."""
+    from . import commands, instances
+    if inst is not None and inst.slot:
+        return inst, ""
     if not any("{rid}" in str(getattr(p, "default", "") or "") for p in getattr(comp, "run_params", ())):
         return commands.SLOT0, ""
+    sid = svc.stack_of(comp.id) or ""
+    rid, why = instances.slot0_radio(svc._paths, sid, band)
+    if why:
+        return None, f"no radio for its daemon sockets: {why}"
+    if rid:
+        note = instances.slot0_note(svc._paths, sid, band, rid)
+        if note and out is not None and f"  [radio] {note}" not in out:
+            out.append(f"  [radio] {note}")
+        return commands.Instance(0, rid), ""
     t = band_rid(svc, band)
     if t.outcome != "proceed":
         return None, f"no radio for its daemon sockets: {t.reason}"

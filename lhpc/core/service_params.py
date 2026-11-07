@@ -1380,9 +1380,9 @@ class ParamsConfigMixin:
             return ActionResult(True, f"hardware setup: {cur} ({setups.get(cur, cur)})",
                                 details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}",
                                          "  choose from: " + ", ".join(setups)])
-        if setup_id not in setups:
-            return ActionResult(False, f"unknown hardware setup {setup_id!r}",
-                                details=["  choose from: " + ", ".join(setups)])
+        if type(setup_id) is not str or setup_id not in setups:     # item 13: a list or dict is not hashable
+            why = "" if type(setup_id) is str else f": a setup is named by a string (got {type(setup_id).__name__})"
+            return ActionResult(False, f"unknown hardware setup {setup_id!r}{why}", details=["  choose from: " + ", ".join(setups)])
         rows_ok, rows_line = _radio_start.setup_radios(self._paths, setup_id)     # 0.14.0: the hardware list first
         if not rows_ok:
             return ActionResult(False, f"hardware setup not set: {rows_line}")

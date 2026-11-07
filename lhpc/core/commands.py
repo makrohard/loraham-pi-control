@@ -87,9 +87,19 @@ class Instance:
 SLOT0 = Instance()
 
 
-def stack_instances(stack) -> tuple:
-    """The stack's instances (its firewall rows, its web pages): until L5 its one instance at slot 0."""
-    return (SLOT0,)
+def stack_instances(stack, paths=None) -> tuple:
+    """The stack's instances (its firewall rows, its web pages): slot 0, then each one config/instances.toml lists
+    for it (item 7, instances.py), each with the slots of the other stacks' instances on its radio (`{port_of:}`).
+    Without `paths` (a manifest-level caller), or with a registry that does not read back, slot 0 only."""
+    if paths is None:
+        return (SLOT0,)
+    from . import instances
+    state = instances.load(paths)
+    out = [SLOT0]
+    for slot, rid in instances.listed(state, stack.id):
+        peers = {sid: k for sid in state.slots for k, r in instances.listed(state, sid) if r == rid}
+        out.append(Instance(slot, rid, peers))
+    return tuple(out)
 
 
 def _controller_python() -> str:

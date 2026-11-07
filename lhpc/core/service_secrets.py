@@ -52,13 +52,13 @@ def _read_regular(p: Path) -> bytes | None:
 class SecretsOpsMixin:
 
     def _secrets_state_roots(self) -> list:
-        """Every declared `state_root` (the set `clean --purge` collects, all stacks)."""
-        return sorted({c.state_root for s in self.stacks() for c in s.components if c.state_root})
+        """Every declared `state_root`, and each listed instance's (7d): the set `clean --purge` collects, all stacks."""
+        from .instances import instance_rels
+        return sorted({r for s in self.stacks() for r in instance_rels(self._paths, s.id, [c.state_root for c in s.components if c.state_root], 1)})
 
     def _secrets_running(self) -> list:
         """The stacks with a state root that are running (they write their state and secrets)."""
-        return sorted(s.id for s in self.stacks()
-                      if any(c.state_root for c in s.components) and self.stack_running(s.id))
+        return sorted(s.id for s in self.stacks() if any(c.state_root for c in s.components) and self.stack_running(s.id))
 
     def _secrets_locked(self, op: str, *, console: bool):
         """The locks in the product's fixed order, entered into one ExitStack: the task admission

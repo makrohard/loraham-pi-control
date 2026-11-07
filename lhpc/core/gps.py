@@ -23,6 +23,8 @@ import threading as _threading
 import time
 from dataclasses import dataclass
 
+from .procident import PID_MAX_LIMIT  # the kernel's highest possible pid
+
 # Consumers that can be fed a device-shaped NMEA stream by the bridge. Each gets its OWN
 # bridge instance: no shared process, no reference counting, and the two want different
 # output shapes anyway (a PTY for meshtasticd, a UNIX socket for MeshCom's QEMU UART1).
@@ -426,21 +428,23 @@ MARKER_MAX_AGE_S = 60.0
 
 
 def marker_is_fresh(got: dict, now: float, max_age: float = MARKER_MAX_AGE_S) -> bool:
-    """Was this readiness marker refreshed within `max_age` seconds of `now`? A missing,
-    non-numeric or non-positive `updated` is never fresh."""
-    try:
-        updated = float(got.get("updated", 0) or 0)
-    except (TypeError, ValueError):
-        return False
-    return not (updated <= 0 or (now - updated) > max_age)
+    """Was this readiness marker refreshed within `max_age` seconds of `now`? `updated` must be a
+    real number (an int or float, never a bool or a string; the bridge writes int(time.time()))
+    and finite. Up to `max_age` ahead of `now` is still fresh (a clock stepped back);
+    further ahead is not this run's refresh. NaN compares false both ways, so it is refused
+    before any comparison (L24 F1)."""
+    updated = got.get("updated")
+    return _finite(updated) and -max_age <= now - updated <= max_age
 
 
 def marker_owner_pid(got: dict) -> int | None:
     """The feed pid a readiness marker names, or None. The pid is REQUIRED, not a bonus: the
     bridge writes it on every refresh, so a marker without one is not from a feed we are running.
-    `bool` is an `int` in Python — True would otherwise sail through as "pid 1", always alive."""
+    `bool` is an `int` in Python — True would otherwise sail through as "pid 1", always alive.
+    A pid above PID_MAX_LIMIT names no process; asking the kernel about one of 2**31 or more
+    raised OverflowError on every status read while such a marker existed."""
     pid = got.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid <= PID_MAX_LIMIT:
         return None
     return pid
 
@@ -574,8 +578,16 @@ def monitor_label(state: str) -> str:
 
 
 def _finite(x) -> bool:
+    """A real, finite number: an int or float, never a bool. An integer too large for a float
+    (a JSON or TOML literal of hundreds of digits) is not finite here; math.isfinite would
+    raise OverflowError on it (L24 F1)."""
     import math
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    try:
+        return math.isfinite(x)
+    except OverflowError:
+        return False
 
 
 def _nmea_coord(value: bytes, hemi: bytes, is_lat: bool) -> float | None:

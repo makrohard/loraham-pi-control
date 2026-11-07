@@ -78,7 +78,7 @@
           <tr><th>Stack</th><th>Installed</th><th>Install/Update</th><th>Version</th>
               <th>Run Tests</th><th>TX-Test</th></tr>
           <tr class="ai-allrow"><th>All</th><td class="muted">—</td>
-            <td><input type="checkbox" id="ai-all-install" checked></td>
+            <td><input type="checkbox" id="ai-all-install"{% if ai_form.all_install %} checked{% endif %}></td>
             <td><select id="ai-all-version" aria-label="Version for all stacks">
               {# An ACTION, not a state: the rows' defaults differ (binary or pinned), so the master
                  rests on a placeholder and returns to it after setting the rows. #}
@@ -92,20 +92,22 @@
           {# data-testable / data-txcapable: the STACK's own capability, so the script can tell
              "disabled because this stack has no host test" from "disabled because you picked
              the binary channel" and restore the box when you switch back to source. #}
+          {# W206: a row renders the selection last submitted for it (auto_install_form), else the defaults. #}
+          {% set f = ai_form.rows.get(r.id) %}
           <tr data-stack="{{ r.id }}" data-deps='{{ r.deps|tojson }}'
               data-testable="{{ 1 if r.testable else 0 }}"
               data-txcapable="{{ 1 if r.tx_capable else 0 }}">
             <td>{{ r.name }}</td>
             <td class="muted">{{ 'yes' if r.installed else 'no' }}</td>
-            <td><input type="checkbox" class="ai-install" name="install:{{ r.id }}" value="yes" checked></td>
+            <td><input type="checkbox" class="ai-install" name="install:{{ r.id }}" value="yes"{% if not f or f.install %} checked{% endif %}></td>
             {# Only the channels THIS stack allows (binary appears where a signed-off artifact
                is published for this platform), preselected with the stack's default. #}
             <td><select class="ai-version" name="version:{{ r.id }}" aria-label="Version for {{ r.name }}"
                        {% if r.binary_available %}title="Binary = download a prebuilt, sha256-verified artifact (minutes instead of hours); host tests need a source channel"{% endif %}>
-              {% for key, label in src_labels %}{% if key in r.channels %}<option value="{{ key }}"{% if key == r.default_channel %} selected{% endif %}>{{ label }}</option>{% endif %}{% endfor %}
+              {% for key, label in src_labels %}{% if key in r.channels %}<option value="{{ key }}"{% if key == (f.version if f else r.default_channel) %} selected{% endif %}>{{ label }}</option>{% endif %}{% endfor %}
             </select></td>
-            <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if not r.testable %} disabled{% endif %}></td>
-            <td><input type="checkbox" class="ai-tx" name="tx:{{ r.id }}" value="yes"{% if not r.tx_capable %} disabled{% endif %}></td>
+            <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if not r.testable %} disabled{% endif %}{% if f and f.tests %} checked{% endif %}></td>
+            <td><input type="checkbox" class="ai-tx" name="tx:{{ r.id }}" value="yes"{% if not r.tx_capable %} disabled{% endif %}{% if f and f.tx %} checked{% endif %}></td>
           </tr>
           {% endfor %}
         </table>
@@ -201,6 +203,6 @@
 {% endblock %}
 {% block scripts %}
   {# Always loaded: the poller IIFE self-disables when no run card is present; the selection-table
-     assistance IIFE (All row + dependency auto-select) runs whenever the start form is shown. #}
+     assistance IIFE (the All row; no dependency auto-select, W206) runs whenever the start form is shown. #}
   <script src="{{ url_for('static', filename='auto_install.js') }}"></script>
 {% endblock %}

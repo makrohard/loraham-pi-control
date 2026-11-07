@@ -47,6 +47,8 @@ TEST_FILES = ("test_*.py",)            # globs on the file name, or on the path 
 TEST_DEF = re.compile(r"(async )?def test_")
 # Assembled from fragments so that no committed file spells the names it looks for.
 ATTRIBUTION = ("Clau" + "de", "Chat" + "GPT", "Anthro" + "pic", "Generated " + "with")
+ALLOWED_AUTHORS = ("makrohard", "lhpc-release-bot")      # the maintainer's login and his release bot (L50)
+ALLOWED_COMMITS = {"46f24a10ae6a61df2d4af215520120d4540bdfde"}  # maintainer's GitHub web merge
 TRAILER = re.compile("^" + "Co-" + "Authored-By:", re.IGNORECASE | re.MULTILINE)
 WORDS = re.compile(r"\b(" + "ag" + "ent" + "|" + "ses" + "sion" + r")\b", re.IGNORECASE)
 # Product tokens that contain those words and are not attribution: an HTTP header, pytest's fixture
@@ -341,12 +343,12 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     rows.append(("markers", f"{unmarked} without slow", "WARN" if unmarked else "OK"))
 
     # attribution
-    authors = sorted({a for _, a, _ in commits})
+    authors = sorted({a for sha, a, _ in commits if sha not in ALLOWED_COMMITS})
     trailers = sum(len(TRAILER.findall(msg)) for _, _, msg in commits)
     texts = [msg for _, _, msg in commits] + [t for _, _, t in added]
     words = sum(1 for t in texts for name in ATTRIBUTION if name.lower() in t.lower())
     words += sum(len(WORDS.findall(WORD_EXEMPT.sub("", t))) for t in texts)
-    v = "HARD" if trailers or any(a != "makrohard" for a in authors) else "WARN" if words else "OK"
+    v = "HARD" if trailers or any(a not in ALLOWED_AUTHORS for a in authors) else "WARN" if words else "OK"
     rows.append(("attribution", f"authors {','.join(authors) or '-'}; trailers {trailers}; words {words}", v))
 
     # modules
