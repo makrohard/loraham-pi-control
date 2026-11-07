@@ -73,6 +73,16 @@ def instance_key(stack: str, rid: str, listed: dict, slot=None) -> str:
     return f"{stack}@{rid}" if rid and rid in listed.get(stack, ()) else stack
 
 
+def resolve_item(svc, item) -> tuple:
+    """instances.resolve for a stack item's key, with G1-C6: a listed instance whose radio is on another band now than
+    the journal's is not started there; the item fails with the reason and the operator starts it by hand."""
+    from . import instances
+    sid, inst, band, why = instances.resolve(svc, item["target"])
+    if not why and band and item.get("band") and band != item["band"]:
+        why = f"{item['target']}: {inst.rid} is on {band} MHz now, not {item['band']} MHz: start it by hand"
+    return sid, inst, band, why
+
+
 def listed_instances(paths: Paths) -> tuple[dict, str]:
     """({stack: frozenset of listed rids}, "") from config/instances.toml, or ({}, why) when it does not read back."""
     from . import instances

@@ -24,7 +24,7 @@ def test_r1_a_pid_the_kernel_cannot_hold_is_gone(pid):
 
 
 @pytest.mark.parametrize("exc,want", [(OverflowError, "gone"), (ValueError, "gone"), (ProcessLookupError, "gone"),
-                                      (PermissionError, "denied"), (OSError, "gone")],
+                                      (PermissionError, "denied"), (OSError, "unknown")],   # G1-C14: never "gone"
                          ids=["overflow", "value", "lookup", "permission", "oserror"])
 def test_r2_each_error_kind_of_the_probe(monkeypatch, exc, want):
     def kill(pid, sig):

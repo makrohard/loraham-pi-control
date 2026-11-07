@@ -268,3 +268,23 @@ def test_a_launch_records_its_instances_slot_beside_its_radio(tmp_path, monkeypa
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, run_argv=("true",))
     assert life.start(Stack(id="s", name="s", main="c"), comp, inst=commands.Instance(slot, rid)).ok
     assert extras == [{"rid": rid, "slot": slot}]
+
+
+def test_an_instance_whose_radio_moved_band_after_the_plan_is_not_started_there(tmp_path, monkeypatch):
+    # G1-C6: the list changed between the plan (r3 on 433) and the item's start (r3 on 868 now): the item fails with
+    # the reason, and nothing starts on 868; the operator starts it by hand.
+    from lhpc.core import instances
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    _record(tmp_path, rid="r3", band="433", pid=999991, slot=1)
+    real = instances.resolve
+
+    def resolve(svc, target):
+        sid, inst, band, why = real(svc, target)
+        return (sid, inst, "868", why) if target == "kiss@r3" else (sid, inst, band, why)
+    monkeypatch.setattr(instances, "resolve", resolve)
+    svc.boot_restore_run()
+    assert starts == []
+    [item] = _journal(tmp_path)["items"]
+    assert (item["state"], item["result"]["summary"]) == (
+        "failed", "kiss@r3: r3 is on 868 MHz now, not 433 MHz: start it by hand")

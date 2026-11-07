@@ -62,17 +62,19 @@ def proc_alive(pid: int) -> bool:
 
 def signal0_state(pid) -> str:
     """Signal-0 probe of a pid read from a file or another process's record: "alive", "denied" (it exists and is
-    someone else's: PermissionError) or "gone". A non-positive or non-int pid is never signalled; a pid the kernel
-    cannot hold (OverflowError, ValueError: 2**31 and above) names no process, so it is "gone", never an exception
-    out of a status read."""
+    someone else's: EPERM), "gone" (ESRCH) or "unknown" (any other error: never read as gone, G1-C14). A non-positive
+    or non-int pid is never signalled; a pid the kernel cannot hold (OverflowError, ValueError: 2**31 and above) names
+    no process, so it is "gone", never an exception out of a status read."""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return "gone"
     try:
         os.kill(pid, 0)
     except PermissionError:
         return "denied"
-    except (OSError, OverflowError, ValueError):
+    except (ProcessLookupError, OverflowError, ValueError):
         return "gone"
+    except OSError:
+        return "unknown"
     return "alive"
 
 

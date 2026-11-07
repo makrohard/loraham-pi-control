@@ -62,7 +62,7 @@ pytestmark = pytest.mark.needs_session
 
 PATHS = ("cli", "web", "job", "boot")
 _BOOKKEEPING = re.compile(r"^(state/(jobresults|jobs|owned|locks)/|state/boot-restore\.json$|"
-                          r"logs/web-|config/secrets/web_session\.key$|config/\.lock$)")
+                          r"logs/web-|config/secrets/web_session\.key$|config/\.lock$|state/hotplug\.json\.lock$)")
 KISS_STARTED = ["logs/start-loraham-kiss-tnc-433.log", "state/daemon-feed-floor-433",
                 "state/running/kiss.band"]
 

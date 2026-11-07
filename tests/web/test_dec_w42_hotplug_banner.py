@@ -158,14 +158,13 @@ def test_the_first_render_starts_from_the_hardware_list(web, tmp_path, monkeypat
     assert len(lines) == 2 and any(x.endswith("r2 unplugged (serial 26073012)") for x in lines), lines
 
 
-def test_a_first_render_that_matches_the_hardware_list_takes_no_lock_and_writes_nothing(web, tmp_path, monkeypatch):
-    # No store yet and the scan is exactly the list (a port-bound radio's stick on its port): the render returns
-    # before the lock, so a plain dashboard GET leaves no file behind, not even the lock's.
+def test_a_first_render_that_matches_the_hardware_list_writes_nothing(web, tmp_path, monkeypatch):
+    # No store yet and the scan is exactly the list (a port-bound radio's stick on its port): nothing is recorded.
+    # Since G1-C9 B4 every render takes the store's lock before its scan, so the lock's own file may exist.
     radios_fixture.write(tmp_path, (ROWS[0], ROWS[2]))
     c, _usb = web(), _Usb(monkeypatch, _dev("1-1.4"))
     assert _lines(c) == []
     assert not _store(tmp_path).exists()
-    assert not (tmp_path / "state" / "hotplug.json.lock").exists()
 
 
 import pytest  # noqa: E402  (the guard cases below)
@@ -198,3 +197,41 @@ def test_a_failing_banner_gives_no_banner_never_an_error(web, tmp_path, monkeypa
     usb.devices = [BOUND[0]]                                     # a change, so the diff runs
     r = c.get("/")
     assert r.status_code == 200 and 'id="hardware-changes"' not in r.get_data(as_text=True)
+
+
+
+# ---- G1-C9: B1 a port-bound radio's stick with a serial; B2 an unreadable list; B4 the scan under the lock ----------
+
+def test_a_port_bound_radios_stick_that_reports_a_serial_is_that_radios(web, tmp_path, monkeypatch):
+    # r3 is bound by port 1-1.4; its stick (the 433 build on the direct port) reports serial CHE1W433: nothing to say.
+    radios_fixture.write(tmp_path, (ROWS[0], ROWS[2]))
+    c, _usb = web(), _Usb(monkeypatch, _dev("1-1.4", "CHE1W433"))
+    assert _lines(c) == []
+
+
+def test_a_hardware_list_that_does_not_read_back_records_nothing(web, tmp_path, monkeypatch):
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    _lines(c)
+    before = _store(tmp_path).read_bytes()
+    (tmp_path / "config" / "radios.toml").write_text("not toml [")
+    usb.devices = [_dev("1-1.4")]                                 # r2's stick gone while the list cannot be read
+    assert _lines(c) == [] and _store(tmp_path).read_bytes() == before
+    radios_fixture.write(tmp_path, ROWS)                          # readable again: the change is seen then
+    assert [line.partition(" ")[2] for line in _lines(c)] == ["r2 unplugged (serial 26073012)"]     # after "HH:MMZ"
+
+
+def test_the_scan_is_taken_under_the_stores_lock(web, tmp_path, monkeypatch):
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    lock, held = tmp_path / "state" / "hotplug.json.lock", []
+
+    def scan(*a, **k):
+        with open(lock, "a+") as fh:                              # another open file: blocked while the render holds it
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except OSError:
+                held.append(True)
+        return Scan(usb.listing, tuple(usb.devices))
+    monkeypatch.setattr(usb_access, "scan", scan)
+    _lines(c)
+    assert held == [True]

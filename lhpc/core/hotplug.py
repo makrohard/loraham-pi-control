@@ -49,12 +49,14 @@ def _ident(serial: str, port: str) -> str:
     return f"serial:{serial[:radios.SERIAL_PREFIX]}" if serial else f"port:{port}"
 
 
-def observe(scan, models) -> dict | None:
-    """{ident: (port, serial)} of the sticks of a USB model on this scan; None when it cannot be trusted."""
+def observe(scan, models, rows=()) -> dict | None:
+    """{ident: (port, serial)} of the sticks of a USB model on this scan; None when it cannot be trusted. A stick on
+    the port a port-bound radio names is that port's, whatever serial it reports (G1-C9)."""
     from .usb_access import Probe
     if scan.listing is not Probe.PRESENT:
         return None
     ids = {(m.usb["vid"], m.usb["pid"]) for m in models.values() if m.usb}
+    bound = {r.usb_port for r in rows if r.usb_port and not r.usb_serial}
     out = {}
     for d in scan.devices:
         if d.vid.state is not Probe.PRESENT or d.pid.state is not Probe.PRESENT:
@@ -64,7 +66,7 @@ def observe(scan, models) -> dict | None:
         if d.serial.state is Probe.UNKNOWN:
             return None
         serial = d.serial.value if d.serial.state is Probe.PRESENT else ""
-        out[_ident(serial, d.port)] = (d.port, serial)
+        out[f"port:{d.port}" if d.port in bound else _ident(serial, d.port)] = (d.port, serial)
     return out
 
 
@@ -160,19 +162,18 @@ def banner(svc, scan=None, now=None) -> dict:
 
 
 def _banner(svc, scan, now) -> dict:
-    """Records this render's changes first, under the store's own lock; a render with nothing to record takes no
-    lock and creates no file, and a busy lock records nothing this time."""
+    """Scans, compares and records this render's changes under the store's own lock, so a scan is never recorded
+    after a newer one (G1-C9); a busy lock records nothing this time, and a render with nothing to record writes
+    nothing. A hardware list that does not read back skips the comparison: its radios cannot be told (G1-C9)."""
     from . import usb_access
-    state_list = radios.load(svc._paths)
-    rows = state_list.radios if state_list.kind == radios.VALID else ()
-    seen_now = observe(usb_access.scan() if scan is None else scan, radio_models.load())
-    state = _read(svc._paths) or {"seen": baseline(rows), "events": [], "seq": 0}
-    if seen_now is None or seen_now == state["seen"]:
-        return {"lines": state["events"][-MAX_EVENTS:]}
     try:
         with _locked(svc._paths):
-            state = _read(svc._paths) or {"seen": baseline(rows), "events": [], "seq": 0}   # again, under the lock
-            if seen_now != state["seen"]:
+            state_list = radios.load(svc._paths)
+            seen_now = (None if state_list.kind == radios.INVALID else
+                        observe(usb_access.scan() if scan is None else scan, radio_models.load(), state_list.radios))
+            state = _read(svc._paths) or {"seen": baseline(state_list.radios), "events": [], "seq": 0}
+            rows = state_list.radios
+            if seen_now is not None and seen_now != state["seen"]:
                 at = time.strftime("%H:%MZ", time.gmtime(time.time() if now is None else now))
                 for line in changes(state["seen"], seen_now, rows):
                     state["seq"] += 1
