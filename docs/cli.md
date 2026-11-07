@@ -195,6 +195,26 @@ daemon briefly per candidate board and reports whether the chip responds; the bo
 during init). Detect is refused, naming the stack, while a stack that drives the radio itself
 (Meshtastic, Reticulum) runs on that band.
 
+#### hardware remove
+Remove one radio from the hardware list (`config/radios.toml`):
+
+```
+lhpc hardware remove r3                              # dry run: what goes, what stays; nothing changes
+lhpc hardware remove r3 --confirm-phrase remove-r3   # remove r3
+```
+
+- It is refused while the radio runs: its own daemon, or a stack on it. The refusal names each
+  ("stop meshcore and stop its daemon, then remove r2"). The Hardware page greys its Remove with the same line.
+- What goes: the radio's row, its binding to the stick, and the daemon settings on that row.
+- What stays: the stick (plugged in, it shows up again as a new stick), the other radios and their
+  stacks, the per-band stack settings (`config/stacks/`), and the RF logs already written (`logs/<rid>/`).
+- The id stays reserved: `retired = ["r3"]` in `config/radios.toml`. No later radio gets it, so logs
+  and ports stay unambiguous; a row that uses it is refused.
+- A stack that ran on the radio before the last reboot is not restored at the next boot; the boot
+  restore skips it with "radio r3 no longer exists".
+
+Web: Hardware › the radio › Remove asks "Remove r3 (<model>)?" with Remove and Cancel.
+
 ---
 
 ### gps

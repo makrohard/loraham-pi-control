@@ -176,6 +176,84 @@ def _radio_users(svc, radio) -> list:
                   and radio.band in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}))
 
 
+def radio_activity(svc, radio, procs=None) -> list:
+    """DEC-W39: what runs on `radio`, the ONE answer the remove's refusal, its confirm page and the card's greyed
+    button all use: "its daemon" when its CONF socket answers or a process is (or cannot be told from) its daemon,
+    then every running stack _radio_users names. [] = nothing runs on it."""
+    from . import daemon_control
+    procs = _daemon_procs(svc) if procs is None else procs
+    mine = [p for p in procs if p.kind == "unknown" or (p.kind == "id" and p.rid == radio.id)
+            or (p.kind == "no-id" and p.band == radio.band)]
+    daemon = ["its daemon"] if mine or daemon_control.read_view(svc._system, radio.id).reachable else []
+    return [*_radio_users(svc, radio), *daemon]
+
+
+def stop_first(rid: str, activity: list) -> str:
+    """The line a running radio's card and refusal show: "stop meshcore and stop its daemon, then remove r2"."""
+    return " and ".join(f"stop {a}" for a in activity) + f", then remove {rid}"
+
+
+def _restore_records(svc, rid: str) -> list:
+    """The ownership records of radio `rid` the next boot's planner would read (role "" with that rid); read only."""
+    from . import boot_restore
+    valid, _issues, _state = svc._lifecycle().owned_inventory()
+    return [r for r in valid if r.get("role", "") == "" and boot_restore.rid_of(r.get("rid")) == rid]
+
+
+def remove_plan(svc, rid: str) -> dict:
+    """DEC-W39: what `Remove rid` would do, for the confirm page and the dry run (nothing is written): the row,
+    the activity that blocks it, what goes, what stays. `row` None with `reason` when there is nothing to remove."""
+    state = radios.load(svc._paths)
+    if state.kind != radios.VALID:
+        why = ("there is no hardware list" if state.kind == radios.ABSENT
+               else "the hardware list is not valid: " + "; ".join(state.reasons))
+        return {"rid": rid, "row": None, "reason": why}
+    row = next((r for r in state.radios if r.id == rid), None)
+    if row is None:
+        return {"rid": rid, "row": None, "reason": f"{rid} is already removed (its id stays reserved)"
+                if rid in state.retired else f"there is no radio {rid}"}
+    activity = radio_activity(svc, row)
+    goes = ["its row in the hardware list (config/radios.toml) and its binding"
+            + (f" to the stick {row.usb_serial or 'on port ' + row.usb_port}" if row.usb_serial or row.usb_port else ""),
+            f"its own daemon settings (the settings on {rid}'s row)"]
+    goes += [f"{r.get('stack') or '?'} will not be restored at the next boot: radio {rid} no longer exists"
+             for r in _restore_records(svc, rid)]
+    stays = [f"the id {rid} stays reserved, so logs and ports stay unambiguous (DEC-W39)",
+             f"logs/{rid}/ (its RF logs already written) stays on disk",
+             "the stick itself: plugged in, it shows up again as a new stick",
+             "the other radios and their stacks; the per-band stack settings (config/stacks/)"]
+    return {"rid": rid, "row": row, "reason": "", "activity": activity, "goes": goes, "stays": stays,
+            "state": state}
+
+
+def remove_radio(svc, rid: str, confirm: str):
+    """DEC-W39: `lhpc hardware remove <rid>` and the card's Remove, under the hardware list's lock (W217)."""
+    from .service_base import ActionResult
+    return _with_list_lock(svc._paths, lambda why: ActionResult(False, f"{rid}: {why}", data={"reason": "busy"}),
+                           _remove_radio, svc, rid, confirm)
+
+
+def _remove_radio(svc, rid: str, confirm: str):
+    from .service_base import ActionResult
+    plan = remove_plan(svc, rid)
+    if plan["row"] is None:
+        return ActionResult(False, f"Not removed: {plan['reason']}", data={"reason": "no-radio"})
+    if plan["activity"]:
+        return ActionResult(False, f"{rid} cannot be removed while it runs: {stop_first(rid, plan['activity'])}",
+                            data={"reason": "running"})
+    details = [f"  [goes] {g}" for g in plan["goes"]] + [f"  [stays] {s}" for s in plan["stays"]]
+    phrase = f"remove-{rid}"
+    if confirm != phrase:
+        return ActionResult(False, f"Not removed (dry run): type the confirm phrase '{phrase}' to remove {rid}",
+                            details=details, next_commands=[f"lhpc hardware remove {rid} --confirm-phrase {phrase}"],
+                            data={"reason": "dry-run"})
+    state = plan["state"]
+    reasons = radios.save(svc._paths, radios.without(state.radios, rid), retired=(*state.retired, rid))
+    if reasons:
+        return ActionResult(False, f"Not removed: {'; '.join(reasons)}", data={"reason": "save-refused"})
+    return ActionResult(True, f"{rid} removed; its id stays reserved", details=details)
+
+
 def _account() -> str:
     import os
     import pwd
@@ -193,6 +271,7 @@ def hardware_view(svc) -> dict:
     state = radios.load(svc._paths)
     models = radio_models.load()
     found = usb_access.scan()                       # the sticks to bind, and (B) to add as new USB radios
+    procs = _daemon_procs(svc)                      # one /proc read for every card's Remove (DEC-W39)
     rows = []
     for r in state.radios:
         m = models.get(r.model)
@@ -201,7 +280,8 @@ def hardware_view(svc) -> dict:
         rows.append({"rid": r.id, "name": r.name, "model": r.model, "band": r.band, "enabled": r.enabled,
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
-                     "choices": usb_flow.usb_choices(found, m) if usb else None})
+                     "choices": usb_flow.usb_choices(found, m) if usb else None,
+                     "activity": radio_activity(svc, r, procs)})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None
@@ -265,7 +345,7 @@ def _add_usb(svc, model_id: str, port: str) -> tuple:
     if len(m.bands) != 1:
         return False, f"{m.id} runs {len(m.bands)} bands; adding it needs a band choice", False
     try:
-        rid = radios.next_id(state.radios)
+        rid = radios.next_id(state.radios, state.retired)
     except ValueError as exc:
         return False, str(exc), False
     band = m.bands[0]

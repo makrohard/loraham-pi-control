@@ -2047,7 +2047,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
         from lhpc.core import radio_start
-        return render_template("hardware.html", view=radio_start.hardware_view(service))
+        return render_template("hardware.html", view=radio_start.hardware_view(service),
+                               stop_first=radio_start.stop_first)
 
     @app.post("/hardware/bind")
     def hardware_bind():
@@ -2068,6 +2069,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         ok, msg, box = radio_start.add_usb(service, request.form.get("model", ""), request.form.get("port", ""))
         flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
         return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+
+    @app.get("/hardware/remove/<rid>")
+    def hardware_remove_confirm(rid: str):
+        """DEC-W39: the confirm step of Remove radio: what goes, what stays; the refusal instead while it runs."""
+        from lhpc.core import radio_start
+        return render_template("hardware_remove.html", plan=radio_start.remove_plan(service, rid),
+                               stop_first=radio_start.stop_first)
+
+    @app.post("/hardware/remove")
+    def hardware_remove():
+        """DEC-W39: remove one radio's row; only with its confirm phrase, else nothing changes."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        res = radio_start.remove_radio(service, request.form.get("rid", ""), request.form.get("confirm_phrase", ""))
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hardware_view"))
 
     @app.post("/hardware")
     def hardware_set():
