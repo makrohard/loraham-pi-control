@@ -681,6 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Restart on this band (the daemon of that band, or a band-switchable stack)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
+    # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
+    for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
+                          ("remove-instance", "Remove <stack>@<rid>; its slot stays reserved, no port moves")):
+        sp = stack_sub.add_parser(action, help=ahelp)
+        sp.add_argument("stack", help="Stack id (kiss, meshcore or chat)")
+        sp.add_argument("rid", help="Radio id of the hardware list (r1..r99)")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
@@ -1419,6 +1425,10 @@ def _run(argv: list[str] | None = None) -> int:
             print("lhpc stack stop: --band applies to the daemon only (a stack's own stop needs no "
                   "band)", file=sys.stderr)
             return 2
+        if args.stack_action in ("add-instance", "remove-instance"):
+            from lhpc.core import instances
+            fn = instances.add_instance if args.stack_action == "add-instance" else instances.remove_instance
+            return _render(fn(svc, args.stack, args.rid))
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
@@ -1444,7 +1454,7 @@ def _run(argv: list[str] | None = None) -> int:
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
         print("usage: lhpc stack <action> <stack> [--yes]\n"
-              "lhpc stack: an action is required (start|stop|restart|poststart)",
+              "lhpc stack: an action is required (start|stop|restart|poststart|add-instance|remove-instance)",
               file=sys.stderr)
         return 2
     if args.command == "kill":
