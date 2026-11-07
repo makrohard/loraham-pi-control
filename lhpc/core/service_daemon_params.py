@@ -237,24 +237,23 @@ class DaemonParamsMixin:
         fam = radio_start.chip_family(self, band)
         return fam if fam is not None else cfgmod.hw_preset_family(self.hw_preset_for_band(band))
 
-    def _daemon_feed_source(self, band: str) -> Path | None:
-        """The SINGLE feed source log for a band, or None: the per-band log
-        `logs/start-<daemon>-<band>.log` (the daemon runs one instance per band). Never a
-        concatenation — the band-agnostic tokens ([TX], [RX], TXOK, ...) match either band."""
+    def _daemon_feed_source(self, band: str, rid: str = "") -> Path | None:
+        """The SINGLE feed source log of one radio's daemon (item 16: radio_start.start_log_name), or None. Never a
+        concatenation: the band-agnostic tokens ([TX], [RX], TXOK, ...) match any radio's lines."""
         try:
-            p = self._paths.under("logs", f"start-{self.DAEMON_ID}-{band}.log")
+            p = self._paths.under("logs", radio_start.start_log_name(self.DAEMON_ID, band, rid))       # item 16
         except PathContainmentError:
             return None
         return p if p.is_file() else None
 
-    def _daemon_feed_floor_path(self, band: str) -> Path:
-        return self._paths.under("state", f"daemon-feed-floor-{band}")
+    def _daemon_feed_floor_path(self, band: str, rid: str = "") -> Path:
+        return self._paths.under("state", f"daemon-feed-floor-{band}" + (f"-{rid}" if rid else ""))
 
-    def _read_daemon_feed_floor(self, band: str) -> int:
+    def _read_daemon_feed_floor(self, band: str, rid: str = "") -> int:
         """The RX/TX window's clear FLOOR (a byte offset into the source log), or 0 when unset/
         unreadable. Set by `clear_daemon_feed` at each start/stop boundary."""
         try:
-            txt = runtime_fs.read_text_regular(self._paths, self._daemon_feed_floor_path(band),
+            txt = runtime_fs.read_text_regular(self._paths, self._daemon_feed_floor_path(band, rid),
                                                max_bytes=64)
         except (OSError, PathContainmentError, ValueError):
             return 0
@@ -263,30 +262,31 @@ class DaemonParamsMixin:
         except ValueError:
             return 0
 
-    def clear_daemon_feed(self, band: str) -> None:
+    def clear_daemon_feed(self, band: str, rid: str = "") -> None:
         """Clear the RX/TX activity window for a band: record the current daemon-log size as the feed
         FLOOR so `daemon_feed` returns nothing until fresh activity is appended. Non-destructive — the
         append-only daemon log (and its logs view) is untouched. Best-effort; a failure is swallowed so
         it can never break a start/stop. Called at every start (daemon OR any stack) and daemon stop."""
         if not daemon_control.is_valid_band(band):
             return
-        p = self._daemon_feed_source(band)
-        st = runtime_fs.stat_leaf_nofollow(self._paths, p) if p is not None else None
-        size = st.st_size if st is not None else 0
-        try:
-            runtime_fs.write_marker(self._paths, self._daemon_feed_floor_path(band), str(size))
-        except (OSError, PathContainmentError):
-            pass
+        for r in [rid] if rid else radio_start.band_rids(self._paths, band) or [""]:   # item 16: each radio's window
+            p = self._daemon_feed_source(band, r)
+            st = runtime_fs.stat_leaf_nofollow(self._paths, p) if p is not None else None
+            try:
+                runtime_fs.write_marker(self._paths, self._daemon_feed_floor_path(band, r), str(st.st_size if st else 0))
+            except (OSError, PathContainmentError):
+                pass
 
-    def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
+    def daemon_feed(self, band: str, lines: int = 40, rid: str = "") -> list[str]:
         """Bounded tail of the daemon's activity, filtered to RX/TX lines, from the single per-band
         source (`_daemon_feed_source`). Only content beyond the clear FLOOR is shown, so the window is
         emptied at each start/daemon-stop boundary without touching the underlying append-only log."""
-        p = self._daemon_feed_source(band)
+        rid = rid or "".join(radio_start.band_rids(self._paths, band)[:1])     # the band's radio when it has one
+        p = self._daemon_feed_source(band, rid)
         if p is None:
             return []
         try:
-            raws = runtime_fs.tail_since(self._paths, p, self._read_daemon_feed_floor(band),
+            raws = runtime_fs.tail_since(self._paths, p, self._read_daemon_feed_floor(band, rid),
                                          self._FEED_SCAN_LINES, self._FEED_SCAN_BYTES)
         except (OSError, PathContainmentError, ValueError):
             raws = []                            # symlinked/escaping -> no lines

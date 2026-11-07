@@ -472,7 +472,7 @@ class Lifecycle:
             # BAND-SCOPED log: the daemon runs one instance PER BAND simultaneously, and they must
             # not append to one shared file (it mixes bands and doubles the volume the RX/TX feed
             # has to scan). `band` is "" for band-agnostic components -> the plain name.
-            log = self.logs_dir() / f"start-{comp.id}{('-' + band) if band else ''}.log"
+            log = self.logs_dir() / radio_start.start_log_name(comp.id, band, inst.rid)        # item 16: by radio
             runtime_fs.ensure_dir(self.paths, self.logs_dir())
         except (OSError, PathContainmentError) as exc:
             return StartLaunch(False, "", f"runtime log setup failed: {exc}")
@@ -1501,11 +1501,11 @@ class Lifecycle:
             except Exception:
                 pass
 
-    def start_log(self, comp: Component, band: str = "") -> Path | None:
-        """The captured process log for `comp`, band-aware. A band-scoped start writes
-        `start-<id>-<band>.log`; a band-agnostic one writes `start-<id>.log`. Resolution order:
+    def start_log(self, comp: Component, band: str = "", rid: str = "") -> Path | None:
+        """The captured process log for `comp`, band-aware. A start on a radio writes `start-<id>-<band>-<rid>.log`
+        (item 16, radio_start.start_log_name); a band-agnostic one writes `start-<id>.log`. Resolution order:
 
-          1. the EXACT band's log, when the caller knows the band (the RX/TX feed, `?band=`);
+          1. the EXACT log of radio `rid`, or of the band's first radio, when the caller knows the band;
           2. else the NEWEST `start-<id>-*.log` — a band-less caller (`lhpc logs`, the GUI "logs"
              link) has no band to offer and must not come up empty for a banded component;
           3. else the band-agnostic name `start-<id>.log` (what a band-less start writes).
@@ -1515,7 +1515,7 @@ class Lifecycle:
         """
         d = self.logs_dir()
         if band:
-            p = d / f"start-{comp.id}-{band}.log"
+            p = d / radio_start.start_log_name(comp.id, band, rid or "".join(radio_start.band_rids(self.paths, band)[:1]))
             if p.is_file():
                 return p
         prefix = f"start-{comp.id}-"

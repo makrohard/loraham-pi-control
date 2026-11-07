@@ -515,6 +515,33 @@ def radio_clients(svc, band: str, rid: str, sid: str) -> tuple:
     return [d for d in on if d.partition("@")[0] != sid], any(d.partition("@")[0] == sid for d in on)
 
 
+def start_log_name(comp_id: str, band: str = "", rid: str = "") -> str:
+    """The one name of a start's captured log (item 16): `start-<comp>[-<band>][-<rid>].log`. Every start that runs
+    on a radio names it, slot 0 of a single radio too, so a second radio on the band never renames a log."""
+    return f"start-{comp_id}" + (f"-{band}" if band else "") + (f"-{rid}" if rid else "") + ".log"
+
+
+def band_rids(paths, band: str) -> list:
+    """The enabled radios of `band`, by rid ([] without a list)."""
+    return [r[0] for r in view_radios(paths) if r[2] == band]
+
+
+def view_radio(svc, band: str, rid: str) -> tuple:
+    """Item 16 batch 2 (DEC-W53): (the socket key, "") of a radio-addressed daemon view: radio `rid`, an enabled radio
+    of the hardware list on `band`; no rid gives the band's key, as before. ("", why) when rid is not one."""
+    if not rid:
+        return daemon_key(svc, band), ""
+    _inst, rband, why = daemon_radio(svc, rid)
+    if not why and rband != band:
+        why = f"{rid} is on {rband} MHz, not {band} MHz"
+    return ("", why) if why else (rid, "")
+
+
+def view_radios(paths) -> list:
+    """Every enabled radio of the hardware list as (rid, name, band), by rid: the per-radio views' chooser."""
+    return [(r.id, r.name, r.band) for r in sorted(radios.load(paths).radios, key=lambda r: int(r.id[1:])) if r.enabled]
+
+
 def radio_dependents(svc, band: str, inst=None):
     """Item 16: the running clients a stop of `band`'s daemons leaves without a daemon, by instance key — `<stack>`
     for slot 0, `<stack>@<rid>` for a listed instance — on radio `inst.rid` alone when given, else on each enabled
