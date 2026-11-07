@@ -255,6 +255,17 @@ def resolve(svc, target: str):
     return sid, inst, radio.band, ""
 
 
+def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
+    """(stored, bandless): the saved settings a component of stack `sid` reads. Slot 0: its band's file and the
+    band-less file (the stack-level params), as before; a listed instance: its own `config/stacks/<sid>@<rid>.toml`
+    for both (DEC-W60) — nothing of slot 0's is shared, an instance without its file runs on the defaults."""
+    if inst is not None and inst.slot:
+        own = svc._stack_config_cached(sid, inst.rid)
+        return own, own
+    stored = svc._stack_config_cached(sid, cfg_band)
+    return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
+
+
 def listed_rids(paths, sid: str) -> frozenset:
     """The radio ids the stack's listed instances run on (reserved slots left out)."""
     return frozenset(rid for _k, rid in listed(load(paths), sid))

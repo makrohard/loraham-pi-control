@@ -1468,7 +1468,7 @@ class LifecycleOpsMixin:
             # store) so a stored sibling run parameter can never leak into another component's argv
             # through a name collision. The only launch-time overlay is an inherited identity
             # (`_materialize_inherited_identity`), handed to its own component only.
-            comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            comp_cfg = dict(self.stack_config(comp.id, cfg_band, prep.inst))      # DEC-W60: an instance its own
             if _target_is_stack or comp.id == target:
                 comp_cfg.update(self._overrides_for_comp(target, "run", params, comp.id))
             # ONE announcer per component (dedup within it): the start capture log, the

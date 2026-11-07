@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
+from . import instances as _instances
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _openhop_store
@@ -630,18 +631,15 @@ class ParamsConfigMixin:
                             f"component-scoped value for '{comp.id}'")
         return None
 
-    def stack_config(self, target: str, band: str = "") -> dict:
+    def stack_config(self, target: str, band: str = "", inst=None) -> dict:
         """Effective run config for `target` (and band): the component-scoped saved value, else a
         UNIQUE flat value, else the per-band/manifest default (operator `{callsign}`
         tokens substituted in DEFAULTS only — a saved value is used verbatim). An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
-        # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); read from the
-        # banded file they would launch at their default whatever the operator saved.
-        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
-                    if cfg_band else stored)
+        # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); a listed instance's in its own.
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -1632,15 +1630,13 @@ class ParamsConfigMixin:
         # Owner-stack scoped for a stack target; JUST the targeted component for a direct component.
         return [c for c in self._target_components(target) if c.config_file]
 
-    def file_config_values(self, target: str, band: str = "") -> dict:
+    def file_config_values(self, target: str, band: str = "", inst=None) -> dict:
         """Stored file-config values (component-scoped `__f__<comp>__<name>`, else a UNIQUE flat
         `file_<name>`), falling back to the per-band default, then the FileParam default. An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
-        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
-                    if cfg_band else stored)          # STACK-LEVEL params: the band-less store
+        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
@@ -2136,7 +2132,7 @@ class ParamsConfigMixin:
                     out = out.replace(token, value)
             return out
 
-        stored = self.file_config_values(target, band)
+        stored = self.file_config_values(target, band, inst)
         over = overrides or {}
         written: list[ConfigWrite] = []
         for c in self._file_config_components(target):
