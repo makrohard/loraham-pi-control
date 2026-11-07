@@ -403,6 +403,65 @@ def chrony_dropin_text() -> str:
     )
 
 
+_TS_HELPER = """# Bounded service calls (BOOTSTRAP-RETRY-TABLES-v5 rows 18-20, 28): each systemctl call runs under `timeout`, and a
+# timed-out one is called again within SVC_RETRIES. A timed-out restart counts as done only when the unit is active
+# and its own ActiveEnterTimestampMonotonic moved past a baseline read before the first call (an unknown baseline
+# never counts as moved). Status 12 is the helper's own plumbing: TS_PLUMB is set, the step goes on, and the verdict
+# exits 12 (the bootstrap reads it from the marker file $TS_MARK). The bounds default to the bootstrap's.
+SVC_CALL_BOUND_S="${SVC_CALL_BOUND_S:-90}"; SVC_RETRIES="${SVC_RETRIES:-4}"; SVC_RETRY_PAUSE_S="${SVC_RETRY_PAUSE_S:-5}"
+SVC_READ_BOUND_S="${SVC_READ_BOUND_S:-60}"; SVC_KILL_GRACE_S="${SVC_KILL_GRACE_S:-5}"
+TS_PLUMB=0; TS_LAST=""; TS_TRIES=0
+ts_plumb() { TS_PLUMB=1; echo "[bootstrap-deps] ERROR: the service-call helper cannot run: $1" >&2; }
+command -v timeout >/dev/null 2>&1 || ts_plumb "coreutils' timeout is not installed"
+ts_call() {   # ts_call BOUND ARGS...: 0 done, 1 refused, 3 no answer, 12 plumbing; TS_OUT, TS_LAST (last stderr line)
+  _b=$1; shift; _rc=0
+  _e=$(mktemp) || return 12
+  TS_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$_b" systemctl "$@" 2>"$_e") || _rc=$?
+  TS_LAST=$(tail -n 1 "$_e"); rm -f "$_e"
+  case "$_rc" in
+    0) return 0 ;;
+    124|137) TS_LAST="no answer within $_b s"; return 3 ;;
+    125|126|127) return 12 ;;
+  esac
+  case "$TS_LAST" in *'Connection timed out') return 3 ;; esac
+  return 1
+}
+ts_base() {   # ts_base UNIT: TS_TS and TS_AS from one bounded read; 0 accepted, 2 not, 12 plumbing
+  TS_TS=""; TS_AS=""; _r=0
+  ts_call "$SVC_READ_BOUND_S" show --property=ActiveEnterTimestampMonotonic --property=ActiveState --value "$1" || _r=$?
+  [ "$_r" -ne 12 ] || return 12
+  [ "$_r" -eq 0 ] || return 2
+  for _v in $TS_OUT; do
+    case "$_v" in *[!0123456789]*) TS_AS=$_v ;; *) TS_TS=$_v ;; esac
+  done
+  case "$TS_AS" in active|reloading|inactive|failed|activating|deactivating) ;; *) return 2 ;; esac
+  [ -n "$TS_TS" ] || return 2
+  return 0
+}
+ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout. 0 done, 1 refused, 3 no answer,
+  # 12 plumbing; TS_TRIES = the calls made
+  _base=""; _n=0; _r=0
+  if [ "$1" = restart ]; then
+    ts_base "$2" || _r=$?
+    [ "$_r" -ne 12 ] || return 12
+    [ "$_r" -ne 0 ] || _base=$TS_TS
+  fi
+  while [ "$_n" -lt "$SVC_RETRIES" ]; do
+    _n=$((_n + 1)); TS_TRIES=$_n; _r=0
+    ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
+    [ "$_r" -eq 3 ] || return "$_r"
+    sleep "$SVC_RETRY_PAUSE_S"
+    if [ "$1" = restart ] && [ -n "$_base" ]; then
+      _r=0; ts_base "$2" || _r=$?
+      [ "$_r" -ne 12 ] || return 12
+      if [ "$_r" -eq 0 ] && [ "$TS_AS" = active ] && [ "$TS_TS" != "$_base" ]; then return 0; fi
+    fi
+  done
+  return 3
+}
+"""
+
+
 def time_source_setup_sh() -> str:
     """The whole privileged setup, as ONE shell script fed to `sh -s` through a QUOTED heredoc.
 
@@ -422,6 +481,8 @@ def time_source_setup_sh() -> str:
         "# container/image build with no systemd, daemon activation is genuinely not possible and\n"
         "# stays best-effort -- that branch never sets this.\n"
         "TS_FAILED=0\n"
+        "\n"
+        + _TS_HELPER +
         "\n"
         "# Every path is a seam with its real value as the default, so the test harness can point\n"
         "# the whole step at a tmp tree. On a real box nothing sets these and the defaults apply.\n"
@@ -618,9 +679,18 @@ def time_source_setup_sh() -> str:
         "#   - conditioning the restart on \"we just edited the file\" makes the failure permanent:\n"
         "#     on the retry the file already has -n, so nothing would ever restart it again.\n"
         "# Rerunning setup is the documented repair, so it must repair this too.\n"
-        "systemctl enable gpsd >/dev/null 2>&1 || true\n"
-        "if ! systemctl restart gpsd >/dev/null 2>&1; then\n"
+        "# The enable is idempotent and retried; only a status 12 is never swallowed (row 18).\n"
+        "_r=0; ts_svc enable gpsd || _r=$?\n"
+        "case \"$_r\" in\n"
+        "  0) ;;\n"
+        "  12) ts_plumb \"systemctl enable gpsd\" ;;\n"
+        "  *) [ ! -d \"$SYSTEMD_RUNDIR\" ] || echo \"[bootstrap-deps] NOTE: enable gpsd: $TS_LAST; the restart below decides.\" ;;\n"
+        "esac\n"
+        "_r=0; ts_svc restart gpsd || _r=$?\n"
+        "[ \"$_r\" -ne 12 ] || { ts_plumb \"systemctl restart gpsd\"; _r=0; }\n"
+        "if [ \"$_r\" -ne 0 ]; then\n"
         "  if [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
+        "    [ \"$_r\" -ne 3 ] || echo \"[bootstrap-deps] WARNING: systemd gave no answer to restart gpsd after $TS_TRIES call(s) ($TS_LAST).\" >&2\n"
         "    echo \"[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be\" >&2\n"
         "    echo \"[bootstrap-deps]          available until it is: sudo systemctl status gpsd\" >&2\n"
         "    TS_FAILED=1\n"
@@ -629,7 +699,15 @@ def time_source_setup_sh() -> str:
         "    echo \"[bootstrap-deps]       sudo systemctl enable --now gpsd\"\n"
         "  fi\n"
         "fi\n"
-        "if ! systemctl restart chrony >/dev/null 2>&1; then\n"
+        "_r=0; ts_svc restart chrony || _r=$?\n"
+        "[ \"$_r\" -ne 12 ] || { ts_plumb \"systemctl restart chrony\"; _r=0; }\n"
+        "if [ \"$_r\" -eq 3 ] && [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
+        "  # A timeout is not a refusal: systemd never answered, so do not blame chrony's configuration (row 20).\n"
+        "  echo \"[bootstrap-deps] ERROR: systemd gave no answer to restart chrony after $TS_TRIES call(s)\" >&2\n"
+        "  echo \"[bootstrap-deps]        ($TS_LAST), and systemd-timesyncd has been removed, so this box may\" >&2\n"
+        "  echo \"[bootstrap-deps]        have NO time daemon. See: sudo systemctl status chrony\" >&2\n"
+        "  TS_FAILED=1\n"
+        "elif [ \"$_r\" -ne 0 ]; then\n"
         "  # Distinguish the two reasons, because they need opposite reactions and the previous\n"
         "  # wording covered both with 'no action is needed'. On a box with a live systemd, a\n"
         "  # refused start is chronyd REJECTING the configuration -- and since this run already\n"
@@ -651,6 +729,15 @@ def time_source_setup_sh() -> str:
         "# The verdict. `set -eu` cannot carry this: every failure above is deliberately caught so\n"
         "# the remaining steps still run (a box that got chrony but not gpsd is better off than\n"
         "# one that got neither). What must NOT happen is reporting success over it.\n"
+        "# The helper's plumbing first (row 28): it never folds into TS_FAILED. The marker tells the bootstrap that\n"
+        "# this 12 is the helper's, and whether the time source failed as well.\n"
+        "if [ \"$TS_PLUMB\" -ne 0 ]; then\n"
+        "  if [ -n \"${TS_MARK:-}\" ] && [ -f \"$TS_MARK\" ] && [ ! -L \"$TS_MARK\" ]; then\n"
+        "    { echo plumb; [ \"$TS_FAILED\" -eq 0 ] || echo failed; } > \"$TS_MARK\"\n"
+        "  fi\n"
+        "  echo \"[bootstrap-deps] time source setup INCOMPLETE - the service-call helper could not run.\" >&2\n"
+        "  exit 12\n"
+        "fi\n"
         "if [ \"$TS_FAILED\" -ne 0 ]; then\n"
         "  echo \"[bootstrap-deps] time source setup INCOMPLETE - see the errors above.\" >&2\n"
         "  exit 1\n"
@@ -1382,7 +1469,12 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     # anything. Rendered from the SAME helper the dependency-panel copybox uses.
     out("# --- time source (chrony + gpsd; opt out with --no-time-source) ------------------------------",
         'if [ -z "$NO_TIME_SOURCE" ]; then',
-        "\tif sh -s <<'LHPC_TIME_SOURCE'")
+        "\t# Row 28: the child gets the bounds and a fresh, empty marker file for its status 12.",
+        '\t_st=0; TS_MARK=$(mktemp) || _st=$?',
+        '\t[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"',
+        "\texport TS_MARK SVC_CALL_BOUND_S SVC_RETRIES SVC_RETRY_PAUSE_S SVC_READ_BOUND_S SVC_KILL_GRACE_S",
+        "\tts_rc=0",
+        "\tsh -s <<'LHPC_TIME_SOURCE' || ts_rc=$?")
     # NOT indented: `sh -s <<'X'` is a QUOTED, non-dash heredoc, so every byte reaches the inner
     # shell verbatim. Indenting the body would push the NESTED terminators (LHPC_DROPIN, LHPC_AWK)
     # off column 0 -- where the inner shell never recognises them -- and would prepend tabs to the
@@ -1393,6 +1485,13 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         # The setup exits nonzero when a promise it makes could not be established on a box that
         # CAN establish it (see TS_FAILED). Announcing success over that is the exact failure the
         # live matrix caught: the box had no time daemon and the script said so was fine.
+        # A 12 is the helper's only when the marker says so (row 28); any other nonzero is the time source's.
+        '\t_mark=""; if [ -f "$TS_MARK" ] && [ ! -L "$TS_MARK" ]; then _mark=$(cat "$TS_MARK"); fi',
+        '\tif [ "$ts_rc" -eq 12 ] && { [ "$_mark" = plumb ] || [ "$_mark" = "$(printf \'plumb\\nfailed\')" ]; }; then',
+        '\t\techo "ERROR: the service-call helper could not run in the time-source step (exit 12 at the end)." >&2',
+        "\t\t_PLUMB_FAILED=1",
+        '\t\t[ "$_mark" = plumb ] || BOOTSTRAP_FAILED=1',
+        '\telif [ "$ts_rc" -eq 0 ]',
         "\tthen",
         '\t\techo "[bootstrap-deps] time source: chrony disciplines the clock (this REPLACED'
         ' systemd-timesyncd); gpsd feeds it GPS time when a receiver is attached."',
@@ -1788,7 +1887,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
-    out('_DISABLE_FAILED=""', '_PLUMB_FAILED=""')
+    out('_DISABLE_FAILED=""')
     for blk in disable_blocks:
         b = _desudo(blk)
         out("# --- disable an OS-packaged service (lhpc manages its own) --------------------------------")

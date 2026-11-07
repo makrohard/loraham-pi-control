@@ -25,7 +25,8 @@ _USER = getpass.getuser()
 # line when the unit is present and rc 1 with nothing when it is absent; `show --property=UnitFileState
 # --property=ActiveState --value` prints ActiveState then UnitFileState (an absent unit: "inactive" and an empty
 # line); `disable --now` leaves the unit disabled and stopped (recorded under $FAKE_SYSTEMCTL_STATE). A plan file
-# ($FAKE_SYSTEMCTL_SCRIPT) scripts single calls per verb (list, show, disable), first line first: timeout, deny,
+# ($FAKE_SYSTEMCTL_SCRIPT) scripts single calls per verb (list, show, disable, enable, restart), or per verb and unit
+# (`show@gpsd.service ...`, taken first), first line first: timeout, deny,
 # hang, empty (rc 0, no output), absent (rc 1, no output), plumb (rc 125, which `timeout` passes on: the helper's
 # plumbing), ok (the call as without a plan), took (the disable takes effect, then times out), half (disabled but
 # still active, then a timeout), or value:<UnitFileState>:<ActiveState> for a show. Each consumed line is logged to <plan>.log.
@@ -34,9 +35,9 @@ last=""; verb=1; for a in "$@"; do [ "$verb" = 1 ] && { verb=0; continue; }; cas
 u="${last%.service}.service"
 plan_take() {
   [ -n "${FAKE_SYSTEMCTL_SCRIPT:-}" ] || return 1
-  l=$(grep -m1 -n "^$1 " "$FAKE_SYSTEMCTL_SCRIPT") || return 1
+  k="$1@$u"; l=$(grep -m1 -n "^$k " "$FAKE_SYSTEMCTL_SCRIPT") || { k="$1"; l=$(grep -m1 -n "^$1 " "$FAKE_SYSTEMCTL_SCRIPT"); } || return 1
   sed -i "${l%%:*}d" "$FAKE_SYSTEMCTL_SCRIPT"; a="${l#*:}"; a="${a#* }"
-  echo "$1 $a" >> "$FAKE_SYSTEMCTL_SCRIPT.log"; printf '%s' "$a"
+  echo "$k $a" >> "$FAKE_SYSTEMCTL_SCRIPT.log"; printf '%s' "$a"
 }
 act() {
   case "$1" in
@@ -72,6 +73,9 @@ if [ "$1" = "list-unit-files" ] && [ -n "$last" ]; then
   if a=$(plan_take list); then act "$a" "list unit files"; fi
   known && { echo "$u enabled enabled"; exit 0; }
   exit 1
+fi
+if [ "$1" = "enable" ] || [ "$1" = "restart" ]; then
+  if a=$(plan_take "$1"); then act "$a" "$1 unit"; fi
 fi
 if [ "$1" = "disable" ] && [ -n "$st" ]; then
   a=$(plan_take disable) || a=""
@@ -2251,7 +2255,7 @@ def test_row30_the_helpers_plumbing_on_nginx_is_exit_12_at_once(tmp_path):
 
 
 def test_row30_the_helpers_plumbing_on_meshtasticd_is_deferred_to_exit_12(tmp_path):
-    r, _log = _units_run(tmp_path, ["show ok", "show plumb"], units="nginx.service meshtasticd.service")
+    r, _log = _units_run(tmp_path, ["show@meshtasticd.service plumb"], units="nginx.service meshtasticd.service")
     assert r.returncode == 12
     assert "could not run for meshtasticd (exit 12 at the end)" in r.stderr
     assert r.stderr.rstrip().endswith("[bootstrap-deps] the service-call helper could not run (see above).")
@@ -2274,3 +2278,74 @@ def test_row13_absent_needs_the_unfiltered_listing_in_the_same_step(tmp_path):
     assert r.returncode == 8, r.stdout + r.stderr
     assert _calls(plan)[:2] == ["list-unit-files ok", "list-unit-files deny"]
     assert "could not inspect systemd unit files" in r.stderr
+
+
+
+# --- bounded service calls, the time-source block (rows 18-20, 28): the `sh -s` child, its marker, the parent ------
+
+def _ts_run(tmp_path, plan_lines, **kw):
+    env = kw.pop("env", {})
+    return _units_run(tmp_path, plan_lines, units="", **env, **kw)
+
+
+def test_row18_a_timed_out_enable_is_called_again(tmp_path):
+    r, log = _ts_run(tmp_path, ["enable timeout", "enable ok"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["enable timeout", "enable ok"] and "NOTE: enable gpsd" not in r.stdout
+
+
+def test_row18_a_refused_enable_is_a_note_and_the_restart_decides(tmp_path):
+    r, log = _ts_run(tmp_path, ["enable deny"])
+    assert r.returncode == 0, r.stderr
+    assert "NOTE: enable gpsd: Failed to enable unit: Access denied; the restart below decides." in r.stdout
+
+
+def test_row18_28_the_helpers_plumbing_in_the_child_is_exit_12_at_the_end(tmp_path):
+    r, _log = _ts_run(tmp_path, ["enable plumb"])
+    assert r.returncode == 12, r.stdout + r.stderr
+    assert "the service-call helper cannot run: systemctl enable gpsd" in r.stderr
+    assert "could not run in the time-source step (exit 12 at the end)" in r.stderr
+    assert "time source setup did NOT complete" not in r.stderr          # 12 never folds into the time source's 11
+
+
+def test_row19_a_timed_out_restart_that_moved_past_the_baseline_is_done(tmp_path):
+    r, log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
+                                "show@gpsd.service value:200:active", "restart@gpsd.service deny"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
+                   "show@gpsd.service value:200:active"]                  # done: no second call (the deny stays)
+
+
+def test_row19_an_unmoved_timestamp_is_called_again(tmp_path):
+    r, log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
+                                "show@gpsd.service value:100:active", "restart@gpsd.service ok"])
+    assert r.returncode == 0, r.stderr
+    assert log[-1] == "restart@gpsd.service ok"
+
+
+def test_row19_an_unknown_baseline_never_counts_as_moved(tmp_path):
+    # after the timeout an active, "moved" state is on offer: with no accepted baseline it is never read as done
+    r, log = _ts_run(tmp_path, ["show@gpsd.service timeout", "restart@gpsd.service timeout",
+                                "show@gpsd.service value:200:active", "restart@gpsd.service ok"])
+    assert r.returncode == 0, r.stderr
+    assert log == ["show@gpsd.service timeout", "restart@gpsd.service timeout", "restart@gpsd.service ok"]
+
+
+def test_row19_a_restart_that_keeps_timing_out_fails_the_time_source(tmp_path):
+    r, _log = _ts_run(tmp_path, ["restart@gpsd.service timeout"] * 2, env={"SVC_RETRIES": "2"})
+    assert r.returncode == 11, r.stdout + r.stderr
+    assert "systemd gave no answer to restart gpsd after 2 call(s)" in r.stderr
+
+
+def test_row20_a_chrony_timeout_is_no_answer_never_refused(tmp_path):
+    r, _log = _ts_run(tmp_path, ["restart@chrony.service timeout"] * 2, env={"SVC_RETRIES": "2"})
+    assert r.returncode == 11, r.stdout + r.stderr
+    assert "systemd gave no answer to restart chrony after 2 call(s)" in r.stderr and "REFUSED" not in r.stderr
+
+
+def test_row28_plumbing_and_a_failed_time_source_report_both(tmp_path):
+    # the marker says plumb + failed: the parent sets BOOTSTRAP_FAILED too, so 11 (reported first) is not hidden
+    r, _log = _ts_run(tmp_path, ["restart@gpsd.service plumb", "restart@chrony.service deny"])
+    assert r.returncode == 11, r.stdout + r.stderr
+    assert "could not run in the time-source step (exit 12 at the end)" in r.stderr
+    assert "chrony REFUSED to start" in r.stderr

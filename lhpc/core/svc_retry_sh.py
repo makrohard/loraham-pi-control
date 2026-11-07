@@ -89,6 +89,7 @@ def parent_lines() -> list[str]:
         '[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"',
         "printf '0\\n' > \"$SVC_ACCT\" || svc_plumb \"the accounting file cannot be written\"",
         "export SVC_ACCT",
+        '_PLUMB_FAILED=""   # a deferred 12 (the packaged-service step, the time-source step), reported last',
         "svc_acct_add() {   # add $1 s to the run's total: 0 below the bound, 5 at or above it, 12 for a bad file",
         "\tlocal v='' r=0",
         '\t[ -f "$SVC_ACCT" ] && [ ! -L "$SVC_ACCT" ] || return 12',
