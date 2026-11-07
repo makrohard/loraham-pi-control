@@ -12,6 +12,8 @@
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
+- Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
+  guide for a 433 MHz CH341A + RFM98PW stick.
 
 Fixed
 

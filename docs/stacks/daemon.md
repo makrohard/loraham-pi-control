@@ -36,7 +36,8 @@ this release.
   Until the list exists, no daemon starts and the console shows a banner. `lhpc hardware <setup>` writes the
   list for the setup (one radio per band) when there is none; an existing list is never changed by it.
 - **USB radios:** the console's Hardware page (`/hardware`) lists each radio with its own daemon's state, adds a
-  listed USB stick as a new radio, binds a radio to a stick, and offers the one-time USB setup as one command.
+  listed USB stick as a new radio, binds a radio to a stick, and offers the one-time USB setup as one command
+  ([USB radios](../usb-radios.md)).
 - **Two radios on one band:** a band with two enabled radios starts no daemon: set `enabled = false` on one of
   them in `config/radios.toml` (the `<stack>@<rid>` form is not in 0.14.0). A client start on such a band, and a
   per-band stop of it, are refused naming both radios.
