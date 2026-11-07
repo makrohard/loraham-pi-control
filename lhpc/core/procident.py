@@ -111,3 +111,42 @@ def identity_matches(recorded: dict, pid: int) -> bool:
     if now is None:
         return False
     return int(recorded.get("starttime", -1)) == now["starttime"]
+
+
+def stat_start_time(pid: int) -> int:
+    """Field 22 of /proc/<pid>/stat (starttime, clock ticks since boot) — the stable half of a
+    (pid, start_time) process identity. 0 if unavailable."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+        # comm (field 2) is parenthesized and may contain spaces/parens — split after the LAST ')'.
+        fields = data[data.rindex(b")") + 2:].split()
+        return int(fields[19])                            # starttime = 22nd overall; index 19 here
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+# The kernel's starttime (clock ticks since boot) is an unsigned 64-bit field; anything at or
+# beyond it is no process's start time.
+_START_TIME_LIMIT = 1 << 64
+
+
+def recorded_ceased(pid, start_time) -> bool:
+    """True when the recorded (pid, start_time) process no longer exists (dead, or the PID was
+    reused by a different process). Conservative: unknown/malformed identity → NOT ceased.
+
+    A pid with no /proc entry is ceased whatever the start time says. A pid that exists is
+    compared by its start time, a positive int below 2**64 (never a bool, a float or a string;
+    those once read as "a different process", so a live helper read as ceased, L24 F2). An
+    unreadable stat of an existing process proves nothing."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if not os.path.exists(f"/proc/{pid}"):
+        return True
+    if (isinstance(start_time, bool) or not isinstance(start_time, int)
+            or not 0 < start_time < _START_TIME_LIMIT):
+        return False
+    live = stat_start_time(pid)
+    if live == 0:                                   # stat unreadable: ceased only if it vanished meanwhile
+        return not os.path.exists(f"/proc/{pid}")
+    return live != start_time
