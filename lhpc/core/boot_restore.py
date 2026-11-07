@@ -20,7 +20,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import runtime_fs
+from . import procident, runtime_fs
 from .daemon_control import ALLOWED_BANDS
 from .paths import PathContainmentError, Paths
 
@@ -134,11 +134,14 @@ def validate_journal(obj) -> str:
         return "run_id missing"
     if not isinstance(obj.get("boot_id"), str):
         return "boot_id wrong type"
+    # The writer's identity as its writer writes it (L24 F4): os.getpid(), and the kernel's
+    # start time (an int below 2**64; 0 when it could not be read). NaN, ±inf, floats, negatives
+    # and 401-digit numbers are no journal lhpc wrote.
     pid = obj.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid <= procident.PID_MAX_LIMIT:
         return "pid invalid"
     pst = obj.get("process_start_time")
-    if not isinstance(pst, (int, float)) or isinstance(pst, bool):
+    if not isinstance(pst, int) or isinstance(pst, bool) or not 0 <= pst < 1 << 64:
         return "process_start_time invalid"
     if obj.get("state") not in RUN_STATES:
         return f"unknown run state {obj.get('state')!r}"
