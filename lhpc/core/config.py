@@ -2095,16 +2095,16 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 
 # --- per-stack user configuration (set via the web Config page) -----------
 
-def _stack_config_path(paths: Paths, stack_id: str, band: str = "") -> Path:
-    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml".
+def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -> Path:
+    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml"; a listed copy (`inst`, slot k) its
+    # own, "<id>@<rid>.toml" (DEC-W60), named by the copy, never by a band argument (CLEANUP C10).
     # Defence in depth: the id is a single path component and the band must be a
     # real radio band, so neither can introduce a separator or "..". The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
     sid = validators.path_component(stack_id, field="stack id")
-    if band:      # a band, or a listed instance's radio id (DEC-W60: an instance's own settings, `<id>@<rid>.toml`)
-        band = band if re.fullmatch(r"r[1-9][0-9]?", band) else validators.band(band, allow_both=True)
-    name = f"{sid}@{band}.toml" if band else f"{sid}.toml"
+    key = inst.rid if inst is not None and inst.slot else (validators.band(band, allow_both=True) if band else "")
+    name = f"{sid}@{key}.toml" if key else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.
     try:
@@ -2119,7 +2119,7 @@ def _stack_config_path(paths: Paths, stack_id: str, band: str = "") -> Path:
     return resolved
 
 
-def load_stack_config(paths: Paths, stack_id: str, band: str = "") -> dict:
+def load_stack_config(paths: Paths, stack_id: str, band: str = "", inst=None) -> dict:
     """User-defined configuration for a stack/band (runtime-local, git-ignored).
 
     FAIL-CLOSED: ONLY an absent file yields `{}` (use-defaults). A present-but-malformed, unreadable,
@@ -2127,7 +2127,7 @@ def load_stack_config(paths: Paths, stack_id: str, band: str = "") -> dict:
     (from `_load_runtime_toml`) rather than silently degrading to defaults — the bad file is left in
     place for diagnosis, and start/restart/reset/status/config-views/web must surface the error and
     refuse to continue with defaults (CLI: typed failure, no side effects; web: 409, no traceback/echo)."""
-    return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, band))
+    return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, band, inst))
 
 
 # TOML basic-string control-character escapes (TOML v1.0 §String). Other C0 controls + DEL are
@@ -2226,13 +2226,13 @@ def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names) -> None:
 
 
 def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
-                       clear_empty: bool = True) -> dict:
+                       clear_empty: bool = True, inst=None) -> dict:
     """Read the LATEST stack config (MUST be called inside `config_lock`) and merge `updates`,
     keeping every OTHER key with its parsed type — so one owner's write never drops another's
     keys (a daemon-profile save keeps normal params; a normal save keeps `dp_*`; a manual scalar
     survives both). When `clear_empty`, a value of ""/None removes that key; otherwise it is
     stored (normal-config semantics keep an explicit empty value). Returns the merged dict."""
-    current = dict(_load_runtime_toml(paths, _stack_config_path(paths, stack_id, band)))
+    current = dict(_load_runtime_toml(paths, _stack_config_path(paths, stack_id, band, inst)))
     for key, value in updates.items():
         if clear_empty and value in (None, ""):
             current.pop(key, None)
@@ -2263,14 +2263,14 @@ def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expec
 
 
 def update_stack_config(paths: Paths, stack_id: str, updates: dict, band: str = "",
-                        clear_empty: bool = True) -> Path:
+                        clear_empty: bool = True, inst=None) -> Path:
     """Locked read-merge-write of a stack's config under ONE lock: read the LATEST config, merge
     `updates` (see `merge_stack_values`), and atomic-write. Preserves every other key (run params,
     file values, autostart, `dp_*`, manual scalars …) and any concurrent change committed before
     the lock was taken. The render is type-aware and validates before the write, so a corrupt
     manual entry blocks the save and leaves the file unchanged. Never nests `config_lock`."""
-    path = _stack_config_path(paths, stack_id, band)
+    path = _stack_config_path(paths, stack_id, band, inst)
     with config_lock(paths):
-        merged = merge_stack_values(paths, stack_id, band, updates, clear_empty)
+        merged = merge_stack_values(paths, stack_id, band, updates, clear_empty, inst)
         _atomic_write(paths, path, _render_stack_config(stack_id, merged), mode=0o644)
     return path

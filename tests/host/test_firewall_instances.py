@@ -6,6 +6,7 @@ the AP's DHCP/DNS rules render the same."""
 
 import dataclasses
 
+from lhpc.core.commands import Instance
 from lhpc.core import commands
 from lhpc.core import firewall_helper as fh
 from lhpc.core.paths import Paths
@@ -24,7 +25,7 @@ def _with_slot1_on_r2(svc, monkeypatch, stacks=("kiss", "meshtastic")):
     # raising=False: on a code without instances the candidate simply lacks the slot-k rows (the red-before).
     # DEC-W60: slot k reads its OWN settings file, so it binds off-box by its own kiss_host, never slot 0's
     from lhpc.core import config as cfgmod
-    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, band="r2")
+    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, inst=Instance(1, "r2"))
     monkeypatch.setattr(commands, "stack_instances",
                         lambda stk, paths=None: (commands.SLOT0, commands.Instance(1, "r2"))
                         if stk.id in stacks else (commands.SLOT0,), raising=False)

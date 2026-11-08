@@ -1050,7 +1050,7 @@ class ParamsConfigMixin:
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
-        def _render_stack(pth, tgt=sid, b=own or cfg_band, setv=stack_set, rmv=stack_remove):
+        def _render_stack(pth, tgt=sid, b=cfg_band, setv=stack_set, rmv=stack_remove, i=inst):
             # AUTHORITATIVE RECHECK, inside the transaction (the caller's
             # accept/refuse decision was taken before this lock, so a concurrent global-identity
             # clear could land in between and the submission was persisted and only THEN refused).
@@ -1065,7 +1065,7 @@ class ParamsConfigMixin:
                     raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
             _ohs_recheck()                  # issue #5: openHop's file appeared/vanished since split_saves
-            current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, b))
+            current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, b, i))
             merged = config_save.overlay(current, setv, rmv)
             if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged, _ohs_pending)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
@@ -1075,7 +1075,7 @@ class ParamsConfigMixin:
                     _why := self._reticulum_internet_save_refusal(merged)):
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
-        targets.append(("stack", _stack_config_path(self._paths, sid, own or cfg_band), _render_stack, 0o644))
+        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band, inst), _render_stack, 0o644))
         if bandless_set or bandless_remove:
             # SECOND transactional target: autostart flags land in the band-less file.
             def _render_auto(pth, tgt=sid, setv=bandless_set, rmv=bandless_remove):
@@ -2420,7 +2420,7 @@ class ParamsConfigMixin:
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
         # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
         # reset of one band owns that file too; a band-less stack has only the one.
-        files = [own] if own else ([cfg_band, ""] if cfg_band else [""])
+        files = [""] if own else ([cfg_band, ""] if cfg_band else [""])   # a listed copy: its own file, by the copy
         cleared: list = []
         _gps_busy: dict = {}
 
@@ -2431,7 +2431,7 @@ class ParamsConfigMixin:
         def _render_reset(pth, b):
             # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
             # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
-            merged = merge_stack_values(pth, target, b, {})
+            merged = merge_stack_values(pth, target, b, {}, inst=inst)
             normal = _normal(merged)
             if not normal:
                 return None
@@ -2460,7 +2460,7 @@ class ParamsConfigMixin:
         try:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
-                ("stack", _stack_config_path(self._paths, target, b),
+                ("stack", _stack_config_path(self._paths, target, b, inst),
                  lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
                 self._restart_marker_target(target, target, band, cfg_band, params, set(), {}, inst)])
             if cleared:

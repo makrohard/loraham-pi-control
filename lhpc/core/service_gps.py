@@ -686,7 +686,7 @@ class GpsOpsMixin:
         if not stack_id:
             return False
         try:
-            cfg = self._stack_config_cached(stack_id, inst.rid if inst is not None and inst.slot else "")   # bandless; an instance's own
+            cfg = self._stack_config_cached(stack_id, "", inst)   # bandless; an instance's own
         except (OSError, ValueError, KeyError, ConfigError):
             return False
         raw = str(cfg.get("use_gps", "")).strip().lower()

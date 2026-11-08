@@ -6,6 +6,7 @@ by hand here (add-instance is item 7c). The registry module's own reads: test_in
 import pytest
 import radios_fixture
 
+from lhpc.core.commands import Instance
 from lhpc.core import radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -42,7 +43,7 @@ def test_a_listed_instance_gets_its_own_pages_on_its_slots_ports(tmp_path):
 def test_a_listed_instance_gets_its_own_firewall_row(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path, 'kiss = ["r3"]\n')
-    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, band="r3")   # DEC-W60: its own bind
+    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, inst=Instance(1, "r3"))   # DEC-W60: its own bind
     assert _kiss_rows(svc) == [("loraham-kiss-tnc.tcp-8001", 8001), ("loraham-kiss-tnc-r3.tcp-8001", 8011)]
 
 

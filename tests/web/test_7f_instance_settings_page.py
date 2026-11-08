@@ -8,6 +8,7 @@ import tomllib
 import pytest
 import radios_fixture
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import radios
 from lhpc.core.paths import Paths
@@ -48,7 +49,7 @@ def test_the_chooser_names_each_radio_slot0s_by_band_and_the_instance_by_radio(b
 
 def test_an_instances_settings_show_its_own_value_and_say_it_starts_from_defaults(box):
     c, _post, tmp_path = box
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL1ABC"}, band="r3")
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL1ABC"}, inst=Instance(1, "r3"))
     s = _section(c.get("/stacks?cfg=chat&radio=r3").get_data(as_text=True))
     assert "chat@r3 starts from the defaults" in s
     assert 'value="DL1ABC"' in s and 'value="DL2XYZ"' not in s
@@ -90,7 +91,7 @@ def test_a_fixed_band_stacks_radio_without_an_instance_is_greyed_with_add_instan
 
 def test_an_instances_page_shows_its_own_value_of_every_field(box):
     c, _post, tmp_path = box
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_tx_freq": "433.900"}, band="r3")
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_tx_freq": "433.900"}, inst=Instance(1, "r3"))
     assert 'value="433.900"' in _section(c.get("/stacks?cfg=chat&radio=r3").get_data(as_text=True))
     assert 'value="433.900"' not in _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
 

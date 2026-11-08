@@ -5,6 +5,7 @@ and secrets, never slot 0's. Any other path or writer stays refused."""
 import pytest
 import radios_fixture
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -52,7 +53,7 @@ def test_another_writer_or_file_is_refused(web, tmp_path, target, job):
 def test_an_instances_records_are_decoded_with_its_own_mode_stores_and_secrets(tmp_path, monkeypatch):
     _seed(tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "R4"}, band="r4")
+    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "R4"}, inst=Instance(1, "r4"))
     svc._invalidate_config()
     py = tmp_path / "src" / "openhop-core" / ".venv" / "bin" / "python"   # the stack's interpreter (built)
     py.parent.mkdir(parents=True)

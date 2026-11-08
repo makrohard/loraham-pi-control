@@ -607,8 +607,8 @@ def test_a_token_hit_recorded_for_another_copy_is_not_slot0s(tmp_path, procs):
     from lhpc.core import config as cfgmod
     p = procs()
     svc = _copy_svc(tmp_path, {})
-    for key in ("r3", svc._config_band("kiss", "")):
-        cfgmod.update_stack_config(svc._paths, "kiss", {"data_socket": "/tmp/shared.sock"}, band=key)
+    for band, copy in (("", commands.Instance(1, "r3")), (svc._config_band("kiss", ""), None)):
+        cfgmod.update_stack_config(svc._paths, "kiss", {"data_socket": "/tmp/shared.sock"}, band=band, inst=copy)
     svc = _copy_svc(tmp_path, {p.pid: ["/x/loraham-kiss-tnc", "--data-socket", "/tmp/shared.sock"]})
     stk = svc.stack("kiss")
     svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="868",

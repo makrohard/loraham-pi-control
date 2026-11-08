@@ -9,6 +9,7 @@ import pytest
 
 from radios_fixture import R1, R3
 
+from lhpc.core.commands import Instance
 from lhpc.core import meshcore_identity as mi
 from lhpc.core import openhop_store as ops
 from lhpc.core.paths import Paths
@@ -39,7 +40,7 @@ def _repeater(tmp_path, name="Relay R3", rid=""):
     from lhpc.core import config as cfgmod
     if rid:
         cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore",
-                                   {"file_mode": "repeater", "file_repeater_name": name}, band=rid)
+                                   {"file_mode": "repeater", "file_repeater_name": name}, inst=Instance(1, rid))
         return
     svc = cli.ControllerService()
     r = svc.save_config("meshcore", {"file_mode": "repeater", "file_repeater_name": name})

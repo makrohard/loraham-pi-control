@@ -2,6 +2,7 @@
 running mode (its node process and its generated config), never slot 0's. The copy runs repeater-only (its generated
 file says so) while its saved mode is chat again, not yet restarted: its client is refused; slot 0's is not."""
 import radios_fixture
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -15,10 +16,10 @@ def _svc(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
     (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     paths = Paths(runtime_root=tmp_path)
-    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "RptR4"}, band="r4")
+    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "RptR4"}, inst=Instance(1, "r4"))
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     svc.write_config_files("meshcore-node", "868", inst=instances.copy_of(svc, "meshcore", "r4")[0])   # its launch
-    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "chat"}, band="r4")                     # saved since
+    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "chat"}, inst=Instance(1, "r4"))                     # saved since
     node = ["/usr/bin/python", "-m", "meshcore_host", str(tmp_path / "config" / "files" / "r4" / "meshcore.toml")]
     return ControllerService(system=FakeSystem(cmdlines_data={51: node}).system, paths=paths)
 

@@ -2,6 +2,7 @@
 port, bind and allow (DEC-W60: a copy's own settings file), never slot 0's. A copy that binds 0.0.0.0 while slot 0
 stays on loopback gets its firewall row, and its start is refused until the firewall is verified."""
 import radios_fixture
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -16,7 +17,7 @@ def _svc(tmp_path, own):
     radios_fixture.write(tmp_path, ROWS)
     (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    cfgmod.update_stack_config(svc._paths, "kiss", own, band="r3")              # kiss@r3's own file only
+    cfgmod.update_stack_config(svc._paths, "kiss", own, inst=Instance(1, "r3"))              # kiss@r3's own file only
     return svc
 
 

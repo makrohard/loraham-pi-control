@@ -5,6 +5,7 @@ import json
 
 from radios_fixture import R1, R3
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import openhop_store as ops
 from lhpc.core.paths import Paths
@@ -12,7 +13,7 @@ from lhpc.core.paths import Paths
 
 def _node(tmp_path, name="Node3"):
     # the instance's own node name, config/stacks/meshcore@r3.toml (7f, DEC-W60: slot 0's is never lent)
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"file_node_name": name}, band="r3")
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"file_node_name": name}, inst=Instance(1, "r3"))
 
 
 def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, monkeypatch):

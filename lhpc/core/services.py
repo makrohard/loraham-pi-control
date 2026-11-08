@@ -833,7 +833,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             val = memo[key] = compute()
             return val
 
-    def _stack_config_cached(self, stack_id: str, band: str = "") -> dict:
+    def _stack_config_cached(self, stack_id: str, band: str = "", inst=None) -> dict:
         """`load_stack_config` once per (stack, band) per request — the parameter views resolve
         every row through it (hundreds of reads of the same few files per render). The memo key
         carries the file's stat signature (inode, size, mtime), so a write by ANY path — a service
@@ -842,12 +842,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         returned dict is shared for the request; callers must not mutate it. A malformed file
         still raises `ConfigError` on every read (never memoized)."""
         try:
-            st = os.stat(_stack_config_path(self._paths, stack_id, band))
+            st = os.stat(_stack_config_path(self._paths, stack_id, band, inst))
             sig = (st.st_ino, st.st_size, st.st_mtime_ns)
         except OSError:
             sig = None
-        return self._request_memo(("stack-config", stack_id, band, sig),
-                                  lambda: load_stack_config(self._paths, stack_id, band))
+        return self._request_memo(("stack-config", stack_id, band, getattr(inst, "rid", "") if getattr(inst, "slot", 0) else "", sig),
+                                  lambda: load_stack_config(self._paths, stack_id, band, inst))
 
     # ---- read-only operations --------------------------------------------
 

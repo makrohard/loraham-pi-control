@@ -1,6 +1,7 @@
 """C7 (CLEANUP-DESIGN-v6 section 12, decision B): with meshcore@r4 running and slot 0 stopped, slot 0's DISPLAYS
 (ComponentStatus.own_run_state: the CLI status rows, the stack's rollup) show it not running, never RUNNING (W286),
 while every safety reader keeps `run_state`, any process of the spec, and still sees the copy run."""
+from lhpc.core.commands import Instance
 from lhpc.core.status import rollup_states
 import radios_fixture
 from lhpc.core import instances, radios
@@ -97,7 +98,7 @@ def test_a_recorded_copy_stays_the_copys_after_a_restart_mode_save(tmp_path):
         stk = svc.stack("meshcore")
         assert svc._lifecycle().record_launch(stk, stk.component("meshcore-node"), p.pid, band="868",
                                               extra={"rid": "r4", "slot": 1})
-        cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater"}, band="r4")
+        cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater"}, inst=Instance(1, "r4"))
         assert _node(svc).own_run_state is RunState.STOPPED
     finally:
         p.kill()

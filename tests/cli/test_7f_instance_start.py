@@ -3,6 +3,7 @@ mode decides which identity it needs and which endpoints mean ready, and its own
 ones checked. Through `lhpc stack start meshcore@r3`."""
 from radios_fixture import R1, R3
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core.paths import Paths
 
@@ -10,7 +11,7 @@ LISTED = 'meshcore = ["r3"]\n'
 
 
 def _save(tmp_path, values, rid=""):
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", values, band=rid)
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", values, inst=Instance(1, rid) if rid else None)
 
 
 def _node_started(launches) -> bool:

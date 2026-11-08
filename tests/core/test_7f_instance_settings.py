@@ -6,6 +6,7 @@ from pathlib import Path
 
 import radios_fixture
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -31,7 +32,7 @@ def _conf(tmp_path, rel):
 
 def test_an_instances_own_value_reaches_its_generated_config_file(tmp_path):
     svc, inst = _svc(tmp_path)
-    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL1ABC"}, band="r3")
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL1ABC"}, inst=Instance(1, "r3"))
     assert (tmp_path / "config" / "stacks" / "chat@r3.toml").is_file()
     [cw] = svc.write_config_files("chat", "433", inst=inst)
     assert cw.status == "written" and cw.path.endswith("/config/files/r3/lorachat.conf")
@@ -50,7 +51,7 @@ def test_slot0s_saved_value_is_not_an_instances_and_the_instance_runs_on_the_def
 
 def test_an_instances_value_is_never_slot0s(tmp_path):
     svc, inst = _svc(tmp_path)
-    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL1ABC"}, band="r3")
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL1ABC"}, inst=Instance(1, "r3"))
     assert svc.file_config_values("chat", "433", inst)["call"] == "DL1ABC"
     assert svc.file_config_values("chat", "433")["call"] != "DL1ABC"
     assert not (tmp_path / "config" / "stacks" / "chat.toml").exists()            # slot 0's file untouched
@@ -77,7 +78,7 @@ def test_a_listed_meshcore_instance_mints_its_own_identity_never_slot0s(tmp_path
     _sid, inst, band, why = instances.resolve(svc, "meshcore@r4")
     assert why == "" and band == "868"
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R4"},
-                               band="r4")                     # its repeater's handle names its own chat key
+                               inst=Instance(1, "r4"))                     # its repeater's handle names its own chat key
     assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868"))
     assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868", inst=inst))
     files = tmp_path / "config" / "files"
@@ -114,7 +115,7 @@ def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_sett
     _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_repeater_name": "Slot Zero"})
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "Relay Four"},
-                               band="r4")
+                               inst=Instance(1, "r4"))
     svc._invalidate_config()
     ops.start_ensure(svc, "meshcore", inst=inst)
     own = json.loads(ops.file_path(svc._paths, inst).read_text())
@@ -133,7 +134,7 @@ def test_an_instances_openhop_gps_switch_is_its_own(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R4",
-                                                        "use_gps": "off"}, band="r4")
+                                                        "use_gps": "off"}, inst=Instance(1, "r4"))
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R2"})
     svc.write_config_files("meshcore", "868")
     svc.write_config_files("meshcore", "868", inst=inst)

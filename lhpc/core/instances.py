@@ -314,7 +314,7 @@ def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
     band-less file (the stack-level params), as before; a listed instance: its own `config/stacks/<sid>@<rid>.toml`
     for both (DEC-W60) — nothing of slot 0's is shared, an instance without its file runs on the defaults."""
     if inst is not None and inst.slot:
-        own = svc._stack_config_cached(sid, inst.rid)
+        own = svc._stack_config_cached(sid, "", inst)
         return own, own
     stored = svc._stack_config_cached(sid, cfg_band)
     return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)

@@ -3,13 +3,14 @@ instance's own saved settings (config/stacks/<stack>@<rid>.toml), never slot 0's
 refuses before anything launches or stops; slot 0's valid value does not let it through."""
 from radios_fixture import R1, R3
 
+from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
 from lhpc.core.paths import Paths
 
 
 def _box(box, tmp_path):
     run = box((R1, R3), 'kiss = ["r3"]\n', ports=(8001, 8002))
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"kiss_port": "not-a-port"}, band="r3")
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"kiss_port": "not-a-port"}, inst=Instance(1, "r3"))
     return run
 
 
