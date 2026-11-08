@@ -22,9 +22,9 @@ from typing import ClassVar
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import config as _cfgmod
+from . import instances, radio_start, spi_mode
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
-from . import radio_start, spi_mode
 from .config import (
     HW_SETUPS,
     Config,
@@ -560,7 +560,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover,
-                            owned_running=self._lifecycle().owned_running(), sources=sources,
+                            owned_running=self._lifecycle().owned_running(), sources=sources, copy_pids=instances.copy_pids(self),
                             cache=None if fresh else source_cache.SHARED,
                             meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)

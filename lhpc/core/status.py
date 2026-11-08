@@ -68,7 +68,7 @@ class StatusProber:
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
                  meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True,
-                 cache=None, owned_running: dict | None = None) -> None:
+                 cache=None, owned_running: dict | None = None, copy_pids: dict | None = None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
@@ -86,6 +86,8 @@ class StatusProber:
         # running even when the spec no longer matches its argv: one started by an older LHPC,
         # before its argv gained an instance token (A §2.3 "across the update", T-R6).
         self._owned_running = owned_running or {}
+        # {component_id: pids} the listed copies run (their own token or record): never slot 0's (C7, W286).
+        self._copy_pids = copy_pids or {}
         # ONE /proc/net/tcp read and ONE /proc cmdline table per whole-snapshot assessment (set by
         # `assess_stacks`); None outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None
@@ -199,8 +201,9 @@ class StatusProber:
         proc_matched = False
         if comp.process is not None:
             pm = probe_process(self._system, comp.process, self._cmdlines)
-            proc_matched = pm.matched
-            status.pids = pm.pids
+            status.pids = [p for p in pm.pids if p not in self._copy_pids.get(comp.id, ())]   # slot 0's own
+            status.copy_pids = sorted(self._copy_pids.get(comp.id, ()))   # "any copy of the stack runs" reads these
+            proc_matched = pm.matched and bool(status.pids)
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})
         if not proc_matched and self._owned_running.get(comp.id):
             proc_matched = True

@@ -405,8 +405,8 @@ class LifecycleOpsMixin:
             for c in ss.stack.components:
                 if c.id in order_ids:
                     continue
-                if ss.components[c.id].run_state not in (RunState.RUNNING, RunState.DEGRADED):
-                    continue
+                if ss.components[c.id].run_state not in (RunState.RUNNING, RunState.DEGRADED) and not ss.components[c.id].copy_pids:
+                    continue                                  # neither slot 0 nor a listed copy runs it (C7)
                 # Which radio band(s) is THIS running component actually using?
                 if c.id == self.DAEMON_ID:
                     active = served

@@ -695,7 +695,7 @@ class MaintenanceOpsMixin:
         verdict are typed; failures after it land only in the trigger log; `power_record` names `client` first."""
         if kind not in power.POWER_KINDS:
             return ActionResult(False, f"unknown power action {kind!r} (reboot | poweroff)")
-        running = sorted(s.id for s in self.stacks() if self.stack_running(s.id))
+        running = sorted(s.id for s in self.stacks() if self.stack_running(s.id) or any(cs.copy_pids for cs in self.build_snapshot().stack(s.id).components.values()))   # a copy too (C7)
         verb = "Reboot" if kind == "reboot" else "Shut down"
         if not apply:
             details = [f"  [running] {sid}" for sid in running] or ["  (no stacks running)"]

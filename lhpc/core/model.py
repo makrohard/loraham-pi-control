@@ -701,6 +701,7 @@ class ComponentStatus:
     endpoints: list[EndpointObservation] = field(default_factory=list)
     dependencies: list[DependencyObservation] = field(default_factory=list)
     pids: list[int] = field(default_factory=list)
+    copy_pids: list[int] = field(default_factory=list)   # the listed copies' own processes (C7): never slot 0's
     evidence: dict[str, str] = field(default_factory=dict)
 
 
