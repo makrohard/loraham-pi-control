@@ -59,6 +59,9 @@
       <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
       running stack{{ 's' if restart_required|length > 1 }}:
       {% for sid in restart_required %}
+        {% if "@" in sid %}{# a listed copy (cleanup C7): the console cannot restart it, the CLI can #}
+        <code class="restart-copy">lhpc stack restart {{ sid }}</code>
+        {% else %}
         <form method="post" action="{{ url_for('action') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="restart">
@@ -66,6 +69,7 @@
           <input type="hidden" name="from" value="dash">
           <button type="submit" class="warnbtn">Restart {{ sid }} now</button>
         </form>
+        {% endif %}
       {% endfor %}
     </div>
   {% endif %}

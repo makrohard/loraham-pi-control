@@ -1,6 +1,6 @@
 {# Per-stack row body on /stacks — the collapsible sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first, restart_note %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -97,14 +97,7 @@
       {% endif %}
       {% if g.restart_required %}
         <div class="depnote depnote-warn">
-          {% if g.restart_required.unsafe %}
-            <span class="ver ver-yellow">Restart required (safe-side)</span> — {{ g.restart_required.reason }}
-          {% else %}
-            <span class="ver ver-yellow">Restart required</span> — saved
-            {{ 'compile-time' if g.restart_required.mode == 'build' else 'start-time' }} settings
-            ({{ g.restart_required.params|join(', ') }}) differ from what the running stack uses.
-            {% if g.restart_required.mode == 'build' %}Run <strong>Build</strong>, then restart.{% endif %}
-          {% endif %}
+          {{ restart_note(g.restart_required) }}
           <form method="post" action="{{ url_for('action') }}" class="act">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="op" value="restart">

@@ -1105,6 +1105,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
                     "restart_required": service.restart_required(stack.id),
+                    # Cleanup C7: the shown listed copy's own marker (its settings view), keyed `<sid>@<rid>`.
+                    "copy_key": _instances.key(stack.id, _inst),
+                    "copy_restart_required": service.restart_required(_instances.key(stack.id, _inst)) if _inst else None,
                 })
             groups.append(g)
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))

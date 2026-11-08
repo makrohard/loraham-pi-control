@@ -1,7 +1,7 @@
 {# Per-stack Settings section Included by _stack_body.html on the Apps (/stacks) list. Requires `stack`, `view`, `config_groups`; optional `settings_id` (default
    'stack-settings' — pass a per-stack id when several are rendered on one page). Collapsed by
    default; opens when `?cfg=<stack id>` names THIS stack. #}
-{% from "_macros.html" import action_btn %}
+{% from "_macros.html" import action_btn, restart_note %}
 {% set _sid = settings_id | default('stack-settings') %}
 {# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only
    when this stack's section is the one the link opened. #}
@@ -67,6 +67,11 @@
         </span>
         <span class="muted">— each radio has its own config</span></p>
       {% if view.radio %}<p class="muted instance-note">{{ stack.id }}@{{ view.radio }} starts from the defaults: slot 0's settings are not shared, and a change applies at its next start.</p>{% endif %}
+      {% if g.copy_restart_required %}
+        {# Cleanup C7: the shown copy's own marker; the console cannot restart a copy, so the CLI command is named. #}
+        <div class="depnote depnote-warn" id="copy-restart-required">{{ restart_note(g.copy_restart_required) }}
+          Restart it: <code>lhpc stack restart {{ g.copy_key }}</code></div>
+      {% endif %}
     {% elif view.bands %}
       <p><strong>Band:</strong>
         <span class="bandswitch">

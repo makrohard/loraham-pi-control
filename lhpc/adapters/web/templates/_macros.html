@@ -215,4 +215,15 @@
 </div>
 {% endmacro %}
 
-
+{# A restart-required marker's text (tri-state: None, the marker, or a safe-side unsafe one), the one wording the stack's
+   row and a listed copy's settings share (cleanup C7). #}
+{% macro restart_note(rr) %}
+  {% if rr.unsafe %}
+    <span class="ver ver-yellow">Restart required (safe-side)</span> — {{ rr.reason }}
+  {% else %}
+    <span class="ver ver-yellow">Restart required</span> — saved
+    {{ 'compile-time' if rr.mode == 'build' else 'start-time' }} settings
+    ({{ rr.params|join(', ') }}) differ from what the running stack uses.
+    {% if rr.mode == 'build' %}Run <strong>Build</strong>, then restart.{% endif %}
+  {% endif %}
+{% endmacro %}
