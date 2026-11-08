@@ -1688,8 +1688,8 @@ def _startable(tmp_path, monkeypatch, real_spawn, *, txmode="DIRECT", fake_paths
     real-but-harmless spawn because ownership recording needs a live /proc identity."""
     from lhpc.core.lifecycle import Lifecycle
     STATUS = f"STATUS RADIO=READY TXMODE={txmode}\n".encode()
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS}, paths=set(fake_paths)).system
+    sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": STATUS,
+                                   "/tmp/loraconf-r2.sock": STATUS}, paths=set(fake_paths)).system
     seed_built(tmp_path, "loraham-daemon/loraham_daemon/loraham_daemon", "RadioLib/build/libRadioLib.a",
                 "LoRaHAM_Voice/loraham_voice", "LoRaHAM_Voice/loraham_voice_cli",
                 "LoRaHAM_Daemon/loraham_chat")

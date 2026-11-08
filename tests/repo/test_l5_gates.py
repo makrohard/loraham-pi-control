@@ -69,7 +69,7 @@ def test_w7_10_every_remaining_band_template_is_a_kept_row():
     assert {h.split(": ", 1)[1] for h in left} == kept           # and each kept row is still there
 
 
-BAND_READERS = {"hw_preset_for_band", "high_power_for_band", "ocp_for_band"}
+BAND_READERS = {"high_power_for_band", "ocp_for_band"}
 
 
 def _names(tree):

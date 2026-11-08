@@ -617,15 +617,15 @@ def _setup_radios(paths, setup_id: str) -> tuple:
     """0.14.0 (REL14-D2 A): an explicit `lhpc hardware <setup>` also writes the hardware list when there is none:
     one row per band of the catalog setup in band order, each the model whose variant runs that band's preset. It
     runs BEFORE the setup itself is saved; a refused save changes nothing. A list that exists in any state (valid,
-    invalid, unreadable, a dangling link) is never touched, and the setup is still saved: it names the served bands
-    (B4-D26). `unset` writes no list. (ok, line)."""
+    invalid, unreadable, a dangling link) is never touched, and the setup is still saved (the list decides the bands,
+    S2). `unset` writes no list. (ok, line)."""
     setup = cfgmod.HW_SETUPS.get(setup_id)
     try:
         present = radios.exists_at_all(radios.path(paths))
     except Exception:                                    # a path refusal: never read as "absent"
         present = True
     if present:
-        return True, "hardware list: exists, not changed (config/radios.toml names the radios; a daemon starts for each band the board setup serves)"
+        return True, "hardware list: exists, not changed (config/radios.toml names the radios; the list decides the bands)"
     if setup is None or not setup[1]:
         return True, "hardware list: stays absent (no radio in this setup)"
     models, rows = radio_models.load(), []

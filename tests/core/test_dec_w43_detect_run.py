@@ -5,6 +5,7 @@ are fakes behind the module's seams (run.spi_bus, ch341.select until P2 lands, c
 the real radio_start.daemon_running over a faked /proc listing."""
 from __future__ import annotations
 
+import pytest
 import radios_fixture
 
 from lhpc.core import radio_daemon, radio_start, radios
@@ -269,6 +270,7 @@ def test_a_stick_found_by_its_serial_on_another_port_is_that_radios(tmp_path, mo
         "Detect refused: r2's daemon is running. Stop it first."
 
 
+@pytest.mark.no_default_hardware                  # the list is really absent (conftest's baseline list off)
 def test_a_daemon_of_unknown_identity_refuses_a_board_detect_with_no_radio_on_the_band(tmp_path, monkeypatch):
     box = _Box(tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(9, "unknown", reason="?")], chip=_Chip("sx127x"))
     (tmp_path / "config" / "radios.toml").unlink()                                  # no radio on any band

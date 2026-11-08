@@ -57,7 +57,8 @@ def test_b2_a_serialless_stick_becomes_r3_on_its_port(web, tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("rows,want", [
-    (None, "there is no hardware list: set it up first (lhpc hardware <setup>)"),                        # B8
+    pytest.param(None, "there is no hardware list: set it up first (lhpc hardware <setup>)",             # B8
+                 marks=pytest.mark.no_default_hardware),                                              # really absent
     (SPI + (radios.Radio("r3", "stick", "meshstick-1262", "868", usb_port="1-1.3"),),
      "the stick on port 1-1.3 is already r3's: re-bind r3 in its card instead"),                       # B4
     (SPI + (radios.Radio("r3", "old", "meshstick-1262", "868", usb_port="1-1.9"),),

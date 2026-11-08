@@ -46,6 +46,7 @@ def _reasons(radios_list):
 
 # ---- load: the file's state ------------------------------------------------------------------------
 
+@pytest.mark.no_default_hardware                  # the list is really absent (conftest's baseline list off)
 def test_a_missing_file_is_absent_and_not_startable(tmp_path):
     rad = _radios()
     st = rad.load(_paths(tmp_path), MODELS)

@@ -51,7 +51,7 @@ def _start(svc, launched):
 
 @pytest.mark.parametrize("setup,daemons", [
     ("waveshare-433", [("433", "waveshare-sx1262")]),
-    ("uputronics-868", []),                                       # no radio on 868 in the list: nothing
+    ("uputronics-868", [("433", "waveshare-sx1262")]),            # S2: the list decides, never the setup
     ("uputronics", [("433", "waveshare-sx1262")]),                # the list's radio and model, not the board's
 ])
 def test_the_daemon_launches_the_hardware_lists_radios_of_the_served_bands(box, csrf, setup, daemons):

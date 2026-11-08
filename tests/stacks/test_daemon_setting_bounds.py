@@ -58,7 +58,7 @@ def test_daemon_set_service_validates_band(tmp_path):
 # --- confirmed vs sent-but-unconfirmable ------------------------------------
 
 def test_confirmable_key_reports_applied(tmp_path):
-    sys = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=DIRECT\n"}).system
+    sys = FakeSystem(unix_replies={dc.conf_socket("r1"): b"STATUS TXMODE=DIRECT\n"}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     r = svc.daemon_set("433", "TXMODE", "DIRECT", apply=True)
     assert r.ok and r.data.get("confirmed") is True and "applied (confirmed)" in r.summary
@@ -67,7 +67,7 @@ def test_confirmable_key_reports_applied(tmp_path):
 def test_unconfirmable_radio_param_is_sent_not_applied(tmp_path):
     # FREQ is accepted by the chip but not echoed by any GET: it must be "SENT
     # (unconfirmed)", never "applied", and the confirmed flag must be False.
-    sys = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=MANAGED\n"}).system
+    sys = FakeSystem(unix_replies={dc.conf_socket("r1"): b"STATUS TXMODE=MANAGED\n"}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     r = svc.daemon_set("433", "FREQ", "433.775", apply=True)
     assert r.ok and r.data.get("confirmed") is False
@@ -158,6 +158,8 @@ def test_service_keeps_the_full_range_for_a_waveshare_board(tmp_path, setup, ban
     # Waveshare box refuse power levels its SX1262 accepts.
     from lhpc.core import config as cfgmod
     p = Paths(runtime_root=tmp_path)
+    from lhpc.core import radio_start
+    assert radio_start.setup_radios(p, setup)[0]          # S2: the list `lhpc hardware <setup>` writes names the board
     cfgmod.save_hardware_setup(p, setup)
     svc = ControllerService(system=FakeSystem().system, paths=p)
     assert svc.chip_family_for_band(band) == "sx1262"

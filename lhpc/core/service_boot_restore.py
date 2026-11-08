@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from . import boot_restore, known_working, radios, runtime_fs, updater_units
+from . import boot_restore, instances, known_working, radios, runtime_fs, updater_units
 from .boot_restore import Evidence, MarkerView, StackMeta
 from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
@@ -219,7 +219,7 @@ class BootRestoreOpsMixin:
             main = next((c for c in st.components if c.id == st.main), None)
             if main is None:
                 continue
-            declared = tuple(self.stack_bands(st.id))
+            declared = instances.stack_bands(st)      # the manifest's (S2): restore_plan judges each radio by rid
             metas[st.id] = StackMeta(
                 stack_id=st.id, main=st.main,
                 interactive_main=bool(getattr(main, "interactive", False)),

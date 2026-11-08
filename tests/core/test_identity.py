@@ -1080,7 +1080,7 @@ def test_an_explicit_unavailable_band_is_refused_not_remapped(tmp_path, monkeypa
     # AUDIT-FOUND: `--band 433` on 868-only hardware was silently remapped — the plan and the launch
     # went to 868 although the caller (or boot-restore, replaying a recorded band) asked for 433.
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "active_bands", lambda self: ("868",))
+    monkeypatch.setattr(type(svc), "radio_bands", lambda self: ("868",))
     for op in ("start", "restart"):
         r = getattr(svc, op)("voice", apply=False, band="433")
         assert not r.ok and "433" in r.summary and "868" in r.summary, r.summary

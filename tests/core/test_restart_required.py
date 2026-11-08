@@ -242,7 +242,7 @@ def test_a_single_band_daemon_stop_keeps_the_marker_when_the_process_view_is_ind
     # The daemon serves 433 and 868 as two instances; a stop of 433 only (a client releasing its
     # band) proves nothing about 868 when the process table cannot be read ({}).
     svc = _svc(tmp_path)
-    assert svc.active_bands() == ("433", "868")
+    assert svc.radio_bands() == ("433", "868")
     _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
     assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None

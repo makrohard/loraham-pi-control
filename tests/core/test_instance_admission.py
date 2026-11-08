@@ -27,7 +27,7 @@ def test_two_daemon_instances_stop_each_on_its_own_band(tmp_path):
     assert svc._operation_bands("daemon", "868", "", "stop") == {"868"}
     k433 = _radio(svc._operation_resource_keys("daemon", "433", op="stop"))
     k868 = _radio(svc._operation_resource_keys("daemon", "868", op="stop"))
-    assert k433 == {"loraham.radio.433", "loraham.daemon-socket.433"} and not k433 & k868
+    assert k433 == {"loraham.radio.r1", "loraham.daemon-socket.r1"} and not k433 & k868
 
 
 def test_one_process_serving_both_bands_takes_both(tmp_path):
@@ -50,8 +50,8 @@ def test_a_two_band_client_stacks_band_keys_never_collide(tmp_path):
     svc = _svc(tmp_path, {})
     k433 = _radio(svc._operation_resource_keys("kiss", "433", op="start"))
     k868 = _radio(svc._operation_resource_keys("kiss", "868", op="start"))
-    assert k433 == {"loraham.radio.433", "loraham.daemon-socket.433"}
-    assert k868 == {"loraham.radio.868", "loraham.daemon-socket.868"}
+    assert k433 == {"loraham.radio.r1", "loraham.daemon-socket.r1"}
+    assert k868 == {"loraham.radio.r2", "loraham.daemon-socket.r2"}
 
 
 def test_the_one_band_rule_still_refuses_the_second_band(tmp_path, monkeypatch):

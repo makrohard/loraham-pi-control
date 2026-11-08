@@ -464,7 +464,7 @@ class LifecycleOpsMixin:
         if any(unlocked(c) for _, c in order) and self._config_band(target, band) == "868" \
                 and "433" in self._daemon_claimed_bands():
             return SPI_SHARED_WARNING
-        if any(c.id == self.DAEMON_ID for _, c in order) and "433" in self._daemon_serve_bands(radio):
+        if any(c.id == self.DAEMON_ID for _, c in order) and "433" in self._daemon_bands(radio):
             for ss in self.build_snapshot().stacks:
                 for c in ss.stack.components:
                     if unlocked(c) and ss.components[c.id].run_state in (
@@ -570,25 +570,25 @@ class LifecycleOpsMixin:
                 "before starting a radio stack")
 
     def radio_mode_block(self, target: str) -> str:
-        """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
-        A band-switchable stack stays available if ANY of its bands is active (uses the RAW declared
-        component bands, not the mode-narrowed `stack_bands`). This is NOT a resource conflict — the
-        remedy is to change the radio mode, not stop a holder."""
+        """A reason string when the hardware list has no enabled radio on ANY band this stack can use, else "" (S2).
+        A band-switchable stack stays available if ANY of its bands is on the list (uses the RAW declared
+        component bands, not the list-narrowed `stack_bands`). This is NOT a resource conflict — the
+        remedy is to add a radio, not stop a holder."""
         order = self._run_order(target)
         if not order:
             return ""
         needed = {b for _, c in order
                   for b in (([c.band] if c.band else []) + list(c.bands)) if b}
-        active = set(self.active_bands())
+        active = set(self.radio_bands())
         if needed and not (needed & active):
             missing = "/".join(sorted(needed))
-            return (f"requires the {missing} MHz radio — radio mode is {self.radio_mode()}-only; "
-                    "change it in the daemon Hardware settings")
+            have = f"has radios on {'+'.join(sorted(active))} only" if active else "has no enabled radio"
+            return f"requires the {missing} MHz radio — the hardware list {have}; add one on the Hardware page"
         return ""
 
     def _start_static_refusal(self, target: str, op: str):
         """The start refusals that do not depend on whether the target runs (runtime root,
-        hardware, GPS, radio mode), or None — so a restart takes them BEFORE its stop, with the
+        hardware, GPS, the hardware list), or None — so a restart takes them BEFORE its stop, with the
         same wording as the start."""
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root not bootstrapped.",
@@ -773,7 +773,7 @@ class LifecycleOpsMixin:
             return None    # a stop is never refused by its band (item 16: a shared band stops each radio's daemon)
         if not band:
             return None
-        active = self.active_bands()
+        active = self.radio_bands()
         if active and band not in active:
             return ActionResult(
                 False, f"Cannot {op} '{target}' on {band} MHz: this box serves "
@@ -1957,7 +1957,7 @@ class LifecycleOpsMixin:
         single-band request (`radio` == '433'/'868') is NEVER arbitrated away — the operator asked for
         that band, so a genuine conflict is surfaced by the normal blocker path, not silently skipped.
         Only a serve-all start (empty `radio`) is arbitrated to the free bands."""
-        base = self._daemon_serve_bands(radio)
+        base = self._daemon_bands(radio)
         if radio in ALLOWED_BANDS:
             return list(base), {}
         owners = self._direct_radio_owners(base)
@@ -2044,10 +2044,10 @@ class LifecycleOpsMixin:
             lines.append("  [BLOCKED] daemon: all active radio bands are owned by a running radio-"
                          "direct stack — stop it, or start the daemon on a free band")
             return lines, False, ""
-        # Note when a single radio mode narrows an all-bands request (only when nothing was arbitrated
+        # Note when the hardware list narrows an all-bands request (only when nothing was arbitrated
         # away — the skip line already explains a band-owned narrowing).
         if (radio or "") == "" and not owned and set(needed) != set(ALLOWED_BANDS):
-            lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
+            lines.append(f"  [note] the hardware list serves {'+'.join(needed)}")
         for u in not_ready:
             ok_all, b = False, lab[u]
             # A bare RADIO=FAILED leaves the operator with nothing to do (a MeshCom start
@@ -2585,10 +2585,10 @@ class LifecycleOpsMixin:
 
     def stack_bands(self, target: str) -> tuple:
         """Bands the operator may choose for `target` (empty = single fixed band), NARROWED to the
-        active radio mode (in 'both' this is identity). Owner-stack scoped, so a direct component
+        hardware list's bands (S2). Owner-stack scoped, so a direct component
         target uses its stack's band choices."""
         s = self._owner_stack(target)
-        active = self.active_bands()
+        active = self.radio_bands()
         for c in (s.components if s else ()):
             if c.bands:
                 return tuple(b for b in c.bands if b in active)
@@ -2705,7 +2705,7 @@ class LifecycleOpsMixin:
         return ("R:" + ",".join(running) + ";D:" + ",".join(usable)
                 + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
                 + ";B:" + ",".join(booting)
-                + ";M:" + self.radio_mode())      # mode switch reflows the columns -> force a reload
+                + ";M:" + "+".join(self.radio_bands()))   # a band added or removed reflows the columns -> force a reload
 
     def manual_start_command(self, comp, inst=None) -> str:
         """The command the operator runs in a terminal to start an interactive
@@ -2998,7 +2998,7 @@ class LifecycleOpsMixin:
         occupied_bands = [b for b, v in dvs.items() if v.reachable]
         usable_bands = [b for b, v in dvs.items() if v.ready]
         out = []
-        for band in self.active_bands():                 # only the mode's radios get a normal column
+        for band in self.radio_bands():                  # only the list's bands get a normal column
             dv = dvs[band]
             other_served = [b for b in usable_bands if b != band]
             running, startable, interactive = [], [], []
@@ -3148,10 +3148,10 @@ class LifecycleOpsMixin:
                 "conflict": self._radio_competitors(
                     running + [e for e in interactive if e.get("running")]),
             })
-        # Strays (§6): a daemon still live on a band the current mode EXCLUDES (a mode switch's leftover), kept visible
+        # Strays (§6): a daemon still live on a band the hardware list has no enabled radio on, kept visible
         # and stoppable (lhpc never auto-kills). M-2: the SAME process as an active band's daemon (a dual-band PID):
         # disclose that stopping it stops the active band too.
-        active = list(self.active_bands())
+        active = list(self.radio_bands())
         active_pids = {b: set(self._daemon_pids_for_band(b)) for b in active}
         for band in self.RADIO_BANDS:
             if band in active:

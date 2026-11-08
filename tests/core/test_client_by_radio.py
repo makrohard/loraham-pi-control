@@ -12,9 +12,12 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 NO_LIST = None
+_ABSENT = pytest.mark.no_default_hardware     # the list is really absent (conftest's baseline list off)
 TWO_433 = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r2", "b", "uputronics", "433", ce="ce1"))
 OFF = (radios.Radio("r1", "low", "loraham", "433", enabled=False),)
 REFUSED = "no radio for its daemon sockets: "
+NO_BAND = ("Cannot start 'kiss': requires the 433/868 MHz radio — the hardware list has no enabled radio; "
+           "add one on the Hardware page")
 
 
 def _svc(tmp_path, rows):
@@ -25,7 +28,7 @@ def _svc(tmp_path, rows):
 
 # The design table (rule 1): hardware list x band x component -> the instance's radio, or the refusal's reason.
 CASES = [
-    (NO_LIST, "loraham-kiss-tnc", "433", None, "no hardware list"),
+    pytest.param(NO_LIST, "loraham-kiss-tnc", "433", None, "no hardware list", marks=_ABSENT),
     ((), "loraham-kiss-tnc", "433", None, "no enabled radio on 433 MHz"),
     (OFF, "loraham-kiss-tnc", "433", None, "no enabled radio on 433 MHz"),
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "433", "r1", ""),
@@ -33,7 +36,7 @@ CASES = [
     (radios_fixture.RADIOS, "meshcom-bridge", "", None, "2 radios can run it for this stack: r1 (low), r2 (high); name one"),
     (TWO_433, "meshcom-bridge", "433", "r1", ""),       # DEC-W16: slot 0 runs on the band's first unlisted radio
     (TWO_433, "loraham-kiss-tnc", "868", None, "no enabled radio on 868 MHz"),
-    (NO_LIST, "graywolf", "433", "", ""),              # not a daemon client: slot 0 without a radio, any list
+    pytest.param(NO_LIST, "graywolf", "433", "", "", marks=_ABSENT),   # not a daemon client: slot 0 without a radio, any list
     (TWO_433, "graywolf", "", "", ""),
 ]
 
@@ -49,6 +52,7 @@ def test_a_client_runs_as_its_bands_one_radio_or_is_refused_by_name(tmp_path, ro
         assert refusal == "" and (inst.slot, inst.rid) == (0, rid)
 
 
+@_ABSENT
 def test_an_unresolved_radio_template_never_renders(tmp_path):
     # W3-1: slot 0 without a radio has no daemon socket to name; every render of a `{rid}` param refuses it.
     svc = _svc(tmp_path, NO_LIST)
@@ -70,8 +74,9 @@ def test_an_unresolved_radio_template_never_renders(tmp_path):
 
 
 @pytest.mark.parametrize("rows,band,listed,why", [
-    (NO_LIST, "433", None, "no hardware list"),
-    ((), "433", None, "no enabled radio on 433 MHz"),
+    # S2: no list or an empty one serves no band, so the stack's own preflight refuses before any component.
+    pytest.param(NO_LIST, "433", None, NO_BAND, marks=_ABSENT),
+    ((), "433", None, NO_BAND),
     # DEC-W16: two radios no longer refuse slot 0 (it runs on r1); with both listed it has no radio left.
     (TWO_433, "433", 'kiss = ["r1", "r2"]\n', "every enabled radio of 433 MHz holds a listed instance of kiss (r1, r2): "
                                               "start one of them as kiss@<rid>")])
@@ -89,17 +94,24 @@ def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path,
     launched = []
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append(c.id))
     res = svc.start("kiss", apply=True, band=band)
-    tnc = next(r for r in res.results if r.component == "loraham-kiss-tnc")
-    assert (tnc.outcome, tnc.summary) == (Outcome.BLOCKED, REFUSED + why)
+    if why == NO_BAND:
+        assert res.summary == why and res.results == ()
+    else:
+        tnc = next(r for r in res.results if r.component == "loraham-kiss-tnc")
+        assert (tnc.outcome, tnc.summary) == (Outcome.BLOCKED, REFUSED + why)
     assert "loraham-kiss-tnc" not in launched and not res.ok
 
 
-def test_the_manual_command_names_the_radio_or_why_there_is_none(tmp_path):
-    # The operator's terminal command for chat renders its radio's sockets (433 → r1), or says why it has none.
+def test_the_manual_command_names_the_radio(tmp_path):
+    # The operator's terminal command for chat renders its radio's sockets (433 → r1); without a list: below.
     svc = _svc(tmp_path, radios_fixture.RADIOS)
     chat = svc.stack("chat").component("loraham-chat")
     cmd = svc.manual_start_command(chat)
     assert "--data-socket /tmp/lora-r1.sock --conf-socket /tmp/loraconf-r1.sock" in cmd and "{rid}" not in cmd
+
+
+@_ABSENT
+def test_the_manual_command_without_a_list_says_why(tmp_path):
     bare = _svc(tmp_path / "bare", NO_LIST)
     assert bare.manual_start_command(bare.stack("chat").component("loraham-chat")) \
         == f"(no run command: {REFUSED}no hardware list)"

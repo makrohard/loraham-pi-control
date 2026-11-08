@@ -409,7 +409,19 @@ def _default_hardware(request, monkeypatch):
     if request.node.get_closest_marker("no_default_hardware"):
         return
     from lhpc.core import config as _config
+    from lhpc.core import radios as _radios
     monkeypatch.setattr(_config, "HW_DEFAULT", "loraham", raising=False)
+    # S2 (CLEANUP-DESIGN-v13): the hardware list decides the bands, never the setup. The baseline box is the list
+    # `lhpc hardware loraham` writes (r1 on 433, r2 on 868); a runtime that writes its own list keeps it.
+    real = _radios.load
+
+    def load(paths, models=None):
+        state = real(paths, models)
+        if state.kind != _radios.ABSENT:
+            return state
+        return _radios.State(_radios.VALID, radios=(_radios.Radio("r1", "LoRaHAM 433", "loraham", "433"),
+                                                     _radios.Radio("r2", "LoRaHAM 868", "loraham", "868")))
+    monkeypatch.setattr(_radios, "load", load)
 
 
 @pytest.fixture

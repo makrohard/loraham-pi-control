@@ -106,7 +106,7 @@ def _life_stats(tmp_path, reply: bytes):
     from lhpc.core.lifecycle import Lifecycle
     from lhpc.core.config import Config, OperatorConfig
     from lhpc.core.paths import Paths
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply}).system
+    sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply}).system     # the baseline list: 433 is r1
     return Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()), sys)
 
 

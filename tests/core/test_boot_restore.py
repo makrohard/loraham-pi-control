@@ -247,7 +247,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
     # a direct main-component start is scope "component", a stack start scope "stack".
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
     radios_fixture.write(tmp_path)                                    # stage L5: the TNC is r1's client
-    fake = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": reply}))   # daemon serving
+    fake = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock": reply}))   # daemon serving
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)       # kiss installed
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
@@ -1024,7 +1024,7 @@ def test_web_log_source_never_aliases(tmp_path):
 
 # --- lock-order + scoped feed clear on the REAL start path --------------------------------------
 
-def _serving_svc(set_call, tmp_path, monkeypatch, *, hardware=False, sockets=("/tmp/loraconf433.sock",)):
+def _serving_svc(set_call, tmp_path, monkeypatch, *, hardware=False, sockets=("/tmp/loraconf-r1.sock",)):
     """A start-capable service: daemon already serving on `sockets`, kiss installed/built."""
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
     radios_fixture.write(tmp_path)                                    # stage L5: the TNC is its radio's client
@@ -1045,8 +1045,8 @@ def test_daemon_all_active_start_locks_every_band(tmp_path, monkeypatch, set_cal
     # cover BOTH bands — the old `stack_config(...).radio` fallback under-locked a dual-band
     # serve-all start (locked 433 while both bands were launched).
     svc = _serving_svc(set_call, tmp_path, monkeypatch, hardware=True,
-                      sockets=("/tmp/loraconf433.sock", "/tmp/loraconf868.sock"))
-    assert set(svc.active_bands()) == {"433", "868"}      # precondition: dual-band hardware
+                      sockets=("/tmp/loraconf-r1.sock", "/tmp/loraconf-r2.sock"))
+    assert set(svc.radio_bands()) == {"433", "868"}      # precondition: dual-band hardware
     assert svc._operation_bands("daemon", "", "", "start") == {"433", "868"}
     keys = svc._operation_resource_keys("daemon", "", "", "start")
     assert {"loraham.radio.r1", "loraham.radio.r2"} <= set(keys)       # stage L5 (W4-4): by the radios' ids

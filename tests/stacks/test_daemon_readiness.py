@@ -14,22 +14,22 @@ from lhpc.core import daemon_control
 
 
 def _svc(tmp_path, status: bytes):
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system
+    sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": status}).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
 
 def test_view_ready_requires_radio_ready(tmp_path):
     sys = FakeSystem(unix_replies={
-        "/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
-    v = daemon_control.read_view(sys, "433")
+        "/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
+    v = daemon_control.read_view(sys, "r1")
     assert v.reachable and v.ready and v.radio_state == "READY"
 
 
 @pytest.mark.parametrize("state", [b"FAILED", b"UNINITIALIZED"])
 def test_reachable_but_not_ready_is_not_ready(tmp_path, state):
     sys = FakeSystem(unix_replies={
-        "/tmp/loraconf433.sock": b"STATUS RADIO=" + state + b" TXMODE=MANAGED\n"}).system
-    v = daemon_control.read_view(sys, "433")
+        "/tmp/loraconf-r1.sock": b"STATUS RADIO=" + state + b" TXMODE=MANAGED\n"}).system
+    v = daemon_control.read_view(sys, "r1")
     assert v.reachable and not v.ready and v.radio_state == state.decode()
 
 
@@ -69,7 +69,7 @@ def test_verify_band_up_reads_the_bands_radio(tmp_path, monkeypatch, timeout):
     radios_fixture.write(tmp_path)
     ready = b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"
     by_rid = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": ready}).system
-    by_band = FakeSystem(unix_replies={"/tmp/loraconf433.sock": ready}).system
+    by_band = FakeSystem(unix_replies={"/tmp/loraconf433.sock": ready}).system    # the 0.13.x band socket (kept)
     assert ControllerService(system=by_rid, paths=Paths(runtime_root=tmp_path))._verify_band_up("433") is True
     assert ControllerService(system=by_band, paths=Paths(runtime_root=tmp_path))._verify_band_up("433") is False
 
@@ -106,12 +106,12 @@ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
 def test_tx_test_never_moves_a_client_to_another_band(tmp_path, set_call):
     # meshcom is a 433 stack; with only 868 served, its TX test refuses rather than transmitting on
     # 868. Only the daemon itself (no band of its own) falls back to the bands it is serving.
-    sys = FakeSystem(unix_replies={"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "local.toml").write_text('[radio]\nhardware = "uputronics-868"\n')
+    sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system  # r1 on 868
+    from lhpc.core import radio_start
+    assert radio_start.setup_radios(Paths(runtime_root=tmp_path), "uputronics-868")[0]   # S2: the list decides
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
-    assert svc.active_bands() == ("868",)
+    assert svc.radio_bands() == ("868",)
     assert not svc.test("meshcom", tx=True, apply=False).ok
     assert svc.test("daemon", tx=True, apply=False).ok
 
@@ -123,8 +123,8 @@ def test_tx_test_refused_on_a_band_another_stack_uses(tmp_path, set_call):
     ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     sys = FakeSystem(cmdlines_data={300: ["meshcom-loraham-bridge"], 301: ["qemu-system-xtensa"],
                                     4242: ["loraham-kiss-tnc", "--config", "X"]},
-                     unix_replies={"/tmp/loraconf433.sock": ready,
-                                   "/tmp/loraconf868.sock": ready}).system
+                     unix_replies={"/tmp/loraconf-r1.sock": ready,
+                                   "/tmp/loraconf-r2.sock": ready}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     assert svc._set_running_band("kiss", "868")
@@ -135,16 +135,17 @@ def test_tx_test_refused_on_a_band_another_stack_uses(tmp_path, set_call):
 
 def _competing_start(svc, monkeypatch, band):
     """A competing start of meshcore on `band`, run right AFTER each conflict check returns: it
-    takes `claim.loraham.radio.<band>` like a real start, and once it has it, meshcore uses the
+    takes the band radio's claim like a real start, and once it has it, meshcore uses the
     band. Returns the list of starts that got the claim."""
     import threading
 
-    from lhpc.core import reslock
+    from lhpc.core import radio_start, reslock
     started: list = []
+    key = f"claim.{radio_start.claim_key(svc._paths, band)}"     # the band's one radio (stage L5)
 
     def start():
         try:
-            with reslock.operation_lock(svc._paths, f"claim.loraham.radio.{band}", "start", "meshcore"):
+            with reslock.operation_lock(svc._paths, key, "start", "meshcore"):
                 started.append("meshcore")
         except reslock.ResourceBusy:
             pass
@@ -171,7 +172,7 @@ def test_tx_test_holds_the_band_claim_against_a_competing_start(tmp_path, set_ca
                                           detail="stub")))
     ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     sys = FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]},
-                     unix_replies={"/tmp/loraconf868.sock": ready}).system
+                     unix_replies={"/tmp/loraconf-r2.sock": ready}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     assert svc._set_running_band("kiss", "868")
@@ -210,7 +211,7 @@ def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path
 
 def test_radio_overview_occupied_vs_usable(tmp_path):
     def _daemon(status):
-        sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system
+        sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": status}).system
         ov = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path)).radio_overview()
         return next(r["daemon"] for r in ov if r["band"] == "433")
 
@@ -245,7 +246,7 @@ def test_radio_overview_reports_binary_installed_daemon_as_installed(tmp_path, m
 
 def test_served_summary_excludes_failed(tmp_path):
     def _daemon(status):
-        sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system
+        sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": status}).system
         ov = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path)).radio_overview()
         return next(r["daemon"] for r in ov if r["band"] == "433")
 
@@ -264,7 +265,7 @@ def test_served_summary_excludes_failed(tmp_path):
 
 def test_dash_signature_D_segment_excludes_failed(tmp_path):
     sys = FakeSystem(unix_replies={
-        "/tmp/loraconf433.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}).system
+        "/tmp/loraconf-r1.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}).system
     sig = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path)).dash_signature()
     dseg = next(s for s in sig.split(";") if s.startswith("D:"))
     assert "433" not in dseg                            # a FAILED band is not "served"

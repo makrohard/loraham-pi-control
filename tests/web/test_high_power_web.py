@@ -23,8 +23,10 @@ def _page(c, path=DAEMON_PAGE):
 
 def _client(web, tmp_path, setup, status):
     p = Paths(runtime_root=tmp_path)
+    from lhpc.core import radio_start
+    assert radio_start.setup_radios(p, setup)[0]        # S2: the list `lhpc hardware <setup>` writes decides the board
     cfgmod.save_hardware_setup(p, setup)
-    fs = FakeSystem(unix_replies={dc.conf_socket(b): status for b in ("433", "868")})
+    fs = FakeSystem(unix_replies={dc.conf_socket(r): status for r in ("r1", "r2")})
     return web(system=fs.system, paths=p), p
 
 
@@ -54,7 +56,7 @@ def test_banner_keys_on_the_running_sx127x_permission(web, tmp_path):
     doc = _page(c)
     assert doc.present("hp-warn-433")                     # running ON, saved off: banner stays
     assert doc.present("hp-mismatch-433") and "saved off" in doc.text
-    assert _page(c, "/").present("rd-hp-433")
+    assert _page(c, "/").present("rd-hp-r1")              # the dashboard card is r1's (433 on the list)
     assert doc.present("dp-hp-daemon")                    # the daemon-params panel too
 
 

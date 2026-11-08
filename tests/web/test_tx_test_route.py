@@ -37,7 +37,8 @@ def box(tmp_path, web, monkeypatch):
 def _box(tmp_path, web, monkeypatch, status):
     """`status` is each band's CONF socket answer."""
     seed_built(tmp_path, "loraham-daemon/loraham_daemon/loraham_daemon")
-    sys_ = FakeSystem(unix_replies={f"/tmp/loraconf{b}.sock": r for b, r in status.items()}).system
+    rid = {"433": "r1", "868": "r2"}                     # the baseline list: r1 on 433, r2 on 868
+    sys_ = FakeSystem(unix_replies={f"/tmp/loraconf-{rid[b]}.sock": r for b, r in status.items()}).system
     svc = ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
     sent = []
 

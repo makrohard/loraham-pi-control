@@ -211,7 +211,7 @@ def test_radio_dashboard_has_two_band_columns(web):
     doc = parse(body)
     assert doc.find("div", class_="radiogrid")
     assert doc.find("div", **{"data-radio-band": "433"}) and doc.find("div", **{"data-radio-band": "868"})
-    assert "433 MHz" in body and "868 MHz" in body
+    assert "r1 · 433" in body and "r2 · 868" in body          # S2: the baseline list's radios, one card each (W286)
     # per-band: a start-stack control and a radio-config link
     assert 'name="op" value="start"' in body
     assert "Radio config" in body or "daemon offline" in body
@@ -385,7 +385,7 @@ def test_no_inline_style_or_script_on_pages(web):
 
 def _daemon_client(web, tmp_path, guard=False):
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     return web(system=fake.system, guard=ReadOnlyGuard if guard else None)
 
 
@@ -930,7 +930,7 @@ def _overview_433(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
-    sysm = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+    sysm = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock":
                                     b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
     svc = ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))
     return svc
@@ -1014,8 +1014,8 @@ def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, mon
 
 def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path, web):
     # daemon serving ONLY 433 + meshtastic on 868 must NOT show a conflict.
-    c = _conflict_app(web, tmp_path, {100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
-                      {"/tmp/loraconf433.sock": _RDY_A5}, "868")
+    c = _conflict_app(web, tmp_path, {100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["meshtasticd"]},
+                      {"/tmp/loraconf-r1.sock": _RDY_A5}, "868")
     body = c.get("/stacks").get_data(as_text=True)
     # The declared-resource keys now always render in each stack's Info panel, so a conflict is
     # proven by the conflict markup, not the bare key: no false conflict here.
@@ -1026,11 +1026,11 @@ def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path, web):
 def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path, web):
     # daemon serving BOTH + meshtastic on 868 IS a real conflict on 868 -> shown.
     c = _conflict_app(web, tmp_path, {100: ["loraham_daemon", "--radio", "both"], 200: ["meshtasticd"]},
-                      {"/tmp/loraconf433.sock": _RDY_A5, "/tmp/loraconf868.sock": _RDY_A5}, "868")
+                      {"/tmp/loraconf-r1.sock": _RDY_A5, "/tmp/loraconf-r2.sock": _RDY_A5}, "868")
     # The OBSERVED conflict row lives in the stack's (deferred) Info panel — fetch it inline via ?open.
     body = c.get("/stacks?open=daemon").get_data(as_text=True)
     # A real 868 conflict is shown as an OBSERVED conflict row naming the 868 radio resource.
-    assert "OBSERVED" in body and parse(body).find("li", class_="conflict") and "loraham.radio.868" in body
+    assert "OBSERVED" in body and parse(body).find("li", class_="conflict") and "loraham.radio.r2" in body   # 868's radio
 
 
 # --- Start-confirm "Stack parameters" panel + CALL/node enforcement + Save -------------------
@@ -1127,7 +1127,7 @@ def test_daemon_socket_line_sanitises_and_bounds(tmp_path):
     from lhpc.core.services import ControllerService
     # ANSI colour + a control char (0x07) + a non-ASCII byte + a second line -> stripped to one
     # printable-ASCII first line (a hostile/garbled socket can never emit control chars or extra data).
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock":
                                     b"\x1b[31mSTATUS RSSI=-95\x07\xff CAD=1\nEVIL\n"})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     assert svc.daemon_socket_line("433") == "STATUS RSSI=-95 CAD=1"
@@ -1445,12 +1445,12 @@ def test_last_apply_success_suppressed_failure_shown(tmp_path, web):
 
 
 _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
-_DAEMON_UP = {100: ["loraham_daemon", "--radio", "433"]}
+_DAEMON_UP = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"]}
 
 
 @pytest.mark.parametrize("state,cmdlines,socks", [
-    ("ready", {}, {"/tmp/loraconf433.sock": _RDY}),
-    ("occupied", {}, {"/tmp/loraconf433.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}),
+    ("ready", {}, {"/tmp/loraconf-r1.sock": _RDY}),
+    ("occupied", {}, {"/tmp/loraconf-r1.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}),
     ("offline-installed", _DAEMON_UP, {}),
 ], ids=["ready", "occupied", "offline-installed"])
 def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
@@ -1462,12 +1462,14 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
     forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
-    assert len(forms) == 1, "exactly one daemon control on the card"
+    # S2: the baseline list's r1 card; a radio's running daemon has Stop and Restart (W286), else one Start
+    assert [col.within(f).field_default("op") for f in forms] == (["stop", "restart"] if state != "offline-installed"
+                                                                  else ["start"]), "the card's daemon controls"
     links = [p for p in col.find("p") if col.within(p).find("a", href="/logs/loraham-daemon?band=433")]
     assert len(links) == 1                                                 # the block with the log links
     if state in ("ready", "occupied"):
         heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
-        assert len(heads) == 1 and heads[0].index == forms[0].end + 1     # Stop, then Radio config
+        assert len(heads) == 1 and heads[0].index == forms[-1].end + 1    # Stop, Restart, then Radio config
         assert links[0].index == heads[0].end + 1                          # then the log links
     else:
         assert links[0].index == forms[0].end + 1
@@ -1487,7 +1489,7 @@ def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):
     # can be asserted where the operator sees it rather than by scraping one template line.
     from lhpc.core import config as _cfg
     svc = ControllerService(
-        system=FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+        system=FakeSystem(unix_replies={"/tmp/loraconf-r1.sock":
                                         b"STATUS RADIO=READY TXMODE=DIRECT\n"}).system,
         paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham")
@@ -1934,13 +1936,13 @@ def test_daemon_feed_reads_per_band_process_log(tmp_path, monkeypatch):
                             paths=Paths(runtime_root=tmp_path))
     d = tmp_path / "logs"
     d.mkdir(parents=True)
-    (d / "start-loraham-daemon-868.log").write_text(
+    (d / "start-loraham-daemon-868-r2.log").write_text(
         "boot\n[TX868] one frame TXOK=1\nnoise\n[RX868] pkt\n")
     feed = svc.daemon_feed("868")
     assert feed == ["[TX868] one frame TXOK=1", "[RX868] pkt"]
     assert svc.daemon_feed("433") == []                          # band-scoped
     # symlinked log leaf: refused by the no-follow tail, feed stays empty
-    (d / "start-loraham-daemon-433.log").symlink_to("start-loraham-daemon-868.log")
+    (d / "start-loraham-daemon-433-r1.log").symlink_to("start-loraham-daemon-868-r2.log")
     assert svc.daemon_feed("433") == []
 
 
@@ -1959,7 +1961,7 @@ def test_daemon_feed_keeps_a_tx_buried_under_log_chatter(tmp_path):
     # seconds-old TX; a quiet chat did not. Filter FIRST, then keep the last N matches.
     svc = _feed_svc(tmp_path)
     body = ("noise\n" * 1500) + "[TX868] one frame TXOK=1\n" + ("noise\n" * 800)
-    (tmp_path / "logs" / "start-loraham-daemon-868.log").write_text(body)
+    (tmp_path / "logs" / "start-loraham-daemon-868-r2.log").write_text(body)
     assert svc.daemon_feed("868") == ["[TX868] one frame TXOK=1"]
 
 
@@ -1968,7 +1970,7 @@ def test_daemon_feed_uses_exactly_one_source_file(tmp_path):
     # ([TX]/[RX]/TXOK/...) match either band, so concatenating would double-count every match.
     svc = _feed_svc(tmp_path)
     d = tmp_path / "logs"
-    (d / "start-loraham-daemon-868.log").write_text("[TX868] frame TXOK=1\n")
+    (d / "start-loraham-daemon-868-r2.log").write_text("[TX868] frame TXOK=1\n")
     (d / "start-loraham-daemon.log").write_text("[TX] band-less frame TXOK=1\n")
     assert svc.daemon_feed("868") == ["[TX868] frame TXOK=1"]     # band-less file never read
 
@@ -1978,7 +1980,7 @@ def test_clear_daemon_feed_hides_prior_activity_but_shows_new(tmp_path):
     # log size as a floor, so prior [TX]/[RX] lines vanish from the feed while the underlying
     # append-only log is untouched — and activity appended AFTER the clear shows again.
     svc = _feed_svc(tmp_path)
-    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log = tmp_path / "logs" / "start-loraham-daemon-868-r2.log"
     log.write_text("boot\n[TX868] old frame TXOK=1\n[RX868] old pkt\n")
     assert svc.daemon_feed("868") == ["[TX868] old frame TXOK=1", "[RX868] old pkt"]
     svc.clear_daemon_feed("868")                                 # the boundary
@@ -1994,7 +1996,7 @@ def test_clear_daemon_feed_floor_resets_when_log_shrinks(tmp_path):
     # A daemon restart that truncates/replaces the log shorter than the recorded floor must not
     # hide the whole new log — a size below the floor is treated as floor 0.
     svc = _feed_svc(tmp_path)
-    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log = tmp_path / "logs" / "start-loraham-daemon-868-r2.log"
     log.write_text("x" * 500 + "\n[TX868] before TXOK=1\n")
     svc.clear_daemon_feed("868")                                 # floor at ~520 bytes
     log.write_text("[RX868] after restart\n")                    # replaced shorter than the floor
@@ -2004,8 +2006,8 @@ def test_clear_daemon_feed_floor_resets_when_log_shrinks(tmp_path):
 def test_clear_daemon_feed_is_band_scoped_and_ignores_bad_band(tmp_path):
     svc = _feed_svc(tmp_path)
     d = tmp_path / "logs"
-    (d / "start-loraham-daemon-868.log").write_text("[TX868] keep TXOK=1\n")
-    (d / "start-loraham-daemon-433.log").write_text("[TX433] keep TXOK=1\n")
+    (d / "start-loraham-daemon-868-r2.log").write_text("[TX868] keep TXOK=1\n")
+    (d / "start-loraham-daemon-433-r1.log").write_text("[TX433] keep TXOK=1\n")
     svc.clear_daemon_feed("868")                                 # only 868 cleared
     assert svc.daemon_feed("868") == []
     assert svc.daemon_feed("433") == ["[TX433] keep TXOK=1"]     # other band untouched
@@ -2018,8 +2020,8 @@ def test_logs_view_band_selects_the_per_band_process_log(tmp_path, web):
     c = web()
     d = tmp_path / "logs"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "start-loraham-daemon-433.log").write_text("four-three-three\n")
-    (d / "start-loraham-daemon-868.log").write_text("eight-six-eight\n")
+    (d / "start-loraham-daemon-433-r1.log").write_text("four-three-three\n")
+    (d / "start-loraham-daemon-868-r2.log").write_text("eight-six-eight\n")
     assert "four-three-three" in c.get("/logs/loraham-daemon?band=433").get_data(as_text=True)
     assert "eight-six-eight" in c.get("/logs/loraham-daemon?band=868").get_data(as_text=True)
     # A band outside the whitelist is dropped (never reaches the filename), not a 500/traversal.
@@ -2777,8 +2779,8 @@ def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, 
     rdy = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
     def factory():
         return ControllerService(system=FakeSystem(
-            cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_chat"]},
-            unix_replies={"/tmp/loraconf433.sock": rdy}).system,
+            cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham_chat"]},
+            unix_replies={"/tmp/loraconf-r1.sock": rdy}).system,
             paths=Paths(runtime_root=tmp_path))
     assert factory().set_operator_identity(callsign="XX0XXA").ok
     c = web(service_factory=factory)

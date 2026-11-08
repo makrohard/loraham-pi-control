@@ -180,6 +180,7 @@ def test_a_disabled_second_radio_of_the_band_leaves_the_enabled_ones_socket(tmp_
 
 # ---- without a hardware list: the 0.13.x band socket ---------------------------------------------------
 
+@pytest.mark.no_default_hardware                  # the list is really absent (conftest's baseline list off)
 def test_without_a_hardware_list_the_band_socket_is_read(tmp_path):
     svc, fake = _svc(tmp_path, hardware_list=False)
     view = svc.daemon_view("433")

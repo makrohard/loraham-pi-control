@@ -15,7 +15,7 @@ from lhpc.core.services import ControllerService
 def _svc(tmp_path, monkeypatch):
     radios_fixture.write(tmp_path)                        # r1 on 433, r2 on 868
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
     monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cmdbox, webserver_pills, banner %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
-{# Single-radio mode: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
-{% block body_class %}{% if radio_mode != 'both' %}dash-narrow{% endif %}{% endblock %}
+{# One band on the hardware list: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
+{% block body_class %}{% if radio_bands | length != 2 %}dash-narrow{% endif %}{% endblock %}
 {# A running component's state, name and note: one markup for slot 0's rows and a listed copy's (G1-C49). #}
 {% macro comp_state(c) %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
@@ -110,7 +110,7 @@
       {% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if x %} data-radio-rid="{{ x.rid }}"{% endif %}>
         <header>
-          <h2>{% if x %}{{ x.rid }} · {{ r.band }}{% else %}{{ r.band }} MHz{% endif %}{% if r.stray %} <span class="pill">not in radio mode</span>{% endif %}</h2>
+          <h2>{% if x %}{{ x.rid }} · {{ r.band }}{% else %}{{ r.band }} MHz{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
           {% if x %}
           <span class="badge badge-{{ 'running' if x.ready else ('degraded' if x.reachable else 'stopped') }}" id="rd-badge-{{ key }}">
             {% if x.ready %}daemon usable (READY){% elif x.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span>
@@ -136,13 +136,13 @@
 
           {% if r.stray %}
             <div class="depnote depnote-warn">
-              <strong>A daemon is still running on {{ r.band }} MHz, which the current radio mode
-              ({{ radio_mode }}) excludes.</strong>
+              <strong>A daemon is still running on {{ r.band }} MHz, where the hardware list has no enabled radio
+              (it has: {{ radio_bands | join('+') or 'none' }}).</strong>
               {% if r.shared_with %}
                 It is the <strong>same process</strong> as the {{ r.shared_with|join(', ') }} MHz
                 daemon — stopping it stops {{ r.shared_with|join(', ') }} too.
               {% else %}
-                Stop it below (lhpc never stops it for you), or switch the radio mode back.
+                Stop it below (lhpc never stops it for you), or add its radio on the Hardware page.
               {% endif %}
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

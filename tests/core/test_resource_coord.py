@@ -23,18 +23,18 @@ def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
     # meshtasticd also claims `spi.bus.0.unlocked` (it drives /dev/spidev0.0 without
     # taking spi0.lock), which is how `meshtastic + reticulum` is blocked while the
     # shipped `daemon + meshtastic` pair stays allowed.
-    assert svc._operation_resource_keys("meshtastic") == ["loraham.radio.868",
+    assert svc._operation_resource_keys("meshtastic") == ["loraham.radio.r2",
                                                           "spi.bus.0.unlocked",
                                                           "tcp.port.4403", "tcp.port.9443"]
     keys = svc._operation_resource_keys("meshcore")
-    assert "loraham.radio.868" in keys and keys == sorted(keys)
+    assert "loraham.radio.r2" in keys and keys == sorted(keys)
 
 
 @pytest.mark.contract
 def test_cross_stack_shared_radio_blocks_start(tmp_path):
-    # meshtastic and meshcore both claim loraham.radio.868 (different stacks).
+    # meshtastic and meshcore both claim loraham.radio.r2 (different stacks).
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, "claim.loraham.radio.868", "start", "meshtastic"):
+    with reslock.operation_lock(svc._paths, "claim.loraham.radio.r2", "start", "meshtastic"):
         res = svc.run_action("start", "meshcore", apply=True)
     assert not res.ok and "busy" in res.summary.lower()
     assert "meshtastic" in res.summary           # diagnostics name the holder
@@ -43,14 +43,14 @@ def test_cross_stack_shared_radio_blocks_start(tmp_path):
 def test_disjoint_resources_do_not_block(tmp_path):
     # Holding radio.868 must NOT block a stack that only uses radio.433.
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, "claim.loraham.radio.868", "start", "meshtastic"):
+    with reslock.operation_lock(svc._paths, "claim.loraham.radio.r2", "start", "meshtastic"):
         res = svc.run_action("start", "kiss", apply=True)     # kiss uses radio.433
     assert "busy" not in res.summary.lower()     # not a resource conflict (fails for other reasons)
 
 
 def test_stop_also_takes_resource_locks(tmp_path):
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, "claim.loraham.radio.868", "start", "meshtastic"):
+    with reslock.operation_lock(svc._paths, "claim.loraham.radio.r2", "start", "meshtastic"):
         res = svc.run_action("stop", "meshcore", apply=True)
     assert not res.ok and "busy" in res.summary.lower()
 
@@ -152,7 +152,7 @@ def test_nested_same_thread_reenters_without_self_deadlock(tmp_path):
 
 
 def test_daemon_socket_lock_is_band_scoped_like_the_radio_lock(tmp_path):
-    # The daemon is a PROVIDER of BOTH loraham.daemon-socket.433 and .868, and it sits in every
+    # The daemon is a PROVIDER of BOTH loraham.daemon-socket.r1 and .868, and it sits in every
     # daemon-backed stack's run order. Its provider claims used to be added verbatim, so an
     # 868-only stack (meshcore) locked the 433 socket and a 433-only stack (meshcom) locked the
     # 868 one — and the two then serialized against each other across bands neither touches.
@@ -162,13 +162,13 @@ def test_daemon_socket_lock_is_band_scoped_like_the_radio_lock(tmp_path):
     svc = ControllerService(paths=Paths(runtime_root=tmp_path))
     keys = {sid: set(svc._operation_resource_keys(sid, op="start"))
             for sid in ("meshcore", "meshcom", "kiss")}
-    assert "loraham.daemon-socket.868" in keys["meshcore"]
-    assert "loraham.daemon-socket.433" not in keys["meshcore"], "868-only stack locked 433"
+    assert "loraham.daemon-socket.r2" in keys["meshcore"]
+    assert "loraham.daemon-socket.r1" not in keys["meshcore"], "868-only stack locked 433"
     for sid in ("meshcom", "kiss"):                      # both are 433
-        assert "loraham.daemon-socket.433" in keys[sid]
-        assert "loraham.daemon-socket.868" not in keys[sid], f"{sid} (433) locked 868"
+        assert "loraham.daemon-socket.r1" in keys[sid]
+        assert "loraham.daemon-socket.r2" not in keys[sid], f"{sid} (433) locked 868"
     # the radio key stays band-scoped, and non-band keys are untouched
-    assert "loraham.radio.868" in keys["meshcore"] and "loraham.radio.433" not in keys["meshcore"]
+    assert "loraham.radio.r2" in keys["meshcore"] and "loraham.radio.r1" not in keys["meshcore"]
     assert "tcp.port.5000" in keys["meshcore"] and "tcp.port.8001" in keys["kiss"]
 
 

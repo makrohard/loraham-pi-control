@@ -27,7 +27,11 @@ def _svc(tmp_path):
 
 
 def _setup(svc, setup_id):
+    # S2: a box set up as `setup_id` has the hardware list `lhpc hardware <setup>` writes; the list decides the bands.
+    from lhpc.core import radio_start
+    (svc._paths.runtime_root / "config" / "radios.toml").unlink(missing_ok=True)
     config.save_hardware_setup(svc._paths, setup_id)
+    assert radio_start.setup_radios(svc._paths, setup_id)[0]
     svc._invalidate_config()
 
 
@@ -52,9 +56,7 @@ def _band_starts(details):
 def test_config_default_is_unconfigured(tmp_path):
     c = config.load_config(Paths(runtime_root=tmp_path))
     assert c.radio.hardware == "unset"
-    assert c.radio.active_bands == ()            # nothing served until a board is picked
     assert c.radio.configured is False
-    assert c.radio.radio_mode == "unset"
 
 
 @pytest.mark.parametrize("setup,bands,presets", [
@@ -70,10 +72,9 @@ def test_config_setup_bands_and_presets(tmp_path, setup, bands, presets):
     config.save_hardware_setup(p, setup)
     c = config.load_config(p)
     assert c.radio.hardware == setup and c.diagnostics == []
-    assert c.radio.active_bands == bands and c.radio.configured
+    assert c.radio.configured
     for b in ("433", "868"):
         assert c.radio.hw_preset(b) == presets.get(b, "")
-    assert c.radio.radio_mode == ("both" if len(bands) == 2 else bands[0])
 
 
 def test_config_bad_value_is_diagnostic_and_falls_open_to_unset(tmp_path):
@@ -93,12 +94,11 @@ def test_save_rejects_invalid_setup(tmp_path):
 
 def test_service_helpers(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.active_bands() == () and not svc.hardware_configured()
+    assert svc.radio_bands() == () and not svc.hardware_configured()
     _setup(svc, "waveshare-433")
     assert svc.hardware_setup() == "waveshare-433" and svc.hardware_configured()
-    assert svc.active_bands() == ("433",) and svc.radio_mode() == "433"
+    assert svc.radio_bands() == ("433",)                           # the list's one radio decides (S2)
     assert svc.band_active("433") and not svc.band_active("868")
-    assert svc.hw_preset_for_band("433") == "waveshare-sx1262"
     assert dict(svc.hw_setups())["loraham"].startswith("LoRaHAM")
 
 
@@ -162,21 +162,38 @@ def test_start_refuses_absent_band_stack_after_configured(tmp_path):
     # a usable identity, which plan and apply both judge first
     assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     r = svc.start("meshcore", apply=False)                         # meshcore is fixed 868
-    assert not r.ok and "radio mode is 433-only" in r.summary
+    assert not r.ok and "the hardware list has radios on 433 only" in r.summary
 
 
 # ---- retained invariants: one process per band, serve-bands never 'both' ------------------------
 
 @pytest.mark.contract
-def test_daemon_serve_bands_never_both(tmp_path):
+@pytest.mark.parametrize("rows,raw,bands", [
+    ((radios.Radio("r1", "a", "loraham", "433"), radios.Radio("r2", "b", "loraham", "868", enabled=False)), None, ("433",)),
+    ((radios.Radio("r1", "a", "loraham", "868"),), None, ("868",)),
+    (None, "[[radio]]\nid = 7\n", ()),                          # an invalid list serves nothing
+])
+def test_the_served_bands_are_the_enabled_radios_of_a_valid_list(tmp_path, rows, raw, bands):
+    # S2: the list decides, whatever the board setup says (it names both bands here).
+    config.save_hardware_setup(Paths(runtime_root=tmp_path), "uputronics")
+    if rows is not None:
+        radios_fixture.write(tmp_path, rows)
+    else:
+        (tmp_path / "config" / "radios.toml").write_text(raw)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.radio_bands() == bands
+    assert [b for b in ("433", "868") if svc.band_active(b)] == list(bands)
+
+
+def test_daemon_bands_follow_the_hardware_list_never_both(tmp_path):
     svc = _svc(tmp_path)
     _setup(svc, "loraham")
-    assert svc._daemon_serve_bands("") == ["433", "868"]
-    assert svc._daemon_serve_bands("both") == ["433", "868"]       # legacy 'both' -> active bands
-    assert svc._daemon_serve_bands("433") == ["433"]
+    assert svc._daemon_bands("") == ["433", "868"]
+    assert svc._daemon_bands("both") == ["433", "868"]       # legacy 'both' -> the list's bands
+    assert svc._daemon_bands("433") == ["433"]
     _setup(svc, "uputronics-433")
-    assert svc._daemon_serve_bands("both") == ["433"]              # clamped, never 'both'
-    assert svc._daemon_serve_bands("868") == ["433"]              # excluded single -> active
+    assert svc._daemon_bands("both") == ["433"]              # never 'both'
+    assert svc._daemon_bands("868") == ["433"]              # a band no radio of the list has -> the list's
 
 
 @pytest.mark.needs_session
@@ -201,17 +218,8 @@ def test_single_setup_starts_only_the_active_band(tmp_path):
 
 # ---- stray disclosure (unchanged behavior, now fed by the setup) --------------------------------
 
-def test_shared_pid_stray_is_disclosed(tmp_path):
-    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _RDY, "/tmp/loraconf868.sock": _RDY},
-                      cmdlines={100: ["loraham_daemon", "--radio", "both"]})
-    _setup(svc, "waveshare-433")                                   # serves 433 only
-    cards = {r["band"]: r for r in svc.radio_overview()}
-    assert not cards["433"]["stray"]
-    assert cards["868"]["stray"] and cards["868"]["shared_with"] == ["433"]
-
-
 def test_dual_setup_radio_overview_two_columns_no_strays(tmp_path):
-    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _RDY, "/tmp/loraconf868.sock": _RDY},
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf-r1.sock": _RDY, "/tmp/loraconf-r2.sock": _RDY},
                       cmdlines={100: ["loraham_daemon", "--radio", "both"]})
     _setup(svc, "loraham")
     cards = svc.radio_overview()

@@ -82,7 +82,7 @@ def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypat
     # W285/W286: one Home card per radio ("r1 · 433"), its band a property of the radio (B5's list in a band card before).
     from lhpc.core.services import ControllerService
     radios_fixture.write(tmp_path)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     doc = parse(web().get("/").get_data(as_text=True))
     cards = doc.find("div", class_="radio-col")
     assert [(c["data-radio-rid"], c["data-radio-band"]) for c in cards] == [("r1", "433"), ("r2", "868")]
@@ -102,7 +102,7 @@ def test_the_hardware_list_has_a_row_per_radio_naming_its_band(web, tmp_path, mo
     # Redesign (W250/W257): the radio cards left Home; the Hardware list has one row per radio, naming its band.
     from lhpc.core.services import ControllerService
     radios_fixture.write(tmp_path)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     page = web().get("/hardware").get_data(as_text=True)
     rows = re.findall(r'<tr class="hwrow"[^>]*data-rid="(r\d+)".*?</tr>', page, re.S)
     assert rows == ["r1", "r2"]

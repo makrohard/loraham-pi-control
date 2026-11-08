@@ -236,12 +236,12 @@ def test_start_log_resolves_exact_band_then_newest_then_plain(tmp_path):
     (d / "start-c.log").write_text("legacy\n")
     assert life.start_log(comp) == d / "start-c.log"          # 3. legacy fallback
 
-    (d / "start-c-433.log").write_text("433\n")
-    (d / "start-c-868.log").write_text("868\n")
-    os.utime(d / "start-c-433.log", (1000, 1000))             # make 868 the newest
-    os.utime(d / "start-c-868.log", (2000, 2000))
-    assert life.start_log(comp) == d / "start-c-868.log"      # 2. newest band, not the legacy
-    assert life.start_log(comp, "433") == d / "start-c-433.log"   # 1. exact band wins
+    (d / "start-c-433-r1.log").write_text("433\n")          # the baseline list: r1 on 433, r2 on 868
+    (d / "start-c-868-r2.log").write_text("868\n")
+    os.utime(d / "start-c-433-r1.log", (1000, 1000))          # make 868 the newest
+    os.utime(d / "start-c-868-r2.log", (2000, 2000))
+    assert life.start_log(comp) == d / "start-c-868-r2.log"   # 2. newest band, not the legacy
+    assert life.start_log(comp, "433") == d / "start-c-433-r1.log"   # 1. exact band wins
 
 
 def test_start_log_skips_symlinked_band_entries(tmp_path):
@@ -270,8 +270,8 @@ def test_logs_reads_the_band_suffixed_start_log(tmp_path):
 
 
 def test_tx_test_send_failure_is_handled(tmp_path):
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": b"STATS TXOK=0\n"},
-                      unix_errors={"/tmp/lora433.sock": "broken pipe"})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": b"STATS TXOK=0\n"},
+                      unix_errors={"/tmp/lora-r1.sock": "broken pipe"})   # r1: 433 on the baseline list
     res = _life(fake.system, tmp_path).run_daemon_tx_test("433", "X")
     assert not res.ok and "send failed" in res.detail
 

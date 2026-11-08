@@ -1491,11 +1491,11 @@ def _running_kiss(tmp_path):
     from lhpc.core.services import ControllerService
     (tmp_path / "config").mkdir(exist_ok=True)
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                        200: ["loraham-kiss-tnc", "--config", "X"]},
         listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
         owners={1: 200},
-        unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
         paths=Paths(runtime_root=tmp_path))
     _expose_kiss(svc)
     return svc

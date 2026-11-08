@@ -31,7 +31,6 @@ from pathlib import Path
 
 from .ap_subnet import DEFAULT as _AP_SUBNET_DEFAULT
 from .assets import asset_path
-from .daemon_control import ALLOWED_BANDS
 from .paths import PathContainmentError, Paths
 
 # Tracked defaults shipped with the controller (package data, wheel-safe).
@@ -458,22 +457,10 @@ class RadioConfig:
     def configured(self) -> bool:
         return self.hardware != "unset" and bool(self._preset_map)
 
-    @property
-    def active_bands(self) -> tuple:
-        # SERVED bands, ascending. Empty () when unconfigured.
-        return tuple(b for b in ALLOWED_BANDS if b in self._preset_map)
-
     def hw_preset(self, band: str) -> str:
         # Daemon `--hw` wire preset for a served band, or "" if this setup does not serve it.
         return self._preset_map.get(band, "")
 
-    @property
-    def radio_mode(self) -> str:
-        # DERIVED band-mode for dashboard narrowing / labels: both | 433 | 868 | unset.
-        bands = self.active_bands
-        if len(bands) == 2:
-            return "both"
-        return bands[0] if bands else "unset"
 
 
 # Webserver access modes (browser client-certificate authentication policy). There are

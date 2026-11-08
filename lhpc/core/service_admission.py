@@ -127,7 +127,7 @@ class AdmissionOpsMixin:
                                      if b != band and own & set(self._daemon_pids_for_band(b))}
                 # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
                 return self._daemon_claimed_bands()
-            # START: clamp to the active radio mode (M-1) — never lock/serve an excluded band, never
+            # START: clamp to the hardware list's bands (M-1, S2) — never lock/serve an excluded band, never
             # 'both'. A serve-all start is ALSO arbitrated away from bands a running radio-direct stack
             # owns, so this single source of truth for the conflict set + lock set matches what the
             # daemon will actually serve (it starts the free band(s), not the owned one).

@@ -207,20 +207,6 @@ def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, 
     assert _daemon_forms(doc, card) == {("stop", "r2", None), ("restart", "r2", None)}     # its own, by rid
 
 
-def test_a_radio_daemon_on_a_band_the_setup_no_longer_serves_keeps_a_card_with_its_stop(tmp_path, monkeypatch, web):
-    # W292: the stray band keeps its card; with a listed radio running there, the card is that radio's, its Stop by rid.
-    _box(tmp_path)
-    radios_fixture.write(tmp_path, (*radios_fixture.RADIOS, radios_fixture.R3))         # r3 on 868 too, its daemon idle
-    ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_hardware_setup("uputronics-433")
-    monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
-    fs = FakeSystem(unix_replies={"/tmp/loraconf-r2.sock": _READY})
-    doc = parse(web(system=fs.system).get("/").get_data(as_text=True))
-    card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
-    assert "radio-stray" in card.classes and "not in radio mode" in doc.within(card).text
-    assert _daemon_forms(doc, card) == {("stop", "r2", None)}
-    assert not doc.find("div", class_="radio-col", **{"data-radio-rid": "r3"})       # a card per RUNNING daemon there
-
-
 def test_add_hardware_sets_up_a_fresh_box_with_a_dual_board_in_one_step(tmp_path, web, csrf):
     # W292: the board setup lives on Add Hardware (once the daemon's Settings form). On a box with no hardware list
     # (the HAT row refuses there) it writes the list: both radios of a dual board in one step.
@@ -236,11 +222,10 @@ def test_add_hardware_sets_up_a_fresh_box_with_a_dual_board_in_one_step(tmp_path
 
 
 def test_add_hardware_serves_a_band_a_hat_was_added_on(tmp_path, web, csrf):
-    # W292 gap: a HAT added on 868 to a 433-only setup is not served until the setup names 868; Add Hardware sets it.
+    # S2 (was the W292 gap): the list decides, so a HAT added on 868 to a 433-only box is served at once.
     svc = lambda: ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))   # noqa: E731
     svc().set_hardware_setup("uputronics-433")
+    assert svc().radio_bands() == ("433",)
     c = web()
     c.post("/hardware/add-hat", data={"_csrf": csrf(c, "/hardware/add"), "board": "uputronics:ce1", "band": "868"})
-    assert svc().active_bands() == ("433",)
-    c.post("/hardware", data={"_csrf": csrf(c, "/hardware/add"), "hardware": "uputronics"})
-    assert svc().active_bands() == ("433", "868")
+    assert svc().radio_bands() == ("433", "868")

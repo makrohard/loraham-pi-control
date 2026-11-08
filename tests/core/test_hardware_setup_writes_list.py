@@ -59,7 +59,7 @@ def test_an_existing_list_is_never_touched_and_the_setup_still_names_the_bands(t
     before = os.readlink(path) if path.is_symlink() else path.read_bytes()
     res = svc.set_hardware_setup("waveshare-868")
     assert res.ok and res.details[-1] == ("  hardware list: exists, not changed (config/radios.toml names the radios; "
-                                          "a daemon starts for each band the board setup serves)")
+                                          "the list decides the bands)")
     assert (os.readlink(path) if path.is_symlink() else path.read_bytes()) == before
     assert config.load_config(Paths(runtime_root=tmp_path)).radio.hardware == "waveshare-868"
 
@@ -73,13 +73,19 @@ def test_a_refused_save_writes_nothing_and_fails(tmp_path, monkeypatch):
     assert not (tmp_path / "config" / "radios.toml").exists() and not (tmp_path / "config" / "local.toml").exists()
 
 
+@pytest.mark.no_default_hardware                  # the list is really absent (conftest's baseline list off)
 def test_a_path_that_cannot_be_judged_is_a_list(tmp_path, monkeypatch):
     # tri-state: a probe that raises is never "absent", so nothing is written over it
-    def boom(_p):
-        raise PermissionError("denied")
+    real, calls = radios.exists_at_all, []
+
+    def boom(p):                                   # the list write's probe raises; later reads see the real probe
+        calls.append(p)
+        if len(calls) == 1:
+            raise PermissionError("denied")
+        return real(p)
     monkeypatch.setattr(radios, "exists_at_all", boom)
     res = _svc(tmp_path).set_hardware_setup("loraham")
-    assert res.details[-1] == "  hardware list: exists, not changed (config/radios.toml names the radios; a daemon starts for each band the board setup serves)"
+    assert res.details[-1] == "  hardware list: exists, not changed (config/radios.toml names the radios; the list decides the bands)"
     assert not (tmp_path / "config" / "radios.toml").exists()
 
 

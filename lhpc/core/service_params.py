@@ -866,7 +866,7 @@ class ParamsConfigMixin:
             view["hardware"] = self.hardware_setup()
             view["hardware_configured"] = self.hardware_configured()
             view["hw_setups"] = self.hw_setups()
-            active = self.active_bands()
+            active = self.radio_bands()
             # The per-band +20 dBm permission switch (daemon 1.2.0 `--high-power`) beside the
             # Hardware selector: an explicit small control, because this page deliberately renders
             # none of the daemon's run params. Saved intent beside the running daemon's report.
@@ -1376,7 +1376,7 @@ class ParamsConfigMixin:
         if setup_id is None:
             cur = self.hardware_setup()
             return ActionResult(True, f"hardware setup: {cur} ({setups.get(cur, cur)})",
-                                details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}",
+                                details=[f"  served band(s): {', '.join(self.radio_bands()) or '(none)'}",
                                          "  choose from: " + ", ".join(setups)])
         if type(setup_id) is not str or setup_id not in setups:     # item 13: a list or dict is not hashable
             why = "" if type(setup_id) is str else f": a setup is named by a string (got {type(setup_id).__name__})"
@@ -1389,7 +1389,7 @@ class ParamsConfigMixin:
         except (OSError, _config.ConfigError) as exc:
             return ActionResult(False, f"could not save hardware setup: {exc}", details=[f"  {rows_line}"])
         self._invalidate_config()
-        return ActionResult(True, f"hardware setup set to {setup_id}", details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}", f"  {rows_line}"])
+        return ActionResult(True, f"hardware setup set to {setup_id}", details=[f"  served band(s): {', '.join(self.radio_bands()) or '(none)'}", f"  {rows_line}"])
 
     def meshcore_identity_candidates(self) -> tuple:
         """Files that may already hold the MeshCore identity, newest-authority first.

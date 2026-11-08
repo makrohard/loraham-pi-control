@@ -96,7 +96,7 @@ def test_interactive_run_shows_block_then_dismiss(tmp_path):
     # Chat's box shows only while its daemon band is USABLE (see the daemon-down test below), so fake a
     # READY daemon on 433 for the marked interactive app to show its command block.
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     svc.mark_interactive("chat", "433")                  # chat is 433-only
     ro = {r["band"]: r for r in svc.radio_overview()}
@@ -168,14 +168,14 @@ def test_blockers_only_real_band_conflicts(tmp_path):
         return ControllerService(system=fake.system, paths=Paths(runtime_root=p))
 
     # daemon serving 433 must NOT block meshcom (a 433 daemon-backed stack uses it)
-    s = make("a", {100: ["loraham_daemon"]}, {"/tmp/loraconf433.sock": reply})
+    s = make("a", {100: ["loraham_daemon"]}, {"/tmp/loraconf-r1.sock": reply})
     assert s.run_blockers("meshcom") == []
 
     # meshtastic running on 868 must NOT block a 433 stack, but MUST block 868 ones
     s = make("b", {200: ["meshtasticd"]})
     s._set_running_band("meshtastic", "868")
     assert s.run_blockers("meshcom") == []                       # 433 unaffected
-    assert any("868" in b["resource"] for b in s.run_blockers("meshcore"))  # real 868 conflict
+    assert any("r2" in b["resource"] for b in s.run_blockers("meshcore"))  # real 868 conflict
 
 
 def test_same_frequency_blocks_second_stack(tmp_path):
@@ -216,7 +216,7 @@ def test_start_log_omits_unconfirmed_boilerplate(short_tmp_path, set_call):
     # Radio params aren't echoed by the daemon; the start log stays concise (no verbose
     # "SENT but UNCONFIRMED — a radio param the daemon does not report back …").
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     (short_tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=short_tmp_path))
     set_call(svc)
@@ -230,7 +230,7 @@ def test_cli_start_same_sequence_as_web(short_tmp_path, set_call):
     # SAME _start_impl, so both perform the identical sequence: ensure the daemon (READY) -> apply
     # this stack's radio params -> start the stack's own components.
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     (short_tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=short_tmp_path))
     set_call(svc)
@@ -260,7 +260,7 @@ def test_app_start_uses_running_daemon_when_serving_band(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     res = svc.start("kiss", apply=True)
@@ -301,7 +301,7 @@ def test_dual_band_both_absent_starts_per_band(tmp_path):
 
 @pytest.mark.needs_session
 def test_dual_band_433_ready_starts_only_868(tmp_path):
-    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _RDY})
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf-r1.sock": _RDY})
     text = "\n".join(svc.start("daemon", apply=True).details)
     assert _band_starts([text]) == {"868"}                # ONLY the missing band...
     assert "daemon already serving 433" in text           # ...433 retained, no --radio both
@@ -310,7 +310,7 @@ def test_dual_band_433_ready_starts_only_868(tmp_path):
 
 @pytest.mark.needs_session
 def test_dual_band_868_ready_starts_only_433(tmp_path):
-    svc = _daemon_svc(tmp_path, {"/tmp/loraconf868.sock": _RDY})
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf-r2.sock": _RDY})
     text = "\n".join(svc.start("daemon", apply=True).details)
     assert _band_starts([text]) == {"433"}
     assert "daemon already serving 868" in text and "--radio both" not in text
@@ -318,7 +318,7 @@ def test_dual_band_868_ready_starts_only_433(tmp_path):
 
 def test_dual_band_reachable_not_ready_fails_without_relaunch(tmp_path):
     # 433 reachable but NOT READY -> fail that band, never relaunch a conflicting instance on it.
-    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _UNINIT, "/tmp/loraconf868.sock": _RDY})
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf-r1.sock": _UNINIT, "/tmp/loraconf-r2.sock": _RDY})
     res = svc.start("daemon", apply=True)
     text = "\n".join(res.details)
     assert not res.ok and "not READY" in text
@@ -376,7 +376,7 @@ def test_daemon_start_all_free_serves_both(tmp_path):
 
 def test_client_single_band_startup_unchanged(tmp_path):
     # A single-band client with its band already served applies once, no daemon relaunch.
-    svc = ControllerService(system=FakeSystem(unix_replies={"/tmp/loraconf433.sock": _RDY}).system,
+    svc = ControllerService(system=FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": _RDY}).system,
                             paths=Paths(runtime_root=tmp_path))
     (tmp_path / "x").mkdir()
     text = "\n".join(svc.start("kiss", apply=True).details)
@@ -569,9 +569,9 @@ _RDY6 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
 def test_no_false_conflict_daemon_433_meshtastic_868(tmp_path):
     # daemon serving ONLY 433 (for a 433 client) + meshtastic on 868 must NOT conflict.
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_chat"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham_chat"],
                        300: ["meshtasticd"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("meshtastic", "868")
     assert svc._observed_conflicts() == []
@@ -581,12 +581,12 @@ def test_real_conflict_daemon_both_vs_meshtastic_868(tmp_path):
     # daemon serving BOTH + meshtastic on 868 IS a real conflict — on 868 only.
     svc = ControllerService(system=FakeSystem(
         cmdlines_data={100: ["loraham_daemon", "--radio", "both"], 300: ["meshtasticd"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6, "/tmp/loraconf868.sock": _RDY6}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6, "/tmp/loraconf-r2.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("meshtastic", "868")
     msgs = [c.message for c in svc._observed_conflicts()]
-    assert any("loraham.radio.868" in m for m in msgs)
-    assert not any("loraham.radio.433" in m for m in msgs)
+    assert any("loraham.radio.r2" in m for m in msgs)
+    assert not any("loraham.radio.r1" in m for m in msgs)
 
 
 @pytest.mark.needs_session
@@ -597,8 +597,8 @@ def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
     b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\nsleep .1\n"); os.chmod(b, 0o755)
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_voice"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham_voice"]},
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "433")
     for b in ("433", "868"):                              # the SAVED daemon params (Settings)
@@ -616,8 +616,8 @@ def test_second_component_start_keeps_the_running_bands_config(tmp_path):
     # that band: the app is already up and never re-sends its frequency, so the band default would
     # replace it and the whole stack would go deaf while every status still reads healthy.
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham-kiss-tnc"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-kiss-tnc"]},
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("kiss", "433")
     res = svc.run_action("start", "loraham-kiss-serial", apply=True)
@@ -666,8 +666,8 @@ def test_daemon_stop_cascade_stops_dependents_before_daemon(tmp_path, monkeypatc
 # --- A2: client stop releases the ACTUAL daemon band ----------------------------------------
 
 @pytest.mark.parametrize("stack,band,sock,other", [
-    pytest.param("voice", "868", "/tmp/loraconf868.sock", "433", id="voice-ran-on-868"),
-    pytest.param("kiss", "433", "/tmp/loraconf433.sock", "868", id="kiss-ran-on-433"),
+    pytest.param("voice", "868", "/tmp/loraconf-r2.sock", "433", id="voice-ran-on-868"),
+    pytest.param("kiss", "433", "/tmp/loraconf-r1.sock", "868", id="kiss-ran-on-433"),
 ])
 def test_client_release_actual_band(tmp_path, stack, band, sock, other):
     svc = ControllerService(system=FakeSystem(
@@ -680,7 +680,7 @@ def test_client_release_actual_band(tmp_path, stack, band, sock, other):
 
 def test_daemon_release_failure_makes_client_stop_nonsuccess(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "433")
     orig = ControllerService.stop
     def fake(self, target, apply=False, cascade=False, band="", release_daemon=True, **kw):
@@ -705,7 +705,7 @@ def _msvc(tmp_path, band):
 
 def test_same_band_meshtastic_blocks_daemon_start(tmp_path):
     svc = _msvc(tmp_path, "868")
-    assert any("868" in bl["resource"] for bl in svc.run_blockers("daemon", radio="868"))
+    assert any("r2" in bl["resource"] for bl in svc.run_blockers("daemon", radio="868"))
 
 
 def test_opposite_band_meshtastic_permits_daemon_start(tmp_path):
@@ -717,10 +717,10 @@ def test_radio_both_arbitrates_away_the_owned_band(tmp_path):
     # a serve-all/both daemon start ARBITRATES an owned band away and serves only the free
     # band — it never blocks or stops a running radio-direct owner (symmetric with meshtastic start
     # stopping the daemon band). An EXPLICIT single-band request still conflicts (tests above).
-    assert not any("868" in bl["resource"]
+    assert not any("r2" in bl["resource"]
                    for bl in _msvc(tmp_path, "868").run_blockers("daemon", radio="both"))
     assert _msvc(tmp_path, "868")._daemon_arbitrated_bands("both") == (["433"], {"868": "meshtastic"})
-    assert not any("433" in bl["resource"]
+    assert not any("r1" in bl["resource"]
                    for bl in _msvc(tmp_path, "433").run_blockers("daemon", radio="both"))
     assert _msvc(tmp_path, "433")._daemon_arbitrated_bands("both") == (["868"], {"433": "meshtastic"})
 
@@ -730,29 +730,29 @@ def test_explicit_single_band_request_is_never_arbitrated_away(tmp_path):
     # (surfaced as a blocker), not be silently skipped.
     svc = _msvc(tmp_path, "868")
     assert svc._daemon_arbitrated_bands("868") == (["868"], {})
-    assert any("868" in bl["resource"] for bl in svc.run_blockers("daemon", radio="868"))
+    assert any("r2" in bl["resource"] for bl in svc.run_blockers("daemon", radio="868"))
 
 
 def test_daemon_start_lock_keys_track_radio_mode(tmp_path):
     svc = _svc(tmp_path)
     r433 = [k for k in svc._operation_resource_keys("daemon", radio="433") if "radio" in k]
     rboth = [k for k in svc._operation_resource_keys("daemon", radio="both") if "radio" in k]
-    assert r433 == ["loraham.radio.433"]
-    assert rboth == ["loraham.radio.433", "loraham.radio.868"]
+    assert r433 == ["loraham.radio.r1"]
+    assert rboth == ["loraham.radio.r1", "loraham.radio.r2"]
 
 
 def test_daemon_perband_stop_locks_band_and_both_collateral(tmp_path):
     _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     # separate per-band instances: stopping 433 locks only 433
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={10: ["loraham_daemon", "--radio", "433"], 11: ["loraham_daemon", "--radio", "868"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY, "/tmp/loraconf868.sock": _RDY}).system,
+        cmdlines_data={10: ["loraham_daemon", "--radio", "433", "--id", "r1"], 11: ["loraham_daemon", "--radio", "868", "--id", "r2"]},
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY, "/tmp/loraconf-r2.sock": _RDY}).system,
         paths=Paths(runtime_root=tmp_path))
     assert svc._operation_bands("daemon", band="433", op="stop") == {"433"}
     # ONE --radio both process serves both: stopping via 433 is collateral for 868 -> lock both
     svc2 = ControllerService(system=FakeSystem(
         cmdlines_data={20: ["loraham_daemon", "--radio", "both"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY, "/tmp/loraconf868.sock": _RDY}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY, "/tmp/loraconf-r2.sock": _RDY}).system,
         paths=Paths(runtime_root=tmp_path))
     assert svc2._operation_bands("daemon", band="433", op="stop") == {"433", "868"}
 
@@ -762,9 +762,9 @@ def test_daemon_perband_stop_locks_band_and_both_collateral(tmp_path):
 def _healthy_kiss(tmp_path):
     _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     return ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                        200: ["loraham-kiss-tnc", "--config", "X"]},
-        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf433.sock": _RDY}).system,
+        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf-r1.sock": _RDY}).system,
         paths=Paths(runtime_root=tmp_path))
 
 
@@ -788,8 +788,8 @@ def test_healthy_start_with_saved_fsk_sends_no_set(tmp_path, set_call):
 def test_stopped_client_with_ready_daemon_applies_before_launch(tmp_path, set_call):
     _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     svc = ControllerService(system=FakeSystem(       # daemon ready 433; kiss NOT running
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY}).system, paths=Paths(runtime_root=tmp_path))
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"]},
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY}).system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     res = svc.start("kiss", apply=True)
     text = "\n".join(res.details)
@@ -813,7 +813,7 @@ def test_per_band_daemon_stop_locks_only_dependents_that_can_run_on_that_band(tm
     # part of an 868 stop: locking it made the stop refuse "busy" whenever one was starting.
     keys = _svc(tmp_path)._lifecycle_lock_keys("stop", "daemon", band="868", cascade=True)
     assert {"lifecycle.meshcore", "lifecycle.kiss"} <= set(keys)
-    assert not {"lifecycle.chat", "lifecycle.meshcom", "claim.loraham.radio.433"} & set(keys)
+    assert not {"lifecycle.chat", "lifecycle.meshcom", "claim.loraham.radio.r1"} & set(keys)
     # a whole-daemon stop, and an 868 stop whose process also serves 433, still lock them
     assert "lifecycle.chat" in _svc(tmp_path)._lifecycle_lock_keys("stop", "daemon", cascade=True)
     both = ControllerService(system=FakeSystem(
@@ -825,18 +825,18 @@ def test_per_band_daemon_stop_locks_only_dependents_that_can_run_on_that_band(tm
 def test_voice_868_stop_locks_only_868(tmp_path):
     svc = _svc(tmp_path); svc._set_running_band("voice", "868")
     keys = _keys(svc, "stop", "voice")
-    assert "claim.loraham.radio.868" in keys and "claim.loraham.radio.433" not in keys
+    assert "claim.loraham.radio.r2" in keys and "claim.loraham.radio.r1" not in keys
 
 
 def test_kiss_868_restart_locks_868(tmp_path):
     svc = _svc(tmp_path); svc._set_running_band("kiss", "868")
-    assert "claim.loraham.radio.868" in _keys(svc, "restart", "kiss", band="868")
+    assert "claim.loraham.radio.r2" in _keys(svc, "restart", "kiss", band="868")
 
 
 def test_voice_433_restart_to_868_locks_both(tmp_path):
     svc = _svc(tmp_path); svc._set_running_band("voice", "433")
     keys = _keys(svc, "restart", "voice", band="868")
-    assert "claim.loraham.radio.433" in keys and "claim.loraham.radio.868" in keys
+    assert "claim.loraham.radio.r1" in keys and "claim.loraham.radio.r2" in keys
 
 
 def _daemon_both(tmp_path, socks):
@@ -846,18 +846,18 @@ def _daemon_both(tmp_path, socks):
 
 
 def test_daemon_both_restart_to_433_locks_both(tmp_path):
-    svc = _daemon_both(tmp_path, {"/tmp/loraconf433.sock": _RDYP1, "/tmp/loraconf868.sock": _RDYP1})
+    svc = _daemon_both(tmp_path, {"/tmp/loraconf-r1.sock": _RDYP1, "/tmp/loraconf-r2.sock": _RDYP1})
     keys = _keys(svc, "restart", "daemon", radio="433")
-    assert "claim.loraham.radio.433" in keys and "claim.loraham.radio.868" in keys
+    assert "claim.loraham.radio.r1" in keys and "claim.loraham.radio.r2" in keys
 
 
 def test_daemon_both_perband_stop_locks_both_even_if_socket_down(tmp_path):
-    svc = _daemon_both(tmp_path, {"/tmp/loraconf433.sock": _RDYP1})   # 868 socket unreachable
+    svc = _daemon_both(tmp_path, {"/tmp/loraconf-r1.sock": _RDYP1})   # 868 socket unreachable
     assert svc._operation_bands("daemon", band="433", op="stop") == {"433", "868"}
 
 
 def test_whole_daemon_stop_locks_process_served_band_socket_down(tmp_path):
-    svc = _daemon_both(tmp_path, {"/tmp/loraconf433.sock": _RDYP1})   # 868 socket unreachable
+    svc = _daemon_both(tmp_path, {"/tmp/loraconf-r1.sock": _RDYP1})   # 868 socket unreachable
     assert svc._operation_bands("daemon", op="stop") == {"433", "868"}
 
 
@@ -892,7 +892,7 @@ def test_daemon_cascade_both_bands_no_inner_release(tmp_path, monkeypatch):
 
 def test_standalone_client_releases_daemon_once(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
-        unix_replies={"/tmp/loraconf868.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
+        unix_replies={"/tmp/loraconf-r2.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "868")
     calls = _spy_stop(monkeypatch)
     assert svc.stop("voice", apply=True).ok
@@ -903,9 +903,9 @@ def test_no_false_conflict_meshcom433_meshtastic868_without_marker(tmp_path):
     # Reported bug: MeshCom(433) + Meshtastic(868) showed false conflicts on BOTH bands when the
     # meshtastic running-band marker was absent (it kept both radio claims). It must limit to 868.
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["meshtasticd"],
                        300: ["qemu-system-arm"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system,   # daemon serves only 433
+        unix_replies={"/tmp/loraconf-r1.sock": _RDYP1}).system,   # daemon serves only 433
         paths=Paths(runtime_root=tmp_path))
     # deliberately NO meshtastic running-band marker set
     assert svc._observed_conflicts() == []
@@ -916,7 +916,7 @@ def test_no_false_conflict_meshcom433_meshtastic868_without_marker(tmp_path):
 def test_dead_conf_433_process_blocks_replacement_daemon(tmp_path):
     # observed --radio 433 with unreachable CONF -> a replacement 433 daemon is NOT launched.
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={10: ["loraham_daemon", "--radio", "433"]}).system,   # no 433 socket = CONF down
+        cmdlines_data={10: ["loraham_daemon", "--radio", "433", "--id", "r1"]}).system,   # no 433 socket = CONF down
         paths=Paths(runtime_root=tmp_path))
     res = svc.run_action("start", "daemon", apply=True)
     assert any("still holds the radio" in d and "433" in d for d in res.details)
@@ -927,18 +927,18 @@ def test_dead_conf_868_of_both_blocks_868_daemon_and_direct_stack(tmp_path):
     # --radio both with 868 CONF down still claims 868.
     svc = ControllerService(system=FakeSystem(
         cmdlines_data={20: ["loraham_daemon", "--radio", "both"], 200: ["meshtasticd"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system,          # 868 CONF down
+        unix_replies={"/tmp/loraconf-r1.sock": _RDYP1}).system,          # 868 CONF down
         paths=Paths(runtime_root=tmp_path))
     assert "868" in svc._daemon_claimed_bands()
-    assert any("868" in b["resource"] for b in svc.run_blockers("meshtastic"))   # blocks direct-SPI 868
+    assert any("r2" in b["resource"] for b in svc.run_blockers("meshtastic"))   # blocks direct-SPI 868
     svc._set_running_band("meshtastic", "868")
-    assert any("loraham.radio.868" in c.message for c in svc._observed_conflicts())  # true conflict
+    assert any("loraham.radio.r2" in c.message for c in svc._observed_conflicts())  # true conflict
 
 
 def test_independent_433_868_daemons_non_conflicting(tmp_path):
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={30: ["loraham_daemon", "--radio", "433"], 31: ["loraham_daemon", "--radio", "868"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDYP1, "/tmp/loraconf868.sock": _RDYP1}).system,
+        cmdlines_data={30: ["loraham_daemon", "--radio", "433", "--id", "r1"], 31: ["loraham_daemon", "--radio", "868", "--id", "r2"]},
+        unix_replies={"/tmp/loraconf-r1.sock": _RDYP1, "/tmp/loraconf-r2.sock": _RDYP1}).system,
         paths=Paths(runtime_root=tmp_path))
     assert svc._observed_conflicts() == []
 
@@ -946,7 +946,7 @@ def test_independent_433_868_daemons_non_conflicting(tmp_path):
 def test_perband_daemon_stop_blocks_unknown_band_dependent(tmp_path):
     svc = ControllerService(system=FakeSystem(
         cmdlines_data={20: ["loraham_daemon", "--radio", "both"], 300: ["loraham-kiss-tnc"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDYP1, "/tmp/loraconf868.sock": _RDYP1}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": _RDYP1, "/tmp/loraconf-r2.sock": _RDYP1}).system,
         paths=Paths(runtime_root=tmp_path))
     # kiss running, band-switchable, NO marker -> per-band stop is blocked, stops nothing
     res = svc.stop("daemon", apply=True, band="433")
@@ -965,9 +965,9 @@ def test_whole_daemon_stop_cascades_unknown_band_dependent(tmp_path, monkeypatch
 
 def test_healthy_start_stop_owners_stops_no_owner(tmp_path, monkeypatch, set_call):
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                        200: ["loraham-kiss-tnc", "--config", "X"]},
-        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system,
+        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf-r1.sock": _RDYP1}).system,
         paths=Paths(runtime_root=tmp_path))
     calls = _spy_stop(monkeypatch)
     set_call(svc)
@@ -981,7 +981,7 @@ def test_default_restart_locks_only_running_band(tmp_path):
     # emulate restart()'s pre-guard band resolution:
     rband = svc._effective_band("kiss", "")
     keys2 = [k for k in svc._lifecycle_lock_keys("restart", "kiss", band=rband) if "radio" in k]
-    assert keys2 == ["claim.loraham.radio.868"]        # only the running band
+    assert keys2 == ["claim.loraham.radio.r2"]        # only the running band
 
 
 # --- a cross-stack chain member already up on the OTHER band ------------------
@@ -999,8 +999,8 @@ def _band_svc(set_call, tmp_path, cmdlines, socks, bands):
     return svc
 
 
-_D433 = {100: ["loraham_daemon", "--radio", "433"], 200: ["/x/loraham-kiss-tnc", "--config", "c"]}
-_S433 = {"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+_D433 = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["/x/loraham-kiss-tnc", "--config", "c"]}
+_S433 = {"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
 
 
 def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path, set_call):
@@ -1039,9 +1039,9 @@ def test_a_bandless_start_is_judged_on_the_band_it_will_actually_use(tmp_path, s
     test masked the hole by putting kiss on 433, the one band that cannot mismatch the primary.)
     The rule now judges the RESOLVED band: mismatch refused, match untouched."""
     # kiss live on 868, graywolf's primary is 433 -> the resolved band mismatches -> DENIED.
-    _D868 = {100: ["loraham_daemon", "--radio", "868"],
+    _D868 = {100: ["loraham_daemon", "--radio", "868", "--id", "r2"],
              200: ["/x/loraham-kiss-tnc", "--config", "c"]}
-    _S868 = {"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+    _S868 = {"/tmp/loraconf-r2.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
     svc = _band_svc(set_call, tmp_path, _D868, _S868, {"kiss": "868"})
     res = svc.run_action("start", "graywolf", apply=False)
     assert res.ok is False
@@ -1058,9 +1058,9 @@ def test_restart_is_refused_by_the_dependency_band_rule_before_its_stop(tmp_path
     the _restart_impl docstring promises cannot happen). The rule now runs in restart's
     preflight, before anything is stopped."""
     from lhpc.core.config import save_operator_config
-    _D868 = {100: ["loraham_daemon", "--radio", "868"],
+    _D868 = {100: ["loraham_daemon", "--radio", "868", "--id", "r2"],
              200: ["/x/loraham-kiss-tnc", "--config", "c"]}
-    _S868 = {"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+    _S868 = {"/tmp/loraconf-r2.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
     svc = _band_svc(set_call, tmp_path, _D868, _S868, {"kiss": "868", "graywolf": "433"})
     save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
@@ -1082,11 +1082,11 @@ def _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch):
     a fake process is not an LHPC-owned launch, so the snapshot alone never reads it RUNNING."""
     from lhpc.core.probes.backends import Listener
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                        200: ["/x/loraham-kiss-tnc", "--config", "c"]},
         listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
         owners={1: 200},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     monkeypatch.setattr(type(svc), "stop_dependents",
@@ -1166,7 +1166,7 @@ def _blockers_until_a_stop(monkeypatch, stopped, holders):
     """`run_blockers` reporting `holders` while nothing has been stopped yet, none afterwards."""
     monkeypatch.setattr(ControllerService, "run_blockers",
                         lambda self, t, band="", radio="", inst=None: [] if stopped else [
-                            {"resource": "loraham.radio.433", "holder": h, "holder_stack": s}
+                            {"resource": "loraham.radio.r1", "holder": h, "holder_stack": s}
                             for h, s in holders])
 
 

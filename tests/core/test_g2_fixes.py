@@ -133,7 +133,8 @@ def test_r1_control_two_enabled_radios_on_a_band_apply_nothing(tmp_path):
     assert sets == []
 
 
-@pytest.mark.parametrize("case", ["no list", "invalid list", "radio disabled"])
+@pytest.mark.parametrize("case", [pytest.param("no list", marks=pytest.mark.no_default_hardware),   # really absent
+                                  "invalid list", "radio disabled"])
 def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(tmp_path, case):
     """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value. Without
     a list the stack's value goes to the 0.13.x band socket (the upgrade case); with a list that names no one radio
@@ -154,6 +155,21 @@ def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(
         if case == "radio disabled":
             assert res.summary == "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz"
         assert sets == []
+
+
+@pytest.mark.parametrize("setup", ["uputronics-868", "uputronics"])
+def test_k1_an_explicit_band_the_list_does_not_serve_is_refused_never_remapped(tmp_path, setup):
+    """K1 (S2): the list has one radio, on 868; Apply on 433 is refused by name and sends nothing to 868's radio. RED
+    before K1 with the 868-only setup: the setup's single band remapped the 433 request onto 868 (applied 17/17)."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.services import ControllerService
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(p, setup)
+    _write(tmp_path, [_radios().Radio("r1", "b", "uputronics", "868", ce="ce1")])
+    fake = _ConfDaemon(serve={"/tmp/loraconf-r1.sock": _status("r1", "868"), "/tmp/loraconf868.sock": _status("-", "868")})
+    res = ControllerService(system=fake.system, paths=p).apply_daemon_params("daemon", "433")
+    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz")
+    assert fake.sent == []
 
 
 @pytest.mark.parametrize("key,value", [("cadrssi_433", "zzz"), ("ocp_433", "nope"), ("cadmon_433", "maybe")])

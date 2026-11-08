@@ -38,7 +38,7 @@ def box(tmp_path, monkeypatch, capsys):
         assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
         if listed:
             (tmp_path / "config" / "instances.toml").write_text(listed)
-        for name, value in (("hardware_configured", lambda self: True), ("active_bands", lambda self: ["433", "868"]),
+        for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
                             ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
                             ("_source_present", lambda self, c: True), ("_verify_band_up", lambda self, b: True)):
             monkeypatch.setattr(ControllerService, name, value)

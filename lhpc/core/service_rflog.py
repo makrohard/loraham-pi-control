@@ -169,7 +169,7 @@ class RflogOpsMixin:
         e, jband = _rflog.by_job(job)
         stack_band = next((c.band for c in self.stack(e.surface).components if c.band), "")
         shown = (band if band in self.RADIO_BANDS else "") or radio_start.rf_band(self, jband) \
-            or self.running_band(e.surface, stack_band) or (self.active_bands() or self.RADIO_BANDS)[0]
+            or self.running_band(e.surface, stack_band) or (self.radio_bands() or self.RADIO_BANDS)[0]
         stacks = []
         for x in self._rflog_entries():
             if x.banded:

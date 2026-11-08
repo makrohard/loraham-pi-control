@@ -52,7 +52,7 @@ def test_a_refused_usb_radio_is_never_launched(tmp_path, monkeypatch):
     from lhpc.core.lifecycle import Lifecycle
     svc = _svc(tmp_path, radios.Radio("r2", "stick", "meshstick-1262", "868", usb_port="1-1.9"), monkeypatch)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
     monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")

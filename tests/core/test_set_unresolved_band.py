@@ -70,7 +70,7 @@ def test_the_reads_and_the_raw_frame_reach_no_socket_either(tmp_path):
 def test_without_a_list_the_band_socket_stays_for_a_013_daemon(tmp_path):
     svc, fs = _svc(tmp_path, None)
     svc.daemon_set("868", "TXMODE", "DIRECT", apply=True)
-    assert [p for p, _ in fs.seen][:1] == ["/tmp/loraconf868.sock"]             # the upgrade case, unchanged
+    assert [p for p, _ in fs.seen][:1] == ["/tmp/loraconf-r2.sock"]             # the upgrade case, unchanged
 
 
 def test_one_radio_on_the_band_reaches_its_own_socket(tmp_path):

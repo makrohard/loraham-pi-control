@@ -92,7 +92,7 @@
           {{ g.hardware_block }}
           <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">configure &rarr;</a></div>
       {% elif g.radio_block %}
-        <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio mode</span> —
+        <div class="depnote depnote-warn"><span class="ver ver-yellow">Hardware list</span> —
           this stack {{ g.radio_block }}</div>
       {% endif %}
       {% if g.restart_required %}

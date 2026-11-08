@@ -216,13 +216,14 @@ class DaemonParamsMixin:
                             details=list(r.details or []), data=dict(r.data or {}))
 
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
-        """The single band the daemon-params panel/apply uses: the requested band if valid, else
-        the stack's fixed band (from its band-component), else the first served band; "" when no hardware is configured."""
-        active = self.active_bands()                              # served bands (radio mode)
-        if not active:
-            return ""                                             # no hardware configured -> no band
-        if band in active:
+        """The single band the daemon-params panel/apply uses: the requested band if valid (never remapped: a band
+        the list does not serve is refused downstream, by name), else the stack's fixed band (from its
+        band-component), else the first served band; "" when nothing is requested and no band is served."""
+        if band in daemon_control.ALLOWED_BANDS:
             return band
+        active = self.radio_bands()                              # the bands the hardware list serves
+        if not active:
+            return ""
         s = self._owner_stack(target)
         fixed = sorted({c.band for c in (s.components if s else ()) if c.band} & set(active))
         return fixed[0] if fixed else active[0]
@@ -233,9 +234,8 @@ class DaemonParamsMixin:
         The accepted POWER range depends on it: daemon 1.0.0 enforces 2..17 on SX127x (below 2
         RadioLib drives RFO instead of PA_BOOST, and 18..20 are refused) against 0..20 on SX1262.
         "" deliberately narrows nothing — see `daemon_control.int_range`."""
-        from . import config as cfgmod
         fam = radio_start.chip_family(self, band, rid)
-        return fam if fam is not None else cfgmod.hw_preset_family(self.hw_preset_for_band(band))
+        return fam or ""
 
     def _daemon_feed_source(self, band: str, rid: str = "") -> Path | None:
         """The SINGLE feed source log of one radio's daemon (item 16: radio_start.start_log_name), or None. Never a
@@ -412,13 +412,13 @@ class DaemonParamsMixin:
             return {}
         # Applicable bands = the SAME source config_view uses for view.bands (never new band logic).
         if is_daemon:
-            applicable = list(self.active_bands())                   # the daemon serves the active band(s)
+            applicable = list(self.radio_bands())                   # the daemon serves the active band(s)
         else:
             applicable = [b for b in (list(self.stack_bands(target))
                                       or [self._effective_daemon_band(target, "")]) if b]
         if not applicable:
             return {}            # no hardware configured -> no served band -> nothing to tune
-        b = band if band in applicable else applicable[0]            # CLAMP to a served band (radio mode)
+        b = band if band in applicable else applicable[0]            # CLAMP to a served band (the hardware list's)
         # "Apply live" only makes sense against a live daemon: the daemon page always, or an
         # app stack that is currently running (its daemon dependency is up).
         can_apply = is_daemon or self.stack_running(sid)

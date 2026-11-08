@@ -24,8 +24,10 @@ _OLD_STATUS = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90 
 
 def _svc(tmp_path, setup="uputronics", status=None):
     p = Paths(runtime_root=tmp_path)
+    from lhpc.core import radio_start
+    assert radio_start.setup_radios(p, setup)[0]        # S2: the list `lhpc hardware <setup>` writes decides the board
     cfgmod.save_hardware_setup(p, setup)
-    replies = {dc.conf_socket(b): status for b in ("433", "868")} if status is not None else {}
+    replies = {dc.conf_socket(r): status for r in ("r1", "r2")} if status is not None else {}   # the baseline list
     fs = FakeSystem(unix_replies=replies)
     return ControllerService(system=fs.system, paths=p), fs
 

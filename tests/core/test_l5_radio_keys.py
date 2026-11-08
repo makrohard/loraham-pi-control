@@ -11,6 +11,7 @@ from lhpc.core.services import ControllerService
 from lhpc.core.status import StatusProber
 
 NO_LIST = None
+_ABSENT = pytest.mark.no_default_hardware     # the list is really absent (conftest's baseline list off)
 TWO_868 = (radios.Radio("r1", "a", "uputronics", "868", ce="ce0"), radios.Radio("r2", "b", "uputronics", "868", ce="ce1"))
 MIXED = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "waveshare-sx1262", "868"))
 READY = b"STATUS RADIO=READY ID=%s BOUND=- TXMODE=MANAGED\n"
@@ -25,7 +26,8 @@ def _svc(tmp_path, rows, **fake):
 @pytest.mark.parametrize("rows,band,name", [
     (radios_fixture.RADIOS, "433", "r1"), (radios_fixture.RADIOS, "868", "r2"),
     (TWO_868, "868", "868"),                     # two radios of one band share the band key (B4-D39)
-    (NO_LIST, "433", "433"), ((), "868", "868"),
+    pytest.param(NO_LIST, "433", "433", marks=_ABSENT),
+    ((), "433", "433"),                          # S2: an empty list serves no band (868 is K6's per-rid chooser)
     ((radios.Radio("r1", "low", "loraham", "433", enabled=False),), "433", "433"),
 ])
 def test_a_bands_claim_and_lock_keys_name_its_one_radio(tmp_path, rows, band, name):
@@ -88,6 +90,7 @@ def test_status_lists_every_radios_conf_socket(tmp_path):
     assert [o.spec.address for o in obs] == ["/tmp/loraconf-r1.sock", "/tmp/loraconf-r2.sock"]
 
 
+@_ABSENT
 def test_status_without_a_list_has_no_daemon_socket(tmp_path):
     sys = FakeSystem().system
     comp = next(c for st in ControllerService(system=sys, paths=Paths(runtime_root=tmp_path)).stacks()
@@ -100,7 +103,7 @@ def test_the_overview_lists_each_radio_of_a_band_with_its_own_daemon(tmp_path):
     # W6-3: the 868 entry names both radios, each read on its own socket; r2's daemon is not up.
     svc = _svc(tmp_path, TWO_868, unix_replies={"/tmp/loraconf-r1.sock": READY % b"r1"})
     monkey_bands = {"433", "868"}
-    svc.active_bands = lambda: sorted(monkey_bands)
+    svc.radio_bands = lambda: sorted(monkey_bands)
     entry = next(e for e in svc.radio_overview() if e["band"] == "868")
     assert [(r["rid"], r["reachable"], r["ready"]) for r in entry["radios"]] == [("r1", True, True),
                                                                                     ("r2", False, False)]
@@ -112,12 +115,13 @@ def test_the_overview_leaves_out_a_disabled_radio(tmp_path):
     rows = (radios.Radio("r1", "a", "uputronics", "868", ce="ce0"),
             radios.Radio("r2", "b", "uputronics", "868", ce="ce1", enabled=False))
     svc = _svc(tmp_path, rows, unix_replies={"/tmp/loraconf-r2.sock": READY % b"r2"})
-    svc.active_bands = lambda: ["868"]
+    svc.radio_bands = lambda: ["868"]
     assert [r["rid"] for r in next(e for e in svc.radio_overview() if e["band"] == "868")["radios"]] == ["r1"]
 
 
 @pytest.mark.parametrize("rows,band,family", [(MIXED, "433", "sx127x"), (MIXED, "868", "sx1262"),
-                                              (TWO_868, "868", None), (NO_LIST, "868", None)])
+                                              (TWO_868, "868", None),
+                                              pytest.param(NO_LIST, "868", None, marks=_ABSENT)])
 def test_w5_2_the_chip_family_is_the_radio_rows_model(tmp_path, rows, band, family):
     svc = _svc(tmp_path, rows)
     assert radio_start.chip_family(svc, band) == family
@@ -138,7 +142,7 @@ def test_w4_7_a_per_band_stop_never_signals_a_daemon_it_does_not_own(tmp_path):
     # A 0.13.x daemon (`--radio 433`, no `--id`, no ownership record) on r1's band: the stop is not verified,
     # names the pid, and signals nothing (record-driven stop, A §2.3).
     from lhpc.core.outcomes import Outcome
-    svc = _svc(tmp_path, radios_fixture.RADIOS, cmdlines_data={4242: ["loraham_daemon", "--radio", "433"]})
+    svc = _svc(tmp_path, radios_fixture.RADIOS, cmdlines_data={4242: ["loraham_daemon", "--radio", "433", "--id", "r1"]})
     res = svc.stop("daemon", apply=True, band="433")
     assert not res.ok
     assert [(r.component, r.outcome) for r in res.results] == [("loraham-daemon", Outcome.MANUAL_REQUIRED)]

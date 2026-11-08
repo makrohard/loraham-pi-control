@@ -2158,36 +2158,26 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         """True once the operator has picked a real hardware setup (not 'unset')."""
         return self.config().radio.configured
 
-    def hw_preset_for_band(self, band: str) -> str:
-        """The daemon `--hw` wire preset for a served band under the current setup, or '' if the
-        setup does not serve that band / no hardware is configured."""
-        return self.config().radio.hw_preset(band)
-
     def hw_setups(self) -> list:
         """The hardware-setup catalog for the UI/CLI: [(id, label), …] in display order."""
         return [(sid, label) for sid, (label, _map) in HW_SETUPS.items()]
 
-    def radio_mode(self) -> str:
-        """DERIVED band-mode for the dashboard narrowing / labels: 'both' | '433' | '868' | 'unset'."""
-        return self.config().radio.radio_mode
-
-    def active_bands(self) -> tuple:
-        """The bands the current hardware setup OFFERS / SERVES / STARTS — a subset of RADIO_BANDS,
-        and EMPTY () when no hardware is configured. Use this for what lhpc shows/serves/starts; use
-        RADIO_BANDS for what lhpc can still detect/manage."""
-        return self.config().radio.active_bands
+    def radio_bands(self) -> tuple:
+        """The bands of the hardware list's enabled radios, ascending; () without a valid list (only a valid list has
+        rows). The list decides what lhpc shows, serves and starts (S2), never a global hardware setup."""
+        from . import radios
+        rows = radios.load(self._paths).radios
+        return tuple(b for b in ALLOWED_BANDS if any(r.enabled and r.band == b for r in rows))
 
     def band_active(self, band: str) -> bool:
-        """True iff `band` is served by the current hardware setup (the SET/offer gate)."""
-        return band in self.active_bands()
+        """True iff an enabled radio of the hardware list is on `band` (the SET/offer gate)."""
+        return band in self.radio_bands()
 
-    def _daemon_serve_bands(self, radio: str = "") -> list:
-        """The explicit single band(s) a daemon start SERVES, from a requested `radio` value — ALWAYS
-        clamped to the active mode and ALWAYS explicit (lhpc runs one
-        process per band). A single active band -> [that band]; anything else (empty, a dual-band value,
-        or the excluded band) -> the active band(s). radio_mode='both' therefore serves TWO processes."""
-        active = list(self.active_bands())
-        return [radio] if radio in ALLOWED_BANDS and radio in active else active
+    def _daemon_bands(self, radio: str = "") -> list:
+        """The band(s) a daemon start serves: the requested one when a radio of the list is on it, else every band of
+        the list."""
+        have = list(self.radio_bands())
+        return [radio] if radio in have else have
 
     # -- CALL/node identity enforcement (plan and apply, on the saved configuration) ----
 

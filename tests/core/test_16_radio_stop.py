@@ -104,7 +104,7 @@ def test_a_listed_instance_that_does_not_run_is_not_stopped(box, monkeypatch):
 def test_a_stray_daemon_on_a_band_the_box_does_not_serve_stays_stoppable(box, monkeypatch):
     # A stop is never refused by its band: a daemon left on 868 after the list moved to 433 is still stopped.
     svc, stops = box
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433"])
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
     assert svc.stop("daemon", apply=True, band="868").ok
     assert stops == [("loraham-daemon", "868", None, ())]

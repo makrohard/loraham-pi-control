@@ -550,7 +550,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             welcome=service.auto_install_welcome(),
             welcome_dismissed=service.welcome_note_dismissed(),
             tasks=tasks,
-            radio_mode=service.radio_mode(),
+            radio_bands=service.radio_bands(),
             hardware_configured=service.hardware_configured(),
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
             attention=(_att := _attention_banner()),              # W272/W273: the "Needs attention" banner

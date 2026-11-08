@@ -21,7 +21,7 @@ def test_a_usb_radios_daemon_start_reaches_the_launch_with_its_preset(tmp_path, 
     monkeypatch.setattr(usb_access, "scan", lambda *a, **k: real_scan(STICKS))
     monkeypatch.setattr(usb_access, "node_access", lambda *a, **k: Probe.PRESENT)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
     monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
@@ -49,7 +49,7 @@ def test_a_shared_band_starts_each_radios_daemon_with_its_own_preset(tmp_path, m
     monkeypatch.setattr(usb_access, "scan", lambda *a, **k: real_scan(STICKS))
     monkeypatch.setattr(usb_access, "node_access", lambda *a, **k: Probe.PRESENT)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
-    monkeypatch.setattr(ControllerService, "active_bands", lambda self: ["433", "868"])
+    monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
     monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")

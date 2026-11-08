@@ -172,7 +172,9 @@ def test_the_stack_row_is_the_registry_for_that_band(tmp_path, band):
     sw = svc.rflog_switcher("rf-kiss.log", band)
     assert sw["band"] == band
     assert [(b["band"], b["current"]) for b in sw["bands"]] == [(b, b == band) for b in ControllerService.RADIO_BANDS]
-    expected = [(e.writer, e.job(band) if e.banded else e.job(), e.surface) for e in rflog.REGISTRY
+    rid = {"433": "r1", "868": "r2"}[band]              # S2: the baseline list's radio of the band owns the daemon's file
+    expected = [(e.writer, e.radio_job(rid) if e.banded else e.job(), e.surface)
+                for e in rflog.REGISTRY
                 if e.banded or band in _declared(svc, e.surface)]
     assert [(s["target"], s["job"], s["surface"]) for s in sw["stacks"]] == expected
     assert [s["surface"] for s in sw["stacks"] if s["current"]] == ["graywolf"]

@@ -88,9 +88,8 @@ def test_a_fixed_band_stacks_slot0_runs_on_its_one_band(tmp_path):
     assert (copy.rid, copy.band, why) == ("r2", "868", "")
 
 
-@pytest.mark.no_default_hardware
 def test_a_switchable_stacks_slot0_without_served_bands_has_no_band(tmp_path):
-    copy, why = instances.copy_of(_svc(tmp_path, listed=""), "kiss")
+    copy, why = instances.copy_of(_svc(tmp_path, listed="", rows=()), "kiss")    # S2: a list without radios serves none
     assert (copy.rid, copy.band, why) == ("", "", "")
 
 

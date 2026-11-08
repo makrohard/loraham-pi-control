@@ -131,6 +131,7 @@ def test_the_page_has_a_band_row_and_the_stack_row_of_that_band(tmp_path, band, 
     assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-kiss.log"
 
 
+@pytest.mark.no_default_hardware   # the 0.13.x band files of a box without a list (per-radio files: below)
 def test_the_shown_band_falls_back_to_the_files_own_band(web):
     doc = parse(web().get("/logs/loraham-daemon?job=rf-daemon-868.log").get_data(as_text=True))
     bands = _row(doc, "RF log bands")
@@ -225,7 +226,7 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
 
     def factory():
         svc = ControllerService(
-            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["meshtasticd"]},
                               # Q16: the hardware list resolves 433 to r1, so the fake answers on its socket
                               unix_replies={"/tmp/loraconf-r1.sock":
                                             b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
@@ -262,8 +263,8 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
     carried, never re-guessed from the manifest."""
     def factory():
         svc = ControllerService(
-            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham-rns-node", "--config", "x"]},
-                              unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-rns-node", "--config", "x"]},
+                              unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band marker a start records — seeded through the product's own recorder, since no
         # public setter exists and a real start needs a radio.
@@ -385,7 +386,7 @@ def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
     its RF-log link on its Apps row carries 433."""
     def factory():
         svc = ControllerService(
-            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                                              200: ["loraham-rns-node", "--config", "x"]}).system,
             paths=Paths(runtime_root=tmp_path))
         svc._set_running_band("reticulum", "433")

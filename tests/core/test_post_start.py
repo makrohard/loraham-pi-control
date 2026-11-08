@@ -89,7 +89,7 @@ def _kiss_svc(tmp_path):
     (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")  # built
     radios_fixture.write(tmp_path)                         # stage L5: the TNC is r1's (433) client
     sys = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
-                     unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock":
+                     unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock":
                                                            b"STATUS RADIO=READY TXMODE=MANAGED\n"})).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
@@ -1817,7 +1817,7 @@ def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch, r
     _built_daemon(tmp_path)
     radios_fixture.write(tmp_path)                       # stage L5: r1 (433) answers; r2 (868) never comes up
     # Only 433's radio answers GET STATUS; 868's CONF socket never comes up.
-    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": STATUS})).system
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock": STATUS})).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda s: _fake_life_factory(real_spawn, s))
@@ -1828,8 +1828,8 @@ def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch, r
 
 def test_start_ok_when_daemon_serving_both(tmp_path, monkeypatch, real_spawn):
     _built_daemon(tmp_path)
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS}).system
+    sys = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": STATUS,
+                                   "/tmp/loraconf-r2.sock": STATUS}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda s: _fake_life_factory(real_spawn, s))
@@ -1851,7 +1851,7 @@ def test_dependent_not_started_when_daemon_unready(tmp_path):
 def _svc_with_daemon(tmp_path, status):
     from lhpc.core.probes.backends import FakeSystem
     radios_fixture.write(tmp_path)                         # stage L5: the daemon of 433 is r1's
-    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": status})).system
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock": status})).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
 
@@ -2031,8 +2031,8 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     # for the start to clear the TX-mode gate and reach the running-band marker step.
     DIRECT = b"STATUS RADIO=READY TXMODE=DIRECT\n"
     radios_fixture.write(tmp_path)                         # stage L5: voice is its band's radio's client
-    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": DIRECT,
-                                                           "/tmp/loraconf868.sock": DIRECT})).system
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock": DIRECT,
+                                                           "/tmp/loraconf-r2.sock": DIRECT})).system
     (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)

@@ -154,7 +154,7 @@ def test_save_requires_csrf(web):
 # --- Apply-live truthfulness, config atomicity, radio/lifecycle locking -------------------
 
 def _svc(tmp_path, reply=None):
-    unix = {"/tmp/loraconf433.sock": reply} if reply else {}
+    unix = {"/tmp/loraconf-r1.sock": reply} if reply else {}
     return ControllerService(system=FakeSystem(unix_replies=unix).system,
                              paths=Paths(runtime_root=tmp_path))
 
@@ -208,7 +208,7 @@ def test_apply_live_reports_confirmed_vs_sent_unconfirmed(tmp_path):
 
 def test_apply_live_counts_a_refused_set_as_failed(tmp_path):
     # The daemon refuses SF with ERR: Apply counts it failed, never "sent".
-    sock = "/tmp/loraconf433.sock"
+    sock = "/tmp/loraconf-r1.sock"
     svc = ControllerService(system=FakeSystem(
         unix_replies={sock: b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"},
         set_replies={sock: b"ERR INVALID\n"}).system, paths=Paths(runtime_root=tmp_path))
@@ -272,7 +272,7 @@ def test_apply_live_respects_same_band_lock(tmp_path):
     from lhpc.core import reslock
     svc = _svc(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n")
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the busy result)
-    with reslock.operation_lock(svc._paths, "claim.loraham.radio.433", "start", "other"):
+    with reslock.operation_lock(svc._paths, "claim.loraham.radio.r1", "start", "other"):
         r = svc.apply_daemon_params("daemon", "433")
     assert not r.ok and r.data.get("busy")                 # typed busy, not a race
 
@@ -280,7 +280,7 @@ def test_apply_live_respects_same_band_lock(tmp_path):
 def test_apply_live_reentrant_within_held_guard(tmp_path):
     # Called while THIS thread already holds the band lock (as a Start would) -> no self-deadlock.
     svc = _echo_svc(tmp_path)
-    with svc._keys_guard("start", "daemon", ["lifecycle.daemon", "claim.loraham.radio.433"]):
+    with svc._keys_guard("start", "daemon", ["lifecycle.daemon", "claim.loraham.radio.r1"]):
         r = svc.apply_daemon_params("daemon", "433")
     assert r.ok                                            # re-entrant, completed
 
@@ -289,7 +289,7 @@ def test_apply_live_other_band_not_blocked(tmp_path):
     from lhpc.core import reslock
     svc = _echo_svc(tmp_path)
     # A held 868 lock must NOT block a 433 apply (independent bands).
-    with reslock.operation_lock(svc._paths, "claim.loraham.radio.868", "start", "other"):
+    with reslock.operation_lock(svc._paths, "claim.loraham.radio.r2", "start", "other"):
         r = svc.apply_daemon_params("daemon", "433")
     assert r.ok
 
@@ -414,6 +414,7 @@ def test_daemon_params_band_chooser_rendered(web):
     assert not ks.find("span", class_="disabled")
 
 
+@pytest.mark.no_default_hardware   # the per-band stores alone: with a list the row and agreed client values win (W5-6/W5-7)
 def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
     # Settings is the only place daemon parameters change; a start applies the SAVED
     # per-band values. `_daemon_param_applies` has no per-launch input any more.
@@ -463,7 +464,7 @@ def _two_stacks(tmp_path):
     ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     fake = FakeSystem(cmdlines_data={300: ["meshcom-loraham-bridge"], 301: ["qemu-system-xtensa"],
                                      4242: ["loraham-kiss-tnc", "--config", "X"]},
-                      unix_replies={"/tmp/loraconf433.sock": ready, "/tmp/loraconf868.sock": ready})
+                      unix_replies={"/tmp/loraconf-r1.sock": ready, "/tmp/loraconf-r2.sock": ready})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     assert svc._set_running_band("kiss", "868")
     return svc
@@ -492,7 +493,7 @@ def test_app_apply_holds_the_band_claim_against_a_competing_start(tmp_path, monk
 
     def start():
         try:
-            with reslock.operation_lock(svc._paths, "claim.loraham.radio.433", "start", "meshcore"):
+            with reslock.operation_lock(svc._paths, "claim.loraham.radio.r1", "start", "meshcore"):
                 pass
         except reslock.ResourceBusy:
             refused.append("meshcore")
