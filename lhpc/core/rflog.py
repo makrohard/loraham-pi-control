@@ -332,9 +332,9 @@ def prune_targets(entries, keep_rule) -> list:
 def log_runs(svc, e, rid: str) -> bool:
     """7f: the RF log badge of a listed instance's own log `<rid>/rf-<x>.log`: that instance's run state."""
     from . import instances
-    _sid, inst, band, why = instances.resolve(svc, f"{e.owner}@{rid}")
+    inst, why = instances.copy_of(svc, e.owner, rid)
     comp = svc.stack(e.owner).component(e.writer) if svc.stack(e.owner) else None
-    return not why and comp is not None and instances.instance_runs(svc, comp, inst, band)
+    return not why and comp is not None and instances.instance_runs(svc, comp, inst, inst.band)
 
 
 def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
@@ -342,7 +342,7 @@ def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
     instance's own (7f: its mode, config/secrets/<rid>, state/<rid>/…), never slot 0's."""
     from . import instances, meshcore_mode
     own = (rid,) if rid else ()
-    mode = meshcore_mode.normalize(svc.meshcore_mode(instances.resolve(svc, f"{sid}@{rid}")[1])) if rid else svc._rflog_meshcore_mode()
+    mode = meshcore_mode.normalize(svc.meshcore_mode(instances.copy_of(svc, sid, rid)[0])) if rid else svc._rflog_meshcore_mode()
     return ["--mode", mode, "--secrets", str(svc._paths.under("config", "secrets", *own)),
             "--store", str(svc._paths.under("state", *own, "meshcore", "companion.db")),
             "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]

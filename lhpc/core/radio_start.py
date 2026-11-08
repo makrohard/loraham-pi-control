@@ -213,7 +213,7 @@ def _radio_users(svc, radio) -> list:
     from .model import RunState
     up, snap = (RunState.RUNNING, RunState.DEGRADED), svc.build_snapshot()
     copies = running_copies_on(svc, {r.id for r in radios.load(svc._paths).radios})
-    out = [f"{s.id}@{i.rid}" for s, i in copies if i.rid == radio.id]
+    out = [instances.key(s.id, i) for s, i in copies if i.rid == radio.id]
     for s in svc.stacks():
         if (s.main == svc.DAEMON_ID or not svc.stack_running(s.id)          # plain run_state: any process of the spec
                 or radio.band not in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band})):
@@ -1032,8 +1032,9 @@ def running_copies_on(svc, rids) -> list:
 def running_copies(svc, band: str) -> list:
     """Cleanup C7c (W286, W290): Home's entry for each listed copy that runs on a radio of `band` (`<sid>@<rid>`, for
     its own radio's card only). The snapshot no longer counts a copy as slot 0, so without it a running copy vanished."""
+    from . import instances
     on = {r.id for r in radios.load(svc._paths).radios if r.band == band}
-    return [{"id": f"{stk.id}@{inst.rid}", "sid": stk.id, "rid": inst.rid, "name": stk.name, "main": stk.main,
+    return [{"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name, "main": stk.main,
              "components": [], "multi_band": False} for stk, inst in running_copies_on(svc, on)]
 
 

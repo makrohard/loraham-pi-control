@@ -560,7 +560,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover,
-                            owned_running=self._lifecycle().owned_running(), sources=sources, copy_pids=instances.copy_pids(self),
+                            owned_running=self._lifecycle().owned_running(), sources=sources, copy_pids=lambda table: instances.copy_pids(self, table),
                             cache=None if fresh else source_cache.SHARED,
                             meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)

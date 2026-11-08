@@ -51,31 +51,19 @@ _PORT_OF_RE = re.compile(r"\{port_of:([a-z][a-z0-9_-]*):(\d{1,5})\}")
 
 
 class Instance:
-    """One stack copy: its stack, its slot, its radio id, its radio's band and the slots of the other
-    stacks' instances on the same radio (for `{port_of:}`). Slot 0 is the stack itself and resolves every
-    template to today's value, whatever the radio; slot k needs a radio id for its names.
-    `instances.copy_of` builds a copy with its stack and band; a template-only value leaves both ""."""
+    """One stack copy: its slot, its radio id, its radio's band and the slots of the other stacks' instances on the
+    same radio (for `{port_of:}`). Slot 0 is the stack itself and resolves every template to today's value, whatever
+    the radio; slot k needs a radio id for its names. `instances.copy_of` builds a copy with its band; a
+    template-only value leaves it "". Its key is `instances.key(<stack>, copy)`."""
 
-    __slots__ = ("band", "peer_slots", "rid", "sid", "slot")
+    __slots__ = ("band", "peer_slots", "rid", "slot")
 
-    def __init__(self, slot: int = 0, rid: str = "", peer_slots: dict | None = None, *, sid: str = "",
-                 band: str = ""):
+    def __init__(self, slot: int = 0, rid: str = "", peer_slots: dict | None = None, *, band: str = ""):
         if isinstance(slot, bool) or not isinstance(slot, int) or slot not in SLOTS:
             raise CommandError(f"instance slot must be 0..{SLOTS[-1]}, got {slot!r}")
         if (slot or rid) and not _RID_RE.fullmatch(rid or ""):
             raise CommandError(f"instance radio id must match r1..r99, got {rid!r}")
-        self.slot, self.rid, self.peer_slots = slot, rid, dict(peer_slots or {})
-        self.sid, self.band = sid, band
-
-    @property
-    def primary(self) -> bool:
-        """The stack itself (slot 0), which alone keeps the slot-0-only behaviour."""
-        return self.slot == 0
-
-    @property
-    def key(self) -> str:
-        """The copy's one name: `<sid>` for slot 0, `<sid>@<rid>` for a listed copy (never a daemon's identity)."""
-        return self.sid if self.primary else f"{self.sid}@{self.rid}"
+        self.slot, self.rid, self.peer_slots, self.band = slot, rid, dict(peer_slots or {}), band
 
     def port(self, base: int, slot: int | None = None) -> int:
         slot = self.slot if slot is None else slot

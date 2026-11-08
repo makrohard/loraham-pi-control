@@ -255,16 +255,15 @@ def keys(svc, sid: str) -> list:
     return [key(sid, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)]
 
 
-def copy_pids(svc) -> dict:
+def copy_pids(svc, table: dict) -> dict:
     """{component: pids} of the processes the listed copies run, by their own argv token or verified record (slot k):
-    the snapshot never counts them as slot 0's (C7, W286)."""
+    the snapshot never counts them as slot 0's (C7, W286). `table` is the snapshot's own cmdline table."""
     from .probes.process import matches
     life, out = svc._lifecycle(), {}
     for rec in life.owned_inventory()[0]:            # a verified slot-k record, listed now or not (G1-C48 (1))
         if rec.get("slot", 0) and life.verify_owned(rec)[0]:
             out.setdefault(rec.get("component", ""), set()).add(rec["pid"])
     copies = [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]]
-    table = svc._system.procfs.cmdlines() if copies else {}
     bands = {r.id: r.band for r in radios.load(svc._paths).radios} if copies else {}
     for stk, inst in copies:                         # a hand-started copy without a record: its own token
         for comp in stk.components:
@@ -287,7 +286,7 @@ def copy_of(svc, sid: str, rid: str = "", band: str = ""):
         bands = stack_bands(stack)                    # a fixed-band stack's operation band is "" (no store): its band
         band = svc.operation_band(sid, band) or (bands[0] if len(bands) == 1 else "")
         rid0, why = slot0_radio(svc._paths, sid, band) if band else ("", "")
-        return commands.Instance(0, rid0, sid=sid, band=band), why
+        return commands.Instance(0, rid0, band=band), why
     inst = next((i for i in commands.stack_instances(stack, svc._paths) if i.slot and i.rid == rid), None)
     if inst is None:
         return None, f"{sid}@{rid} is not a listed instance (lhpc stack add-instance {sid} {rid})"
@@ -296,7 +295,7 @@ def copy_of(svc, sid: str, rid: str = "", band: str = ""):
         return None, f"{sid}@{rid}: {rid} is not in the hardware list"
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
-    copy = commands.Instance(inst.slot, rid, inst.peer_slots, sid=sid, band=radio.band)
+    copy = commands.Instance(inst.slot, rid, inst.peer_slots, band=radio.band)
     if not radio.enabled:                     # G1-C7 B3: still addressed (a stop, a removal's running check), never started
         return copy, f"{sid}@{rid}: {rid} is disabled"
     if radio.band not in stack_bands(stack):

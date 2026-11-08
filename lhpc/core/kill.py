@@ -325,7 +325,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         for comp in comps:
             _log(svc, life, comp, hint, copy.rid if copy is not None else "")
         if not component and copy is not None and copy.slot:
-            svc._write_stop_intent([f"{stk.id}@{copy.rid}"])           # a listed copy's own intent
+            svc._write_stop_intent([instances.key(stk.id, copy)])       # a listed copy's own intent
         elif not component and copy is None:
             svc._safe_unlink(svc._band_marker(stk.id))
             svc.dismiss_interactive(stk.id)
