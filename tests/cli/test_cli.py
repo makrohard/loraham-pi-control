@@ -1374,15 +1374,15 @@ def test_a_pending_config_journal_is_cleaned_up_when_lhpc_starts(capsys):
     assert "recovered a pending config transaction" in capsys.readouterr().err
 
 
-def test_hardware_ocp_saves_the_bands_limit_and_refuses_with_a_setup(tmp_path, monkeypatch, capsys):
+def test_hardware_ocp_saves_the_radios_limit_and_refuses_with_a_setup(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["hardware", "waveshare-433"]) == 0
     capsys.readouterr()
-    assert main(["hardware", "--ocp", "433", "120"]) == 0
-    assert "OCP for 433 MHz: 120 (120 mA)" in capsys.readouterr().out
-    assert main(["hardware", "--ocp", "433", "150"]) != 0             # SX1262 tops out at 140
+    assert main(["hardware", "--ocp", "r1", "120"]) == 0              # K2: per radio, in its row
+    assert "OCP for r1: 120" in capsys.readouterr().out
+    assert main(["hardware", "--ocp", "r1", "150"]) != 0              # SX1262 tops out at 140
     assert "5..140 in steps of 5" in capsys.readouterr().out
-    assert main(["hardware", "waveshare-433", "--ocp", "433", "auto"]) == 2
+    assert main(["hardware", "waveshare-433", "--ocp", "r1", "auto"]) == 2
     assert "--ocp and a hardware setup are separate settings" in capsys.readouterr().out
 
 
@@ -1391,11 +1391,9 @@ def test_hardware_high_power_and_ocp_together_are_refused_not_half_applied(tmp_p
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["hardware", "waveshare-433"]) == 0
     capsys.readouterr()
-    assert main(["hardware", "--high-power", "433", "on", "--ocp", "433", "140"]) == 2
+    assert main(["hardware", "--high-power", "r1", "on", "--ocp", "r1", "140"]) == 2
     assert "--high-power and --ocp are separate settings — one at a time" in capsys.readouterr().out
+    from lhpc.core import radios
     from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path / "rt"))
-    cfg = svc.stack_config("daemon")
-    assert (cfg["hipower_433"], cfg["ocp_433"]) == ("off", "auto")      # neither half applied
+    row = radios.load(Paths(runtime_root=tmp_path / "rt")).radios[0]
+    assert (row.high_power, row.ocp_ma) == (None, None)                 # neither half applied

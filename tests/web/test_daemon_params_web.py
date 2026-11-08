@@ -455,7 +455,7 @@ def test_daemon_param_save_refuses_without_radio_hardware(tmp_path):
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     r = svc.save_daemon_params("daemon", "", {"MODE": "FSK"})
-    assert not r.ok and "no radio hardware configured" in r.summary
+    assert not r.ok and "no enabled radio in the hardware list" in r.summary
     assert not any(k.startswith("dp_") for k in load_stack_config(svc._paths, "daemon", ""))
 
 

@@ -51,9 +51,8 @@ def launch_plan(svc, rid: str) -> tuple:
 
 
 def _settings(svc, radio, model):
-    """The radio's resolved settings (radios.radio_settings) from its row, the daemon's old band params and the
-    client stacks' old `dp_<band>_<PARAM>` values; ValueError as radio_settings raises it."""
-    legacy = {k: str(v) for k, v in svc.stack_config("daemon").items()}
+    """The radio's resolved settings (radios.radio_settings) from its row and the client stacks'
+    `dp_<band>_<PARAM>` values; ValueError as radio_settings raises it."""
     legacy_dp = {}
     for sid in _dp.CLIENT_STACKS:
         stored = cfgmod.load_stack_config(svc._paths, sid)
@@ -62,7 +61,7 @@ def _settings(svc, radio, model):
         if vals:
             legacy_dp[sid] = vals
     defaults = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off"}   # manifest defaults
-    return radios.radio_settings(radio, model, legacy, legacy_dp, defaults)
+    return radios.radio_settings(radio, model, legacy_dp, defaults)
 
 
 def row_dp(svc, band: str, rid: str = "") -> dict:
@@ -742,9 +741,9 @@ def radio_params_view(svc, target: str, rid: str) -> dict:
     ov = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
     return {"stack": target, "band": band, "rid": rid, "bands": [band], "all_bands": list(svc.RADIO_BANDS),
             "is_daemon": True, "can_apply": True, "radios": view_radios(svc._paths),
-            "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid)),
+            "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
             "rows": daemon_params.stack_view(sid, band, ov, svc.chip_family_for_band(band, rid),
-                                             radio_high_power(svc, rid))}
+                                             effective_high_power(svc, rid))}
 
 
 def save_radio_params(svc, target: str, rid: str, values: dict):
@@ -765,19 +764,43 @@ def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
         return {}, f"Cannot save the settings of {rid}: {why}"
     sid = svc._owner_stack_id(target)
     shown = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
-    return dp_updates(svc, sid, band, values, svc.chip_family_for_band(band, rid), radio_high_power(svc, rid),
+    return dp_updates(svc, sid, band, values, svc.chip_family_for_band(band, rid), effective_high_power(svc, rid),
                       {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()})
 
 
-def radio_high_power(svc, rid: str) -> bool:
-    """Radio `rid`'s own high-power permission, as its daemon starts with it (its row, else the old band switch:
-    radios.radio_settings); False when its settings do not resolve (its start is refused then)."""
+def effective_high_power(svc, rid: str) -> bool:
+    """THE power check (W311, CLEANUP-DESIGN-v13 13.12.2): radio `rid`'s row grant, given on the band the row is on
+    now, on a model with a high-power switch (radios.radio_settings). The daemon's argv and every live POWER SET read
+    it. False for no such radio and for settings that do not resolve: default denied."""
     row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
     model = radio_models.load().get(row.model) if row else None
     try:
         return bool(model and _settings(svc, row, model).hipower)
     except ValueError:
         return False
+
+
+def set_row_fields(svc, rid: str, fields, done: str):
+    """Write `fields(row)` (row settings, e.g. high_power, read from the row as it is under the lock) into radio
+    `rid`'s row and nothing else, under the hardware list's lock (W217); radios.save checks the whole list and writes
+    it whole. `done` is the success summary; `{band}` in it names the row's band."""
+    from .service_base import ActionResult
+    return _with_list_lock(svc._paths, lambda why: ActionResult(False, f"the hardware list is busy ({why}); nothing was "
+                                                               "changed — try again"), _set_row_fields, svc, rid, fields, done)
+
+
+def _set_row_fields(svc, rid: str, fields, done: str):
+    from .service_base import ActionResult
+    state = radios.load(svc._paths)
+    row = next((r for r in state.radios if r.id == rid), None) if state.kind == radios.VALID else None
+    if row is None:
+        return ActionResult(False, f"{rid}: not saved: " + (f"{rid} is not in the hardware list"
+                                   if state.kind == radios.VALID else "the hardware list does not read back"))
+    reasons = radios.save(svc._paths, radios.with_row(state.radios, dataclasses.replace(row, **fields(row))),
+                          radio_models.load())
+    if reasons:
+        return ActionResult(False, f"{rid}: not saved: " + "; ".join(reasons))
+    return ActionResult(True, done.format(band=row.band))
 
 
 def set_row_dp(svc, rid: str, updates, save=None):

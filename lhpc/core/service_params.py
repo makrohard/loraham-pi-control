@@ -110,7 +110,7 @@ class ParamsConfigMixin:
         from . import daemon_params
         stored = cfgmod.load_stack_config(self._paths, self._owner_stack_id(stack_id))
         family = self.chip_family_for_band(band)
-        high_power = self.high_power_for_band(band)          # saved intent: future overrides only
+        high_power = self._granted(band)                     # the band radio's grant: future overrides only
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             v = stored.get(f"dp_{band}_{name}")
@@ -867,10 +867,11 @@ class ParamsConfigMixin:
             view["hardware_configured"] = self.hardware_configured()
             view["hw_setups"] = self.hw_setups()
             active = self.radio_bands()
-            # The per-band +20 dBm permission switch (daemon 1.2.0 `--high-power`) beside the
-            # Hardware selector: an explicit small control, because this page deliberately renders
-            # none of the daemon's run params. Saved intent beside the running daemon's report.
-            view["high_power"] = [self.high_power_state(b) for b in active]
+            # Each radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311): an explicit small control,
+            # because this page deliberately renders none of the daemon's run params. The grant beside the running
+            # daemon's report.
+            view["high_power"] = [self.high_power_state(band, rid=rid) for rid, _name, band in
+                                  _radio_start.view_radios(self._paths)]
             if active:                                   # only a configured setup has tunable radios
                 live_band = band if band in active else active[0]
                 view["bands"] = list(active)             # only the setup's radios are tunable

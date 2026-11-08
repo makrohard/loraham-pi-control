@@ -2155,7 +2155,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
         from lhpc.core import radio_models, radio_start
         view = radio_start.hardware_view(service)        # DEC-W57: a band's +20 dBm state shows in its radios' rows
-        hp = {b: service.high_power_state(b) for b in {r["band"] for r in view["rows"]}}
+        hp = {r["rid"]: service.high_power_state(r["band"], rid=r["rid"]) for r in view["rows"]}
         return render_template("hardware.html", view=view, models=radio_models.load(), hp=hp)
 
     @app.get("/hardware/radio/<rid>")
@@ -2171,7 +2171,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         rf = ([x for x in radio_start.daemon_rf_links(service, rflog.entry("daemon"), r["band"])
                if x.get("error") or x["job"].startswith(r["rid"] + "/")] if service._daemon_installed(dstat) else [])
         return render_template("hardware_radio.html", r=r, models=radio_models.load(), rflogs=rf,
-                               hp=service.high_power_state(r["band"]), detect=session.pop("hw_detect", None))
+                               hp=service.high_power_state(r["band"], rid=r["rid"]), detect=session.pop("hw_detect", None))
 
     @app.get("/hardware/add")
     def hardware_add_page():
@@ -2286,11 +2286,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/hardware/high-power")
     def hardware_high_power():
-        """The per-band +20 dBm permission switch (daemon 1.2.0 `--high-power`): one key through
-        the ordinary config transaction; saves and marks restart-required, restarts nothing."""
+        """A radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311) in its row of the hardware list; saves,
+        restarts nothing."""
         if not _csrf_ok():
             abort(400)
-        result = service.set_high_power(request.form.get("band", ""), request.form.get("value", ""))
+        result = service.set_high_power(request.form.get("rid", ""), request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")

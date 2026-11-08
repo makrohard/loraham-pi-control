@@ -348,9 +348,9 @@ def _damaged_client_index(box):
 
 
 def _tx_without_permission(box):
-    """kiss saved to transmit at POWER=20 (the switch saved on) while the running daemon does
+    """kiss saved to transmit at POWER=20 (r1, 433's radio, granted) while the running daemon does
     not report the high-power permission — the explicit TX authorisation the start gates on."""
-    assert box.svc.save_config_bundle("daemon", values={"hipower_433": "on"}).ok
+    assert box.svc.set_high_power("r1", "on").ok
     cfgmod.update_stack_config(box.svc._paths, "kiss", {"dp_433_POWER": "20"})
     box.svc._invalidate_config()
 

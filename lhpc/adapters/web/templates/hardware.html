@@ -25,8 +25,8 @@
           <td>{% if r.transport == "spi" %}HAT (SPI){% elif r.usb_serial %}serial {{ r.usb_serial }}{% elif r.usb_port %}port {{ r.usb_port }}{% else %}—{% endif %}</td>
           <td>{% if r.enabled %}<span class="state-on">enabled</span>{% else %}disabled{% endif %} {{ daemon_badge(r) }}
             {% for p in r.problems %}<span class="note-bad">⚠ {{ p }}</span>{% endfor %}
-            {% if hp[r.band].warn %}<span class="note-bad">⚠ +20 dBm permission enabled on {{ r.band }} MHz</span>{% endif %}
-            {% if hp[r.band].mismatch %}<span class="note-bad">⚠ high-power switch: {{ hp[r.band].mismatch }}</span>{% endif %}</td>
+            {% if hp[r.rid].warn %}<span class="note-bad">⚠ +20 dBm permission enabled on {{ r.rid }} ({{ r.band }} MHz)</span>{% endif %}
+            {% if hp[r.rid].mismatch %}<span class="note-bad">⚠ high-power switch: {{ hp[r.rid].mismatch }}</span>{% endif %}</td>
           <td class="act">
             <form method="post" action="{{ url_for('hardware_enabled') }}" class="inline">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

@@ -8,6 +8,7 @@ from lhpc.core import commands
 from lhpc.core import config as cfgmod
 from lhpc.core import daemon_control as dc
 from lhpc.core import daemon_params as dp
+from lhpc.core import radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -131,67 +132,75 @@ def test_live_twenty_with_unknown_family_is_refused_not_guessed(live, saved):
     assert err and "chip family" in err
 
 
-# --- the saved switch -------------------------------------------------------------------------
+# --- the grant: the radio's row, on the band it was given on (W311, K2) ----------------------------
 
-def test_saved_switch_is_the_canonical_on_only(tmp_path):
+def _granted(svc, rid, band):
+    return svc.high_power_state(band, rid=rid)["saved"]
+
+
+def test_the_grant_is_the_rows_and_only_that_radios(tmp_path):
     svc, _ = _svc(tmp_path)
-    assert not svc.high_power_for_band("433") and not svc.high_power_for_band("868")
-    assert svc.save_config_bundle("daemon", values={"hipower_433": "on"}).ok
-    assert svc.high_power_for_band("433") and not svc.high_power_for_band("868")
-    assert svc.save_config_bundle("daemon", values={"hipower_433": "off"}).ok
-    assert not svc.high_power_for_band("433")
-    assert not svc.high_power_for_band("bogus")
+    assert not _granted(svc, "r1", "433") and not _granted(svc, "r2", "868")
+    assert svc.set_high_power("r1", "on").ok
+    assert _granted(svc, "r1", "433") and not _granted(svc, "r2", "868")
+    row = radios.load(svc._paths).radios[0]
+    assert (row.high_power, row.high_power_band) == (True, "433")       # the band it was given on
+    assert svc.set_high_power("r1", "off").ok
+    assert not _granted(svc, "r1", "433")
+    assert not svc.set_high_power("r9", "on").ok
 
 
 @pytest.mark.parametrize("bad", ["banana", "False", "1", "yes", "ON", " on "])
-def test_saved_switch_refuses_everything_but_off_and_on(tmp_path, bad):
-    # A flag-kind param would keep any string and the emitter would read it as ON; the stored
-    # switch is a strict enum precisely so this cannot happen.
+def test_set_high_power_refuses_everything_but_off_and_on(tmp_path, bad):
     svc, _ = _svc(tmp_path)
-    assert not svc.save_config_bundle("daemon", values={"hipower_433": bad}).ok
-    assert not svc.set_high_power("433", bad).ok
-    assert not svc.high_power_for_band("433")
+    assert not svc.set_high_power("r1", bad).ok
+    assert radios.load(svc._paths).radios[0].high_power is None          # nothing written
 
 
-@pytest.mark.parametrize("raw", ["ON", "On", " on ", "true", "1", "banana", "yes", "off"])
-def test_hand_edited_stored_value_never_grants_the_permission(tmp_path, raw):
-    # The strict enum refuses junk at save time; this writes the stack config file DIRECTLY, the
-    # way a hand edit would, and proves the read/launch path is literal too: only exactly "on"
-    # is the permission, and the injected flag emits nothing for anything else. The daemon is
-    # skipped by the generic saved-launch refusal, so this compare is its only gate (audit P1).
-    p = Paths(runtime_root=tmp_path)
-    cfgmod.save_hardware_setup(p, "uputronics")
-    path = cfgmod._stack_config_path(p, "daemon")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'hipower_433 = "{raw}"\n')
-    svc = ControllerService(system=FakeSystem().system, paths=p)
-    assert svc.stack_config("daemon").get("hipower_433") == raw          # stored verbatim
-    assert svc.high_power_for_band("433") is False
-    comp = svc.stack("daemon").component("loraham-daemon")
-    params = {"radio": "433", "hw": "uputronics-ce0", "txmode": "managed", "cadmon": "off",
-              "cadrssi": "-90", "rf_log": "on", "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log",
-              "hipower": "on" if svc.high_power_for_band("433") else "off"}   # the spawn mapping
-    argv = commands.expand_argv(comp.run_argv, comp, params, svc.config().operator, "/rt", "/src", "433")
-    assert "--high-power" not in argv
-    assert not svc.set_high_power("433", raw if raw != "off" else "ON ").ok  # literal at the boundary too
+@pytest.mark.parametrize("raw", ['"on"', '"ON"', '"true"', "1", '"yes"'])
+def test_a_hand_edited_row_value_never_grants_the_permission(tmp_path, raw):
+    # The row's high_power is a TOML boolean; anything else a hand edit writes makes the list invalid, so no radio
+    # is granted (and no daemon starts on an invalid list).
+    svc, _ = _svc(tmp_path)
+    f = tmp_path / "config" / "radios.toml"
+    f.write_text(f.read_text().replace('band = "433"', f'band = "433"\nhigh_power = {raw}\nhigh_power_band = "433"', 1))
+    assert radios.load(svc._paths).kind == radios.INVALID
+    assert not _granted(svc, "r1", "433")
 
 
-def test_exactly_on_in_the_file_is_the_permission(tmp_path):
-    p = Paths(runtime_root=tmp_path)
-    cfgmod.save_hardware_setup(p, "uputronics")
-    path = cfgmod._stack_config_path(p, "daemon")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('hipower_433 = "on"\n')
-    svc = ControllerService(system=FakeSystem().system, paths=p)
-    assert svc.high_power_for_band("433") is True and svc.high_power_for_band("868") is False
+def test_k2_a_grant_given_on_another_band_is_denied_and_named(tmp_path):
+    # Handler DEC (replaces the band-edit guard): r1's grant was given on 433 and its band was moved to 868 by hand.
+    # RED before K2: the row's high_power alone granted it on 868.
+    from lhpc.core import radio_start
+    svc, _ = _svc(tmp_path)
+    assert svc.set_high_power("r1", "on").ok
+    f = tmp_path / "config" / "radios.toml"
+    f.write_text(f.read_text().replace('band = "433"', 'band = "868"', 1))      # the hand edit of the band
+    params, refusal, notes = radio_start.start_plan(svc, "r1")
+    assert params["hipower"] == "off" and not refusal
+    assert any("r1: the +20 dBm permission was given on 433 MHz, the radio is on 868 MHz now: denied" in n
+               for n in notes)
+    assert not _granted(svc, "r1", "868")
+
+
+def test_k2_a_hand_written_grant_without_its_band_is_denied(tmp_path):
+    # A row `high_power = true` with no band on record (a hand edit, or a row written before K2): denied and named.
+    # RED before K2 through the start plan: the row's high_power alone put --high-power on r1's daemon.
+    from lhpc.core import radio_start
+    svc, _ = _svc(tmp_path)
+    f = tmp_path / "config" / "radios.toml"
+    f.write_text(f.read_text().replace('band = "433"', 'band = "433"\nhigh_power = true', 1))
+    params, refusal, notes = radio_start.start_plan(svc, "r1")
+    assert (params["hipower"], refusal) == ("off", "")
+    assert any("r1: the +20 dBm permission was given with no band on record, the radio is on 433 MHz now: denied"
+               in n for n in notes)
 
 
 def test_set_high_power_saves_and_restarts_nothing(tmp_path):
     svc, fs = _svc(tmp_path)
-    r = svc.set_high_power("433", "on")
-    assert r.ok and "restart" in r.summary and "warranty" in r.summary.lower()
-    assert svc.high_power_for_band("433")
-    assert not svc.set_high_power("999", "on").ok
+    r = svc.set_high_power("r1", "on")
+    assert r.ok and "restart" in r.summary and "warranty" in r.summary.lower() and "r1 (433 MHz)" in r.summary
+    assert _granted(svc, "r1", "433")
     assert fs.sent == []                                  # nothing was sent to any daemon
 
 
@@ -201,7 +210,7 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
     svc, _ = _svc(tmp_path)
     comp = svc.stack("daemon").component("loraham-daemon")
     names = {p.name for p in comp.run_params}
-    assert {"hipower", "hipower_433", "hipower_868"} <= names
+    assert "hipower" in names and not {"hipower_433", "hipower_868"} & names        # K2: no per-band switch
     op = svc.config().operator
     base = {"radio": "433", "hw": "uputronics-ce0", "txmode": "managed", "cadmon": "off",
             "cadrssi": "-90", "rf_log": "on", "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log"}
@@ -217,14 +226,14 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
 def test_live_set_twenty_needs_running_permission_and_saved_switch(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "1"))
     assert not svc.daemon_set("433", "POWER", "20").ok            # saved off
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     assert svc.daemon_set("433", "POWER", "20").ok                # running on + saved on
     assert not svc.daemon_set("433", "POWER", "18").ok
 
 
 def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "0"))
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     r = svc.daemon_set("433", "POWER", "20")
     assert not r.ok and "restart" in r.summary
 
@@ -256,14 +265,14 @@ def test_live_set_against_an_older_daemon_admits_only_the_intersection(tmp_path)
 
 def _chat_wants_twenty(svc):
     assert svc.set_operator_identity(callsign="XX0XXA").ok          # chat refuses to start without one
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     assert svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
 
 
 def test_saving_twenty_into_a_profile_needs_the_saved_switch(tmp_path):
     svc, _ = _svc(tmp_path)
     assert not svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     assert svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
     assert not svc.save_daemon_params("chat", "433", {"POWER": "19"}).ok
 
@@ -294,7 +303,7 @@ def test_a_refused_permission_does_not_report_the_daemon_as_failed(tmp_path):
     serving the band and untouched; only the stack's own config was refused (live test
     2026-09-26, row 6)."""
     svc, fs = _svc(tmp_path, status=_status("SX127x", "0"))
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     assert svc.save_daemon_params("kiss", "433", {"POWER": "20"}).ok
     res = svc.start("kiss", apply=True)
     text = "\n".join((res.summary, *res.details))
@@ -308,19 +317,19 @@ def test_a_refused_permission_does_not_report_the_daemon_as_failed(tmp_path):
 def test_saved_off_after_saving_twenty_filters_it_but_revokes_nothing(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "1"))
     _chat_wants_twenty(svc)
-    assert svc.set_high_power("433", "off").ok
+    assert svc.set_high_power("r1", "off").ok
     assert "POWER" not in svc._daemon_param_overrides("chat", "433")     # filtered, not deleted
     st = svc.high_power_state("433")
-    assert st["live"] is True and st["warn"] and "saved off" in st["mismatch"]
+    assert st["live"] is True and st["warn"] and "not granted" in st["mismatch"]
 
 
 # --- what the console shows -------------------------------------------------------------------
 
 @pytest.mark.parametrize("setup,family,hp,saved,warn,needle", [
     ("uputronics", "SX127x", "1", True, True, ""),
-    ("uputronics", "SX127x", "1", False, True, "saved off"),
+    ("uputronics", "SX127x", "1", False, True, "not granted"),
     ("uputronics", "SX127x", "0", True, False, "restart"),
-    ("waveshare-433", "SX1262", "1", True, False, ""),       # the flag is inert: no banner
+    ("waveshare-433", "SX1262", "1", True, False, ""),       # no switch: the grant is refused, no banner
     ("waveshare-433", "SX1262", "1", False, False, ""),
     ("uputronics", "SX1262", "1", False, False, "running daemon is sx1262"),  # saved/running differ
     ("waveshare-433", "SX127x", "1", False, True, "running daemon is sx127x"),  # banner keys on RUNNING; the family line outranks the switch line
@@ -328,8 +337,9 @@ def test_saved_off_after_saving_twenty_filters_it_but_revokes_nothing(tmp_path):
 def test_high_power_state_keys_on_the_running_daemon(tmp_path, setup, family, hp, saved, warn,
                                                      needle):
     svc, _ = _svc(tmp_path, setup, status=_status(family, hp))
-    if saved:
-        assert svc.set_high_power("433", "on").ok
+    if saved:                       # a model without the switch refuses the grant (the list's own check)
+        r = svc.set_high_power("r1", "on")
+        assert r.ok is (setup == "uputronics") and (r.ok or "has no high-power switch" in r.summary)
     st = svc.high_power_state("433")
     assert st["warn"] is warn
     assert st["family"] == family.lower()
@@ -338,7 +348,7 @@ def test_high_power_state_keys_on_the_running_daemon(tmp_path, setup, family, hp
 
 def test_high_power_state_old_daemon_and_unreachable(tmp_path):
     svc, _ = _svc(tmp_path, status=_OLD_STATUS)
-    assert svc.set_high_power("433", "on").ok
+    assert svc.set_high_power("r1", "on").ok
     st = svc.high_power_state("433")
     assert st["live"] is None and st["family"] == "" and not st["warn"]
     assert "older daemon" in st["mismatch"]

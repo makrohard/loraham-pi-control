@@ -37,25 +37,25 @@ def test_control_saves_through_the_form_and_refuses_junk(web, csrf, tmp_path):
     assert doc.present("high-power-daemon") and doc.find("form", action="/hardware/high-power")
     assert "warranty void" in doc.text.lower() and "1 %" in doc.text
     tok = csrf(c, DAEMON_PAGE)
-    r = c.post("/hardware/high-power", data={"_csrf": tok, "band": "433", "value": "on"})
+    r = c.post("/hardware/high-power", data={"_csrf": tok, "rid": "r1", "value": "on"})     # K2: per radio
     assert r.status_code in (302, 303)
     doc = _page(c)
-    assert doc.present("hp-mismatch-433") and "restart the daemon" in doc.text   # saved on, running off
-    assert not doc.present("hp-warn-433")                                         # running says OFF
+    assert doc.present("hp-mismatch-r1") and "restart the daemon" in doc.text    # granted, running off
+    assert not doc.present("hp-warn-r1")                                          # running says OFF
     # Junk never becomes ON.
-    r = c.post("/hardware/high-power", data={"_csrf": tok, "band": "868", "value": "banana"})
+    r = c.post("/hardware/high-power", data={"_csrf": tok, "rid": "r2", "value": "banana"})
     assert r.status_code in (302, 303)
-    assert not _page(c).present("hp-mismatch-868")
+    assert not _page(c).present("hp-mismatch-r2")
     # No CSRF token -> refused.
-    assert c.post("/hardware/high-power", data={"band": "433", "value": "off"}).status_code == 400
+    assert c.post("/hardware/high-power", data={"rid": "r1", "value": "off"}).status_code == 400
 
 
 @pytest.mark.contract
 def test_banner_keys_on_the_running_sx127x_permission(web, tmp_path):
     c, _ = _client(web, tmp_path, "uputronics", _status("SX127x", "1"))
     doc = _page(c)
-    assert doc.present("hp-warn-433")                     # running ON, saved off: banner stays
-    assert doc.present("hp-mismatch-433") and "saved off" in doc.text
+    assert doc.present("hp-warn-r1")                      # running ON, not granted: banner stays
+    assert doc.present("hp-mismatch-r1") and "not granted" in doc.text
     assert _page(c, "/").present("rd-hp-r1")              # the dashboard card is r1's (433 on the list)
     assert doc.present("dp-hp-daemon")                    # the daemon-params panel too
 

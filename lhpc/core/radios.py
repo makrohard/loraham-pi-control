@@ -3,7 +3,8 @@
 A row names a hidden id (`r1` … `r99`, the lowest free number at creation, never renamed), a name, a model of the
 model table (`lhpc/core/radio_models.py`), a band, `enabled`, the model's settings (`ce`, the variant of a model with
 more than one; `usb_serial` and `usb_port`, USB sticks) and the per-radio daemon settings as fields of the row
-(B4-D3a): `high_power`, `txmode`, `cadmon`, `cadrssi`, `ocp_ma` and `dp_<PARAM>`. A settings field that is absent is
+(B4-D3a): `high_power` (with `high_power_band`, the band it was given on), `txmode`, `cadmon`, `cadrssi`, `ocp_ma` and
+`dp_<PARAM>`. A settings field that is absent is
 "not set" (None) and is resolved at start (`radio_settings`); a set field, an explicit false included, wins.
 
 Every read is an explicit state, never a guess (QUALITY-RULES-v1 rule 2): `load` returns ABSENT (no file), VALID
@@ -27,9 +28,6 @@ from .paths import PathContainmentError
 FILE = ("config", "radios.toml")
 MAX_RADIOS = 99
 SERIAL_PREFIX = 8          # pine64 and the daemon compare the first 8 serial characters (A:185, A:288)
-# M7 (B4-D1): the old band params tx_/cadmon_/cadrssi_/hipower_<band> are carried to a radio whose row does not set
-# them. One constant, so the maintainer's word on M7 changes one line.
-CARRY_BAND_PARAMS = True
 TXMODES = ("managed", "direct")
 CADMONS = ("off", "on")
 CADRSSI_RANGE = (-130, 0)
@@ -40,10 +38,11 @@ _PORT = re.compile(r"[0-9]+-[0-9]+(?:\.[0-9]+)*")      # sysfs bus-port, e.g. 1-
 _SERIAL = re.compile(rf"[\x21-\x7a\x7c\x7e]{{{SERIAL_PREFIX},64}}")   # bytes 0x21-0x7E without { and } (Q3, Q5)
 _CANON_INT = re.compile(r"0|-?[1-9][0-9]*")      # a canonical decimal integer: no sign on 0, no leading zero, no "+" (Q12)
 _BASE_KEYS = ("id", "name", "model", "band", "enabled", "ce", "usb_serial", "usb_port")
-_SETTING_KEYS = ("high_power", "txmode", "cadmon", "cadrssi", "ocp_ma")
+_SETTING_KEYS = ("high_power", "high_power_band", "txmode", "cadmon", "cadrssi", "ocp_ma")
 _DP_KEYS = tuple(f"dp_{p}" for p in ALL_PARAMS)
 _TYPES = {"id": (str,), "name": (str,), "model": (str,), "band": (str,), "enabled": (bool,), "ce": (str,),
-          "usb_serial": (str,), "usb_port": (str,), "high_power": (bool,), "txmode": (str,), "cadmon": (str,),
+          "usb_serial": (str,), "usb_port": (str,), "high_power": (bool,), "high_power_band": (str,), "txmode": (str,),
+          "cadmon": (str,),
           "cadrssi": (int,), "ocp_ma": (str, int), **dict.fromkeys(_DP_KEYS, (str,))}
 
 ABSENT, VALID, INVALID = "absent", "valid", "invalid"
@@ -60,6 +59,7 @@ class Radio:
     usb_serial: str = ""
     usb_port: str = ""
     high_power: bool | None = None
+    high_power_band: str | None = None     # the band the grant was given on: it holds only there (W311)
     txmode: str | None = None
     cadmon: str | None = None
     cadrssi: int | None = None
@@ -425,50 +425,36 @@ def save(paths, radios, models: dict | None = None, retired: tuple | None = None
     return []
 
 
-def radio_settings(radio, model, legacy: dict, legacy_dp: dict, defaults: dict) -> RadioSettings:
-    """The settings a radio's daemon starts with. A field set on the row wins (an explicit false included); else, for
-    txmode, cadmon, cadrssi and high power, the old band param when CARRY_BAND_PARAMS, else `defaults`; ocp: the row,
-    else the old `ocp_<band>` always (RK11), else "auto"; each dp PARAM: the row, else the one value every client stack
-    holding it agrees on. Nothing is written (W12). ValueError names a legacy value that fails its rule (a carried value
-    is never silently replaced)."""
+def radio_settings(radio, model, legacy_dp: dict, defaults: dict) -> RadioSettings:
+    """The settings a radio's daemon starts with: each field from the row (an explicit false included), else
+    `defaults`, else "auto" for ocp. No old per-band value is read (CLEANUP-DESIGN-v13 13.7, W311). The +20 dBm
+    permission is the row's grant AND the model's high-power switch, default denied. Each dp PARAM: the row, else the
+    one value every client stack holding it agrees on (the stack stores, until they are per radio). Nothing is written
+    (W12). ValueError names a value that fails its rule."""
     band, chip, notes = radio.band, model.chip, []
 
-    # (the legacy band key's prefix, the `defaults` key = the manifest param name): every pair named once (Q11)
-    def legacy_or_default(row_value, prefix, default_key):
-        if row_value is not None:
-            return row_value, "row"
-        if CARRY_BAND_PARAMS and f"{prefix}_{band}" in legacy:
-            return legacy[f"{prefix}_{band}"], f"legacy {prefix}_{band}"
-        return defaults[default_key], "default"
-    txmode, src_tx = legacy_or_default(radio.txmode, "tx", "txmode")
-    cadmon, src_cm = legacy_or_default(radio.cadmon, "cadmon", "cadmon")
-    cadrssi, src_cr = legacy_or_default(radio.cadrssi, "cadrssi", "cadrssi")
-    if radio.high_power is not None:
-        hipower, src_hp = radio.high_power, "row"
-    elif CARRY_BAND_PARAMS and f"hipower_{band}" in legacy:
-        if model.high_power_switch:
-            hipower, src_hp = legacy[f"hipower_{band}"], f"legacy hipower_{band}"
-        else:                                             # the old key belonged to another board: off is the safe side
-            hipower, src_hp = "off", "default"
-            notes.append(f"hipower_{band}={legacy[f'hipower_{band}']!r} not carried: {model.label} has no high-power switch")
-    else:
-        hipower, src_hp = defaults["hipower"], "default"
+    def row_or_default(row_value, default_key):
+        return (row_value, "row") if row_value is not None else (defaults[default_key], "default")
+    txmode, src_tx = row_or_default(radio.txmode, "txmode")
+    cadmon, src_cm = row_or_default(radio.cadmon, "cadmon")
+    cadrssi, src_cr = row_or_default(radio.cadrssi, "cadrssi")
+    hipower, src_hp = row_or_default(radio.high_power, "hipower")
     try:
         cadrssi_i = cadrssi if type(cadrssi) is int else int(daemon_control_int(cadrssi))
     except ValueError:
         raise ValueError(f"cadrssi from {src_cr}: {cadrssi!r} is not a canonical integer") from None
     hp = _flag(hipower, src_hp)
+    if hp and radio.high_power_band != band:             # a hand-moved band: the grant does not follow it (W311)
+        hp = False
+        given = f"on {radio.high_power_band} MHz" if radio.high_power_band else "with no band on record"
+        notes.append(f"{radio.id}: the +20 dBm permission was given {given}, the radio is on {band} MHz now: denied; "
+                     "grant it again")
     errs = [f"{e} (from {src})" for value_args, src in (((str(txmode), None, None), src_tx), ((None, str(cadmon), None), src_cm),
                                                        ((None, None, cadrssi_i), src_cr))
             for e in _setting_errors(*value_args, None, {}, chip, hp)]
     if errs:
         raise ValueError(f"{radio.id}: " + "; ".join(errs))
-    if radio.ocp_ma is not None:
-        ocp, src_ocp = radio.ocp_ma, "row"
-    elif f"ocp_{band}" in legacy:
-        ocp, src_ocp = legacy[f"ocp_{band}"], f"legacy ocp_{band}"
-    else:
-        ocp, src_ocp = "auto", "default"
+    ocp, src_ocp = (radio.ocp_ma, "row") if radio.ocp_ma is not None else ("auto", "default")
     why = _ocp_error(ocp, chip)
     if why:
         raise ValueError(f"{radio.id}: {why} (from {src_ocp})")

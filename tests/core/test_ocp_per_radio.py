@@ -1,8 +1,8 @@
 """OCP per radio after L5 (T-CO9, T-CO10; plan A §2.7, the OCP bullet; B4-TABLES-v2 rows M8, M9; B4-D3a).
 
 The value lives on the radio's row (`ocp_ma`, B4-D3a). LHPC's value is 100, or 140 with high power (W68);
-an explicit legal value wins; the value is checked against the radio's chip family; a carried band value
-`ocp_<band>` is used until the row sets one (RK11). New feature, no old path: the module is imported per test.
+an explicit legal value wins; the value is checked against the radio's chip family; no band value `ocp_<band>` is
+carried (K2, CLEANUP-DESIGN-v13 13.8). New feature, no old path: the module is imported per test.
 """
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def _settings(**kw):
     return cls(**base)
 
 
-def _resolve(radio, model, legacy=None):
-    return _radios().radio_settings(radio, MODELS[model], legacy or {}, {}, DEFAULTS)
+def _resolve(radio, model):
+    return _radios().radio_settings(radio, MODELS[model], {}, DEFAULTS)
 
 
 @pytest.mark.parametrize("hipower,ocp,want", [(False, "auto", 100), (True, "auto", 140), (True, "100", 100),
@@ -81,21 +81,9 @@ def test_ocp_ma_as_a_bool_is_refused():
     assert _radios().check([_r("r1", ocp_ma=True)], MODELS)
 
 
-def test_m8_a_carried_band_ocp_is_used_until_the_row_sets_one():
+def test_k2_an_unset_ocp_is_auto_whatever_a_band_value_said():
+    """K2: no `ocp_<band>` is carried (13.8): an unset row is auto, 140 with the grant on its band, else 100."""
     rad = _radios()
-    assert rad.effective_ocp(_resolve(_r("r1", band="433"), "loraham", {"ocp_433": "130"})) == 130
-    assert rad.effective_ocp(_resolve(_r("r1", band="433", ocp_ma="90"), "loraham", {"ocp_433": "130"})) == 90
-    assert rad.effective_ocp(_resolve(_r("r1", band="868"), "loraham", {"ocp_433": "130"})) == 100
-
-
-def test_m8_a_carried_auto_follows_the_high_power_flag():
-    rad = _radios()
-    s = _resolve(_r("r1", band="433", high_power=True), "loraham", {"ocp_433": "auto"})
-    assert rad.effective_ocp(s) == 140
-
-
-def test_a_carried_ocp_wrong_for_the_chip_refuses_naming_the_legacy_key():
-    """An SX1262 radio cannot represent 0 (off): a band value carried from an SX127x board is refused."""
-    with pytest.raises(ValueError) as e:
-        _resolve(_r("r1", model="waveshare-sx1262", band="868"), "waveshare-sx1262", {"ocp_868": "0"})
-    assert "ocp_868" in str(e.value)
+    assert rad.effective_ocp(_resolve(_r("r1", band="433"), "loraham")) == 100
+    assert rad.effective_ocp(_resolve(_r("r1", band="433", ocp_ma="90"), "loraham")) == 90
+    assert rad.effective_ocp(_resolve(_r("r1", band="433", high_power=True, high_power_band="433"), "loraham")) == 140

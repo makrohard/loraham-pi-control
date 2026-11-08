@@ -453,10 +453,6 @@ class RadioConfig:
         # {band: --hw preset} for the selected setup (empty when unset/unknown).
         return HW_SETUPS.get(self.hardware, HW_SETUPS[HW_DEFAULT])[1]
 
-    @property
-    def configured(self) -> bool:
-        return self.hardware != "unset" and bool(self._preset_map)
-
     def hw_preset(self, band: str) -> str:
         # Daemon `--hw` wire preset for a served band, or "" if this setup does not serve it.
         return self._preset_map.get(band, "")

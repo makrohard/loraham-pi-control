@@ -780,17 +780,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_hw.add_argument("rid", nargs="?", help="with remove or detect: the radio id (r1 … r99)")
     p_hw.add_argument("--confirm-phrase", default="", dest="hw_confirm_phrase",
                       help="with remove: remove-<rid>; without it the remove is a dry run that changes nothing")
-    # The per-band +20 dBm permission lives beside the hardware setup (daemon 1.2.0 --high-power):
-    # `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
-    # for the switch. Saves and marks the daemon restart-required; restarts nothing.
-    p_hw.add_argument("--high-power", nargs=2, metavar=("BAND", "off|on"),
-                      help="Allow POWER=20 on an SX127x board for BAND (433|868), off|on. Takes "
-                           "effect at the band's next daemon start. At +20 dBm: duty cycle <= 1 %%, "
-                           "VSWR <= 3:1, cooling; nothing enforces it; warranty void if disregarded")
-    p_hw.add_argument("--ocp", nargs=2, metavar=("BAND", "auto|MA"),
-                      help="PA over-current limit for BAND (433|868): auto (140 mA with high power, "
-                           "else 100) or mA the band's chip can represent. Takes effect at the "
-                           "band's next daemon start")
+    # The per-radio +20 dBm permission (daemon 1.2.0 --high-power, W311) and OCP, in the radio's row of the
+    # hardware list: `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
+    # for them. Saves; restarts nothing.
+    p_hw.add_argument("--high-power", nargs=2, metavar=("RID", "off|on"),
+                      help="Allow POWER=20 on radio RID (an SX127x board), off|on. Takes effect at the "
+                           "radio's next daemon start. At +20 dBm: duty cycle <= 1 %%, VSWR <= 3:1, "
+                           "cooling; nothing enforces it; warranty void if disregarded")
+    p_hw.add_argument("--ocp", nargs=2, metavar=("RID", "auto|MA"),
+                      help="PA over-current limit of radio RID: auto (140 mA with high power, else 100) "
+                           "or mA its chip can represent. Takes effect at the radio's next daemon start")
 
     # Guarded passthrough to the managed Meshtastic CLI (parsed by _cmd_meshtastic, not here — it
     # forwards arbitrary upstream argv). Registered only so it appears in the command list.

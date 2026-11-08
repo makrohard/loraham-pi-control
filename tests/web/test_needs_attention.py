@@ -33,7 +33,7 @@ def _svc(tmp_path, monkeypatch, *, states=None, evidence=None, hp=None, row_atte
     snap.stacks.append(ss)
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *a, **k: snap)
     monkeypatch.setattr(ControllerService, "high_power_state",
-                        lambda self, band, view=None: {"warn": band in (hp or ()), "mismatch": ""})
+                        lambda self, band, view=None, rid="": {"warn": band in (hp or ()), "mismatch": ""})
     monkeypatch.setattr(ControllerService, "running_tasks", lambda self: list(tasks))
     real = radio_start.hardware_view
 
@@ -99,7 +99,7 @@ def test_the_high_power_line_comes_back_on_every_visit(web, tmp_path, monkeypatc
     c = web(service_factory=lambda: svc)
     assert _dismiss_shown(c, csrf).status_code == 302
     page = c.get("/").get_data(as_text=True)
-    assert _lines(page) == [("/hardware/radio/r1", "+20 dBm permission enabled on 433 MHz")]
+    assert _lines(page) == [("/hardware/radio/r1", "+20 dBm permission enabled on r1 (433 MHz)")]
     assert 'action="/attention/dismiss"' not in page                       # nothing left to close
 
 

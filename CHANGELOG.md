@@ -9,7 +9,7 @@
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
   radio id (`lhpc stack stop daemon --radio rN`).
 - LoRaHAM daemon v1.4.0 (3ffee009, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
-  with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
+  with high power, else 100 mA; set per radio with `lhpc hardware --ocp <rid>`.
 - Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 98b656bf).
   Source builds need `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch it before `lhpc build daemon`.
 - Update: a libch341 checkout LHPC cloned from pine64 is re-cloned from the fork on `lhpc update`, not refused as
@@ -39,8 +39,8 @@ Upgrading from 0.13.x
 
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
-- 0.13.x per-band daemon settings stay in effect for every radio of that band; saving a radio's settings panel
-  stores that radio's own values in its row of config/radios.toml.
+- The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
+  grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
 - A script calling `lhpc kill <stack>@<band>`: use `lhpc kill <stack>` or `lhpc kill <stack>@<rid>`.
 - Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
   `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.

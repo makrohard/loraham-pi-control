@@ -88,17 +88,13 @@ def test_m1_nothing_is_written(tmp_path):
 
 # ---- M7: the carry switch (B4-D1) ---------------------------------------------------------------
 
-def test_m7_the_carry_switch_is_one_constant_defaulting_to_carry():
-    assert _radios().CARRY_BAND_PARAMS is True
-
-
-def test_m7_carrying_writes_nothing(tmp_path):
+def test_resolving_a_radios_settings_writes_nothing(tmp_path):
     rad = _radios()
     defaults = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off", "ocp": "auto"}
     assert rad.save(_paths(tmp_path), [_r("r1")], MODELS) == []
     p = tmp_path / "config" / "radios.toml"
     before = p.read_bytes()
-    s = rad.radio_settings(_r("r1"), MODELS["loraham"], {"tx_433": "direct"}, {}, defaults)
+    s = rad.radio_settings(_r("r1", txmode="direct"), MODELS["loraham"], {}, defaults)
     assert s.txmode == "direct"
     assert p.read_bytes() == before
 

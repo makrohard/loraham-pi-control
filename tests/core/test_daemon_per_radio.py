@@ -332,59 +332,33 @@ def test_run_starts_lets_an_interrupt_through():
 DEFAULTS = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off", "ocp": "auto"}
 
 
-def _resolve(radio, model="loraham", legacy=None, legacy_dp=None):
-    return _radios().radio_settings(radio, MODELS[model], legacy or {}, legacy_dp or {}, DEFAULTS)
+def _resolve(radio, model="loraham", legacy_dp=None):
+    return _radios().radio_settings(radio, MODELS[model], legacy_dp or {}, DEFAULTS)
 
 
-def test_m7_band_params_are_carried_by_default():
+def test_k2_an_unset_row_takes_the_defaults_and_nothing_is_carried():
+    """K2 (CLEANUP-DESIGN-v13 13.7/13.8): no per-band value exists or is carried; an unset field is the default."""
     rad = _radios()
-    assert rad.CARRY_BAND_PARAMS is True
-    s = _resolve(_r("r1", band="433"), legacy={"tx_433": "direct", "cadmon_433": "on", "cadrssi_433": "-100",
-                                                "hipower_433": "on", "tx_868": "managed"})
-    assert (s.txmode, s.cadmon, s.cadrssi, s.hipower) == ("direct", "on", -100, True)
+    assert not hasattr(rad, "CARRY_BAND_PARAMS")
+    s = _resolve(_r("r1", band="433"))
+    assert (s.txmode, s.cadmon, s.cadrssi, s.hipower, s.ocp) == ("managed", "off", -90, False, "auto")
 
 
-def test_a_value_on_the_row_wins_over_legacy():
-    s = _resolve(_r("r1", band="433", txmode="managed"), legacy={"tx_433": "direct"})
-    assert s.txmode == "managed"
-
-
-def test_q8_an_explicit_false_on_the_row_beats_a_legacy_on():
-    """Q8: the operator's saved high power off must not be replaced by a carried +20 dBm on."""
-    s = _resolve(_r("r1", band="433", high_power=False), legacy={"hipower_433": "on"})
+def test_q8_an_explicit_false_on_the_row_is_off():
+    s = _resolve(_r("r1", band="433", high_power=False))
     assert s.hipower is False
     p = _rd().daemon_params(_r("r1", band="433", high_power=False), MODELS["loraham"], s, rf_log="on")
     assert p["hipower"] == "off"
 
 
-def test_q8_an_unset_high_power_carries_a_legacy_on_on_a_model_with_the_switch():
-    assert MODELS["loraham"].high_power_switch
-    assert _resolve(_r("r1", band="433"), legacy={"hipower_433": "on"}).hipower is True
-
-
-def test_a_legacy_high_power_on_is_not_carried_onto_a_model_without_the_switch():
-    """B4-D4: not carried (off is the safe side)."""
-    assert not MODELS["waveshare-sx1262"].high_power_switch
-    s = _resolve(_r("r1", model="waveshare-sx1262", band="868"), model="waveshare-sx1262",
-                 legacy={"hipower_868": "on"})
-    assert s.hipower is False
-
-
-@pytest.mark.parametrize("legacy", [{"tx_433": "loud"}, {"cadmon_433": "yes"}, {"cadrssi_433": "-0"},
-                                    {"cadrssi_433": "-090"}, {"cadrssi_433": "5"}, {"cadrssi_433": "-131"},
-                                    {"cadrssi_433": True}, {"hipower_433": "1"}, {"tx_433": 1}])
-def test_an_invalid_carried_value_refuses_naming_its_key(legacy):
-    with pytest.raises(ValueError) as e:
-        _resolve(_r("r1", band="433"), legacy=legacy)
-    assert next(iter(legacy)) in str(e.value)
-
-
-def test_m7_with_the_switch_off_the_defaults_apply(monkeypatch):
-    rad = _radios()
-    monkeypatch.setattr(rad, "CARRY_BAND_PARAMS", False)
-    s = _resolve(_r("r1", band="433"), legacy={"tx_433": "direct", "hipower_433": "on", "ocp_433": "130"})
-    assert (s.txmode, s.hipower) == ("managed", False)
-    assert s.ocp == "130"                                         # OCP is carried regardless (RK11)
+@pytest.mark.parametrize("granted_on,band,want", [("433", "433", True), ("433", "868", False), (None, "433", False)])
+def test_k2_a_grant_holds_only_on_the_band_it_was_given_on(granted_on, band, want):
+    """W311 (handler DEC, replaces the band-edit guard): a grant whose band is not the row's is denied and named."""
+    s = _resolve(_r("r1", band=band, high_power=True, high_power_band=granted_on))
+    assert s.hipower is want
+    assert any("permission was given" in n for n in s.notes) is (not want)
+    p = _rd().daemon_params(_r("r1", band=band), MODELS["loraham"], s, rf_log="on")
+    assert p["hipower"] == ("on" if want else "off")
 
 
 def test_dp_carried_only_when_every_client_stack_agrees():

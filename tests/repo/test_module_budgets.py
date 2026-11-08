@@ -86,7 +86,6 @@ SPLITS = [
         "clear_daemon_feed",
         "daemon_feed",
         "daemon_set",
-        "high_power_for_band",
         "high_power_state",
         "set_high_power",
     )),

@@ -92,128 +92,89 @@ class DaemonParamsMixin:
         if key == "POWER":
             # The live predicate: the RUNNING family and permission decide what may be sent,
             # never the saved hardware setup. `apply_set` re-validates against the union only.
-            err = self._live_power_error(band, value, view.status)
+            err = self._live_power_error(band, value, view.status, rid)
             if err:
                 return False, err
         ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), key, value)
         return ok, detail
 
-    def _live_power_error(self, band: str, value: str, status: dict) -> str | None:
+    def _live_power_error(self, band: str, value: str, status: dict, rid: str = "") -> str | None:
         """One shared predicate for every LIVE POWER request (direct SET, profile apply, the
         start preflight) so they cannot disagree: `daemon_control.live_power_error` on the
-        daemon's own reported family and permission plus this band's SAVED switch."""
+        daemon's own reported family and permission plus the radio's grant (`_granted`)."""
         return daemon_control.live_power_error(
             value, daemon_control.chip_family_from_status(status),
-            daemon_control.high_power_from_status(status), self.high_power_for_band(band))
+            daemon_control.high_power_from_status(status), self._granted(band, rid))
 
-    def high_power_for_band(self, band: str) -> bool:
-        """The band's SAVED high-power switch (`hipower_<band>` on the daemon stack): exactly the
-        canonical `on`. SAVED INTENT ONLY — it authorises the next launch and is never the running
-        value; `daemon_control.high_power_from_status` is the running value. An explicit string
-        compare, never `bool(value)`: `bool("off")` is True."""
-        if band not in daemon_control.ALLOWED_BANDS:
-            return False
-        # LITERAL: the strict manifest enum stores exactly "on"; anything else -- "ON", " on ",
-        # "true", "1", a hand-edited file -- is not the permission. No stripping, no case folding:
-        # a normaliser here would quietly widen what the enum refused at save time (audit P1).
-        return self.stack_config("daemon").get(f"hipower_{band}") == "on"
-
-    def ocp_for_band(self, band: str) -> int | None:
-        """The `--ocp` (mA) this band's daemon is started with: the saved `ocp_<band>`, or for
-        `auto` 140 under the band's high-power switch and 100 otherwise. None = a saved value the
-        band's chip cannot represent (a hand edit, or the hardware changed since): the start
-        refuses it rather than send or clamp it."""
-        raw = self.stack_config("daemon").get(f"ocp_{band}", "auto")
-        if raw == "auto":
-            return 140 if self.high_power_for_band(band) else 100
-        ma = daemon_control.ocp_ma(raw)
-        if ma is None:
-            return None
-        return ma if daemon_control.ocp_valid(ma, self.chip_family_for_band(band)) else None
+    def _granted(self, band: str, rid: str = "") -> bool:
+        """The +20 dBm grant of radio `rid`, else of `band`'s one enabled radio (radio_start.effective_high_power,
+        W311); False when the band names no one radio: default denied, never a per-band switch."""
+        if not rid:
+            t = radio_start.band_rid(self, band) if band in daemon_control.ALLOWED_BANDS else None
+            rid = t.rid if t is not None and t.outcome == "proceed" else ""
+        return bool(rid) and radio_start.effective_high_power(self, rid)
 
     @invalidates_snapshot
-    def set_ocp(self, band: str, value: str) -> ActionResult:
-        """Save the band's PA over-current limit (`ocp_<band>` = `auto` or mA) through the same
-        `save_config_bundle()` transaction as the high-power switch: restart-required, restarts
-        nothing. A value is accepted only where the band's chip can represent it (the daemon's
-        own rule, 0 = protection off on SX127x included)."""
-        if band not in daemon_control.ALLOWED_BANDS:
-            return ActionResult(False, f"Invalid band '{band}' (allowed: "
-                                f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
-        fam = self.chip_family_for_band(band)
+    def set_ocp(self, rid: str, value: str) -> ActionResult:
+        """Save radio `rid`'s PA over-current limit (`ocp_ma` in its row: `auto` or mA) under the hardware list's lock;
+        restarts nothing. The list's own check accepts only a value the radio's chip can represent (the daemon's rule,
+        0 = protection off on SX127x included)."""
         ma = daemon_control.ocp_ma(value)
-        if value != "auto" and not (ma is not None and daemon_control.ocp_valid(ma, fam)):
-            legal = daemon_control.OCP_LEGAL_TEXT.get(fam) or " or ".join(
-                f"{k.upper()} {v}" for k, v in daemon_control.OCP_LEGAL_TEXT.items())
-            return ActionResult(False, f"OCP for {band} MHz must be 'auto' or mA the chip can "
-                                       f"represent ({legal}), not {value!r}")
-        r = self.save_config_bundle("daemon", values={f"ocp_{band}": value})
-        if not r.ok:
-            return r
-        return ActionResult(True, f"OCP for {band} MHz: {value} "
-                                  f"({self.ocp_for_band(band)} mA) — saved; takes effect when the "
-                                  "daemon on this band is next started (restart it)",
-                            details=list(r.details or []), data=dict(r.data or {}))
+        if value != "auto" and ma is None:
+            return ActionResult(False, f"OCP for {rid} must be 'auto' or mA, not {value!r}")
+        return radio_start.set_row_fields(self, rid, lambda row: {"ocp_ma": ma},          # auto clears it: unset = auto
+                                          f"OCP for {rid}: {value} — saved; takes effect when {rid}'s daemon is next "
+                                          "started (restart it)")
 
-    def high_power_state(self, band: str, view=None) -> dict:
-        """What the console shows for a band's high-power permission — saved intent beside the
-        RUNNING daemon's own report, never one masquerading as the other:
-          saved       the `hipower_<band>` switch
+    def high_power_state(self, band: str, view=None, rid: str = "") -> dict:
+        """What the console shows for a radio's high-power permission (radio `rid`, else `band`'s one radio) — the
+        grant beside the RUNNING daemon's own report, never one masquerading as the other:
+          saved       the grant (`_granted`)
           live        HIGHPOWER= from STATUS (True/False), None = unknown/unreachable/older daemon
           family      the RUNNING family from CHIPFAMILY= ("" = unknown); saved_family beside it
           warn        the SX127x hazard banner is due: running family sx127x AND live permission on
           mismatch    a sentence when saved and running disagree, else ""
         `view` is an already-read DaemonView (passive STATUS); read here when absent."""
         if view is None:
-            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
+            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
         status = view.status if view.reachable else {}
-        saved = self.high_power_for_band(band)
+        saved = self._granted(band, rid)
         live = daemon_control.high_power_from_status(status) if view.reachable else None
         fam = daemon_control.chip_family_from_status(status) if view.reachable else ""
-        saved_family = self.chip_family_for_band(band)
+        saved_family = self.chip_family_for_band(band, rid)
         mismatch = ""
         # The permission is inert on a running SX1262, so saved/running disagreement about it is
         # not worth a line there; a family disagreement always is.
         if view.reachable and fam and saved_family and fam != saved_family:
-            mismatch = (f"the running daemon is {fam} while the saved hardware setup is "
+            mismatch = (f"the running daemon is {fam} while the hardware list's radio is "
                         f"{saved_family} — restart the daemon")
         elif view.reachable and fam != "sx1262" and live is True and not saved:
-            mismatch = ("saved off, but the running daemon still holds the +20 dBm permission — "
+            mismatch = ("not granted, but the running daemon still holds the +20 dBm permission — "
                         "restart the daemon to revoke it")
         elif view.reachable and fam != "sx1262" and live is False and saved:
-            mismatch = "saved on, but the running daemon was started without it — restart the daemon to enable it"
+            mismatch = "granted, but the running daemon was started without it — restart the daemon to enable it"
         elif view.reachable and live is None and saved:
-            mismatch = "saved on, but the running daemon does not report HIGHPOWER= (older daemon) — update it"
-        return {"band": band, "saved": saved, "live": live, "family": fam,
+            mismatch = "granted, but the running daemon does not report HIGHPOWER= (older daemon) — update it"
+        return {"band": band, "rid": rid, "saved": saved, "live": live, "family": fam,
                 "saved_family": saved_family, "reachable": view.reachable,
                 "warn": bool(fam == "sx127x" and live is True), "mismatch": mismatch}
 
     @invalidates_snapshot
-    def set_high_power(self, band: str, value: str) -> ActionResult:
-        """Save the band's high-power switch (`hipower_<band>` = `off`/`on`) through the ordinary
-        `save_config_bundle()` transaction, which writes the value and the restart-required marker
-        together and restarts NOTHING (`lhpc config daemon` exposes no daemon start option; the CLI
-        for this is `lhpc hardware --high-power <band> on|off`). The setting authorises the
-        daemon's next launch (`--high-power` in its argv); the running process keeps whatever
-        permission it was started with until it is restarted. `value` is taken literally -- the
-        service boundary agrees with the manifest enum instead of holding a second, looser
-        definition of "strict"."""
-        if band not in daemon_control.ALLOWED_BANDS:
-            return ActionResult(False, f"Invalid band '{band}' (allowed: "
-                                f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
-        v = value
-        if v not in ("off", "on"):
+    def set_high_power(self, rid: str, value: str) -> ActionResult:
+        """Grant or withdraw radio `rid`'s +20 dBm permission (`off`/`on`, taken literally) in its row, with the band it
+        is given on (`high_power_band`: a hand-moved band drops it, W311), under the hardware list's lock; restarts
+        NOTHING (`lhpc hardware --high-power <rid> on|off`). The grant authorises the daemon's next launch
+        (`--high-power` in its argv); the running process keeps whatever permission it was started with until it is
+        restarted. A model without the switch is refused by the list's own check."""
+        if value not in ("off", "on"):
             return ActionResult(False, f"high-power switch must be 'off' or 'on', not {value!r}")
-        r = self.save_config_bundle("daemon", values={f"hipower_{band}": v})
-        if not r.ok:
-            return r
-        note = ("saved; takes effect when the daemon on this band is next started (restart it) — "
-                "at +20 dBm the transmit duty cycle must not exceed 1 %, keep the chip cooled; "
-                "LHPC does not measure or enforce this; warranty void if disregarded"
-                if v == "on" else
-                "saved; a running daemon keeps its permission until it is restarted")
-        return ActionResult(True, f"high-power permission for {band} MHz: {v} — {note}",
-                            details=list(r.details or []), data=dict(r.data or {}))
+        on = value == "on"
+        note = ("saved; takes effect when its daemon is next started (restart it) — at +20 dBm the transmit duty cycle "
+                "must not exceed 1 %, keep the chip cooled; LHPC does not measure or enforce this; warranty void if "
+                "disregarded" if on else "saved; a running daemon keeps its permission until it is restarted")
+        return radio_start.set_row_fields(self, rid, lambda row: {"high_power": on,
+                                                                  "high_power_band": row.band if on else None},
+                                          f"high-power permission for {rid} ({{band}} MHz): {value} — {note}")
 
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
         """The band the daemon-params panel/apply uses: the requested one if valid, else a fixed-band stack's own band,
@@ -378,11 +339,11 @@ class DaemonParamsMixin:
         # would not be truthful configuration. Every other radio-param failure stays warn-only.
         if str(applies.get("POWER", "")).strip() == "20":
             view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
-            err = (self._live_power_error(band, "20", view.status) if view.reachable
+            err = (self._live_power_error(band, "20", view.status, rid) if view.reachable
                    else f"daemon not serving {band} MHz")
             if err:
                 lines.append(f"  [fail] {band}: {stack_id} requests POWER=20 but {err} "
-                             f"(saved switch {'on' if self.high_power_for_band(band) else 'off'}, "
+                             f"(grant {'on' if self._granted(band, rid) else 'off'}, "
                              f"running HIGHPOWER={view.status.get('HIGHPOWER', '?')})")
                 return lines, False, (f"{stack_id} requests POWER=20 on {band} MHz without the "
                                       "running daemon's high-power permission")
@@ -427,7 +388,7 @@ class DaemonParamsMixin:
                 "high_power": self.high_power_state(b),
                 "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b),
                                                  self.chip_family_for_band(b),
-                                                 self.high_power_for_band(b))}
+                                                 self._granted(b))}
 
     @invalidates_snapshot
     def save_daemon_params(self, target: str, band: str, values: dict, rid: str = "") -> ActionResult:
@@ -448,11 +409,10 @@ class DaemonParamsMixin:
             return ActionResult(False, f"{target} has no configurable daemon parameters")
         if not band:
             # No served band -> the keys would be `dp__<PARAM>`: stored, never read, reported saved.
-            return ActionResult(False, f"Cannot save daemon parameters for '{target}': no radio "
-                                       "hardware configured — choose your board in the daemon "
-                                       "Hardware settings first")
+            return ActionResult(False, f"Cannot save daemon parameters for '{target}': no enabled radio in the "
+                                       "hardware list — add a radio on the Hardware page first")
         edits, err = radio_start.dp_updates(self, sid, band, values, self.chip_family_for_band(band),
-                                            self.high_power_for_band(band))
+                                            self._granted(band))
         if err:
             return ActionResult(False, err)
         updates = {f"dp_{band}_{name}": v for name, v in edits.items()}

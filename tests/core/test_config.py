@@ -83,9 +83,9 @@ def test_save_stack_config_validates(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    bad = svc.save_stack_config("daemon", {"cadrssi_433": "999"})   # out of range
+    bad = svc.save_stack_config("daemon", {"cadrssi": "999"})       # out of range
     assert not bad.ok
-    good = svc.save_stack_config("daemon", {"radio": "868", "cadrssi_433": "-100"})
+    good = svc.save_stack_config("daemon", {"radio": "868", "cadrssi": "-100"})
     assert good.ok and svc.stack_config("daemon")["radio"] == "868"
 
 

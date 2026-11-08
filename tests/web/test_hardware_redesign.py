@@ -133,7 +133,7 @@ def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, m
 
 def _hp(monkeypatch, warn=(), mismatch=None):
     from lhpc.core.services import ControllerService
-    monkeypatch.setattr(ControllerService, "high_power_state", lambda self, band, view=None: {
+    monkeypatch.setattr(ControllerService, "high_power_state", lambda self, band, view=None, rid="": {
         "warn": band in warn, "mismatch": (mismatch or {}).get(band, "")})
 
 
@@ -146,7 +146,7 @@ def test_the_high_power_warning_and_mismatch_show_on_the_detail_page_and_in_the_
     assert 'id="hw-hp-warn"' in r1 and "+20 dBm permission is enabled on 433 MHz" in r1 and 'id="hw-hp-warn"' not in r2
     assert "High-power switch, 868 MHz: saved on, the running daemon reports off" in r2
     page = _text(c.get("/hardware").get_data(as_text=True))
-    assert re.search(r'data-rid="r1">.*?⚠ \+20 dBm permission enabled on 433 MHz.*?data-rid="r2"', page)
+    assert re.search(r'data-rid="r1">.*?⚠ \+20 dBm permission enabled on r1 \(433 MHz\).*?data-rid="r2"', page)
     assert re.search(r'data-rid="r2">.*?⚠ high-power switch: saved on, the running daemon reports off', page)
 
 

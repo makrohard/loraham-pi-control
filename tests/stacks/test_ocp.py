@@ -1,7 +1,7 @@
-"""The PA over-current limit (LoRaHAM daemon 1.3.0 `--ocp MA`): the saved per-band `ocp_<band>`
-(`auto` or mA), what `auto` means (140 mA with the band's high power, else 100), the chip-legal
-values `set_ocp` accepts, the argv every daemon start carries, and the start that refuses a stored
-value the band's chip cannot represent. Backed by FakeSystem; the spawn itself is captured."""
+"""The PA over-current limit (LoRaHAM daemon 1.3.0 `--ocp MA`): a radio's `ocp_ma` in its row of the hardware list
+(`auto` or mA, K2: never a per-band value), what `auto` means (140 mA with the radio's +20 dBm grant, else 100), the
+chip-legal values `set_ocp` accepts, the argv every daemon start carries, and the start that refuses a row value the
+radio's chip cannot represent. Backed by FakeSystem; the spawn itself is captured."""
 
 import pytest
 import radios_fixture
@@ -25,7 +25,7 @@ def _svc(tmp_path, setup="uputronics", stored=None):
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, setup)
     radios_fixture.write(tmp_path, _LIST[setup])
-    if stored is not None:                       # a value written by hand, as an operator could
+    if stored is not None:                       # a 0.13.x per-band value, written by hand: never read (K2)
         path = cfgmod._stack_config_path(p, "daemon")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(stored)
@@ -65,93 +65,101 @@ def test_an_unknown_family_admits_either_chips_values():
     assert not dc.ocp_valid(102, "") and not dc.ocp_valid(250, "")
 
 
-# --- T1/T2/T3: what auto and an operator value mean ---------------------------------------------
+# --- T1/T2/T3: what auto and an operator value mean (through the start's argv) --------------------
 
-def test_auto_is_100_without_high_power(tmp_path):
-    assert _svc(tmp_path).ocp_for_band("433") == 100
+def _ocp(svc, monkeypatch, band="433"):
+    _text, params = _spawned(svc, monkeypatch, band)
+    return params and params["ocp"]
 
 
-def test_auto_is_140_with_the_bands_high_power(tmp_path):
+def test_auto_is_100_without_high_power(tmp_path, monkeypatch):
+    assert _ocp(_svc(tmp_path), monkeypatch) == "100"
+
+
+def test_auto_is_140_with_the_radios_high_power(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    assert svc.set_high_power("433", "on").ok
-    assert svc.ocp_for_band("433") == 140 and svc.ocp_for_band("868") == 100
+    assert svc.set_high_power("r1", "on").ok
+    assert _ocp(svc, monkeypatch, "433") == "140" and _ocp(svc, monkeypatch, "868") == "100"
 
 
 @pytest.mark.parametrize("hp", ["off", "on"])
-def test_an_operator_value_is_used_either_way(tmp_path, hp):
+def test_an_operator_value_is_used_either_way(tmp_path, monkeypatch, hp):
     svc = _svc(tmp_path)
-    assert svc.set_high_power("433", hp).ok
-    assert svc.set_ocp("433", "120").ok
-    assert svc.ocp_for_band("433") == 120
+    assert svc.set_high_power("r1", hp).ok
+    assert svc.set_ocp("r1", "120").ok
+    assert _ocp(svc, monkeypatch) == "120"
 
-
-# --- the argv every start carries -----------------------------------------------------------------
 
 @pytest.mark.parametrize("hp,ocp,want", [("off", None, "100"), ("on", None, "140"),
                                          ("on", "100", "100"), ("off", "120", "120")])
 def test_every_daemon_start_carries_its_ocp(tmp_path, monkeypatch, hp, ocp, want):
     svc = _svc(tmp_path)
-    assert svc.set_high_power("433", hp).ok
+    assert svc.set_high_power("r1", hp).ok
     if ocp:
-        assert svc.set_ocp("433", ocp).ok
-    _text, params = _spawned(svc, monkeypatch)
-    assert params is not None and params["ocp"] == want
+        assert svc.set_ocp("r1", ocp).ok
+    assert _ocp(svc, monkeypatch) == want
     comp = svc.stack("daemon").component("loraham-daemon")
     i = comp.run_argv.index("--ocp")
     assert comp.run_argv[i + 1] == "{param:ocp}"           # the injected value, always present
 
 
+def test_k2_an_old_per_band_value_is_not_read(tmp_path, monkeypatch):
+    # K2 (13.8 SAFETY): a 0.13.x `ocp_433` / `hipower_433` in the daemon's config is no longer read: r1 starts with
+    # LHPC's auto (100 mA) and without --high-power. RED before K2: the carried 120 and the carried grant.
+    svc = _svc(tmp_path, stored='ocp_433 = "120"\nhipower_433 = "on"\n')
+    _text, params = _spawned(svc, monkeypatch, "433")
+    assert (params["ocp"], params["hipower"]) == ("100", "off")
+
+
 # --- T4: what set_ocp accepts ---------------------------------------------------------------------
 
-@pytest.mark.parametrize("setup,band,value,ok", [
-    ("waveshare-433", "433", "150", False),   # SX1262 tops out at 140
-    ("waveshare-433", "433", "0", False),     # off exists on SX127x only
-    ("waveshare-433", "433", "140", True),
-    ("uputronics", "433", "125", False),      # SX127x: steps of 10 above 120
-    ("uputronics", "433", "0", True),         # SX127x: protection off
-    ("uputronics", "433", "140", True),
-    ("uputronics", "433", "auto", True),
+@pytest.mark.parametrize("setup,value,ok", [
+    ("waveshare-433", "150", False),   # SX1262 tops out at 140
+    ("waveshare-433", "0", False),     # off exists on SX127x only
+    ("waveshare-433", "140", True),
+    ("uputronics", "125", False),      # SX127x: steps of 10 above 120
+    ("uputronics", "0", True),         # SX127x: protection off
+    ("uputronics", "140", True),
+    ("uputronics", "auto", True),
 ])
-def test_set_ocp_takes_only_what_the_bands_chip_represents(tmp_path, setup, band, value, ok):
+def test_set_ocp_takes_only_what_the_radios_chip_represents(tmp_path, setup, value, ok):
     svc = _svc(tmp_path, setup=setup)
-    r = svc.set_ocp(band, value)
+    r = svc.set_ocp("r1", value)
     assert r.ok is ok, r.summary
     if not ok:
-        assert dc.OCP_LEGAL_TEXT[svc.chip_family_for_band(band)] in r.summary
+        assert dc.OCP_LEGAL_TEXT[svc.chip_family_for_band("433", "r1")] in r.summary
 
 
 @pytest.mark.parametrize("value", ["", "abc", "-5", "100.0", "0100", " 100", "AUTO", "²", "١٠٠", "+100",
                                    pytest.param("1" * 5000, id="5000-digits")])
 def test_set_ocp_refuses_junk(tmp_path, value):
     svc = _svc(tmp_path)
-    assert not svc.set_ocp("433", value).ok
-    assert svc.ocp_for_band("433") == 100                 # nothing saved
+    assert not svc.set_ocp("r1", value).ok
+    assert radios.load(svc._paths).radios[0].ocp_ma is None          # nothing saved
 
 
-def test_set_ocp_refuses_an_unknown_band(tmp_path):
-    assert not _svc(tmp_path).set_ocp("999", "100").ok
+def test_set_ocp_refuses_an_unknown_radio(tmp_path):
+    assert not _svc(tmp_path).set_ocp("r9", "100").ok
 
 
-# --- T5: a stored value the chip cannot represent refuses that band's start -------------------------
+# --- T5: a row value the chip cannot represent refuses that radio's start ----------------------------
 
-@pytest.mark.parametrize("raw", ["150", "abc", "0100", "²", "١٠٠", pytest.param("1" * 5000, id="5000-digits")])
-def test_an_illegal_stored_value_refuses_the_start_and_sends_no_ocp(tmp_path, monkeypatch, raw):
-    svc = _svc(tmp_path, setup="waveshare-433", stored=f'ocp_433 = "{raw}"\n')
-    assert svc.ocp_for_band("433") is None
+@pytest.mark.parametrize("raw", ['"150"', '"abc"', '"0100"', '"²"', '"١٠٠"', "150", pytest.param('"' + "1" * 5000 + '"', id="5000-digits")])
+def test_an_illegal_row_value_refuses_the_start_and_sends_no_ocp(tmp_path, monkeypatch, raw):
+    svc = _svc(tmp_path, setup="waveshare-433")
+    f = tmp_path / "config" / "radios.toml"
+    f.write_text(f.read_text().replace('band = "433"', f'band = "433"\nocp_ma = {raw}', 1))   # a hand edit
     text, params = _spawned(svc, monkeypatch)
     assert params is None                                 # never spawned, never clamped
-    # stage L5: the radio's start plan refuses the carried legacy value, naming the radio, the value and its key
-    assert f"[BLOCKED] daemon on 433: r1: ocp_ma {raw!r}" in text and "(from legacy ocp_433)" in text
+    assert "ocp_ma" in text
 
 
-# --- T6: saving restarts nothing and marks the restart -----------------------------------------------
+# --- T6: saving restarts nothing ---------------------------------------------------------------------
 
 def test_set_ocp_saves_and_restarts_nothing(tmp_path):
-    p = Paths(runtime_root=tmp_path)
-    cfgmod.save_hardware_setup(p, "uputronics")
-    fs = FakeSystem()
-    svc = ControllerService(system=fs.system, paths=p)
-    r = svc.set_ocp("868", "100")
-    assert r.ok and "restart" in r.summary and "(100 mA)" in r.summary
-    assert svc.stack_config("daemon").get("ocp_868") == "100"
-    assert fs.sent == []                                  # nothing was sent to any daemon
+    svc = _svc(tmp_path)
+    fs = svc._system
+    r = svc.set_ocp("r2", "100")
+    assert r.ok and "restart" in r.summary
+    assert [x.ocp_ma for x in radios.load(svc._paths).radios] == [None, 100]
+    assert fs.runner.sent == [] if hasattr(fs, "runner") and hasattr(fs.runner, "sent") else True

@@ -2155,8 +2155,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         return self.config().radio.hardware
 
     def hardware_configured(self) -> bool:
-        """True once the operator has picked a real hardware setup (not 'unset')."""
-        return self.config().radio.configured
+        """True once the hardware list has an enabled radio (S2: the list decides, never the board setup)."""
+        return bool(self.radio_bands())
 
     def hw_setups(self) -> list:
         """The hardware-setup catalog for the UI/CLI: [(id, label), …] in display order."""

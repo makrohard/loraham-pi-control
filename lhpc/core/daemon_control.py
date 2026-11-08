@@ -353,7 +353,7 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
     `family` narrows the POWER range to the chip actually fitted; omitted, POWER is validated
     against the union of both families and the daemon refuses what its own chip cannot do.
 
-    `high_power` is the band's SAVED high-power switch (`service.high_power_for_band`): with it,
+    `high_power` is the radio's +20 dBm grant (`radio_start.effective_high_power`): with it,
     exactly 20 is admitted on an SX127x family. It matters ONLY when the family is known to be
     SX127x — with no family this stays the non-authoritative union utility (`apply_set` calls it
     that way), and its default of False must never turn that second check into a refusal of an
@@ -486,7 +486,7 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
                                     saved board
 
     Returns the reason string, or None when the value may be sent. `saved_on` is
-    `service.high_power_for_band(band)`; `live_high_power` is `high_power_from_status`."""
+    the radio's grant (`radio_start.effective_high_power`); `live_high_power` is `high_power_from_status`."""
     try:
         n = int(str(value).strip())
     except ValueError:
@@ -500,12 +500,12 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
             if live_high_power is True and saved_on:
                 return None
             if live_high_power is True:
-                return ("POWER=20 refused: the band's high-power switch is saved off; the "
-                        "running daemon still holds the permission until it is restarted")
+                return ("POWER=20 refused: the radio's +20 dBm permission is saved off; the "
+                        "running daemon still holds it until it is restarted")
             if live_high_power is False:
                 return ("POWER=20 refused: high-power permission is not enabled on the running "
-                        "daemon (switch it on in the daemon Hardware settings, then restart the "
-                        "daemon)")
+                        "daemon (grant it to the radio in the daemon Hardware settings, then restart "
+                        "its daemon)")
             return ("POWER=20 refused: the running daemon does not report HIGHPOWER= (older "
                     "daemon) — update it")
         return "POWER must be in [2, 17] on the running SX127x (or exactly 20 with high-power)"

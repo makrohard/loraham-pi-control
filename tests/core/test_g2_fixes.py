@@ -209,16 +209,6 @@ def test_c57_a_switchable_client_without_a_requested_band_takes_a_band_the_list_
     assert res.data["band"] == "868" and fake.sent and {path for path, _v in fake.sent} == {"/tmp/loraconf-r1.sock"}
 
 
-@pytest.mark.parametrize("key,value", [("cadrssi_433", "zzz"), ("ocp_433", "nope"), ("cadmon_433", "maybe")])
-def test_r7_control_a_radio_whose_settings_do_not_resolve_sends_no_row_value(tmp_path, key, value):
-    """CONTROL: its start is refused (radio_settings raises), so its row value reaches no SET either; the stack's
-    value goes to its radio's socket."""
-    res, sets = _apply(tmp_path, _pair(dp868=()), {"dp_433_CADWAIT": "700", key: value}, "433")
-    assert res.ok, (res.summary, res.details)
-    assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=700"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=250")], \
-        (res.summary, res.details)
-
-
 @pytest.mark.parametrize("band", ["915", "", "r1"])
 def test_r6_a_band_outside_433_868_applies_nothing(tmp_path, band):
     """A unit check: Apply resolves every band it is given to a served one first, so the public path never hands

@@ -56,7 +56,6 @@ def _band_starts(details):
 def test_config_default_is_unconfigured(tmp_path):
     c = config.load_config(Paths(runtime_root=tmp_path))
     assert c.radio.hardware == "unset"
-    assert c.radio.configured is False
 
 
 @pytest.mark.parametrize("setup,bands,presets", [
@@ -72,7 +71,6 @@ def test_config_setup_bands_and_presets(tmp_path, setup, bands, presets):
     config.save_hardware_setup(p, setup)
     c = config.load_config(p)
     assert c.radio.hardware == setup and c.diagnostics == []
-    assert c.radio.configured
     for b in ("433", "868"):
         assert c.radio.hw_preset(b) == presets.get(b, "")
 
@@ -125,7 +123,7 @@ def test_daemon_hidden_injected_params_exist(tmp_path):
     daemon = _svc(tmp_path).stack("daemon").component("loraham-daemon")
     names = {p.name for p in daemon.run_params}
     assert {"hw", "txmode", "cadmon", "cadrssi"} <= names          # injected at spawn
-    assert {"tx_433", "tx_868", "cadmon_433", "cadmon_868"} <= names  # per-band stored values kept
+    assert not {"tx_433", "tx_868", "cadmon_433", "cadmon_868"} & names   # K2: no per-band value (13.8)
     radio = next(p for p in daemon.run_params if p.name == "radio")
     assert "both" not in radio.choices and set(radio.choices) == {"433", "868"}
 
@@ -140,10 +138,10 @@ def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     for target in ("daemon", "meshcore", "chat"):
-        assert "no radio hardware configured" in svc.hardware_block(target)
+        assert "no enabled radio in the hardware list" in svc.hardware_block(target)
         for apply in (False, True):
             r = svc.start(target, apply=apply)
-            assert not r.ok and "no radio hardware configured" in r.summary
+            assert not r.ok and "no enabled radio in the hardware list" in r.summary
             assert "lhpc hardware" in " ".join(r.next_commands)
 
 

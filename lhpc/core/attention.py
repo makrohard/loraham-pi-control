@@ -33,13 +33,13 @@ def conditions(svc) -> list:
     rows = [r for r in view["rows"] if r["enabled"]]
     for r in rows:
         out += [_item(f"radio:{r['rid']}:{t}", f"{r['rid']}: {t}", "radio", r["rid"]) for t in r.get("attention", [])]
-    for band in sorted({r["band"] for r in rows}):
-        rid = next(r["rid"] for r in rows if r["band"] == band)
-        hp = svc.high_power_state(band)
+    for r in rows:
+        rid, band = r["rid"], r["band"]
+        hp = svc.high_power_state(band, rid=rid)
         if hp.get("warn"):
-            out.append(_item(f"hp:{band}", f"+20 dBm permission enabled on {band} MHz", "radio", rid, sticky=True))
+            out.append(_item(f"hp:{rid}", f"+20 dBm permission enabled on {rid} ({band} MHz)", "radio", rid, sticky=True))
         if hp.get("mismatch"):
-            out.append(_item(f"hpmis:{band}", f"high-power switch, {band} MHz: {hp['mismatch']}", "radio", rid))
+            out.append(_item(f"hpmis:{rid}", f"high-power switch, {rid} ({band} MHz): {hp['mismatch']}", "radio", rid))
     if view.get("copybox") is not None:
         out.append(_item("usb-setup", "the USB access setup is needed", "usb", ""))
     for ss in svc.build_snapshot().stacks:

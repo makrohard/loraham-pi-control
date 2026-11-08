@@ -18,6 +18,7 @@ from . import (
     instances,
     procident,
     radio_start,
+    radios,
     runtime_fs,
     validators,
 )
@@ -554,10 +555,10 @@ class LifecycleOpsMixin:
         return "", []
 
     def hardware_block(self, target: str) -> str:
-        """A reason string when NO radio hardware is configured and this stack needs a radio, else "".
-        Fresh installs default to 'unset' — the daemon must not start until the operator picks a board
-        in the daemon Hardware settings. The daemon itself and any band-declaring stack are gated; a
-        stack that needs no radio is not. Remedy = configure hardware, not stop a holder."""
+        """A reason string when the hardware list has no enabled radio (S2) and this stack needs a radio, else "".
+        A fresh install has no list — the daemon must not start until a radio is added on the Hardware page. The
+        daemon itself and any band-declaring stack are gated; a stack that needs no radio is not. Remedy = add a
+        radio, not stop a holder."""
         if self.hardware_configured():
             return ""
         order = self._run_order(target)
@@ -566,8 +567,10 @@ class LifecycleOpsMixin:
         needs_radio = self._is_daemon_target(target) or any((c.band or c.bands) for _, c in order)
         if not needs_radio:
             return ""
-        return ("no radio hardware configured — choose your board in the daemon Hardware settings "
-                "before starting a radio stack")
+        st = radios.load(self._paths)
+        why = ("the hardware list does not load: " + "; ".join(st.reasons[:3])) if st.kind == radios.INVALID \
+            else "no enabled radio in the hardware list"
+        return f"{why} — add a radio on the Hardware page before starting a radio stack"
 
     def radio_mode_block(self, target: str) -> str:
         """A reason string when the hardware list has no enabled radio on ANY band this stack can use, else "" (S2).
@@ -2013,7 +2016,10 @@ class LifecycleOpsMixin:
         # Defense-in-depth: never launch the daemon with no hardware configured (the start-path gate
         # already refuses, but a daemon-only/internal caller must fail closed here too).
         if not self.hardware_configured():
-            return ["  [BLOCKED] daemon: no radio hardware configured (lhpc hardware)"], False, ""
+            st = radios.load(self._paths)
+            why = ("the hardware list does not load: " + "; ".join(st.reasons[:3])) if st.kind == radios.INVALID \
+                else "no enabled radio in the hardware list"
+            return [f"  [BLOCKED] daemon: {why} (lhpc hardware)"], False, ""
         # Bands this start must make ready — always explicit single band(s) clamped to the active mode
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
