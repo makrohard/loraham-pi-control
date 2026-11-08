@@ -1734,7 +1734,7 @@ class ParamsConfigMixin:
                         return _mm.normalize(role)
             except (OSError, PathContainmentError, ValueError, UnicodeError):
                 pass                       # unreadable/absent generated file: the saved mode
-        return (self.meshcore_mode(inst) if getattr(inst, "slot", 0) else self.meshcore_mode_display()) or _mm.DEFAULT_MODE
+        return self.meshcore_mode_display() or _mm.DEFAULT_MODE
 
     def meshcore_mode_display(self) -> str:
         """The SAVED mode for read-only surfaces (status, the console, stop verification): ""
