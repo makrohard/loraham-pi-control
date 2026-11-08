@@ -172,6 +172,43 @@ def test_k1_an_explicit_band_the_list_does_not_serve_is_refused_never_remapped(t
     assert fake.sent == []
 
 
+@pytest.mark.parametrize("band", ["", "433", "868"])
+def test_c57_a_fixed_band_client_keeps_its_band_when_its_radio_is_disabled(tmp_path, monkeypatch, band):
+    """G1-C57 B1: meshcom (433 only) beside a list whose 433 radio is disabled and whose 868 radio runs: its panel
+    stays on 433 (an explicit 868 too: the panel clamps to the stack's band) and its Apply is refused by name, nothing
+    reaches r2. RED on b872e622: the panel moved to 868 and its Apply sent the SETs to r2's socket."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.services import ControllerService
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(p, "uputronics")
+    R = _radios().Radio
+    _write(tmp_path, [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False), R("r2", "b", "uputronics", "868", ce="ce1")])
+    fake = _ConfDaemon(serve={"/tmp/loraconf-r2.sock": _status("r2", "868")})
+    svc = ControllerService(system=fake.system, paths=p)
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "meshcom")
+    view = svc.daemon_params_view("meshcom", band)
+    assert (view["band"], view["bands"]) == ("433", ["433"])
+    res = svc.apply_daemon_params("meshcom", view["band"])     # the band the panel shows, as its Apply button sends it
+    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz")
+    assert fake.sent == []
+
+
+def test_c57_a_switchable_client_without_a_requested_band_takes_a_band_the_list_serves(tmp_path, monkeypatch):
+    """The other half of G1-C57 B1: kiss (433 or 868) on a list with r1 on 868 only applies on 868 when no band is
+    requested, never on its primary 433."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.services import ControllerService
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(p, "uputronics")
+    _write(tmp_path, [_radios().Radio("r1", "b", "uputronics", "868", ce="ce1")])
+    fake = _ConfDaemon(serve={"/tmp/loraconf-r1.sock": _status("r1", "868")})
+    svc = ControllerService(system=fake.system, paths=p)
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
+    assert svc.daemon_params_view("kiss")["band"] == "868"
+    res = svc.apply_daemon_params("kiss")
+    assert res.data["band"] == "868" and fake.sent and {path for path, _v in fake.sent} == {"/tmp/loraconf-r1.sock"}
+
+
 @pytest.mark.parametrize("key,value", [("cadrssi_433", "zzz"), ("ocp_433", "nope"), ("cadmon_433", "maybe")])
 def test_r7_control_a_radio_whose_settings_do_not_resolve_sends_no_row_value(tmp_path, key, value):
     """CONTROL: its start is refused (radio_settings raises), so its row value reaches no SET either; the stack's

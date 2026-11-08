@@ -216,17 +216,17 @@ class DaemonParamsMixin:
                             details=list(r.details or []), data=dict(r.data or {}))
 
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
-        """The single band the daemon-params panel/apply uses: the requested band if valid (never remapped: a band
-        the list does not serve is refused downstream, by name), else the stack's fixed band (from its
-        band-component), else the first served band; "" when nothing is requested and no band is served."""
+        """The band the daemon-params panel/apply uses: the requested one if valid, else a fixed-band stack's own band,
+        served or not (G1-C57 B1: a band the list does not serve is refused downstream, by name), else a switchable
+        stack's served band, else the first served band, else ""."""
         if band in daemon_control.ALLOWED_BANDS:
             return band
+        comps = s.components if (s := self._owner_stack(target)) else ()
+        own = sorted({c.band for c in comps if c.band})
+        if own and not any(c.bands for c in comps):
+            return own[0]
         active = self.radio_bands()                              # the bands the hardware list serves
-        if not active:
-            return ""
-        s = self._owner_stack(target)
-        fixed = sorted({c.band for c in (s.components if s else ()) if c.band} & set(active))
-        return fixed[0] if fixed else active[0]
+        return (sorted(set(own) & set(active)) or list(active) or [""])[0]
 
     def chip_family_for_band(self, band: str, rid: str = "") -> str:
         """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware

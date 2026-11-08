@@ -138,11 +138,13 @@ def test_w5_2_a_set_is_checked_against_this_radios_chip(tmp_path):
     assert not daemon_control.validate_set("POWER", "20", svc.chip_family_for_band("868"))
 
 
-def test_w4_7_a_per_band_stop_never_signals_a_daemon_it_does_not_own(tmp_path):
-    # A 0.13.x daemon (`--radio 433`, no `--id`, no ownership record) on r1's band: the stop is not verified,
-    # names the pid, and signals nothing (record-driven stop, A §2.3).
+@pytest.mark.parametrize("argv", [["loraham_daemon", "--radio", "433"],                 # a 0.13.x daemon, no --id
+                                  ["loraham_daemon", "--radio", "433", "--id", "r1"]])  # r1's, started outside lhpc
+def test_w4_7_a_per_band_stop_never_signals_a_daemon_it_does_not_own(tmp_path, argv):
+    # A daemon with no ownership record on r1's band: the stop is not verified, names the pid, and signals nothing
+    # (record-driven stop, A §2.3).
     from lhpc.core.outcomes import Outcome
-    svc = _svc(tmp_path, radios_fixture.RADIOS, cmdlines_data={4242: ["loraham_daemon", "--radio", "433", "--id", "r1"]})
+    svc = _svc(tmp_path, radios_fixture.RADIOS, cmdlines_data={4242: argv})
     res = svc.stop("daemon", apply=True, band="433")
     assert not res.ok
     assert [(r.component, r.outcome) for r in res.results] == [("loraham-daemon", Outcome.MANUAL_REQUIRED)]

@@ -20,7 +20,9 @@ def _rows(tmp_path):
     return [(r.id, r.name, r.model, r.band, r.ce) for r in radios.load(Paths(runtime_root=tmp_path)).radios]
 
 
-# The design table (rule 1): setup -> the rows written to an absent list.
+# The design table (rule 1): setup -> the rows written to an absent list. A really absent one: conftest's baseline-list
+# fake is off, so setup_radios's probe and every later read see the same real file (G1-C57 N2, DEC: the fake stays).
+@pytest.mark.no_default_hardware
 @pytest.mark.parametrize("setup,rows", [
     ("loraham", [("r1", "loraham 433", "loraham", "433", ""), ("r2", "loraham 868", "loraham", "868", "")]),
     ("uputronics", [("r1", "uputron 433", "uputronics", "433", "ce0"), ("r2", "uputron 868", "uputronics", "868", "ce1")]),
@@ -36,6 +38,8 @@ def test_a_setup_writes_one_row_per_band(tmp_path, setup, rows):
     assert res.details[-1] == "  hardware list written: " + ", ".join(
         f"{rid} {name!r} ({model}, {band} MHz)" for rid, name, model, band, _ce in rows)
     assert radios.load(Paths(runtime_root=tmp_path)).startable
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.radio_bands() == tuple(sorted({band for _rid, _n, _m, band, _ce in rows}))   # the written list decides
 
 
 def test_unset_writes_no_list(tmp_path):
