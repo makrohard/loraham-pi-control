@@ -2724,7 +2724,7 @@ def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypat
     assert "radio hardware not set" in page and "set it under Settings" in page
 
 
-def test_the_confirm_page_names_the_daemon_by_band(tmp_path, monkeypatch, web, csrf):
+def test_the_confirm_page_names_the_daemon_by_radio(tmp_path, monkeypatch, web, csrf):
     # Finding 140: Stop owner(s) & start stops the daemon on the held band only — the page says so,
     # in the order the stops run (the app first). Stubbed: the plan (its blocker list).
     from lhpc.core.services import ActionResult, ControllerService
@@ -2741,7 +2741,7 @@ def test_the_confirm_page_names_the_daemon_by_band(tmp_path, monkeypatch, web, c
                                 "from": "dash"})
     body = r.get_data(as_text=True)
     line = next(l for l in body.splitlines() if "is required to run this stack" in l)
-    assert "meshcore" in line and "868" in line and line.index("meshcore") < line.index("daemon")
+    assert "meshcore@r2" in line and "daemon@r2" in line and line.index("meshcore") < line.index("daemon")   # G1-C60
 
 
 def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeypatch, web, csrf):

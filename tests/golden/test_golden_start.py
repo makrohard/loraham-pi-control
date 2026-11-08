@@ -134,7 +134,7 @@ def test_refused_by_band_owner(kiss_box, run_op):
     assert [b["holder_stack"] for b in plan.res.data["blockers"]] == ["meshtastic", "meshtastic"]
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields == {
-        "ok": False, "summary": "Cannot run 'kiss': meshtastic must be stopped first.",
+        "ok": False, "summary": "Cannot run 'kiss': meshtastic@r1 must be stopped first.",
         "data_keys": [], "next_commands": ["lhpc stack stop meshtastic@r1"], "heads": [],
         "outcomes": []}
     assert run.phases == KISS_LOCKS + RECHECK + ["recheck:preflight"]

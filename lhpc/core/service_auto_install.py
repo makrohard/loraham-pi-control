@@ -1584,7 +1584,7 @@ class AutoInstallOpsMixin:
             False, "Refusing to start the auto-install run: component(s) are running — this run "
             "never stops anything itself.",
             details=[f"  running: {', '.join(running)}"],
-            next_commands=[f"lhpc stack stop {instances.named(self, o)} --yes" for o in owners])
+            next_commands=[f"lhpc stack stop {k} --yes" for o in owners for k in instances.stop_keys(self, o)])
 
     def _auto_install_scope_edges(self) -> tuple:
         """(ordered stack ids, {stack -> set(dependency stacks)}) from the manifest graph."""
@@ -1658,7 +1658,7 @@ class AutoInstallOpsMixin:
                     fail_tx((prior + " — " if prior and
                              marker["tx_phase"]["status"] == "fail" else "") +
                             "final daemon stop FAILED — the daemon may still be "
-                            f"RUNNING; stop it: lhpc stack stop {instances.named(self, 'daemon')} --yes", ran=True)
+                            "RUNNING; stop it: " + " && ".join(f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, "daemon")), ran=True)
                     stop_failed = "stop"
             if not stop_failed:
                 bw()

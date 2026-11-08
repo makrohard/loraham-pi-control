@@ -596,7 +596,7 @@ class GpsOpsMixin:
                     False, "cannot change the position source while it is in use by: " + ", ".join(blocked),
                     details=["  a running stack holds claims and a config derived from the "
                              "CURRENT source",
-                             *(f"  stop it first:  lhpc stack stop {instances.named(self, sid)}" for sid in blocked)])
+                             *(f"  stop it first:  lhpc stack stop {k}" for sid in blocked for k in instances.stop_keys(self, sid))])
             return ActionResult(False, f"could not save GPS settings: {exc}")
         except OSError as exc:
             return ActionResult(False, f"could not save GPS settings: {exc}")

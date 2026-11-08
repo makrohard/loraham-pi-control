@@ -434,7 +434,7 @@ def test_band_owner(entry):
     because this owner is not a process lhpc can verify stopped. The job runner and boot-restore
     refuse in the apply's preflight."""
     res = _all(entry, "start", "kiss", _band_owner)
-    refusal = "Cannot run 'kiss': meshtastic must be stopped first."
+    refusal = "Cannot run 'kiss': meshtastic@r1 must be stopped first."
     assert _decisions(res) == {
         "cli": {"refusal": "Cannot run 'kiss': conflicting stack(s) meshtastic could not be "
                            "verified stopped.", **REFUSED_NOTHING},

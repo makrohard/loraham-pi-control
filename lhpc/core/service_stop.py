@@ -246,7 +246,7 @@ class StopOpsMixin:
                                            "no other stack needs it")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).",
                                 details=details,
-                                next_commands=[f"lhpc stack stop {instances.named(self, target)} --yes"],
+                                next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, target)],
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
@@ -426,7 +426,7 @@ class StopOpsMixin:
                 summary = (f"Stop for '{target}' applied but the known-working candidate "
                            f"could not be retired — see details.")
                 details = [*list(details), f"  [candidate] not cleared: {why}"]
-            _rr.clear_marker(self._paths, instances.key(target, inst))     # the copy's own marker
+            _rr.clear_marker(self._paths, instances.key(target, inst), getattr(inst, "rid", ""))     # the copy's own
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
@@ -528,16 +528,13 @@ class StopOpsMixin:
 
     def owner_stops(self, blockers) -> list[tuple[str, str]]:
         """`(label, command)` per stop the holders of `blockers` need, in the order a start with
-        stop_owners runs them: the app stacks first, then the daemon per radio band it holds (a
-        bare `lhpc stack stop daemon` would stop every client on every band, finding 140)."""
+        stop_owners runs them: each running instance of an app stack first, then the daemon of each radio it holds (a
+        bare `lhpc stack stop daemon` would stop every client on every band, finding 140; G1-C60)."""
         daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
         holders = {bl["holder_stack"] for bl in blockers}
-        out = [(o, f"lhpc stack stop {instances.named(self, o)}") for o in sorted(holders - {daemon_sid})]
-        if daemon_sid in holders:
-            bands = sorted({bl.get("band", "") for bl in blockers if bl["holder_stack"] == daemon_sid})
-            out += [(f"{daemon_sid} on {b}" if b else daemon_sid, f"lhpc stack stop {instances.named(self, daemon_sid, band=b)}")
-                for b in ([""] if "" in bands else bands)]
-        return out
+        out = [(k, f"lhpc stack stop {k}") for o in sorted(holders - {daemon_sid}) for k in instances.stop_keys(self, o)]
+        held = sorted({instances.holder_rid(self, daemon_sid, bl) for bl in blockers if bl["holder_stack"] == daemon_sid})
+        return out + [(f"{daemon_sid}@{r}", f"lhpc stack stop {daemon_sid}@{r}") for r in held]
 
     def owner_stop_commands(self, blockers) -> list[str]:
         """The commands of `owner_stops`."""

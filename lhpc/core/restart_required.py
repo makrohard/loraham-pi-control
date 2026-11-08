@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from pathlib import Path
 
@@ -145,9 +146,18 @@ def merged_payload(current: dict | None, stack_id: str, params, band: str,
     return json.dumps(out)
 
 
-def clear_marker(paths: Paths, stack_id: str) -> None:
+def marker_rids(marker: dict | None) -> list:
+    """The radios a radio-level marker names (the daemon's: "r2 ocp_ma", radio_start._mark_restart), by rid order."""
+    rids = {p.split(" ", 1)[0] for p in (marker or {}).get("params") or [] if re.fullmatch(r"r[1-9][0-9]? \S+", str(p))}
+    return sorted(rids, key=lambda r: int(r[1:]))
+
+
+def clear_marker(paths: Paths, stack_id: str, rid: str = "") -> None:
     """Best effort — a stale marker is safe-side: the operator sees a yellow action that a
-    fresh restart simply satisfies."""
+    fresh restart simply satisfies. With `rid` (one radio's daemon stopped or started), a marker that also names
+    another radio is kept (G1-C60 B1: r1's restart never clears r2's change)."""
+    if rid and set(marker_rids(read_marker(paths, stack_id))) - {rid}:
+        return
     try:
         runtime_fs.unlink(paths, marker_path(paths, stack_id))
     except (OSError, PathContainmentError):

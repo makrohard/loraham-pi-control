@@ -282,6 +282,25 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
     return f"{target}@{rid or '<rid>'}"
 
 
+def stop_keys(svc, sid: str) -> list:
+    """A stack-wide remedy's instances (G1-C60 NOTE): every running one, else the one `named` names."""
+    return running_keys(svc, sid) or [named(svc, sid)]
+
+
+def restart_keys(svc, sid: str, marker) -> list:
+    """The instances a restart-required marker asks to restart: the radios it names (the daemon's "r2 ocp_ma",
+    G1-C60 B1), else stop_keys."""
+    from . import restart_required
+    return [f"{sid}@{r}" for r in restart_required.marker_rids(marker)] or stop_keys(svc, sid)
+
+
+def holder_rid(svc, sid: str, blocker: dict) -> str:
+    """The radio a resource blocker's holder holds: the one its claim names (`loraham.radio.r2`, G1-C60 B2), else its
+    band's first radio (named)."""
+    m = re.search(r"\.(r[1-9][0-9]?)$", str(blocker.get("resource", "")))
+    return m.group(1) if m else named(svc, sid, band=blocker.get("band", "")).partition("@")[2]
+
+
 def parse_target(svc, target: str, verb: str = "start"):
     """THE target of an operator entry (the CLI, then the console; CLEANUP-DESIGN-v13 13.2, W323/W326):
     `<stack>@<rid>` (or `<component>@<rid>`: its stack's instance) -> (the stack or component id, Instance, its

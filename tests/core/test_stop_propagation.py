@@ -176,7 +176,7 @@ def test_a_dual_band_daemon_is_not_stopped_under_the_other_bands_clients(tmp_pat
     assert res.next_commands == ["lhpc stack stop kiss@r1", "lhpc stack start reticulum@r1 --yes"]
 
 
-def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monkeypatch):
+def test_the_band_owner_refusal_names_the_radios_daemon_stop(tmp_path, monkeypatch):
     # Without stop_owners the preflight refuses; its remedy for a daemon holder stops that band
     # only, never the bare `lhpc stack stop daemon@r1` (finding 140).
     from lhpc.core.services import ControllerService
@@ -190,7 +190,7 @@ def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monk
     assert not res.ok and res.next_commands == ["lhpc stack stop meshcore@r2",
                                                 "lhpc stack stop daemon@r2"]
     s = res.summary
-    assert "meshcore" in s and "868" in s and s.index("meshcore") < s.index("daemon")
+    assert "meshcore@r2" in s and "daemon@r2" in s and s.index("meshcore") < s.index("daemon")   # by instance (G1-C60)
 
 
 # --- §8.3 web job-log selector hardening -------------------------------------

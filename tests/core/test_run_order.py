@@ -1198,7 +1198,7 @@ def test_restart_plan_does_not_refuse_for_a_resource_holder_its_apply_refuses(
     assert [b["holder_stack"] for b in plan.data["blockers"]] == ["meshtastic"]
     assert stopped == []
     applied = svc.restart("kiss", apply=True)
-    assert applied.ok is False and "meshtastic must be stopped first" in applied.summary
+    assert applied.ok is False and "meshtastic@r1 must be stopped first" in applied.summary
     assert not applied.results and stopped == []
 
 

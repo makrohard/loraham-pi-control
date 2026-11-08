@@ -151,7 +151,7 @@ class SecretsOpsMixin:
         if running := self._secrets_running():
             return ActionResult(False, "A stack that keeps its state in the backup is running: "
                                 f"{', '.join(running)}. Stop it first; no backup file was written.",
-                                next_commands=[f"lhpc stack stop {instances.named(self, s)}" for s in running])
+                                next_commands=[f"lhpc stack stop {k}" for s in running for k in instances.stop_keys(self, s)])
         roots = self._secrets_state_roots()
         try:
             members, absent = sb.inventory(root, roots)
@@ -344,7 +344,7 @@ class SecretsOpsMixin:
                 if running:
                     return ActionResult(False, f"A stack is running: {', '.join(running)}. Stop it "
                                         "first; no target was changed.", details=head,
-                                        next_commands=[f"lhpc stack stop {instances.named(self, s)}" for s in running])
+                                        next_commands=[f"lhpc stack stop {k}" for s in running for k in instances.stop_keys(self, s)])
                 now, _ = self._secrets_plan(root, snap, archive, only_pki)
                 if now != shown:
                     return ActionResult(False, "state changed; run restore again. No target was "

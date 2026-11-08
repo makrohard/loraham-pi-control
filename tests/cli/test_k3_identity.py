@@ -104,3 +104,41 @@ def test_a_suggested_command_names_the_bands_first_radio(tmp_path):
     assert instances.named(svc, "daemon", band="868") == "daemon@r3"
     assert instances.named(svc, "daemon", band="433") == "daemon@r1"
     assert instances.named(svc, "kiss@r12") == "kiss@r12"                    # already named
+
+
+def _two_433(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
+                                    radios.Radio("r2", "b", "uputronics", "433", ce="ce1")))
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_c60_b1_an_ocp_change_on_r2_names_r2s_restart_and_r1s_restart_keeps_it(tmp_path, monkeypatch):
+    # G1-C60 B1: r1 and r2 both on 433, both daemons running; r2's OCP changes. The restart-required remedy names
+    # daemon@r2 (not the first running, r1), and r1's daemon restart does not clear r2's marker.
+    from lhpc.core import radio_start, restart_required
+    svc = _two_433(tmp_path)
+    monkeypatch.setattr(radio_start, "daemon_running", lambda svc, radio, procs=None: True)
+    monkeypatch.setattr(instances, "running_keys", lambda svc, sid: ["daemon@r1", "daemon@r2"], raising=False)
+    assert svc.set_ocp("r2", "120").ok
+    text = "\n".join(svc.status("daemon").details)                       # the public status names the remedy
+    assert "(lhpc stack restart daemon@r2)" in text and "daemon@r1" not in text, text
+    restart_required.clear_marker(svc._paths, "daemon", "r1")              # r1's restart
+    assert svc.restart_required("daemon") is not None
+    restart_required.clear_marker(svc._paths, "daemon", "r2")              # r2's own restart clears it
+    assert svc.restart_required("daemon") is None
+
+
+def test_c60_b2_a_daemon_holding_r2_is_stopped_as_daemon_at_r2(tmp_path):
+    svc = _two_433(tmp_path)
+    blockers = [{"resource": "loraham.radio.r2", "holder": "d", "holder_stack": "daemon", "band": "433"}]
+    assert svc.owner_stops(blockers) == [("daemon@r2", "lhpc stack stop daemon@r2")]
+
+
+def test_c60_note_a_stack_wide_remedy_names_every_running_instance(tmp_path, monkeypatch):
+    svc = _two_433(tmp_path)
+    monkeypatch.setattr(instances, "running_keys", lambda svc, sid: ["kiss@r1", "kiss@r3"] if sid == "kiss" else [],
+                        raising=False)
+    blockers = [{"resource": "loraham.radio.r1", "holder": "k", "holder_stack": "kiss", "band": "433"}]
+    assert svc.owner_stops(blockers) == [("kiss@r1", "lhpc stack stop kiss@r1"), ("kiss@r3", "lhpc stack stop kiss@r3")]

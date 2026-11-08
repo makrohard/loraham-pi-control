@@ -575,7 +575,7 @@ def test_k3_the_band_form_is_gone(monkeypatch, capsys, verb):
 
 
 @pytest.mark.contract
-def test_the_held_band_question_names_the_daemon_by_band(monkeypatch):
+def test_the_held_band_question_names_the_daemon_by_radio(monkeypatch):
     # Finding 140: the question names what --yes stops: the app, then the daemon on that band.
     import builtins
     import sys as _sys
@@ -594,7 +594,7 @@ def test_the_held_band_question_names_the_daemon_by_band(monkeypatch):
     assert len(prompts) == 1
     p = prompts[0]
     who = p.split("held by", 1)[1].split("—", 1)[0]      # the holders named, not the resource
-    assert "meshcore" in who and "daemon on 868" in who and "reticulum" in p
+    assert "meshcore@r2" in who and "daemon@r2" in who and "reticulum" in p      # G1-C60: by instance
     assert who.index("meshcore") < who.index("daemon")
 
 
@@ -681,11 +681,11 @@ def test_a_start_on_a_held_band_asks_to_stop_the_holder(monkeypatch, capsys, arg
     seen, prompts = _held_band(monkeypatch, tty=tty, answer=answer)
     assert main(["stack", "start", "kiss@r1", *argv]) == rc
     assert seen == applies
-    assert prompts == (["\nloraham.radio.433 held by meshtastic — stop them and start kiss@r1? [y/N] "]
+    assert prompts == (["\nloraham.radio.433 held by meshtastic@r1 — stop them and start kiss@r1? [y/N] "]
                        if tty and not argv else [])
     if rc:
         out = capsys.readouterr().out
-        assert "Cannot run 'kiss@r1': meshtastic must be stopped first." in out
+        assert "Cannot run 'kiss@r1': meshtastic@r1 must be stopped first." in out
         assert "lhpc stack stop meshtastic@r1" in out and "lhpc stack start kiss@r1 --yes" in out
 
 

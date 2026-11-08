@@ -933,8 +933,8 @@ class LifecycleOpsMixin:
                 f"{band} MHz.",
                 details=["  [blocked] a band-switchable stack runs on ONE band at a time",
                          f"  Stop it first, then start it on {band} MHz."],
-                next_commands=[f"lhpc stack stop {instances.named(self, _sid)} --yes",
-                               f"lhpc stack start {instances.named(self, _sid)} --yes"])
+                next_commands=[*(f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, _sid)),
+                               f"lhpc stack start {instances.named(self, _sid, inst, band)} --yes"])
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
         # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only
         # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
@@ -1140,7 +1140,7 @@ class LifecycleOpsMixin:
                                if apps else "") + "the daemon was not.",
                             details=[*prelude, f"  [blocked] daemon {b}: one process with "
                                      f"{', '.join(sorted(extra))} — {', '.join(hit)} left running"],
-                            next_commands=[*(f"lhpc stack stop {instances.named(self, h)}" for h in hit),
+                            next_commands=[*(f"lhpc stack stop {k}" for h in hit for k in instances.stop_keys(self, h)),
                                            f"lhpc stack start {instances.named(self, target)} --yes"])
                 for b in ([""] if "" in bands else bands):
                     stop_owner(daemon_sid, b)
@@ -1605,7 +1605,7 @@ class LifecycleOpsMixin:
                             and (self.stack_of(r.component) or r.stack) == target
                             for r in results)
             if not _kept_old and self.restart_required(instances.key(target, prep.inst)) == run.pre_marker:
-                _rr.clear_marker(self._paths, instances.key(target, prep.inst))      # the copy's own marker
+                _rr.clear_marker(self._paths, instances.key(target, prep.inst), getattr(prep.inst, "rid", ""))   # its own
         # What this start left running as it was gets the SPI warning of the already-healthy answer.
         _kept = {r.component for r in results if r.outcome == Outcome.ALREADY_HEALTHY or (r.component
                  == self.DAEMON_ID and r.outcome == Outcome.VERIFIED and not run.daemon_launched)}
@@ -2503,7 +2503,7 @@ class LifecycleOpsMixin:
                          f"  Stop '{_dep}' first, or start '{target}' on {_dlive} MHz "
                          "instead."],
                 # The remedy names the instances (K3: the band is the named radio's): stop the holder, then start.
-                next_commands=[f"lhpc stack stop {instances.named(self, _dep)} --yes",
+                next_commands=[*(f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, _dep)),
                                f"lhpc stack start {instances.named(self, target)} --yes"])
         return None
 

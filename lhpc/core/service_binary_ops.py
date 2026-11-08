@@ -337,7 +337,7 @@ class BinaryOpsMixin:
                     False, f"Refusing to install '{stack_id}' from binary: component(s) "
                            "running.",
                     details=[f"  running: {', '.join(_running)} — stop them first"],
-                    next_commands=[f"lhpc stack stop {instances.named(self, stack_id)} --yes"])
+                    next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
 
             # OPEN THE TRANSACTION FIRST — before the auth change and before any file moves.
             # The journal carries the previous receipt and the previous mesh-password value, so
@@ -884,7 +884,7 @@ class BinaryOpsMixin:
                 False, f"Refusing to retire the binary install of '{stack_id}': component(s) "
                        "running.",
                 details=[f"  running: {', '.join(_running)} — stop them first"],
-                next_commands=[f"lhpc stack stop {instances.named(self, stack_id)} --yes"])
+                next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
         if txn:
             # SWITCH path: move the artifact into the caller's open transaction instead of
             # deleting it. The journal already carries the receipt, so `binary_recover()` can

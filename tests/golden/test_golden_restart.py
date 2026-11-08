@@ -143,7 +143,7 @@ def test_band_owner_refuses_before_the_stop(kiss_box, run_op):
     box.fake.cmdlines_data[300] = ["meshtasticd"]
     run = run_op(box.root, lambda: box.svc.restart("kiss", apply=True))
     assert run.fields == {
-        "ok": False, "summary": "Cannot run 'kiss': meshtastic must be stopped first.",
+        "ok": False, "summary": "Cannot run 'kiss': meshtastic@r1 must be stopped first.",
         "data_keys": [], "next_commands": ["lhpc stack stop meshtastic@r1"], "heads": [],
         "outcomes": []}
     assert run.phases == LOCKS + ["recheck:preflight"]

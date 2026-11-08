@@ -1016,7 +1016,7 @@ class ParamsConfigMixin:
                            f"{', '.join(_live)} {'is' if len(_live) == 1 else 'are'} running.",
                     details=["  its feed, claims and generated config came from the "
                              "CURRENT setting"],
-                    next_commands=[f"lhpc stack stop {_instances.named(self, sid)}"])
+                    next_commands=[f"lhpc stack stop {k}" for k in _instances.stop_keys(self, sid)])
 
         def _gps_recheck(_pth=None):
             """AUTHORITATIVE recheck, run inside the exclusive config transaction.
@@ -1047,7 +1047,7 @@ class ParamsConfigMixin:
                 raise ConfigError(
                     f"cannot change use_gps while {', '.join(_blockers)} "
                     f"{'is' if len(_blockers) == 1 else 'are'} running — its feed, claims and "
-                    f"generated config came from the CURRENT setting (lhpc stack stop {_instances.named(self, sid)})")
+                    f"generated config came from the CURRENT setting (" + "; ".join(f"lhpc stack stop {k}" for k in _instances.stop_keys(self, sid)) + ")")
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
