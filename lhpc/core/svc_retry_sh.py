@@ -17,24 +17,6 @@ from __future__ import annotations
 CONSTANTS = (("SVC_CALL_BOUND_S", 90), ("SVC_RETRIES", 4), ("SVC_RETRY_PAUSE_S", 5), ("SVC_READ_BOUND_S", 60),
              ("SVC_KILL_GRACE_S", 5), ("SVC_READS_PER_CHECK_D", 2), ("SVC_READS_PER_CHECK_R", 1),
              ("SVC_SCRIPT_BOUND_S", 1800))
-UNIT_FILE_STATES = ("enabled", "enabled-runtime", "linked", "linked-runtime", "disabled", "masked", "masked-runtime",
-                    "static", "indirect", "generated", "alias", "transient", "bad", "not-found")
-ACTIVE_STATES = ("active", "reloading", "inactive", "failed", "activating", "deactivating")
-
-
-def total_d(c: dict) -> int:
-    """SVC_TOTAL_BOUND_D_S: the D-class total (a disable): attempts x (call + reads) + pauses."""
-    k = c["SVC_KILL_GRACE_S"]
-    return (c["SVC_RETRIES"] * ((c["SVC_CALL_BOUND_S"] + k) + c["SVC_READS_PER_CHECK_D"] * (c["SVC_READ_BOUND_S"] + k))
-            + (c["SVC_RETRIES"] - 1) * c["SVC_RETRY_PAUSE_S"])
-
-
-def total_r(c: dict) -> int:
-    """SVC_TOTAL_BOUND_R_S: the R-class total (a restart): the baseline read, attempts x (call + reads), pauses."""
-    k = c["SVC_KILL_GRACE_S"]
-    return ((c["SVC_READ_BOUND_S"] + k)
-            + c["SVC_RETRIES"] * ((c["SVC_CALL_BOUND_S"] + k) + c["SVC_READS_PER_CHECK_R"] * (c["SVC_READ_BOUND_S"] + k))
-            + (c["SVC_RETRIES"] - 1) * c["SVC_RETRY_PAUSE_S"])
 
 
 def parent_lines() -> list[str]:
