@@ -10,8 +10,12 @@
                                                <dir>/remotes.txt resolves to its mirror; exit 1 if not
     mirror-sources.py graywolf-version <manifest>   the Graywolf release the manifest pins
     mirror-sources.py cli-requirements <manifest>   the Meshtastic CLI venv's pip requirements
+    mirror-sources.py web-tarball <manifest>   "<url> <sha256>" of the Meshtastic web client's
+                                               build.tar the manifest pins
 
-The last two serve the slow-build job's acquisition of the timed operations' transfers.
+`graywolf-version` and `cli-requirements` serve the slow-build job's acquisition of the timed
+operations' transfers; `cli-requirements` and `web-tarball` the testlab job's acquisition of the
+lane's transfers.
 
 The workflow fetches each mirror before the lane (with the transfer backoff) and the lane copies
 <dir>/gitconfig to the lab user's ~/.gitconfig, so the product's own `git clone <remote>` resolves
@@ -135,6 +139,22 @@ def resolved(directory: Path) -> int:
     return 1 if failed else 0
 
 
+def web_tarball(manifest: Path) -> str:
+    """`<url> <sha256>` of the `meshtastic-web-assets.sh <dest> <version> <sha256>` step: the URL
+    is the script's own (its `URL="…${VERSION}…"` line), so it is written in one place. The script
+    is found next to the manifest (lhpc/data/scripts), never from this file's location: the
+    proof steps run this file alone, with only .github/scripts mounted."""
+    script = manifest.resolve().parent / "scripts" / "meshtastic-web-assets.sh"
+    m = re.search(r'^\s*URL="(https://[^"]*\$\{VERSION\}[^"]*)"', script.read_text(), re.MULTILINE)
+    if not m:
+        raise SystemExit(f"no URL=\"…${{VERSION}}…\" line in {script}")
+    for argv in _build_steps(manifest):
+        for i, tok in enumerate(argv):
+            if tok.endswith("meshtastic-web-assets.sh") and len(argv) > i + 3:
+                return f"{m.group(1).replace('${VERSION}', argv[i + 2])} {argv[i + 3]}"
+    raise SystemExit(f"no meshtastic-web-assets.sh step in {manifest}")
+
+
 def main(argv: list[str]) -> int:
     cmd, *args = argv or ["help"]
     if cmd == "list" and len(args) == 1:
@@ -151,6 +171,8 @@ def main(argv: list[str]) -> int:
         print(graywolf_version(Path(args[0])))
     elif cmd == "cli-requirements" and len(args) == 1:
         print(cli_requirements(Path(args[0])))
+    elif cmd == "web-tarball" and len(args) == 1:
+        print(web_tarball(Path(args[0])))
     else:
         print(__doc__, file=sys.stderr)
         return 2

@@ -2,6 +2,10 @@
 
 ## 0.14.0
 
+- Test lab: the testlab lane's own Python packages, Chromium and Meshtastic web client are fetched before the
+  lane and proved complete offline; the product's pip steps still fetch from PyPI, as for a user.
+- `LHPC_MESHTASTIC_WEB_TARBALL` (a local Meshtastic web client `build.tar`, still sha256-checked) now reaches
+  `lhpc build`'s web client step.
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
   starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB

@@ -196,9 +196,11 @@ _FIXED_ENV = {
 # IS build-qemu.sh's own documented knob (its inode preflight reads it directly): forwarding it lets an
 # operator relax the check on dynamic-inode filesystems (btrfs/xfs/overlay report `df -i` favail as 0, so
 # the default 200000 preflight falsely aborts). Unset on a real Pi -> the 200000 guard is unchanged there.
+# LHPC_MESHTASTIC_WEB_TARBALL IS meshtastic-web-assets.sh's own documented offline input (a local
+# build.tar, verified against the same sha256 pin); the test lab sets it to its pre-fetched copy.
 for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
            "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR",
-           "LHPC_QEMU_MIN_FREE_INODES"):
+           "LHPC_QEMU_MIN_FREE_INODES", "LHPC_MESHTASTIC_WEB_TARBALL"):
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 
