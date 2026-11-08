@@ -102,7 +102,7 @@ def test_start_plan_is_dry_run_without_yes(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     main(["bootstrap", "--yes"])
     capsys.readouterr()
-    assert main(["stack", "start", "daemon"]) == 0
+    assert main(["stack", "start", "daemon@r1"]) == 0
     assert "Run plan" in capsys.readouterr().out
 
 
@@ -116,7 +116,7 @@ def test_ctrl_c_ends_a_command_with_one_line_and_exit_130(tmp_path, monkeypatch,
     def _interrupted(self, *a, **k):                        # noqa: ANN001, ANN002, ANN003
         raise KeyboardInterrupt
     monkeypatch.setattr(ControllerService, "start", _interrupted)
-    assert main(["stack", "start", "daemon", "--yes"]) == 130
+    assert main(["stack", "start", "daemon@r1", "--yes"]) == 130
     err = capsys.readouterr().err
     assert "lhpc status" in err and "Traceback" not in err and len(err.splitlines()) == 1
 
@@ -534,12 +534,12 @@ def test_stack_restart_is_a_command(short_tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, short_tmp_path, capsys)
     # The PLAN enforces the saved identity: without a callsign the restart is refused
     # before anything runs, with the `lhpc config` remedy — the same truth the web shows.
-    assert main(["stack", "restart", "meshcom"]) == 1
+    assert main(["stack", "restart", "meshcom@r1"]) == 1
     out = capsys.readouterr().out
     assert "callsign is required" in out and "lhpc config meshcom mc_callsign" in out
     assert main(["config", "operator", "--callsign", "DL1ABC"]) == 0
     capsys.readouterr()
-    assert main(["stack", "restart", "meshcom"]) == 0        # not argparse rc 2
+    assert main(["stack", "restart", "meshcom@r1"]) == 0        # not argparse rc 2
     assert "Restart plan" in capsys.readouterr().out
 
 
@@ -547,25 +547,31 @@ def test_stack_poststart_is_a_command(tmp_path, monkeypatch, capsys):
     # Re-apply post-start (e.g. the MeshCom callsign) against a running stack — the
     # dry-run plan lists what would re-run without argparse rejecting the verb.
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["stack", "poststart", "meshcom"]) == 0      # not argparse rc 2
+    assert main(["stack", "poststart", "meshcom@r1"]) == 0      # not argparse rc 2
     assert "re-run post-start" in capsys.readouterr().out
 
 
 @pytest.mark.contract
-def test_stack_start_takes_a_band(monkeypatch, capsys):
-    # F-A2: the console starts a band-switchable stack on one band; the CLI can too. The band
-    # reaches the service for the plan AND the apply.
+def test_stack_start_passes_its_radios_band(monkeypatch, capsys):
+    # K3 (W323): `<stack>@<rid>` starts on its radio's band, for the plan AND the apply (was F-A2's --band).
     from lhpc.core.services import ControllerService, ActionResult
     calls = []
     def cap(self, op, target, **kw):
-        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        calls.append((op, target, kw.get("apply"), kw.get("band"), getattr(kw.get("inst"), "rid", None)))
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
-    assert main(["stack", "start", "daemon", "--band", "433", "--yes"]) == 0
-    assert calls == [("start", "daemon", False, "433"), ("start", "daemon", True, "433")]
-    calls.clear()
-    assert main(["stack", "start", "daemon", "--yes"]) == 0
-    assert calls[-1] == ("start", "daemon", True, "")          # no flag: the saved band, as before
+    assert main(["stack", "start", "kiss@r2", "--yes"]) == 0
+    assert calls == [("start", "kiss", False, "868", "r2"), ("start", "kiss", True, "868", "r2")]
+
+
+@pytest.mark.parametrize("verb", ["start", "stop", "restart"])
+def test_k3_the_band_form_is_gone(monkeypatch, capsys, verb):
+    # DoD test 2 (CLEANUP-DESIGN-v13 13.12.3): `--band` is no option of a stack verb any more: a usage error (exit 2),
+    # nothing run. RED before K3: it was accepted.
+    calls = []
+    monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: calls.append(op))
+    assert main(["stack", verb, "kiss@r1", "--band", "433", "--yes"]) == 2
+    assert calls == [] and "unrecognized arguments: --band 433" in capsys.readouterr().err
 
 
 @pytest.mark.contract
@@ -584,7 +590,7 @@ def test_the_held_band_question_names_the_daemon_by_band(monkeypatch):
     for stream in (_sys.stdin, _sys.stdout):
         monkeypatch.setattr(stream, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(builtins, "input", lambda prompt: (prompts.append(prompt), "n")[1])
-    assert main(["stack", "start", "reticulum"]) == 1
+    assert main(["stack", "start", "reticulum@r2"]) == 1
     assert len(prompts) == 1
     p = prompts[0]
     who = p.split("held by", 1)[1].split("—", 1)[0]      # the holders named, not the resource
@@ -593,19 +599,8 @@ def test_the_held_band_question_names_the_daemon_by_band(monkeypatch):
 
 
 @pytest.mark.contract
-def test_stack_stop_takes_a_band_for_the_daemon_only(monkeypatch, capsys):
-    # A band on another stack's stop would only skip its stop intent (boot restore starts it
-    # again): refused, nothing run.
-    calls = []
-    monkeypatch.setattr(ControllerService, "run_action",
-                        lambda self, op, target, **kw: calls.append((op, target)))
-    assert main(["stack", "stop", "meshtastic", "--band", "868", "--yes"]) == 2
-    assert calls == [] and "--band" in capsys.readouterr().err
-
-
-@pytest.mark.contract
-def test_stack_stop_takes_a_band(monkeypatch):
-    # The band-scoped remedy a held band names (`lhpc stack stop daemon --band 868`, finding 140)
+def test_stack_stop_of_a_radios_daemon(monkeypatch):
+    # The radio-scoped remedy a held band names (`lhpc stack stop daemon@r2`, finding 140)
     # must be a command the CLI accepts and passes on.
     from lhpc.core.services import ActionResult
     calls = []
@@ -614,7 +609,7 @@ def test_stack_stop_takes_a_band(monkeypatch):
         calls.append((op, target, kw.get("apply"), kw.get("band")))
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
-    assert main(["stack", "stop", "daemon", "--band", "868", "--yes"]) == 0
+    assert main(["stack", "stop", "daemon@r2", "--yes"]) == 0
     assert calls[-1] == ("stop", "daemon", True, "868")
 
 
@@ -640,19 +635,19 @@ def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
 
     monkeypatch.setattr(ControllerService, "run_action",
                         fake(result(Outcome.VERIFIED, Outcome.MANUAL_REQUIRED)))
-    assert main(["stack", "start", "chat", "--yes"]) == 0
+    assert main(["stack", "start", "chat@r1", "--yes"]) == 0
     assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
-    assert main(["stack", "restart", "chat", "--yes"]) == 0          # a restart ends like a start
+    assert main(["stack", "restart", "chat@r1", "--yes"]) == 0          # a restart ends like a start
     assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
     # a real failure beside the manual step is still a failure
     monkeypatch.setattr(ControllerService, "run_action",
                         fake(result(Outcome.FAILED, Outcome.MANUAL_REQUIRED)))
-    assert main(["stack", "start", "chat", "--yes"]) == 1
+    assert main(["stack", "start", "chat@r1", "--yes"]) == 1
     assert "ERR" in capsys.readouterr().out
 
 
 def _held_band(monkeypatch, *, tty, answer=""):
-    """`lhpc stack start kiss` whose plan lists meshtastic holding the 433 radio; returns the
+    """`lhpc stack start kiss@r1` whose plan lists meshtastic holding the 433 radio; returns the
     applies run_action received (their stop_owners flags) and the questions asked."""
     import builtins
     import sys as _sys
@@ -684,14 +679,14 @@ def _held_band(monkeypatch, *, tty, answer=""):
 def test_a_start_on_a_held_band_asks_to_stop_the_holder(monkeypatch, capsys, argv, tty, answer,
                                                         rc, applies):
     seen, prompts = _held_band(monkeypatch, tty=tty, answer=answer)
-    assert main(["stack", "start", "kiss", *argv]) == rc
+    assert main(["stack", "start", "kiss@r1", *argv]) == rc
     assert seen == applies
-    assert prompts == (["\nloraham.radio.433 held by meshtastic — stop them and start kiss? [y/N] "]
+    assert prompts == (["\nloraham.radio.433 held by meshtastic — stop them and start kiss@r1? [y/N] "]
                        if tty and not argv else [])
     if rc:
         out = capsys.readouterr().out
-        assert "Cannot run 'kiss': meshtastic must be stopped first." in out
-        assert "lhpc stack stop meshtastic" in out and "lhpc stack start kiss --yes" in out
+        assert "Cannot run 'kiss@r1': meshtastic must be stopped first." in out
+        assert "lhpc stack stop meshtastic@r1" in out and "lhpc stack start kiss@r1 --yes" in out
 
 
 @pytest.mark.contract
@@ -702,23 +697,19 @@ def test_the_held_band_refusal_repeats_the_band(monkeypatch, capsys):
     _held_band(monkeypatch, tty=False)
     rendered = []
     monkeypatch.setattr(cli_main, "_render", lambda res: (rendered.append(res), 1)[1])
-    assert main(["stack", "start", "kiss", "--band", "868"]) == 1
-    assert rendered[-1].next_commands == ["lhpc stack stop meshtastic",
-                                          "lhpc stack start kiss --band 868 --yes"]
+    assert main(["stack", "start", "kiss@r2"]) == 1
+    assert rendered[-1].next_commands == ["lhpc stack stop meshtastic@r1",
+                                          "lhpc stack start kiss@r2 --yes"]
 
 
 @pytest.mark.contract
-def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
+def test_stack_start_refuses_a_radio_the_box_does_not_have(tmp_path, monkeypatch, capsys):
     # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["hardware", "waveshare-433"]) == 0
     capsys.readouterr()
-    assert main(["stack", "start", "daemon", "--band", "868"]) == 1
-    out = capsys.readouterr().out
-    assert "Cannot start 'daemon' on 868 MHz" in out and "lhpc hardware" in out
-    with pytest.raises(SystemExit) as exc:
-        main(["stack", "start", "daemon", "--band", "915"])  # not a band LHPC knows
-    assert exc.value.code == 2
+    assert main(["stack", "start", "daemon@r2"]) == 1                # K3: a radio the list does not have
+    assert "daemon@r2: r2 is not a radio of the hardware list" in capsys.readouterr().err
 
 
 @pytest.mark.contract
@@ -730,11 +721,11 @@ def test_stack_start_plan_repeats_the_band_in_its_next_command(tmp_path, monkeyp
     assert main(["hardware", "waveshare-433"]) == 0
     capsys.readouterr()
     monkeypatch.setattr(cli, "_confirm", lambda _prompt: False)   # show the plan, apply nothing
-    assert main(["stack", "start", "daemon", "--band", "433"]) == 0
-    assert "lhpc stack start daemon --band 433 --yes" in capsys.readouterr().out
-    assert main(["stack", "start", "daemon"]) == 0
+    assert main(["stack", "start", "daemon@r1"]) == 0
+    assert "lhpc stack start daemon@r1 --yes" in capsys.readouterr().out
+    assert main(["stack", "start", "daemon@r1"]) == 0
     out = capsys.readouterr().out
-    assert "lhpc stack start daemon --yes" in out and "--band" not in out
+    assert "lhpc stack start daemon@r1 --yes" in out and "--band" not in out
 
 
 def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
@@ -745,7 +736,7 @@ def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
         return ActionResult(True, "ok", details=["  re-run post-start: meshcom-qemu"],
                             data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
-    assert main(["stack", "poststart", "meshcom", "--yes"]) == 0
+    assert main(["stack", "poststart", "meshcom@r1", "--yes"]) == 0
     assert calls[-1] == ("poststart", "meshcom", True)       # plan, then applied
 
 
@@ -1097,9 +1088,9 @@ def test_daemon_unreachable_hint_names_a_real_target(capsys):
     from types import SimpleNamespace
     from lhpc.adapters.cli.main import _render_daemon
     view = SimpleNamespace(reachable=False, band="433", error="no CONF socket")
-    assert _render_daemon(view) == 1
+    assert _render_daemon(view, start="daemon@r1") == 1          # the caller names the band's radio (K3)
     out = capsys.readouterr().out
-    assert "lhpc stack start daemon" in out and "loraham-daemon-433" not in out
+    assert "lhpc stack start daemon@r1" in out and "loraham-daemon-433" not in out
 
 
 def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):

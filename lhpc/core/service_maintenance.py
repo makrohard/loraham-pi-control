@@ -1030,7 +1030,7 @@ class MaintenanceOpsMixin:
             (f"'{target}' updated to {version}." if restart_ok
              else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
             details=notes, next_commands=([f"lhpc status {target}"] if restart_ok
-                                          else [f"lhpc stack start {target} --yes"]))
+                                          else [f"lhpc stack start {instances.named(self, target)} --yes"]))
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -1534,7 +1534,7 @@ class MaintenanceOpsMixin:
                                        "manager runs from the venv this would rewrite — stop the "
                                        "stack first.",
                                 details=list(refusal.details),
-                                next_commands=["lhpc stack stop meshcore --yes"],
+                                next_commands=[f"lhpc stack stop {instances.named(self, 'meshcore')} --yes"],
                                 data=dict(refusal.data))
         return refusal
 
@@ -1890,7 +1890,7 @@ class MaintenanceOpsMixin:
                 "affected source(s) are running.",
                 details=[f"  running: {', '.join(running)} — stop them first "
                          "(an update never stops or restarts a stack itself)"],
-                next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+                next_commands=[f"lhpc stack stop {instances.named(self, o)} --yes" for o in owners])
         self._op_seam("update-preflight")
         from . import reslock
         # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->
@@ -1915,7 +1915,7 @@ class MaintenanceOpsMixin:
                         "using the affected source(s) started while the update was "
                         "acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
-                        next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+                        next_commands=[f"lhpc stack stop {instances.named(self, o)} --yes" for o in owners])
                 # MeshCore's plugin manager runs out of the venv an update of its sources would
                 # replace; LHPC never spawned it and cannot see it. Its same-boot marker is the
                 # evidence — checked only once LHPC believes nothing runs (meshcore_plugins.py).
@@ -2439,7 +2439,7 @@ class MaintenanceOpsMixin:
             return ActionResult(
                 False, f"Refusing to uninstall '{target or 'all'}': component(s) running.",
                 details=[f"  running: {', '.join(running)} — stop them first"],
-                next_commands=[f"lhpc stack stop {target} --yes"])
+                next_commands=[f"lhpc stack stop {instances.named(self, target)} --yes"])
 
         # 2+3) remove vs keep-shared vs orphan classification (DESCRIPTOR-PROVEN leaf
         # state; consumers include build_requires edges). Computed here for the PLAN
@@ -2490,7 +2490,7 @@ class MaintenanceOpsMixin:
                         False, f"Refusing to uninstall '{target or 'all'}': component(s) "
                         "started while the uninstall was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
-                        next_commands=[f"lhpc stack stop {target} --yes"])
+                        next_commands=[f"lhpc stack stop {instances.named(self, target)} --yes"])
                 if (_mp := self._meshcore_plugins_refusal(f"uninstall '{target or 'all'}'",
                                                           target_ids)):
                     return _mp
@@ -2586,7 +2586,7 @@ class MaintenanceOpsMixin:
         if running:
             return ActionResult(False, f"Refusing to clean '{sid}': component(s) running.",
                                 details=[f"  running: {', '.join(running)} — stop them first"],
-                                next_commands=[f"lhpc stack stop {sid} --yes"])
+                                next_commands=[f"lhpc stack stop {instances.named(self, sid)} --yes"])
 
         # Removal set (computed up front so the dry-run names EXACTLY what apply removes).
         consumers = self._source_consumers()
@@ -2704,7 +2704,7 @@ class MaintenanceOpsMixin:
                         False, f"Refusing to clean '{sid}': component(s) started while "
                         "the clean was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
-                        next_commands=[f"lhpc stack stop {sid} --yes"])
+                        next_commands=[f"lhpc stack stop {instances.named(self, sid)} --yes"])
                 if (_mp := self._meshcore_plugins_refusal(f"clean '{sid}'", comp_ids | {sid})):
                     return _mp
                 # ONLY NOW, with the stack PROVEN stopped under the locks, retire the

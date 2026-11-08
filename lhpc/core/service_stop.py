@@ -137,7 +137,7 @@ class StopOpsMixin:
         _stk0 = self.stack(_sid0) if _sid0 else None
         if _stk0 is not None and _stk0.main == self.DAEMON_ID:
             cascade = True
-        _whole, slot0 = inst is None, inst is None and _stk0 is not None and _stk0.main != self.DAEMON_ID   # v6; the operator's intent
+        slot0, _whole = (_app := _stk0 is not None and _stk0.main != self.DAEMON_ID) and inst is None, inst is None or (_app and not inst.slot)   # v6; K3: kiss@r1 stops slot 0 whole
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
                                    release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst)
@@ -246,7 +246,7 @@ class StopOpsMixin:
                                            "no other stack needs it")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).",
                                 details=details,
-                                next_commands=[f"lhpc stack stop {target} --yes"],
+                                next_commands=[f"lhpc stack stop {instances.named(self, target)} --yes"],
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
@@ -532,11 +532,11 @@ class StopOpsMixin:
         bare `lhpc stack stop daemon` would stop every client on every band, finding 140)."""
         daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
         holders = {bl["holder_stack"] for bl in blockers}
-        out = [(o, f"lhpc stack stop {o}") for o in sorted(holders - {daemon_sid})]
+        out = [(o, f"lhpc stack stop {instances.named(self, o)}") for o in sorted(holders - {daemon_sid})]
         if daemon_sid in holders:
             bands = sorted({bl.get("band", "") for bl in blockers if bl["holder_stack"] == daemon_sid})
-            out += ([(daemon_sid, f"lhpc stack stop {daemon_sid}")] if "" in bands else
-                    [(f"{daemon_sid} on {b}", f"lhpc stack stop {daemon_sid} --band {b}") for b in bands])
+            out += [(f"{daemon_sid} on {b}" if b else daemon_sid, f"lhpc stack stop {instances.named(self, daemon_sid, band=b)}")
+                for b in ([""] if "" in bands else bands)]
         return out
 
     def owner_stop_commands(self, blockers) -> list[str]:
@@ -690,7 +690,7 @@ class StopOpsMixin:
                    *res.details]
         return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                             details=details, data=data,
-                            next_commands=[f"lhpc stack restart {target} --yes"])
+                            next_commands=[f"lhpc stack restart {instances.named(self, target)} --yes"])
 
     def _restore_optional(self, target: str, band: str, stopped: ActionResult,
                           res: ActionResult, optional_up: list[str]) -> ActionResult:

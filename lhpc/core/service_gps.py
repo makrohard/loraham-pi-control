@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from typing import ClassVar
 
+from . import instances
 from . import meshcore_mode as _meshcore_mode
 from .config import ConfigError
 from .gps import USE_GPS_PARAM
@@ -592,12 +593,10 @@ class GpsOpsMixin:
         except _config.ConfigError as exc:
             if blocked:
                 return ActionResult(
-                    False,
-                    "cannot change the position source while it is in use by: "
-                    + ", ".join(blocked),
+                    False, "cannot change the position source while it is in use by: " + ", ".join(blocked),
                     details=["  a running stack holds claims and a config derived from the "
                              "CURRENT source",
-                             *(f"  stop it first:  lhpc stack stop {sid}" for sid in blocked)])
+                             *(f"  stop it first:  lhpc stack stop {instances.named(self, sid)}" for sid in blocked)])
             return ActionResult(False, f"could not save GPS settings: {exc}")
         except OSError as exc:
             return ActionResult(False, f"could not save GPS settings: {exc}")

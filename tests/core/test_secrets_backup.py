@@ -161,7 +161,7 @@ def test_backup_is_refused_while_an_included_stack_runs(tmp_path, monkeypatch):
     svc = _seed(a)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, s: s == "graywolf")
     r = svc.secrets_backup(str(tmp_path / "b.tar"))
-    assert not r.ok and "lhpc stack stop graywolf" in r.next_commands
+    assert not r.ok and "lhpc stack stop graywolf@r1" in r.next_commands
     assert not (tmp_path / "b.tar").exists()
 
 
@@ -573,7 +573,7 @@ def test_restore_is_refused_while_a_stack_runs(tmp_path, monkeypatch):
     svc = _svc(b)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, s: s == "meshtastic")
     r = svc.secrets_restore(str(tmp_path / "b.tar"), choice="overwrite")
-    assert not r.ok and "lhpc stack stop meshtastic" in r.next_commands and _tree(b) == before
+    assert not r.ok and "lhpc stack stop meshtastic@r1" in r.next_commands and _tree(b) == before
 
 
 def test_a_start_attempted_during_the_restore_is_refused(tmp_path, monkeypatch):

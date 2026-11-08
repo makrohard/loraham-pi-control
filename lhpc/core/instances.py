@@ -171,7 +171,7 @@ def add_instance(svc, sid: str, rid: str):
             if any(instance_runs(svc, c, commands.Instance(0, rid), radio.band) for c in stack.components
                    if c.process is not None):       # G1-C7 B1: slot 0 runs on that radio
                 return ActionResult(False, f"Cannot add {sid}@{rid}: {sid} (slot 0) runs on {rid} — stop it first",
-                                    next_commands=[f"lhpc stack stop {sid}"])
+                                    next_commands=[f"lhpc stack stop {named(svc, sid)}"])
             bands = stack_bands(stack)
             if radio.band not in bands:
                 return ActionResult(False, f"Cannot add {sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, "
@@ -243,6 +243,83 @@ def resolve(svc, target: str):
         return sid, None, "", f"{sid}@ is not a listed instance (lhpc stack add-instance {sid} <rid>)"
     copy, why = copy_of(svc, sid, rid)
     return sid, copy, copy.band if copy is not None else "", why
+
+
+def can_run_on(svc, stack) -> list:
+    """The enabled radios `stack` can run on, by rid order: those of its bands (any band for a stack without one)."""
+    bands = stack_bands(stack)
+    return sorted((r.id for r in radios.load(svc._paths).radios if r.enabled and (not bands or r.band in bands)),
+                  key=lambda x: int(x[1:]))
+
+
+def running_keys(svc, sid: str) -> list:
+    """`<sid>@<rid>` of each running instance of the stack, by rid order: slot 0 by its verified ownership record's
+    radio, a copy by copy_processes (W323: a bare stop or restart names them)."""
+    life, rids = svc._lifecycle(), set()
+    for rec in life.owned_inventory()[0]:
+        if (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid and rec.get("rid") \
+                and life.verify_owned(rec)[0]:
+            rids.add(rec["rid"])
+    rids |= {rid for s, rid, _c, _p in copy_processes(svc, svc._system.procfs.cmdlines()) if s == sid and rid}
+    return [f"{sid}@{r}" for r in sorted(rids, key=lambda x: int(x[1:]))]
+
+
+def named(svc, target: str, inst=None, band: str = "") -> str:
+    """`<target>@<rid>` for a command lhpc suggests (W323: a bare stack is refused): the instance's radio, else the
+    band's first enabled radio, else the stack's running instance, else the first radio it can run on; `<rid>` when
+    none is known. A target that already names its radio is kept."""
+    if not isinstance(target, str) or "@" in target:
+        return target
+    rid = getattr(inst, "rid", "") or ""
+    sid = target if svc.stack(target) is not None else (svc.stack_of(target) or "")
+    stack = svc.stack(sid) if sid else None
+    if not rid and band and stack is not None:             # the band's first enabled radio, by rid order
+        rid = next(iter(sorted((r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band),
+                               key=lambda x: int(x[1:]))), "")
+    if not rid and stack is not None:
+        run = running_keys(svc, sid)
+        rid = run[0].partition("@")[2] if run else next(iter(can_run_on(svc, stack)), "")
+    return f"{target}@{rid or '<rid>'}"
+
+
+def parse_target(svc, target: str, verb: str = "start"):
+    """THE target of an operator entry (the CLI, then the console; CLEANUP-DESIGN-v13 13.2, W323/W326):
+    `<stack>@<rid>` (or `<component>@<rid>`: its stack's instance) -> (the stack or component id, Instance, its
+    radio's band, ""), or (that id, None, "", why). A bare `<stack>` is refused
+    with the radios it can run on ("kiss can run on r1 or r3: use kiss@r1 or kiss@r3"), one radio included; a bare
+    stop, restart or kill names its running instances. A radio with a listed copy is that copy; until the slots go
+    (K4) any other radio of the stack is slot 0 on it. A disabled radio's instance comes back WITH its why (a stop
+    still reaches it, G1-C7 B3)."""
+    name, at, rid = target.partition("@") if isinstance(target, str) else ("", "", "")
+    sid = name if svc.stack(name) is not None else (svc.stack_of(name) or "")
+    stack = svc.stack(sid) if sid else None
+    if stack is None:
+        return name, None, "", f"unknown stack or component {name!r}"
+    out = parse_instance(svc, stack, name, at, rid, verb)
+    return (name, *out[1:])
+
+
+def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
+    """parse_target's rule for `name` (a stack or one of its components) of `stack`."""
+    sid, target = stack.id, f"{name}{at}{rid}"
+    if not at and verb in ("stop", "restart", "kill") and (run := running_keys(svc, sid)):
+        named = [f"{name}@{k.partition('@')[2]}" for k in run]
+        return sid, None, "", f"{name} runs as {' and '.join(named)}: name one ({named[0]})"
+    if not at:
+        can = can_run_on(svc, stack)
+        if not can:
+            return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
+        return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
+    if rid in listed_rids(svc._paths, sid):
+        copy, why = copy_of(svc, sid, rid)
+        return sid, copy, copy.band if copy is not None else "", why
+    radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    if radio is None:
+        return sid, None, "", f"{target}: {rid or '(no radio)'} is not a radio of the hardware list"
+    if (bands := stack_bands(stack)) and radio.band not in bands:
+        return sid, None, "", f"{target}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
+    inst = commands.Instance(0, rid, band=radio.band)
+    return sid, inst, radio.band, (f"{target}: {rid} is disabled" if not radio.enabled else "")
 
 
 def key(target: str, inst) -> str:

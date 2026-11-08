@@ -24,9 +24,9 @@ def test_an_instance_that_runs_is_already_healthy_and_nothing_launches(box):
 
 
 def test_slot_0_is_not_healthy_because_another_instance_runs(box):
-    # Only kiss@r3 runs; the plain start is slot 0 on r1 (433) and launches, never reads r3's process as its own.
+    # Only kiss@r3 runs; kiss@r1 is slot 0 on r1 (433) and launches, never reads r3's process as its own.
     run = box((R1, R3), 'kiss = ["r3"]\n', procs={4100: _kiss_on("r3")}, ports=(8001,))
-    rc, out, launches = run("start", "kiss", "--band", "433")
+    rc, out, launches = run("start", "kiss@r1")                     # K3: slot 0 named on its radio
     assert ("loraham-kiss-tnc", "433", 0, "r1") in launches, (launches, out)
 
 
@@ -34,7 +34,7 @@ def test_slot_0_that_runs_beside_a_listed_copy_is_already_healthy(box):
     # Slot 0 runs on r1 (its DEC-W16 radio) while kiss@r3 is listed: its start is the no-op, judged on slot 0's own
     # copy from copy_of (CLEANUP-DESIGN-v6: slot 0 is a real copy), never a re-derived radio.
     run = box((R1, R3), 'kiss = ["r3"]\n', procs={4100: _kiss_on("r1")}, ports=(8001,))
-    rc, out, launches = run("start", "kiss", "--band", "433")
+    rc, out, launches = run("start", "kiss@r1")                     # K3: slot 0 named on its radio
     assert rc == 0 and "already healthy" in out and launches == [], (out, launches)
 
 
@@ -58,8 +58,8 @@ def test_slot_0_is_refused_when_every_radio_of_its_band_is_listed(box):
 
 
 @pytest.mark.parametrize("argv,why", [
-    (("start", "kiss@r9"), "kiss@r9 is not a listed instance (lhpc stack add-instance kiss r9)"),
-    (("poststart", "kiss@r3"), "lhpc stack poststart kiss@r3: not for an instance in this build"),
+    (("start", "kiss@r9"), "kiss@r9: r9 is not a radio of the hardware list"),
+    (("poststart", "kiss@r3"), "lhpc stack poststart kiss@r3: not for a listed instance in this build"),
 ])
 def test_the_cli_refuses_an_unlisted_or_not_yet_supported_instance(box, capsys, argv, why):
     box((R1, R3), 'kiss = ["r3"]\n')

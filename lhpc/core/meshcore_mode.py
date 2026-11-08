@@ -115,7 +115,7 @@ def start_refusal(svc, target: str, inst=None):
             from . import instances
             key = instances.key(STACK_ID, inst)
             return ActionResult(False, f"Cannot start '{target}': the running mode of {key} cannot be read (its "
-                                f"generated config is missing or unreadable)", details=[f"lhpc stack restart {key}"])
+                                f"generated config is missing or unreadable)", details=[f"lhpc stack restart {instances.named(svc, STACK_ID, inst)}"])
     if target in CLIENT_IDS and not clients_available(mode):
         return ActionResult(
             False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "

@@ -47,7 +47,7 @@ def test_plan_is_read_only(kiss_box, run_op):
         "ok": True, "summary": "Restart plan for 'kiss': stop then run.",
         "data_keys": ["blockers", "changes", "commands", "dependents", "optional_restarted",
                       "other_bands"],
-        "next_commands": ["lhpc stack restart kiss --yes"],
+        "next_commands": ["lhpc stack restart kiss@r1 --yes"],
         "heads": ["[daemon] start/ensure", "[start] loraham-kiss-tnc"], "outcomes": []}
     assert plan.res.details == ["  [daemon] start/ensure --radio 433, TXMODE=MANAGED",
                                 "  [start] loraham-kiss-tnc (band 433)"]
@@ -65,7 +65,7 @@ def test_restart_a_running_stack(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.restart("kiss", apply=True))
     assert run.fields == {
         "ok": True, "summary": "Restarted 'kiss'. Run applied for 'kiss'.", "data_keys": [],
-        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss"],
+        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss@r1"],
         "heads": ["[already_stopped] loraham-kiss-serial", "[stopped] loraham-kiss-tnc",
                   "[stopped daemon] daemon", "[ok] daemon", "[log] loraham-kiss-tnc",
                   "[verified] loraham-kiss-tnc"],
@@ -144,7 +144,7 @@ def test_band_owner_refuses_before_the_stop(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.restart("kiss", apply=True))
     assert run.fields == {
         "ok": False, "summary": "Cannot run 'kiss': meshtastic must be stopped first.",
-        "data_keys": [], "next_commands": ["lhpc stack stop meshtastic"], "heads": [],
+        "data_keys": [], "next_commands": ["lhpc stack stop meshtastic@r1"], "heads": [],
         "outcomes": []}
     assert run.phases == LOCKS + ["recheck:preflight"]
     assert run.files == NOTHING and box.owned() == ["loraham-kiss-tnc"]

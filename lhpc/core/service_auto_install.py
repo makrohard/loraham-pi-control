@@ -11,7 +11,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from . import jobs, runtime_fs, validators
+from . import instances, jobs, runtime_fs, validators
 from . import lifecycle as lifecycle_mod
 from .abortflag import AbortFlag
 from .lifecycle import GUI_MISSING_HINT
@@ -1584,7 +1584,7 @@ class AutoInstallOpsMixin:
             False, "Refusing to start the auto-install run: component(s) are running — this run "
             "never stops anything itself.",
             details=[f"  running: {', '.join(running)}"],
-            next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+            next_commands=[f"lhpc stack stop {instances.named(self, o)} --yes" for o in owners])
 
     def _auto_install_scope_edges(self) -> tuple:
         """(ordered stack ids, {stack -> set(dependency stacks)}) from the manifest graph."""
@@ -1658,7 +1658,7 @@ class AutoInstallOpsMixin:
                     fail_tx((prior + " — " if prior and
                              marker["tx_phase"]["status"] == "fail" else "") +
                             "final daemon stop FAILED — the daemon may still be "
-                            "RUNNING; stop it: lhpc stack stop daemon --yes", ran=True)
+                            f"RUNNING; stop it: lhpc stack stop {instances.named(self, 'daemon')} --yes", ran=True)
                     stop_failed = "stop"
             if not stop_failed:
                 bw()

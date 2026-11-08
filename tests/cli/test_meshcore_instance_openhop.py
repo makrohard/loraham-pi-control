@@ -95,6 +95,6 @@ def test_slot_0s_file_stays_where_it_was(box, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(ops, "_helper", _helper(calls))
     _repeater(tmp_path, "Relay 0")
-    run("start", "meshcore")
+    run("start", "meshcore@r3")                                   # K3: slot 0 named on its radio (868: r3 here)
     assert (tmp_path / "state" / "openhop" / "config.yaml").is_file(), calls
     assert not (tmp_path / "state" / "r3").exists()

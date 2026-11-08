@@ -2577,7 +2577,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "env LHPC_RUNTIME_ROOT={runtime} {lhpc_python} -m lhpc stack restart meshcore --yes"
+      default = "env LHPC_RUNTIME_ROOT={runtime} {lhpc_python} -m lhpc stack restart meshcore@{rid} --yes"
       # Upstream's radio presets (the dashboard's preset picker), copied by the host into the state
       # dir at each start, where upstream's own installer would put them.
       [[stack.component.config_file.param]]

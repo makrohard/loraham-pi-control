@@ -924,8 +924,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                    f"{marker.get('reason', 'marker unreadable')}")
                 else:
                     details.append(f"  ! RESTART REQUIRED: '{sid}' — saved settings differ "
-                                   f"from the running stack (lhpc stack stop {sid} && "
-                                   f"lhpc stack start {sid})")
+                                   f"from the running stack (lhpc stack stop {instances.named(self, sid)} && "
+                                   f"lhpc stack start {instances.named(self, sid)})")
         # A source update that is not finished (named states: prior-in-use, prior-dirty,
         # update-interrupted) — every source operation waits on it, so it is said here.
         try:

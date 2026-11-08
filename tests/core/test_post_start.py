@@ -1187,7 +1187,7 @@ def test_status_shows_not_applied_line_with_reapply_hint(tmp_path):
     lines = svc._post_start_outcomes("meshcom-qemu")
     assert len(lines) == 1
     assert "callsign NOT applied" in lines[0] and "console never became ready" in lines[0]
-    assert "lhpc stack poststart meshcom" in lines[0]
+    assert "lhpc stack poststart meshcom@r1" in lines[0]
     assert any("NOT applied" in d for d in svc.status("meshcom").details)
 
 
@@ -1198,7 +1198,7 @@ def test_status_shows_unverified_line_with_reapply_hint(tmp_path):
     lines = [d for d in svc.status("meshcom").details if "post-start:" in d]
     assert len(lines) == 1
     assert "callsign UNVERIFIED" in lines[0]
-    assert "lhpc stack poststart meshcom" in lines[0]
+    assert "lhpc stack poststart meshcom@r1" in lines[0]
 
 
 def test_status_outcome_unknown_on_unreadable_sidecar(tmp_path):

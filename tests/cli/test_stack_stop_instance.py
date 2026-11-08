@@ -45,13 +45,13 @@ def test_slot_0s_stop_leaves_the_listed_instances_alone(box, stops):
     run = box((R1, R3), KISS, procs={4100: _kiss_on("r1")})
     svc = cli.ControllerService()
     assert svc._set_running_band("kiss", "433")
-    rc, out, _ = run("stop", "kiss")
+    rc, out, _ = run("stop", "kiss@r1")                          # K3: slot 0 named on its radio
     (kw,) = _tnc(stops)
     assert (kw["exclude_rids"], kw["token"]) == (("r3",), ("--data-socket", "/tmp/loraf-r1.sock"))
 
 
 def test_without_listed_instances_the_stop_is_as_before(box, stops):
-    box((R1, R3), None)("stop", "kiss")
+    box((R1, R3), None)("stop", "kiss@r1")
     assert _tnc(stops) == [{}]
 
 

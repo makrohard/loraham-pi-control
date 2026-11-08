@@ -36,7 +36,7 @@ from lhpc_testlab.release import (
     wait_http,
     wait_tcp,
 )
-from lhpc_testlab.testing import run_lhpc
+from lhpc_testlab.testing import named, run_lhpc
 
 from lhpc.core.manifest import default_manifest_path, load_manifest
 
@@ -135,7 +135,7 @@ def _start(env, stack: str, timeout: float = 600.0, *, attribute: bool = True):
     — so its failure carries no `stack_regression` marker and can never freeze the wrong thing.
     """
     mark = f"{stack_regression(stack, 'start')}\n" if attribute else ""
-    r = run_lhpc(env, "stack", "start", stack, "--yes", timeout=timeout)
+    r = run_lhpc(env, "stack", "start", named(env, stack), "--yes", timeout=timeout)
     assert r.returncode == 0, (f"{mark}starting {stack} failed (rc {r.returncode}): "
                                f"{r.stdout[-2000:]}\n{r.stderr[-800:]}")
     return r

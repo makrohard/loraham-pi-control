@@ -349,7 +349,7 @@ def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path,
     assert not any("graywolf" in d for d in r.details), r.details        # override -> untouched
     assert svc.restart_required("chat") is not None
     assert svc.restart_required("graywolf") is None
-    assert "lhpc stack restart chat" in (r.next_commands or [])
+    assert "lhpc stack restart chat@r1" in (r.next_commands or [])
 
 
 # ===== external re-audit regressions (@959618e findings) =====
@@ -389,7 +389,7 @@ def test_global_change_marking_is_band_aware(tmp_path, monkeypatch):
     assert r.ok
     assert svc.restart_required("chat") is not None          # inheriting -> marked
     assert svc.restart_required("voice") is None             # 868 local override -> untouched
-    assert "lhpc stack restart chat" in (r.next_commands or [])
+    assert "lhpc stack restart chat@r1" in (r.next_commands or [])
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)

@@ -8,7 +8,7 @@ FILE = "config/stacks/chat.toml"
 WRITES = ["lock:config", "recheck:config-journal", "mutate:write:state/config-txn.json",
           "mutate:write:" + FILE]
 SAVED = {"ok": True, "summary": "Config saved for 'chat'.", "data_keys": [],
-         "next_commands": ["lhpc stack start chat"], "heads": [], "outcomes": []}
+         "next_commands": ["lhpc stack start chat@r1"], "heads": [], "outcomes": []}
 
 
 def chat_svc(root, running=False):

@@ -32,8 +32,8 @@
   rc it returned, instead of only its last output line.
 - Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
   not reported as failed while it still completes.
-- `lhpc kill` takes `<stack>` (slot 0) or `<stack>@<rid>` (a listed copy, per radio); the `<stack>@<band>` form is
-  gone.
+- Every stack verb and `lhpc kill` name the instance, `<stack>@<rid>`; a bare `<stack>` is refused with the radios it
+  can run on ("kiss can run on r1 or r3: use kiss@r1 or kiss@r3"), and the stack verbs take no `--band`.
 
 Upgrading from 0.13.x
 
@@ -41,7 +41,8 @@ Upgrading from 0.13.x
   (or `sudo modprobe spi_ch341`).
 - The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
   grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
-- A script calling `lhpc kill <stack>@<band>`: use `lhpc kill <stack>` or `lhpc kill <stack>@<rid>`.
+- A script calling `lhpc stack <verb> <stack> [--band B]` or `lhpc kill <stack>[@<band>]`: name the instance,
+  `<stack>@<rid>` (`lhpc hardware` lists the radios; `daemon --radio rN` still works).
 - Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
   `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
 

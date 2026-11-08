@@ -12,6 +12,7 @@ import stat
 import time
 from pathlib import Path
 
+from . import instances
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
 
@@ -147,11 +148,10 @@ class SecretsOpsMixin:
 
     def _secrets_backup_locked(self, root, dirfd, name, out, host, version) -> ActionResult:
         from . import secrets_backup as sb
-        running = self._secrets_running()
-        if running:
+        if running := self._secrets_running():
             return ActionResult(False, "A stack that keeps its state in the backup is running: "
                                 f"{', '.join(running)}. Stop it first; no backup file was written.",
-                                next_commands=[f"lhpc stack stop {s}" for s in running])
+                                next_commands=[f"lhpc stack stop {instances.named(self, s)}" for s in running])
         roots = self._secrets_state_roots()
         try:
             members, absent = sb.inventory(root, roots)
@@ -344,7 +344,7 @@ class SecretsOpsMixin:
                 if running:
                     return ActionResult(False, f"A stack is running: {', '.join(running)}. Stop it "
                                         "first; no target was changed.", details=head,
-                                        next_commands=[f"lhpc stack stop {s}" for s in running])
+                                        next_commands=[f"lhpc stack stop {instances.named(self, s)}" for s in running])
                 now, _ = self._secrets_plan(root, snap, archive, only_pki)
                 if now != shown:
                     return ActionResult(False, "state changed; run restore again. No target was "

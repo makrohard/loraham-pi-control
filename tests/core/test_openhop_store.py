@@ -642,7 +642,7 @@ def test_a_restart_that_would_migrate_under_a_running_node_is_refused_before_the
 
 
 def test_the_cli_restart_of_a_repeater_ends_ok_with_the_real_config_lock(env, monkeypatch, capsys):
-    """The same through the CLI entry (`lhpc stack restart meshcore --yes`, what openHop's restart,
+    """The same through the CLI entry (`lhpc stack restart meshcore@r2 --yes`, what openHop's restart,
     reboot and Glass restart run)."""
     from lhpc.adapters.cli import main as cli
     svc, helper = env
@@ -654,7 +654,7 @@ def test_the_cli_restart_of_a_repeater_ends_ok_with_the_real_config_lock(env, mo
     calls = _restart_without_processes(monkeypatch, svc)
     monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == mm.STACK_ID and not calls)
-    assert cli.main(["stack", "restart", mm.STACK_ID, "--yes"]) == 0, capsys.readouterr()
+    assert cli.main(["stack", "restart", f"{mm.STACK_ID}@r2", "--yes"]) == 0, capsys.readouterr()   # K3: 868 is r2
     assert calls == [("stop", mm.STACK_ID), ("start", mm.STACK_ID)]
     assert helper.file()["repeater.node_name"] == "Relay"
 

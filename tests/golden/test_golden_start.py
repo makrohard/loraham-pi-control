@@ -29,7 +29,7 @@ KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-
             "final:clear-stop-intent:kiss"]
 PLAN = {"ok": True, "summary": "Run plan for 'kiss': 2 component(s) in order.",
         "data_keys": ["blockers", "changes", "commands"],
-        "next_commands": ["lhpc stack start kiss --yes"],
+        "next_commands": ["lhpc stack start kiss@r1 --yes"],
         "heads": ["[daemon] start/ensure", "[start] loraham-kiss-tnc"], "outcomes": []}
 NOTHING = {"added": [], "removed": [], "changed": []}
 
@@ -46,7 +46,7 @@ def test_plan_then_apply_happy_path(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields == {
         "ok": True, "summary": "Run applied for 'kiss'.", "data_keys": [],
-        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss"],
+        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss@r1"],
         "heads": ["[ok] daemon", "[log] loraham-kiss-tnc", "[verified] loraham-kiss-tnc"],
         "outcomes": [("loraham-daemon", "verified"), ("loraham-kiss-tnc", "verified")]}
     assert run.phases == KISS_LOCKS + RECHECK + KISS_RUN
@@ -135,7 +135,7 @@ def test_refused_by_band_owner(kiss_box, run_op):
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields == {
         "ok": False, "summary": "Cannot run 'kiss': meshtastic must be stopped first.",
-        "data_keys": [], "next_commands": ["lhpc stack stop meshtastic"], "heads": [],
+        "data_keys": [], "next_commands": ["lhpc stack stop meshtastic@r1"], "heads": [],
         "outcomes": []}
     assert run.phases == KISS_LOCKS + RECHECK + ["recheck:preflight"]
     assert run.files == NOTHING
@@ -164,7 +164,7 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
     assert run.fields == {
         "ok": False, "summary": "Run FAILED for 'kiss': loraham-kiss-tnc did not start/verify.",
         "data_keys": [],
-        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss"],
+        "next_commands": ["lhpc status kiss", "lhpc logs kiss", "lhpc stack stop kiss@r1"],
         "heads": ["[ok] daemon", "[log] loraham-kiss-tnc", "[unverified] loraham-kiss-tnc"],
         "outcomes": [("loraham-daemon", "verified"), ("loraham-kiss-tnc", "unverified")]}
     assert run.res.details[-1] == (
@@ -224,7 +224,7 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
         "ok": False,
         "summary": "Run for 'chat': manual start required for loraham-chat — see the dashboard.",
         "data_keys": [],
-        "next_commands": ["lhpc status chat", "lhpc logs chat", "lhpc stack stop chat"],
+        "next_commands": ["lhpc status chat", "lhpc logs chat", "lhpc stack stop chat@r1"],
         "heads": ["[ok] daemon", "[manual_required] loraham-chat"],
         "outcomes": [("loraham-daemon", "verified"), ("loraham-chat", "manual_required")]}
     assert run.phases[-4:] == ["recheck:identity", "recheck:preflight", "mutate:feed-floor:433",

@@ -514,7 +514,7 @@ class LifecycleOpsMixin:
                     f"does not use it — starting it alone would claim the receiver for a "
                     f"consumer that is not running",
                     ["lhpc gps", f"lhpc config {target} use_gps on",
-                     f"lhpc stack start {target}"])
+                     f"lhpc stack start {instances.named(self, target)}"])
         cfg = self.config()
         g = getattr(cfg, "gps", None)
         if g is not None and not getattr(g, "valid", True):
@@ -830,8 +830,8 @@ class LifecycleOpsMixin:
                         False,
                         f"Cannot start '{target}': it shares {stack.main}'s configuration "
                         f"(callsign, audio device and radio params), which only a stack "
-                        f"start generates — run: lhpc stack start {stack.id}",
-                        next_commands=[f"lhpc stack start {stack.id}"])
+                        f"start generates — run: lhpc stack start {instances.named(self, stack.id)}",
+                        next_commands=[f"lhpc stack start {instances.named(self, stack.id)}"])
                 return None
         return None
 
@@ -933,8 +933,8 @@ class LifecycleOpsMixin:
                 f"{band} MHz.",
                 details=["  [blocked] a band-switchable stack runs on ONE band at a time",
                          f"  Stop it first, then start it on {band} MHz."],
-                next_commands=[f"lhpc stack stop {_sid} --yes",
-                               f"lhpc stack start {_sid} --yes"])
+                next_commands=[f"lhpc stack stop {instances.named(self, _sid)} --yes",
+                               f"lhpc stack start {instances.named(self, _sid)} --yes"])
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
         # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only
         # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
@@ -1077,8 +1077,7 @@ class LifecycleOpsMixin:
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
         return ActionResult(True, f"Run plan for '{instances.key(target, prep.inst)}': {len(order)} component(s) in order.",
                             details=details,
-                            next_commands=[f"lhpc stack start {instances.key(target, prep.inst)}"
-                                           + (f" --band {band}" if band and not getattr(prep.inst, "slot", 0) else "") + " --yes"],
+                            next_commands=[f"lhpc stack start {instances.named(self, target, prep.inst, band)} --yes"],
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})
 
@@ -1141,8 +1140,8 @@ class LifecycleOpsMixin:
                                if apps else "") + "the daemon was not.",
                             details=[*prelude, f"  [blocked] daemon {b}: one process with "
                                      f"{', '.join(sorted(extra))} — {', '.join(hit)} left running"],
-                            next_commands=[*(f"lhpc stack stop {h}" for h in hit),
-                                           f"lhpc stack start {target} --yes"])
+                            next_commands=[*(f"lhpc stack stop {instances.named(self, h)}" for h in hit),
+                                           f"lhpc stack start {instances.named(self, target)} --yes"])
                 for b in ([""] if "" in bands else bands):
                     stop_owner(daemon_sid, b)
             if unstopped:
@@ -1624,7 +1623,7 @@ class LifecycleOpsMixin:
             warned = {**warned, "openhop_warnings": _ohw}   # the stack page's start note too
         return ActionResult(ok, summary, details=out, results=tuple(results), data=warned,
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
-                                           f"lhpc stack stop {target}"])
+                                           f"lhpc stack stop {instances.named(self, target)}"])
 
     def _roll_back_start(self, life, order, results, band: str, daemon_launched) -> list[str]:
         """The roll-back of a FAILED start (finding 64): stop again what THIS start launched,
@@ -1827,7 +1826,7 @@ class LifecycleOpsMixin:
             if state != RunState.RUNNING:
                 record(comp, stack, Outcome.BLOCKED,
                        f"not running ({state.value}) — start it first "
-                       f"(lhpc stack start {stack.id})")
+                       f"(lhpc stack start {instances.named(self, stack.id)})")
                 continue
             cfg_band = self.running_band(stack.id) if self.stack_bands(stack.id) else (band or "")
             notes, unverified = life._cancel_post_runners(comp, cfg_band or None)
@@ -2503,12 +2502,9 @@ class LifecycleOpsMixin:
                          f"start would need '{_dep}' on {band} MHz",
                          f"  Stop '{_dep}' first, or start '{target}' on {_dlive} MHz "
                          "instead."],
-                # `lhpc stack start` takes no --band (the band is chosen in the console),
-                # so the remedy is the same shape as the own-stack refusal: stop the
-                # holder, then start. Naming a flag that does not exist would be worse
-                # than naming none.
-                next_commands=[f"lhpc stack stop {_dep} --yes",
-                               f"lhpc stack start {target} --yes"])
+                # The remedy names the instances (K3: the band is the named radio's): stop the holder, then start.
+                next_commands=[f"lhpc stack stop {instances.named(self, _dep)} --yes",
+                               f"lhpc stack start {instances.named(self, target)} --yes"])
         return None
 
     def _band_owner_is_up(self, stack_id: str, snap=None) -> bool:
@@ -2869,17 +2865,17 @@ class LifecycleOpsMixin:
             elif oc == "exhausted":
                 lines.append(f"post-start: {label} NOT applied — console never became "
                              f"ready within {el}s ({n} attempts); re-apply with: "
-                             f"lhpc stack poststart {stack_hint}")
+                             f"lhpc stack poststart {instances.named(self, stack_hint)}")
             elif oc == "unverified":
                 lines.append(f"post-start: {label} UNVERIFIED — the node answered but never "
                              f"reported the expected value within {el}s ({n} attempts); "
-                             f"re-apply with: lhpc stack poststart {stack_hint}")
+                             f"re-apply with: lhpc stack poststart {instances.named(self, stack_hint)}")
             elif oc == "ok":
                 lines.append(f"post-start: {label} applied after {el}s")
             elif oc == "failed":
                 lines.append(f"post-start: {label} FAILED "
                              f"(exit {rc if isinstance(rc, int) else '?'}) after {el}s — see "
-                             f"{log_hint}; re-apply with: lhpc stack poststart {stack_hint}")
+                             f"{log_hint}; re-apply with: lhpc stack poststart {instances.named(self, stack_hint)}")
             elif oc == "timeout":
                 lines.append(f"post-start: {label} timed out after {el}s (see {log_hint})")
             elif oc == "ready":

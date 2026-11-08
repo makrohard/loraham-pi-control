@@ -95,7 +95,7 @@ def test_the_instance_preview_names_the_instance(box, capsys):
     box((R1, R3), KISS)
     cli.main(["stack", "start", "kiss@r3"])                             # no --yes: the plan only
     out = capsys.readouterr().out
-    assert "lhpc stack start kiss@r3 --yes" in out and "lhpc stack start kiss --band" not in out, out
+    assert "lhpc stack start kiss@r3 --yes" in out and "lhpc stack start kiss@r1 --band" not in out, out
 
 
 def test_c17_a_running_instance_holds_the_secrets_backup_back(box, tmp_path):

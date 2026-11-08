@@ -47,7 +47,7 @@ from lhpc_testlab.release_lane import (  # noqa: F401
     pytest_runtest_makereport,
     release_what_a_failing_case_took,
 )
-from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
+from lhpc_testlab.testing import LabServer, lab_env, run_lhpc, running
 
 from lhpc.core.manifest import default_manifest_path, load_manifest
 
@@ -73,7 +73,8 @@ def lab(tmp_path_factory):
     # because it is the provider the others run over.
     stacks = [s.id for s in load_manifest(default_manifest_path())]
     for sid in sorted(stacks, key=lambda sid: sid == "daemon"):
-        run_lhpc(server.env, "stack", "stop", sid, "--yes", timeout=300)
+        for key in running(server.env, sid):           # each instance by name (W323)
+            run_lhpc(server.env, "stack", "stop", key, "--yes", timeout=300)
 
 
 @pytest.fixture(scope="session", autouse=True)

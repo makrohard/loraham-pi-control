@@ -33,14 +33,14 @@ def test_a_restart_of_a_shared_band_is_no_longer_refused_and_signals_no_unowned_
     signals = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append(("kill", pid, sig)))
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append(("killpg", pgid, sig)))
-    cli.main(["stack", "restart", "daemon", "--band", "868", "--yes"])
+    cli.main(["stack", "restart", "daemon@r2", "--yes"])
     out = capsys.readouterr().out
     assert "share it" not in out, out
     assert signals == []
 
 
-@pytest.mark.parametrize("band", ["433", "868"])
-def test_a_restart_passes_its_band_on(tmp_path, monkeypatch, band):
+@pytest.mark.parametrize("rid,band", [("r1", "433"), ("r2", "868")])
+def test_a_restart_passes_its_radios_band_on(tmp_path, monkeypatch, rid, band):
     _fake_service(monkeypatch, tmp_path, radios_fixture.RADIOS)
     calls = []
 
@@ -48,11 +48,5 @@ def test_a_restart_passes_its_band_on(tmp_path, monkeypatch, band):
         calls.append((op, target, kw.get("apply"), kw.get("band")))
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
-    assert cli.main(["stack", "restart", "daemon", "--band", band, "--yes"]) == 0
+    assert cli.main(["stack", "restart", f"daemon@{rid}", "--yes"]) == 0          # K3: the radio's band
     assert calls[-1] == ("restart", "daemon", True, band)
-
-
-def test_a_restart_band_outside_433_868_is_a_usage_error(capsys):
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["stack", "restart", "daemon", "--band", "915", "--yes"])
-    assert exc.value.code == 2 and "invalid choice: '915'" in capsys.readouterr().err

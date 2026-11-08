@@ -33,7 +33,7 @@ def test_plan_is_read_only(kiss_box, run_op):
     assert plan.fields == {
         "ok": True, "summary": "Stop plan for 'kiss': 2 component(s).",
         "data_keys": ["changes", "commands", "dependents", "other_bands"],
-        "next_commands": ["lhpc stack stop kiss --yes"],
+        "next_commands": ["lhpc stack stop kiss@r1 --yes"],
         "heads": ["[stop] loraham-kiss-serial", "[stop] loraham-kiss-tnc"], "outcomes": []}
     assert plan.phases == [] and plan.files == {"added": [], "removed": [], "changed": []}
 

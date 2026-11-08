@@ -25,7 +25,7 @@ import traceback
 
 from . import binary_install as bi
 from . import binary_receipt as brx
-from . import reslock, runtime_fs, source_registry, web_client
+from . import instances, reslock, runtime_fs, source_registry, web_client
 from .best_effort import best_effort
 from .paths import PathContainmentError
 from .service_base import (
@@ -337,7 +337,7 @@ class BinaryOpsMixin:
                     False, f"Refusing to install '{stack_id}' from binary: component(s) "
                            "running.",
                     details=[f"  running: {', '.join(_running)} — stop them first"],
-                    next_commands=[f"lhpc stack stop {stack_id} --yes"])
+                    next_commands=[f"lhpc stack stop {instances.named(self, stack_id)} --yes"])
 
             # OPEN THE TRANSACTION FIRST — before the auth change and before any file moves.
             # The journal carries the previous receipt and the previous mesh-password value, so
@@ -457,7 +457,7 @@ class BinaryOpsMixin:
             return ActionResult(
                 True, f"Installed '{stack_id}' from the published binary ({size_mb:.1f} MB).",
                 details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…", *_newer],
-                next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
+                next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {instances.named(self, stack_id)}"],
                 data={"channel": "binary", "changes": 1, **_newer_data})
 
     @staticmethod
@@ -884,7 +884,7 @@ class BinaryOpsMixin:
                 False, f"Refusing to retire the binary install of '{stack_id}': component(s) "
                        "running.",
                 details=[f"  running: {', '.join(_running)} — stop them first"],
-                next_commands=[f"lhpc stack stop {stack_id} --yes"])
+                next_commands=[f"lhpc stack stop {instances.named(self, stack_id)} --yes"])
         if txn:
             # SWITCH path: move the artifact into the caller's open transaction instead of
             # deleting it. The journal already carries the receipt, so `binary_recover()` can

@@ -83,15 +83,19 @@ def test_the_cli_addresses_one_radios_daemon(cli, action):
 
 
 @pytest.mark.parametrize("argv, rc, why", [
-    (("stop", "daemon", "--radio", "r9", "--yes"), 1, "r9 is not a radio of the hardware list"),
-    (("stop", "daemon", "--radio", "r3", "--yes"), 1, "r3 is disabled"),
-    (("stop", "kiss", "--radio", "r2", "--yes"), 2, "--radio applies to the daemon only, without --band"),
-    (("stop", "daemon", "--radio", "r2", "--band", "433", "--yes"), 2,
-     "--radio applies to the daemon only, without --band"),
+    (("stop", "daemon", "--radio", "r9", "--yes"), 1, "ERR   daemon@r9: r9 is not a radio of the hardware list"),
+    (("stop", "kiss", "--radio", "r2", "--yes"), 2, "ERR   --radio applies to the daemon only: daemon@RID"),
+    (("stop", "daemon", "--radio", "r2", "--band", "433", "--yes"), 2, "lhpc: error: unrecognized arguments: --band 433"),
 ])
 def test_the_cli_refuses_a_radio_it_cannot_address(cli, argv, rc, why):
     got, out, calls = cli(*argv)
-    assert (got, calls) == (rc, []) and out.err == f"ERR   {why}\n"
+    assert (got, calls) == (rc, []) and out.err == f"{why}\n"
+
+
+def test_a_disabled_radios_daemon_still_stops(cli):
+    # G1-C7 B3, K3: the stop of a disabled radio's daemon reaches it (`daemon --radio r3` is daemon@r3); was refused.
+    got, _out, calls = cli("stop", "daemon", "--radio", "r3", "--yes")
+    assert got == 0 and calls[-1] == ("stop", "daemon", True, "868", 0, "r3")
 
 
 def test_a_listed_instance_that_does_not_run_is_not_stopped(box, monkeypatch):
@@ -111,7 +115,7 @@ def test_a_stray_daemon_on_a_band_the_box_does_not_serve_stays_stoppable(box, mo
 
 
 def test_a_bandless_daemon_stop_stops_every_client_instance_too(box):
-    # G1-C18 (1): `lhpc stack stop daemon` without a band left kiss@r2 running (only slot 0 was stopped).
+    # G1-C18 (1): `lhpc stack stop daemon@r1` without a band left kiss@r2 running (only slot 0 was stopped).
     svc, stops = box
     assert svc.stop("daemon", apply=True).ok
     assert stops == [*((c, None, None, ("r2",)) for c in KISS), *((c, None, "r2", ()) for c in KISS),

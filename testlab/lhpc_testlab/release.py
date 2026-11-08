@@ -23,7 +23,8 @@ from pathlib import Path
 
 from lhpc.core import build_regression as br
 from lhpc_testlab import data_path
-from lhpc_testlab.testing import run_lhpc
+from lhpc_testlab.testing import named, run_lhpc
+from lhpc_testlab.testing import running as running_instances
 
 REQUIRED_CASES_FILE = "required-release-cases.json"
 
@@ -198,10 +199,11 @@ def stop(env: dict, *stacks: str, require: bool = True) -> None:
     is for stacks that may not be running at all.
     """
     for sid in stacks:
-        r = run_lhpc(env, "stack", "stop", sid, "--yes", timeout=300)
-        if require and r.returncode != 0:
-            raise AssertionError(f"stopping {sid} failed (rc {r.returncode}): "
-                                 f"{r.stdout[-800:]}")
+        for key in running_instances(env, sid):       # each instance by name (W323)
+            r = run_lhpc(env, "stack", "stop", key, "--yes", timeout=300)
+            if require and r.returncode != 0:
+                raise AssertionError(f"stopping {key} failed (rc {r.returncode}): "
+                                     f"{r.stdout[-800:]}")
 
 
 # A stack's header line in `lhpc status`: `[kiss] LoRaHAM KISS TNC  (running)`. Merely finding
@@ -759,7 +761,7 @@ def start_component(env: dict, component: str, timeout: float = 900.0, *,
     that stack's own regression. The marker names the stack, never the component id.
     """
     mark = f"{stack_regression(stack, 'start')}\n" if stack else ""
-    r = run_lhpc(env, "stack", "start", component, "--yes", timeout=timeout)
+    r = run_lhpc(env, "stack", "start", named(env, component), "--yes", timeout=timeout)
     assert r.returncode == 0, (f"{mark}starting {component} failed (rc {r.returncode}): "
                                f"{r.stdout[-2000:]}\n{r.stderr[-500:]}")
 

@@ -113,7 +113,7 @@ def _start_flow(run, stack: str, yes: bool, band: str = "", stop_cmds=None,
     if yes or (sys.stdin.isatty() and sys.stdout.isatty() and _confirm(
             f"\n{held} held by {who} — stop them and start {stack}? [y/N] ")):
         return _render(run(True, stop_owners=True))
-    retry = f"lhpc stack start {stack}" + (f" --band {band}" if band else "") + " --yes"
+    retry = f"lhpc stack start {stack} --yes"                 # `stack` names its radio (W323); no --band (13.3)
     return _render(ActionResult(
         False, f"Cannot run '{stack}': {who} must be stopped first.",
         details=[f"  `{retry}` stops them and starts it without asking"],
@@ -195,10 +195,10 @@ def _render_gps_monitor(m: dict, sats: bool) -> int:
     return 0 if ok else 1
 
 
-def _render_daemon(view, channel: dict[str, str] | None = None) -> int:
+def _render_daemon(view, channel: dict[str, str] | None = None, start: str = "daemon@<rid>") -> int:
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
-        print("\nNext:\n  lhpc stack start daemon")
+        print(f"\nNext:\n  lhpc stack start {start}")
         return 1
     s, st, ch = view.status, view.stats, (channel if channel is not None else {})
     if view.ready:
@@ -675,27 +675,11 @@ def build_parser() -> argparse.ArgumentParser:
                           ("poststart", "Re-run post-start steps against a RUNNING stack "
                                         "(no restart — e.g. re-apply the MeshCom callsign)")):
         sp = stack_sub.add_parser(action, help=ahelp)
-        sp.add_argument("stack", help="Stack or component id")
-        if action == "start":
-            # The band a band-switchable stack starts on, as the console's per-band Start does;
-            # the service refuses a band the hardware or the stack cannot serve (band_refusal).
-            from lhpc.core.daemon_control import ALLOWED_BANDS
-            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
-                            help="Start on this band (band-switchable stacks); default: the saved one")
-        elif action == "stop":
-            # A per-band stop (the daemon on one band only, as the console's per-band Stop does) —
-            # the remedy a held band names (finding 140).
-            from lhpc.core.daemon_control import ALLOWED_BANDS
-            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
-                            help="Stop the daemon on this band only (daemon only)")
-        elif action == "restart":
-            # Package item 14: a per-band restart, as start and stop take; the service refuses a band two radios
-            # share (band_refusal, the stop's W1-11 rule) and a band the box or the stack cannot serve.
-            from lhpc.core.daemon_control import ALLOWED_BANDS
-            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
-                            help="Restart on this band (the daemon of that band, or a band-switchable stack)")
-        if action in ("start", "stop", "restart"):          # item 16: one radio's daemon of a shared band
-            sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio only (daemon only)")
+        # W323/W326 (CLEANUP-DESIGN-v13 13.2): every instance by name, `<stack>@<rid>`; a bare stack is refused
+        # with the radios it can run on. No --band: the band is the radio's (13.3).
+        sp.add_argument("stack", metavar="stack@rid", help="<stack>@<rid> (or <component>@<rid>)")
+        if action in ("start", "stop", "restart"):          # 13.8: `--radio RID` stays for scripts: daemon@RID
+            sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio: daemon@RID")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
     # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
     for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
@@ -706,7 +690,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
-    p_kill.add_argument("target", metavar="stack[@rid]", help="Stack id (slot 0), or <stack>@<rid>: a listed copy, the daemon of radio rid")
+    p_kill.add_argument("target", metavar="stack@rid", help="<stack>@<rid>: the stack's instance on radio rid (W323)")
     p_kill.add_argument("component", nargs="?", default="", help="Only this component of the stack")
     p_kill.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
@@ -1457,13 +1441,6 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if (args.stack_action == "stop" and getattr(args, "band", "") and "@" not in args.stack
-                and args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon")):
-            # Fail closed: for any other stack a band would only skip the operator's stop intent,
-            # so boot restore would start it again (finding 140's review).
-            print("lhpc stack stop: --band applies to the daemon only (a stack's own stop needs no "
-                  "band)", file=sys.stderr)
-            return 2
         if args.stack_action in ("add-instance", "remove-instance"):
             from lhpc.core import instances
             fn = instances.add_instance if args.stack_action == "add-instance" else instances.remove_instance
@@ -1473,29 +1450,21 @@ def _run(argv: list[str] | None = None) -> int:
 
             from lhpc.core import instances
             from lhpc.core.outcomes import manual_required_only
-            # Item 7c2: `<stack>@<rid>` names a listed instance; it starts, stops and restarts on its radio's band.
-            sid, inst, iband, why = instances.resolve(svc, args.stack)
-            if inst is not None and args.stack_action == "poststart":
-                why = f"lhpc stack poststart {args.stack}: not for an instance in this build"
+            if getattr(args, "radio", ""):                # 13.8: `daemon --radio rN` is daemon@rN
+                if args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon"):
+                    print("ERR   --radio applies to the daemon only: daemon@RID", file=sys.stderr)
+                    return 2
+                args.stack = f"{args.stack}@{args.radio}"
+            # W323/W326: `<stack>@<rid>`, one parser for every operator entry (instances.parse_target).
+            sid, inst, iband, why = instances.parse_target(svc, args.stack, args.stack_action)
+            if inst is not None and inst.slot and args.stack_action == "poststart":
+                why = f"lhpc stack poststart {args.stack}: not for a listed instance in this build"
             if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1
-            if inst is not None and getattr(args, "band", "") and args.band != iband:
-                print(f"ERR   {args.stack} runs on {iband} MHz (its radio's band), not {args.band}", file=sys.stderr)
-                return 2
-            if getattr(args, "radio", ""):
-                if sid not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon") or inst or args.band:
-                    print("ERR   --radio applies to the daemon only, without --band", file=sys.stderr)
-                    return 2
-                from lhpc.core import radio_start
-                inst, iband, why = radio_start.daemon_radio(svc, args.radio)
-                if why:
-                    print(f"ERR   {why}", file=sys.stderr)
-                    return 1
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, sid, apply=a, band=iband or getattr(args, "band", ""),
-                                     stop_owners=stop_owners, inst=inst)
+                res = svc.run_action(args.stack_action, sid, apply=a, band=iband, stop_owners=stop_owners, inst=inst)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
@@ -1504,8 +1473,7 @@ def _run(argv: list[str] | None = None) -> int:
                     return replace(res, ok=True)
                 return res
             if args.stack_action == "start":
-                return _start_flow(_run, args.stack, yes=args.yes,
-                                   band=getattr(args, "band", "") or "",
+                return _start_flow(_run, args.stack, yes=args.yes, band=iband,
                                    stop_cmds=svc.owner_stop_commands,
                                    stop_labels=svc.owner_stops)
             return _apply_flow(_run, yes=args.yes)
@@ -1517,7 +1485,11 @@ def _run(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     if args.command == "kill":
+        from lhpc.core import instances
         from lhpc.core import kill as _kill
+        if "@" not in args.target:                       # W323: a kill names its instance (parse_target's refusal)
+            print(f"ERR   {instances.parse_target(svc, args.target, 'kill')[3]}", file=sys.stderr)
+            return 1
         return _apply_flow(lambda a: _kill.kill(svc, args.target, args.component, apply=a),
                            yes=args.yes)
     if args.command == "config":
@@ -1711,8 +1683,9 @@ def _run(argv: list[str] | None = None) -> int:
         # An operator ran `lhpc daemon <band>` by hand, ONCE: that is a deliberate request to
         # measure the channel, so this is the one place that still runs a real CAD scan.
         _dview = svc.daemon_view(args.band)
-        return _render_daemon(_dview,
-                              svc.daemon_channel_scan(args.band) if _dview.reachable else {})
+        from lhpc.core import instances
+        return _render_daemon(_dview, svc.daemon_channel_scan(args.band) if _dview.reachable else {},
+                              instances.named(svc, "daemon", band=args.band))
     if args.command == "update":
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),

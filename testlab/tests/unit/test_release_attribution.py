@@ -303,8 +303,8 @@ def _run(env, *a, **kw):
         out += "[controller] loraham-pi-control  (up to date)\\n"
     else:
         assert a[:2] == ("stack", "stop"), a
-        STATE[a[2]] = "stopped"
-        LOG.write_text(json.dumps(json.loads(LOG.read_text() or "[]") + [a[2]]))
+        STATE[a[2].partition("@")[0]] = "stopped"           # K3: the stop names its instance
+        LOG.write_text(json.dumps(json.loads(LOG.read_text() or "[]") + [a[2].partition("@")[0]]))
         out = ""
     return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
 

@@ -451,7 +451,7 @@ def test_missing_reconverge_callable_is_not_a_false_green(tmp_path, monkeypatch)
     _make_fake_cli(tmp_path)
     _fake_run_rc(monkeypatch, 0)
     rc, _out, err = _run(["--configure", "c"], root=tmp_path, reconverge=None)
-    assert rc == 1 and "lhpc stack poststart meshtastic" in err
+    assert rc == 1 and "lhpc stack poststart meshtastic@<rid>" in err
 
 
 def test_upstream_0_reconverge_false_returns_nonzero(tmp_path, monkeypatch):

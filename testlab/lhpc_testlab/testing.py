@@ -62,6 +62,29 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     return r
 
 
+def named(env: dict, target: str, band: str = "") -> str:
+    """`<target>@<rid>` on the lab root's own hardware list, as lhpc names it (instances.named, W323): every stack
+    verb of a lane names its instance."""
+    from lhpc.core import instances
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    if "LHPC_RUNTIME_ROOT" not in env:                  # a unit lane's stubbed env: no lab root to read
+        return f"{target}@<rid>"
+    svc = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))
+    return instances.named(svc, target, band=band)
+
+
+def running(env: dict, sid: str) -> list:
+    """Every running instance of `sid` on the lab root (instances.running_keys), else its `named` one: a teardown
+    stops each (a bare stop no longer stops every radio's daemon, W323)."""
+    from lhpc.core import instances
+    from lhpc.core.services import ControllerService
+    if "LHPC_RUNTIME_ROOT" not in env:                  # a unit lane's stubbed env
+        return [named(env, sid)]
+    svc = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))
+    return instances.running_keys(svc, sid) or [named(env, sid)]
+
+
 def run_lhpc(env: dict, *args: str, timeout: float = 300.0,
              check: bool = False) -> subprocess.CompletedProcess:
     r = subprocess.run([str(lhpc_bin()), *args], env=env, capture_output=True,

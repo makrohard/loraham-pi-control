@@ -1019,7 +1019,7 @@ def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path
     assert res.ok is False
     assert "kiss" in res.summary and "433" in res.summary and "868" in res.summary
     # The offered ways out both work: stop the holder, or join it on its band.
-    assert "lhpc stack stop kiss --yes" in (res.next_commands or [])
+    assert "lhpc stack stop kiss@r1 --yes" in (res.next_commands or [])
 
 
 def test_the_dependency_band_rule_does_not_block_the_matching_band(tmp_path, set_call):
@@ -1034,7 +1034,7 @@ def test_the_dependency_band_rule_does_not_block_the_matching_band(tmp_path, set
 
 def test_a_bandless_start_is_judged_on_the_band_it_will_actually_use(tmp_path, set_call):
     """REVIEW-FOUND: the rule was gated on an EXPLICIT band, but the CLI has no band flag — a
-    bandless `lhpc stack start graywolf` resolves to the declared primary (433) and sailed past
+    bandless `lhpc stack start graywolf@r1` resolves to the declared primary (433) and sailed past
     the gate straight into the cross-band state the rule refuses. (The first version of this
     test masked the hole by putting kiss on 433, the one band that cannot mismatch the primary.)
     The rule now judges the RESOLVED band: mismatch refused, match untouched."""
@@ -1245,7 +1245,7 @@ def test_restart_preflight_ignores_holders_its_own_stop_releases(tmp_path, monke
     stopped.clear()
     res = svc.restart("kiss", apply=True)
     assert res.ok is False
-    assert res.next_commands == ["lhpc stack stop graywolf"]   # own-stack holder excluded
+    assert res.next_commands == ["lhpc stack stop graywolf@r1"]   # own-stack holder excluded
     assert not res.results and stopped == []
 
 
@@ -1409,7 +1409,7 @@ def test_a_restart_keeps_the_shared_spi_warning_for_the_console(tmp_path):
 
 
 def _start_meshtastic_with(tmp_path, monkeypatch, states, *, source="auto", feed=None):
-    """`lhpc stack start meshtastic` (GPS feed in the plan, `source` the [gps] source) with the
+    """`lhpc stack start meshtastic@r1` (GPS feed in the plan, `source` the [gps] source) with the
     named components' run states stubbed and the feed's marker reading `feed`; returns (result by
     component, the result, the commands it ran)."""
     import dataclasses
@@ -1456,7 +1456,7 @@ def _start_meshtastic_with(tmp_path, monkeypatch, states, *, source="auto", feed
 
 
 def test_a_running_stack_whose_auto_feed_has_no_source_starts_idempotently(tmp_path, monkeypatch):
-    """`lhpc stack start meshtastic` on a running meshtastic whose GPS feed is DEGRADED because
+    """`lhpc stack start meshtastic@r1` on a running meshtastic whose GPS feed is DEGRADED because
     its `auto` source delivers no position (source-lost) is already running, as a fresh start
     would admit it: nothing is launched, and it says so."""
     from lhpc.core.model import RunState
@@ -1472,7 +1472,7 @@ def test_a_running_stack_whose_auto_feed_has_no_source_starts_idempotently(tmp_p
 
 
 def test_a_running_meshtastic_started_through_the_run_warns_while_config_txt_waits_for_a_reboot(tmp_path, monkeypatch):
-    """Live row E3 (`lhpc stack start meshtastic --yes`, the Pi 5): with the feed DEGRADED the start is not the
+    """Live row E3 (`lhpc stack start meshtastic@r1 --yes`, the Pi 5): with the feed DEGRADED the start is not the
     already-healthy no-op but a run ("Run applied") that keeps meshtastic as it is; with config.txt edited to
     the other chip-select mode and no reboot, that run names meshtastic's refused next start too."""
     from lhpc.core import spi_mode

@@ -26,16 +26,14 @@ _TERM_BUDGET_S = GRACE_S + 2.5  # one admission holder's termination: the SIGTER
 
 def _parse(svc, target: str, component: str):
     """`<stack>[@<rid>]` and an optional component of that stack → (stack, copy, comps) or an error (W298: a kill is
-    per radio). `<stack>` is slot 0 (copy None); `<stack>@<rid>` a listed copy, or for the daemon that radio's own."""
-    sid, at, rid = target.partition("@")
+    per radio). `<stack>` is slot 0 (copy None; the CLI refuses it first, W323, and the console follows);
+    `<stack>@<rid>` is parse_target's instance: a listed copy, slot 0 on that radio (until K4), or for the daemon
+    that radio's own. A disabled radio's is still addressed."""
+    sid, at, _rid = target.partition("@")
     stk = svc.stack(sid)
     if stk is None:
         return None, None, [], f"Unknown stack '{sid}' (kill takes a stack id)."
-    copy, why = None, ""
-    if at and sid == svc.stack_of(svc.DAEMON_ID):
-        copy, _band, why = radio_start.daemon_radio(svc, rid)        # the daemon is radio-level (D2-2)
-    elif at:
-        copy, why = instances.copy_of(svc, sid, rid)              # a disabled radio's copy is still addressed
+    copy, why = (instances.parse_target(svc, target, "kill")[1::2]) if at else (None, "")
     if at and copy is None:
         return None, None, [], f"Cannot kill {target}: {why}."
     comps = [c for c in stk.components if c.process is not None]

@@ -173,12 +173,12 @@ def test_a_dual_band_daemon_is_not_stopped_under_the_other_bands_clients(tmp_pat
     assert stops == [("meshcore", "")] and not res.ok
     tail = res.summary.split("kiss", 1)[1]        # after the client it would have stopped
     assert "meshcore" in tail and "stopped" in tail and "daemon" in tail and "not" in tail
-    assert res.next_commands == ["lhpc stack stop kiss", "lhpc stack start reticulum --yes"]
+    assert res.next_commands == ["lhpc stack stop kiss@r1", "lhpc stack start reticulum@r1 --yes"]
 
 
 def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monkeypatch):
     # Without stop_owners the preflight refuses; its remedy for a daemon holder stops that band
-    # only, never the bare `lhpc stack stop daemon` (finding 140).
+    # only, never the bare `lhpc stack stop daemon@r1` (finding 140).
     from lhpc.core.services import ControllerService
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="", inst=None: [
@@ -187,8 +187,8 @@ def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monk
         {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "meshcore-node",
          "band": "868"}])
     res = svc.start("kiss", apply=True)
-    assert not res.ok and res.next_commands == ["lhpc stack stop meshcore",
-                                                "lhpc stack stop daemon --band 868"]
+    assert not res.ok and res.next_commands == ["lhpc stack stop meshcore@r2",
+                                                "lhpc stack stop daemon@r2"]
     s = res.summary
     assert "meshcore" in s and "868" in s and s.index("meshcore") < s.index("daemon")
 

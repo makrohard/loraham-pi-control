@@ -18,7 +18,7 @@ from lhpc_testlab.release import (
     wait_http,
     wait_tcp,
 )
-from lhpc_testlab.testing import run_lab, run_lhpc
+from lhpc_testlab.testing import named, run_lab, run_lhpc
 
 
 def _kiss_serving() -> bool:
@@ -36,10 +36,10 @@ def chain(lab):
     """Install+build+start kiss over the fake daemon; stop everything afterwards."""
     run_lhpc(lab.env, "install", "kiss", "--yes", check=True, timeout=600)
     run_lhpc(lab.env, "build", "kiss", "--yes", check=True, timeout=600)
-    run_lhpc(lab.env, "stack", "start", "kiss", "--yes", check=True, timeout=300)
+    run_lhpc(lab.env, "stack", "start", named(lab.env, "kiss"), "--yes", check=True, timeout=300)
     yield lab
-    run_lhpc(lab.env, "stack", "stop", "kiss", "--yes", timeout=300)
-    run_lhpc(lab.env, "stack", "stop", "daemon", "--yes", timeout=300)
+    run_lhpc(lab.env, "stack", "stop", named(lab.env, "kiss"), "--yes", timeout=300)
+    run_lhpc(lab.env, "stack", "stop", named(lab.env, "daemon"), "--yes", timeout=300)
 
 
 @pytest.mark.slow
@@ -71,7 +71,7 @@ def test_kiss_rx_and_tx_round_trip(chain):
 
 @pytest.mark.slow
 def test_kiss_stop_restart_and_status(chain):
-    run_lhpc(chain.env, "stack", "restart", "kiss", "--yes", check=True, timeout=300)
+    run_lhpc(chain.env, "stack", "restart", named(chain.env, "kiss"), "--yes", check=True, timeout=300)
     assert wait_tcp(KISS_TCP, 120), "kiss not serving on 8001 after restart"
 
 
@@ -85,7 +85,7 @@ def test_graywolf_shows_injected_station(chain):
     import urllib.request
     run_lhpc(chain.env, "install", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "graywolf", "--yes", check=True, timeout=900)
-    run_lhpc(chain.env, "stack", "start", "graywolf", "--yes", check=True, timeout=300)
+    run_lhpc(chain.env, "stack", "start", named(chain.env, "graywolf"), "--yes", check=True, timeout=300)
     try:
         assert wait_http(f"http://127.0.0.1:{GRAYWOLF_UI}/", 120, accept=(200, 401, 403)), \
             "graywolf's UI never answered on 8080"
@@ -120,7 +120,7 @@ def test_graywolf_shows_injected_station(chain):
             time.sleep(2)
         assert found, "injected station never appeared in graywolf's packet list"
     finally:
-        run_lhpc(chain.env, "stack", "stop", "graywolf", "--yes", timeout=300)
+        run_lhpc(chain.env, "stack", "stop", named(chain.env, "graywolf"), "--yes", timeout=300)
 
 
 @pytest.mark.slow
@@ -130,7 +130,7 @@ def test_meshcore_real_process_over_fake_868(chain):
     release lane proves the same start at release time; this runs on every push."""
     run_lhpc(chain.env, "install", "meshcore", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "meshcore", "--yes", check=True, timeout=900)
-    r = run_lhpc(chain.env, "stack", "start", "meshcore", "--yes", timeout=300)
+    r = run_lhpc(chain.env, "stack", "start", named(chain.env, "meshcore"), "--yes", timeout=300)
     try:
         assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
         assert wait_tcp(MESHCORE_COMPANION, 180), "MeshCore companion never opened TCP 5000"
@@ -138,7 +138,7 @@ def test_meshcore_real_process_over_fake_868(chain):
         # proven with it in the release lane)
         assert plugin_manager_pids(chain.root) == [], "a plugin manager beside a chat node"
     finally:
-        run_lhpc(chain.env, "stack", "stop", "meshcore", "--yes", timeout=300)
+        run_lhpc(chain.env, "stack", "stop", named(chain.env, "meshcore"), "--yes", timeout=300)
 
 
 @pytest.mark.slow
@@ -156,12 +156,12 @@ def test_meshcom_starts_on_the_prebuilt_image(chain):
         pytest.skip("meshcom ESP32 boot is opt-in (LHPC_CHAIN_HEAVY=1) — validate on real "
                     "aarch64 hardware; reset already installed the binary")
     # reset already installed meshcom via --source binary; just release 433 and start.
-    run_lhpc(chain.env, "stack", "stop", "kiss", "--yes", timeout=300)
-    r = run_lhpc(chain.env, "stack", "start", "meshcom", "--yes", timeout=600)
+    run_lhpc(chain.env, "stack", "stop", named(chain.env, "kiss"), "--yes", timeout=300)
+    r = run_lhpc(chain.env, "stack", "start", named(chain.env, "meshcom"), "--yes", timeout=600)
     try:
         assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
     finally:
-        run_lhpc(chain.env, "stack", "stop", "meshcom", "--yes", timeout=300)
+        run_lhpc(chain.env, "stack", "stop", named(chain.env, "meshcom"), "--yes", timeout=300)
 
 
 @pytest.mark.slow
@@ -177,8 +177,8 @@ def test_simulated_reboot_restores_running_stacks(chain):
     # same daemon on 868 and leave it stopped). Only (re)start when kiss is not already
     # serving, so we never spawn a duplicate that collides on port 8001.
     if not _kiss_serving():
-        run_lhpc(chain.env, "stack", "start", "daemon", "--yes", timeout=200)
-        run_lhpc(chain.env, "stack", "start", "kiss", "--yes", timeout=300)
+        run_lhpc(chain.env, "stack", "start", named(chain.env, "daemon"), "--yes", timeout=200)
+        run_lhpc(chain.env, "stack", "start", named(chain.env, "kiss"), "--yes", timeout=300)
     assert wait_tcp(KISS_TCP, 120), "kiss not serving on 127.0.0.1:8001 before reboot"
     before = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
     run_lab(chain.env, "_power", "--kind", "reboot", check=True, timeout=300)

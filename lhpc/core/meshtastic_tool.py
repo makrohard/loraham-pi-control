@@ -365,7 +365,7 @@ def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
         return 2
 
     if not stack_running("meshtastic"):
-        err.write("ERR  Meshtastic is not running.\n\nNext:\n  lhpc stack start meshtastic\n")
+        err.write("ERR  Meshtastic is not running.\n\nNext:\n  lhpc stack start meshtastic@<rid>\n")
         return 1
 
     if decision.action == "confirm" and not yes and not confirm(f"\n{decision.message} [y/N] "):
@@ -403,7 +403,7 @@ def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
             return rc                      # upstream failure preserved (reconvergence was attempted)
         if not reconverged:
             err.write("\nERR  the change was applied but LHPC could NOT verify region/name/GPS were "
-                      "reasserted.\n\nRe-apply:\n  lhpc stack poststart meshtastic\n")
+                      "reasserted.\n\nRe-apply:\n  lhpc stack poststart meshtastic@<rid>\n")
             return 1                       # upstream 0 but reconvergence unproven -> not a success
         return 0
     return _exec_foreground(exe, final)
@@ -415,7 +415,7 @@ def _reconverge(reconverge: Callable[[], bool] | None, out, err) -> bool:
     clean 130; any other failure returns False (never masked as success)."""
     if reconverge is None:
         err.write("\nWARN  no reconvergence hook — reassert manually:\n"
-                  "  lhpc stack poststart meshtastic\n")
+                  "  lhpc stack poststart meshtastic@<rid>\n")
         return False
     try:
         ok = bool(reconverge())
@@ -428,7 +428,7 @@ def _reconverge(reconverge: Callable[[], bool] | None, out, err) -> bool:
         out.write("\nLHPC  Reasserted LHPC-managed settings (region / name / GPS).\n")
     else:
         err.write("\nWARN  LHPC could not verify region/name/GPS were reasserted.\n"
-                  "Run:\n  lhpc stack poststart meshtastic\n")
+                  "Run:\n  lhpc stack poststart meshtastic@<rid>\n")
     return ok
 
 

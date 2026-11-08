@@ -168,7 +168,7 @@ def test_direct_terminal_variant_start_is_refused_and_names_the_stack(tmp_path, 
     set_call(svc)
     res = svc.start("loraham-voice-cli", apply=True)
     assert res.ok is False
-    assert "lhpc stack start voice" in res.summary, res.summary
+    assert "lhpc stack start voice@r1" in res.summary, res.summary
     assert "run it yourself" not in res.summary
     # PREFLIGHT: refused before the component loop — no per-component results, no
     # daemon ensure, no already-healthy shortcut.
@@ -191,7 +191,7 @@ def test_direct_start_refusal_is_a_preflight_even_with_marker_and_ready_daemon(t
     set_call(svc)
     res = svc.start("loraham-voice-cli", apply=True)
     assert res.ok is False
-    assert "lhpc stack start voice" in res.summary, res.summary
+    assert "lhpc stack start voice@r1" in res.summary, res.summary
     assert "already healthy" not in res.summary.lower()
     assert res.results == ()
     assert fed == []                          # zero side effects
@@ -224,7 +224,7 @@ def test_plan_omits_the_terminal_command_where_the_gtk_app_runs(tmp_path, monkey
     assert "[skip] loraham-voice-cli" in text, text
     # A direct CLI plan is refused outright by the same preflight.
     res2 = svc.start("loraham-voice-cli", apply=False)
-    assert res2.ok is False and "lhpc stack start voice" in res2.summary
+    assert res2.ok is False and "lhpc stack start voice@r1" in res2.summary
     # On a Lite box the plan still presents the command — that is the fallback working.
     lite = _voice_svc(real_spawn, tmp_path / "lite", monkeypatch, desktop=False)
     set_call(lite)
@@ -262,7 +262,7 @@ def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkey
     set_call(svc)
     res = svc.restart("loraham-voice-cli", apply=apply)
     assert res.ok is False, res.summary
-    assert "lhpc stack start voice" in res.summary, res.summary
+    assert "lhpc stack start voice@r1" in res.summary, res.summary
     assert res.results == ()
     assert touched == []                      # no stop, no feed clearing
     assert svc.interactive_band("voice") == "433"   # marker survives

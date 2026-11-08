@@ -1016,7 +1016,7 @@ class ParamsConfigMixin:
                            f"{', '.join(_live)} {'is' if len(_live) == 1 else 'are'} running.",
                     details=["  its feed, claims and generated config came from the "
                              "CURRENT setting"],
-                    next_commands=[f"lhpc stack stop {sid}"])
+                    next_commands=[f"lhpc stack stop {_instances.named(self, sid)}"])
 
         def _gps_recheck(_pth=None):
             """AUTHORITATIVE recheck, run inside the exclusive config transaction.
@@ -1047,7 +1047,7 @@ class ParamsConfigMixin:
                 raise ConfigError(
                     f"cannot change use_gps while {', '.join(_blockers)} "
                     f"{'is' if len(_blockers) == 1 else 'are'} running — its feed, claims and "
-                    f"generated config came from the CURRENT setting (lhpc stack stop {sid})")
+                    f"generated config came from the CURRENT setting (lhpc stack stop {_instances.named(self, sid)})")
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
@@ -1113,7 +1113,7 @@ class ParamsConfigMixin:
         return ActionResult(True, f"Config saved for '{target}'.",
                             details=self._apply_hints(target, modes,
                                                       live=_live_seen.get("v")) + remote_notes,
-                            next_commands=[f"lhpc stack start {target}"])
+                            next_commands=[f"lhpc stack start {_instances.named(self, target, inst)}"])
 
     def _restart_marker_target(self, target, sid, band, cfg_band, params, modes, live_seen, inst=None):
         """The config-transaction target ("state", marker path, renderer, mode) that keeps the
@@ -1343,7 +1343,7 @@ class ParamsConfigMixin:
                   for sid in keep_unsafe]
         return ActionResult(True, "operator identity saved",
                             details=[f"  callsign = {new_call or '(unset)'}", *notes],
-                            next_commands=[f"lhpc stack restart {sid}"
+                            next_commands=[f"lhpc stack restart {_instances.named(self, sid)}"
                                            for sid, _rb in affected])
 
     def boot_restore_enabled(self) -> tuple[bool, str]:
@@ -2121,7 +2121,7 @@ class ParamsConfigMixin:
         gps_values = self._gps_config_values(target)
 
         # W3-13: a client's socket keys name the copy's radio (slot 0's: DEC-W16's), else its band's one; unresolved, it refuses
-        _rids, _sid = {}, self._owner_stack_id(target)
+        _rids, _sid, _sb = {}, self._owner_stack_id(target), next(iter(_instances.stack_bands(self._owner_stack(target))), "")
         _rid = lambda b: _rids.setdefault(b, _radio_start.client_rid(self, _sid, b) or getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
 
         def subst(text: str) -> str:
@@ -2221,7 +2221,7 @@ class ParamsConfigMixin:
                 default = inst.subst(p.default_template) if inst is not None and inst.slot and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 raw = default if raw == p.default else raw        # 7d: a listed instance's own controller paths
-                raw = raw.replace("{rid}", getattr(inst, "rid", "") or _rid(c.band or cfg_band or band)) if isinstance(raw, str) else raw
+                raw, default = (v.replace("{rid}", getattr(inst, "rid", "") or _rid(c.band or cfg_band or band or _sb)) if isinstance(v, str) else v for v in (raw, default))   # the default too: the fallback below
                 if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
                     raw = _web_client.current_root(raw, runtime, p.default)
                 try:
@@ -2471,10 +2471,10 @@ class ParamsConfigMixin:
                 return ActionResult(False, f"Config reset blocked for {label}: cannot change "
                                     f"use_gps while {', '.join(blockers)} "
                                     f"{'is' if len(blockers) == 1 else 'are'} running "
-                                    f"(lhpc stack stop {target})")
+                                    f"(lhpc stack stop {_instances.named(self, target, inst)})")
             return ActionResult(False, f"Config reset blocked for {label}: unsafe/malformed "
                                 f"config (refused, not modified): {exc}")
         return ActionResult(True,
                             f"Config reset to defaults for {label}." if cleared
                             else f"{label} already at defaults.",
-                            next_commands=[f"lhpc stack start {target}"])
+                            next_commands=[f"lhpc stack start {_instances.named(self, target, inst)}"])

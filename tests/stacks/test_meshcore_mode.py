@@ -242,7 +242,7 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     assert rep["cli_lock"] == str(tmp_path / "state" / "meshcore-cli.lock")
     import shlex, sys
     assert shlex.split(rep["restart_cmd"]) == ["env", f"LHPC_RUNTIME_ROOT={tmp_path}", sys.executable,
-                                               "-m", "lhpc", "stack", "restart", "meshcore", "--yes"]
+                                               "-m", "lhpc", "stack", "restart", "meshcore@r2", "--yes"]   # 868: r2 (K3)
     import hashlib
     assert rep["chat_node_id"] == hashlib.sha256(doc["identity"]["key"].lower().encode()).hexdigest()[:16]
     (tmp_path / "config" / "secrets" / mi.IDENTITY_FILENAME).unlink()

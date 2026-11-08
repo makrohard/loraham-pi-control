@@ -395,7 +395,7 @@ def test_build_refusal_names_the_stop_when_meshcore_is_healthy_and_running(tmp_p
     monkeypatch.setattr(Lifecycle, "build", lambda self, comp, *a, **k: None)
     res = svc.build("meshcore", apply=True)
     assert not res.ok and "stop the stack first" in res.summary and "reboot" not in res.summary
-    assert res.next_commands == ["lhpc stack stop meshcore --yes"]
+    assert res.next_commands == ["lhpc stack stop meshcore@r2 --yes"]
     assert res.data.get("reason") == "meshcore-plugins"
 
 
