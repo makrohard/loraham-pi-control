@@ -599,7 +599,7 @@ class ParamsConfigMixin:
             return None
         return old_p, self._param_default_canon(old_p, cand["band"], cand["band"])
 
-    def _config_ambiguity(self, target: str, order, band: str = ""):
+    def _config_ambiguity(self, target: str, order, band: str = "", inst=None):
         """A message naming the first AMBIGUOUS legacy value a started component would rely on — a
         run/file param name declared by >= 2 owner-stack components, stored as a flat value,
         with no component-scoped value for that component. None when every started component resolves
@@ -608,8 +608,8 @@ class ParamsConfigMixin:
         owner = self._owner_stack(target)
         if owner is None:
             return None
-        stored = self._stack_config_cached(self._owner_stack_id(target),
-                                   self._config_band(target, band))
+        stored = _instances.stores(self, self._owner_stack_id(target),        # a listed copy's own file
+                                   self._config_band(target, band), inst)[0]
         run_counts, file_counts = self._owner_param_counts(owner)
         owner_comp_ids = {c.id for c in owner.components}
         for _stack, comp in order:
@@ -1764,7 +1764,7 @@ class ParamsConfigMixin:
         fields = self._identity_fields(target)
         return fields[0] if fields else None
 
-    def _identity_cmd(self, target: str, rec: dict, value: str, band: str = "") -> str:
+    def _identity_cmd(self, target: str, rec: dict, value: str, band: str = "", inst=None) -> str:
         """THE copyable `lhpc config` command for one identity field — key derived from the
         param model, `--band` appended for a band-switchable stack when a band was judged.
         Every displayed remedy (hints AND resolution problem text) renders through here, so
@@ -1773,7 +1773,7 @@ class ParamsConfigMixin:
         key = self._param_key(target, kind, rec["comp"], rec["name"])
         suffix = (f" --band {band}"
                   if band and self.stack_bands(self.stack_of(target) or target) else "")
-        return f"lhpc config {target} {key} {value}{suffix}"
+        return f"lhpc config {target}{f'@{inst.rid}' if getattr(inst, 'slot', 0) else ''} {key} {value}{suffix}"
 
     def operation_band(self, target: str, band: str = "") -> str:
         """THE ONE CONCRETE BAND of a start/restart, for every consumer outside the locked launch
@@ -1845,7 +1845,7 @@ class ParamsConfigMixin:
             data={"enforce_fields": [r["field"] for r in bad]},
             next_commands=self._identity_config_hints(target, band))
 
-    def _identity_config_hints(self, target: str, band: str = "") -> list[str]:
+    def _identity_config_hints(self, target: str, band: str = "", inst=None) -> list[str]:
         """The copy-pasteable remedies for a start refused over missing/invalid identities:
         ONE `lhpc config <stack> <field> <value>` per problem field — a fresh Meshtastic
         refusal prints BOTH node_name and node_short in the same attempt (first-problem-only
@@ -1855,7 +1855,7 @@ class ParamsConfigMixin:
         # BAND-AWARE: the refusal that prints these is judged on the
         # running/launch band, so the remedy must target THAT band's store — a hint
         # without --band saved into the primary band and the same refusal repeated.
-        rows = self.identity_resolution(target, band)
+        rows = self.identity_resolution(target, band, inst)           # a listed copy's own values and target
         bad = [r for r in rows if r["problem"]] or rows
         if not bad:
             return [f"lhpc config {target}"]
@@ -1871,7 +1871,7 @@ class ParamsConfigMixin:
                                      "YOURCALL-99 = your callsign (+optional suffix)"),
                 "node_short": ("SHORTNAME", "SHORTNAME = your short node name (max 4)"),
             }.get(r["validator"], ("NODENAME", "NODENAME = your node name"))
-            cmd = self._identity_cmd(target, r, example, band) + f"   # {what}"
+            cmd = self._identity_cmd(target, r, example, band, inst) + f"   # {what}"
             if n == 0 and r["enforce"] == "licensed":
                 cmd += ("; or once for every licensed stack: "
                         "lhpc config operator --callsign YOURCALL")

@@ -954,7 +954,7 @@ class LifecycleOpsMixin:
         if not id_ok:
             return ActionResult(False, f"Cannot start '{target}': {id_msg}",
                                 data={"enforce_fields": id_fields},
-                                next_commands=self._identity_config_hints(target, _id_band))
+                                next_commands=self._identity_config_hints(target, _id_band, inst))
         # The approved identity must actually LAUNCH: a licensed field that inherits the global
         # operator callsign carries it as a launch value (never persisted) so argv/config-file
         # rendering and post-steps use what enforcement just approved — on the launch band.
@@ -2287,7 +2287,7 @@ class LifecycleOpsMixin:
             return None
         return ActionResult(False, f"Cannot {op} '{target}': {id_msg}",
                             data={"enforce_fields": id_fields},
-                            next_commands=self._identity_config_hints(target, band))
+                            next_commands=self._identity_config_hints(target, band, inst))
 
     def _order_radio(self, target: str, op_band: str):
         """`(run order, the daemon's requested radio)` for an operation on `op_band` — the radio
@@ -2334,7 +2334,7 @@ class LifecycleOpsMixin:
         if not _fw_ok:
             return ActionResult(False, f"Cannot {op} '{target}': {_fw_msg}",
                                 next_commands=_fw_cmds, data={"firewall_gate": "pending"})
-        _amb = self._config_ambiguity(target, order, band)
+        _amb = self._config_ambiguity(target, order, band, inst)
         if _amb is not None:
             return ActionResult(False, f"Cannot {op} '{target}': {_amb}",
                                 next_commands=[f"lhpc config {target}"])

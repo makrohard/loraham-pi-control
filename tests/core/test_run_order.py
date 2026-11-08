@@ -1211,7 +1211,7 @@ def test_restart_refuses_an_ambiguous_saved_value_before_its_stop(tmp_path, monk
            "only as a flat value; set a component-scoped value for 'loraham-kiss-tnc'")
     seen = []
     monkeypatch.setattr(ControllerService, "_config_ambiguity",
-                        lambda self, t, order, band="": seen.append(list(stopped)) or msg)
+                        lambda self, t, order, band="", inst=None: seen.append(list(stopped)) or msg)
     res = svc.restart("kiss", apply=True)
     assert res.ok is False and res.summary == f"Cannot restart 'kiss': {msg}"
     assert seen and seen[0] == []                               # judged before any stop
