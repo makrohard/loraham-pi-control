@@ -71,12 +71,37 @@ jobs:
           docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
 
+      - name: Acquire the binaries the lanes install (mirror, transfer backoff)
+        # Class A as above, for the lhpc-binaries artifacts the reset installs (meshcom and meshtastic,
+        # `_install_binary_stacks` in testlab/lhpc_testlab/ops.py): every candidate entry for the image's
+        # target, through the API asset URL with the job's token (`gh release download`; the browser
+        # download URLs answered 504 on 2026-11-08). The lanes read them through LHPC_BINARY_MIRROR and
+        # never fetch live; the product fails closed on a file the mirror lacks.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . .github/scripts/retry.sh
+          target="aarch64-$(docker run --rm "$IMG" sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')"
+          echo "BIN_TARGET=$target" >> "$GITHUB_ENV"
+          mkdir -p binmirror
+          backoff gh release download binaries -R makrohard/lhpc-binaries -p index-v3.json -D binmirror --clobber
+          python3 .github/scripts/mirror-binaries.py list binmirror/index-v3.json "$target" meshcom meshtastic > binmirror.txt
+          while read -r f; do
+            backoff gh release download binaries -R makrohard/lhpc-binaries -p "$f" -D binmirror --clobber
+          done < binmirror.txt
+
+      - name: Prove the binary mirror is complete (no network)
+        run: |
+          docker run --rm --network none -v "$PWD/binmirror":/binmirror:ro \
+            -v "$PWD/.github/scripts":/scripts:ro "$IMG" \
+            python3 /scripts/mirror-binaries.py verify /binmirror "$BIN_TARGET" meshcom meshtastic
+
       - name: Run the lab lanes in the image
         # Root copies the checkout in and DROPS to the unprivileged lab user — the
         # same privilege boundary users get (uid mapping of -v mounts is not assumed).
         run: |
           docker run --rm --user root -v "$PWD":/repo:ro \
-            -v "$PWD/srcmirror":/srcmirror:ro -v lhpc_lab_tmp:/tmp \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/binmirror":/binmirror:ro -v lhpc_lab_tmp:/tmp \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
@@ -84,6 +109,8 @@ jobs:
                 set -e
                 cd /tmp/repo
                 export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+                # The binary channel reads the mirror (the lab only; production never sets it).
+                export LHPC_BINARY_MIRROR=/binmirror
                 # Clones resolve to the mirrors. A file in HOME, because the product runner
                 # forwards HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
                 cp /srcmirror/gitconfig ~/.gitconfig

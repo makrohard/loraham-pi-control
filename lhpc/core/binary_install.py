@@ -94,10 +94,34 @@ def _open_stream(url: str, timeout: float):
 
 
 def _open(url: str, timeout: float):
-    """THE opener of every download (the index, an artifact): an http:// or file:// URL never opens."""
+    """THE opener of every download (the index, an artifact): an http:// or file:// URL never opens; with
+    LHPC_BINARY_MIRROR set the file comes from the mirror, never from the network."""
     if not url.startswith("https://"):
         raise BinaryInstallError(f"refusing a non-HTTPS download URL: {url}")
+    mirror = os.environ.get(MIRROR_ENV, "")
+    if mirror:
+        return _mirror_file(mirror, url)
     return _open_stream(url, timeout)
+
+
+# --- L1: the test lab's mirror (DEC-W339) ------------------------------------------------------
+# The lab sets LHPC_BINARY_MIRROR=<dir>, filled before its lanes run; production never sets it. In mirror mode the
+# mirrored index is the root of trust (its sha256 and sizes still decide every artifact), so the mirror FAILS
+# CLOSED: a URL outside the one release, a name not in the mirror or a traversal is a typed refusal, never a live
+# fetch.
+
+MIRROR_ENV = "LHPC_BINARY_MIRROR"
+_RELEASE_DOWNLOAD = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/"
+
+
+def _mirror_file(mirror: str, url: str):
+    name = url[len(_RELEASE_DOWNLOAD):] if url.startswith(_RELEASE_DOWNLOAD) else ""
+    if not name or "/" in name or ".." in name:
+        raise BinaryInstallError(f"the binary mirror {mirror} serves only {_RELEASE_DOWNLOAD}<file>, not {url}")
+    try:
+        return open(os.path.join(mirror, name), "rb")
+    except OSError as exc:
+        raise BinaryInstallError(f"{name} is not in the binary mirror {mirror} ({exc.strerror})") from None
 
 
 class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
@@ -423,6 +447,9 @@ def download_artifact(entry: IndexEntry, dest_path) -> None:
     small boxes, and buffering a 50 MB artifact in RAM on a 512 MB Zero is how you OOM the
     controller before the hash could ever reject it. A failed verification removes the file.
     A transfer failure is retried (P1, `_retrying`); each attempt starts its file, hash and count afresh."""
+    if os.environ.get(MIRROR_ENV) and entry.url.rsplit("/", 1)[-1] != entry.filename:
+        raise BinaryInstallError(f"the binary mirror serves {entry.filename} only at its own name, not {entry.url}")
+
     def attempt(end):
         h, total = hashlib.sha256(), 0           # per attempt: never a failed stream's bytes
         try:
