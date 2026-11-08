@@ -92,3 +92,11 @@ def test_a_fixed_band_stacks_slot0_runs_on_its_one_band(tmp_path):
 def test_a_switchable_stacks_slot0_without_served_bands_has_no_band(tmp_path):
     copy, why = instances.copy_of(_svc(tmp_path, listed=""), "kiss")
     assert (copy.rid, copy.band, why) == ("", "", "")
+
+
+def test_slot0_with_its_radio_renders_a_peer_port_as_today():
+    # CLEANUP-DESIGN-v5 section 12 (C6): slot 0 is a real copy with its DEC-W16 radio; `{port_of:}` then names the
+    # peer stack's slot 0, as without a radio. A listed copy still needs its peer on its radio.
+    assert commands.Instance(0, "r1", sid="graywolf").subst("{port_of:kiss:8001}") == "8001"
+    with pytest.raises(commands.CommandError):
+        commands.Instance(1, "r2", sid="graywolf").subst("{port_of:kiss:8001}")

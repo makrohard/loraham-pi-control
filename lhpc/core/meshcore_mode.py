@@ -89,6 +89,14 @@ def expected_endpoints(comp, mode) -> list:
     return out
 
 
+def _node_live(svc, inst) -> bool:
+    """The copy's node process runs: slot 0's by the snapshot, a listed copy's by its own token or record."""
+    if inst is None or not inst.slot:
+        return svc._meshcore_node_live()
+    from . import instances
+    return instances.instance_runs(svc, svc.stack(STACK_ID).component(NODE_ID), inst, inst.band)
+
+
 def start_refusal(svc, target: str, inst=None):
     """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
     (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
@@ -99,10 +107,10 @@ def start_refusal(svc, target: str, inst=None):
     if target not in (STACK_ID, NODE_ID, *CLIENT_IDS):
         return None
     mode = svc.meshcore_mode(inst)                  # 7f: a listed instance's own (DEC-W60)
-    if target in CLIENT_IDS and svc._meshcore_node_live():
+    if target in CLIENT_IDS and _node_live(svc, inst):
         # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
-        # mode (status and stop verification judge by the same running mode).
-        mode = svc.meshcore_running_mode()
+        # mode (status and stop verification judge by the same running mode) — the copy's own.
+        mode = svc.meshcore_running_mode(inst)
     if target in CLIENT_IDS and not clients_available(mode):
         return ActionResult(
             False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "

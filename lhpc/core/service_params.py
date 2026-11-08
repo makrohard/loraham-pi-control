@@ -1713,7 +1713,7 @@ class ParamsConfigMixin:
             return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
 
-    def meshcore_running_mode(self) -> str:
+    def meshcore_running_mode(self, inst=None) -> str:
         """The mode the node is RUNNING in: the `[repeater] role` of the GENERATED config, which
         write_config_files renders only on the start path — so a saved-but-not-yet-restarted
         change does not flip a healthy node's status, and a stop verifies the endpoints the
@@ -1725,7 +1725,7 @@ class ParamsConfigMixin:
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is not None:
             try:
-                dest = self._resolve_config_dest(hit[1], fc.path, for_base=False)
+                dest = self._resolve_config_dest(hit[1], inst.subst(fc.path_template) if getattr(inst, 'slot', 0) and fc.path_template else fc.path, for_base=False)   # a listed copy's own file
                 if dest.status == "ok" and dest.path is not None:
                     raw = runtime_fs.read_bytes(self._paths, dest.path)
                     role = (tomllib.loads(raw.decode("utf-8", "replace"))
@@ -1734,7 +1734,7 @@ class ParamsConfigMixin:
                         return _mm.normalize(role)
             except (OSError, PathContainmentError, ValueError, UnicodeError):
                 pass                       # unreadable/absent generated file: the saved mode
-        return self.meshcore_mode_display() or _mm.DEFAULT_MODE
+        return (self.meshcore_mode(inst) if getattr(inst, "slot", 0) else self.meshcore_mode_display()) or _mm.DEFAULT_MODE
 
     def meshcore_mode_display(self) -> str:
         """The SAVED mode for read-only surfaces (status, the console, stop verification): ""

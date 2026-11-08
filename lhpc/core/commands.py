@@ -86,7 +86,7 @@ class Instance:
     def subst(self, text: str) -> str:
         def port_of(m):
             stack = m.group(1)
-            if stack not in self.peer_slots and self.rid:
+            if stack not in self.peer_slots and self.slot:    # slot 0 (with its radio too) uses the peers' slot 0
                 raise CommandError(f"no {stack} instance on radio {self.rid} for {m.group(0)}")
             return str(self.port(int(m.group(2)), self.peer_slots.get(stack, 0)))
         text = _PORT_OF_RE.sub(port_of, text)
