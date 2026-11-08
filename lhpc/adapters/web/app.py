@@ -978,7 +978,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # which also decided which per-band config a Save would write.
             sband = (band if (cfg_sid and stack.id == cfg_sid)
                      else service.running_band(stack.id, ""))
-            _inst, _iband = _settings_instance(stack.id, request.args.get("radio", "") if stack.id == cfg_sid else "")
+            _inst = _settings_copy(stack.id, request.args.get("radio", "") if stack.id == cfg_sid else "")
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
                    if not main or c.id != main.id]
@@ -1092,9 +1092,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                    "view": {**service.config_view(stack.id, _iband or sband),
+                    "view": {**service.config_view(stack.id, _inst.band if _inst else sband),
                              **_instances.settings_choice(service, stack.id, sband, _inst)},   # 7f, DEC-W40
-                    "config_groups": service.config_param_groups(stack.id, _iband or sband, _inst),
+                    "config_groups": service.config_param_groups(stack.id, _inst.band if _inst else sband, _inst),
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
@@ -2029,8 +2029,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        inst, iband = _settings_instance(stack_id, request.form.get("radio", ""), refuse=True)
-        band = iband or request.form.get("band", "")
+        inst = _settings_copy(stack_id, request.form.get("radio", ""), refuse=True)
+        band = inst.band if inst else request.form.get("band", "")
         view = service.config_view(stack_id, band)
         # Fold each submitted Config-page field (`c_`/`f_`, component-qualified when the name
         # collides) into the canonical API key (`name` or `component.name`; file keys carry the
@@ -2069,15 +2069,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
                                 cfg=stack_id) + "#stack-settings-" + stack_id)
 
-    def _settings_instance(stack_id, rid, refuse=False):
-        """7f: (the listed instance `<stack>@<rid>` a Settings page or form names, its radio's band), (None, "") for
-        slot 0; a form naming a radio without an instance is a 404, a page falls back to slot 0."""
-        if not rid:
-            return None, ""
-        _sid, inst, band, why = _instances.resolve(service, f"{stack_id}@{rid}")
+    def _settings_copy(stack_id, rid, refuse=False):
+        """The listed copy `<stack>@<rid>` a Settings page or form names (instances.copy_of: its band is its radio's),
+        None for slot 0 (the routes' band= form field, as before); a form naming a radio without a copy, or a disabled
+        one, is a 404, a page falls back to slot 0."""
+        copy, why = _instances.copy_of(service, stack_id, rid) if rid else (None, "")
         if why and refuse:
             abort(make_response(why, 404))
-        return (None, "") if why else (inst, band)
+        return None if why else copy
 
     def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
         from lhpc.core import daemon_params as _dp
@@ -2366,8 +2365,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        inst, iband = _settings_instance(stack_id, request.form.get("radio", ""), refuse=True)
-        band = iband or request.form.get("band", "")
+        inst = _settings_copy(stack_id, request.form.get("radio", ""), refuse=True)
+        band = inst.band if inst else request.form.get("band", "")
         result = service.reset_config(stack_id, band, inst)
         flash(result.summary, "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
