@@ -401,7 +401,7 @@ class StopOpsMixin:
         if target_is_daemon and own_ok:
             for _b in ({band, *other_bands} if band in ALLOWED_BANDS
                        else set(self.active_bands())):
-                self.clear_daemon_feed(_b)
+                self.clear_daemon_feed(_b, getattr(inst, "rid", ""))       # `--radio rN`: that radio's window alone
         # ok only when every result (dependents + own + daemon release) is a verified stop.
         ok = applied_ok(results) if results else True
         summary = (f"Stop applied for '{target}'." if ok else

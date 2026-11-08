@@ -1518,6 +1518,8 @@ class Lifecycle:
             p = d / radio_start.start_log_name(comp.id, band, rid or "".join(radio_start.band_rids(self.paths, band)[:1]))
             if p.is_file():
                 return p
+            if rid:
+                return None                 # G1-C21 note 3: a named radio's log, never another radio's
         prefix = f"start-{comp.id}-"
         newest: Path | None = None
         newest_mtime = -1.0

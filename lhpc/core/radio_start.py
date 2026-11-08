@@ -680,10 +680,11 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
-def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power) -> tuple:
+def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None) -> tuple:
     """The daemon-param edits of a settings save, ({PARAM: canonical value, or "" to clear}, ""), or ({}, why): a
     param not in `values` is left out; a blank clears; a value is validated for the chip, then canonicalised, and one
-    equal to its default clears. One rule for a band's save and a radio's (item 16)."""
+    equal to its default clears. A radio's save (`shown`: the values its panel shows) keeps only what the operator
+    changed, a default included; a value as shown stays inherited (G1-C21 B2)."""
     from . import daemon_control, daemon_params
     out = {}
     for name in daemon_params.ALL_PARAMS:
@@ -693,7 +694,10 @@ def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power) -> tupl
         if raw and (err := daemon_control.validate_set(name, raw, chip, high_power)):
             return {}, f"{name}: {err}"
         canon = daemon_control.canonical_value(name, raw) if raw else ""
-        out[name] = "" if canon == daemon_params.default_value(sid, band, name) else canon
+        if shown is None:
+            out[name] = "" if canon == daemon_params.default_value(sid, band, name) else canon
+        elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name)):
+            out[name] = canon
     return out, ""
 
 
@@ -717,12 +721,22 @@ def save_radio_params(svc, target: str, rid: str, values: dict):
     """Item 16 (DEC-W53): save the daemon settings of radio `rid` into its row of the hardware list (its dp_* fields
     only), under the list's lock (W217, set_row_dp); for the daemon's own page only. Never applies live."""
     from .service_base import ActionResult
+    if not svc._is_daemon_target(target):
+        return ActionResult(False, f"Cannot save the settings of {rid}: a radio's settings are the daemon's")
+    return set_row_dp(svc, rid, None, (target, values))
+
+
+def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
+    """(updates, why) of a radio's save, judged on the list as it reads under its lock (G1-C21 B1): the radio's band,
+    chip and high-power permission, and the values its panel shows."""
+    from . import daemon_control
     _inst, band, why = daemon_radio(svc, rid)
-    if why or not svc._is_daemon_target(target):
-        return ActionResult(False, f"Cannot save the settings of {rid}: " + (why or "a radio's settings are the daemon's"))
-    updates, why = dp_updates(svc, svc._owner_stack_id(target), band, values, svc.chip_family_for_band(band, rid),
-                              radio_high_power(svc, rid))
-    return ActionResult(False, why) if why else set_row_dp(svc, rid, updates)
+    if why:
+        return {}, f"Cannot save the settings of {rid}: {why}"
+    sid = svc._owner_stack_id(target)
+    shown = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
+    return dp_updates(svc, sid, band, values, svc.chip_family_for_band(band, rid), radio_high_power(svc, rid),
+                      {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()})
 
 
 def radio_high_power(svc, rid: str) -> bool:
@@ -736,16 +750,21 @@ def radio_high_power(svc, rid: str) -> bool:
         return False
 
 
-def set_row_dp(svc, rid: str, updates: dict):
+def set_row_dp(svc, rid: str, updates, save=None):
     """Write `updates` ({PARAM: value, "" clears}) into the dp_* fields of radio `rid`'s row and nothing else, under
-    the hardware list's lock (W217); radios.save checks the whole list, keeps its reserved ids and writes it whole."""
+    the hardware list's lock (W217); radios.save checks the whole list, keeps its reserved ids and writes it whole.
+    `save` = (target, values): the updates of a settings save, validated under that lock (_radio_updates)."""
     from .service_base import ActionResult
     return _with_list_lock(svc._paths, lambda why: ActionResult(False, f"the hardware list is busy ({why}); nothing was "
-                                                               "changed — try again"), _set_row_dp, svc, rid, updates)
+                                                               "changed — try again"), _set_row_dp, svc, rid, updates, save)
 
 
-def _set_row_dp(svc, rid: str, updates: dict):
+def _set_row_dp(svc, rid: str, updates, save=None):
     from .service_base import ActionResult
+    if save is not None:
+        updates, why = _radio_updates(svc, save[0], rid, save[1])
+        if why:
+            return ActionResult(False, why)
     state = radios.load(svc._paths)
     row = next((r for r in state.radios if r.id == rid), None) if state.kind == radios.VALID else None
     if row is None:

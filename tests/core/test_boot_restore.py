@@ -1057,7 +1057,7 @@ def test_start_feed_clear_scoped_to_operation_bands(tmp_path, monkeypatch, set_c
     svc = _serving_svc(set_call, tmp_path, monkeypatch)
     cleared = []
     monkeypatch.setattr(ControllerService, "clear_daemon_feed",
-                        lambda self, b: cleared.append(b))
+                        lambda self, b, rid="": cleared.append(b))
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "start",
                         lambda self, stack, comp, params=None, band="", **kw:
                         lifecycle_mod.StartLaunch(True, ""))
@@ -1092,7 +1092,7 @@ def test_hook_runs_after_every_lock_before_any_mutation(tmp_path, monkeypatch, s
     monkeypatch.setattr(ControllerService, "_config_stable", stable)
     monkeypatch.setattr(ControllerService, "_acquire_key", acquire)
     monkeypatch.setattr(ControllerService, "clear_daemon_feed",
-                        lambda self, b: events.append(f"clear:{b}"))
+                        lambda self, b, rid="": events.append(f"clear:{b}"))
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "start",
                         lambda self, stack, comp, params=None, band="", **kw:
                         (events.append("spawn"), lifecycle_mod.StartLaunch(True, ""))[1])
@@ -1110,7 +1110,7 @@ def test_hook_refusal_cancels_with_zero_side_effects(tmp_path, monkeypatch, set_
     svc = _serving_svc(set_call, tmp_path, monkeypatch)
     cleared, spawned = [], []
     monkeypatch.setattr(ControllerService, "clear_daemon_feed",
-                        lambda self, b: cleared.append(b))
+                        lambda self, b, rid="": cleared.append(b))
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "start",
                         lambda self, stack, comp, params=None, band="", **kw:
                         (spawned.append(comp.id), lifecycle_mod.StartLaunch(True, ""))[1])
