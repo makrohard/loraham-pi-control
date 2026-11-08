@@ -8,20 +8,22 @@ from htmlq import parse
 
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
 ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3", "b", "uputronics", "433", ce="ce1"))
 
 
-def _home(tmp_path, web, monkeypatch, running=True):
-    """kiss@r3 runs (its own argv token) unless `running` is False; slot 0 is stopped; Home rendered over that box."""
+def _home(tmp_path, web, monkeypatch, running=True, listening=False):
+    """kiss@r3 runs (its own argv token) unless `running` is False, its own listener (127.0.0.1:8011, slot 1) up when
+    `listening`; slot 0 is stopped; Home rendered over that box."""
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
     radios_fixture.write(tmp_path, ROWS)
     (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), instances.copy_of(svc, "kiss", "r3")[0], "433")
-    sysm = FakeSystem(cmdlines_data={61: ["/x/loraham-kiss-tnc", opt, val]} if running else {}).system
+    sysm = FakeSystem(cmdlines_data={61: ["/x/loraham-kiss-tnc", opt, val]} if running else {},
+                      listeners=[Listener("ipv4", "127.0.0.1", 8011, 1)] if listening else []).system
     return parse(web(service_factory=lambda: ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))).get("/")
                  .get_data(as_text=True))
 
@@ -34,7 +36,7 @@ def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeyp
     doc = _home(tmp_path, web, monkeypatch)
     r3, r1 = _card(doc, "r3"), _card(doc, "r1")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 running Stop it: lhpc stack stop kiss@r3"]
+        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8011 Stop it: lhpc stack stop kiss@r3"]
     assert not r1.find("div", class_="runstack")
     assert "No stack running on this radio." in r1.text
     stops = [f for f in (doc.within(x) for x in doc.find("form", action="/action")) if f.field_default("op") == "stop"]
@@ -56,5 +58,13 @@ def test_a_copy_is_its_radios_bands_alone(tmp_path, web, monkeypatch):
                                 instances.copy_of(idle, "kiss", "r3")[0], "433")
     svc = ControllerService(system=FakeSystem(cmdlines_data={61: ["/x/loraham-kiss-tnc", opt, val]}).system,
                             paths=Paths(runtime_root=tmp_path))
-    assert [e["id"] for e in radio_start.running_copies(svc, "433")] == ["kiss@r3"]
-    assert radio_start.running_copies(svc, "868") == []
+    live = {cid: st for ss in svc.build_snapshot().stacks for cid, st in ss.components.items()}
+    assert [e["id"] for e in radio_start.running_copies(svc, "433", live)] == ["kiss@r3"]
+    assert radio_start.running_copies(svc, "868", live) == []
+
+
+def test_a_copy_whose_own_listener_is_up_reads_running_with_no_note(tmp_path, web, monkeypatch):
+    # G1-C49: the copy's rows are judged on its OWN listener, as slot 0's are on slot 0's (already_healthy's calls).
+    r3 = _card(_home(tmp_path, web, monkeypatch, listening=True), "r3")
+    assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
+        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC Stop it: lhpc stack stop kiss@r3"]

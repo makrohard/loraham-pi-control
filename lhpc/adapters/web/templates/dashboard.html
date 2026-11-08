@@ -3,6 +3,10 @@
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {# Single-radio mode: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
 {% block body_class %}{% if radio_mode != 'both' %}dash-narrow{% endif %}{% endblock %}
+{# A running component's state, name and note: one markup for slot 0's rows and a listed copy's (G1-C49). #}
+{% macro comp_state(c) %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>
+                      {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
+                      {% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}{% endmacro %}
 {% block content %}
   {% include "_task_banner.html" %}
   {% if attention %}
@@ -242,16 +246,16 @@
               <div class="runstack">
                 {% if s.rid %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
-                  <span class="pill">{{ s.id }}</span> <span class="badge badge-running">running</span></p>
+                  <span class="pill">{{ s.id }}</span></p>
+                {# G1-C49: the copy's component rows in slot 0's markup, without its Start/Stop forms #}
+                <ul class="complist">{% for c in s.components %}<li>{{ comp_state(c) }}</li>{% endfor %}</ul>
                 <p class="muted">Stop it: <code>lhpc stack stop {{ s.id }}</code></p>
                 {% else %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
                 <ul class="complist">
                   {% for c in s.components %}
-                    <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
-                      {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
-                      {% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}
+                    <li>{{ comp_state(c) }}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {% for itf in c.interfaces %}

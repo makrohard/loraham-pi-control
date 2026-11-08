@@ -3137,7 +3137,7 @@ class LifecycleOpsMixin:
                     # the saved switch (a stray band after a Hardware change renders it too).
                     "high_power": self.high_power_state(band, dv),
                 },
-                "running": running + radio_start.running_copies(self, band),   # C7c: a running copy, on its radio
+                "running": running + radio_start.running_copies(self, band, live),   # C7c: a running copy, on its radio
                 "startable": startable,
                 "interactive": interactive,
                 "rflogs": self._rflogs_for_band(band, running),
