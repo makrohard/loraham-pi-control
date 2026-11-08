@@ -57,9 +57,9 @@ class FirewallOpsMixin:
             _auth = "none"
         band = self._config_band(stk.id, band or "") if hasattr(self, "_config_band") else ""
         static_host, _, static_port = str(ep.address).rpartition(":")
-        port = _fw.instance_port(self._fw_param_int(stk, comp, meta.port_param, band, static_port), inst)
-        bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host)
-        allow = self._fw_param_str(stk, comp, meta.allow_param, band, "")
+        port = _fw.instance_port(self._fw_param_int(stk, comp, meta.port_param, band, static_port, inst), inst)
+        bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host, inst)   # the copy's own values
+        allow = self._fw_param_str(stk, comp, meta.allow_param, band, "", inst)
         cidrs = _split_cidrs(allow)
         # STABLE id: the STATIC manifest port never changes even when the configured port does,
         # so a ticked direct-access checkbox survives a port change (fragile-id fix).
@@ -88,20 +88,20 @@ class FirewallOpsMixin:
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                 "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(static_host)}
 
-    def _fw_param_int(self, stk, comp, name, band, default):
+    def _fw_param_int(self, stk, comp, name, band, default, inst=None):
         if not name:
             return _to_int(default, 0)
-        v = self._resolved_param_value(stk.id, "run", comp.id, name, band)
+        v = self._resolved_param_value(stk.id, "run", comp.id, name, band, inst)
         return _to_int(v, _to_int(default, 0))
 
-    def _fw_param_str(self, stk, comp, name, band, default):
+    def _fw_param_str(self, stk, comp, name, band, default, inst=None):
         # A firewall param may be a RUN param (kiss --kiss-host/--bind) OR a config-FILE param
         # (meshcore wifi.allow lives in the component's TOML) — resolve run first, then file, so
         # a file-param allow-list is never silently missed.
         if not name:
             return default
         for kind in ("run", "file"):
-            v = self._resolved_param_value(stk.id, kind, comp.id, name, band)
+            v = self._resolved_param_value(stk.id, kind, comp.id, name, band, inst)
             if v not in (None, ""):
                 return v
         return default
@@ -958,7 +958,7 @@ class FirewallOpsMixin:
 
     # ---- stack-start exposure gate (FW-R8, plan P1-B) ---------------------------------------
 
-    def _fw_prospective_stack_scopes(self, target, band=""):
+    def _fw_prospective_stack_scopes(self, target, band="", inst=None):
         """The complete set of non-loopback listener SCOPES the START of `target` will bind,
         resolved from the ACTUAL launch plan: the LAUNCH band's SAVED per-band config (a start
         runs exactly the saved configuration — there are no per-launch values). Each scope is a
@@ -977,7 +977,7 @@ class FirewallOpsMixin:
         for stk, comp, ep in mapped:
             if comp.id not in comp_ids:
                 continue
-            sc = self._fw_resolve_scope(stk, comp, ep, band=cfg_band)
+            sc = self._fw_resolve_scope(stk, comp, ep, band=cfg_band, inst=inst)   # the copy's own scope
             if sc["loopback"] and not sc["deny"]:
                 continue                                   # loopback-only -> nothing to expose
             scopes.append({"id": sc["id"], "proto": sc["proto"], "family": sc["family"],
@@ -1017,7 +1017,7 @@ class FirewallOpsMixin:
             return _cidrs_covered(sc["allow_cidrs"], e["allow_cidrs"])   # selected allow
         return False
 
-    def firewall_gate_stack_start(self, target, band="", *, render=True, op="start"):
+    def firewall_gate_stack_start(self, target, band="", *, render=True, op="start", inst=None):
         """Exposure gate for a stack/component START. Absent firewall -> allow (behaviour
         preserved). Partial -> refuse. No non-loopback scope -> allow. Otherwise the firewall
         must be live-verified against the current saved intent (config_ok+live_ok) AND every
@@ -1047,7 +1047,7 @@ class FirewallOpsMixin:
                          "refusing to start a non-loopback listener until it is repaired.",
                          f"Repair it first, then restart '{target}'."),
                     [f"sudo bash {base}"])
-        scopes = self._fw_prospective_stack_scopes(target, band)
+        scopes = self._fw_prospective_stack_scopes(target, band, inst)
         if not scopes:
             return True, "", []                            # nothing non-loopback -> nothing to gate
         st = self.firewall_status()

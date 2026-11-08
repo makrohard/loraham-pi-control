@@ -1007,7 +1007,7 @@ class LifecycleOpsMixin:
         # either stop that stack first (stop_owners) or refuse and report it.
         if (_r := self._start_preflight_refusal(target, order, band, radio, "start",
                                                 check_blockers=not stop_owners,
-                                                render=True)) is not None:
+                                                render=True, inst=inst)) is not None:
             return _r
         return prep
 
@@ -1071,7 +1071,7 @@ class LifecycleOpsMixin:
         if not instances.already_healthy(self, target, order, radio, prep.inst, cfg_band) and (
                 _r := self._start_preflight_refusal(target, order, band, radio, "start",
                                                     check_blockers=False,
-                                                    render=False)) is not None:
+                                                    render=False, inst=prep.inst)) is not None:
             return _r
         blockers = self.run_blockers(target, band, radio, prep.inst)
         for bl in blockers:
@@ -2322,7 +2322,7 @@ class LifecycleOpsMixin:
 
     def _start_preflight_refusal(self, target: str, order, band: str, radio: str, op: str, *,
                                  check_blockers: bool, render: bool,
-                                 exclude_holders=frozenset()):
+                                 exclude_holders=frozenset(), inst=None):
         """The one firewall/ambiguity/blocker wording the start plan, the start apply and the
         restart (plan and apply) share, or None. The FW-R8 exposure gate first (`render=False`
         for a plan: no apply-script write); then an AMBIGUOUS flat value (a run/file param name
@@ -2330,7 +2330,7 @@ class LifecycleOpsMixin:
         value); then, only if `check_blockers`, the running holders of a needed resource —
         except `exclude_holders` (stack ids a restart's own stop takes down)."""
         _fw_ok, _fw_msg, _fw_cmds = self.firewall_gate_stack_start(target, band=band,
-                                                                   render=render, op=op)
+                                                                   render=render, op=op, inst=inst)
         if not _fw_ok:
             return ActionResult(False, f"Cannot {op} '{target}': {_fw_msg}",
                                 next_commands=_fw_cmds, data={"firewall_gate": "pending"})

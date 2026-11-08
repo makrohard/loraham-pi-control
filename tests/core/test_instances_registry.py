@@ -40,8 +40,10 @@ def test_a_listed_instance_gets_its_own_pages_on_its_slots_ports(tmp_path):
 
 
 def test_a_listed_instance_gets_its_own_firewall_row(tmp_path):
-    assert _kiss_rows(_svc(tmp_path, 'kiss = ["r3"]\n')) == [("loraham-kiss-tnc.tcp-8001", 8001),
-                                                              ("loraham-kiss-tnc-r3.tcp-8001", 8011)]
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, 'kiss = ["r3"]\n')
+    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, band="r3")   # DEC-W60: its own bind
+    assert _kiss_rows(svc) == [("loraham-kiss-tnc.tcp-8001", 8001), ("loraham-kiss-tnc-r3.tcp-8001", 8011)]
 
 
 def test_without_a_registry_a_stack_has_its_slot_0_pages_and_rows_only(tmp_path):

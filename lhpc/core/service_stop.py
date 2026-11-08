@@ -651,7 +651,7 @@ class StopOpsMixin:
                                                band=_rband, inst=inst).data.get("dependents") or [])
             if (_r := self._start_preflight_refusal(target, _pre_order, _rband, radio, "restart",
                                                     check_blockers=_check, render=apply,
-                                                    exclude_holders=_ex)) is not None:
+                                                    exclude_holders=_ex, inst=inst)) is not None:
                 return _r
         return None
 

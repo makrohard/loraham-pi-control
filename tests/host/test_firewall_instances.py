@@ -21,7 +21,10 @@ def _svc(tmp_path):
 
 
 def _with_slot1_on_r2(svc, monkeypatch, stacks=("kiss", "meshtastic")):
-    # raising=False: on a code without instances the candidate simply lacks the slot-k rows (the red-before)
+    # raising=False: on a code without instances the candidate simply lacks the slot-k rows (the red-before).
+    # DEC-W60: slot k reads its OWN settings file, so it binds off-box by its own kiss_host, never slot 0's
+    from lhpc.core import config as cfgmod
+    cfgmod.update_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0"}, band="r2")
     monkeypatch.setattr(commands, "stack_instances",
                         lambda stk, paths=None: (commands.SLOT0, commands.Instance(1, "r2"))
                         if stk.id in stacks else (commands.SLOT0,), raising=False)
@@ -42,12 +45,13 @@ def test_t_g2_a_slot_k_instance_adds_exactly_its_own_rows(tmp_path, monkeypatch)
                      "meshtastic-r2.tcp-4403": (4413, True), "meshtastic-r2.tcp-9443": (9453, True)}
 
 
-def test_a_configured_slot0_port_moves_slot_k_with_it(tmp_path, monkeypatch):
+def test_a_configured_slot0_port_never_moves_slot_k(tmp_path, monkeypatch):
+    # DEC-W60: slot k reads its own settings file (here no port: the manifest's), never slot 0's (cleanup must-fix 2)
     svc = _svc(tmp_path)
     assert svc.save_config("kiss", {"kiss_port": "8050"}).ok
     _with_slot1_on_r2(svc, monkeypatch, stacks=("kiss",))
     rows = _rows(svc.firewall_candidate())
-    assert (rows["loraham-kiss-tnc.tcp-8001"]["port"], rows["loraham-kiss-tnc-r2.tcp-8001"]["port"]) == (8050, 8060)
+    assert (rows["loraham-kiss-tnc.tcp-8001"]["port"], rows["loraham-kiss-tnc-r2.tcp-8001"]["port"]) == (8050, 8011)
 
 
 def test_t_f6_a_tick_on_the_slot0_id_selects_every_instance(tmp_path, monkeypatch):
