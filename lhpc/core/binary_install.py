@@ -137,10 +137,11 @@ class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
 
 _RETRY_WAITS = (0, 5, 15, 45, 120)    # the first retry at once, then growing: about 3 min while a user waits
 _DEADLINE_S = 600.0                   # one download (all its attempts and waits) ends by about then
-# The bound, stated: the deadline caps every wait, every connect and every body read (each gets at most the time
-# left). A server that trickles its status line, headers or chunk-size lines (each byte inside the socket timeout)
-# is bounded by the per-read timeout, not by the deadline; name resolution is not bounded at all. GitHub's failures
-# (5xx, resets, stalls) are covered; the index's sha256 still decides every file.
+# The bound, stated: the deadline caps every wait and every connect (the opener's timeout is the time left, at most
+# 60 s) and is checked before every body read; a read then waits at most that socket timeout, so a stalled body ends
+# within one timeout of the deadline. A server that trickles its status line, headers or chunk-size lines (each byte
+# inside the socket timeout) is bounded per read, not by the deadline; name resolution is not bounded at all.
+# GitHub's failures (5xx, resets, stalls) are covered; the index's sha256 still decides every file.
 
 
 def _transient(exc) -> bool:
@@ -164,13 +165,10 @@ def _left(url: str, end: float) -> float:
 
 
 def _read(resp, url: str, end: float) -> bytes:
-    """One chunk of what has arrived (`read1`: a trickle cannot hold one call past the deadline), after lowering the
-    socket's timeout to the time left (urllib's response keeps its socket at fp.raw._sock). A body that ends before
-    its Content-Length is a transfer cut short: http.client returns b"" there, not IncompleteRead."""
-    t = min(_HTTP_TIMEOUT_S, _left(url, end))
-    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
-    if sock is not None:
-        sock.settimeout(t)
+    """One chunk of what has arrived (`read1`: a trickle cannot hold one call past the deadline), once the deadline
+    is checked. A body that ends before its Content-Length is a transfer cut short: http.client returns b"" there,
+    not IncompleteRead."""
+    _left(url, end)
     chunk = getattr(resp, "read1", resp.read)(1 << 20)
     if not chunk and getattr(resp, "length", None):
         raise http.client.IncompleteRead(b"", resp.length)

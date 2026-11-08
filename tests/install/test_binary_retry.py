@@ -182,19 +182,20 @@ def test_the_deadline_caps_each_connect_and_each_wait(net, per_open, timeouts, w
     assert ([t for _, t in net.calls], net.waits) == (timeouts, waits)
 
 
-def test_the_deadline_holds_across_a_blocking_read(net):
-    # each read lowers the socket's timeout to the time left: 60, 60, then 40; the fourth read is past the deadline
+def test_the_deadline_is_checked_before_every_body_read(net):
+    # each read takes 280 s: the third ends at 840 s, past the deadline, and no fourth read starts; the socket is
+    # left as the opener set it (no private attribute of urllib's response is touched)
     sock = SimpleNamespace(timeouts=[])
     sock.settimeout = sock.timeouts.append
 
     def tick():
         net.now[0] += 280.0
     body = _Body(DATA, on_read=tick)
-    body.fp = SimpleNamespace(raw=SimpleNamespace(_sock=sock))       # where urllib's response keeps its socket
+    body.fp = SimpleNamespace(raw=SimpleNamespace(_sock=sock))
     net.script.append(body)
     with pytest.raises(bi.BinaryInstallError, match="did not finish within 600 s"):
         bi.download_artifact(_entry(), net.dest)
-    assert (sock.timeouts, len(net.calls), net.dest.exists()) == ([60.0, 60.0, 40.0], 1, False)
+    assert (sock.timeouts, net.now[0], len(net.calls), net.dest.exists()) == ([], 840.0, 1, False)
 
 
 def test_the_index_retries_too_and_its_bound_is_not_retried(net):
