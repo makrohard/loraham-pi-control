@@ -1196,7 +1196,7 @@ class LifecycleOpsMixin:
         # deleted by the very launch that did NOT apply it — saved config said B, the radio still
         # identified as A, and nothing said so. Remember the marker HERE, while configuration is
         # still stable and before any release window, and clear only THIS state (see the tail).
-        _pre_marker = self.restart_required(target) if _target_is_stack else None
+        _pre_marker = self.restart_required(instances.key(target, prep.inst)) if _target_is_stack else None
         def _comp_overrides(comp_id):
             if not (_target_is_stack or comp_id == target):
                 return None
@@ -1602,8 +1602,8 @@ class LifecycleOpsMixin:
             _kept_old = any(r.outcome == Outcome.ALREADY_HEALTHY
                             and (self.stack_of(r.component) or r.stack) == target
                             for r in results)
-            if not _kept_old and self.restart_required(target) == run.pre_marker:
-                _rr.clear_marker(self._paths, target)
+            if not _kept_old and self.restart_required(instances.key(target, prep.inst)) == run.pre_marker:
+                _rr.clear_marker(self._paths, instances.key(target, prep.inst))      # the copy's own marker
         # What this start left running as it was gets the SPI warning of the already-healthy answer.
         _kept = {r.component for r in results if r.outcome == Outcome.ALREADY_HEALTHY or (r.component
                  == self.DAEMON_ID and r.outcome == Outcome.VERIFIED and not run.daemon_launched)}

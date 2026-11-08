@@ -1100,9 +1100,9 @@ class ParamsConfigMixin:
         # consumer; and whether the committed change is even on the band that consumer reads.
         # Every payload is rendered before any is written, so this reads the pre-save values
         # regardless of where it sits in the target list.
-        if clean_params and not own:                    # the restart marker is slot 0's
+        if clean_params:                                # the copy's own restart marker (must-fix 6)
             targets.append(self._restart_marker_target(target, sid, band, cfg_band, clean_params,
-                                                       modes, _live_seen))
+                                                       modes, _live_seen, inst))
         try:
             _commit_config(self._paths, targets, held=self._holds_config_exclusive())
         except ConfigError as exc:
@@ -1114,13 +1114,13 @@ class ParamsConfigMixin:
                                                       live=_live_seen.get("v")) + remote_notes,
                             next_commands=[f"lhpc stack start {target}"])
 
-    def _restart_marker_target(self, target, sid, band, cfg_band, params, modes, live_seen):
+    def _restart_marker_target(self, target, sid, band, cfg_band, params, modes, live_seen, inst=None):
         """The config-transaction target ("state", marker path, renderer, mode) that keeps the
         DURABLE restart-required marker in step with a config change of `params`
         (`(kind, component, param, post-save value)`), decided INSIDE the transaction — shared by
         a Settings save and a reset. Fills `modes` with the apply-modes of what changes and
         `live_seen["v"]` with the live consumer it probed."""
-        def _render_marker(_paths, tgt=target, _sid=sid, _band=band, _cfg=cfg_band,
+        def _render_marker(_paths, tgt=target, _sid=_instances.key(sid, inst), _band=band, _cfg=cfg_band,  # noqa: B008
                            _params=tuple(params)):
             id_recs = {(r["kind"], r["comp"], r["name"]): r
                        for r in self._identity_fields(tgt)}
@@ -1147,14 +1147,14 @@ class ParamsConfigMixin:
                 restart-required and told the operator to restart."""
                 rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
                 stored = self._stored_param_value(
-                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
+                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band, inst)
                 if rec is not None and not stored.strip():
                     return (self.inheritable_global(rec)[0]
                             if rec["enforce"] == "licensed" else "")
                 if rec is not None:
                     return stored
                 return self._resolved_param_value(
-                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
+                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band, inst)
             def _key(c, p) -> str:
                 """Which stored value a launch value belongs to: the store's band (none for
                 a band-less param), the component, the param."""
@@ -1194,7 +1194,7 @@ class ParamsConfigMixin:
 
             if not live_modes:
                 return _unmarked()                # nothing that needs a restart changed
-            live, live_band = self.active_config_consumer(_sid, fresh=True)
+            live, live_band = (_instances.instance_runs(self, self._owner_stack(sid).main_component, inst, inst.band), inst.band) if getattr(inst, "slot", 0) else self.active_config_consumer(_sid, fresh=True)
             live_seen["v"] = live          # reused by the apply hints — never probed twice
             if not live:
                 return _unmarked()                # nobody is reading this configuration
@@ -1215,7 +1215,7 @@ class ParamsConfigMixin:
                 mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
                 else "restart", current=cur,
                 launched={_key(c, p): _pre_effective(k, c, p) for k, c, p in marked})
-        return ("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600)
+        return ("state", _rr.marker_path(self._paths, _instances.key(sid, inst)), _render_marker, 0o600)
 
     def operator_callsign_correction(self) -> str:
         """A VALIDATED base-callsign suggestion derived from a non-base stored global, or ""
@@ -1598,7 +1598,7 @@ class ParamsConfigMixin:
     def restart_required_stacks(self) -> list:
         """All stacks currently flagged restart-required — including SAFE-SIDE unsafe markers
         (for the dashboard + CLI status + dash signature)."""
-        return [s.id for s in self.stacks() if self.restart_required(s.id) is not None]
+        return [k for s in self.stacks() for k in (s.id, *(f"{s.id}@{r}" for r in sorted(_instances.listed_rids(self._paths, s.id)))) if self.restart_required(k) is not None]
 
     @invalidates_snapshot
     def save_component_remote(self, component_id: str, url: str) -> ActionResult:
@@ -2461,8 +2461,8 @@ class ParamsConfigMixin:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
                 ("stack", _stack_config_path(self._paths, target, b),
-                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + ([] if own else [
-                self._restart_marker_target(target, target, band, cfg_band, params, set(), {})]))
+                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
+                self._restart_marker_target(target, target, band, cfg_band, params, set(), {}, inst)])
             if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:

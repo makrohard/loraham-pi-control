@@ -426,7 +426,7 @@ class StopOpsMixin:
                 summary = (f"Stop for '{target}' applied but the known-working candidate "
                            f"could not be retired — see details.")
                 details = [*list(details), f"  [candidate] not cleared: {why}"]
-            _rr.clear_marker(self._paths, target)
+            _rr.clear_marker(self._paths, instances.key(target, inst))     # the copy's own marker
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
