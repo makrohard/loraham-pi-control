@@ -81,18 +81,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           . .github/scripts/retry.sh
+          # Outside the checkout: the lane copies /repo, and 178 MiB more there could fill the disk first.
           target="aarch64-$(docker run --rm "$IMG" sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')"
+          mirror="$RUNNER_TEMP/binmirror"
           echo "BIN_TARGET=$target" >> "$GITHUB_ENV"
-          mkdir -p binmirror
-          backoff gh release download binaries -R makrohard/lhpc-binaries -p index-v3.json -D binmirror --clobber
-          python3 .github/scripts/mirror-binaries.py list binmirror/index-v3.json "$target" meshcom meshtastic > binmirror.txt
+          echo "BIN_MIRROR=$mirror" >> "$GITHUB_ENV"
+          mkdir -p "$mirror"
+          backoff gh release download binaries -R makrohard/lhpc-binaries -p index-v3.json -D "$mirror" --clobber
+          python3 .github/scripts/mirror-binaries.py list "$mirror/index-v3.json" "$target" meshcom meshtastic \
+            > "$RUNNER_TEMP/binmirror.txt"
           while read -r f; do
-            backoff gh release download binaries -R makrohard/lhpc-binaries -p "$f" -D binmirror --clobber
-          done < binmirror.txt
+            backoff gh release download binaries -R makrohard/lhpc-binaries -p "$f" -D "$mirror" --clobber
+          done < "$RUNNER_TEMP/binmirror.txt"
 
       - name: Prove the binary mirror is complete (no network)
         run: |
-          docker run --rm --network none -v "$PWD/binmirror":/binmirror:ro \
+          docker run --rm --network none -v "$BIN_MIRROR":/binmirror:ro \
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" \
             python3 /scripts/mirror-binaries.py verify /binmirror "$BIN_TARGET" meshcom meshtastic
 
@@ -101,7 +105,7 @@ jobs:
         # same privilege boundary users get (uid mapping of -v mounts is not assumed).
         run: |
           docker run --rm --user root -v "$PWD":/repo:ro \
-            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/binmirror":/binmirror:ro -v lhpc_lab_tmp:/tmp \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$BIN_MIRROR":/binmirror:ro -v lhpc_lab_tmp:/tmp \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo

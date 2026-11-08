@@ -588,6 +588,8 @@ def test_download_is_streamed_not_buffered(tmp_path, monkeypatch):
             assert n is not None and n > 0, "download_artifact must read in bounded chunks"
             return super().read(n)
 
+        read1 = read
+
     monkeypatch.setattr(bi, "_open_stream",
                         lambda url, timeout: contextlib.closing(ChunkedOnly(data)))
     dest = tmp_path / "dl.tar.zst"

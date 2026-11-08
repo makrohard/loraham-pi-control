@@ -50,11 +50,14 @@ class _Body(io.BytesIO):
             raise http.client.IncompleteRead(b"")
         return super().read(min(n, 1000))
 
+    read1 = read
+
 
 @pytest.fixture
 def net(monkeypatch, tmp_path):
     """`script`: one outcome per opened URL (an exception to raise, bytes or a body to serve)."""
-    s = SimpleNamespace(script=[], calls=[], waits=[], now=[0.0], dest=tmp_path / "dl.tar.zst", seen=[], per_open=0.0)
+    s = SimpleNamespace(script=[], calls=[], waits=[], now=[0.0], dest=tmp_path / "dl.tar.zst", seen=[], per_open=0.0,
+                        tick=0.0)
 
     def stream(url, timeout=None):
         s.calls.append((url, timeout))
@@ -63,15 +66,23 @@ def net(monkeypatch, tmp_path):
         out = s.script.pop(0)
         if isinstance(out, BaseException):
             raise out
+        if callable(out):                                 # a real HTTP response (`_short_response`)
+            return out(timeout)
         return out if isinstance(out, io.IOBase) else _Body(out)
 
     def sleep(t):
+        if t < 0:
+            raise ValueError("sleep length must be non-negative")      # as time.sleep
         s.waits.append(t)
         s.now[0] += t
+
+    def monotonic():
+        s.now[0] += s.tick                                # the time between two reads of the clock
+        return s.now[0]
     monkeypatch.setattr(bi, "_open_stream", stream)
     monkeypatch.setattr(bi, "_http_get", _REAL_HTTP_GET)
     monkeypatch.setattr(bi.time, "sleep", sleep)
-    monkeypatch.setattr(bi.time, "monotonic", lambda: s.now[0])
+    monkeypatch.setattr(bi.time, "monotonic", monotonic)
     return s
 
 
@@ -193,3 +204,89 @@ def test_the_index_retries_too_and_its_bound_is_not_retried(net):
     with pytest.raises(bi.BinaryInstallError, match="byte bound"):
         bi.fetch_index(IDX)
     assert len(net.calls) == 3
+
+
+@pytest.fixture
+def short_response():
+    """A real http.client response that announces Content-Length len(body) and ends after `sent` bytes (parsed from
+    the raw bytes a server would send, over a socket stand-in): http.client's read then returns b"", not
+    IncompleteRead."""
+    def make(body, sent):
+        raw = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body[:sent]
+
+        def opened(timeout):
+            resp = http.client.HTTPResponse(SimpleNamespace(makefile=lambda mode: io.BytesIO(raw)))
+            resp.begin()
+            return resp
+        return opened
+    return make
+
+
+def test_a_body_shorter_than_its_content_length_is_a_transfer_failure_and_retried(net, short_response):
+    # G1-C55 (1): 2000 of 3072 announced bytes, then the connection closes: a cut transfer, not a wrong published size
+    net.script += [short_response(DATA, 2000), DATA]
+    bi.download_artifact(_entry(), net.dest)
+    assert (net.dest.read_bytes(), net.waits) == (DATA, [0])
+    index = json.dumps({"schema": 3, "stacks": {}}).encode()
+    net.script += [short_response(index, 10), index]
+    assert bi.fetch_index(IDX) == {"schema": 3, "stacks": {}} and net.waits == [0, 0]
+
+
+def test_a_complete_body_of_the_wrong_size_is_refused_at_once(net, short_response):
+    net.script += [short_response(DATA[:2000], 2000), DATA]           # the server's whole answer, 2000 bytes
+    with pytest.raises(bi.BinaryInstallError, match="size 2000 != published size 3072"):
+        bi.download_artifact(_entry(), net.dest)
+    assert (len(net.calls), net.dest.exists()) == (1, False)
+
+
+def test_the_deadline_holds_inside_a_trickling_read(net):
+    # G1-C55 (2): one byte every 50 s never trips a 60 s socket timeout; each read returns what has arrived, so the
+    # deadline is checked between them (a read that waits for a whole chunk would run for 42 hours here)
+    class Trickle(io.BytesIO):
+        def read1(self, n=-1):
+            net.now[0] += 50.0
+            return super().read1(1)
+
+        def read(self, n=-1):
+            net.now[0] += 50.0 * min(n, len(DATA))
+            return super().read(n)
+    net.script.append(Trickle(DATA))
+    with pytest.raises(bi.BinaryInstallError, match="did not finish within 600 s"):
+        bi.download_artifact(_entry(), net.dest)
+    assert (len(net.calls), net.dest.exists()) == (1, False) and net.now[0] <= 600 + 50     # ends at the deadline
+
+
+@pytest.mark.parametrize("where", ["open", "write", "close"])
+def test_a_local_timeout_on_the_staging_file_is_not_retried(net, monkeypatch, where):
+    # G1-C55 (3): an NFS/FUSE staging directory can raise TimeoutError: a local failure, not a transfer one
+    class Slow(io.BytesIO):
+        def write(self, b):
+            if where == "write":
+                raise TimeoutError(110, "Connection timed out")
+            return len(b)
+
+        def close(self):
+            was_open = not self.closed
+            super().close()
+            if where == "close" and was_open:
+                raise TimeoutError(110, "Connection timed out")
+
+    def opener(*a, **k):
+        if where == "open":
+            raise TimeoutError(110, "Connection timed out")
+        return Slow()
+    monkeypatch.setattr(bi, "open", opener, raising=False)
+    net.script += [DATA] * 6
+    with pytest.raises(bi.BinaryInstallError, match="timed out"):
+        bi.download_artifact(_entry(), net.dest)
+    assert (len(net.calls), net.waits) == (1, [])
+
+
+@pytest.mark.parametrize("per_open", [596.5, 597.5, 598.5])
+def test_the_wait_is_never_negative_when_the_clock_moves_between_two_reads(net, per_open):
+    # G1-C55 (4): the time left is read once per decision: a deadline that passes between two reads of the clock
+    # is the typed refusal, never a negative sleep (time.sleep raises ValueError)
+    net.tick, net.per_open = 1.0, per_open
+    net.script += [_http(504)] * 6
+    with pytest.raises(bi.BinaryInstallError, match="did not finish within 600 s"):
+        bi.download_artifact(_entry(), net.dest)

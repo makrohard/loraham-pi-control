@@ -2,7 +2,7 @@
 """The lhpc-binaries artifacts the testlab lanes install, served from a local mirror (L1, DEC-W339).
 
     mirror-binaries.py list <index-v3.json> <target> <stack>...    the file name of every entry of those stacks
-                                                                   for <target>, one per line; exit 1 if none
+                                                                   for <target>, one per line; exit 1 if a stack has none
     mirror-binaries.py verify <dir> <target> <stack>...            <dir>/index-v3.json and every listed file are
                                                                    there with the index's sha256 and size; exit 1
                                                                    if not
@@ -26,9 +26,12 @@ def entries(index_path, target: str, stacks) -> list[dict]:
     idx = json.loads(Path(index_path).read_text(encoding="utf-8"))
     if idx.get("schema") != 3 or not isinstance(idx.get("stacks"), dict):
         raise SystemExit(f"{index_path}: not an index-v3 (schema 3 with a stacks table)")
-    out = [e for s in stacks for e in idx["stacks"].get(s, []) if e.get("target") == target]
-    if not out:
-        raise SystemExit(f"{index_path}: no entry of {' '.join(stacks)} for {target}: nothing to mirror")
+    out = []
+    for s in stacks:                     # each stack needs its own entry: one cannot cover for another's absence
+        mine = [e for e in idx["stacks"].get(s, []) if e.get("target") == target]
+        if not mine:
+            raise SystemExit(f"{index_path}: no entry of {s} for {target}: nothing to mirror")
+        out += mine
     return out
 
 

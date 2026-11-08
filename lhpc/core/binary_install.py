@@ -151,22 +151,26 @@ def _transient(exc) -> bool:
     return isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror, http.client.HTTPException))
 
 
-def _time_left(url: str, end: float) -> float:
-    """The timeout of the next connect or read: at most 60 s, never past the download's deadline."""
+def _left(url: str, end: float) -> float:
+    """The time left to the download's deadline, read once per decision; past it, the typed refusal."""
     left = end - time.monotonic()
     if left <= 0:
         raise BinaryInstallError(f"download of {url} did not finish within {_DEADLINE_S:.0f} s — try again later")
-    return min(_HTTP_TIMEOUT_S, left)
+    return left
 
 
 def _read(resp, url: str, end: float) -> bytes:
-    """One bounded chunk; the socket's timeout is lowered to the time left first, so the deadline holds across a
-    blocking read (urllib's response keeps its socket at fp.raw._sock)."""
-    t = _time_left(url, end)
+    """One chunk of what has arrived (`read1`: a trickle cannot hold one call past the deadline), after lowering the
+    socket's timeout to the time left (urllib's response keeps its socket at fp.raw._sock). A body that ends before
+    its Content-Length is a transfer cut short: http.client returns b"" there, not IncompleteRead."""
+    t = min(_HTTP_TIMEOUT_S, _left(url, end))
     sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
     if sock is not None:
         sock.settimeout(t)
-    return resp.read(1 << 20)
+    chunk = getattr(resp, "read1", resp.read)(1 << 20)
+    if not chunk and getattr(resp, "length", None):
+        raise http.client.IncompleteRead(b"", resp.length)
+    return chunk
 
 
 def _retrying(url: str, attempt):
@@ -181,11 +185,19 @@ def _retrying(url: str, attempt):
         except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
             if planned is None or not _transient(exc):
                 raise BinaryInstallError(f"download failed: {exc}") from None
-            _time_left(url, end)                          # past the deadline: the typed refusal, no wait
-            wait = min(planned, end - time.monotonic())
+            wait = min(planned, _left(url, end))
             print(f"download failed: {exc} — retrying in {wait:.0f} s", file=sys.stderr, flush=True)
             time.sleep(wait)
     raise AssertionError("unreachable")    # pragma: no cover
+
+
+def _local(fn, *args):
+    """A staging-file operation (open, write, close): its OSError (a full disk, a network filesystem's timeout) is
+    local, so it is the typed refusal at once, never classified as a transfer failure."""
+    try:
+        return fn(*args)
+    except OSError as exc:
+        raise BinaryInstallError(f"cannot write the download: {exc}") from None
 
 
 def _remove_staging(p) -> None:
@@ -202,7 +214,7 @@ def _http_get(url: str, max_bytes: int) -> bytes:
     """The index read: bounded, through the one opener, retried like an artifact."""
     def attempt(end):
         data = bytearray()
-        with _open(url, _time_left(url, end)) as resp:
+        with _open(url, min(_HTTP_TIMEOUT_S, _left(url, end))) as resp:
             while chunk := _read(resp, url, end):
                 data += chunk
                 if len(data) > max_bytes:
@@ -453,28 +465,28 @@ def download_artifact(entry: IndexEntry, dest_path) -> None:
     def attempt(end):
         h, total = hashlib.sha256(), 0           # per attempt: never a failed stream's bytes
         try:
-            with _open(entry.url, _time_left(entry.url, end)) as resp, open(dest_path, "wb") as fh:
-                while chunk := _read(resp, entry.url, end):
-                    total += len(chunk)
-                    if total > entry.size:            # bounded by the PUBLISHED size, not a ceiling
-                        raise BinaryInstallError(
-                            f"artifact is larger than its published size ({entry.size}) — refusing")
-                    h.update(chunk)
-                    fh.write(chunk)
+            with _open(entry.url, min(_HTTP_TIMEOUT_S, _left(entry.url, end))) as resp:
+                fh = _local(open, dest_path, "wb")
+                try:
+                    while chunk := _read(resp, entry.url, end):
+                        total += len(chunk)
+                        if total > entry.size:            # bounded by the PUBLISHED size, not a ceiling
+                            raise BinaryInstallError(
+                                f"artifact is larger than its published size ({entry.size}) — refusing")
+                        h.update(chunk)
+                        _local(fh.write, chunk)
+                finally:
+                    _local(fh.close)
+            if total != entry.size:
+                raise BinaryInstallError(f"downloaded artifact size {total} != published size {entry.size}")
+            if h.hexdigest() != entry.sha256:
+                raise BinaryInstallError(
+                    f"artifact sha256 mismatch (got {h.hexdigest()[:12]}…, expected "
+                    f"{entry.sha256[:12]}…) — refusing to extract")
         except Exception:
             _remove_staging(dest_path)
             raise
-        return h, total
-    h, total = _retrying(entry.url, attempt)
-    if total != entry.size:
-        _remove_staging(dest_path)
-        raise BinaryInstallError(
-            f"downloaded artifact size {total} != published size {entry.size}")
-    if h.hexdigest() != entry.sha256:
-        _remove_staging(dest_path)
-        raise BinaryInstallError(
-            f"artifact sha256 mismatch (got {h.hexdigest()[:12]}…, expected "
-            f"{entry.sha256[:12]}…) — refusing to extract")
+    _retrying(entry.url, attempt)
 
 
 # --- extraction -------------------------------------------------------------------------------

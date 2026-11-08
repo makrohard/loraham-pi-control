@@ -56,3 +56,11 @@ def test_verify_passes_a_complete_mirror_and_fails_a_missing_or_tampered_file(tm
     (tmp_path / es["meshcom"][1]["filename"]).unlink()
     r = _run(*args)
     assert r.returncode == 1 and f"{es['meshcom'][1]['filename']}: missing" in r.stdout
+
+
+def test_a_requested_stack_without_an_entry_for_the_target_fails(tmp_path):
+    # G1-C56: one stack's entries must not cover for another's absence
+    _mirror(tmp_path)
+    r = _run("list", tmp_path / "index-v3.json", "aarch64-bookworm", "meshcom", "meshtastic")
+    assert r.returncode == 1 and "no entry of meshtastic for aarch64-bookworm" in r.stderr
+    assert _run("verify", tmp_path, "aarch64-bookworm", "meshcom", "meshtastic").returncode == 1
