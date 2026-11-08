@@ -183,3 +183,38 @@ def test_a_listed_copy_that_does_not_run_leaves_its_radio_free(tmp_path):
     (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {"r2": [], "r4": []}
+
+
+def test_an_unattributed_process_beside_a_running_copy_holds_every_radio_of_its_band(tmp_path):
+    # G1-C51 (1): meshcore@r4 runs by its own token AND a verified slot-1 record of a copy on r2 that is listed no
+    # more runs: no listed copy explains that pid, so r2 stays held too (before: a running copy freed the band).
+    from lhpc.core import radio_start
+    p = _spawn()
+    try:
+        svc = _svc(tmp_path, lambda svc, node: [instances._token(svc, node, instances.copy_of(svc, "meshcore", "r4")[0], "868")[1]])
+        stk = svc.stack("meshcore")
+        assert svc._lifecycle().record_launch(stk, stk.component("meshcore-node"), p.pid, band="868",
+                                              extra={"rid": "r2", "slot": 2})
+        assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
+            "r2": ["meshcore"], "r4": ["meshcore", "meshcore@r4"]}
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_slot0s_non_main_component_holds_its_radio_beside_a_running_copy(tmp_path):
+    # G1-C51 (2): slot 0's main is stopped but its own meshcore-webui runs (pid 93), beside meshcore@r4: slot 0's
+    # radio r2 (DEC-W16) is held by slot 0 (before: only the main counted, so r2 read free).
+    from lhpc.core import radio_start
+    radios_fixture.write(tmp_path, ROWS)
+    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    stk = svc.stack("meshcore")
+    node, web = stk.component("meshcore-node"), stk.component("meshcore-webui")
+    copy = ["/usr/bin/python", "-m", "meshcore_host", instances._token(svc, node, instances.copy_of(svc, "meshcore", "r4")[0], "868")[1]]
+    ui = [web.process.exec_name, *web.process.all_args, *web.process.any_args[:1]]
+    svc = ControllerService(system=FakeSystem(cmdlines_data={92: copy, 93: ui}).system, paths=Paths(runtime_root=tmp_path))
+    snap = svc.build_snapshot(fresh=True).stack("meshcore").components
+    assert snap["meshcore-webui"].pids == [93] and snap["meshcore-node"].own_run_state is RunState.STOPPED
+    assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
+        "r2": ["meshcore"], "r4": ["meshcore@r4"]}

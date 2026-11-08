@@ -205,26 +205,30 @@ def _daemon_procs(svc) -> list:
 
 
 def _radio_users(svc, radio) -> list:
-    """The users of `radio`, judged per radio (G1-C49), other than the daemon: each listed copy running on it
-    (`<sid>@<rid>`, running_copies_on); slot 0 of a stack whose own processes run on its band, when `radio` is slot 0's
-    DEC-W16 radio there; and, fail-safe, a stack running on the band by a process neither slot 0 nor any of its copies
-    explains: it holds every radio of the band (a removal guard stays conservative)."""
-    from . import instances
+    """The users of `radio`, judged per radio and per pid (G1-C49, G1-C51), other than the daemon: each listed copy
+    with a process on it (`<sid>@<rid>`, instances.copy_processes); slot 0 of a stack any of whose components runs a
+    process of its own on its band, when `radio` is slot 0's DEC-W16 radio there; and, fail-safe, a stack on the band
+    with a pid no listed copy and not slot 0 explains (a copy's record no longer listed, or running with no pid seen):
+    it holds every radio of the band, whether copies run or not (a removal guard stays conservative)."""
+    from . import commands, instances
     from .model import RunState
     up, snap = (RunState.RUNNING, RunState.DEGRADED), svc.build_snapshot()
-    copies = running_copies_on(svc, {r.id for r in radios.load(svc._paths).radios})
-    out = [instances.key(s.id, i) for s, i in copies if i.rid == radio.id]
+    procs = instances.copy_processes(svc, svc._system.procfs.cmdlines())
+    out = set()
     for s in svc.stacks():
-        if (s.main == svc.DAEMON_ID or not svc.stack_running(s.id)          # plain run_state: any process of the spec
-                or radio.band not in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band})):
+        if s.main == svc.DAEMON_ID:
+            continue
+        listed = {i.rid: i for i in commands.stack_instances(s, svc._paths)[1:]}
+        mine = [(rid, pid) for sid, rid, _c, pid in procs if sid == s.id]
+        out.update(instances.key(s.id, listed[rid]) for rid, _p in mine if rid == radio.id and rid in listed)
+        if radio.band not in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}):
             continue
         ss = snap.stack(s.id)
-        st = ss.components.get(s.main) if ss is not None else None
-        if st is not None and st.own_run_state in up:
-            if instances.slot0_radio(svc._paths, s.id, radio.band)[0] == radio.id:
-                out.append(s.id)
-        elif not any(cs.id == s.id for cs, _i in copies):
-            out.append(s.id)                     # an unattributed process: hold the band's radios
+        comps = [cs for cs in (ss.components.values() if ss is not None else ()) if cs.run_state in up]
+        if any(cs.own_run_state in up for cs in comps) and instances.slot0_radio(svc._paths, s.id, radio.band)[0] == radio.id:
+            out.add(s.id)                                # slot 0's own process, any component (G1-C51 (2))
+        if any(rid not in listed for rid, _p in mine) or (not comps and svc.stack_running(s.id)):
+            out.add(s.id)                                # an unattributed pid: hold the band's radios (G1-C51 (1))
     return sorted(out)
 
 
@@ -1021,12 +1025,12 @@ def chip_family(svc, band: str, rid: str = ""):
 
 
 def running_copies_on(svc, rids) -> list:
-    """[(stack, copy)] of each listed copy on a radio of `rids` that runs, by its verified record or its own token
-    (instances.instance_runs, any component): the one copy-ownership answer for Home's cards and a radio's users."""
+    """[(stack, copy)] of each listed copy on a radio of `rids` with a process (instances.copy_processes, any
+    component): the one copy-ownership answer for Home's cards and a radio's users."""
     from . import commands, instances
-    bands = {r.id: r.band for r in radios.load(svc._paths).radios}
+    runs = {(sid, rid) for sid, rid, _c, _p in instances.copy_processes(svc, svc._system.procfs.cmdlines())}
     return [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]
-            if inst.rid in rids and any(instances.instance_runs(svc, c, inst, bands.get(inst.rid, "")) for c in stk.components)]
+            if inst.rid in rids and (stk.id, inst.rid) in runs]
 
 
 def running_copies(svc, band: str, live: dict) -> list:

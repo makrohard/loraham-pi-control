@@ -255,21 +255,32 @@ def keys(svc, sid: str) -> list:
     return [key(sid, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)]
 
 
-def copy_pids(svc, table: dict) -> dict:
-    """{component: pids} of the processes the listed copies run, by their own argv token or verified record (slot k):
-    the snapshot never counts them as slot 0's (C7, W286). `table` is the snapshot's own cmdline table."""
+def copy_processes(svc, table: dict) -> list:
+    """[(sid, rid, component, pid)], sorted, of each process a copy runs: a verified slot-k record (listed now or not,
+    G1-C48 (1)) or a listed copy's own argv token in `table` (the caller's one cmdline table). The one copy-ownership
+    collection (G1-C51): copy_pids, running_copies_on and a radio's users read it."""
     from .probes.process import matches
-    life, out = svc._lifecycle(), {}
+    life, out = svc._lifecycle(), set()
     for rec in life.owned_inventory()[0]:            # a verified slot-k record, listed now or not (G1-C48 (1))
         if rec.get("slot", 0) and life.verify_owned(rec)[0]:
-            out.setdefault(rec.get("component", ""), set()).add(rec["pid"])
+            cid = rec.get("component", "")
+            out.add((rec.get("stack") or svc.stack_of(cid) or "", rec.get("rid", ""), cid, rec["pid"]))
     copies = [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]]
     bands = {r.id: r.band for r in radios.load(svc._paths).radios} if copies else {}
     for stk, inst in copies:                         # a hand-started copy without a record: its own token
         for comp in stk.components:
             tok = _token(svc, comp, inst, bands.get(inst.rid, "")) if comp.process is not None else None
             if tok is not None:
-                out.setdefault(comp.id, set()).update(p for p, a in table.items() if matches(comp.process, a, tok))
+                out.update((stk.id, inst.rid, comp.id, p) for p, a in table.items() if matches(comp.process, a, tok))
+    return sorted(out)
+
+
+def copy_pids(svc, table: dict) -> dict:
+    """{component: pids} of the copies' processes (copy_processes): the snapshot never counts them as slot 0's (C7,
+    W286). `table` is the snapshot's own cmdline table."""
+    out: dict = {}
+    for _sid, _rid, cid, pid in copy_processes(svc, table):
+        out.setdefault(cid, set()).add(pid)
     return out
 
 
