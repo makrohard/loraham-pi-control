@@ -2574,16 +2574,14 @@ class LifecycleOpsMixin:
         """
         return self._effective_band(stack_id, self._config_band(stack_id, "")) == band
 
-    def running_lora_stacks(self, band: str) -> list:
-        """Daemon-client (LoRa) stacks currently running on `band` — the ones a live switch to
-        MODE=FSK would break. Used to warn on the daemon's live-setting confirm."""
+    def running_lora_stacks(self, band: str, rid: str = "") -> list:
+        """Daemon-client (LoRa) stacks currently running on `band`, or on radio `rid` (its instances, running_keys;
+        TRANSITIONAL: by K6 the rid is required) — the ones a live switch to MODE=FSK would break."""
         from . import daemon_params
-        out = []
-        for sid in daemon_params.CLIENT_STACKS:
-            if self.stack_running(sid) and \
-                    self._effective_daemon_band(sid, self.running_band(sid)) == band:
-                out.append(sid)
-        return out
+        if rid:
+            return [sid for sid in daemon_params.CLIENT_STACKS if f"{sid}@{rid}" in instances.running_keys(self, sid)]
+        return [sid for sid in daemon_params.CLIENT_STACKS if self.stack_running(sid)
+                and self._effective_daemon_band(sid, self.running_band(sid)) == band]
 
     def stack_bands(self, target: str) -> tuple:
         """Bands the operator may choose for `target` (empty = single fixed band), NARROWED to the

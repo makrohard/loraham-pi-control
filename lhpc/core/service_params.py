@@ -782,7 +782,7 @@ class ParamsConfigMixin:
             entry["mandatory"] = any((not g) and (not o) for g, o in ds)
         return out
 
-    def config_view(self, target: str, band: str = "") -> dict:
+    def config_view(self, target: str, band: str = "", rid: str = "") -> dict:
         """Structured config for the Config page: operator identity (always shown
         on top) plus per-component run parameters and their effective values. For
         band-switchable stacks `band` selects which band's config is shown."""
@@ -873,19 +873,19 @@ class ParamsConfigMixin:
             view["high_power"] = [self.high_power_state(band, rid=rid) for rid, _name, band in
                                   _radio_start.view_radios(self._paths)]
             if active:                                   # only a configured setup has tunable radios
-                live_band = band if band in active else active[0]
-                view["bands"] = list(active)             # only the setup's radios are tunable
-                view["band"] = live_band
-                view["live_band"] = True       # band switch selects the LIVE band, not config
-                dv = self.daemon_view(live_band)
+                live_band = (_radio_start.daemon_radio(self, rid)[1] if rid else "") or (band if band in active else active[0])
+                # The live block's radio, TRANSITIONAL (K6: required): `rid`, else the band's first enabled radio.
+                rid = rid if rid and not _radio_start.daemon_radio(self, rid)[2] else next(iter(_radio_start.band_rids(self._paths, live_band)), "")
+                view["bands"], view["band"], view["live_band"] = list(active), live_band, True   # the LIVE band
+                dv = self.daemon_view(live_band, rid)
                 # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
                 # what it actually reports; the configured daemon-param value is the fallback for
                 # radio params the daemon does not echo (FREQ/SF/BW/…).
                 # PASSIVE channel read: this renders a settings form, it is not an operator
                 # asking to measure the channel. A scan here would destroy an arriving frame.
-                actual = {**self.daemon_channel(live_band), **dv.status}
-                cfg = self._daemon_param_applies("daemon", live_band) if dv.reachable else {}
-                view["radios"] = [{"band": live_band, "reachable": dv.reachable,
+                actual = {**self.daemon_channel(live_band, rid), **dv.status}
+                cfg = self._daemon_param_applies("daemon", live_band, rid) if dv.reachable else {}
+                view["radios"] = [{"band": live_band, "rid": rid, "reachable": dv.reachable,
                                    "error": dv.error, "status": actual, "config": cfg}]
                 # Order the live per-parameter controls the same as the daemon-params panel
                 # below (shared keys in that order; any daemon-only extras after).

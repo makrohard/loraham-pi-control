@@ -259,23 +259,24 @@ class DaemonParamsMixin:
         return out[-lines:]
 
     @invalidates_snapshot
-    def daemon_set(self, band: str, key: str, value: str, apply: bool = False) -> ActionResult:
-        # Validate the band at the service boundary too (not only in web routes): a
-        # direct CLI/service caller must never reach a constructed arbitrary socket path.
-        if not daemon_control.is_valid_band(band) or (why := radio_start.socket_refusal(self._paths, band)):   # L27
-            return ActionResult(False, f"Cannot SET {key.upper()} on {band} MHz: {why}" if daemon_control.is_valid_band(band)
+    def daemon_set(self, band: str, key: str, value: str, apply: bool = False, rid: str = "") -> ActionResult:
+        # The band is validated here too: no caller reaches an arbitrary socket path. `rid` (TRANSITIONAL, handler DEC;
+        # by K6 required, the band form gone) names the radio's own daemon: its band, chip and grant.
+        _inst, band, why = radio_start.daemon_radio(self, rid) if rid else (None, band, "")
+        if why or not daemon_control.is_valid_band(band) or (not rid and (why := radio_start.socket_refusal(self._paths, band))):
+            return ActionResult(False, f"Cannot SET {key.upper()} on {rid or f'{band} MHz'}: {why}" if why
                                 else f"Invalid band '{band}' (allowed: {', '.join(daemon_control.ALLOWED_BANDS)}).")
         if key.upper() == "POWER":
             # Live POWER is decided by the RUNNING daemon's family and permission, not by the
             # saved hardware setup (which may have changed since the process started).
             err = daemon_control.validate_set(key, value)              # syntax, union range
             if not err:
-                view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
-                err = (self._live_power_error(band, value, view.status) if view.reachable
+                view = daemon_control.read_view(self._system, rid or radio_start.daemon_key(self, band))
+                err = (self._live_power_error(band, value, view.status, rid) if view.reachable
                        else f"POWER={value}: daemon not serving {band} MHz — a live POWER is "
                             "checked against the running daemon; start it first")
         else:
-            err = daemon_control.validate_set(key, value, self.chip_family_for_band(band))
+            err = daemon_control.validate_set(key, value, self.chip_family_for_band(band, rid))
         if err:
             return ActionResult(False, f"Invalid setting: {err}",
                                 next_commands=[f"lhpc daemon {band}"])
@@ -291,7 +292,7 @@ class DaemonParamsMixin:
                 details=[note, "It does not transmit by itself."],
                 next_commands=[f"lhpc daemon {band} --set {key}={value} --yes"],
                 data={"changes": 1, "confirmable": confirmable})
-        ok, confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, value)
+        ok, confirmed, detail = daemon_control.apply_set(self._system, rid or radio_start.daemon_key(self, band), key, value)
         # Truthful outcome: only a read-back-confirmed SET is "applied"; an unconfirmable
         # radio param that was accepted is "SENT (unconfirmed)", never "applied".
         if not ok:
