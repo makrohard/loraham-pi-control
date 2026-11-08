@@ -706,7 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
-    p_kill.add_argument("target", metavar="stack[@band]", help="Stack id, optionally @433 or @868")
+    p_kill.add_argument("target", metavar="stack[@rid]", help="Stack id (slot 0), or <stack>@<rid>: a listed copy, the daemon of radio rid")
     p_kill.add_argument("component", nargs="?", default="", help="Only this component of the stack")
     p_kill.add_argument("--yes", action="store_true", help="Apply without confirmation")
 

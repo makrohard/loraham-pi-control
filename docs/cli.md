@@ -333,12 +333,12 @@ restarting it (any live retry runner is cancelled first). Use it when `lhpc stat
 slow QEMU boot.
 
 ### kill
-`lhpc kill <stack>[@<band>] [<component>] [--yes]` — the hard stop of one stack instance, or of one
+`lhpc kill <stack>[@<rid>] [<component>] [--yes]` — the hard stop of one stack copy (`<stack>` is slot 0, `<stack>@<rid>` a listed copy), or of one
 component of it, when a stop failed or hangs. The plan names the processes. Each gets SIGTERM, and
 SIGKILL after 5 s if it is still running; unsaved data in them is lost. The targets are the
 processes whose argv names this instance, including one you started by hand, and those LHPC's
 ownership records name. A component kill leaves the rest of the stack running, and a client stack's
-kill never ends the shared daemon (`lhpc kill daemon@<band>` does). A start of the same stack that
+kill never ends the shared daemon (`lhpc kill daemon@<rid>` ends that radio's). A start of the same stack that
 is still running is ended first; any other task in progress refuses the kill, naming it. Nothing
 else runs a kill. In the console: **Kill** beside each component's Stop, and the whole-stack Kill
 on a stop that failed.

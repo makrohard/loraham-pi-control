@@ -10,8 +10,7 @@ import signal
 import time
 from pathlib import Path
 
-from . import procident, radio_start
-from .daemon_control import ALLOWED_BANDS
+from . import instances, procident, radio_start
 from .outcomes import CompResult, Outcome
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -26,23 +25,28 @@ _TERM_BUDGET_S = GRACE_S + 2.5  # one admission holder's termination: the SIGTER
 
 
 def _parse(svc, target: str, component: str):
-    """`<stack>[@<band>]` and an optional component of that stack → (stack, band, comps) or an
-    error. At L3 the instance value is the band."""
-    sid, _, band = target.partition("@")
+    """`<stack>[@<rid>]` and an optional component of that stack → (stack, copy, comps) or an error (W298: a kill is
+    per radio). `<stack>` is slot 0 (copy None); `<stack>@<rid>` a listed copy, or for the daemon that radio's own."""
+    sid, at, rid = target.partition("@")
     stk = svc.stack(sid)
     if stk is None:
-        return None, "", [], f"Unknown stack '{sid}' (kill takes a stack id)."
-    if band and band not in ALLOWED_BANDS:
-        return None, "", [], f"Unknown band '{band}' (one of {', '.join(ALLOWED_BANDS)})."
+        return None, None, [], f"Unknown stack '{sid}' (kill takes a stack id)."
+    copy, why = None, ""
+    if at and sid == svc.stack_of(svc.DAEMON_ID):
+        copy, _band, why = radio_start.daemon_radio(svc, rid)        # the daemon is radio-level (D2-2)
+    elif at:
+        copy, why = instances.copy_of(svc, sid, rid)              # a disabled radio's copy is still addressed
+    if at and copy is None:
+        return None, None, [], f"Cannot kill {target}: {why}."
     comps = [c for c in stk.components if c.process is not None]
     if component:
         comps = [c for c in comps if c.id == component]
         if not comps:
-            return None, "", [], f"'{component}' is no process component of '{sid}'."
-    return stk, band, comps, ""
+            return None, None, [], f"'{component}' is no process component of '{sid}'."
+    return stk, copy, comps, ""
 
 
-def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
+def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     """The instance's processes: the exact matcher's hits over /proc (incl. a user-started
     component, W46) plus the processes its verified ownership records name (T-R6, W88), scoped
     to `comps`. Each target carries the identity it was verified by, so nothing reused is signalled.
@@ -50,33 +54,27 @@ def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
     from . import commands
     from .probes.process import matches
     life = svc._lifecycle()
+    band = copy.band if copy is not None else ""
     hint = svc._launch_band_hint(stk.id, band)
     cfg_band = svc._config_band(stk.id, hint)
-    runtime = str(svc._paths.runtime_root)
     table = svc._system.procfs.cmdlines()
     found: dict[int, dict] = {}
     unresolved: list[str] = []
     for comp in comps:
         if comp.id == svc.DAEMON_ID:
-            # The daemon goes per band by its exact --radio parse until L5 (NO_INSTANCE_ARG).
-            pids = (svc._daemon_pids_for_band(band) if band else
-                    [p for p, a in table.items()
-                     if a and posixpath.basename(a[0]) == "loraham_daemon"])
+            # The daemon of one radio by its exact `--id <rid>` (L5), else every daemon.
+            pids = [p for p, a in table.items() if a and posixpath.basename(a[0]) == "loraham_daemon"
+                    and (copy is None or _arg(a, "--id") == copy.rid)]
         else:
             # A spec exempt in NO_INSTANCE_ARG (voice, voice_cli, kiss-serial) matches by its
             # stack identity, i.e. any instance: sound only while today's one-band rule allows
             # one instance per box, until L5 gives them a socket token (W98).
             instance = None
-            if comp.process.instance_arg:
-                opt, tpl = comp.process.instance_arg
-                src = (str(svc._paths.resolve_source(comp.source.path)) if comp.source
-                       else runtime)
-                with contextlib.suppress(Exception):   # an unresolvable value: records only
-                    # stage L5 (W3): a daemon client's instance value names its band's radio, as its start renders it
-                    inst = radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.SLOT0
-                    instance = (opt, commands.instance_value(
-                        tpl, comp, svc.stack_config(comp.id, hint), runtime, src,
-                        cfg_band or comp.band, inst=inst))
+            with contextlib.suppress(Exception):       # an unresolvable value: records only
+                # stage L5 (W3): a daemon client's instance value names its radio, as its start renders it (the
+                # one token rule, instances._token)
+                inst = copy or radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.SLOT0
+                instance = instances._token(svc, comp, inst, cfg_band or comp.band)
             if comp.process.instance_arg and instance is None:
                 # The value cannot be resolved, so the matcher cannot scope this component: a process of
                 # its spec that runs is a gap, not a non-target (G2-B2 F3).
@@ -85,18 +83,19 @@ def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
                                for p, a in sorted(table.items()) if matches(comp.process, a, None)]
             else:
                 pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
-            if band and comp.id in BAND_BY_RECORD:
-                # Under an explicit band a bare hit proves no band: only its verified record of that band can
-                # name it (below), anything else is refused by name (G2-B2 F4).
-                bands = {r["pid"] for r in life.owned_records(comp.id, band) if life.verify_owned(r)[0]}
-                unresolved += [f"pid {p} {comp.id}: cannot verify band {band} (no verified ownership record of it)"
-                               for p in pids if p not in bands]
+            if comp.id in BAND_BY_RECORD and (copy is not None or instances.listed_rids(svc._paths, stk.id)):
+                # With copies a bare hit proves no copy: only the copy's own verified record can name it (below),
+                # anything else is refused by name (G2-B2 F4, per copy).
+                own = {r["pid"] for r in life.owned_records(comp.id, band or None, rid=copy.rid if copy else None)
+                       if r.get("slot", 0) == (copy.slot if copy else 0) and life.verify_owned(r)[0]}
+                unresolved += [f"pid {p} {comp.id}: cannot verify {f'band {band}' if band else 'slot 0'} "
+                               "(no verified ownership record of it)" for p in pids if p not in own]
                 pids = []
         for pid in pids:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
-        for rec in life.owned_records(comp.id, hint or None):
-            if life.verify_owned(rec)[0]:
+        for rec in life.owned_records(comp.id, hint or None, rid=copy.rid if copy is not None else None):
+            if rec.get("slot", 0) == (copy.slot if copy is not None else 0) and life.verify_owned(rec)[0]:
                 found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
                                      "pgid": rec["pgid"], "record": rec,
                                      "argv": " ".join(table.get(rec["pid"], []))}
@@ -115,6 +114,16 @@ def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
         else:
             unresolved.append(f"pid {pid} {t['component']}: its identity cannot be read or changed while read")
     return out, unresolved
+
+
+def _arg(argv, opt: str) -> str:
+    """The value of `opt` in `argv` (`--opt v` or `--opt=v`), else ""."""
+    for i, tok in enumerate(argv):
+        if tok == opt and i + 1 < len(argv):
+            return argv[i + 1]
+        if tok.startswith(opt + "="):
+            return tok.split("=", 1)[1]
+    return ""
 
 
 def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
@@ -260,14 +269,14 @@ def _signal(svc, targets: list[dict]) -> list[dict]:
 
 @invalidates_snapshot
 def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionResult:
-    """`lhpc kill <stack>[@<band>] [<component>]`: SIGTERM, 5 s, SIGKILL over the instance's
+    """`lhpc kill <stack>[@<rid>] [<component>]`: SIGTERM, 5 s, SIGKILL over the copy's (slot 0's)
     processes, under the admission flock. A dry run names the processes (the confirm)."""
-    stk, band, comps, err = _parse(svc, target, component)
+    stk, copy, comps, err = _parse(svc, target, component)
     if err:
         return ActionResult(False, err, next_commands=["lhpc list"])
     what = f"{component} of {target}" if component else target
     if not apply:
-        targets, unresolved = _targets(svc, stk, band, comps)
+        targets, unresolved = _targets(svc, stk, copy, comps)
         details = [f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}" for t in targets]
         pids = [t["pid"] for t in targets]
         # A start of this stack holding the admission flock is ended first (the apply's
@@ -292,17 +301,19 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         if refused:
             return ActionResult(False, f"Cannot kill {what}: {refused}", details=notes,
                                 next_commands=[f"lhpc status {stk.id}"])
-        targets, unresolved = _targets(svc, stk, band, comps)
+        targets, unresolved = _targets(svc, stk, copy, comps)
         left = _signal(svc, targets)
         gone = {t["pid"] for t in targets} - {t["pid"] for t in left}
         life = svc._lifecycle()
         for t in targets:
             if t["pid"] in gone and "record" in t:
                 life._remove_record(t["record"])
-        hint = svc._launch_band_hint(stk.id, band)
+        hint = svc._launch_band_hint(stk.id, copy.band if copy is not None else "")
         for comp in comps:
-            _log(svc, life, comp, hint)
-        if not component:
+            _log(svc, life, comp, hint, copy.rid if copy is not None else "")
+        if not component and copy is not None and copy.slot:
+            svc._write_stop_intent([f"{stk.id}@{copy.rid}"])           # a listed copy's own intent
+        elif not component and copy is None:
             svc._safe_unlink(svc._band_marker(stk.id))
             svc.dismiss_interactive(stk.id)
             svc._write_stop_intent([stk.id])
@@ -324,10 +335,10 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
                         details=details, results=results)
 
 
-def _log(svc, life, comp, band: str) -> None:
-    """'killed by operator' in the component's start log (best effort)."""
+def _log(svc, life, comp, band: str, rid: str = "") -> None:
+    """'killed by operator' in the component's start log, the copy's own radio's (best effort)."""
     from . import runtime_fs
-    log = life.start_log(comp, band)
+    log = life.start_log(comp, band, rid)
     if log is None:
         return
     with contextlib.suppress(Exception), runtime_fs.open_log_append(svc._paths, log) as fh:

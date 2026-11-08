@@ -343,7 +343,7 @@ def _token(svc, comp, inst, band: str):
     opt, tpl = spec.instance_arg
     src = str(svc._paths.resolve_source(comp.source.path)) if comp.source else str(svc._paths.runtime_root)
     try:
-        return opt, commands.instance_value(tpl, comp, svc.stack_config(comp.id, band), str(svc._paths.runtime_root),
+        return opt, commands.instance_value(tpl, comp, svc.stack_config(comp.id, band, inst), str(svc._paths.runtime_root),
                                             src, band, inst=inst)
     except Exception:          # an unresolvable value: the instance cannot be told by argv
         return None

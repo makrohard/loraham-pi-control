@@ -30,6 +30,8 @@
   rc it returned, instead of only its last output line.
 - Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
   not reported as failed while it still completes.
+- `lhpc kill` takes `<stack>` (slot 0) or `<stack>@<rid>` (a listed copy, per radio); the `<stack>@<band>` form is
+  gone.
 
 Upgrading from 0.13.x
 
@@ -37,6 +39,7 @@ Upgrading from 0.13.x
   (or `sudo modprobe spi_ch341`).
 - 0.13.x per-band daemon settings stay in effect for every radio of that band; saving a radio's settings panel
   stores that radio's own values in its row of config/radios.toml.
+- A script calling `lhpc kill <stack>@<band>`: use `lhpc kill <stack>` or `lhpc kill <stack>@<rid>`.
 
 Fixed
 

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import radios_fixture
 
-from lhpc.core import commands, jobs, kill, procident, radio_start, reslock
+from lhpc.core import commands, instances, jobs, kill, procident, radio_start, radios, reslock
 from lhpc.core.config import Config
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -92,6 +92,23 @@ def _svc(tmp_path, table):
                              paths=Paths(runtime_root=tmp_path))
 
 
+def _copy_svc(tmp_path, table):
+    """A box with kiss@r3 listed: r3 is a second 868 radio (W298: a kill is per radio)."""
+    radios_fixture.write(tmp_path, (*radios_fixture.RADIOS,
+                                    radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")))
+    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
+    return ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
+
+
+def _copy_argv(svc, comp_id):
+    """The component's real argv as the listed copy kiss@r3 (its own sockets)."""
+    copy = instances.copy_of(svc, "kiss", "r3")[0]
+    comp = svc.stack("kiss").component(comp_id)
+    src = str(svc._paths.resolve_source(comp.source.path)) if comp.source else str(svc._paths.runtime_root)
+    return commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, "868", copy),
+                                Config().operator, str(svc._paths.runtime_root), src, "868", inst=copy)
+
+
 def _argv(svc, comp_id, band):
     """The component's real argv on `band` (what its start launches)."""
     comp = next(c for st in svc.stacks() for c in st.components if c.id == comp_id)
@@ -112,34 +129,51 @@ def _gone(p):
 def test_k1_a_process_ignoring_sigterm_is_gone_after_the_5s_grace(tmp_path, clock, procs):
     p = procs()
     svc = _svc(tmp_path, {})
-    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-tnc", "433")})
-    res = kill.kill(svc, "kiss@433", apply=True)
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-tnc", svc._config_band("kiss", ""))})
+    res = kill.kill(svc, "kiss", apply=True)
     assert res.ok, res.summary
     assert _gone(p) and p.returncode == -signal.SIGKILL      # SIGTERM was ignored: SIGKILL ended it
     assert round(clock.t, 6) >= kill.GRACE_S      # only after the grace, on the clock
 
 
-def test_k3_a_kill_of_one_instance_never_touches_the_other_nor_the_daemon(tmp_path, clock, procs):
-    p433, p868, daemon = procs(), procs(), procs()
-    svc = _svc(tmp_path, {})
-    table = {p433.pid: _argv(svc, "loraham-kiss-tnc", "433"),
-             p868.pid: _argv(svc, "loraham-kiss-tnc", "868"),
-             daemon.pid: ["/x/loraham_daemon", "--radio", "433"]}
-    assert table[p433.pid] != table[p868.pid]
-    svc = _svc(tmp_path, table)
-    assert kill.kill(svc, "kiss@433", apply=True).ok
-    assert _gone(p433)
-    assert p868.poll() is None and daemon.poll() is None     # the other band and the daemon live
+def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, clock, procs):
+    # W298: a kill is per radio. `kiss@r3` is the listed copy alone; `kiss` is slot 0 alone.
+    p0, pk, daemon = procs(), procs(), procs()
+    svc = _copy_svc(tmp_path, {})
+    table = {p0.pid: _argv(svc, "loraham-kiss-tnc", svc._config_band("kiss", "")), pk.pid: _copy_argv(svc, "loraham-kiss-tnc"),
+             daemon.pid: ["/x/loraham_daemon", "--radio", "868", "--id", "r3"]}
+    assert table[p0.pid] != table[pk.pid]
+    svc = _copy_svc(tmp_path, table)
+    marker = svc._band_marker("kiss")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("433\n")                                # slot 0's running band
+    assert kill.kill(svc, "kiss@r3", apply=True).ok
+    assert _gone(pk)
+    assert p0.poll() is None and daemon.poll() is None       # slot 0 and the daemon live
+    assert marker.is_file() and svc._stop_intent_stacks() == {"kiss@r3"}   # the copy's own intent alone
+    assert kill.kill(svc, "kiss", apply=True).ok
+    assert _gone(p0) and daemon.poll() is None
+    assert not marker.exists() and svc._stop_intent_stacks() == {"kiss@r3", "kiss"}
 
 
-def test_the_daemon_goes_per_band_by_its_radio_parse(tmp_path, clock, procs):
-    d433, d868 = procs(), procs()
-    table = {d433.pid: ["/x/loraham_daemon", "--radio", "433"],
-             d868.pid: ["/x/loraham_daemon", "--radio=868"]}
-    svc = _svc(tmp_path, table)
+def test_the_daemon_goes_per_radio_by_its_id(tmp_path, clock, procs):
+    # W298: `daemon@<rid>` is that radio's daemon alone, by its exact `--id` (two daemons may serve one band).
+    d2, d3 = procs(), procs()
+    table = {d2.pid: ["/x/loraham_daemon", "--radio", "868", "--id", "r2"],
+             d3.pid: ["/x/loraham_daemon", "--radio=868", "--id=r3"]}
+    svc = _copy_svc(tmp_path, table)
     sid = svc.stack_of(svc.DAEMON_ID)
-    assert kill.kill(svc, f"{sid}@868", apply=True).ok
-    assert _gone(d868) and d433.poll() is None
+    stk = svc.stack(sid)                                      # r2's verified record (slot 0, like every daemon's)
+    svc._lifecycle().record_launch(stk, stk.component(svc.DAEMON_ID), d2.pid, band="868", extra={"rid": "r2", "slot": 0})
+    assert kill.kill(svc, f"{sid}@r3", apply=True).ok
+    assert _gone(d3) and d2.poll() is None
+
+
+def test_the_band_form_is_gone(tmp_path):
+    # W298, the maintainer's yes under W290: `<stack>@<band>` is no kill target any more.
+    plan = kill.kill(_copy_svc(tmp_path, {}), "kiss@433")
+    assert not plan.ok and plan.summary == (
+        "Cannot kill kiss@433: kiss@433 is not a listed instance (lhpc stack add-instance kiss 433).")
 
 
 def test_k4_a_user_started_chat_is_killed(tmp_path, clock, procs):
@@ -203,7 +237,7 @@ def test_k2_a_web_start_holding_the_flock_is_killed(tmp_path, clock, procs, monk
         seen.append(True)
         return real(svc_, targets)
     monkeypatch.setattr(kill, "_signal", during_sweep)
-    res = kill.kill(svc, "kiss@433", apply=True)
+    res = kill.kill(svc, "kiss", apply=True)
     assert res.ok, res.summary
     assert _gone(job) and job.returncode == -signal.SIGKILL and seen
     with reslock.operation_lock(svc._paths, ADMISSION, "start", "kiss"):
@@ -472,30 +506,42 @@ def test_an_unresolved_instance_value_with_a_candidate_running_is_not_an_empty_p
     def broken(*_a, **_k):
         raise ValueError("no such parameter")
     monkeypatch.setattr(commands, "instance_value", broken)
-    plan = kill.kill(svc, "chat@433")
+    plan = kill.kill(svc, "chat")
     assert not plan.ok and "loraham-chat" in "\n".join(plan.details)
 
 
-def test_an_exempt_component_under_another_band_is_refused_not_taken(tmp_path, procs):
-    # G2-B2 F4: voice's argv names no band, so under @868 a running voice process proves nothing about 868:
-    # without a verified 868 ownership record it is refused by name, not taken. Red-before at 63a8376c: the 433
-    # process was planned for voice@868.
+def test_an_exempt_component_of_a_copy_without_its_record_is_refused_not_taken(tmp_path, procs):
+    # G2-B2 F4, per copy (W298): kiss-serial's argv names no instance, so for kiss@r3 a running kiss-serial
+    # proves nothing about r3: without a verified ownership record of r3 it is refused by name, not taken.
     p = procs()
-    svc = _svc(tmp_path, {})
-    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-voice", "433")})
-    plan = kill.kill(svc, "voice@868")
+    svc = _copy_svc(tmp_path, {})
+    svc = _copy_svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-serial", "868")})
+    plan = kill.kill(svc, "kiss@r3", "loraham-kiss-serial")
     assert not plan.ok and p.pid not in plan.data["pids"] and "cannot verify band 868" in "\n".join(plan.details)
 
 
-def test_an_exempt_component_with_a_verified_record_of_the_band_is_taken(tmp_path, procs):
-    # G2-B2 F4, the positive side: a verified ownership record of the requested band names it.
+def test_an_exempt_component_with_a_verified_record_of_the_copy_is_taken(tmp_path, procs):
+    # G2-B2 F4, the positive side: a verified ownership record of the copy's radio names it.
     p = procs()
-    svc = _svc(tmp_path, {})
-    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-voice", "433")})
-    stk = svc.stack("voice")
-    svc._lifecycle().record_launch(stk, stk.component("loraham-voice"), p.pid, band="433")
-    plan = kill.kill(svc, "voice@433", "loraham-voice")
+    svc = _copy_svc(tmp_path, {})
+    svc = _copy_svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-serial", "868")})
+    stk = svc.stack("kiss")
+    svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-serial"), p.pid, band="868",
+                                   extra={"rid": "r3", "slot": 1})
+    plan = kill.kill(svc, "kiss@r3", "loraham-kiss-serial")
     assert plan.ok and plan.data["pids"] == [p.pid]
+
+
+def test_slot0s_kill_never_takes_a_copys_recorded_process(tmp_path, procs):
+    # W298: `kiss` is slot 0 alone; a listed copy's verified record (slot 1) is not slot 0's.
+    p = procs()
+    svc = _copy_svc(tmp_path, {})
+    svc = _copy_svc(tmp_path, {p.pid: _copy_argv(svc, "loraham-kiss-serial")})
+    stk = svc.stack("kiss")
+    svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-serial"), p.pid, band="868",
+                                   extra={"rid": "r3", "slot": 1})
+    plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
+    assert not plan.ok and p.pid not in plan.data["pids"] and "cannot verify slot 0" in "\n".join(plan.details)
 
 
 def test_the_band_by_record_set_is_the_exemptions_owned_by_their_record():
