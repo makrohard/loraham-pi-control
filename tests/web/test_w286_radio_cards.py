@@ -270,3 +270,14 @@ def test_the_hardware_list_shows_each_radios_daemon_badge_as_home_does(tmp_path,
         "r1": ("daemon offline", {"badge", "badge-stopped"}), "r2": ("daemon occupied (FAILED)", {"badge", "badge-degraded"})}
     home = parse(c.get("/").get_data(as_text=True))
     assert home.by_id("rd-badge-r2").text.strip() == badge["r2"].text.strip()             # the same rendering
+
+
+def test_a_band_card_without_a_radio_list_shows_its_daemons_badge(tmp_path, monkeypatch, web):
+    # G1-C34 (handler DEC): Home's band card (no hardware list, so no radio card) renders the same badge from the band's
+    # daemon view: a READY daemon is usable, a reachable one whose radio failed is occupied with that state.
+    monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
+    for state, label, cls in ((b"READY", "daemon usable (READY)", "badge-running"),
+                              (b"FAILED", "daemon occupied (FAILED)", "badge-degraded")):
+        fs = FakeSystem(unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=" + state + b" TX=0 TXMODE=MANAGED\n"})
+        badge = parse(web(system=fs.system).get("/").get_data(as_text=True)).by_id("rd-badge-433")
+        assert (badge.text.strip(), cls in badge.classes) == (label, True)
