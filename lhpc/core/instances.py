@@ -233,26 +233,45 @@ def remove_instance(svc, sid: str, rid: str):
 # ---- item 7c2: addressing an instance -------------------------------------------------------------------
 
 def resolve(svc, target: str):
-    """`<stack>@<rid>` → (stack id, its listed Instance, the radio's band, ""), or (stack id, None, "", why) when it
-    cannot be started: the stack has no listed instance on that radio, or the radio is unknown, disabled or on a
-    band the stack does not run on. A target without "@" → (target, None, "", "") — today's slot 0."""
+    """`<stack>@<rid>` → (stack id, its listed copy, the radio's band, ""), or (stack id, None, "", why) when it
+    cannot be started (see `copy_of`; a disabled radio's copy comes back WITH its why). A target without "@" →
+    (target, None, "", "") — today's slot 0."""
     if not isinstance(target, str) or "@" not in target:
         return target, None, "", ""
     sid, _, rid = target.partition("@")
+    if not rid:
+        return sid, None, "", f"{sid}@ is not a listed instance (lhpc stack add-instance {sid} <rid>)"
+    copy, why = copy_of(svc, sid, rid)
+    return sid, copy, copy.band if copy is not None else "", why
+
+
+def copy_of(svc, sid: str, rid: str = "", band: str = ""):
+    """THE stack copy (CLEANUP-DESIGN-v2 section 2) → (Instance, why); (None, why) when there is none.
+    A listed copy (`rid`): its band is its radio row's, and an explicit band that contradicts it is refused,
+    never substituted. A disabled radio's copy comes back WITH its why (still addressed: a stop, a removal's
+    running check; never started). Slot 0 (no `rid`): the operation band (explicit -> running -> fallback ->
+    primary) and, on it, DEC-W16's radio; its why is DEC-W16's refusal when every radio of the band is listed."""
     stack = svc.stack(sid)
     if stack is None:
-        return sid, None, "", f"unknown stack {sid!r}"
+        return None, f"unknown stack {sid!r}"
+    if not rid:
+        band = svc.operation_band(sid, band)
+        rid0, why = slot0_radio(svc._paths, sid, band) if band else ("", "")
+        return commands.Instance(0, rid0, sid=sid, band=band), why
     inst = next((i for i in commands.stack_instances(stack, svc._paths) if i.slot and i.rid == rid), None)
     if inst is None:
-        return sid, None, "", f"{sid}@{rid} is not a listed instance (lhpc stack add-instance {sid} {rid})"
+        return None, f"{sid}@{rid} is not a listed instance (lhpc stack add-instance {sid} {rid})"
     radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
     if radio is None:
-        return sid, None, "", f"{sid}@{rid}: {rid} is not in the hardware list"
+        return None, f"{sid}@{rid}: {rid} is not in the hardware list"
+    if band and band != radio.band:
+        return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
+    copy = commands.Instance(inst.slot, rid, inst.peer_slots, sid=sid, band=radio.band)
     if not radio.enabled:                     # G1-C7 B3: still addressed (a stop, a removal's running check), never started
-        return sid, inst, radio.band, f"{sid}@{rid}: {rid} is disabled"
+        return copy, f"{sid}@{rid}: {rid} is disabled"
     if radio.band not in stack_bands(stack):
-        return sid, None, "", f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
-    return sid, inst, radio.band, ""
+        return None, f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
+    return copy, ""
 
 
 def own_rid(inst) -> str:
