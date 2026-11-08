@@ -20,7 +20,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 @pytest.fixture
 def run(tmp_path, monkeypatch, capsys):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('chat = ["r3"]\n')
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # slot 0's
     real = ControllerService
     monkeypatch.setattr(cli, "ControllerService",

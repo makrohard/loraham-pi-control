@@ -11,7 +11,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 
 def _svc(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     copy = instances.copy_of(svc, "kiss", "r3")[0]
     opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), copy, "433")

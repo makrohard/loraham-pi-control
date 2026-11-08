@@ -19,7 +19,6 @@ JOB = "r4/rf-meshcore.log"
 
 def _seed(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     (tmp_path / "logs" / "r4").mkdir(parents=True)
     (tmp_path / "logs" / "r4" / "rf-meshcore.log").write_text(LINE + "\n")
 

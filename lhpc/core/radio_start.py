@@ -1094,7 +1094,6 @@ def running_copies(svc, band: str, live: dict) -> list:
 
     from . import commands, instances
     from .model import RunState
-    from .probes.endpoints import tcp_endpoint_match
     from .status import component_note
     on, out = {r.id for r in radios.load(svc._paths).radios if r.band == band}, []
     runs = {(sid, rid, comp) for sid, rid, comp, _pid in instances.copy_processes(svc, svc._system.procfs.cmdlines())}
@@ -1104,8 +1103,7 @@ def running_copies(svc, band: str, live: dict) -> list:
             cs = live.get(c.id)
             if cs is None or (stk.id, inst.rid, c.id) not in runs:
                 continue
-            eps = [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
-                   else o for o in cs.endpoints or () for e in instances.endpoints_for([o.spec], inst)]
+            eps = instances.endpoint_statuses(svc, cs, inst)
             st = RunState.DEGRADED if any(o.spec.kind == "tcp" and not o.present for o in eps) else RunState.RUNNING
             rows.append({"id": c.id, "name": c.name, "optional": c.optional, "state": st.value,
                          "note": component_note(dataclasses.replace(cs, run_state=st, endpoints=eps))})
@@ -1139,8 +1137,8 @@ def radio_endpoints(paths, specs) -> list:
 def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
     """(instance, refusal) for a component's start (W3, stage L5; item 7c2). A listed instance `inst` (slot k, its
     radio) is used as given. Otherwise a daemon client — a run param whose value template names `{rid}` — runs as
-    slot 0 on the first enabled radio of its band not listed for its stack (DEC-W16); with several radios there the
-    choice is named in `out` (instances.slot0_note), and when every radio of the band is listed it is refused. Any
+    slot 0 on the first enabled radio of its band (DEC-W16); with several radios there the choice is named in `out`
+    (instances.slot0_note). Any
     other component keeps the given instance (default slot 0, without a radio)."""
     from . import commands, instances
     if inst is not None and inst.slot:
@@ -1148,11 +1146,9 @@ def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
     if not any("{rid}" in str(getattr(p, "default", "") or "") for p in getattr(comp, "run_params", ())):
         return commands.SLOT0, ""
     sid = svc.stack_of(comp.id) or ""
-    rid, why = instances.slot0_radio(svc._paths, sid, band)
-    if why:
-        return None, f"no radio for its daemon sockets: {why}"
+    rid, _why = instances.slot0_radio(svc._paths, sid, band)
     if rid:
-        note = instances.slot0_note(svc._paths, sid, band, rid)
+        note = instances.slot0_note(svc._paths, svc.stack(sid), band, rid)
         if note and out is not None and f"  [radio] {note}" not in out:
             out.append(f"  [radio] {note}")
         return commands.Instance(0, rid), ""

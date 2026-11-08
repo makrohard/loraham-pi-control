@@ -24,7 +24,7 @@ def test_a_slot_k_instance_has_its_own_pages_proxied_to_its_own_ports(tmp_path, 
     pages = {p.page_id: p for p in _svc(tmp_path, monkeypatch).stack_web_pages("meshcore")}
     assert {pid: p.address for pid, p in pages.items()} == {
         "meshcore": "127.0.0.1:8788", "meshcore-meshcore-node": "127.0.0.1:8000",
-        "meshcore@r2": "127.0.0.1:8798", "meshcore-meshcore-node@r2": "127.0.0.1:8010"}
+        "meshcore@r2": "127.0.0.1:8921", "meshcore-meshcore-node@r2": "127.0.0.1:8133"}     # + 133 on r2 (DEC-W348)
     assert pages["meshcore@r2"].label == pages["meshcore"].label + " @r2"
 
 
@@ -50,7 +50,7 @@ def test_t_n5_every_instance_page_carries_its_slot0_deny_locations_and_answer(tm
         return [ln.strip() for ln in block.splitlines() if ln.strip().startswith("location ~ ")]
     assert deny_lines(block0) == deny_lines(blockk) and deny_lines(block0)
     assert f"return 200 '{ws.DENY_NOTICE_BODY}'" in deny_lines(blockk)[0]
-    assert "server 127.0.0.1:8010" in out and "server 127.0.0.1:8000" in out
+    assert "server 127.0.0.1:8133" in out and "server 127.0.0.1:8000" in out
 
 
 def test_t_n1_until_l5_the_pages_are_slot_0s(tmp_path, monkeypatch):

@@ -15,11 +15,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from . import commands
 from .probes.endpoints import parse_endpoint
 
 PORT_MIN, PORT_MAX = 1024, 65535
-# The listener bases of A §2.4: ten follow their instance's slot (base + 10 x slot, slots 0–7), four are fixed
-# (Reticulum is one node). T-P1 holds them disjoint over every slot.
+# The listener bases of A §2.4: ten follow their instance's radio (base + 133 x (n - 1), r1..r64, DEC-W348), four are
+# fixed (Reticulum is one node). T-P1 holds them disjoint over every radio and from the fixed and page ports.
 SLOTTED_BASES = (8001, 8080, 4403, 9443, 7000, 18083, 12323, 5000, 8000, 8788)
 FIXED_PORTS = (37428, 37429, 4242, 8790)
 
@@ -74,11 +75,15 @@ def param_conflicts(svc, changes) -> list[str]:
     overrides = {(ch.comp.id, ch.param.name): str(ch.value) for ch in changes if ch.kind == "r"}
     if not overrides:
         return []
-    stack = stack_listeners(svc, overrides)
-    every: dict[int, list[str]] = defaultdict(list)
-    for src in (stack, nginx_listeners(svc)):
+    # DEC-W348: a stack listener's port is the base of r1..r64's (base + 133 x k), so two of them meet on some radio
+    # when they differ by 133 x j (j < 64), and a fixed port (the console, a web page, Reticulum's) meets every one
+    # of a base's derived ports.
+    derived = {p: o for p, o in stack_listeners(svc, overrides).items() if p not in FIXED_PORTS}
+    fixed: dict[int, list[str]] = defaultdict(list)
+    for src in ({p: o for p, o in stack_listeners(svc, overrides).items() if p in FIXED_PORTS}, nginx_listeners(svc)):
         for port, owners in src.items():
-            every[port].extend(owners)
+            fixed[port].extend(owners)
+    step, n = commands.PORT_STEP, commands.PORT_RADIOS
     problems = []
     for cid, name in overrides:
         comp = next((c for st in svc.stacks() for c in st.components if c.id == cid), None)
@@ -89,7 +94,10 @@ def param_conflicts(svc, changes) -> list[str]:
                 continue
             if not PORT_MIN <= port <= PORT_MAX:
                 problems.append(f"{owner}: port {port} is outside {PORT_MIN}..{PORT_MAX}")
-            others = [o for o in every.get(port, []) if o != owner]
+            others = [o for q, owners in derived.items() if abs(port - q) % step == 0 and abs(port - q) < step * n
+                      for o in owners if o != owner]
+            others += [o for q, owners in fixed.items() if (q - port) % step == 0 and 0 <= q - port < step * n
+                       for o in owners if o != owner]
             if others:
                 problems.append(f"{owner}: port {port} is already {', '.join(others)}'s listener")
     return problems

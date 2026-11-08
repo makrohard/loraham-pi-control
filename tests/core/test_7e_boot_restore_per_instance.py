@@ -1,7 +1,7 @@
 """Item 7e (DESIGN-7E 8d3e823f, DEC-W49): boot restore per instance key, through the service's boot-restore run.
 
-Slot 0's key is `<stack>`; a listed instance's is `<stack>@<rid>`. A record's rid is a listed instance's when the
-stack lists it (the rule 7c2b's plain stop uses). A slot-0 item is kept only while slot 0's radio on its band
+Slot 0's key is `<stack>`; a copy's is `<stack>@<rid>`. A record's rid is a copy's when the hardware list gives the
+stack a copy there (instances.copy_rids, K4ac: a band's further radio; the rule 7c2b's plain stop uses). A slot-0 item is kept only while slot 0's radio on its band
 (DEC-W16) is still its rid; this replaces G2-0.14.0-1 item 3's "the band's enabled radios are exactly [rid]". A
 slot-k item is kept while its radio exists, is enabled and is on its band. A stop of `<stack>@<rid>` holds back
 that instance alone (L55)."""
@@ -44,19 +44,17 @@ def _record(tmp_path, *, rid, band, pid, at=1000, stack="kiss", comp=TNC, slot=_
     return rec
 
 
-def _box(tmp_path, rows, listed):
-    """The hardware list and the instance list on disk; the service over them."""
+def _box(tmp_path, rows):
+    """The hardware list on disk (it gives the copies); the service over it."""
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "radios.toml").write_text(radios.render(tuple(rows)))
     assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
-    if listed:
-        (tmp_path / "config" / "instances.toml").write_text(listed)
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def _service(tmp_path, monkeypatch, rows, listed, starts):
+def _service(tmp_path, monkeypatch, rows, starts):
     """A boot-restore-ready service whose stack starts are recorded as (target, band, (slot, rid) or None)."""
-    svc = _box(tmp_path, rows, listed)
+    svc = _box(tmp_path, rows)
     monkeypatch.setattr(sbr, "current_boot_id", lambda: "CURBOOT")
     monkeypatch.setattr(ControllerService, "_web_integration_proven", lambda self: (True, ""))
     monkeypatch.setattr(ControllerService, "boot_restore_enabled", lambda self: (True, ""))
@@ -81,11 +79,11 @@ def _skips(tmp_path):
     return [(s["stack"], s["reason"]) for s in _journal(tmp_path)["skipped"]]
 
 
-def test_slot0_and_a_listed_instance_on_another_band_are_both_restored(tmp_path, monkeypatch):
-    # kiss ran as slot 0 on r2 (868) and as kiss@r3 (433), each band with one radio. Slot 0's markers name 868;
+def test_slot0_and_a_copy_on_another_band_are_both_restored(tmp_path, monkeypatch):
+    # kiss ran as slot 0 on r2 (868's radio) and as kiss@r3 (433's second radio, a copy). Slot 0's markers name 868;
     # kiss@r3 writes none, so its band is its record's.
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     _record(tmp_path, rid="r2", band="868", pid=999901, at=1000)
     _record(tmp_path, rid="r3", band="433", pid=999902, at=1001)
     (tmp_path / "state" / "running").mkdir(parents=True)
@@ -97,10 +95,10 @@ def test_slot0_and_a_listed_instance_on_another_band_are_both_restored(tmp_path,
 
 
 def test_slot0_on_r1_and_kiss_at_r3_on_the_same_band_are_both_restored(tmp_path, monkeypatch):
-    # DEC-W49 (2): today's rule refuses both ("433 MHz has 2 enabled radios now"). Slot 0 starts on r1 (the band's
-    # first unlisted radio, DEC-W16), so its item is kept; kiss@r3 starts on r3.
+    # DEC-W49 (2): slot 0 starts on r1 (the band's first radio, DEC-W16), so its item is kept; kiss@r3 (the band's
+    # second radio, a copy) starts on r3.
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT433, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, USB433], starts)
     _record(tmp_path, rid="r1", band="433", pid=999911, at=1000)
     _record(tmp_path, rid="r3", band="433", pid=999912, at=1001)
     assert svc.boot_restore_run().ok
@@ -108,26 +106,15 @@ def test_slot0_on_r1_and_kiss_at_r3_on_the_same_band_are_both_restored(tmp_path,
     assert _skips(tmp_path) == []
 
 
-@pytest.mark.parametrize("rows, listed, why", [
-    # G2-0.14.0-1 item 3's own case: a second enabled radio with a lower rid joined the band, so slot 0 would now
-    # start on r1, not on the r3 it ran on.
-    ([HAT433, USB433], "", "slot 0 of kiss on 433 MHz starts on r1 now, not r3"),
-    ([USB433, HAT433], "", "slot 0 of kiss on 433 MHz starts on r1 now, not r3"),     # by rid, not by file order
-    # every radio of the band holds a listed instance: slot 0 has no radio there
-    ([HAT433, USB433], 'kiss = ["r1", "r3"]\n', "slot 0 of kiss has no radio on 433 MHz now"),
-])
-def test_a_slot0_item_whose_radio_is_no_longer_slot0s_is_refused(tmp_path, monkeypatch, rows, listed, why):
+@pytest.mark.parametrize("rows", [[HAT433, USB433], [USB433, HAT433]], ids=["rid-order", "file-order"])
+def test_a_record_without_a_slot_on_a_bands_second_radio_reads_as_its_copy(tmp_path, monkeypatch, rows):
+    # G2-0.14.0-1 item 3's case: a radio with a lower rid joined the band. r3 is the band's second radio (by rid, not
+    # by file order), so the hardware list gives kiss a copy there and the record reads as kiss@r3.
     starts = []
-    svc = _service(tmp_path, monkeypatch, rows, listed, starts)
-    rec = _record(tmp_path, rid="r3", band="433", pid=999921)
-    if listed:                       # r3 is listed now: its record reads as kiss@r3, which still resolves
-        assert svc.boot_restore_run().ok
-        assert starts == [("kiss", "433", (2, "r3"))]
-        return
-    svc.boot_restore_run()
-    assert starts == []
-    assert _skips(tmp_path) == [("kiss", why)]
-    assert _journal(tmp_path)["skipped"][0]["evidence_ids"] == [rec["launch_id"]]
+    svc = _service(tmp_path, monkeypatch, rows, starts)
+    _record(tmp_path, rid="r3", band="433", pid=999921)
+    assert svc.boot_restore_run().ok
+    assert starts == [("kiss", "433", (1, "r3"))] and _skips(tmp_path) == []
 
 
 @pytest.mark.parametrize("rows, why", [
@@ -137,12 +124,12 @@ def test_a_slot0_item_whose_radio_is_no_longer_slot0s_is_refused(tmp_path, monke
     ([HAT868, radios.Radio("r3", "ms", "meshstick-1262", "868", usb_serial="MS654321")],
      "radio r3 is on 868 MHz now, not 433 MHz"),
 ])
-def test_a_listed_instance_whose_radio_is_gone_or_disabled_is_refused_and_slot0_still_runs(tmp_path, monkeypatch,
-                                                                                         rows, why):
-    starts = []
-    svc = _service(tmp_path, monkeypatch, rows, 'kiss = ["r3"]\n', starts)
+def test_a_copy_whose_radio_is_gone_or_disabled_is_refused_and_slot0_still_runs(tmp_path, monkeypatch,
+                                                                               rows, why):
+    starts = []                       # kiss@r3 ran as a copy (its record's slot 1)
+    svc = _service(tmp_path, monkeypatch, rows, starts)
     _record(tmp_path, rid="r2", band="868", pid=999931, at=1000)
-    _record(tmp_path, rid="r3", band="433", pid=999932, at=1001)
+    _record(tmp_path, rid="r3", band="433", pid=999932, at=1001, slot=1)
     assert svc.boot_restore_run().ok
     assert starts == [("kiss", "868", None)]
     assert _skips(tmp_path) == [("kiss@r3", why)]
@@ -153,7 +140,7 @@ def test_stopping_an_instance_holds_back_that_instance_alone(tmp_path, monkeypat
     # restores slot 0 and not kiss@r3.
     from lhpc.core import instances
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     sid, inst, band, why = instances.resolve(svc, "kiss@r3")
     assert why == "" and svc.stop(sid, apply=True, band=band, inst=inst, _operator=True).ok
     _record(tmp_path, rid="r2", band="868", pid=999941, at=1000)
@@ -167,7 +154,7 @@ def test_starting_an_instance_ends_its_own_stop_intent_and_leaves_slot0s(tmp_pat
     # L55, the start side: the applied start of kiss@r3 removes kiss@r3's intent only; slot 0's stays. The start's
     # body is stubbed: only its wrapper's intent hook is under test (as in test_boot_restore.py's slot-0 test).
     from lhpc.core import instances
-    svc = _box(tmp_path, [HAT868, USB433], 'kiss = ["r3"]\n')
+    svc = _box(tmp_path, [HAT433, HAT868, USB433])
     intents = tmp_path / "state" / "stop-intent"
     sid, inst, band, _why = instances.resolve(svc, "kiss@r3")
     assert svc.stop("kiss", apply=True).ok and svc.stop(sid, apply=True, band=band, inst=inst).ok
@@ -177,38 +164,27 @@ def test_starting_an_instance_ends_its_own_stop_intent_and_leaves_slot0s(tmp_pat
     assert sorted(p.name for p in intents.iterdir()) == ["kiss.json"]
 
 
-def test_an_instance_list_that_does_not_read_back_refuses_the_items_of_stacks_with_instances(tmp_path, monkeypatch):
-    # Without the list a record's radio cannot be told slot 0's from an instance's: the item is refused, naming why.
-    starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"\n', starts)
-    _record(tmp_path, rid="r3", band="433", pid=999951)
-    svc.boot_restore_run()
-    assert starts == []
-    [(stack, why)] = _skips(tmp_path)
-    assert stack == "kiss" and why.partition(": ")[0] == "instances.toml does not read back"
-
-
 def test_an_instance_the_list_no_longer_resolves_at_its_start_fails_and_never_starts_slot0(tmp_path, monkeypatch):
     # The list changed between the plan and the item's start: the item fails with the reason; nothing starts in its
     # place as slot 0.
     from lhpc.core import instances
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     _record(tmp_path, rid="r2", band="868", pid=999961, at=1000)
     _record(tmp_path, rid="r3", band="433", pid=999962, at=1001)
     real = instances.resolve
-    monkeypatch.setattr(instances, "resolve", lambda svc, t: ("kiss", None, "", "kiss@r3 is not a listed instance")
+    monkeypatch.setattr(instances, "resolve", lambda svc, t: ("kiss", None, "", "kiss@r3 is not a copy of kiss")
                         if t == "kiss@r3" else real(svc, t))
     svc.boot_restore_run()
     assert starts == [("kiss", "868", None)]
     item = next(i for i in _journal(tmp_path)["items"] if i["target"] == "kiss@r3")
-    assert (item["state"], item["result"]["summary"]) == ("failed", "kiss@r3 is not a listed instance")
+    assert (item["state"], item["result"]["summary"]) == ("failed", "kiss@r3 is not a copy of kiss")
 
 
 def test_an_instances_own_part_is_restored_on_the_instance(tmp_path, monkeypatch):
     # meshcore@r4's web UI, started on its own, comes back after its node, on the same instance.
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, STICK868], 'meshcore = ["r4"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT868, STICK868], starts)
     _record(tmp_path, rid="r4", band="868", pid=999971, stack="meshcore", comp="meshcore-node")
     rec = _record(tmp_path, rid="r4", band="868", pid=999972, stack="meshcore", comp="meshcore-webui")
     rec.update(start_scope="component", requested_target="meshcore-webui")
@@ -217,22 +193,22 @@ def test_an_instances_own_part_is_restored_on_the_instance(tmp_path, monkeypatch
     assert starts == [("meshcore", "868", (1, "r4")), ("meshcore-webui", "868", (1, "r4"))]
 
 
-def test_a_removed_instances_record_is_refused_and_never_starts_slot0_on_its_radio(tmp_path, monkeypatch):
-    # kiss@r3 ran (slot 1); it was removed from the list before the restore. r3 is now 433's only radio, so read by
-    # the list its record would start slot 0 there, which never ran. The record's slot names the instance instead.
+def test_a_copys_record_on_a_radio_that_is_no_copy_now_is_refused_and_never_starts_slot0(tmp_path, monkeypatch):
+    # kiss@r3 ran (slot 1) beside r1; r1 left the list before the restore. r3 is now 433's only radio, so read by the
+    # list its record would start slot 0 there, which never ran. The record's slot names the copy instead.
     starts = []
-    svc = _service(tmp_path, monkeypatch, [USB433], 'kiss = [""]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [USB433], starts)
     _record(tmp_path, rid="r3", band="433", pid=999981, slot=1)
     svc.boot_restore_run()
     assert starts == []
     [item] = _journal(tmp_path)["items"]
     assert (item["target"], item["state"]) == ("kiss@r3", "failed")
-    assert item["result"]["summary"] == "kiss@r3 is not a listed instance (lhpc stack add-instance kiss r3)"
+    assert item["result"]["summary"] == "kiss@r3 is not a copy of kiss: the hardware list gives it none on r3"
 
 
-def test_a_slot0_record_on_a_radio_listed_since_is_slot0s_and_refused(tmp_path, monkeypatch):
-    starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT433, USB433], 'kiss = ["r3"]\n', starts)
+def test_a_slot0_record_on_a_radio_that_is_a_copys_now_is_slot0s_and_refused(tmp_path, monkeypatch):
+    starts = []                       # r1 joined the band: r3 is its second radio, a copy's
+    svc = _service(tmp_path, monkeypatch, [HAT433, USB433], starts)
     _record(tmp_path, rid="r3", band="433", pid=999982, slot=0)
     svc.boot_restore_run()
     assert starts == []
@@ -240,10 +216,10 @@ def test_a_slot0_record_on_a_radio_listed_since_is_slot0s_and_refused(tmp_path, 
 
 
 @pytest.mark.parametrize("slot", [_NO_SLOT, True, False, "1", 1.0, -1, 8, None, [1]])
-def test_a_record_without_a_valid_slot_reads_by_the_instance_list(tmp_path, monkeypatch, slot):
-    # A record from before 7e, or one whose slot is not a plain int 0..7: the list decides, as before.
+def test_a_record_without_a_valid_slot_reads_by_the_hardware_list(tmp_path, monkeypatch, slot):
+    # A record from before 7e, or one whose slot is not a plain int 0..7: the hardware list's copies decide.
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     _record(tmp_path, rid="r3", band="433", pid=999983, slot=slot)
     assert svc.boot_restore_run().ok
     assert starts == [("kiss", "433", (1, "r3"))]
@@ -275,7 +251,7 @@ def test_an_instance_whose_radio_moved_band_after_the_plan_is_not_started_there(
     # the reason, and nothing starts on 868; the operator starts it by hand.
     from lhpc.core import instances
     starts = []
-    svc = _service(tmp_path, monkeypatch, [HAT868, USB433], 'kiss = ["r3"]\n', starts)
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     _record(tmp_path, rid="r3", band="433", pid=999991, slot=1)
     real = instances.resolve
 

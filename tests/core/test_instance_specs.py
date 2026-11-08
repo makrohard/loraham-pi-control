@@ -90,11 +90,11 @@ SLOT_FOLLOWING = {"graywolf", "meshtastic-gps", "meshtastic", "meshcom-bridge", 
                   "meshcore-gps", "meshcore-node", "meshcore-webui", "meshcore-cli"}
 RID_AT_L5 = {"loraham-chat", "loraham-kiss-tnc"}
 L8_MC = {"meshcom-gps-relay"}
-# One stack has at most one instance per radio (I1), so its instances are on distinct radios: slots 1–7 on
-# seven radios whose ids prefix each other (r1/r12, r2/r21, r9/r99), and slot 0 (today's names, any radio).
-# Slot 0 is on its own radio r4 (stage L5: a daemon client's slot 0 names its radio; other components ignore it).
-INSTANCES = [commands.Instance(k, rid) for k, rid in zip(range(1, 8), ("r1", "r12", "r2", "r21", "r9", "r99", "r3"))] \
-    + [commands.Instance(0, "r4")]
+# One stack has at most one instance per radio (I1), so its instances are on distinct radios: seven copies (K4ac:
+# never on r1, its band's first radio; ports end at r64, DEC-W348) on radios whose ids prefix each other (r1/r12,
+# r2/r21, r6/r64), and slot 0 on r1 (today's names; stage L5: a daemon client's slot 0 names its radio).
+INSTANCES = [commands.Instance(1, rid) for rid in ("r12", "r2", "r21", "r6", "r64", "r3", "r7")] \
+    + [commands.Instance(0, "r1")]
 
 
 def _slot_argv(comp, inst):
@@ -130,8 +130,8 @@ def test_the_kiss_pty_link_follows_the_instance():
     # and not the TNC (whose config file name also starts with loraham_kiss).
     comp = next(c for c in SPECS if c.id == "loraham-kiss-serial")
     links = {(i.slot, i.rid): next(t for t in _slot_argv(comp, i) if t.startswith("PTY,link=")) for i in INSTANCES}
-    assert links[(0, "r4")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
-    assert links[(3, "r2")] == f"PTY,link={RT}/state/r2/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert links[(0, "r1")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert links[(1, "r2")] == f"PTY,link={RT}/state/r2/loraham_kiss,raw,echo=0,waitslave,mode=666"
     assert len(set(links.values())) == len(INSTANCES)
     tnc = next(c for c in SPECS if c.id == "loraham-kiss-tnc")
     for inst in INSTANCES:

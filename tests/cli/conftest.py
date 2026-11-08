@@ -32,12 +32,10 @@ def no_venv_sync(monkeypatch):
 @pytest.fixture
 def box(tmp_path, monkeypatch, capsys):
     """The stack-instance tests' box (item 7), a FakeSystem service over a temporary runtime root:
-    box(rows, listed, procs, ports) -> run(*argv) -> (rc, out, launches)."""
-    def make(rows, listed, procs=None, ports=()):
+    box(rows, procs, ports) -> run(*argv) -> (rc, out, launches). The hardware list `rows` gives the copies (K4ac)."""
+    def make(rows, procs=None, ports=()):
         radios_fixture.write(tmp_path, rows)
         assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
-        if listed:
-            (tmp_path / "config" / "instances.toml").write_text(listed)
         for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
                             ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
                             ("_source_present", lambda self, c: True), ("_verify_band_up", lambda self, b: True)):

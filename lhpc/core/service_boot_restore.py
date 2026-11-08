@@ -348,7 +348,7 @@ class BootRestoreOpsMixin:
             if not ok:
                 return ActionResult(False, f"Boot restore blocked: {why}.")
 
-        listed, unlisted_why = boot_restore.listed_instances(self._paths)               # 7e: instance keys
+        listed = boot_restore.listed_instances(self)                                   # 7e: instance keys
         evidence, skipped, issues, dir_state = self._classify_boot_evidence(cur_boot, listed)
         if dir_state == "unsafe":
             return ActionResult(False, "Boot restore blocked: state/owned/ is unsafe "
@@ -367,7 +367,7 @@ class BootRestoreOpsMixin:
                    {e.stack for e in evidence}}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID, listed)
         plan.skipped.extend(skipped)
-        boot_restore.radio_filter(plan, radios.load(self._paths).radios, listed, unlisted_why)   # D14/D15, 7e
+        boot_restore.radio_filter(plan, radios.load(self._paths).radios, listed)   # D14/D15, 7e
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),

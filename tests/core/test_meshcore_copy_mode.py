@@ -14,7 +14,6 @@ ROWS = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4
 
 def _svc(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     paths = Paths(runtime_root=tmp_path)
     cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "RptR4"}, inst=Instance(1, "r4"))
     svc = ControllerService(system=FakeSystem().system, paths=paths)

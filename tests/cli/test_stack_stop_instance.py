@@ -2,10 +2,10 @@
 
 A stop is record-driven (Lifecycle.stop): an instance's stop takes only the records of its radio (rid), judges a
 leftover process by the instance's own token and verifies cessation on the instance's own endpoints; slot 0's stop,
-once the stack has listed instances, leaves those instances' records alone. The service level records what each
+once the stack has copies (the hardware list's, K4ac), leaves those copies' records alone. The service level records what each
 component's Lifecycle.stop is asked; the Lifecycle level runs the real filter on given records."""
 import pytest
-from radios_fixture import R1, R3, kiss_on as _kiss_on
+from radios_fixture import R1, R2_868, R3, kiss_on as _kiss_on
 
 from lhpc.adapters.cli import main as cli
 from lhpc.core import commands
@@ -13,9 +13,6 @@ from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.outcomes import CompResult, Outcome
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
-
-KISS = 'kiss = ["r3"]\n'
-
 
 @pytest.fixture
 def stops(monkeypatch):
@@ -34,15 +31,15 @@ def _tnc(calls):
 
 
 def test_an_instance_stop_takes_its_radios_records_its_token_and_its_endpoints(box, stops):
-    rc, out, _ = box((R1, R3), KISS)("stop", "kiss@r3")
+    rc, out, _ = box((R1, R2_868, R3))("stop", "kiss@r3")
     assert rc == 0, out
     (kw,) = _tnc(stops)
     assert (kw["rid"], kw["token"]) == ("r3", ("--data-socket", "/tmp/loraf-r3.sock"))
-    assert [e.address for e in kw["endpoints"]] == ["127.0.0.1:8011"]
+    assert [e.address for e in kw["endpoints"]] == ["127.0.0.1:8267"]          # DEC-W348: 8001 + 133 x 2
 
 
-def test_slot_0s_stop_leaves_the_listed_instances_alone(box, stops):
-    run = box((R1, R3), KISS, procs={4100: _kiss_on("r1")})
+def test_slot_0s_stop_leaves_the_copies_alone(box, stops):
+    run = box((R1, R2_868, R3), procs={4100: _kiss_on("r1")})
     svc = cli.ControllerService()
     assert svc._set_running_band("kiss", "433")
     rc, out, _ = run("stop", "kiss@r1")                          # K3: slot 0 named on its radio
@@ -50,30 +47,23 @@ def test_slot_0s_stop_leaves_the_listed_instances_alone(box, stops):
     assert (kw["exclude_rids"], kw["token"]) == (("r3",), ("--data-socket", "/tmp/loraf-r1.sock"))
 
 
-def test_without_listed_instances_the_stop_is_as_before(box, stops):
-    box((R1, R3), None)("stop", "kiss@r1")
+def test_without_copies_the_stop_is_as_before(box, stops):
+    box((R1, R3))("stop", "kiss@r1")
     assert _tnc(stops) == [{}]
 
 
 def test_an_instance_restart_stops_and_starts_that_instance(box, stops):
-    rc, out, launches = box((R1, R3), KISS, ports=(8011,))("restart", "kiss@r3")
+    rc, out, launches = box((R1, R2_868, R3), ports=(8267,))("restart", "kiss@r3")
     assert [kw["rid"] for kw in _tnc(stops)] == ["r3"], (stops, out)
     assert ("loraham-kiss-tnc", "868", 1, "r3") in launches, (launches, out)
 
 
 def test_an_instance_stop_leaves_slot_0s_band_marker(box, stops, tmp_path):
-    run = box((R1, R3), KISS)
+    run = box((R1, R2_868, R3))
     svc = cli.ControllerService()
     assert svc._set_running_band("kiss", "433")
     assert run("stop", "kiss@r3")[0] == 0
     assert cli.ControllerService().running_band("kiss", "") == "433"
-
-
-def test_a_running_instance_is_not_removed(box, capsys):
-    box((R1, R3), KISS, procs={4100: _kiss_on("r3")})
-    rc = cli.main(["stack", "remove-instance", "kiss", "r3"])
-    assert rc == 1 and "Cannot remove kiss@r3: it is running — stop it first" in capsys.readouterr().out
-    assert (cli.ControllerService()._paths.runtime_root / "config" / "instances.toml").read_text().count('"r3"') == 1
 
 
 # ---- Lifecycle.stop's own filter -------------------------------------------------------------------------

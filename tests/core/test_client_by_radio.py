@@ -6,7 +6,6 @@ import radios_fixture
 from lhpc.core import commands, radio_start, radios
 from lhpc.core.config import Config
 from lhpc.core.lifecycle import Lifecycle
-from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -34,7 +33,7 @@ CASES = [
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "433", "r1", ""),
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "868", "r2", ""),
     (radios_fixture.RADIOS, "meshcom-bridge", "", None, "2 radios can run it for this stack: r1 (low), r2 (high); name one"),
-    (TWO_433, "meshcom-bridge", "433", "r1", ""),       # DEC-W16: slot 0 runs on the band's first unlisted radio
+    (TWO_433, "meshcom-bridge", "433", "r1", ""),       # DEC-W16: slot 0 runs on the band's first enabled radio
     (TWO_433, "loraham-kiss-tnc", "868", None, "no enabled radio on 868 MHz"),
     pytest.param(NO_LIST, "graywolf", "433", "", "", marks=_ABSENT),   # not a daemon client: slot 0 without a radio, any list
     (TWO_433, "graywolf", "", "", ""),
@@ -73,18 +72,14 @@ def test_an_unresolved_radio_template_never_renders(tmp_path):
     assert "/tmp/loraf-r7.sock" in argv and not any("{rid}" in a for a in argv)
 
 
-@pytest.mark.parametrize("rows,band,listed,why", [
+@pytest.mark.parametrize("rows,band", [
     # S2: no list or an empty one serves no band, so the stack's own preflight refuses before any component.
-    pytest.param(NO_LIST, "433", None, NO_BAND, marks=_ABSENT),
-    ((), "433", None, NO_BAND),
-    # DEC-W16: two radios no longer refuse slot 0 (it runs on r1); with both listed it has no radio left.
-    (TWO_433, "433", 'kiss = ["r1", "r2"]\n', "every enabled radio of 433 MHz holds a listed instance of kiss (r1, r2): "
-                                              "start one of them as kiss@<rid>")])
-def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path, monkeypatch, rows, band, listed, why):
-    # Through the public start: the TNC's refusal is BLOCKED with the reason; nothing is launched.
+    # (DEC-W16: two radios never refuse slot 0, it runs on r1; K4ac: the band's further radios are its copies.)
+    pytest.param(NO_LIST, "433", marks=_ABSENT),
+    ((), "433")])
+def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path, monkeypatch, rows, band):
+    # Through the public start: the stack's refusal names the missing band; nothing is launched.
     svc = _svc(tmp_path, rows)
-    if listed:
-        (tmp_path / "config" / "instances.toml").write_text(listed)
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
@@ -94,11 +89,7 @@ def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path,
     launched = []
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append(c.id))
     res = svc.start("kiss", apply=True, band=band)
-    if why == NO_BAND:
-        assert res.summary == why and res.results == ()
-    else:
-        tnc = next(r for r in res.results if r.component == "loraham-kiss-tnc")
-        assert (tnc.outcome, tnc.summary) == (Outcome.BLOCKED, REFUSED + why)
+    assert res.summary == NO_BAND and res.results == ()
     assert "loraham-kiss-tnc" not in launched and not res.ok
 
 

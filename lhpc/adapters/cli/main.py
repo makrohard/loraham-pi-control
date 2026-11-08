@@ -681,12 +681,6 @@ def build_parser() -> argparse.ArgumentParser:
         if action in ("start", "stop", "restart"):          # 13.8: `--radio RID` stays for scripts: daemon@RID
             sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio: daemon@RID")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
-    # Item 7c (DEC-W15): an instance of a stack beyond its own, on another radio: `<stack>@<rid>`.
-    for action, ahelp in (("add-instance", "List <stack>@<rid>, an instance on another radio (next free slot)"),
-                          ("remove-instance", "Remove <stack>@<rid>; its slot stays reserved, no port moves")):
-        sp = stack_sub.add_parser(action, help=ahelp)
-        sp.add_argument("stack", help="Stack id (kiss, meshcore or chat)")
-        sp.add_argument("rid", help="Radio id of the hardware list (r1..r99)")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
     p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
@@ -1441,10 +1435,6 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if args.stack_action in ("add-instance", "remove-instance"):
-            from lhpc.core import instances
-            fn = instances.add_instance if args.stack_action == "add-instance" else instances.remove_instance
-            return _render(fn(svc, args.stack, args.rid))
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
@@ -1458,7 +1448,7 @@ def _run(argv: list[str] | None = None) -> int:
             # W323/W326: `<stack>@<rid>`, one parser for every operator entry (instances.parse_target).
             sid, inst, iband, why = instances.parse_target(svc, args.stack, args.stack_action)
             if inst is not None and inst.slot and args.stack_action == "poststart":
-                why = f"lhpc stack poststart {args.stack}: not for a listed instance in this build"
+                why = f"lhpc stack poststart {args.stack}: not for a copy in this build"
             if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1
@@ -1481,7 +1471,7 @@ def _run(argv: list[str] | None = None) -> int:
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
         print("usage: lhpc stack <action> <stack> [--yes]\n"
-              "lhpc stack: an action is required (start|stop|restart|poststart|add-instance|remove-instance)",
+              "lhpc stack: an action is required (start|stop|restart|poststart)",
               file=sys.stderr)
         return 2
     if args.command == "kill":

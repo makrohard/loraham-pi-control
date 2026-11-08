@@ -9,7 +9,7 @@ READY = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=M
 def test_an_instances_start_plan_names_its_own_radios_sockets(box, monkeypatch, capsys):
     from lhpc.adapters.cli import main as cli
     monkeypatch.setattr(radios_fixture, "INSTANCE_READY", READY)
-    box((R1, R2), 'chat = ["r2"]\n', ports=())
+    box((R1, R2), ports=())
     assert cli.main(["config", "operator", "--callsign", "DL9OP"]) == 0
     capsys.readouterr()
     cli.main(["stack", "start", "chat@r2"])                                  # the plan: no --yes

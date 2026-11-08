@@ -55,7 +55,7 @@ class SecretsOpsMixin:
     def _secrets_state_roots(self) -> list:
         """Every declared `state_root`, and each listed instance's (7d): the set `clean --purge` collects, all stacks."""
         from .instances import instance_rels
-        return sorted({r for s in self.stacks() for r in instance_rels(self._paths, s.id, [c.state_root for c in s.components if c.state_root], 1)})
+        return sorted({r for s in self.stacks() for r in instance_rels(self._paths, s, [c.state_root for c in s.components if c.state_root], 1)})
 
     def _secrets_running(self) -> list:
         """The stacks with a state root that are running (they write their state and secrets)."""

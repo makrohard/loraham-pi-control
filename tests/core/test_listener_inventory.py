@@ -27,11 +27,12 @@ def _manifest_bases():
     return slotted, fixed
 
 
-def test_t_p1_the_slotted_bases_are_disjoint_over_slots_0_to_7_and_from_the_fixed_ports():
+def test_t_p1_the_radio_bases_are_disjoint_over_r1_to_r64_and_from_the_fixed_and_page_ports():
+    # DEC-W348 (PORTS-LIMIT-OPTIONS-v3): base + 133 x (n - 1) for r1..r64, the top port 26462.
     slotted, fixed = _manifest_bases()
-    ports = [b + commands.PORT_STEP * k for b in slotted for k in commands.SLOTS]
-    assert len(set(ports)) == len(ports) == 10 * 8
-    assert not set(ports) & fixed
+    ports = [b + commands.PORT_STEP * k for b in slotted for k in range(commands.PORT_RADIOS)]
+    assert len(set(ports)) == len(ports) == 10 * 64 and max(ports) == 26462
+    assert not set(ports) & (fixed | set(range(8444, 8449)))
 
 
 def test_t_p1_the_bases_are_the_manifests():
@@ -46,6 +47,20 @@ def test_t_p3_a_stack_port_param_meeting_another_stacks_listener_is_refused(tmp_
     svc = _svc(tmp_path)
     r = svc.save_config("kiss", {"kiss_port": "8080"})          # graywolf's web UI
     assert not r.ok and any("port 8080 is already graywolf/graywolf's listener" in d for d in r.details), r.details
+
+
+def test_t_p3_a_port_one_radio_step_from_another_stacks_listener_is_refused(tmp_path):
+    # DEC-W348: kiss on 8213 is kiss@r2's 8346 and graywolf's 8080 is graywolf@r2's 8213: the two meet on some radio.
+    r = _svc(tmp_path).save_config("kiss", {"kiss_port": "8213"})               # 8080 + 133
+    assert not r.ok and any("port 8213 is already graywolf/graywolf's listener" in d for d in r.details), r.details
+
+
+def test_t_p3_a_port_whose_radio_step_reaches_a_fixed_port_is_refused(tmp_path):
+    # A fixed port (meshchat's 8790, one node) meets a derived one when base + 133 x k reaches it: kiss@r2 would be 8790.
+    from lhpc.core import listeners
+    assert 8790 in listeners.FIXED_PORTS
+    r = _svc(tmp_path).save_config("kiss", {"kiss_port": "8657"})               # 8790 - 133
+    assert not r.ok and r.details == ["kiss/loraham-kiss-tnc: port 8657 is already reticulum/meshchat's listener"], r.details
 
 
 def test_t_p3_a_stack_port_param_outside_the_range_is_refused(tmp_path):

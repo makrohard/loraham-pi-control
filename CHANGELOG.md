@@ -20,8 +20,8 @@
   identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
 - Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
   guide for a 433 MHz CH341A + RFM98PW stick.
-- Stack instances: kiss, meshcore and chat can also run on other radios as `<stack>@<rid>` (up to 7 per stack, ports
-  +10 per slot): `lhpc stack add-instance|remove-instance`; `start|stop|restart <stack>@<rid>` act on that one alone.
+- Stack instances: kiss, meshcore and chat run as `<stack>@<rid>` on each radio of their bands in the hardware list;
+  `start|stop|restart <stack>@<rid>` act on that one alone; ports base + 133 × (n − 1), r1 keeps today's ports, up to r64.
 - Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
   back that instance alone, and a removed instance's record starts nothing.
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved

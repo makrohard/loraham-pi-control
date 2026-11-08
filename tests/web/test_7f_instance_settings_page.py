@@ -1,8 +1,8 @@
 """Item 7f, DEC-W40 and DEC-W60 on the console: a stack's Settings chooser has one entry per radio of its bands
 ("rN · band"); a listed instance opens its own settings (`radio=rN`), says it starts from the defaults, and its
-Save and Reset write and clear config/stacks/<stack>@<rid>.toml alone; slot 0's radio keeps `band=`. A radio of
-a fixed-band stack without an instance is greyed with "add instance". Through the console's routes; the saved
-files are read back."""
+Save and Reset write and clear config/stacks/<stack>@<rid>.toml alone; slot 0's radio keeps `band=`. A
+fixed-band stack's second radio is its copy (K4ac: the hardware list's; no "add instance" entry, DEC-W344). Through
+the console's routes; the saved files are read back."""
 import tomllib
 
 import pytest
@@ -19,7 +19,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 @pytest.fixture
 def box(web, tmp_path, csrf):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('chat = ["r3"]\n')
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # slot 0's
     c = web()
     token = csrf(c, "/stacks?cfg=chat")
@@ -80,13 +79,16 @@ def test_a_form_naming_a_radio_without_an_instance_is_refused_and_writes_nothing
     assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before
 
 
-def test_a_fixed_band_stacks_radio_without_an_instance_is_greyed_with_add_instance(web, tmp_path):
+def test_a_fixed_band_stacks_second_radio_is_its_copy_with_no_add_instance_entry(web, tmp_path):
+    # K4ac (DEC-W344): the hardware list gives the copies; r4, 868's second radio, is meshcore@r4's own config, and
+    # the greyed "add instance" entry is gone with the registry.
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
     page = web().get("/stacks?cfg=meshcore").get_data(as_text=True)
     s = page[page.index('id="stack-settings-meshcore"'):]
-    assert ('<span class="disabled" title="no meshcore instance on r4: add one to use it">r4 · 868 · add instance</span>'
-            in s[:s.index("</details>")])
+    s = s[:s.index("</details>")]
+    assert 'href="/stacks?radio=r4&amp;cfg=meshcore#stack-settings-meshcore">r4 · 868</a>' in s
+    assert "add instance" not in s and "add one to use it" not in s
 
 
 def test_an_instances_page_shows_its_own_value_of_every_field(box):
@@ -100,7 +102,6 @@ def test_a_band_switchable_instances_save_keeps_slot0s_files_and_takes_no_auto_s
     # kiss runs on 433 and 868: its slot 0 keeps rf_log and auto-start in its band-less file; the instance's save
     # writes its own file alone, and its page offers no auto-start or remotes (those are slot 0's)
     radios_fixture.write(tmp_path, (*ROWS, radios.Radio("r2", "c", "meshstick-1262", "868", usb_serial="MSTICK01")))
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     c = web()
     token = csrf(c, "/stacks?cfg=kiss")
     page = _section(c.get("/stacks?cfg=kiss&radio=r3").get_data(as_text=True), "kiss")

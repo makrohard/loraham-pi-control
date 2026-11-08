@@ -17,7 +17,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 def _marked(tmp_path):
     """kiss@r3 runs and its saved restart-mode change marked it (the core's real write path); slot 0 is unmarked."""
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     copy = instances.copy_of(svc, "kiss", "r3")[0]
     opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), copy, "433")
@@ -95,7 +94,7 @@ def test_an_unlisted_copy_target_is_refused_and_nothing_runs(tmp_path, web, monk
     spawns = _spy_spawns(monkeypatch)
     r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r1", "from": "dash"},
                follow_redirects=True)
-    assert spawns == [] and "Cannot restart kiss@r1: kiss@r1 is not a listed instance" in r.get_data(as_text=True)
+    assert spawns == [] and "Cannot restart kiss@r1: kiss@r1 is not a copy of kiss: the hardware list gives it none on r1" in r.get_data(as_text=True)
 
 
 
@@ -118,7 +117,6 @@ def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monke
     from lhpc.core import jobresult, jobs, procident
     from lhpc.core.services import ActionResult
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setenv("LHPC_WEBJOB_GATE_TIMEOUT_S", "0.3")
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))

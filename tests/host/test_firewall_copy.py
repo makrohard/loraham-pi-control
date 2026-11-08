@@ -15,7 +15,6 @@ ROW = "loraham-kiss-tnc-r3.tcp-8001"
 
 def _svc(tmp_path, own):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     cfgmod.update_stack_config(svc._paths, "kiss", own, inst=Instance(1, "r3"))              # kiss@r3's own file only
     return svc
@@ -28,7 +27,7 @@ def _rows(svc):
 def test_a_copy_exposing_its_own_port_gets_its_own_firewall_row(tmp_path):
     rows = _rows(_svc(tmp_path, {"kiss_host": "0.0.0.0", "kiss_port": "8050"}))
     assert set(rows) == {ROW}                                                  # slot 0 stays on loopback: no row
-    assert (rows[ROW]["addr"], rows[ROW]["port"]) == ("*", 8060)               # its own port, + 10 for slot 1
+    assert (rows[ROW]["addr"], rows[ROW]["port"]) == ("*", 8316)               # its own port, + 133 x 2 on r3
 
 
 def test_the_model_carries_the_copys_own_allow_list(tmp_path):

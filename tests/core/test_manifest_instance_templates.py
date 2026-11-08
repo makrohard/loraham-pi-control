@@ -50,23 +50,22 @@ def test_every_listener_that_follows_its_slot_loads_as_todays_value():
         assert commands.SLOT0.subst(template) == slot0 and "{" not in slot0
 
 
-def test_the_templates_render_every_slot():
-    # slot 3 on r2, with kiss at slot 1 there: own ports +30, graywolf's kiss port +10
-    inst = commands.Instance(3, "r2", {"kiss": 1})
+def test_the_templates_render_every_radio():
+    # K4ac (DEC-W348): a copy on r3 serves every templated port at base + 133 x 2, graywolf's kiss port the same
+    inst = commands.Instance(1, "r3")
     rendered = {k: inst.subst(t) for k, t in _templated().items()}
-    assert rendered[("loraham-kiss-tnc", "address", "127.0.0.1:8001")] == "127.0.0.1:8031"
-    assert rendered[("graywolf", "param", "8001")] == "8011"
-    assert rendered[("graywolf", "key", "tcp.port.8001")] == "tcp.port.8011"
+    assert rendered[("loraham-kiss-tnc", "address", "127.0.0.1:8001")] == "127.0.0.1:8267"
+    assert rendered[("graywolf", "param", "8001")] == "8267"
+    assert rendered[("graywolf", "key", "tcp.port.8001")] == "tcp.port.8267"
     for (cid, _field, slot0), value in rendered.items():
-        if cid != "graywolf" or "8001" not in slot0:
-            base = int(re.search(r"(\d+)$", slot0).group(1))
-            assert value.endswith(str(base + 30)), (cid, slot0, value)
+        base = int(re.search(r"(\d+)$", slot0).group(1))
+        assert value.endswith(str(base + 266)), (cid, slot0, value)
 
 
 def test_the_run_argv_carries_the_listener_tokens_whole():
     webui = next(c for st in load_manifest() for c in st.components if c.id == "meshcore-webui")
     assert webui.process.instance_arg == ("--port", "{port:8788}")
-    assert commands.instance_value("{port:8788}", webui, {}, "/rt", "/src", inst=commands.Instance(2, "r1")) == "8808"
+    assert commands.instance_value("{port:8788}", webui, {}, "/rt", "/src", inst=commands.Instance(1, "r2")) == "8921"
 
 
 def test_a_manifest_without_tokens_keeps_no_template(tmp_path):

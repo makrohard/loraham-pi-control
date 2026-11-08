@@ -15,6 +15,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
+import radios_fixture
 
 from lhpc.core import config, reslock, selfupdate
 from lhpc.core import secrets_backup as sb
@@ -972,7 +973,7 @@ def test_backup_holds_a_listed_instances_state_and_secrets(tmp_path):
     # config/secrets/r3/), so a restore brings back that node too.
     a = _root(tmp_path, "a")
     svc = _seed(a, pki=False)
-    (a / "config" / "instances.toml").write_text('meshcore = ["r3"]\n')
+    radios_fixture.write(a, (radios_fixture.R2_868, radios_fixture.R3))  # K4ac: meshcore@r3 (868 radio 2)
     (a / "state/r3/meshcore").mkdir(parents=True)
     (a / "state/r3/meshcore/companion.db").write_bytes(b"c")
     (a / "config/secrets/r3").mkdir()

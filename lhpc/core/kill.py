@@ -58,7 +58,7 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     table = svc._system.procfs.cmdlines()
     found: dict[int, dict] = {}
     unresolved: list[str] = []
-    others = [f"{svc._paths.runtime_root}/state/{r}/" for r in instances.listed_rids(svc._paths, stk.id)]
+    others = [f"{svc._paths.runtime_root}/state/{r}/" for r in instances.copy_rids(stk, svc._paths)]
     for comp in comps:
         recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}   # one verified scan
         if comp.id == svc.DAEMON_ID:

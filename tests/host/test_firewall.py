@@ -1593,7 +1593,7 @@ def test_candidate_represents_divergent_bands(tmp_path, monkeypatch):
     import types
     svc = _svc(tmp_path)
     comp = types.SimpleNamespace(id="kc")
-    stk = types.SimpleNamespace(id="kiss")
+    stk = types.SimpleNamespace(id="kiss", components=())          # K4ac: no bands of its own, so no copies
     ep = object()
     monkeypatch.setattr(svc, "_fw_listener_endpoints", lambda: ([(stk, comp, ep)], []))
     monkeypatch.setattr(svc, "stack_bands", lambda t: ("433", "868"))

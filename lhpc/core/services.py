@@ -1996,11 +1996,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         idx = {c.id: ss.components[c.id] for ss in snap.stacks for c in ss.stack.components}
         return self._all_components_healthy(order, idx, radio)
 
-    def _all_components_healthy(self, order, st_index, radio: str) -> bool:
+    def _all_components_healthy(self, order, st_index, radio: str, rid: str = "") -> bool:
         """True when EVERY requested component is already healthy — the daemon serving every needed
         band (READY), and each non-library service component RUNNING. Basis for a no-side-effect
         Start (no launch, no daemon CONF SET, no param apply). A missing band or a stopped client
-        makes it False so the normal apply-once-then-start path runs."""
+        makes it False so the normal apply-once-then-start path runs. `rid`: an instance's radio, whose
+        daemon is the one it needs (K4ac: a copy is never its band's first radio, the band's key)."""
         has_daemon = any(c.id == self.DAEMON_ID for _, c in order)
         # Served bands (never a dual value), arbitrated away from bands a running radio-direct stack
         # owns — so a daemon already serving only the free band(s) reads as healthy, not perpetually
@@ -2037,7 +2038,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     or (self.needs_display(comp) and not self.display_available())):
                 continue
             if comp.id == self.DAEMON_ID:
-                if not need or not all(self.daemon_view(b).ready for b in need):
+                if not need or not all(self.daemon_view(b, rid).ready for b in need):
                     return False
                 continue
             if st_index[comp.id].run_state != RunState.RUNNING:

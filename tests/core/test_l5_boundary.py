@@ -36,7 +36,7 @@ def _socket(kind, rid):
 
 
 def _argv(comp, slot, rid):
-    inst = commands.Instance(slot, rid, {})
+    inst = commands.Instance(slot, rid)
     return commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=inst)
 
 

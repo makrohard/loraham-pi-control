@@ -12,7 +12,7 @@ from lhpc.core.probes.backends import FakeSystem
 
 
 def test_a_start_clears_its_own_radios_window_only(box, tmp_path):
-    run = box((R1, R2), None, ports=(8001,))
+    run = box((R1, R2), ports=(8001,))
     floors = {rid: tmp_path / "state" / f"daemon-feed-floor-433-{rid}" for rid in ("r1", "r2")}
     for p in floors.values():
         p.parent.mkdir(parents=True, exist_ok=True)

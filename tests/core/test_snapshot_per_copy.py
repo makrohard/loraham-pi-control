@@ -15,7 +15,6 @@ ROWS = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4
 
 def _svc(tmp_path, argv_of):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     node = svc.stack("meshcore").component("meshcore-node")
     table = {71: ["/usr/bin/python", "-m", "meshcore_host", *argv_of(svc, node)]}
@@ -54,7 +53,6 @@ def test_a_copys_verified_record_does_not_make_slot0_run(tmp_path):
     p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
     try:
         radios_fixture.write(tmp_path, ROWS)
-        (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         stk = svc.stack("meshcore")
         assert svc._lifecycle().record_launch(stk, stk.component("meshcore-node"), p.pid, band="868",
@@ -93,7 +91,6 @@ def test_a_recorded_copy_stays_the_copys_after_a_restart_mode_save(tmp_path):
     p = _spawn()
     try:
         radios_fixture.write(tmp_path, ROWS)
-        (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         stk = svc.stack("meshcore")
         assert svc._lifecycle().record_launch(stk, stk.component("meshcore-node"), p.pid, band="868",
@@ -135,7 +132,6 @@ def test_a_radio_is_held_by_the_copy_on_it_and_free_beside_it(tmp_path):
     rows = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"),
             radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01"))
     radios_fixture.write(tmp_path, rows)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     tnc = svc.stack("kiss").component("loraham-kiss-tnc")
     opt, val = instances._token(svc, tnc, instances.copy_of(svc, "kiss", "r3")[0], "868")
@@ -146,8 +142,8 @@ def test_a_radio_is_held_by_the_copy_on_it_and_free_beside_it(tmp_path):
 
 
 def test_an_unattributed_running_process_holds_every_radio_of_its_band(tmp_path):
-    # G1-C49 fail-safe (a removal guard): a verified slot-1 record of a copy no longer listed is not slot 0's and no
-    # listed copy explains it, so every radio of its band stays held, never freed.
+    # G1-C49 fail-safe: a verified slot-1 record of a copy whose radio left the hardware list (r9) is not slot 0's
+    # and no copy explains it (K4ac: the list's), so every radio of its band stays held, never freed.
     from lhpc.core import radio_start
     p = _spawn()
     try:
@@ -155,7 +151,7 @@ def test_an_unattributed_running_process_holds_every_radio_of_its_band(tmp_path)
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         stk = svc.stack("meshcore")
         assert svc._lifecycle().record_launch(stk, stk.component("meshcore-node"), p.pid, band="868",
-                                              extra={"rid": "r4", "slot": 1})
+                                              extra={"rid": "r9", "slot": 1})
         assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
             "r2": ["meshcore"], "r4": ["meshcore"]}
     finally:
@@ -167,7 +163,6 @@ def test_slot0_holds_only_its_own_dec_w16_radio_beside_a_running_copy(tmp_path):
     # Slot 0 (its own token, on r2: DEC-W16, r4 holds meshcore@r4) and meshcore@r4 both run: each holds its own radio.
     from lhpc.core import radio_start
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     node = svc.stack("meshcore").component("meshcore-node")
     argv = [["/usr/bin/python", "-m", "meshcore_host", instances._token(svc, node, c, "868")[1]]
@@ -180,7 +175,6 @@ def test_slot0_holds_only_its_own_dec_w16_radio_beside_a_running_copy(tmp_path):
 def test_a_listed_copy_that_does_not_run_leaves_its_radio_free(tmp_path):
     from lhpc.core import radio_start
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {"r2": [], "r4": []}
 
@@ -207,7 +201,6 @@ def test_slot0s_non_main_component_holds_its_radio_beside_a_running_copy(tmp_pat
     # radio r2 (DEC-W16) is held by slot 0 (before: only the main counted, so r2 read free).
     from lhpc.core import radio_start
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     stk = svc.stack("meshcore")
     node, web = stk.component("meshcore-node"), stk.component("meshcore-webui")

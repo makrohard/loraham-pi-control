@@ -96,7 +96,6 @@ def _copy_svc(tmp_path, table):
     """A box with kiss@r3 listed: r3 is a second 868 radio (W298: a kill is per radio)."""
     radios_fixture.write(tmp_path, (*radios_fixture.RADIOS,
                                     radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")))
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     return ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
 
 

@@ -1,6 +1,6 @@
 """Item 16 S1 (DESIGN-16 f3a881f9, DEC-W53): every enabled radio of the hardware list runs its own daemon, also two
 on one band. A daemon start with a band ensures each of that band's enabled radios; a client start ensures its
-instance's radio only (slot 0: the band's first unlisted radio, DEC-W16; `<stack>@<rid>`: that radio). The launches
+instance's radio only (slot 0: the band's first radio, DEC-W16, r2 being kiss@r2's; `<stack>@<rid>`: that radio). The launches
 are captured at Lifecycle.start (each one's `id` parameter names its radio); a READY daemon is a CONF socket that
 answers READY."""
 from __future__ import annotations
@@ -22,12 +22,10 @@ def _ready(rid):
                                          "CADRSSI=-90\n".encode()}
 
 
-def _box(tmp_path, monkeypatch, *, listed="", ready=()):
+def _box(tmp_path, monkeypatch, *, ready=()):
     """The two-radio 433 box: (service, launches). Every launch fails after it is captured, as (component, radio,
     band): nothing runs, so each start's own daemon decisions are what is seen."""
     radios_fixture.write(tmp_path, TWO_433)
-    if listed:
-        (tmp_path / "config" / "instances.toml").write_text(listed)
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433"])
@@ -60,13 +58,13 @@ def test_a_daemon_start_on_a_shared_band_launches_each_radios_daemon(tmp_path, m
 
 
 def test_slot0s_start_ensures_its_own_radios_daemon_only(tmp_path, monkeypatch):
-    svc, launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n')
+    svc, launches = _box(tmp_path, monkeypatch)
     svc.start("kiss", apply=True, band="433")
     assert [x for x in launches if x[0] == DAEMON] == [(DAEMON, "r1", "433")]
 
 
 def test_an_instances_start_ensures_its_own_radios_daemon_only(tmp_path, monkeypatch):
-    svc, launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n')
+    svc, launches = _box(tmp_path, monkeypatch)
     sid, inst, band, why = instances.resolve(svc, "kiss@r2")
     assert why == ""
     svc.start(sid, apply=True, band=band, inst=inst)
@@ -81,14 +79,14 @@ def test_a_ready_radio_is_not_launched_again_and_the_other_one_is(tmp_path, monk
 
 def test_a_client_whose_radios_daemon_is_ready_launches_no_daemon(tmp_path, monkeypatch):
     # kiss@r2's radio is READY; r1's is not, and the instance never starts it.
-    svc, launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n', ready=("r2",))
+    svc, launches = _box(tmp_path, monkeypatch, ready=("r2",))
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     svc.start(sid, apply=True, band=band, inst=inst)
     assert [x for x in launches if x[0] == DAEMON] == []
 
 
 def test_an_instances_daemon_settings_go_to_its_own_radios_socket(tmp_path, monkeypatch):
-    svc, _launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n', ready=("r2",))
+    svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     res = svc.start(sid, apply=True, band=band, inst=inst)
     sent = {path for path, _payload in svc.fake.sent}
@@ -117,7 +115,7 @@ def test_a_daemon_start_for_one_radio_launches_that_radios_daemon_only(tmp_path,
 
 def test_another_stacks_client_on_the_other_radio_keeps_no_settings_from_this_radio(tmp_path, monkeypatch):
     # G1-C18 (2): chat runs as slot 0 on r1; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
-    svc, _launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n', ready=("r2",))
+    svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["chat"])
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     res = svc.start(sid, apply=True, band=band, inst=inst)
@@ -127,7 +125,7 @@ def test_another_stacks_client_on_the_other_radio_keeps_no_settings_from_this_ra
 
 def test_slot0_running_on_the_other_radio_keeps_no_settings_from_this_radio(tmp_path, monkeypatch):
     # G1-C18 (2): kiss runs as slot 0 on r1; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
-    svc, _launches = _box(tmp_path, monkeypatch, listed='kiss = ["r2"]\n', ready=("r2",))
+    svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
     monkeypatch.setattr(ControllerService, "_stack_running_on_band", lambda self, sid, band: True)
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")

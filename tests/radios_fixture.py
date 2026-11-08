@@ -43,6 +43,8 @@ def by_radio(replies: dict) -> dict:
 # Item 7 (stack instances): three radios, r1 and r2 on 433, a USB stick r3 on 868, with READY CONF replies for r1 and r3.
 R1, R2 = radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "wave", "waveshare-sx1262", "433")
 R3 = radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")
+# K4ac: a box whose r3 is a copy's radio (868's second; the hardware list gives the copies, nothing is listed).
+R2_868 = radios.Radio("r2", "high", "loraham", "868")
 INSTANCE_READY = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r3")}
 
 

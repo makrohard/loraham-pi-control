@@ -14,7 +14,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 
 def _svc(tmp_path, socket):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"data_socket": "/tmp/own-r3.sock"}, inst=Instance(1, "r3"))
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"data_socket": "/tmp/slot0.sock"}, band="433")
     table = {41: ["/x/loraham-kiss-tnc", "--data-socket", socket]}

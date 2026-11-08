@@ -33,7 +33,6 @@ def _write(path, text):
 def test_a_meshcore_instances_page_shows_its_own_dashboard_password(web, tmp_path, monkeypatch):
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     monkeypatch.setattr(ops, "_helper", _helper)
     _write(tmp_path / "state" / "openhop" / "config.yaml", json.dumps({KEY: "Slot0-Pass-5678"}))
     _write(tmp_path / "state" / "r4" / "openhop" / "config.yaml", json.dumps({KEY: "Inst-Pass-1234"}))
@@ -48,7 +47,6 @@ def test_a_meshcore_instances_page_shows_its_own_dashboard_password(web, tmp_pat
 def test_before_its_first_repeater_start_an_instance_names_its_own_secret_file(web, tmp_path):
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     _write(tmp_path / "config" / "secrets" / "openhop_repeater_admin.txt", "Slot0-Pass-5678\n")
     [own] = _password_sections(web().get("/stacks?cfg=meshcore&radio=r4").get_data(as_text=True))
     assert "Password not created yet" in own and "Slot0-Pass-5678" not in own                # slot 0's is not lent

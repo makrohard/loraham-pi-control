@@ -2033,10 +2033,12 @@ def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
 def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, monkeypatch, rows, rid, reason):
     # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but its band no longer resolves to it; a band-addressed
     # start would launch the client on another radio, so the item is refused, naming why. Since 7e (DEC-W49) the band
-    # resolves to slot 0's radio (DEC-W16: its first enabled radio not listed for the stack), not to "its one radio".
+    # resolves to slot 0's radio (DEC-W16: its first enabled radio; K4ac: the band's others are the copies), not to
+    # "its one radio". The record is slot 0's by its own slot (7e), so r2 becoming kiss@r2's radio does not make it
+    # the copy's.
     radios_fixture.write(tmp_path, rows)
     svc = _drv(tmp_path, monkeypatch)
-    rec = {**_v1(), "rid": rid}                                       # kiss on 433, the radio it ran on
+    rec = {**_v1(), "rid": rid, "slot": 0}                            # kiss slot 0 on 433, the radio it ran on
     _write_record(tmp_path, rec)
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))

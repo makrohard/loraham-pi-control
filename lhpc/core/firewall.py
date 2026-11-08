@@ -592,10 +592,10 @@ def render_reset_script() -> str:
 # ---- candidate rows per instance (A §2.5; until L5 each stack has its one instance at slot 0) ----
 
 def instance_port(port: int, inst) -> int:
-    """An instance's port: the slot-0 port (configured or not) + 10 per slot; refused outside 1024..65535
-    (commands.slot_port, the one rule)."""
-    from .commands import slot_port
-    return slot_port(port, inst.slot if inst is not None else 0)
+    """An instance's port: a copy's is the base port (configured or not) + 133 x (n - 1) for rN (DEC-W348), slot 0's
+    the base (until K4b); refused outside 1024..65535 and above r64 (commands.rid_port, the one rule)."""
+    from .commands import rid_port
+    return rid_port(port, inst.rid if inst is not None and inst.slot else "")
 
 
 def instance_eid(comp_id: str, static_port, inst) -> str:

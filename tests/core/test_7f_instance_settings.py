@@ -18,7 +18,6 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 
 def _svc(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('chat = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, band, why = instances.resolve(svc, "chat@r3")
     assert why == "" and band == "433"
@@ -73,7 +72,6 @@ def test_a_listed_meshcore_instance_mints_its_own_identity_never_slot0s(tmp_path
     import tomllib
     rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4", "b", "uputronics", "868", ce="ce1"))
     radios_fixture.write(tmp_path, rows)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, band, why = instances.resolve(svc, "meshcore@r4")
     assert why == "" and band == "868"
@@ -110,7 +108,6 @@ def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_sett
     monkeypatch.setattr(ops, "_helper", helper)
     rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4", "b", "uputronics", "868", ce="ce1"))
     radios_fixture.write(tmp_path, rows)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_repeater_name": "Slot Zero"})
@@ -130,7 +127,6 @@ def test_an_instances_openhop_gps_switch_is_its_own(tmp_path):
     import tomllib
     rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4", "b", "uputronics", "868", ce="ce1"))
     radios_fixture.write(tmp_path, rows)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r4"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "chat+repeater", "file_repeater_name": "R4",

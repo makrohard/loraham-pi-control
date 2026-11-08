@@ -1,7 +1,7 @@
 """Gate-1 C-24 B1 on 7f: the saved-launch-value check of a listed instance's start and restart judges the
 instance's own saved settings (config/stacks/<stack>@<rid>.toml), never slot 0's: an invalid value of its own
 refuses before anything launches or stops; slot 0's valid value does not let it through."""
-from radios_fixture import R1, R3
+from radios_fixture import R1, R2_868, R3
 
 from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
@@ -9,7 +9,7 @@ from lhpc.core.paths import Paths
 
 
 def _box(box, tmp_path):
-    run = box((R1, R3), 'kiss = ["r3"]\n', ports=(8001, 8002))
+    run = box((R1, R2_868, R3), ports=(8001, 8002))
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"kiss_port": "not-a-port"}, inst=Instance(1, "r3"))
     return run
 
@@ -31,7 +31,7 @@ def test_an_instance_that_inherits_the_callsign_launches_with_the_global_not_slo
     from radios_fixture import R2
     ready = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r2")}
     monkeypatch.setattr(radios_fixture, "INSTANCE_READY", ready)
-    run = box((R1, R2), 'chat = ["r2"]\n', ports=())
+    run = box((R1, R2), ports=())
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # slot 0's own
     assert cli.main(["config", "operator", "--callsign", "DL9OP"]) == 0
     rc, out, _launches = run("start", "chat@r2")

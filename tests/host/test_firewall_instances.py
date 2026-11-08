@@ -42,8 +42,8 @@ def test_t_g2_a_slot_k_instance_adds_exactly_its_own_rows(tmp_path, monkeypatch)
     rows = _rows(svc.firewall_candidate())
     assert {k: today[k] for k in today} == {k: rows[k] for k in today}           # today's rows unchanged
     added = {k: (v["port"], v["deny_default"]) for k, v in rows.items() if k not in today}
-    assert added == {"loraham-kiss-tnc-r2.tcp-8001": (8011, False),
-                     "meshtastic-r2.tcp-4403": (4413, True), "meshtastic-r2.tcp-9443": (9453, True)}
+    assert added == {"loraham-kiss-tnc-r2.tcp-8001": (8134, False),                 # + 133 on r2 (DEC-W348)
+                     "meshtastic-r2.tcp-4403": (4536, True), "meshtastic-r2.tcp-9443": (9576, True)}
 
 
 def test_a_configured_slot0_port_never_moves_slot_k(tmp_path, monkeypatch):
@@ -52,7 +52,7 @@ def test_a_configured_slot0_port_never_moves_slot_k(tmp_path, monkeypatch):
     assert svc.save_config("kiss", {"kiss_port": "8050"}).ok
     _with_slot1_on_r2(svc, monkeypatch, stacks=("kiss",))
     rows = _rows(svc.firewall_candidate())
-    assert (rows["loraham-kiss-tnc.tcp-8001"]["port"], rows["loraham-kiss-tnc-r2.tcp-8001"]["port"]) == (8050, 8011)
+    assert (rows["loraham-kiss-tnc.tcp-8001"]["port"], rows["loraham-kiss-tnc-r2.tcp-8001"]["port"]) == (8050, 8134)
 
 
 def test_t_f6_a_tick_on_the_slot0_id_selects_every_instance(tmp_path, monkeypatch):

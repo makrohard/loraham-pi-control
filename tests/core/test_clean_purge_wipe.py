@@ -11,6 +11,8 @@ import sys
 import pytest
 
 import repo_paths
+import radios_fixture
+
 from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -328,10 +330,10 @@ def test_a_parent_swapped_after_the_containment_check_cannot_redirect_the_remova
 
 def test_purge_wipes_each_listed_instances_state_and_secrets_and_nothing_beside(tmp_path):
     # 7d (DEC-W51): meshcore@r3 keeps its state under state/r3/<name> and its secrets under config/secrets/r3/ (the
-    # manifest's {instance_dir} layout). The purge takes exactly the listed instance's, never a decoy beside them
-    # (an unlisted r4, state/r3's other folders, logs/r3) and nothing of slot 0's is left either.
+    # manifest's {instance_dir} layout). The purge takes exactly the copy's, never a decoy beside them
+    # (r4, not in the hardware list, state/r3's other folders, logs/r3) and nothing of slot 0's is left either.
     svc = _svc(tmp_path)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r3"]\n')
+    radios_fixture.write(tmp_path, (radios_fixture.R2_868, radios_fixture.R3))  # K4ac: meshcore@r3 (868 radio 2)
     inst = ["state/r3/meshcore/companion.db", "state/r3/meshcore-webui/meshcore-webui.db",
             "state/r3/openhop/repeater.db", "config/secrets/r3/meshcore_identity.key",
             "config/secrets/r3/openhop_repeater_admin.txt"]

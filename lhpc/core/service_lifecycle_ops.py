@@ -1258,10 +1258,9 @@ class LifecycleOpsMixin:
                 # RUNNING is a PROCESS fact. For an endpoint-readiness component a
                 # same-named foreign process satisfies it while the evidence the driver
                 # owns (its ready marker / listeners) is absent — the radio proof was
-                # bypassed. Demand the declared evidence before calling it healthy.
-                st_now = st_index[comp.id]
+                # bypassed. Demand the declared evidence before calling it healthy (a copy's: at its own address).
                 if str(getattr(comp, "readiness", "")) == "endpoint" and not all(
-                        e.present for e in (st_now.endpoints or ())):
+                        e.present for e in instances.endpoint_statuses(self, st_index[comp.id], prep.inst)):
                     record(comp, stack, Outcome.BLOCKED,
                            "a process is running but its readiness evidence is absent "
                            "(foreign or half-started) — stop it (verified) and re-run")

@@ -349,10 +349,10 @@ def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
 
 
 def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
-    """7f: the RF log page's stack-row entries of entry `e`'s listed instances on `band`, each its own `<rid>/<file>`."""
+    """7f: the RF log page's stack-row entries of entry `e`'s copies on `band`, each its own `<rid>/<file>`."""
     from . import instances, radio_start
     out = []
-    for rid in sorted(instances.listed_rids(svc._paths, e.owner), key=lambda r: int(r[1:])):
+    for rid in instances.copy_rids(svc.stack(e.owner), svc._paths):
         job = f"{rid}/{job_name}"
         if radio_start.rf_band(svc, rid) == band and by_job(job):
             out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",

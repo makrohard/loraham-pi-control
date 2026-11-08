@@ -3,7 +3,8 @@
 purge removes the listed instances' generated config files too, nothing beside them."""
 import json
 
-from radios_fixture import R1, R3
+import radios_fixture
+from radios_fixture import R1, R2_868, R3
 
 from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
@@ -17,7 +18,7 @@ def _node(tmp_path, name="Node3"):
 
 
 def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, monkeypatch):
-    run = box((R1, R3), 'meshcore = ["r3"]\n', ports=(5010, 8010, 8798))
+    run = box((R1, R2_868, R3), ports=(5266, 8266, 9054))
     monkeypatch.setattr(ops, "_helper", lambda *a, **k: json.dumps({}))
     _node(tmp_path)
     rc, out, launches = run("start", "meshcore@r3")
@@ -35,7 +36,7 @@ def test_purge_removes_the_listed_instances_config_files_only(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     (tmp_path / "config" / "stacks").mkdir(parents=True)
-    (tmp_path / "config" / "instances.toml").write_text('meshcore = ["r3"]\n')
+    radios_fixture.write(tmp_path, (R2_868, R3))  # K4ac: meshcore@r3 (868 radio 2)
     for rel in ("config/files/meshcore.toml", "config/files/r3/meshcore.toml", "config/files/r4/meshcore.toml",
                 "config/files/r3/lorachat.conf"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from radios_fixture import R1, R3
+from radios_fixture import R1, R2_868, R3
 
 from lhpc.core.commands import Instance
 from lhpc.core import meshcore_identity as mi
@@ -48,7 +48,7 @@ def _repeater(tmp_path, name="Relay R3", rid=""):
 
 
 def test_a_listed_instance_gets_its_own_openhop_file_and_slot_0_is_untouched(box, tmp_path, monkeypatch):
-    run = box((R1, R3), LISTED, ports=(5010, 8010, 8798))
+    run = box((R1, R2_868, R3), ports=(5266, 8266, 9054))
     calls = []
     monkeypatch.setattr(ops, "_helper", _helper(calls))
     _repeater(tmp_path, "Relay 0")                                # slot 0 a repeater too: nothing of it is lent
@@ -73,7 +73,7 @@ def test_an_instances_file_waits_only_for_its_own_records(box, tmp_path, monkeyp
     # blocked(): a same-boot, unverified node record of r3 holds meshcore@r3's file back; slot 0's record of r1
     # does not (before 7d, every node record counted for every start).
     from lhpc.core import lifecycle as lcmod
-    run = box((R1, R3), LISTED, ports=(5010, 8010, 8798))
+    run = box((R1, R2_868, R3), ports=(5266, 8266, 9054))
     monkeypatch.setattr(ops, "_helper", _helper([]))
     _repeater(tmp_path, rid="r3")
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
@@ -91,7 +91,7 @@ def test_an_instances_file_waits_only_for_its_own_records(box, tmp_path, monkeyp
 
 
 def test_slot_0s_file_stays_where_it_was(box, tmp_path, monkeypatch):
-    run = box((R1, R3), None, ports=(5000, 8000, 8788))
+    run = box((R1, R3), ports=(5000, 8000, 8788))
     calls = []
     monkeypatch.setattr(ops, "_helper", _helper(calls))
     _repeater(tmp_path, "Relay 0")

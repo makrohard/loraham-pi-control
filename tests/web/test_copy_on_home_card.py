@@ -15,15 +15,14 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 
 
 def _home(tmp_path, web, monkeypatch, running=True, listening=False):
-    """kiss@r3 runs (its own argv token) unless `running` is False, its own listener (127.0.0.1:8011, slot 1) up when
+    """kiss@r3 runs (its own argv token) unless `running` is False, its own listener (127.0.0.1:8267, r3) up when
     `listening`; slot 0 is stopped; Home rendered over that box."""
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
     radios_fixture.write(tmp_path, ROWS)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r3"]\n')
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), instances.copy_of(svc, "kiss", "r3")[0], "433")
     sysm = FakeSystem(cmdlines_data={61: ["/x/loraham-kiss-tnc", opt, val]} if running else {},
-                      listeners=[Listener("ipv4", "127.0.0.1", 8011, 1)] if listening else []).system
+                      listeners=[Listener("ipv4", "127.0.0.1", 8267, 1)] if listening else []).system
     return parse(web(service_factory=lambda: ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))).get("/")
                  .get_data(as_text=True))
 
@@ -36,7 +35,7 @@ def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeyp
     doc = _home(tmp_path, web, monkeypatch)
     r3, r1 = _card(doc, "r3"), _card(doc, "r1")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8011 Stop Restart"]
+        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 Stop Restart"]
     assert not r1.find("div", class_="runstack")
     assert "No stack running on this radio." in r1.text
     forms = [r3.within(x) for x in r3.find("form", action="/action")]

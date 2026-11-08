@@ -1,7 +1,8 @@
 """Item 16 (DEC-W53): one radio's daemon stops alone, `lhpc stack stop|restart daemon --radio rN`, with the clients on
 that radio first; a per-band stop of a band two radios share stops each radio's daemon (S3; it was refused, W1-11).
-The box: kiss slot 0 on r1 and kiss@r2, both 433. The stops are captured at Lifecycle.stop as (component, band, rid,
-exclude_rids); the snapshot's running answers are stubbed: kiss runs as slot 0 (stop_dependents) and kiss@r2 runs."""
+The box: kiss slot 0 on r1 and kiss@r2 (r2: 433's second radio, K4ac), both 433. The stops are captured at Lifecycle.stop as (component, band, rid,
+exclude_rids); the snapshot's running answers are stubbed: kiss runs as slot 0 (stop_dependents) and kiss@r2 runs
+(the other copies on r2, chat@r2 and meshcore@r2, do not)."""
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,6 @@ KISS = ("loraham-kiss-serial", "loraham-kiss-tnc")
 @pytest.fixture
 def box(tmp_path, monkeypatch):
     radios_fixture.write(tmp_path, TWO_433)
-    (tmp_path / "config" / "instances.toml").write_text('kiss = ["r2"]\n')
     stops = []
 
     def stop(self, comp, band=None, rid=None, exclude_rids=(), token=None, endpoints=None):
@@ -30,7 +30,7 @@ def box(tmp_path, monkeypatch):
         return CompResult(component=comp.id, stack="", action="stop", outcome=Outcome.STOPPED, summary="stopped")
     monkeypatch.setattr(Lifecycle, "stop", stop)
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
-    monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: i.rid == "r2")
+    monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: i.rid == "r2" and c.id in KISS)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     return svc, stops
 

@@ -10,7 +10,7 @@ entry is either a literal token or a single whole placeholder. Placeholders:
                              and it FAILS the launch when the global is unset — stack
                              identities belong in an identity param, not this token)
     {band}            -> one token (the selected band)
-    {port:BASE}       -> BASE + 10 x the instance's slot (slot 0 = BASE), anywhere in a token
+    {port:BASE}       -> a copy's: BASE + 133 x (n - 1) on rN (DEC-W348); slot 0's: BASE, anywhere in a token
     {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
     {instance_dir}    -> "" at slot 0 (today's paths), "<rid>/" at slot k: a per-radio path level
     {instance_suffix} -> "" at slot 0, "-<rid>" at slot k: a per-radio file name in a shared directory
@@ -44,40 +44,35 @@ class CommandError(Exception):
 
 
 SLOTS = range(8)                 # eight instances per stack (A §2.4)
-PORT_STEP = 10
+PORT_STEP, PORT_RADIOS = 133, 64     # DEC-W348: rN's port is base + 133 x (n - 1), for r1..r64
 _RID_RE = re.compile(r"r[1-9][0-9]?")
 _PORT_RE = re.compile(r"\{port:(\d{1,5})\}")
 _PORT_OF_RE = re.compile(r"\{port_of:([a-z][a-z0-9_-]*):(\d{1,5})\}")
 
 
 class Instance:
-    """One stack copy: its slot, its radio id, its radio's band and the slots of the other stacks' instances on the
-    same radio (for `{port_of:}`). Slot 0 is the stack itself and resolves every template to today's value, whatever
-    the radio; slot k needs a radio id for its names. `instances.copy_of` builds a copy with its band; a
-    template-only value leaves it "". Its key is `instances.key(<stack>, copy)`."""
+    """One stack copy: its slot (0, or 1 for a copy: instances.copy_rids), its radio id and its radio's band. A copy's
+    ports are its radio's (DEC-W348: base + 133 x (n - 1) for rN); slot 0 resolves every template to today's value,
+    whatever its radio (its ports and paths move in K4b). `{port_of:STACK:BASE}` follows the same rule. A copy needs a
+    radio id for its names. `instances.copy_of` builds a copy with its band; a template-only value leaves it "". Its
+    key is `instances.key(<stack>, copy)`."""
 
-    __slots__ = ("band", "peer_slots", "rid", "slot")
+    __slots__ = ("band", "rid", "slot")
 
-    def __init__(self, slot: int = 0, rid: str = "", peer_slots: dict | None = None, *, band: str = ""):
+    def __init__(self, slot: int = 0, rid: str = "", *, band: str = ""):
         if isinstance(slot, bool) or not isinstance(slot, int) or slot not in SLOTS:
             raise CommandError(f"instance slot must be 0..{SLOTS[-1]}, got {slot!r}")
         if (slot or rid) and not _RID_RE.fullmatch(rid or ""):
             raise CommandError(f"instance radio id must match r1..r99, got {rid!r}")
-        self.slot, self.rid, self.peer_slots, self.band = slot, rid, dict(peer_slots or {}), band
+        self.slot, self.rid, self.band = slot, rid, band
 
-    def port(self, base: int, slot: int | None = None) -> int:
-        slot = self.slot if slot is None else slot
-        if not 1024 <= base <= 65535 - PORT_STEP * SLOTS[-1]:
-            raise CommandError(f"port base {base} leaves 1024..65535 at slot {SLOTS[-1]}")
-        return base + PORT_STEP * slot
+    def port(self, base: int) -> int:
+        if not 1024 <= base <= 65535:
+            raise CommandError(f"port base {base} is outside 1024..65535")
+        return rid_port(base, self.rid if self.slot else "")
 
     def subst(self, text: str) -> str:
-        def port_of(m):
-            stack = m.group(1)
-            if stack not in self.peer_slots and self.slot:    # slot 0 (with its radio too) uses the peers' slot 0
-                raise CommandError(f"no {stack} instance on radio {self.rid} for {m.group(0)}")
-            return str(self.port(int(m.group(2)), self.peer_slots.get(stack, 0)))
-        text = _PORT_OF_RE.sub(port_of, text)
+        text = _PORT_OF_RE.sub(lambda m: str(self.port(int(m.group(2)))), text)
         text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
         text = text.replace("{instance_suffix}", f"-{self.rid}" if self.slot else "")
         if self.rid:                                     # stage L5: a daemon client's sockets are its radio's (W3)
@@ -89,18 +84,12 @@ SLOT0 = Instance()
 
 
 def stack_instances(stack, paths=None) -> tuple:
-    """The stack's instances (its firewall rows, its web pages): slot 0, then each one config/instances.toml lists
-    for it (item 7, instances.py), each with the slots of the other stacks' instances on its radio (`{port_of:}`).
-    Without `paths` (a manifest-level caller), or with a registry that does not read back, slot 0 only."""
+    """The stack's instances (its firewall rows, its web pages): slot 0, then a copy on each radio the hardware list
+    gives it (instances.copy_rids). Without `paths` (a manifest-level caller), slot 0 only."""
     if paths is None:
         return (SLOT0,)
     from . import instances
-    state = instances.load(paths)
-    out = [SLOT0]
-    for slot, rid in instances.listed(state, stack.id):
-        peers = {sid: k for sid in state.slots for k, r in instances.listed(state, sid) if r == rid}
-        out.append(Instance(slot, rid, peers))
-    return tuple(out)
+    return (SLOT0, *(Instance(1, rid) for rid in instances.copy_rids(stack, paths)))
 
 
 def _controller_python() -> str:
@@ -137,24 +126,28 @@ def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance
     return out
 
 
-def slot_port(port: int, slot: int) -> int:
-    """Slot k's port derived from slot 0's (a saved or static port): + 10 per slot (A §2.4). A derived port that
-    leaves 1024..65535 is refused (B3-D15)."""
-    derived = port + PORT_STEP * slot
-    if slot and not 1024 <= derived <= 65535:
-        raise CommandError(f"port {port} at slot {slot} gives {derived}, outside 1024..65535")
+def rid_port(port: int, rid: str) -> int:
+    """rN's port derived from the base (r1's, a saved or static port): + 133 x (n - 1) (DEC-W348); r1 and no radio keep
+    it. A radio above r64, or a derived port that leaves 1024..65535, is refused by name (B3-D15)."""
+    n = int(rid[1:]) if rid else 1
+    if n > PORT_RADIOS:
+        raise CommandError(f"radio {rid} has no ports: an instance with listeners runs on r1..r{PORT_RADIOS} "
+                           f"(base + {PORT_STEP} x (n - 1))")
+    derived = port + PORT_STEP * (n - 1)
+    if not 1024 <= derived <= 65535:
+        raise CommandError(f"port {port} on {rid} gives {derived}, outside 1024..65535")
     return derived
 
 
 def _param_raw(p, params, inst: Instance) -> str:
     """A run param's raw value for one instance. The default is its template, rendered for the instance. A saved
-    value of a slotted port param (its default a whole `{port:B}`) is slot 0's port; slot k derives from it, + 10 per
-    slot (A §2.4), the rule the firewall rows follow (firewall.instance_port)."""
+    value of a radio-derived port param (its default a whole `{port:B}`) is the base (r1's) port; a copy on rN derives
+    from it, + 133 x (n - 1) (DEC-W348), slot 0 keeps it (until K4b): Instance.port, the rule the firewall rows follow
+    (firewall.instance_port)."""
     saved = (params or {}).get(p.name)
     raw = str(p.default_template or p.default) if saved is None else str(saved)
-    if saved is not None and inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) \
-            and raw.strip().isdigit():
-        return str(slot_port(int(raw), inst.slot))
+    if saved is not None and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
+        return str(inst.port(int(raw)))
     raw = inst.subst(raw)
     if "{rid}" in raw:                               # W3-1: never a socket path without this instance's radio
         raise CommandError(f"{p.name}: needs this instance's radio (no radio id given)")

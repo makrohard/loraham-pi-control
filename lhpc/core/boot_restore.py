@@ -83,25 +83,18 @@ def resolve_item(svc, item) -> tuple:
     return sid, inst, band, why
 
 
-def listed_instances(paths: Paths) -> tuple[dict, str]:
-    """({stack: frozenset of listed rids}, "") from config/instances.toml, or ({}, why) when it does not read back."""
+def listed_instances(svc) -> dict:
+    """{stack: frozenset of its copies' rids} (instances.copy_rids: the hardware list's, nothing is listed)."""
     from . import instances
-    state = instances.load(paths)
-    if state.kind == instances.INVALID:
-        return {}, f"{instances.FILE[-1]} does not read back: " + "; ".join(state.reasons)
-    return {sid: frozenset(rid for _k, rid in instances.listed(state, sid)) for sid in state.slots}, ""
+    return {s.id: frozenset(instances.copy_rids(s, svc._paths)) for s in svc.stacks()}
 
 
-def radio_filter(plan, rows, listed=None, unlisted_why: str = "") -> None:
+def radio_filter(plan, rows, listed=None) -> None:
     """D14/D15 (stage L5): a pre-0.14.0 band item (no `rid`) is not restored, W12 (nothing converted); an item whose
-    radio is gone, disabled or no longer its instance's is refused with the reason (radio_daemon.restore_plan). When
-    the instance list does not read back (`unlisted_why`), an item of a stack that may have instances is refused with
-    that reason: its records cannot be told apart. Both move to `plan.skipped`, their evidence named."""
-    from . import instances, radio_daemon
-    unknown = {id(it) for it in plan.items if unlisted_why and it.get("rid")
-               and it["target"].partition("@")[0] in instances.MAY}
-    kept, refused = radio_daemon.restore_plan([it for it in plan.items if id(it) not in unknown], rows, listed)
-    refused += [(it, unlisted_why) for it in plan.items if id(it) in unknown]
+    radio is gone, disabled or no longer its instance's is refused with the reason (radio_daemon.restore_plan). Both
+    move to `plan.skipped`, their evidence named."""
+    from . import radio_daemon
+    kept, refused = radio_daemon.restore_plan(plan.items, rows, listed)
     why = {id(it): r for it, r in refused}
     for it in plan.items:
         if not any(it is k for k in kept):
