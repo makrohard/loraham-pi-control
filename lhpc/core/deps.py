@@ -407,7 +407,10 @@ _TS_HELPER = """# Bounded service calls (BOOTSTRAP-RETRY-TABLES-v5 rows 18-20, 2
 # timed-out one is called again within SVC_RETRIES. A timed-out restart counts as done only when the unit is active
 # and its own ActiveEnterTimestampMonotonic moved past a baseline read before the first call (an unknown baseline
 # never counts as moved). Status 12 is the helper's own plumbing: TS_PLUMB is set, the step goes on, and the verdict
-# exits 12 (the bootstrap reads it from the marker file $TS_MARK). The bounds default to the bootstrap's.
+# exits 12 (the bootstrap reads it from the marker file $TS_MARK). After a timed-out restart the state is always read
+# again, and no call is made while it is unknown or in a transition (activating, deactivating): a slow start is never
+# interrupted (G2-0.14.0-R18v3). An unknown baseline is taken from the first accepted read. The bounds default to the
+# bootstrap's.
 SVC_CALL_BOUND_S="${SVC_CALL_BOUND_S:-90}"; SVC_RETRIES="${SVC_RETRIES:-4}"; SVC_RETRY_PAUSE_S="${SVC_RETRY_PAUSE_S:-5}"
 SVC_READ_BOUND_S="${SVC_READ_BOUND_S:-60}"; SVC_KILL_GRACE_S="${SVC_KILL_GRACE_S:-5}"
 TS_PLUMB=0; TS_LAST=""; TS_TRIES=0
@@ -417,7 +420,8 @@ ts_call() {   # ts_call BOUND ARGS...: 0 done, 1 refused, 3 no answer, 12 plumbi
   _b=$1; shift; _rc=0
   _e=$(mktemp) || return 12
   TS_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$_b" systemctl "$@" 2>"$_e") || _rc=$?
-  TS_LAST=$(tail -n 1 "$_e"); rm -f "$_e"
+  TS_LAST=$(tail -n 1 "$_e") || { rm -f "$_e"; return 12; }
+  rm -f "$_e"
   case "$_rc" in
     0) return 0 ;;
     124|137) TS_LAST="no answer within $_b s"; return 3 ;;
@@ -439,23 +443,28 @@ ts_base() {   # ts_base UNIT: TS_TS and TS_AS from one bounded read; 0 accepted,
   return 0
 }
 ts_svc() {   # ts_svc VERB UNIT: enable or restart, called again after a timeout. 0 done, 1 refused, 3 no answer,
-  # 12 plumbing; TS_TRIES = the calls made
-  _base=""; _n=0; _r=0
+  # 12 plumbing; TS_TRIES = the calls made. SVC_RETRIES bounds the rounds; a round with no call only reads.
+  _base=""; _n=0; _r=0; _act=1; TS_TRIES=0
   if [ "$1" = restart ]; then
     ts_base "$2" || _r=$?
     [ "$_r" -ne 12 ] || return 12
     [ "$_r" -ne 0 ] || _base=$TS_TS
   fi
   while [ "$_n" -lt "$SVC_RETRIES" ]; do
-    _n=$((_n + 1)); TS_TRIES=$_n; _r=0
-    ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
-    [ "$_r" -eq 3 ] || return "$_r"
-    [ "$_n" -ge "$SVC_RETRIES" ] || sleep "$SVC_RETRY_PAUSE_S"     # no pause after the last attempt (G1-C8)
-    if [ "$1" = restart ] && [ -n "$_base" ]; then
-      _r=0; ts_base "$2" || _r=$?
-      [ "$_r" -ne 12 ] || return 12
-      if [ "$_r" -eq 0 ] && [ "$TS_AS" = active ] && [ "$TS_TS" != "$_base" ]; then return 0; fi
+    _n=$((_n + 1))
+    if [ "$_act" -eq 1 ]; then
+      TS_TRIES=$((TS_TRIES + 1)); _r=0
+      ts_call "$SVC_CALL_BOUND_S" "$1" "$2" || _r=$?
+      [ "$_r" -eq 3 ] || return "$_r"
     fi
+    [ "$_n" -ge "$SVC_RETRIES" ] || sleep "$SVC_RETRY_PAUSE_S"     # no pause after the last round (G1-C8)
+    [ "$1" = restart ] || continue
+    _act=0; _r=0; ts_base "$2" || _r=$?
+    [ "$_r" -ne 12 ] || return 12
+    [ "$_r" -eq 0 ] || continue                                   # unknown: no call, read again
+    if [ -z "$_base" ]; then _base=$TS_TS
+    elif [ "$TS_AS" = active ] && [ "$TS_TS" != "$_base" ]; then return 0; fi
+    case "$TS_AS" in activating|deactivating) ;; *) _act=1 ;; esac
   done
   return 3
 }
