@@ -207,7 +207,7 @@ note "cloned $(git -C "$CHECKOUT" rev-parse --short HEAD) on ${BRANCH}"
 # --------------------------------------------------------------------------- 2. venv (outside)
 step "2/4  Create the venv (outside the checkout) + install"
 mkdir -p "$(dirname "$VENV")"
-"$PY" -m venv "$VENV"
+"$PY" -m venv --system-site-packages "$VENV"
 "${VENV}/bin/python" -m pip install --quiet --upgrade pip
 # The runtime dependencies and the build backend come from the lock, every file hash-checked; LHPC itself
 # without deps and without build isolation, so nothing else is fetched.
