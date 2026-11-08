@@ -37,6 +37,8 @@ Upgrading from 0.13.x
   (or `sudo modprobe spi_ch341`).
 - 0.13.x per-band daemon settings stay in effect for every radio of that band; saving a radio's settings panel
   stores that radio's own values in its row of config/radios.toml.
+- Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
+  `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
 
 Fixed
 

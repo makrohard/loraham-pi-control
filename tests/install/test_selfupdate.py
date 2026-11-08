@@ -319,7 +319,7 @@ def test_the_venv_sync_installs_the_locked_dependencies_hash_checked_then_lhpc_w
     monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "n/a"))
     svc.self_update_apply_operator(force=True)
     pips = [c for c in fake.calls if c[1:4] == ["-m", "pip", "install"]]
-    assert pips == [[sys.executable, "-m", "pip", "install", "--require-hashes", "--no-deps", "-r",
+    assert pips == [[sys.executable, "-m", "pip", "install", "--require-hashes", "--no-deps", "--force-reinstall", "-r",
                      f"{root}/requirements.lock"],
                     [sys.executable, "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e",
                      str(root)]]

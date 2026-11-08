@@ -15,6 +15,7 @@ REAL_SCAN = usb_access.scan
 RELOGIN = "plugdev membership is granted but takes effect at its next login (log out and in, or reboot)"
 SETUP = "run the USB setup on the Hardware page to give this account access"     # the bind's wording (W257)
 ADD_SETUP = "run the USB setup below to give this account access"                # the add's (it lands above the setup)
+DENIED = "plugdev is effective and the udev rule is current, yet this account still cannot open the stick"   # H21
 
 
 def _box(web, tmp_path, monkeypatch, rows, member):
@@ -37,20 +38,24 @@ USB = (radios.Radio("r1", "low", "loraham", "433"),
 
 
 @pytest.mark.parametrize("member, says, anchor", [(Membership.PENDING, RELOGIN, False),
-                                                  (Membership.ABSENT, ADD_SETUP, True)], ids=["pending", "absent"])
+                                                  (Membership.ABSENT, ADD_SETUP, True),
+                                                  (Membership.MEMBER, DENIED, False)], ids=["pending", "absent", "member"])
 def test_the_add_points_at_the_setup_only_while_it_is_needed(web, tmp_path, monkeypatch, csrf, member, says, anchor):
     c = _box(web, tmp_path, monkeypatch, SPI, member)
     r = c.post("/hardware/add", data={"_csrf": csrf(c), "model": "meshstick-1262", "port": "1-1.3"})
     assert r.headers["Location"].endswith("#usb-setup") is anchor
     page = _text(c)
     assert says in page and (ADD_SETUP in page) is anchor
+    assert (RELOGIN in page) is (member is Membership.PENDING)          # H21: the login is blamed only when pending
 
 
 @pytest.mark.parametrize("member, says, anchor", [(Membership.PENDING, RELOGIN, False),
-                                                  (Membership.ABSENT, SETUP, True)], ids=["pending", "absent"])
+                                                  (Membership.ABSENT, SETUP, True),
+                                                  (Membership.MEMBER, DENIED, False)], ids=["pending", "absent", "member"])
 def test_the_bind_points_at_the_setup_only_while_it_is_needed(web, tmp_path, monkeypatch, csrf, member, says, anchor):
     c = _box(web, tmp_path, monkeypatch, USB, member)
     r = c.post("/hardware/bind", data={"_csrf": csrf(c), "rid": "r2", "port": "1-1.3"})
     assert r.headers["Location"].endswith("#usb-setup") is anchor
     page = _text(c)
     assert says in page and (SETUP in page) is anchor
+    assert (RELOGIN in page) is (member is Membership.PENDING)          # H21: the login is blamed only when pending

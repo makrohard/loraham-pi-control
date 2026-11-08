@@ -337,20 +337,24 @@ def _remove_radio(svc, rid: str, confirm: str):
 
 _RELOGIN = (" — this account's plugdev membership is granted but takes effect at its next login (log out and in, or"
             " reboot)")
+_DENIED_MEMBER = (" — plugdev is effective and the udev rule is current, yet this account still cannot open the stick"
+                  " (another udev rule or the device's mode)")
 
 
 def _access_line(msg: str, no_access: bool) -> tuple:
     """(message, copybox) after an add or a bind: the USB setup box is pointed at only while the setup is still needed
     (the page shows it then); with the rule current and plugdev granted but not yet effective there is no box, so the
-    line says the membership takes effect at the next login (W18-1)."""
+    line says the membership takes effect at the next login (W18-1) — only when it is PENDING; an effective member that
+    still has no access is told so (G2-R12av6 H21), never to log in again."""
     from . import usb_access
     if not no_access:
         return msg, False
     effective, configured, _euid = _groups()
     rule = usb_access.rule_state(radio_models.load())
-    if usb_access.setup_needed(rule, usb_access.plugdev(effective, configured)):
+    member = usb_access.plugdev(effective, configured)
+    if usb_access.setup_needed(rule, member):
         return msg, True
-    return msg + _RELOGIN, False
+    return msg + (_RELOGIN if member is usb_access.Membership.PENDING else _DENIED_MEMBER), False
 
 
 def _account() -> str:
@@ -455,7 +459,7 @@ def _add_hat(svc, model_id: str, band: str, variant: str) -> tuple:
     v = next((x for x in fits if x.key == variant), None) if variant else fits[0]
     if v is None:
         return False, f"Not added: {m.id} has no variant {variant!r} for {band} MHz"
-    several = bool(variant) or len(fits) > 1          # G1-C19: an explicit variant is always kept as `ce`
+    several = bool(variant)                           # G1-C19: an explicit variant is always kept as `ce`
     try:
         rid = radios.next_id(state.radios, state.retired)
     except ValueError as exc:

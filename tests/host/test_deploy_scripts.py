@@ -289,10 +289,10 @@ def _fake_toolchain(fakebin: Path, *, clone_fails: bool = False, fail_render: st
     (fakebin / "python3.13").write_text(
         "#!/usr/bin/env bash\n"
         'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then\n'
-        '  mkdir -p "$3/bin"\n'
-        f"  cat > \"$3/bin/python\" <<'PY'\n{venv_py}PY\n"
-        '  printf "#!/usr/bin/env bash\\nexit 0\\n" > "$3/bin/pip"\n'
-        '  cp "$3/bin/pip" "$3/bin/lhpc"; chmod 755 "$3/bin/"*; exit 0\n'
+        '  d="${!#}"; mkdir -p "$d/bin"\n'                       # the venv dir is the last argument (after any flag)
+        f"  cat > \"$d/bin/python\" <<'PY'\n{venv_py}PY\n"
+        '  printf "#!/usr/bin/env bash\\nexit 0\\n" > "$d/bin/pip"\n'
+        '  cp "$d/bin/pip" "$d/bin/lhpc"; chmod 755 "$d/bin/"*; exit 0\n'
         "fi\n"
         f'exec "{sys.executable}" "$@"\n')
     for f in ("git", "python3.13"):
