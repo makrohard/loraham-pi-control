@@ -60,7 +60,9 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     table = svc._system.procfs.cmdlines()
     found: dict[int, dict] = {}
     unresolved: list[str] = []
+    others = [f"{svc._paths.runtime_root}/state/{r}/" for r in instances.listed_rids(svc._paths, stk.id)]
     for comp in comps:
+        recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}   # one verified scan
         if comp.id == svc.DAEMON_ID:
             # The daemon of one radio by its exact `--id <rid>` (L5), else every daemon.
             pids = [p for p, a in table.items() if a and posixpath.basename(a[0]) == "loraham_daemon"
@@ -86,8 +88,9 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
             # One ownership decision per pid (G1-C35): another copy's verified process is not this one's; with no
             # record a token hit is this copy's, and a bare hit (no instance token) is slot 0's (W46), never a
             # copy's: only the copy's own verified record names it (below), anything else is refused (G2-B2 F4).
-            recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}
             pids = [p for p in pids if p not in recs or _mine(recs[p], copy)]
+            if comp.id in BAND_BY_RECORD and copy is None:     # an unrecorded hit in another copy's state dir is its
+                pids = [p for p in pids if p in recs or not any(o in t for t in table.get(p, ()) for o in others)]
             if comp.id in BAND_BY_RECORD and copy is not None:
                 unresolved += [f"pid {p} {comp.id}: cannot verify band {band} (no verified ownership record of it)"
                                for p in pids if p not in recs]
@@ -95,8 +98,8 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
         for pid in pids:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
-        for rec in life.owned_records(comp.id, hint or None):
-            if _mine(rec, copy) and life.verify_owned(rec)[0]:
+        for rec in recs.values():
+            if _mine(rec, copy):                        # a live record is one copy's; slot 0 runs on one band
                 found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
                                      "pgid": rec["pgid"], "record": rec,
                                      "argv": " ".join(table.get(rec["pid"], []))}

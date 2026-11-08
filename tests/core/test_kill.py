@@ -554,6 +554,16 @@ def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(
     assert plan.ok and plan.data["pids"] == [p.pid]
 
 
+def test_slot0s_kill_never_takes_an_unrecorded_process_in_a_copys_state_dir(tmp_path, procs):
+    # G1-C35-RE B1: a kiss-serial of kiss@r3 started by hand (no record) names r3's state dir in its argv
+    # (state/r3/loraham_kiss): it is the copy's, so `kill kiss` leaves it; slot 0's own is taken (W46, above).
+    p = procs()
+    svc = _copy_svc(tmp_path, {})
+    svc = _copy_svc(tmp_path, {p.pid: _copy_argv(svc, "loraham-kiss-serial")})
+    plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
+    assert plan.ok and plan.data["pids"] == []
+
+
 def test_a_token_hit_recorded_for_another_copy_is_not_slot0s(tmp_path, procs):
     # G1-C35 (4): slot 0 and kiss@r3 saved the same data socket, so the token cannot tell them apart; the copy's
     # verified record says whose the process is.
