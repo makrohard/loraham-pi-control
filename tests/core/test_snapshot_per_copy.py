@@ -218,3 +218,27 @@ def test_slot0s_non_main_component_holds_its_radio_beside_a_running_copy(tmp_pat
     assert snap["meshcore-webui"].pids == [93] and snap["meshcore-node"].own_run_state is RunState.STOPPED
     assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
         "r2": ["meshcore"], "r4": ["meshcore@r4"]}
+
+
+def test_an_unlisted_copys_process_holds_its_own_radios_band_not_slot0s(tmp_path):
+    # G1-C53: slot 0 of kiss runs on 433 (its own token, on r1) and a verified slot-1 record of a copy on r3 (868),
+    # listed no more, runs: the 868 radio is held by it; r2 (433, beside slot 0's r1) is not needlessly held (before:
+    # the stack was judged by slot 0's band only, so r3 read free and r2 held).
+    from lhpc.core import radio_start
+    rows = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r2", "b", "uputronics", "433", ce="ce1"),
+            radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01"))
+    p = _spawn()
+    try:
+        radios_fixture.write(tmp_path, rows)
+        svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+        stk = svc.stack("kiss")
+        tnc = stk.component("loraham-kiss-tnc")
+        opt, val = instances._token(svc, tnc, instances.copy_of(svc, "kiss", band="433")[0], "433")
+        svc = ControllerService(system=FakeSystem(cmdlines_data={81: ["/x/loraham-kiss-tnc", opt, val]}).system,
+                                paths=Paths(runtime_root=tmp_path))
+        assert svc._lifecycle().record_launch(stk, tnc, p.pid, band="868", extra={"rid": "r3", "slot": 1})
+        assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
+            "r1": ["kiss"], "r2": [], "r3": ["kiss"]}
+    finally:
+        p.kill()
+        p.wait(timeout=5)

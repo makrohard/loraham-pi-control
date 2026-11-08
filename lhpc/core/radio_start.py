@@ -205,30 +205,34 @@ def _daemon_procs(svc) -> list:
 
 
 def _radio_users(svc, radio) -> list:
-    """The users of `radio`, judged per radio and per pid (G1-C49, G1-C51), other than the daemon: each listed copy
-    with a process on it (`<sid>@<rid>`, instances.copy_processes); slot 0 of a stack any of whose components runs a
-    process of its own on its band, when `radio` is slot 0's DEC-W16 radio there; and, fail-safe, a stack on the band
-    with a pid no listed copy and not slot 0 explains (a copy's record no longer listed, or running with no pid seen):
-    it holds every radio of the band, whether copies run or not (a removal guard stays conservative)."""
+    """The users of `radio`, judged per radio and per pid (G1-C49, G1-C51, G1-C53), other than the daemon: each listed
+    copy with a process on it (`<sid>@<rid>`, instances.copy_processes); a copy no longer listed whose process runs
+    holds every radio of ITS radio's band (of every band when its radio is gone), never judged by slot 0's band; slot 0
+    of a stack any of whose components runs a process of its own on its band, when `radio` is slot 0's DEC-W16 radio
+    there; and, fail-safe, a stack running on the band with no pid seen holds every radio of it (a removal guard stays
+    conservative)."""
     from . import commands, instances
     from .model import RunState
     up, snap = (RunState.RUNNING, RunState.DEGRADED), svc.build_snapshot()
     procs = instances.copy_processes(svc, svc._system.procfs.cmdlines())
-    out = set()
+    out, bands = set(), {r.id: r.band for r in radios.load(svc._paths).radios}
     for s in svc.stacks():
         if s.main == svc.DAEMON_ID:
             continue
         listed = {i.rid: i for i in commands.stack_instances(s, svc._paths)[1:]}
-        mine = [(rid, pid) for sid, rid, _c, pid in procs if sid == s.id]
-        out.update(instances.key(s.id, listed[rid]) for rid, _p in mine if rid == radio.id and rid in listed)
+        rids = {rid for sid, rid, _c, _p in procs if sid == s.id}
+        if radio.id in rids and radio.id in listed:
+            out.add(instances.key(s.id, listed[radio.id]))
+        if any(bands.get(rid, radio.band) == radio.band for rid in rids - listed.keys()):
+            out.add(s.id)                                # an unlisted copy's pid: its own radio's band (G1-C53)
         if radio.band not in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}):
             continue
         ss = snap.stack(s.id)
         comps = [cs for cs in (ss.components.values() if ss is not None else ()) if cs.run_state in up]
         if any(cs.own_run_state in up for cs in comps) and instances.slot0_radio(svc._paths, s.id, radio.band)[0] == radio.id:
             out.add(s.id)                                # slot 0's own process, any component (G1-C51 (2))
-        if any(rid not in listed for rid, _p in mine) or (not comps and svc.stack_running(s.id)):
-            out.add(s.id)                                # an unattributed pid: hold the band's radios (G1-C51 (1))
+        if not comps and svc.stack_running(s.id):
+            out.add(s.id)                                # running with no pid seen: hold the band's radios
     return sorted(out)
 
 
