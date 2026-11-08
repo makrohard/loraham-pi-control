@@ -231,13 +231,20 @@
 
           {# --- running stack(s) on this band --- #}
           <h3>Running on {{ r.band }}</h3>
-          {% if r.running %}
-            {% for s in r.running %}
+          {# Cleanup C7c: a listed copy's entry (its `rid`) shows on its own radio's card only. #}
+          {% set runs = r.running | rejectattr("rid") | list + (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) %}
+          {% if runs %}
+            {% for s in runs %}
               {# A rule BETWEEN the running stacks of this radio. `loop.first` keeps it out of the
                  top of the list, and being emitted before each later item keeps it off the end.
                  The component rows inside each stack get their own, lighter rule (`.complist`). #}
               {% if not loop.first %}<hr class="runsep">{% endif %}
               <div class="runstack">
+                {% if s.rid %}
+                <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
+                  <span class="pill">{{ s.id }}</span> <span class="badge badge-running">running</span></p>
+                <p class="muted">Stop it: <code>lhpc stack stop {{ s.id }}</code></p>
+                {% else %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
                 <ul class="complist">
@@ -322,6 +329,7 @@
                     <button type="submit">Stop</button>
                   </form>
                 </p>
+                {% endif %}
               </div>
             {% endfor %}
           {% else %}

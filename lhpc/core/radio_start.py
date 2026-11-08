@@ -1002,6 +1002,18 @@ def chip_family(svc, band: str, rid: str = ""):
     return None if row is None else cfgmod.hw_preset_family(v.preset if v else "")
 
 
+def running_copies(svc, band: str) -> list:
+    """Cleanup C7c (W286, W290): Home's entry for each listed copy that runs on a radio of `band` (`<sid>@<rid>`, for
+    its own radio's card only). The snapshot no longer counts a copy as slot 0, so without it a running copy vanished."""
+    from . import commands, instances
+    on = {r.id for r in radios.load(svc._paths).radios if r.band == band}
+    return [{"id": f"{stk.id}@{inst.rid}", "sid": stk.id, "rid": inst.rid, "name": stk.name, "main": stk.main,
+             "components": [], "multi_band": False}
+            for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]
+            if inst.rid in on and any(c.process is not None and instances.instance_runs(svc, c, inst, band)
+                                      for c in stk.components)]
+
+
 def band_radios(svc, band: str) -> list:
     """W6-2/W6-3: every enabled radio of `band` in list order, each with its own daemon's view (its rid's CONF
     socket), so two radios of one band are two entries, never one band view; [] without a valid list."""

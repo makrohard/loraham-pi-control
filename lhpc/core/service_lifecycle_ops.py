@@ -3007,7 +3007,7 @@ class LifecycleOpsMixin:
                 if band not in sbands:
                     continue
                 multi = bool(self.stack_bands(s.id))
-                running_up = any(c.id in live and live[c.id].run_state in up
+                running_up = any(c.id in live and live[c.id].own_run_state in up
                                  for c in s.components if c.band or c.bands)
                 # A MULTI-band stack runs on exactly ONE band at a time, so "is a
                 # band-carrying component up?" is not enough — that answer is the same
@@ -3023,7 +3023,7 @@ class LifecycleOpsMixin:
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads
                     # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
-                    booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
+                    booting = c.id in live and live[c.id].own_run_state in up and self._component_booting(c.id)
                     comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
                           "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
@@ -3039,7 +3039,7 @@ class LifecycleOpsMixin:
                                          else bool(c.log_paths)
                                          or bool(c.run_argv and not c.interactive)),
                           "state": ("booting" if booting
-                                    else (live[c.id].run_state.value if c.id in live else "unknown")),
+                                    else (live[c.id].own_run_state.value if c.id in live else "unknown")),
                           # No web-UI/client link while booting — it isn't serving yet.
                           "interfaces": ([] if booting
                                          else self._client_interfaces(live.get(c.id), s.id))})
@@ -3102,7 +3102,7 @@ class LifecycleOpsMixin:
                 elif multi:
                     is_up = False     # not running -> startable on every allowed band
                 else:
-                    is_up = any(c.id in live and live[c.id].run_state in up
+                    is_up = any(c.id in live and live[c.id].own_run_state in up
                                 for c in s.components if c.band == band)
                 (running if is_up else startable).append(entry)
             out.append({
@@ -3137,7 +3137,7 @@ class LifecycleOpsMixin:
                     # the saved switch (a stray band after a Hardware change renders it too).
                     "high_power": self.high_power_state(band, dv),
                 },
-                "running": running,
+                "running": running + radio_start.running_copies(self, band),   # C7c: a running copy, on its radio
                 "startable": startable,
                 "interactive": interactive,
                 "rflogs": self._rflogs_for_band(band, running),
