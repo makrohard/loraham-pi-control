@@ -179,8 +179,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _one_retry_no_wait(monkeypatch):
-    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0,))
-    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0)
+    monkeypatch.setenv("LHPC_TRANSFER_WAITS", "0")          # the one policy's test schedule
 
 ENV = {'LHPC_RUNTIME_ROOT': '/nonexistent'}
 
@@ -867,8 +866,7 @@ def _lhpc(monkeypatch, **by_verb):
         return seq[min(calls[verb], len(seq)) - 1]
     monkeypatch.setattr(rel, "run_lhpc", run)
     monkeypatch.setattr(rel, "on_binary", lambda env, stack: False)   # stub: no receipt read
-    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0, 0), raising=False)
-    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0, raising=False)
+    monkeypatch.setenv("LHPC_TRANSFER_WAITS", "0 0")        # two retries, no wait (transfer.py)
     return calls
 
 
@@ -917,6 +915,56 @@ def test_a_failure_that_is_not_a_transfer_is_never_repeated(monkeypatch):
         _Done(1, "  [failed] clone loraham-kiss-tnc — fatal: repository not found\n")])
     msg = _install_build_message(build=False)
     assert not _EXTERNAL.search(msg) and calls["install"] == 1
+
+
+@pytest.mark.parametrize("out", [
+    # a transfer error, then a 4xx: the 4xx decides, and blocks the repeat on its own too
+    CLONE_DNS + "  [failed] fetch x — curl: (22) The requested URL returned error: 404\n",
+    # the last line is a transfer, but an earlier error line is a 404: not repeated (any line)
+    "  [failed] fetch x — curl: (22) The requested URL returned error: 404\n" + CLONE_DNS,
+    # a transfer, but LHPC timed the step out or could not prove its process stopped
+    CLONE_DNS + "  [timeout] install loraham-kiss-tnc after 900 s\n",
+    CLONE_DNS + "  timed out after 900 s; cessation UNPROVEN — a process may survive: git clone\n",
+], ids=["503-then-404", "404-then-transfer", "timeout", "unproven"])
+def test_a_transfer_failure_with_a_reason_against_a_repeat_is_not_repeated(monkeypatch, out):
+    calls = _lhpc(monkeypatch, install=[_Done(1, out)])
+    _install_build_message(build=False)
+    assert calls["install"] == 1
+
+
+def test_the_external_line_names_the_last_error_line(monkeypatch):
+    """Two transfer errors: the line the step ENDED with is the one reported."""
+    _lhpc(monkeypatch, install=[_Done(1, CLONE_DNS + "  [failed] fetch x — curl: (22) The "
+                                         "requested URL returned error: 503\n")])
+    line = _install_build_message(build=False).splitlines()[1]
+    assert "returned error: 503" in line and "Could not resolve host" not in line
+
+
+def test_a_transfer_error_the_step_did_not_end_with_is_not_external(monkeypatch):
+    calls = _lhpc(monkeypatch, install=[_Done(1, CLONE_DNS + "  [failed] clone loraham-kiss-tnc — "
+                                                "fatal: repository not found\n")])
+    msg = _install_build_message(build=False)
+    assert not _EXTERNAL.search(msg) and calls["install"] == 1
+
+
+def test_no_attempt_starts_past_the_retry_start_deadline(monkeypatch):
+    """The deadline counts the attempts' wall time and the waits: after a 1000 s install the
+    first retry (wait 0) starts; after the second, 2000 s are used and no third one starts."""
+    import time
+
+    import lhpc_testlab.release as rel
+    now = [0.0]
+    calls = _lhpc(monkeypatch, install=[_Done(1, CLONE_DNS)])
+    monkeypatch.setenv("LHPC_TRANSFER_WAITS", "0 0 0")
+    real = rel.run_lhpc
+
+    def slow(env, verb, *a, **kw):
+        now[0] += 1000
+        return real(env, verb, *a, **kw)
+    monkeypatch.setattr(rel, "run_lhpc", slow)
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    msg = _install_build_message(build=False)
+    assert calls["install"] == 2 and msg.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=install:kiss"
 
 
 def _meshcore_steps():

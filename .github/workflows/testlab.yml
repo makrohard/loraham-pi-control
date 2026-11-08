@@ -100,13 +100,56 @@ jobs:
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" \
             python3 /scripts/mirror-binaries.py verify /binmirror "$BIN_TARGET" meshcom meshtastic
 
+      - name: Acquire the lane's Python packages, Chromium and web client (transfer backoff)
+        # Class A as above, for the lane's own transfers: the wheels of its pip installs (the product,
+        # the lab package, pytest, playwright, their build backend) and of the Meshtastic CLI venv the
+        # reset builds (the manifest's pins, a download of their own: that venv resolves alone), the
+        # Chromium playwright drives, and the Meshtastic web client's build.tar (the manifest's pin,
+        # sha256-checked here and again by the product). In the lab image: its Python and target.
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p xfer/meshtastic-web
+          read -r web_url web_sha < <(python3 .github/scripts/mirror-sources.py web-tarball lhpc/data/manifest.example.toml)
+          backoff curl -fsSL -o xfer/meshtastic-web/build.tar "$web_url"
+          echo "$web_sha  xfer/meshtastic-web/build.tar" | sha256sum -c -
+          cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml)
+          # From a COPY of the checkout: setuptools writes egg-info into a tree it builds, /repo is read-only.
+          docker run --rm --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer \
+            "$IMG" bash -lc "
+              set -e
+              . /repo/.github/scripts/retry.sh
+              cp -r /repo /tmp/src
+              backoff python3 -m pip download -q -d /xfer/wheels /tmp/src /tmp/src/testlab pytest playwright 'setuptools>=68'
+              backoff python3 -m pip download -q -d /xfer/wheels $cli
+              python3 -m venv /tmp/pw
+              /tmp/pw/bin/pip install -q --no-index --find-links /xfer/wheels playwright
+              PLAYWRIGHT_BROWSERS_PATH=/xfer/ms-playwright backoff /tmp/pw/bin/python -m playwright install chromium
+              chmod -R a+rX /xfer"
+
+      - name: Prove the lane's packages, Chromium and web client are complete (no network)
+        # The lane's own install commands (lab-lane-install.sh), as the lab user, then the reset's
+        # Meshtastic CLI pip step and a Chromium launch, in a container with no network: anything
+        # the acquisition missed fails here, before the lane.
+        run: |
+          cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml)
+          docker run --rm --network none --user root -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer:ro "$IMG" bash -lc "
+            set -e
+            cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
+            su lhpclab -c '
+              set -e
+              cd /tmp/repo
+              . .github/scripts/lab-lane-install.sh
+              python3 -m venv /tmp/cli && /tmp/cli/bin/pip install -q --disable-pip-version-check $cli
+              PLAYWRIGHT_BROWSERS_PATH=/xfer/ms-playwright python -c \"from playwright.sync_api import sync_playwright as s; p = s().start(); p.chromium.launch().close(); p.stop()\"
+              test -s /xfer/meshtastic-web/build.tar'"
+
       - name: Run the lab lanes in the image
         # Root copies the checkout in and DROPS to the unprivileged lab user — the
         # same privilege boundary users get (uid mapping of -v mounts is not assumed).
         run: |
           docker run --rm --user root -v "$PWD":/repo:ro \
-            -v "$PWD/srcmirror":/srcmirror:ro -v "$BIN_MIRROR":/binmirror:ro -v lhpc_lab_tmp:/tmp \
-            "$IMG" bash -lc '
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$BIN_MIRROR":/binmirror:ro -v "$PWD/xfer":/xfer:ro \
+            -v lhpc_lab_tmp:/tmp "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
               su lhpclab -c "
@@ -118,15 +161,13 @@ jobs:
                 # Clones resolve to the mirrors. A file in HOME, because the product runner
                 # forwards HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
                 cp /srcmirror/gitconfig ~/.gitconfig
-                python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
-                # Sourced from the COPY inside the container: a helper sourced in the host shell
-                # does not survive docker run, let alone the su below.
-                . /tmp/repo/.github/scripts/retry.sh
-                backoff pip install -q -e .            # the product
+                # The lane installs, Chromium and the web client come from /xfer, acquired and proved
+                # complete above: no index (lab-lane-install.sh), the pre-installed browser, and the
+                # web client tarball the product step reads (verified against the same sha256 pin).
+                export PLAYWRIGHT_BROWSERS_PATH=/xfer/ms-playwright
+                export LHPC_MESHTASTIC_WEB_TARBALL=/xfer/meshtastic-web/build.tar
+                . /tmp/repo/.github/scripts/lab-lane-install.sh
                 python3 .github/scripts/mirror-sources.py resolved /srcmirror
-                backoff pip install -q -e ./testlab    # the SEPARATE lab package
-                backoff pip install -q pytest playwright
-                backoff python -m playwright install chromium
                 # A virtual display for the ACCEPTANCE lane only: voice and sideband are
                 # GTK/Kivy programs, and without one the lab would skip starting them
                 # instead of proving they start. The browser lane below runs with no
@@ -381,7 +422,7 @@ jobs:
             ". /repo/.github/scripts/retry.sh && backoff python3 -m pip download -q --require-hashes --no-deps -r /repo/requirements.lock -d /xfer/wheels"
           timed "wheels: $cli setuptools>=68 ./ (this checkout)" docker run --rm --user root \
             -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
-            ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src"
+            ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src /tmp/src/testlab pytest"
           # The pip install of every timed build (build-wheels.py times each component itself).
           # Both fetch from a COPY of the checkout: setuptools writes egg-info into a source tree
           # it builds, and /repo is mounted read-only.
@@ -475,10 +516,10 @@ jobs:
           cd /tmp/repo
           export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
           python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
-          . /tmp/repo/.github/scripts/retry.sh
-          backoff pip install -q -e .
-          backoff pip install -q -e ./testlab
-          backoff pip install -q pytest
+          # The lane installs from the wheels acquired above, never an index.
+          pip install -q --no-index --find-links /xfer/wheels -e .
+          pip install -q --no-index --find-links /xfer/wheels -e ./testlab
+          pip install -q --no-index --find-links /xfer/wheels pytest
           # The timed operations take their transfers from the copies acquired above (decision a):
           # the clones through ~/.gitconfig (HOME reaches the product runner, GIT_CONFIG_GLOBAL
           # does not; mirror-sources.py), the fetch through its URL, the pip operations through

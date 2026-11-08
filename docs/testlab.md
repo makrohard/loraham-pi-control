@@ -119,10 +119,20 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
 
 **What a CI lane may fetch.** A lane reaches an external service only where that service is what it
 proves. Everything else is acquired before the lane's tests run, with the transfer backoff
-(`backoff` in `.github/scripts/retry.sh`: retry at once, then after 1, 2, 5 and 10 min, then
-every 10 min until the waits would pass 30 min): the lab image and the upstream git sources of the
-testlab and release-verify lanes in workflow steps of their own, the lab's Python packages and
-Chromium at the start of the lane's step. The sources are git mirrors
+(`backoff` in `.github/scripts/retry.sh`, by the one transfer policy, `lhpc/core/transfer.py`:
+retry at once, then after 1, 2, 5 and 10 min, then every 10 min; no attempt starts past the 30 min
+retry-start deadline, which counts the attempts' wall time and the waits, and a running attempt is
+bounded by its own timeout; only a failure whose every error line, on stdout and on stderr, is a
+failed transfer is repeated, never an HTTP 4xx, a hash mismatch or another error): the lab image
+and the upstream git sources of the testlab and release-verify lanes in workflow steps of their
+own. The testlab lane's Python packages (with the Meshtastic CLI venv its reset builds), Chromium
+and the Meshtastic web client's `build.tar` are acquired in a step of their own too, proved
+complete in a container with no network by the lane's own install commands
+(`.github/scripts/lab-lane-install.sh`), and read by the lane with no index (a `pip.conf` in the
+lab user's HOME, which the product's command runner passes on), through `PLAYWRIGHT_BROWSERS_PATH`,
+and through `LHPC_MESHTASTIC_WEB_TARBALL` (the web client script's own offline input, verified
+against the same sha256 pin). release-verify's lane installs its Python packages live with the
+same backoff: its job is the live release. The sources are git mirrors
 (`.github/scripts/mirror-sources.py`): the lane copies a git config with one `insteadOf` per
 remote to the lab user's `~/.gitconfig`, so the product's own, unchanged `git clone` resolves to
 them. It is a file in `HOME` because the product's command runner passes `HOME` to git and drops
@@ -138,12 +148,12 @@ index is the root of trust (its sha256 and sizes still decide every file), the m
 never sets it. So the lanes no longer exercise a live GitHub download; the product's own retry of
 one is proven by unit tests. A pinned release download and a build step's packages are still
 fetched in the lane, as the product fetches them; an install or a build whose
-DECISIVE error line (the last one its step ended with) is a failed transfer is repeated with the
-same backoff, only that attempt, never a test. One still failing leads its failure with
+DECISIVE error line (the last one its step ended with) is a failed transfer, and every other error
+line of it too, is repeated by the same policy, only that attempt, never a test, and never when
+LHPC reports the step timed out or its process not proven stopped. One still failing leads its failure with
 `EXTERNAL-UNAVAILABLE what=<token>` (`transfer` in `testlab/lhpc_testlab/release.py`), never with
 a stack-regression marker; a transfer error the step recovered from does not count. A deterministic
-failure of an acquisition (a broken Dockerfile, say) turns red only after the backoff's waits,
-about half an hour.
+failure of an acquisition (a broken Dockerfile, say) turns red at once: it is not a transfer.
 
 `testlab/tests/unit` tests the simulator itself; the four opt-in lanes:
 

@@ -22,6 +22,7 @@ import warnings
 from pathlib import Path
 
 from lhpc.core import build_regression as br
+from lhpc.core import transfer as tp
 from lhpc_testlab import data_path
 from lhpc_testlab.testing import run_lhpc
 
@@ -358,45 +359,20 @@ def install_build(env, svc, stack: str, *, build: bool = True,
 # own error line follows. The bot SEARCHES for it in the JUnit failure; it never coexists with a
 # `STACK-REGRESSION` line.
 
-# The DECISIVE line of a failed step: the last error line its own output ends with.
-_DECISIVE = re.compile(r"^\s*(?:\[failed\]|ERR\b|ERROR:|error:|fatal:|curl: \(\d+\))"
-                       r"|download failed")
-# A decisive line that says WHY a transfer failed, and the why is the network or the server: a
-# name that does not resolve, a connection refused, reset or timed out, an HTTP 5xx. An HTTP 4xx
-# (a binary not yet published, a repository that is gone) is NOT a transfer: it is never retried.
-_TRANSPORT = re.compile(
-    r"Could not resolve host|Failed to connect|Connection (?:refused|reset|timed out)|timed out"
-    r"|Temporary failure in name resolution|Name or service not known|Network is unreachable"
-    r"|ConnectionError|ReadTimeoutError|ConnectTimeoutError|urlopen error \[Errno"
-    r"|(?:returned error|HTTP [Ee]rror):? 5\d\d|curl: \((?:5|6|7|28|35|52|56)\)")
-_CURL = re.compile(r"curl: \(\d+\)")
-# pip's outage shape: its retries ran out on a connection error, and only then it reports that
-# no version satisfies the requirement. A version that does not exist has no exhausted retry.
-_PIP_EXHAUSTED = re.compile(r"Retry\(total=0\b.*(?:NewConnectionError|ConnectTimeoutError"
-                            r"|ReadTimeoutError|name resolution)")
-_PIP_NOT_FOUND = "Could not find a version that satisfies the requirement"
-
-TRANSFER_WAITS = (0, 60, 120, 300, 600)      # then TRANSFER_WAITS[-1] again, while the total
-TRANSFER_TOTAL = 1800                        # of waits stays within this (docs/testlab.md)
+# The DECISIVE line of a failed step (the last error line its own output ends with) and whether
+# it is a failed transfer: the one transfer policy, `lhpc/core/transfer.py`, shared with the
+# workflows' `backoff`.
+# An install or build whose original output says LHPC could not prove a stopped step's process
+# gone, or that it timed out, is never repeated: a second run could meet the first one's process.
+_NEVER_REPEATED = re.compile(r"cessation UNPROVEN|\[timeout\]")
 
 
 def external_unavailable(what: str, text: str) -> str:
     """`EXTERNAL-UNAVAILABLE what=<what>` + the decisive line + a newline when the step's
     DECISIVE line — its last error line — is a failed transfer, else "". A transfer error the
     step recovered from earlier does not count: only the line the step ended with decides."""
-    lines = text.splitlines()
-    at = next((i for i in range(len(lines) - 1, -1, -1) if _DECISIVE.search(lines[i])), None)
-    if at is None:
-        return ""
-    line = lines[at].strip()
-    if "download failed" in line and not _TRANSPORT.search(line):
-        # graywolf-fetch.sh's own last word names no reason: curl's line before it does.
-        cause = next((x.strip() for x in reversed(lines[:at]) if _CURL.search(x)), "")
-        if _TRANSPORT.search(cause):
-            line = f"{line} ({cause})"
-    if not (_TRANSPORT.search(line)
-            or (_PIP_NOT_FOUND in line
-                and any(_PIP_EXHAUSTED.search(x) for x in lines[:at]))):
+    line = tp.decisive_transfer(text)
+    if not line:
         return ""
     return f"EXTERNAL-UNAVAILABLE what={what}\n{' '.join(line.split())[:300]}\n"
 
@@ -416,24 +392,30 @@ def _step_text(res) -> str:
 
 def transfer(what: str, run, *, decisive_text=lambda res: f"{res.stdout}\n{res.stderr}",
              failed=lambda res: res.returncode != 0, sleep=time.sleep):
-    """`run()` once; while it FAILS on a transfer (`external_unavailable` of `decisive_text(r)`;
-    None = not a transfer), repeat it with the transfer backoff, each wait warned. Returns
-    `(result, external line or "")`. Only a failed TRANSFER is repeated: any other failure, and a
-    success, returns at once. The callers repeat an install or a build, never an assertion."""
-    retries, spent = 0, 0
+    """`run()` once; while it FAILS on a transfer, repeat it by the one transfer policy
+    (`lhpc/core/transfer.py`), each wait warned. Returns `(result, external line or "")`.
+
+    A failure is repeated only when `decisive_text(r)` (None = not a transfer) is a transfer by
+    the policy (`retryable`: every error line a failed transfer), the original output carries no
+    `cessation UNPROVEN` or `[timeout]`, and the next attempt starts before the retry-start
+    deadline (attempts' wall time + waits). Any other failure, and a success, returns at once.
+    The callers repeat an install or a build, never an assertion."""
+    retries, used = 0, 0.0
     while True:
+        t0 = time.monotonic()
         r = run()
+        used += time.monotonic() - t0
         text = decisive_text(r) if failed(r) else None
         ext = external_unavailable(what, text) if text is not None else ""
-        if retries < len(TRANSFER_WAITS):
-            wait = TRANSFER_WAITS[retries]
-        else:                                   # past the list: its last wait, if it is one
-            wait = TRANSFER_WAITS[-1] or TRANSFER_TOTAL + 1
-        if not ext or spent + wait > TRANSFER_TOTAL:
+        if (not ext or not tp.retryable(text)
+                or _NEVER_REPEATED.search(f"{r.stdout}\n{r.stderr}")):
+            return r, ext
+        wait = tp.next_wait(retries, used)
+        if wait is None:
             return r, ext
         warnings.warn(f"{what}: {ext.splitlines()[1]} — retrying in {wait} s", stacklevel=2)
         sleep(wait)
-        spent, retries = spent + wait, retries + 1
+        used, retries = used + wait, retries + 1
 
 
 def on_binary(env: dict, stack: str) -> bool:
