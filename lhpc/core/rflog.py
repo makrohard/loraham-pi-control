@@ -325,3 +325,36 @@ def prune_targets(entries, keep_rule) -> list:
     file or a radio's `<rid>/rf-daemon.log`, which is persistent by contract), and never what `keep_rule(name)`
     keeps. Pure; the caller deletes."""
     return [n for n in entries if by_job(n) is None and not keep_rule(n)]
+
+
+# --- a listed copy's own RF log (moved from instances.py, G1-C27 #7: RF-log presentation, not instance identity) ---
+
+def log_runs(svc, e, rid: str) -> bool:
+    """7f: the RF log badge of a listed instance's own log `<rid>/rf-<x>.log`: that instance's run state."""
+    from . import instances
+    _sid, inst, band, why = instances.resolve(svc, f"{e.owner}@{rid}")
+    comp = svc.stack(e.owner).component(e.writer) if svc.stack(e.owner) else None
+    return not why and comp is not None and instances.instance_runs(svc, comp, inst, band)
+
+
+def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
+    """The MeshCore RF decoder's mode, secrets and stores: slot 0's (the mode its log is written in), or a listed
+    instance's own (7f: its mode, config/secrets/<rid>, state/<rid>/…), never slot 0's."""
+    from . import instances, meshcore_mode
+    own = (rid,) if rid else ()
+    mode = meshcore_mode.normalize(svc.meshcore_mode(instances.resolve(svc, f"{sid}@{rid}")[1])) if rid else svc._rflog_meshcore_mode()
+    return ["--mode", mode, "--secrets", str(svc._paths.under("config", "secrets", *own)),
+            "--store", str(svc._paths.under("state", *own, "meshcore", "companion.db")),
+            "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
+
+
+def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
+    """7f: the RF log page's stack-row entries of entry `e`'s listed instances on `band`, each its own `<rid>/<file>`."""
+    from . import instances, radio_start
+    out = []
+    for rid in sorted(instances.listed_rids(svc._paths, e.owner), key=lambda r: int(r[1:])):
+        job = f"{rid}/{job_name}"
+        if radio_start.rf_band(svc, rid) == band and by_job(job):
+            out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",
+                        "current": job == shown_job})
+    return out

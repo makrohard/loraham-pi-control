@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 
-from . import instances, radio_start, runtime_fs, validators
 from . import meshcore_mode as _meshcore_mode
+from . import radio_start, runtime_fs, validators
 from . import rflog as _rflog
 from .model import RunState
 from .paths import PathContainmentError
@@ -137,7 +137,7 @@ class RflogOpsMixin:
             except Exception:
                 return False
         if band:                                                 # 7f: a listed instance's own log
-            return instances.log_runs(self, e, band)
+            return _rflog.log_runs(self, e, band)
         for ss in self.build_snapshot(sources=False).stacks:     # a run state: no git per poll
             st = ss.components.get(e.writer)
             if st is not None:
@@ -180,7 +180,7 @@ class RflogOpsMixin:
                 continue
             stacks.append({"target": x.writer, "job": xjob, "surface": x.surface, "band": xband,
                            "label": f"{x.surface} {xband}".strip(), "current": xjob == job})
-            stacks += [] if x.banded else instances.rf_rows(self, x, xjob, shown, job)     # 7f: each listed instance
+            stacks += [] if x.banded else _rflog.rf_rows(self, x, xjob, shown, job)     # 7f: each listed instance
         # A band pill keeps the shown file, except the daemon's: there it opens that band's file.
         bands = [{"band": b, "current": b == shown, "target": e.writer,
                   "job": radio_start.daemon_rf_job(self, e, b) if e.banded else job} for b in self.RADIO_BANDS]
@@ -316,7 +316,7 @@ class RflogOpsMixin:
             if comp is None or comp.source is None:
                 return (), "meshcore is not installed — nothing to decode with"
             py = self._paths.resolve_source(comp.source.path) / ".venv" / "bin" / "python"
-            extra = instances.meshcore_decode_args(self, e.owner, rid)
+            extra = _rflog.meshcore_decode_args(self, e.owner, rid)
         elif e.decoder == "reticulum":
             # LXMF's venv (RNS + LXMF: the message summary) when the delivery service is built,
             # else the RNS venv (RNS only: announces, IFAC, opaque plaintext) — both this stack's.
