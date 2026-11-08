@@ -68,3 +68,25 @@ def test_a_copy_whose_own_listener_is_up_reads_running_with_no_note(tmp_path, we
     r3 = _card(_home(tmp_path, web, monkeypatch, listening=True), "r3")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
         "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC Stop it: lhpc stack stop kiss@r3"]
+
+
+def test_a_copys_entry_and_rows_come_from_one_read_of_its_processes(tmp_path, web, monkeypatch):
+    # G1-C51: the entry and its rows are built from ONE copy_processes read, so a copy stopping between two probes
+    # cannot leave an entry without rows; no second instance_runs probe is made.
+    from lhpc.core import radio_start
+    _home(tmp_path, web, monkeypatch)
+    idle = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    opt, val = instances._token(idle, idle.stack("kiss").component("loraham-kiss-tnc"),
+                                instances.copy_of(idle, "kiss", "r3")[0], "433")
+    svc = ControllerService(system=FakeSystem(cmdlines_data={61: ["/x/loraham-kiss-tnc", opt, val]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    live = {cid: st for ss in svc.build_snapshot().stacks for cid, st in ss.components.items()}
+    reads, real = [], instances.copy_processes
+    monkeypatch.setattr(instances, "copy_processes", lambda s, t: reads.append(1) or real(s, t))
+
+    def no_second_probe(*a, **k):
+        raise AssertionError("running_copies probed a copy again")
+    monkeypatch.setattr(instances, "instance_runs", no_second_probe)
+    entries = radio_start.running_copies(svc, "433", live)
+    assert [(e["id"], [c["id"] for c in e["components"]]) for e in entries] == [("kiss@r3", ["loraham-kiss-tnc"])]
+    assert reads == [1]

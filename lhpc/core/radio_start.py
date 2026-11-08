@@ -1035,29 +1035,32 @@ def running_copies_on(svc, rids) -> list:
 
 def running_copies(svc, band: str, live: dict) -> list:
     """Cleanup C7c (W286, W290): Home's entry for each listed copy that runs on a radio of `band` (`<sid>@<rid>`, for
-    its own radio's card only; running_copies_on decides which run), with a row per component that runs as that copy,
-    judged as the core's already_healthy does (G1-C49): RUNNING, or DEGRADED when one of its own TCP listeners is
-    absent, noted in component_note's words. `live` is the snapshot's component statuses."""
+    its own radio's card only), with a row per component that runs as that copy, both from ONE read of the copies'
+    processes (instances.copy_processes, G1-C51: no second probe to race), each row judged as the core's
+    already_healthy does (G1-C49): RUNNING, or DEGRADED when one of its own TCP listeners is absent, noted in
+    component_note's words. `live` is the snapshot's component statuses."""
     import dataclasses
 
-    from . import instances
+    from . import commands, instances
     from .model import RunState
     from .probes.endpoints import tcp_endpoint_match
     from .status import component_note
-    out = []
-    for stk, inst in running_copies_on(svc, {r.id for r in radios.load(svc._paths).radios if r.band == band}):
+    on, out = {r.id for r in radios.load(svc._paths).radios if r.band == band}, []
+    runs = {(sid, rid, comp) for sid, rid, comp, _pid in instances.copy_processes(svc, svc._system.procfs.cmdlines())}
+    for stk, inst in ((s, i) for s in svc.stacks() for i in commands.stack_instances(s, svc._paths)[1:] if i.rid in on):
         rows = []
         for c in stk.components:
             cs = live.get(c.id)
-            if cs is None or not instances.instance_runs(svc, c, inst, band):
+            if cs is None or (stk.id, inst.rid, c.id) not in runs:
                 continue
             eps = [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
                    else o for o in cs.endpoints or () for e in instances.endpoints_for([o.spec], inst)]
             st = RunState.DEGRADED if any(o.spec.kind == "tcp" and not o.present for o in eps) else RunState.RUNNING
             rows.append({"id": c.id, "name": c.name, "optional": c.optional, "state": st.value,
                          "note": component_note(dataclasses.replace(cs, run_state=st, endpoints=eps))})
-        out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
-                    "main": stk.main, "components": rows, "multi_band": False})
+        if rows:                                         # a listed copy that runs no component as it shows nowhere
+            out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
+                        "main": stk.main, "components": rows, "multi_band": False})
     return out
 
 
