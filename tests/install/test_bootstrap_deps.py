@@ -2353,21 +2353,62 @@ def test_row19_an_unmoved_timestamp_is_called_again(tmp_path):
 
 
 def test_row19_an_unknown_baseline_never_counts_as_moved(tmp_path):
-    # after the timeout an active, "moved" state is on offer: with no accepted baseline it is never read as done
+    # after the timeout an active, "moved" state is on offer: with no accepted baseline it is never read as done; it
+    # becomes the baseline, and the unit, not in a transition, is called again
     r, log = _ts_run(tmp_path, ["show@gpsd.service timeout", "restart@gpsd.service timeout",
                                 "show@gpsd.service value:200:active", "restart@gpsd.service ok"])
     assert r.returncode == 0, r.stderr
-    assert log == ["show@gpsd.service timeout", "restart@gpsd.service timeout", "restart@gpsd.service ok"]
+    assert log == ["show@gpsd.service timeout", "restart@gpsd.service timeout", "show@gpsd.service value:200:active",
+                   "restart@gpsd.service ok"]
+
+
+def test_r18_b1_a_restart_in_progress_is_never_restarted_again(tmp_path):
+    # G2-0.14.0-R18v3 B1: the start outlasts the call bound; the read after the timeout says activating, so no second
+    # restart interrupts it (the deny would fail the step); the next read proves it done
+    r, log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
+                                "show@gpsd.service value:100:activating", "restart@gpsd.service deny",
+                                "show@gpsd.service value:200:active"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert log == ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
+                   "show@gpsd.service value:100:activating", "show@gpsd.service value:200:active"]
+
+
+def test_r18_b1_an_unknown_baseline_still_reads_before_a_retry(tmp_path):
+    # G2-0.14.0-R18v3 B1: the baseline read failed; the reads after the timeout are still made: an unknown state and a
+    # transition withhold the call, the first accepted read becomes the baseline, and the move past it proves done
+    r, log = _ts_run(tmp_path, ["show@gpsd.service timeout", "restart@gpsd.service timeout",
+                                "show@gpsd.service timeout", "restart@gpsd.service deny",
+                                "show@gpsd.service value:100:deactivating", "show@gpsd.service value:200:active"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert log == ["show@gpsd.service timeout", "restart@gpsd.service timeout", "show@gpsd.service timeout",
+                   "show@gpsd.service value:100:deactivating", "show@gpsd.service value:200:active"]
+
+
+def test_r18_note_a_lost_stderr_read_stays_exit_12_never_a_refusal(tmp_path):
+    # G2-0.14.0-R18v3 NOTE (deps.py:420): the child's stderr read fails after a "Connection timed out" answer; that is
+    # the helper's plumbing (12), never "chrony REFUSED" (11). The fake tail fails only on that answer.
+    fb = tmp_path / "tbin"
+    fb.mkdir()
+    (fb / "tail").write_text('#!/bin/sh\nfor f; do :; done\n'
+                             'case "$(cat "$f" 2>/dev/null)" in *"restart unit: Connection timed out"*) exit 1 ;; esac\n'
+                             'exec /usr/bin/tail "$@"\n')
+    (fb / "tail").chmod(0o755)
+    r, _log = _ts_run(tmp_path, ["restart@chrony.service timeout"],
+                      env={"PATH": f"{fb}:{tmp_path / 'fb'}:/usr/bin:/bin"})
+    assert r.returncode == 12, r.stdout + r.stderr
+    assert "could not run in the time-source step (exit 12 at the end)" in r.stderr and "REFUSED" not in r.stderr
 
 
 def test_row19_a_restart_that_keeps_timing_out_fails_the_time_source(tmp_path):
-    r, _log = _ts_run(tmp_path, ["restart@gpsd.service timeout"] * 2, env={"SVC_RETRIES": "2"})
+    r, _log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout"] * 2
+                      + ["show@gpsd.service value:100:active"], env={"SVC_RETRIES": "2"})
     assert r.returncode == 11, r.stdout + r.stderr
     assert "systemd gave no answer to restart gpsd after 2 call(s)" in r.stderr
 
 
 def test_row20_a_chrony_timeout_is_no_answer_never_refused(tmp_path):
-    r, _log = _ts_run(tmp_path, ["restart@chrony.service timeout"] * 2, env={"SVC_RETRIES": "2"})
+    r, _log = _ts_run(tmp_path, ["show@chrony.service value:100:active", "restart@chrony.service timeout"] * 2
+                      + ["show@chrony.service value:100:active"], env={"SVC_RETRIES": "2"})
     assert r.returncode == 11, r.stdout + r.stderr
     assert "systemd gave no answer to restart chrony after 2 call(s)" in r.stderr and "REFUSED" not in r.stderr
 
