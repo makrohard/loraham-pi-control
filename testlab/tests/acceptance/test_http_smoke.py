@@ -91,7 +91,7 @@ def test_every_post_route_refuses_without_csrf(client, app_rules):
     exactly the blindness this assertion exists to remove.
     """
     subst = {"<sid>": "meshcom", "<stack_id>": "meshcore", "<target>": "daemon",
-             "<band>": "433", "<label>": "labx", "<action>": "enable",
+             "<band>": "433", "<rid>": "r1", "<label>": "labx", "<action>": "enable",
              "<op>": "start", "<kind>": "reboot", "<name>": "x"}
     failures = []
     skipped = []
