@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           . .github/scripts/retry.sh
-          backoff sudo -n apt-get update -q
-          backoff sudo -n apt-get install -y -q qemu-system-arm qemu-utils
+          retry 3 sudo -n apt-get update -q
+          retry 3 sudo -n apt-get install -y -q qemu-system-arm qemu-utils
           qemu-system-aarch64 --version | tee "$EV/qemu-version.txt"
 
       - name: The pinned images (M2), verified before any use
@@ -61,8 +61,8 @@ jobs:
           set -euo pipefail
           . .github/scripts/retry.sh
           cd "$WORK"
-          backoff curl -fsSL -o pios.img.xz "$PIOS_URL"
-          backoff curl -fsSL -o deb.qcow2 "$DEB_URL"
+          retry 3 curl -fsSL -o pios.img.xz "$PIOS_URL"
+          retry 3 curl -fsSL -o deb.qcow2 "$DEB_URL"
           python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify pios.img.xz sha256 "$PIOS_SHA256"
           python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify deb.qcow2 sha512 "$DEB_SHA512"
           xz -d pios.img.xz

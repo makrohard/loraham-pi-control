@@ -2,8 +2,8 @@
 
 ## 0.14.0
 
-- CI and test lab: one download retry policy (`lhpc/core/transfer.py`: at once, then 1-10 min apart, no retry
-  starts after 30 min; never a 4xx or hash mismatch); the testlab lane's packages and web client come pre-fetched.
+- Test lab: the testlab lane's Python packages, Chromium and Meshtastic web client are fetched before the lane
+  and proved complete offline; the lane itself downloads none of them.
 - `LHPC_MESHTASTIC_WEB_TARBALL` (a local Meshtastic web client `build.tar`, still sha256-checked) now reaches
   `lhpc build`'s web client step.
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon

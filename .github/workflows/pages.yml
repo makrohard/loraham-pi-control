@@ -37,7 +37,7 @@ jobs:
       - name: Install the wheel builder
         run: |
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
-          backoff python -m pip install --upgrade build
+          retry 3 python -m pip install --upgrade build
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
@@ -53,7 +53,7 @@ jobs:
           set -o pipefail
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           npm init -y >/dev/null 2>&1
-          backoff npm install --no-save pyodide@0.26.2 >/dev/null 2>&1
+          retry 3 npm install --no-save pyodide@0.26.2 >/dev/null 2>&1
           # The gate itself is NOT retried: a boot that fails once and passes twice is a defect
           # we want to see. Its output is captured only to assert where micropip came from.
           LHPC_WHEEL="$(ls "$PWD"/web/wheels/loraham_pi_control-*.whl)" \
@@ -72,7 +72,7 @@ jobs:
         working-directory: demo
         run: |
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
-          backoff npm install --no-save puppeteer-core@23 >/dev/null 2>&1
+          retry 3 npm install --no-save puppeteer-core@23 >/dev/null 2>&1
           ( cd web && python3 -m http.server 8099 >/tmp/httpd.log 2>&1 & )
           # Wait for the port to answer instead of guessing at it. A fixed sleep is a timing
           # dependency immediately before the browser test; two seconds is either wasted or,

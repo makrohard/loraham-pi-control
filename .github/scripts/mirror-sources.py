@@ -139,15 +139,15 @@ def resolved(directory: Path) -> int:
     return 1 if failed else 0
 
 
-WEB_SCRIPT = Path(__file__).resolve().parents[2] / "lhpc" / "data" / "scripts" / "meshtastic-web-assets.sh"
-
-
 def web_tarball(manifest: Path) -> str:
     """`<url> <sha256>` of the `meshtastic-web-assets.sh <dest> <version> <sha256>` step: the URL
-    is the script's own (its `URL="…${VERSION}…"` line), so it is written in one place."""
-    m = re.search(r'^\s*URL="(https://[^"]*\$\{VERSION\}[^"]*)"', WEB_SCRIPT.read_text(), re.MULTILINE)
+    is the script's own (its `URL="…${VERSION}…"` line), so it is written in one place. The script
+    is found next to the manifest (lhpc/data/scripts), never from this file's location: the
+    proof steps run this file alone, with only .github/scripts mounted."""
+    script = manifest.resolve().parent / "scripts" / "meshtastic-web-assets.sh"
+    m = re.search(r'^\s*URL="(https://[^"]*\$\{VERSION\}[^"]*)"', script.read_text(), re.MULTILINE)
     if not m:
-        raise SystemExit(f"no URL=\"…${{VERSION}}…\" line in {WEB_SCRIPT}")
+        raise SystemExit(f"no URL=\"…${{VERSION}}…\" line in {script}")
     for argv in _build_steps(manifest):
         for i, tok in enumerate(argv):
             if tok.endswith("meshtastic-web-assets.sh") and len(argv) > i + 3:

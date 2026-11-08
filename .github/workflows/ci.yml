@@ -59,8 +59,8 @@ jobs:
         # too — its value is the freshest vulnerability database.
         run: |
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
-          backoff python -m pip install --upgrade pip
-          backoff pip install .[dev] pip-audit
+          retry 3 python -m pip install --upgrade pip
+          retry 3 pip install .[dev] pip-audit
 
       - name: requirements.lock is complete (a clean venv from the lock alone)
         # The installer and self-update install the runtime dependencies and the build backend from the lock,
@@ -70,7 +70,7 @@ jobs:
         run: |
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           python -m venv "$RUNNER_TEMP/lockvenv"
-          backoff "$RUNNER_TEMP/lockvenv/bin/python" -m pip install -q --require-hashes --no-deps -r requirements.lock
+          retry 3 "$RUNNER_TEMP/lockvenv/bin/python" -m pip install -q --require-hashes --no-deps -r requirements.lock
           "$RUNNER_TEMP/lockvenv/bin/python" -m pip install -q --no-index --no-deps --no-build-isolation .
           "$RUNNER_TEMP/lockvenv/bin/python" -m pip check
           "$RUNNER_TEMP/lockvenv/bin/python" -c "import lhpc.adapters.web.app"
@@ -163,8 +163,8 @@ jobs:
       - name: Install package and test tooling
         run: |
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
-          backoff python -m pip install --upgrade pip
-          backoff pip install .[dev]
+          retry 3 python -m pip install --upgrade pip
+          retry 3 pip install .[dev]
 
       - name: Fake-signature guard and frozen unit templates
         run: python -m pytest -q -p no:cacheprovider tests/repo/test_fake_signatures.py tests/repo/test_unit_templates_frozen.py
@@ -235,7 +235,7 @@ jobs:
             # so the object resolution below HARD-FAILS — exactly the 56dc877 -> amend signature.
             # Acquisition only. A dropped connection to one of seventeen remotes is not a
             # statement about the pin; the checks BELOW are, and none of them is retried.
-            backoff git -C "$dir" fetch --no-tags origin "$BRANCH"
+            retry 3 git -C "$dir" fetch --no-tags origin "$BRANCH"
             git -C "$dir" cat-file -e "${PIN}^{commit}" \
               || { echo "::error::$path: pinned commit ${PIN} not found on ${BRANCH} (orphaned pin?)"; exit 1; }
             git -C "$dir" merge-base --is-ancestor "$PIN" "origin/${BRANCH}" \
@@ -320,16 +320,16 @@ jobs:
           # meshcore_host adapter against the upstream the product actually installs, so it must
           # install exactly that — an unmodified checkout at the manifest pin.
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
-          backoff python -m pip install -q --upgrade pip
-          backoff python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
           # The repeater the same way the node build installs it (manifest build steps): its
           # pinned dependency closure, then the pinned checkout without deps, so the guard
           # coupling tests (issue #5) bind to the upstream names the product runs.
-          backoff python -m pip install -q -c lhpc/data/openhop-repeater-constraints.txt cherrypy \
+          retry 3 python -m pip install -q -c lhpc/data/openhop-repeater-constraints.txt cherrypy \
             cherrypy-cors paho-mqtt psutil pyserial pyjwt ws4py pyyaml setuptools wheel setuptools_scm
-          backoff python -m pip install -q --no-deps --no-build-isolation /tmp/openhop-repeater
+          retry 3 python -m pip install -q --no-deps --no-build-isolation /tmp/openhop-repeater
           python -c 'import repeater.main'   # fail here, never as a silent importorskip in the tests
-          backoff python -m pip install -q --no-deps ./lhpc/data/meshcore_host
+          retry 3 python -m pip install -q --no-deps ./lhpc/data/meshcore_host
       - name: LHPC MeshCore host tests
         run: pytest -q -rs lhpc/data/meshcore_host/tests
       - name: MeshCore RF-log decoder (openHop's own crypto, generated keys)
@@ -355,8 +355,8 @@ jobs:
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           ver=$(grep -oE 'meshtastic==[0-9.]+' lhpc/data/manifest.example.toml | head -1)
           test -n "$ver" || { echo "::error::no meshtastic== pin in the manifest"; exit 1; }
-          backoff python -m pip install -q --upgrade pip
-          backoff python -m pip install -q "$ver" pycryptodomex==3.23.0 pytest
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q "$ver" pycryptodomex==3.23.0 pytest
       - name: Meshtastic RF-log decoder tests
         run: pytest -q -rs lhpc/data/rfdecode/tests/test_meshtastic_decoder.py
 
@@ -396,10 +396,10 @@ jobs:
           git clone -q "$RNS_REMOTE" /tmp/rns && git -C /tmp/rns checkout -q "$RNS_PIN"
           git clone -q "$LXMF_REMOTE" /tmp/lxmf && git -C /tmp/lxmf checkout -q "$LXMF_PIN"
           git clone -q "$DRV_REMOTE" /tmp/rnsif && git -C /tmp/rnsif checkout -q "$DRV_PIN"
-          backoff python -m pip install -q --upgrade pip
-          backoff python -m pip install -q /tmp/rns pytest
-          backoff python -m pip install -q --no-deps /tmp/lxmf
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q /tmp/rns pytest
+          retry 3 python -m pip install -q --no-deps /tmp/lxmf
           # the decoder reassembles RNode-framed frames with the driver module itself
-          backoff python -m pip install -q --no-deps /tmp/rnsif
+          retry 3 python -m pip install -q --no-deps /tmp/rnsif
       - name: Reticulum RF-log decoder tests
         run: pytest -q -rs lhpc/data/rfdecode/tests/test_reticulum_decoder.py
