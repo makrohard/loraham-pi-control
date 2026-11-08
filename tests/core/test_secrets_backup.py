@@ -982,3 +982,17 @@ def test_backup_holds_a_listed_instances_state_and_secrets(tmp_path):
     _backup(svc, out)
     names = _names(out)
     assert "state/r3/meshcore/companion.db" in names and "config/secrets/r3/meshcore_identity.key" in names
+
+
+def test_backup_holds_a_disabled_radios_copys_state(tmp_path):
+    # G1-B1 (2): r3 is disabled now (no copy by the hardware list); meshcore@r3's saved state is still on disk and so
+    # still in the backup (the state roots are what exists under a radio's directory).
+    import dataclasses
+    a = _root(tmp_path, "a")
+    svc = _seed(a, pki=False)
+    radios_fixture.write(a, (radios_fixture.R2_868, dataclasses.replace(radios_fixture.R3, enabled=False)))
+    (a / "state/r3/meshcore").mkdir(parents=True)
+    (a / "state/r3/meshcore/companion.db").write_bytes(b"c")
+    out = tmp_path / "out.tar"
+    _backup(svc, out)
+    assert "state/r3/meshcore/companion.db" in _names(out)

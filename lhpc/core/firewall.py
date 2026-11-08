@@ -593,9 +593,9 @@ def render_reset_script() -> str:
 
 def instance_port(port: int, inst) -> int:
     """An instance's port: a copy's is the base port (configured or not) + 133 x (n - 1) for rN (DEC-W348), slot 0's
-    the base (until K4b); refused outside 1024..65535 and above r64 (commands.rid_port, the one rule)."""
-    from .commands import rid_port
-    return rid_port(port, inst.rid if inst is not None and inst.slot else "")
+    the base (until K4b); refused outside 1024..65535 and above r64 (Instance.port over commands.rid_port)."""
+    from .commands import SLOT0
+    return (inst or SLOT0).port(port)
 
 
 def instance_eid(comp_id: str, static_port, inst) -> str:

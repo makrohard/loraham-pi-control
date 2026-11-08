@@ -73,6 +73,17 @@ def running_keys(svc, sid: str) -> list:
     return [f"{sid}@{r}" for r in sorted(rids, key=lambda x: int(x[1:]))]
 
 
+def recorded(svc, sid: str) -> dict:
+    """{rid: slot} of `sid`'s running instances by their verified launch records (13.16, G1-B1): a running instance
+    keeps the key it was launched as (slot 0 or a copy, 1), whatever the hardware list says now."""
+    life, out = svc._lifecycle(), {}
+    for rec in life.owned_inventory()[0]:
+        if rec.get("rid") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
+                and life.verify_owned(rec)[0]:
+            out[rec["rid"]] = 1 if rec.get("slot", 0) else 0
+    return out
+
+
 def named(svc, target: str, inst=None, band: str = "") -> str:
     """`<target>@<rid>` for a command lhpc suggests (W323: a bare stack is refused): the instance's radio, else the ONE
     candidate: the band's one enabled radio when a band is given, else the stack's one running instance, else the one
@@ -152,7 +163,7 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
-    if rid in copy_rids(stack, svc._paths):
+    if (run := recorded(svc, sid).get(rid)) == 1 or (run is None and rid in copy_rids(stack, svc._paths)):
         copy, why = copy_of(svc, sid, rid)
         return sid, copy, copy.band if copy is not None else "", why
     radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
@@ -208,23 +219,29 @@ def copy_of(svc, sid: str, rid: str = "", band: str = ""):
     A copy (`rid`, one of copy_rids): its band is its radio row's, and an explicit band that contradicts it is
     refused, never substituted. A disabled radio's copy comes back WITH its why (still addressed: a stop; never
     started). Slot 0 (no `rid`): the operation band (explicit -> running -> fallback -> primary; a fixed-band
-    stack's one band) and, on it, DEC-W16's radio (the band's first enabled one)."""
+    stack's one band) and, on it, the radio slot 0 runs on by its launch record, else DEC-W16's (the band's first
+    enabled one). A running instance keeps its recorded key (13.16, G1-B1): a record decides before copy_rids."""
     stack = svc.stack(sid)
     if stack is None:
         return None, f"unknown stack {sid!r}"
+    run = recorded(svc, sid)
+    rows = radios.load(svc._paths).radios
     if not rid:
         bands = stack_bands(stack)                    # a fixed-band stack's operation band is "" (no store): its band
         band = svc.operation_band(sid, band) or (bands[0] if len(bands) == 1 else "")
-        rid0, why = slot0_radio(svc._paths, sid, band) if band else ("", "")
+        rid0 = next((r.id for r in rows if run.get(r.id) == 0 and r.band == band), "")
+        rid0, why = (rid0, "") if rid0 else slot0_radio(svc._paths, sid, band) if band else ("", "")
         return commands.Instance(0, rid0, band=band), why
-    radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    radio = next((r for r in rows if r.id == rid), None)
     if radio is None:
         return None, f"{sid}@{rid}: {rid} is not in the hardware list"
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
     if radio.band not in stack_bands(stack):
         return None, f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
-    if rid not in copy_rids(stack, svc._paths, "" if radio.enabled else rid):
+    if run.get(rid) == 0:                     # slot 0 runs there (launched before the list gave it a copy)
+        return commands.Instance(0, rid, band=radio.band), ""
+    if run.get(rid) is None and rid not in copy_rids(stack, svc._paths, "" if radio.enabled else rid):
         return None, f"{sid}@{rid} is not a copy of {sid}: the hardware list gives it none on {rid}"
     copy = commands.Instance(1, rid, band=radio.band)
     if not radio.enabled:                     # G1-C7 B3: still addressed (a stop, a running check), never started
@@ -248,12 +265,34 @@ def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
     return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
 
 
-def instance_rels(paths, stack, rels, keep: int) -> list:
+def instance_rels(paths, stack, rels, keep: int, base: tuple = ()) -> list:
     """7d: `rels` plus, for each copy of `stack` (copy_rids), the same with `<rid>` after their first `keep` segments
     (the manifest's {instance_dir} layout: a state root state/<name> -> state/<rid>/<name> with keep=1; a secret
-    file <name> -> <rid>/<name> with keep=0)."""
-    parts = [r.split("/") for r in rels]
-    return [*rels, *("/".join([*q[:keep], rid, *q[keep:]]) for rid in copy_rids(stack, paths) for q in parts)]
+    file <name> -> <rid>/<name> with keep=0). G1-B1 (2): also every one that EXISTS under a `<rid>/` directory on
+    disk (`rels` are relative to the runtime directory `base`), so a disabled or removed radio's copy is still
+    purged and backed up. Read no-follow and contained (runtime_fs); a container that is unsafe adds nothing."""
+    from . import runtime_fs
+    from .paths import PathContainmentError
+    parts, out = [r.split("/") for r in rels], list(rels)
+    listed = copy_rids(stack, paths)
+    on_disk: dict = {}
+    for q in parts:
+        key = tuple(q[:keep])
+        if key not in on_disk:
+            try:
+                on_disk[key] = [n for n, _link in runtime_fs.scandir_nofollow(paths, paths.under(*base, *key))
+                                if commands._RID_RE.fullmatch(n) and n not in listed]
+            except PathContainmentError:
+                on_disk[key] = []
+    def present(rel):                              # no-follow and contained: a link out of the root is not ours
+        try:
+            return runtime_fs.stat_leaf_nofollow(paths, paths.under(*base, *rel.split("/"))) is not None
+        except PathContainmentError:
+            return False
+    for q in parts:
+        out += ["/".join([*q[:keep], rid, *q[keep:]]) for rid in listed]
+        out += [rel for rid in on_disk[tuple(q[:keep])] if present(rel := "/".join([*q[:keep], rid, *q[keep:]]))]
+    return out
 
 
 def slot0_radio(paths, sid: str, band: str):
@@ -394,7 +433,9 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
         rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
         return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),
                 "endpoints": endpoints_for(comp.endpoints, inst)}
-    taken = copy_rids(svc.stack(sid), svc._paths)
+    run = recorded(svc, sid)                   # the copies: the list's and the recorded ones, never slot 0's own radio
+    taken = sorted({*copy_rids(svc.stack(sid), svc._paths), *(r for r, k in run.items() if k)}
+                   - {inst.rid if inst is not None else "", *(r for r, k in run.items() if not k)})
     if not taken:
         return {}
     b = svc.running_band(sid, comp.band or band) or comp.band or band      # slot 0's copy (stop's copy_of, DEC-W16)

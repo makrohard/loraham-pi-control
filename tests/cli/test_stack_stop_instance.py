@@ -113,3 +113,54 @@ def test_slot_0s_stop_never_takes_a_listed_instances_record(tmp_path):
     life = _life(tmp_path, recs, procs={4200: _kiss_on("r3")})
     res = life.stop(comp, exclude_rids=("r3",), token=("--data-socket", "/tmp/loraf-r1.sock"))
     assert res.outcome == Outcome.ALREADY_STOPPED and res.pid is None, res.summary
+
+
+# ---- G1-B1 (1): a running instance keeps its recorded key when the hardware list changes (13.16) -----------------
+
+def _running_with_record(tmp_path, rows, rid, slot):
+    """A real process of kiss-tnc recorded as `kiss` on `rid` at `slot` (its verified launch record) over `rows`."""
+    import subprocess
+    import sys
+
+    import radios_fixture
+    from lhpc.core.services import ControllerService
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    radios_fixture.write(tmp_path, rows)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    stk = svc.stack("kiss")
+    assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
+                                          extra={"rid": rid, "slot": slot})
+    return p
+
+
+A433 = (__import__("lhpc.core.radios", fromlist=["Radio"]).Radio("r1", "a", "uputronics", "433", ce="ce0"),
+        __import__("lhpc.core.radios", fromlist=["Radio"]).Radio("r3", "b", "uputronics", "433", ce="ce1"))
+
+
+def test_g1_b1_a_running_copy_stays_the_copy_when_its_bands_first_radio_is_disabled(box, stops, tmp_path):
+    import dataclasses
+
+    import radios_fixture
+    run = box(A433)
+    p = _running_with_record(tmp_path, A433, "r3", 1)                            # kiss@r3 runs, slot 1
+    try:
+        radios_fixture.write(tmp_path, (dataclasses.replace(A433[0], enabled=False), A433[1]))   # r3 is 433's first now
+        rc, out, _ = run("stop", "kiss@r3")
+        assert [kw.get("rid") for kw in _tnc(stops)] == ["r3"], (stops, out)     # the copy's records, never slot 0's
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_g1_b1_a_running_slot_0_stays_slot_0_when_a_lower_radio_joins_its_band(box, stops, tmp_path):
+    import radios_fixture
+    run = box(A433[1:])
+    p = _running_with_record(tmp_path, A433[1:], "r3", 0)                        # slot 0 runs on r3, 433's only radio
+    try:
+        radios_fixture.write(tmp_path, A433)                                     # r1 joins: the list now makes r3 a copy
+        rc, out, _ = run("stop", "kiss@r3")
+        (kw,) = _tnc(stops)
+        assert "rid" not in kw and "r3" not in kw.get("exclude_rids", ()), (kw, out)   # slot 0's own record is taken
+    finally:
+        p.kill()
+        p.wait(timeout=5)

@@ -31,7 +31,8 @@ def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, mon
     assert not (tmp_path / "config" / "files" / "meshcore.toml").exists()          # slot 0's: not this start's
 
 
-def test_purge_removes_the_listed_instances_config_files_only(tmp_path):
+def test_purge_removes_each_copys_config_files_only(tmp_path):
+    # G1-B1 (2): r4's file (a radio no longer in the hardware list) is on disk, so it goes too; chat's stays.
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
@@ -44,5 +45,5 @@ def test_purge_removes_the_listed_instances_config_files_only(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     res = svc.clean("meshcore", apply=True, purge=True)
     assert res.ok, res.details
-    assert not (tmp_path / "config/files/r3/meshcore.toml").exists()
-    assert (tmp_path / "config/files/r4/meshcore.toml").exists() and (tmp_path / "config/files/r3/lorachat.conf").exists()
+    assert not (tmp_path / "config/files/r3/meshcore.toml").exists() and not (tmp_path / "config/files/r4/meshcore.toml").exists()
+    assert (tmp_path / "config/files/r3/lorachat.conf").exists()

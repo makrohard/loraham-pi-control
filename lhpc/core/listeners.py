@@ -78,9 +78,10 @@ def param_conflicts(svc, changes) -> list[str]:
     # DEC-W348: a stack listener's port is the base of r1..r64's (base + 133 x k), so two of them meet on some radio
     # when they differ by 133 x j (j < 64), and a fixed port (the console, a web page, Reticulum's) meets every one
     # of a base's derived ports.
-    derived = {p: o for p, o in stack_listeners(svc, overrides).items() if p not in FIXED_PORTS}
+    stack = stack_listeners(svc, overrides)
+    derived = {p: o for p, o in stack.items() if p not in FIXED_PORTS}
     fixed: dict[int, list[str]] = defaultdict(list)
-    for src in ({p: o for p, o in stack_listeners(svc, overrides).items() if p in FIXED_PORTS}, nginx_listeners(svc)):
+    for src in ({p: o for p, o in stack.items() if p in FIXED_PORTS}, nginx_listeners(svc)):
         for port, owners in src.items():
             fixed[port].extend(owners)
     step, n = commands.PORT_STEP, commands.PORT_RADIOS
@@ -94,6 +95,11 @@ def param_conflicts(svc, changes) -> list[str]:
                 continue
             if not PORT_MIN <= port <= PORT_MAX:
                 problems.append(f"{owner}: port {port} is outside {PORT_MIN}..{PORT_MAX}")
+            elif "{port" in (ep.address_template or ""):        # radio-derived: every radio's port is in range (r64)
+                try:
+                    commands.rid_port(port, f"r{n}")
+                except commands.CommandError as exc:
+                    problems.append(f"{owner}: {exc}")
             others = [o for q, owners in derived.items() if abs(port - q) % step == 0 and abs(port - q) < step * n
                       for o in owners if o != owner]
             others += [o for q, owners in fixed.items() if (q - port) % step == 0 and 0 <= q - port < step * n

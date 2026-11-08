@@ -138,3 +138,24 @@ def test_a_box_without_copies_judges_slot0_by_the_snapshot(tmp_path):
     comp = svc.stack("kiss").component("loraham-kiss-serial")
     copy = instances.copy_of(svc, "kiss", band="433")[0]
     assert instances.start_state(svc, "kiss", comp, copy, "433", RunState.RUNNING) is RunState.RUNNING
+
+
+def test_g1_b1_a_running_slot0_keeps_its_recorded_radio_when_a_lower_radio_joins(tmp_path):
+    # 13.16 (G1-B1): slot 0 runs on r3, 433's only radio, by its verified launch record; r1 then joins 433. Slot 0
+    # (asked by band, as the internal starts and stops do) is still the one on r3, and kiss@r3 is slot 0, not a copy.
+    import subprocess
+    import sys
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        svc = _svc(tmp_path, rows=ROWS[1:])
+        stk = svc.stack("kiss")
+        assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
+                                              extra={"rid": "r3", "slot": 0})
+        radios_fixture.write(tmp_path, ROWS)                                      # the list now makes r3 a copy
+        assert instances.copy_rids(stk, svc._paths) == ("r3",)
+        slot0 = instances.copy_of(svc, "kiss", band="433")[0]
+        at_r3 = instances.copy_of(svc, "kiss", "r3")[0]
+        assert [(c.slot, c.rid) for c in (slot0, at_r3)] == [(0, "r3"), (0, "r3")]
+    finally:
+        p.kill()
+        p.wait(timeout=5)

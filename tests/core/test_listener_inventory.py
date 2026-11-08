@@ -63,6 +63,15 @@ def test_t_p3_a_port_whose_radio_step_reaches_a_fixed_port_is_refused(tmp_path):
     assert not r.ok and r.details == ["kiss/loraham-kiss-tnc: port 8657 is already reticulum/meshchat's listener"], r.details
 
 
+def test_t_p3_a_base_whose_r64_port_leaves_the_range_is_refused_and_the_last_fitting_one_saves(tmp_path):
+    # G1-B1 NOTE: 60000 is in range on r1 but r64's port would be 60000 + 133 x 63 = 68379; 57156 is the last base
+    # whose r64 port (65535) fits.
+    r = _svc(tmp_path).save_config("kiss", {"kiss_port": "60000"})
+    assert not r.ok and r.details == ["kiss/loraham-kiss-tnc: port 60000 on r64 gives 68379, outside 1024..65535"], \
+        r.details
+    assert _svc(tmp_path).save_config("kiss", {"kiss_port": "57156"}).ok
+
+
 def test_t_p3_a_stack_port_param_outside_the_range_is_refused(tmp_path):
     svc = _svc(tmp_path)
     r = svc.save_config("kiss", {"kiss_port": "80"})

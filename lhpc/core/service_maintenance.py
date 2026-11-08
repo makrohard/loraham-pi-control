@@ -2625,11 +2625,11 @@ class MaintenanceOpsMixin:
         # Persistent state outside every checkout (MeshCom's node image, each instance's too): update keeps, "Clean all" removes.
         state_roots = instances.instance_rels(self._paths, stack, sorted({c.state_root for c in stack.components if c.state_root}), 1)
         # The stack's own secrets (its instances' too) and its generated config files: "purge" is a full wipe (2026-09-27).
-        secret_files = instances.instance_rels(self._paths, stack, sorted({n for c in stack.components for n in c.secret_files}), 0)
+        secret_files = instances.instance_rels(self._paths, stack, sorted({n for c in stack.components for n in c.secret_files}), 0, ("config", "secrets"))
         gen_prefix = "{runtime}/config/files/"
         gen_files = instances.instance_rels(self._paths, stack, sorted({c.config_file.path[len(gen_prefix):] for c in stack.components
                             if c.config_file and c.config_file.path.startswith(gen_prefix)
-                            and "/" not in c.config_file.path[len(gen_prefix):]}), 0)   # 7d: the listed instances' too
+                            and "/" not in c.config_file.path[len(gen_prefix):]}), 0, ("config", "files"))   # 7d: copies' too
         # The links a component's pre_steps publish there (voice's launcher links).
         link_dsts = [commands.SLOT0.subst(str(st.get("dst", ""))) for c in stack.components   # slot 0's names
                      for st in c.pre_steps if st.get("kind") == "symlink"]
