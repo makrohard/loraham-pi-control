@@ -242,7 +242,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None, systemd_running=True, usb_seams=True, extra_env=None):
+         operator_home=None, systemd_running=True, usb_seams=True, extra_env=None, no_systemctl=False):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -265,7 +265,17 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
         meminfo = tmp_path / "meminfo.default"; meminfo.write_text("MemTotal:       8000000 kB\n")
     if swaps is None:
         swaps = tmp_path / "swaps.default"; swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n")
-    env = {**os.environ, "PATH": f"{fb}:/usr/bin:/bin", "CONFIG_TXT": str(config),
+    path = f"{fb}:/usr/bin:/bin"
+    if no_systemctl:                                   # L56: a box without systemctl — the host's own is not on PATH either
+        (fb / "systemctl").unlink()
+        shadow = tmp_path / "host-bin-without-systemctl"
+        shadow.mkdir()
+        for d in (pathlib.Path("/usr/bin"), pathlib.Path("/bin")):
+            for e in d.iterdir():
+                if e.name != "systemctl" and not os.path.lexists(shadow / e.name):
+                    (shadow / e.name).symlink_to(e)
+        path = f"{fb}:{shadow}"
+    env = {**os.environ, "PATH": path, "CONFIG_TXT": str(config),
            "MEMINFO": str(meminfo), "SWAPS": str(swaps),
            "LHPC_SWAPFILE": str(swapfile or (tmp_path / "swap.lhpc")),
            "FSTAB": str(fstab or (tmp_path / "fstab")),
@@ -1327,6 +1337,16 @@ def test_inspection_failure_aborts_up_front_with_nothing_mutated(tmp_path):
     assert apt == "" and um == ""                         # NOTHING mutated (no apt, no group grant)
     assert "nothing to disable" not in r.stdout           # the fail-open symptom
     assert _DONE not in r.stdout                           # never a false success
+
+
+def test_no_systemctl_on_path_is_refused_before_any_systemd_call(tmp_path):
+    # L56 (self-audit row 29): `command -v systemctl` fails -> the L1 refusal, exit 8, before any service call or mutation.
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], no_systemctl=True)
+    assert r.returncode == 8
+    assert "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?)" in r.stderr
+    assert "attempt(s)" not in r.stderr and "a systemctl call could not be run" not in r.stderr   # no call was tried
+    assert apt == "" and um == ""
+    assert _DONE not in r.stdout
 
 
 def test_swap_stale_fstab_missing_file_recreates_without_a_scary_error(tmp_path):
