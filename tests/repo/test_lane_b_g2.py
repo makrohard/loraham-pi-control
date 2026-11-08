@@ -170,7 +170,7 @@ def test_the_evidence_step_refuses_while_the_sampler_is_held_before_setsid(tmp_p
     # sums. Released, the sampler publishes "grp:<id>" itself and start_samplers succeeds.
     fifo, held = tmp_path / "release", tmp_path / "held"
     os.mkfifo(fifo)
-    stub = _stub(tmp_path, setsid=f'echo $$ > {held}; read -r _ < {fifo}; exec {shutil.which("setsid")} "$@"')
+    stub = _stub(tmp_path, setsid=f'echo $$ > {held}; read -r _ < {fifo} || exit 0; exec {shutil.which("setsid")} "$@"')
     starter = _start(tmp_path, stub=stub, background=True)
     try:
         for _ in range(500):

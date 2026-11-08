@@ -40,6 +40,7 @@ from flask import (
 )
 
 from lhpc.adapters.web.oneshot import OneShot
+from lhpc.core import attention as _attention
 from lhpc.core import auto_install_form, validators, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
@@ -435,10 +436,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return []
 
-    def _set_key(items) -> str:
-        from lhpc.core import attention
-        return attention.set_key(items)
-
     @app.post("/attention/dismiss")
     def attention_dismiss():
         """W273: the banner's one ✕ hides the set it shows until that set changes (+20 dBm stays)."""
@@ -554,7 +551,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             hardware_configured=service.hardware_configured(),
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
             attention=(_att := _attention_banner()),              # W272/W273: the "Needs attention" banner
-            attention_set=_set_key(_att),                         # C23 B2: the ✕ posts the identity of the set shown
+            attention_set=_attention.set_key(_att),                         # C23 B2: the ✕ posts the identity of the set shown
             # Each power button renders ONLY when logind authorizes ITS action (cached
             # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
             # box shows nothing, and the dep panel offers the copybox.

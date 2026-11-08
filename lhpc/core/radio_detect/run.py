@@ -156,13 +156,18 @@ def _list_refusal(state, who: str):
     return _refused(who, "the hardware list is not valid") if state.kind == radios.INVALID else None
 
 
-def _running(svc, rows) -> str:
-    """The first of `rows` whose daemon runs (radio_start.daemon_running, the answer Remove uses), "?" when a daemon
-    process of unknown identity runs although no row is asked about (it could be any radio's), else ""."""
+def _running(svc, rows, listed, band: str = "") -> str:
+    """The first of `rows` whose daemon runs (radio_start.daemon_running, the answer Remove uses); else a daemon no
+    `listed` radio explains (R7v6): "?" for one of unknown identity, its id for an `--id` daemon whose row is absent,
+    "the <band> MHz radio" for a no-id (0.13.x) daemon on `band`; else ""."""
     from .. import radio_start
     procs = radio_start._daemon_procs(svc)
-    hit = next((r.id for r in rows if radio_start.daemon_running(svc, r, procs)), "")
-    return hit or ("?" if any(p.kind == "unknown" for p in procs) else "")
+    if hit := next((r.id for r in rows if radio_start.daemon_running(svc, r, procs)), ""):
+        return hit
+    ids = {r.id for r in listed}
+    p = next((p for p in procs if p.kind == "unknown" or (p.kind == "id" and p.rid not in ids)
+              or (p.kind == "no-id" and band and p.band == band)), None)
+    return "" if p is None else "?" if p.kind == "unknown" else p.rid or f"the {band} MHz radio"
 
 
 def _daemon_line(rid: str, chip: str = "") -> Detected:
@@ -190,7 +195,7 @@ def detect_stick(svc, model_id: str, port: str) -> Detected:
     holders = [r for r in rows if (r.usb_serial or r.usb_port) and (
         radio_start.stick_port(r.usb_serial, r.usb_port, scan)[0] == port
         or (unread and r.usb_serial and not radio_start.stick_port(r.usb_serial, r.usb_port, scan)[0]))]
-    if rid := _running(svc, holders):                                      # FIRST
+    if rid := _running(svc, holders, rows):                                # FIRST (a no-id daemon is a board's)
         return _daemon_line(rid)
     if dev is None:
         return _refused(who, f"no stick is plugged in on port {port}", model.chip)
@@ -213,7 +218,7 @@ def detect_board(svc, model_id: str, variant_key: str, band: str) -> Detected:
     if (bad := _list_refusal(state, who)) is not None:
         return bad
     rows = state.radios if state.kind == radios.VALID else ()
-    if rid := _running(svc, [r for r in rows if r.band == band]):         # FIRST: the band's radios' daemons
+    if rid := _running(svc, [r for r in rows if r.band == band], rows, band):   # FIRST: the band's radios' daemons
         return _daemon_line(rid, model.chip)
     variant = next((v for v in model.variants if v.key == variant_key), None)
     if variant is None or band not in model.bands or (variant.band and variant.band != band):

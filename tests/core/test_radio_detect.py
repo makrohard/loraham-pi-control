@@ -156,6 +156,16 @@ def test_an_uputronics_board_on_kernel_chip_selects_requests_no_lines(tmp_path, 
     assert requests == []
 
 
+def test_the_lock_folder_is_made_before_any_daemon_ever_started(tmp_path):
+    # Box H L1a: on a fresh install state/loraham does not exist yet; the bus makes it (0700) as the daemon's start does.
+    from lhpc.core import radio_models
+    (tmp_path / "spidev0.1").touch()
+    lock = tmp_path / "state" / "loraham" / "spi0.lock"
+    spi.SpiBus(radio_models.load()["uputronics"].variant("ce0").pins, "sx127x", lock, dev=tmp_path,
+               gpio_request=lambda c, o, i: None, spi_factory=lambda node: _Echo()).close()
+    assert lock.is_file() and (lock.parent.stat().st_mode & 0o777) == 0o700
+
+
 
 class _NoCsRefused(_Echo):
     """An spidev on a controller that rejects SPI_NO_CS (the Pi 5's RP1: EINVAL)."""

@@ -419,14 +419,24 @@ def test_a_fake_daemon_that_never_opens_its_socket_is_stopped_and_reaped(fake_da
     assert proc.returncode == -signal.SIGKILL
 
 
+# A HANG GUARD only, never a pacing: every positive wait below is a blocking read of the fake daemon's own reply or
+# frame, so it returns as soon as the fake has written it. The fake runs in its own process (a 0.5 s select loop), and
+# under two parallel -n auto suites it can go unscheduled for seconds; the old 5 s / 8 s bounds read that as a failure.
+FAKE_HANG_S = 60
+
+
 def _conf(sockdir, band, cmd: bytes) -> str:
     import socket as _s
     c = _s.socket(_s.AF_UNIX)
-    c.settimeout(5)
+    c.settimeout(FAKE_HANG_S)
     c.connect(str(sockdir / f"loraconf{band}.sock"))
     c.sendall(cmd + b"\n")
-    out = c.recv(4096).decode()
-    c.close()
+    try:
+        out = c.recv(4096).decode()
+    except TimeoutError:
+        pytest.fail(f"the fake daemon sent no reply to {cmd!r} within {FAKE_HANG_S} s (hang guard)")
+    finally:
+        c.close()
     return out
 
 
@@ -466,7 +476,7 @@ def test_fake_daemon_serves_its_radios_sockets_with_an_id(fake_daemon, tmp_path)
     sockdir, _root = fake_daemon(rid="r1")
     assert sorted(p.name for p in sockdir.iterdir()) == ["lora-r1.sock", "loraconf-r1.sock", "loraf-r1.sock"]
     c = _s.socket(_s.AF_UNIX)
-    c.settimeout(5)
+    c.settimeout(FAKE_HANG_S)
     c.connect(str(sockdir / "loraconf-r1.sock"))
     c.sendall(b"GET STATUS\n")
     line = c.recv(4096).decode()
@@ -506,6 +516,15 @@ def test_fake_daemon_refuses_an_id_that_is_no_radio_id(tmp_path, rid):
     assert out.returncode == 2 and "is not r1..r99" in out.stderr and list(tmp_path.iterdir()) == []
 
 
+def _frame_of(sock, what):
+    """A frame the fake daemon must send (a positive wait): `_frame` under the hang guard, with a clear failure."""
+    sock.settimeout(FAKE_HANG_S)
+    try:
+        return _frame(sock)
+    except TimeoutError:
+        pytest.fail(f"the fake daemon sent no {what} within {FAKE_HANG_S} s (hang guard)")
+
+
 def _frame(sock):
     """Read exactly ONE length-prefixed frame: kind byte, 2-byte length, then the body.
 
@@ -536,18 +555,18 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     import struct as _st
     sockdir, root = fake_daemon()
     f = _s.socket(_s.AF_UNIX)
-    f.settimeout(8)
+    f.settimeout(FAKE_HANG_S)
     f.connect(str(sockdir / "lora433f.sock"))
     _conf(sockdir, "433", b"SET TXRESULT=1")
     f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
-    resp = _frame(f)
+    resp = _frame_of(f, "TX_RESULT frame")
     assert resp[0] == 0x04 and _st.unpack("<H", resp[1:3])[0] == 4
     status, flags, seq = _st.unpack("<BBH", resp[3:7])
     assert status == 0 and flags & 0x01 and seq == 1
     assert "TXOK=1" in _conf(sockdir, "433", b"GET STATS")
     (root / "state" / "testlab" / "rx-queue" / "433" / "0001.json").write_text(
         json.dumps({"preset": "aprs-position"}))
-    rx = _frame(f)
+    rx = _frame_of(f, "RX frame for the queued file")
     assert rx[0] == 0x01
     ln = _st.unpack("<H", rx[1:3])[0]
     rssi, snr = _st.unpack("<hh", rx[3:7])
@@ -569,15 +588,16 @@ def test_fake_daemon_air_carries_a_transmission_to_the_other_clients_only(fake_d
     sockdir, _root = fake_daemon(air=air)
     a, b = _s.socket(_s.AF_UNIX), _s.socket(_s.AF_UNIX)
     for s in (a, b):
-        s.settimeout(2)
+        s.settimeout(FAKE_HANG_S)
         s.connect(str(sockdir / "lora433f.sock"))
     b.sendall(b"\x09" + _st.pack("<H", 0))         # its 0x03 reply proves b is accepted
-    assert _frame(b)[0] == 0x03
+    assert _frame_of(b, "0x03 reply")[0] == 0x03
     a.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
     if air:
-        rx = _frame(b)
+        rx = _frame_of(b, "forwarded RX frame")
         assert rx[0] == 0x01 and rx[7:] == b"hello"
     else:
+        b.settimeout(2)                              # a NEGATIVE wait: its window is the assertion
         with pytest.raises(_s.timeout):
             _frame(b)
     a.settimeout(1)
@@ -593,11 +613,11 @@ def test_fake_daemon_radio_failed_refuses_tx(fake_daemon, tmp_path):
     assert "RADIO=FAILED" in _conf(sockdir, "433", b"GET STATUS")
     assert _conf(sockdir, "433", b"SET FREQ=433.775") == "ERR RADIO_NOT_READY\n"
     f = _s.socket(_s.AF_UNIX)
-    f.settimeout(5)
+    f.settimeout(FAKE_HANG_S)
     f.connect(str(sockdir / "lora433f.sock"))
     _conf(sockdir, "433", b"SET TXRESULT=1")
     f.sendall(b"\x02" + _st.pack("<H", 2) + b"hi")
-    resp = _frame(f)
+    resp = _frame_of(f, "TX_RESULT frame")
     assert resp[0] == 0x04 and resp[3] == 3                # RADIO_NOT_READY
 
 
@@ -1245,19 +1265,12 @@ _DL_FAILED = ("Binary install of 'meshcom' refused: download failed: "
               "<urlopen error [Errno -3] Temporary failure in name resolution>")
 
 
-def test_a_binary_download_that_stays_unavailable_fails_the_reset_as_external(monkeypatch):
-    import warnings
-
-    import lhpc_testlab.release as rel
-    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0, 0), raising=False)
-    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0, raising=False)
+def test_a_failed_binary_download_fails_the_reset_at_once_the_lab_retries_nothing():
+    # L1: the lane reads the mirror and the product retries a transfer failure itself (P1); the lab's own
+    # whole-install retry is gone, so one failed install is the reset's failure.
     svc, calls = _binary_svc(available=True, outcomes=[(False, _DL_FAILED)])
-    details = []
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        failure = ops._install_binary_stacks(svc, details)
-    assert failure.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=binary:meshcom"
-    assert calls == ["meshcom"] * 3                   # 1 + 2 retries, then the reset fails
+    assert ops._install_binary_stacks(svc, []) == f"install meshcom (binary): {_DL_FAILED}"
+    assert calls == ["meshcom"]
 
 
 def test_a_binary_install_that_fails_otherwise_fails_the_reset_at_once(monkeypatch):

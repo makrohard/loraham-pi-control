@@ -66,15 +66,20 @@ def _store(svc):
     return svc._paths.under("state", "attention-dismissed")
 
 
+def closed(svc) -> str:
+    """The identity of the set the ✕ closed, "" when none is stored."""
+    from . import runtime_fs
+    try:
+        return runtime_fs.read_text_regular(svc._paths, _store(svc), max_bytes=128).strip()
+    except (OSError, PathContainmentError, ValueError):
+        return ""
+
+
 def banner(svc) -> list:
     """The lines Home shows: every condition, unless the operator closed this very set; then the sticky ones only. A set
     that changed or emptied since the ✕ clears it (C23 B1)."""
     from . import runtime_fs
-    items = conditions(svc)
-    try:
-        shut = runtime_fs.read_text_regular(svc._paths, _store(svc), max_bytes=128).strip()
-    except (OSError, PathContainmentError, ValueError):
-        shut = ""
+    items, shut = conditions(svc), closed(svc)
     if shut and shut != set_key(items):
         try:
             runtime_fs.unlink(svc._paths, _store(svc))

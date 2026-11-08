@@ -1465,7 +1465,8 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
     # S2: the baseline list's r1 card; a radio's running daemon has Stop and Restart (W286), else one Start
     assert [col.within(f).field_default("op") for f in forms] == (["stop", "restart"] if state != "offline-installed"
                                                                   else ["start"]), "the card's daemon controls"
-    links = [p for p in col.find("p") if col.within(p).find("a", href="/logs/loraham-daemon?band=433")]
+    r1_log = "/logs/loraham-daemon?job=start-loraham-daemon-433-r1.log"     # r1's card: its radio's own log (G1-C28)
+    links = [p for p in col.find("p") if col.within(p).find("a", href=r1_log)]
     assert len(links) == 1                                                 # the block with the log links
     if state in ("ready", "occupied"):
         heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
@@ -1473,7 +1474,7 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
         assert links[0].index == heads[0].end + 1                          # then the log links
     else:
         assert links[0].index == forms[0].end + 1
-    log = col.within(links[0]).find("a", href="/logs/loraham-daemon?band=433")
+    log = col.within(links[0]).find("a", href=r1_log)
     assert log and log[0].text == "Daemon log"
 
 

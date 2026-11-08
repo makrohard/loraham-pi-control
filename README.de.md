@@ -216,8 +216,8 @@ Alles außer dem Link `~/.local/bin/lhpc` und den systemd-User-Units landet unte
 ```bash
 mkdir -p ~/loraham-pi-control/src
 git clone https://github.com/makrohard/loraham-pi-control.git ~/loraham-pi-control/src/loraham-pi-control
-python3 -m venv ~/loraham-pi-control/venv/lhpc
-~/loraham-pi-control/venv/lhpc/bin/pip install --require-hashes --no-deps -r ~/loraham-pi-control/src/loraham-pi-control/requirements.lock
+python3 -m venv --system-site-packages ~/loraham-pi-control/venv/lhpc
+~/loraham-pi-control/venv/lhpc/bin/pip install --require-hashes --no-deps --ignore-installed -r ~/loraham-pi-control/src/loraham-pi-control/requirements.lock
 ~/loraham-pi-control/venv/lhpc/bin/pip install --no-deps --no-build-isolation -e ~/loraham-pi-control/src/loraham-pi-control
 ~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
 mkdir -p ~/.local/bin && ln -sfn ~/loraham-pi-control/venv/lhpc/bin/lhpc ~/.local/bin/lhpc

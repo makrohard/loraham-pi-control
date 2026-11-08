@@ -13,7 +13,7 @@ import re
 
 RIDS = {"r1": "433", "r2": "868"}                       # the lab's radios: one card each
 DAEMON = re.compile(r".*/api/daemon/(433|868)\?rid=(r[0-9]+)$")
-LIVE = {"reachable": True, "channel": {}, "status": {}, "stats": {}, "feed": []}
+LIVE = {"reachable": True, "ready": True, "radio_state": "READY", "channel": {}, "status": {}, "stats": {}, "feed": []}
 
 
 def _open(page, answer, hidden=False):
@@ -57,7 +57,7 @@ def _wait_rendered(page):
     """dash.js has rendered a daemon answer on every radio's card (the server renders other text)."""
     page.wait_for_function(
         "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent"
-        " === 'daemon live')", arg=list(RIDS), timeout=15000)
+        " === 'daemon usable (READY)')", arg=list(RIDS), timeout=15000)
 
 
 def _set_hidden(page, hidden):
@@ -130,3 +130,14 @@ def test_a_failed_poll_is_retried_after_the_slow_interval_not_the_normal_one(pag
     page.clock.run_for(1000)                     # 15.5 s after the failure: exactly one retry
     settled()
     assert seen == dict.fromkeys(RIDS, 2), seen
+
+
+def test_a_reachable_daemon_whose_radio_failed_reads_occupied_not_usable(page):
+    """G1-C28 N1: the badge follows the radio's readiness, as the server renders it; reachability alone is not usable."""
+    failed = dict(LIVE, ready=False, radio_state="FAILED")
+    _open(page, lambda route, band: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(dict(failed, band=band))))
+    page.wait_for_function(
+        "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent === 'daemon occupied (FAILED)')",
+        arg=list(RIDS), timeout=15000)
+    assert all(page.get_attribute(f"#rd-badge-{rid}", "class") == "badge badge-degraded" for rid in RIDS)

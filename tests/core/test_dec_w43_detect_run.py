@@ -277,3 +277,23 @@ def test_a_daemon_of_unknown_identity_refuses_a_board_detect_with_no_radio_on_th
     assert run.detect_board(box.svc, "uputronics", "ce0", "433").line == \
         "Detect refused: a daemon process of unknown identity is running. Stop it first."
     assert box.opened == []
+
+
+@pytest.mark.no_default_hardware                  # the list is really absent (conftest's baseline list off)
+def test_a_0_13_daemon_with_no_list_refuses_a_board_detect_on_its_band_only(tmp_path, monkeypatch):
+    # R7v6: an upgraded box (no radios.toml) still runs its no-id `--radio 433` daemon; Detect must not open its bus.
+    box = _Box(tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(7, "no-id", band="433")], chip=_Chip("sx127x"))
+    (tmp_path / "config" / "radios.toml").unlink()
+    assert run.detect_board(box.svc, "uputronics", "ce0", "433").line == \
+        "Detect refused: the 433 MHz radio's daemon is running. Stop it first."
+    assert box.opened == []
+    assert run.detect_board(box.svc, "uputronics", "ce1", "868").line == "uputronics 868 MHz: SX127x found (version 0x12)"
+
+
+def test_a_daemon_of_a_radio_not_in_the_list_refuses_a_board_and_a_stick_detect(tmp_path, monkeypatch):
+    # R7v6: `--id r9` runs but r9 has no row: it may hold the radio about to be detected.
+    box = _Box(tmp_path, monkeypatch, procs=[radio_daemon.DaemonProc(8, "id", rid="r9")],
+               devices=[_dev("1-1.3", "MSTICK02")], chip=_Chip("sx127x"))
+    assert run.detect_board(box.svc, "uputronics", "ce0", "433").line == "Detect refused: r9's daemon is running. Stop it first."
+    assert run.detect_stick(box.svc, "meshstick-1262", "1-1.3").line == "Detect refused: r9's daemon is running. Stop it first."
+    assert box.opened == [] and box.selected == []

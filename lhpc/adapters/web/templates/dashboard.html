@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import cmdbox, webserver_pills, banner %}
+{% from "_macros.html" import cmdbox, webserver_pills, banner, daemon_badge %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {# One band on the hardware list: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
 {% block body_class %}{% if radio_bands | length != 2 %}dash-narrow{% endif %}{% endblock %}
@@ -104,20 +104,14 @@
          page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
       {% set links %}
         <p class="links">
-          <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
+          <a href="{{ url_for('logs_view', target='loraham-daemon', job=x.log) if x else url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
           <span class="rfline">RF log: {% for l in r.rflogs if not (x and "/" in (l.job or "") and not l.job.startswith(x.rid ~ "/")) %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if x %} data-radio-rid="{{ x.rid }}"{% endif %}>
         <header>
           <h2>{% if x %}{{ x.rid }} · {{ r.band }}{% else %}{{ r.band }} MHz{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
-          {% if x %}
-          <span class="badge badge-{{ 'running' if x.ready else ('degraded' if x.reachable else 'stopped') }}" id="rd-badge-{{ key }}">
-            {% if x.ready %}daemon usable (READY){% elif x.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span>
-          {% else %}
-          <span class="badge badge-{{ 'running' if r.daemon.usable else ('degraded' if r.daemon.occupied else 'stopped') }}" id="rd-badge-{{ key }}">
-            {% if r.daemon.usable %}daemon usable (READY){% elif r.daemon.occupied %}daemon occupied ({{ r.daemon.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
-          {% endif %}
+          {{ daemon_badge(x or r.daemon, "rd-badge-" ~ key) }}
         </header>
         <div class="body">
           {% if x %}<p class="muted"><a href="{{ url_for('hardware_radio', rid=x.rid) }}">{{ x.name }}</a> ({{ x.model }})</p>{% endif %}

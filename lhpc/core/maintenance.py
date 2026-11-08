@@ -63,6 +63,16 @@ def _rf_logs(svc):
     return Outcome.OK, "rolled where due"
 
 
+def _attention(svc):
+    """G1-C23-RE F1: the Needs-attention ✕ is cleared once its set changed, seen here without a Home visit. A fault that
+    recovers and returns within one pass stays closed."""
+    from . import attention
+    if not attention.closed(svc):
+        return Outcome.OK, "nothing closed"
+    attention.banner(svc)
+    return Outcome.OK, "checked"
+
+
 # The pass, in its order: (task name, the call). The names are the record's keys.
 TASKS = (
     ("deferred-apply", _apply),
@@ -71,6 +81,7 @@ TASKS = (
     ("start-logs", lambda svc: _caps(svc.cap_start_logs())),
     ("controller-logs", lambda svc: _caps(svc.cap_controller_logs())),
     ("rf-logs", _rf_logs),
+    ("attention", _attention),
 )
 
 
