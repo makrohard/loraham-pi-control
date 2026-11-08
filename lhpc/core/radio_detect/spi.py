@@ -66,6 +66,7 @@ class SpiBus:
                 if self._lines is not None:
                     self._lines.release()
                 raise
+        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)     # as the daemon's start pre_step makes it
         self._lock = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
 
     def reset(self, level: int) -> None:
