@@ -205,9 +205,27 @@ def _daemon_procs(svc) -> list:
 
 
 def _radio_users(svc, radio) -> list:
-    """The running stacks on `radio`'s band other than the daemon (slot 0: a band's one radio, B4-D39)."""
-    return sorted(s.id for s in svc.stacks() if s.main != svc.DAEMON_ID and svc.stack_running(s.id)
-                  and radio.band in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}))
+    """The users of `radio`, judged per radio (G1-C49), other than the daemon: each listed copy running on it
+    (`<sid>@<rid>`, running_copies_on); slot 0 of a stack whose own processes run on its band, when `radio` is slot 0's
+    DEC-W16 radio there; and, fail-safe, a stack running on the band by a process neither slot 0 nor any of its copies
+    explains: it holds every radio of the band (a removal guard stays conservative)."""
+    from . import instances
+    from .model import RunState
+    up, snap = (RunState.RUNNING, RunState.DEGRADED), svc.build_snapshot()
+    copies = running_copies_on(svc, {r.id for r in radios.load(svc._paths).radios})
+    out = [f"{s.id}@{i.rid}" for s, i in copies if i.rid == radio.id]
+    for s in svc.stacks():
+        if (s.main == svc.DAEMON_ID or not svc.stack_running(s.id)          # plain run_state: any process of the spec
+                or radio.band not in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band})):
+            continue
+        ss = snap.stack(s.id)
+        st = ss.components.get(s.main) if ss is not None else None
+        if st is not None and st.own_run_state in up:
+            if instances.slot0_radio(svc._paths, s.id, radio.band)[0] == radio.id:
+                out.append(s.id)
+        elif not any(cs.id == s.id for cs, _i in copies):
+            out.append(s.id)                     # an unattributed process: hold the band's radios
+    return sorted(out)
 
 
 def radio_activity(svc, radio, procs=None) -> list:
@@ -1002,16 +1020,21 @@ def chip_family(svc, band: str, rid: str = ""):
     return None if row is None else cfgmod.hw_preset_family(v.preset if v else "")
 
 
+def running_copies_on(svc, rids) -> list:
+    """[(stack, copy)] of each listed copy on a radio of `rids` that runs, by its verified record or its own token
+    (instances.instance_runs, any component): the one copy-ownership answer for Home's cards and a radio's users."""
+    from . import commands, instances
+    bands = {r.id: r.band for r in radios.load(svc._paths).radios}
+    return [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]
+            if inst.rid in rids and any(instances.instance_runs(svc, c, inst, bands.get(inst.rid, "")) for c in stk.components)]
+
+
 def running_copies(svc, band: str) -> list:
     """Cleanup C7c (W286, W290): Home's entry for each listed copy that runs on a radio of `band` (`<sid>@<rid>`, for
     its own radio's card only). The snapshot no longer counts a copy as slot 0, so without it a running copy vanished."""
-    from . import commands, instances
     on = {r.id for r in radios.load(svc._paths).radios if r.band == band}
     return [{"id": f"{stk.id}@{inst.rid}", "sid": stk.id, "rid": inst.rid, "name": stk.name, "main": stk.main,
-             "components": [], "multi_band": False}
-            for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]
-            if inst.rid in on and any(c.process is not None and instances.instance_runs(svc, c, inst, band)
-                                      for c in stk.components)]
+             "components": [], "multi_band": False} for stk, inst in running_copies_on(svc, on)]
 
 
 def band_radios(svc, band: str) -> list:
