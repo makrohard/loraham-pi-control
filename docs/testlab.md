@@ -128,9 +128,16 @@ remote to the lab user's `~/.gitconfig`, so the product's own, unchanged `git cl
 them. It is a file in `HOME` because the product's command runner passes `HOME` to git and drops
 `GIT_CONFIG_GLOBAL`. A step with no network proves every listed remote resolves locally, and the
 lane proves, through that runner, that each one resolves to its mirror before its tests start;
-the list is every manifest remote but the few that script names, each with its reason. A
-published binary, a pinned release download and a build step's packages are still fetched in the
-lane, as the product fetches them; an install, a build or the lab reset's binary install whose
+the list is every manifest remote but the few that script names, each with its reason. The
+lhpc-binaries artifacts the testlab lane's reset installs (meshcom and meshtastic) are mirrored the
+same way (`.github/scripts/mirror-binaries.py`: every candidate for the image's target, through the
+API asset URL with the job's token), proved complete with no network, and read by the product
+through `LHPC_BINARY_MIRROR=/binmirror`. That variable is the lab's only: in mirror mode the mirrored
+index is the root of trust (its sha256 and sizes still decide every file), the mirror fails closed
+(a URL outside the one release or a file it lacks is a refusal, never a live fetch), and production
+never sets it. So the lanes no longer exercise a live GitHub download; the product's own retry of
+one is proven by unit tests. A pinned release download and a build step's packages are still
+fetched in the lane, as the product fetches them; an install or a build whose
 DECISIVE error line (the last one its step ended with) is a failed transfer is repeated with the
 same backoff, only that attempt, never a test. One still failing leads its failure with
 `EXTERNAL-UNAVAILABLE what=<token>` (`transfer` in `testlab/lhpc_testlab/release.py`), never with

@@ -636,11 +636,10 @@ def _install_binary_stacks(svc, details: list) -> str:
     """On aarch64 (matching the Pi), pull meshcom and meshtastic from OUR binaries
     (lhpc-binaries) via the production binary channel — the real qemu-system-xtensa and
     meshtasticd, no compile. On a non-aarch64 host the channel is unavailable and the stack is
-    simply left uninstalled (its acceptance leg then skips). Where the channel IS available, a
-    download that fails is retried with the transfer backoff (`release.transfer`), and an install
-    that still fails is returned as the reset's failure — first line `EXTERNAL-UNAVAILABLE …`
-    when it was the transfer — instead of surfacing later as an unrelated start failure."""
-    from .release import transfer
+    simply left uninstalled (its acceptance leg then skips). The lane reads them from the binary
+    mirror (LHPC_BINARY_MIRROR, filled before the lanes; no live fetch in a lane), and the product
+    retries a transfer failure itself, so an install that fails is returned as the reset's failure
+    at once instead of surfacing later as an unrelated start failure."""
     for sid in ("meshcom", "meshtastic"):
         try:
             avail, _why = svc.binary_available(sid)
@@ -650,17 +649,12 @@ def _install_binary_stacks(svc, details: list) -> str:
             details.append(f"  {sid}: binary channel unavailable (not aarch64) — skipped")
             continue
         try:
-            r, ext = transfer(f"binary:{sid}",
-                              lambda sid=sid: svc.install(sid, apply=True,
-                                                          source=svc.BINARY_CHANNEL),
-                              decisive_text=lambda res: "\n".join([res.summary,
-                                                                    *(res.details or [])]),
-                              failed=lambda res: not res.ok)
+            r = svc.install(sid, apply=True, source=svc.BINARY_CHANNEL)
         except Exception as exc:
             return f"install {sid} (binary): error ({exc})"
         details.append(f"  install {sid} (binary): {'ok' if r.ok else r.summary}")
         if not r.ok:
-            return f"{ext}install {sid} (binary): {r.summary}"
+            return f"install {sid} (binary): {r.summary}"
     return ""
 
 def _materialize_sources(svc) -> dict:

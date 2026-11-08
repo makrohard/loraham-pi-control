@@ -1264,19 +1264,12 @@ _DL_FAILED = ("Binary install of 'meshcom' refused: download failed: "
               "<urlopen error [Errno -3] Temporary failure in name resolution>")
 
 
-def test_a_binary_download_that_stays_unavailable_fails_the_reset_as_external(monkeypatch):
-    import warnings
-
-    import lhpc_testlab.release as rel
-    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0, 0), raising=False)
-    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0, raising=False)
+def test_a_failed_binary_download_fails_the_reset_at_once_the_lab_retries_nothing():
+    # L1: the lane reads the mirror and the product retries a transfer failure itself (P1); the lab's own
+    # whole-install retry is gone, so one failed install is the reset's failure.
     svc, calls = _binary_svc(available=True, outcomes=[(False, _DL_FAILED)])
-    details = []
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        failure = ops._install_binary_stacks(svc, details)
-    assert failure.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=binary:meshcom"
-    assert calls == ["meshcom"] * 3                   # 1 + 2 retries, then the reset fails
+    assert ops._install_binary_stacks(svc, []) == f"install meshcom (binary): {_DL_FAILED}"
+    assert calls == ["meshcom"]
 
 
 def test_a_binary_install_that_fails_otherwise_fails_the_reset_at_once(monkeypatch):
