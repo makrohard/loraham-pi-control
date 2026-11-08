@@ -250,12 +250,13 @@ def copy_of(svc, sid: str, rid: str = "", band: str = ""):
     A listed copy (`rid`): its band is its radio row's, and an explicit band that contradicts it is refused,
     never substituted. A disabled radio's copy comes back WITH its why (still addressed: a stop, a removal's
     running check; never started). Slot 0 (no `rid`): the operation band (explicit -> running -> fallback ->
-    primary) and, on it, DEC-W16's radio; its why is DEC-W16's refusal when every radio of the band is listed."""
+    primary; a fixed-band stack's one band) and, on it, DEC-W16's radio; its why is DEC-W16's refusal when every radio of the band is listed."""
     stack = svc.stack(sid)
     if stack is None:
         return None, f"unknown stack {sid!r}"
     if not rid:
-        band = svc.operation_band(sid, band)
+        bands = stack_bands(stack)                    # a fixed-band stack's operation band is "" (no store): its band
+        band = svc.operation_band(sid, band) or (bands[0] if len(bands) == 1 else "")
         rid0, why = slot0_radio(svc._paths, sid, band) if band else ("", "")
         return commands.Instance(0, rid0, sid=sid, band=band), why
     inst = next((i for i in commands.stack_instances(stack, svc._paths) if i.slot and i.rid == rid), None)

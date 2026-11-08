@@ -1,6 +1,8 @@
 """The one stack-copy factory `instances.copy_of` (CLEANUP-DESIGN-v2 sections 1 and 2): a listed copy's band is
 its radio row's and a contradicting band is refused; slot 0 is a copy too, on DEC-W16's radio of its operation band.
 `instances.resolve` answers through it."""
+import pytest
+
 import radios_fixture
 from lhpc.core import commands, instances, radios
 from lhpc.core.paths import Paths
@@ -78,3 +80,15 @@ def test_a_template_only_instance_keeps_todays_values():
     inst = commands.Instance(2, "r4")
     assert (inst.sid, inst.band, inst.primary, inst.subst("{instance_dir}x")) == ("", "", False, "r4/x")
     assert commands.SLOT0.primary and commands.SLOT0.subst("{instance_dir}x") == "x"
+
+
+def test_a_fixed_band_stacks_slot0_runs_on_its_one_band(tmp_path):
+    rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),)
+    copy, why = instances.copy_of(_svc(tmp_path, listed="", rows=rows), "meshcore")
+    assert (copy.rid, copy.band, why) == ("r2", "868", "")
+
+
+@pytest.mark.no_default_hardware
+def test_a_switchable_stacks_slot0_without_served_bands_has_no_band(tmp_path):
+    copy, why = instances.copy_of(_svc(tmp_path, listed=""), "kiss")
+    assert (copy.rid, copy.band, why) == ("", "", "")

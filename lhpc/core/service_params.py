@@ -2120,7 +2120,7 @@ class ParamsConfigMixin:
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
         gps_values = self._gps_config_values(target)
 
-        # W3-13: a client's socket keys name its band's radio; unresolved, its daemon dependency refuses the start
+        # W3-13: a client's socket keys name the copy's radio, else its band's one; unresolved, its daemon refuses
         _rids: dict = {}
         _rid = lambda b: _rids.setdefault(b, getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
 
@@ -2221,7 +2221,7 @@ class ParamsConfigMixin:
                 default = inst.subst(p.default_template) if inst is not None and inst.slot and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 raw = default if raw == p.default else raw        # 7d: a listed instance's own controller paths
-                raw = raw.replace("{rid}", _rid(c.band or cfg_band or band)) if isinstance(raw, str) else raw
+                raw = raw.replace("{rid}", getattr(inst, "rid", "") or _rid(c.band or cfg_band or band)) if isinstance(raw, str) else raw
                 if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
                     raw = _web_client.current_root(raw, runtime, p.default)
                 try:
