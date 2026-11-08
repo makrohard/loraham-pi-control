@@ -701,7 +701,16 @@ class ComponentStatus:
     endpoints: list[EndpointObservation] = field(default_factory=list)
     dependencies: list[DependencyObservation] = field(default_factory=list)
     pids: list[int] = field(default_factory=list)
-    copy_pids: list[int] = field(default_factory=list)   # the listed copies' own processes (C7): never slot 0's
+    copy_pids: list[int] = field(default_factory=list)   # the listed copies' own processes (C7)
+
+    @property
+    def own_run_state(self) -> RunState:
+        """Slot 0's own run state, for the slot-0 displays only (C7, decision B): STOPPED while only listed copies'
+        processes run. Every safety reader keeps `run_state`, any process of the spec."""
+        if (self.copy_pids and self.run_state in (RunState.RUNNING, RunState.DEGRADED)
+                and not set(self.pids) - set(self.copy_pids)):
+            return RunState.STOPPED
+        return self.run_state
     evidence: dict[str, str] = field(default_factory=dict)
 
 

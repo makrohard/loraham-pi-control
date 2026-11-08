@@ -201,14 +201,14 @@ class StatusProber:
         proc_matched = False
         if comp.process is not None:
             pm = probe_process(self._system, comp.process, self._cmdlines)
-            status.pids = [p for p in pm.pids if p not in self._copy_pids.get(comp.id, ())]   # slot 0's own
-            status.copy_pids = sorted(self._copy_pids.get(comp.id, ()))   # "any copy of the stack runs" reads these
-            proc_matched = pm.matched and bool(status.pids)
+            proc_matched = pm.matched
+            status.pids = pm.pids
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})
         if not proc_matched and self._owned_running.get(comp.id):
             proc_matched = True
             status.pids = list(self._owned_running[comp.id])
             status.evidence["process.owned"] = "verified ownership record"
+        status.copy_pids = sorted(self._copy_pids.get(comp.id, ()))   # the copies' (C7), a spec or not (G1-C48 (3))
 
         endpoints, all_ready, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints
@@ -471,7 +471,7 @@ def summarize(snapshot: Snapshot) -> dict:
     for ss in snapshot.stacks:
         for st in ss.components.values():
             components += 1
-            states[st.run_state.value] = states.get(st.run_state.value, 0) + 1
+            states[st.own_run_state.value] = states.get(st.own_run_state.value, 0) + 1
     stack_states: dict[str, int] = {}
     for value in rollup_states(snapshot).values():
         stack_states[value] = stack_states.get(value, 0) + 1
@@ -514,8 +514,8 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
         for cid, st in ss.components.items():
             if st.run_state is RunState.NOT_INSTALLED and cid in optional_ids:
                 continue
-            if _SEVERITY[st.run_state] > _SEVERITY[worst]:
-                worst = st.run_state
+            if _SEVERITY[st.own_run_state] > _SEVERITY[worst]:      # slot 0's own (C7): a display
+                worst = st.own_run_state
         # A stack whose MAIN component is stopped (or not installed) while another of its components
         # runs has lost its main process (e.g. the node crashed, its GPS bridge and web UI still
         # up): failed — not degraded, which means the main runs but an endpoint is not ready. An
@@ -524,7 +524,7 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
         main_st = ss.components.get(ss.stack.main)
         if (worst in (RunState.RUNNING, RunState.DEGRADED)               # a helper is still live
                 and main is not None and not main.interactive
-                and main_st is not None and main_st.run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
+                and main_st is not None and main_st.own_run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
             worst = RunState.FAILED
         out[ss.stack.id] = worst.value
     return out

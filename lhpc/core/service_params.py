@@ -1598,7 +1598,7 @@ class ParamsConfigMixin:
     def restart_required_stacks(self) -> list:
         """All stacks currently flagged restart-required — including SAFE-SIDE unsafe markers
         (for the dashboard + CLI status + dash signature)."""
-        return [k for s in self.stacks() for k in (s.id, *(f"{s.id}@{r}" for r in sorted(_instances.listed_rids(self._paths, s.id)))) if self.restart_required(k) is not None]
+        return [k for s in self.stacks() for k in _instances.keys(self, s.id) if self.restart_required(k) is not None]
 
     @invalidates_snapshot
     def save_component_remote(self, component_id: str, url: str) -> ActionResult:

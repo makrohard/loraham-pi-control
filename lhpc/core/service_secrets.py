@@ -58,7 +58,7 @@ class SecretsOpsMixin:
 
     def _secrets_running(self) -> list:
         """The stacks with a state root that are running (they write their state and secrets)."""
-        return sorted(s.id for s in self.stacks() if any(c.state_root for c in s.components) and (self.stack_running(s.id) or any(cs.copy_pids for cs in self.build_snapshot().stack(s.id).components.values())))   # a copy too (C7)
+        return sorted(s.id for s in self.stacks() if any(c.state_root for c in s.components) and self.stack_running(s.id))
 
     def _secrets_locked(self, op: str, *, console: bool):
         """The locks in the product's fixed order, entered into one ExitStack: the task admission

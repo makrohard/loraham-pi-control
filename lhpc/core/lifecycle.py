@@ -1246,7 +1246,7 @@ class Lifecycle:
         verifies it (`verify_owned`): status counts them running even when the spec misses them."""
         out: dict = {}
         for rec in self.owned_inventory()[0]:
-            if rec.get("role", "") == "" and not rec.get("slot", 0) and self.verify_owned(rec)[0]:   # slot 0's (C7)
+            if rec.get("role", "") == "" and self.verify_owned(rec)[0]:
                 out.setdefault(rec.get("component", ""), []).append(rec["pid"])
         return out
 

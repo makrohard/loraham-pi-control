@@ -2253,7 +2253,7 @@ def _render_component(comp, status) -> list[str]:
     eff_band = status.band or comp.band       # runtime-actual band wins over the manifest default
     band = f"band {eff_band}" if eff_band else "band -"
     line = (
-        f"  {comp.id:24s} {status.run_state.value:14s} "
+        f"  {comp.id:24s} {status.own_run_state.value:14s} "
         f"[{comp.kind.value}] {band}  tx {status.tx_state.value}  "
         f"src {status.source_state.value}"
     )

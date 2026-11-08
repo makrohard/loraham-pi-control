@@ -205,13 +205,9 @@ def _daemon_procs(svc) -> list:
 
 
 def _radio_users(svc, radio) -> list:
-    """The running stacks on `radio`'s band other than the daemon (slot 0: a band's one radio, B4-D39), and each
-    listed copy on `radio` that runs, `<stack>@<rid>` (C7: the snapshot's slot 0 is no copy's)."""
-    from . import commands, instances
-    copies = [f"{s.id}@{i.rid}" for s in svc.stacks() for i in commands.stack_instances(s, svc._paths)[1:]
-              if i.rid == radio.id and any(instances.instance_runs(svc, c, i, radio.band) for c in s.components if c.process)]
-    return sorted([s.id for s in svc.stacks() if s.main != svc.DAEMON_ID and svc.stack_running(s.id)
-                   and radio.band in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band})] + copies)
+    """The running stacks on `radio`'s band other than the daemon (slot 0: a band's one radio, B4-D39)."""
+    return sorted(s.id for s in svc.stacks() if s.main != svc.DAEMON_ID and svc.stack_running(s.id)
+                  and radio.band in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}))
 
 
 def radio_activity(svc, radio, procs=None) -> list:

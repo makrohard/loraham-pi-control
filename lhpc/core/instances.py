@@ -250,23 +250,27 @@ def key(target: str, inst) -> str:
     return f"{target}@{inst.rid}" if inst is not None and inst.slot else target
 
 
+def keys(svc, sid: str) -> list:
+    """The stack's copy keys: slot 0's, then each listed copy's (`key`)."""
+    return [key(sid, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)]
+
+
 def copy_pids(svc) -> dict:
     """{component: pids} of the processes the listed copies run, by their own argv token or verified record (slot k):
     the snapshot never counts them as slot 0's (C7, W286)."""
     from .probes.process import matches
+    life, out = svc._lifecycle(), {}
+    for rec in life.owned_inventory()[0]:            # a verified slot-k record, listed now or not (G1-C48 (1))
+        if rec.get("slot", 0) and life.verify_owned(rec)[0]:
+            out.setdefault(rec.get("component", ""), set()).add(rec["pid"])
     copies = [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]]
-    if not copies:
-        return {}                                    # no listed copy: nothing is another copy's
-    table, life, out = svc._system.procfs.cmdlines(), svc._lifecycle(), {}
-    bands = {r.id: r.band for r in radios.load(svc._paths).radios}
-    for stk, inst in copies:
+    table = svc._system.procfs.cmdlines() if copies else {}
+    bands = {r.id: r.band for r in radios.load(svc._paths).radios} if copies else {}
+    for stk, inst in copies:                         # a hand-started copy without a record: its own token
         for comp in stk.components:
             tok = _token(svc, comp, inst, bands.get(inst.rid, "")) if comp.process is not None else None
             if tok is not None:
                 out.setdefault(comp.id, set()).update(p for p, a in table.items() if matches(comp.process, a, tok))
-    for rec in life.owned_inventory()[0]:
-        if rec.get("slot", 0) and life.verify_owned(rec)[0]:
-            out.setdefault(rec.get("component", ""), set()).add(rec["pid"])
     return out
 
 
