@@ -647,9 +647,9 @@ class LifecycleOpsMixin:
                 return ActionResult(False, f"Refusing to start '{target}': {ctx_err}")
         if (_bref := self.band_refusal(target, band, "start")) is not None:
             return _bref            # plan and apply take the SAME decision on an explicit band
-        if inst is None and self._owner_stack(target) is not None and not self._is_daemon_target(target):
-            inst = instances.copy_of(self, self._owner_stack_id(target), band=band)[0]   # slot 0 is a real copy (v6)
+        slot0 = inst is None and self._owner_stack(target) is not None and not self._is_daemon_target(target)   # v6
         if not apply:
+            inst = instances.copy_of(self, self._owner_stack_id(target), band=band)[0] if slot0 else inst   # advisory
             # The plan takes the apply's outer decision (identity, MeshCore position) at the same
             # point and in the same order, so a start the apply would refuse never plans "ok".
             _ob = self.operation_band(target, band)
@@ -658,12 +658,12 @@ class LifecycleOpsMixin:
                                                 position_note, inst)[0]) is not None:
                 return _r
             return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band, inst=inst)
-        # The guards: admission FIRST (outside the config-stability guard and before every
-        # mutation, so a start refused by a pending self-update/uninstall changes NOTHING), then
-        # config stability, then the lifecycle/resource bundle.
+        # The guards: admission FIRST (outside the config-stability guard and before every mutation, so a start refused
+        # by a pending self-update/uninstall changes NOTHING), then config stability, then the lifecycle/resource bundle.
         try:
             with self._admit_and_acquire_guards("start", target, band, stop_owners,
                                                 _ensured, inst=inst) as (_op_band, _order, _radio):
+                inst = instances.copy_of(self, self._owner_stack_id(target), band=_op_band)[0] if slot0 else inst   # G1-C45
                 # The outer recheck under every lock: identity enforcement
                 # FIRST, then the MeshCore position snapshot (the one position decision of this
                 # start, passed down rather than re-queried, so a restart asks exactly once) —
@@ -684,7 +684,7 @@ class LifecycleOpsMixin:
                                         band=_op_band, position=position, position_note=_pos_note, inst=inst)
                 # The operator's stop intent, from the launch's result.
                 if _operator and self._start_supersedes_stop_intent(target, _res):
-                    self._clear_stop_intent(f"{target}@{inst.rid}" if inst is not None and inst.slot else target)
+                    self._clear_stop_intent(instances.key(target, inst))
                 return _res
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
                 PathContainmentError, _ohs.OneStoreError) as exc:
@@ -706,7 +706,7 @@ class LifecycleOpsMixin:
         only for a bandless stack. The daemon's REQUESTED radio, read under config stability,
         decides which bands the bundle covers. Raises what the guards raise
         (`_guard_refusal` types it)."""
-        with self._admission_guard(op, f"{target}@{inst.rid}" if inst is not None and inst.slot else target):   # the copy
+        with self._admission_guard(op, instances.key(target, inst)):   # the copy
             op_band = self.operation_band(target, band)
             if not ensured:                              # issue #5: admitted, before the shared guard
                 _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)), inst=inst)
@@ -1072,7 +1072,7 @@ class LifecycleOpsMixin:
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
-        return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst and prep.inst.slot else ''}': {len(order)} component(s) in order.",
+        return ActionResult(True, f"Run plan for '{instances.key(target, prep.inst)}': {len(order)} component(s) in order.",
                             details=details,
                             next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst and prep.inst.slot else f"lhpc stack start {target}"
                                            + (f" --band {band}" if band else "") + " --yes"],
@@ -2329,7 +2329,7 @@ class LifecycleOpsMixin:
         _amb = self._config_ambiguity(target, order, band, inst)
         if _amb is not None:
             return ActionResult(False, f"Cannot {op} '{target}': {_amb}",
-                                next_commands=[f"lhpc config {target}{f'@{inst.rid}' if getattr(inst, 'slot', 0) else ''}"])
+                                next_commands=[f"lhpc config {instances.key(target, inst)}"])
         if not check_blockers:
             return None
         blockers = [bl for bl in self.run_blockers(target, band, radio)

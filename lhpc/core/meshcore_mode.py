@@ -112,7 +112,8 @@ def start_refusal(svc, target: str, inst=None):
         # mode (status and stop verification judge by the same running mode) — the copy's own.
         mode = svc._meshcore_running_role(inst)
         if mode is None:                 # G1-C40: a live node whose mode cannot be read is never assumed to serve TCP 5000
-            key = f"{STACK_ID}@{inst.rid}" if getattr(inst, "slot", 0) else STACK_ID
+            from . import instances
+            key = instances.key(STACK_ID, inst)
             return ActionResult(False, f"Cannot start '{target}': the running mode of {key} cannot be read (its "
                                 f"generated config is missing or unreadable)", details=[f"lhpc stack restart {key}"])
     if target in CLIENT_IDS and not clients_available(mode):

@@ -245,6 +245,11 @@ def resolve(svc, target: str):
     return sid, copy, copy.band if copy is not None else "", why
 
 
+def key(target: str, inst) -> str:
+    """The one copy-key formatter: `<target>@<rid>` for a listed copy, `<target>` for slot 0 (or no copy)."""
+    return f"{target}@{inst.rid}" if inst is not None and inst.slot else target
+
+
 def copy_of(svc, sid: str, rid: str = "", band: str = ""):
     """THE stack copy (CLEANUP-DESIGN-v2 section 2) → (Instance, why); (None, why) when there is none.
     A listed copy (`rid`): its band is its radio row's, and an explicit band that contradicts it is refused,

@@ -287,7 +287,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
     if err:
         return ActionResult(False, err, next_commands=["lhpc list"])
     what = f"{component} of {target}" if component else target
-    key = f"{stk.id}@{copy.rid}" if copy is not None and copy.slot else stk.id   # the copy whose in-flight start may end
+    key = instances.key(stk.id, copy)   # the copy whose in-flight start may end
     if not apply:
         targets, unresolved = _targets(svc, stk, copy, comps)
         details = [f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}" for t in targets]

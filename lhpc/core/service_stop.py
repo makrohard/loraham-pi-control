@@ -168,7 +168,7 @@ class StopOpsMixin:
                              or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
                                     and (self.stack_of(r.component) or r.stack) == target
                                     for r in (res.results or ())))):
-                    self._write_stop_intent([f"{target}@{inst.rid}" if inst is not None and inst.slot else target])
+                    self._write_stop_intent([instances.key(target, inst)])
                 return res
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
@@ -482,7 +482,7 @@ class StopOpsMixin:
         # restart refused by a pending self-update/uninstall never stops the running stack. The inner
         # _lifecycle_guard (and the nested stop's) reuse this admission reentrantly.
         try:
-            with self._admission_guard("restart", f"{target}@{inst.rid}" if inst is not None and inst.slot else target):
+            with self._admission_guard("restart", instances.key(target, inst)):
                 # ONE CONCRETE OPERATION BAND, resolved ONCE and only HERE — under admission, so the
                 # running/marker state it reads cannot change under another admitted operation before
                 # this one owns the box (resolving before admission let a concurrently

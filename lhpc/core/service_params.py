@@ -1772,7 +1772,7 @@ class ParamsConfigMixin:
         key = self._param_key(target, kind, rec["comp"], rec["name"])
         suffix = (f" --band {band}"
                   if band and self.stack_bands(self.stack_of(target) or target) else "")
-        return f"lhpc config {target}{f'@{inst.rid}' if getattr(inst, 'slot', 0) else ''} {key} {value}{suffix}"
+        return f"lhpc config {_instances.key(target, inst)} {key} {value}{suffix}"
 
     def operation_band(self, target: str, band: str = "") -> str:
         """THE ONE CONCRETE BAND of a start/restart, for every consumer outside the locked launch

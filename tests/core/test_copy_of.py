@@ -100,3 +100,22 @@ def test_slot0_with_its_radio_renders_a_peer_port_as_today():
     assert commands.Instance(0, "r1", sid="graywolf").subst("{port_of:kiss:8001}") == "8001"
     with pytest.raises(commands.CommandError):
         commands.Instance(1, "r2", sid="graywolf").subst("{port_of:kiss:8001}")
+
+
+def test_an_applied_slot0_start_resolves_its_copy_under_the_locks(tmp_path, monkeypatch):
+    # G1-C45: r1 becomes a listed copy while the start waits for admission; the admitted start acts on slot 0's
+    # radio as the locks see it (r3, DEC-W16's first unlisted), never on the r1 resolved before them.
+    import contextlib
+    from lhpc.core.service_base import ActionResult
+    svc = _svc(tmp_path, listed="")
+    real, seen = svc._admit_and_acquire_guards, []
+
+    @contextlib.contextmanager
+    def admitted(*a, **k):
+        (tmp_path / "config" / "instances.toml").write_text('kiss = ["r1"]\n')     # meanwhile
+        with real(*a, **k) as got:
+            yield got
+    monkeypatch.setattr(svc, "_admit_and_acquire_guards", admitted)
+    monkeypatch.setattr(svc, "_start_outer_refusal", lambda *a: (seen.append(a[-1]), (ActionResult(False, "x"), None, ""))[1])
+    svc.start("kiss", apply=True, band="433")
+    assert [(c.slot, c.rid) for c in seen] == [(0, "r3")]
