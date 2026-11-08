@@ -216,7 +216,7 @@ def _seam_svc(tmp_path, monkeypatch):
 def test_direct_licensed_component_rejects_bad_call_before_side_effects(tmp_path, monkeypatch, call):
     svc = _seam_svc(tmp_path, monkeypatch)
     _seed_raw(svc, "meshcom", {"mc_callsign": call})                       # the SAVED value
-    res = svc._start_impl("meshcom-qemu", apply=True)                       # no LifecycleSeam
+    res = svc.start("meshcom-qemu", apply=True)                              # no LifecycleSeam
     assert not res.ok
     assert "callsign" in (res.summary + str(res.details)).lower()
     assert res.data.get("enforce_fields") == ["c_mc_callsign"]              # the Settings row
@@ -227,10 +227,10 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
     # MeshCore's node name is a REQUIRED local identity (default "", never {callsign}):
     # a fresh config is blocked before any side effect / LifecycleSeam — with or without a global
     # operator callsign, which unlicensed stacks never inherit.
-    res = svc._start_impl("meshcore-node", apply=True)
+    res = svc.start("meshcore-node", apply=True)
     assert not res.ok and res.data.get("enforce_fields") == ["f_node_name"]
     set_call(svc)
-    res = svc._start_impl("meshcore-node", apply=True)
+    res = svc.start("meshcore-node", apply=True)
     assert not res.ok, "a global callsign must not satisfy an unlicensed node identity"
 
 

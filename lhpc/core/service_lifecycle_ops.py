@@ -668,7 +668,6 @@ class LifecycleOpsMixin:
                 # FIRST, then the MeshCore position snapshot (the one position decision of this
                 # start, passed down rather than re-queried, so a restart asks exactly once) —
                 # before the boot-restore claim, the feed clearing and any other mutation.
-                # The inner PREPARE remains the authoritative backstop for direct callers.
                 _r, position, _pos_note = self._start_outer_refusal(
                     target, _order, _op_band, _radio, position, position_note, inst)
                 if _r is not None:
@@ -945,16 +944,9 @@ class LifecycleOpsMixin:
         # The stack whose daemon params to apply once the daemon is up (a direct component target
         # resolves to its owning stack).
         start_sid = self._owner_stack_id(target)
-        # CALL/node enforcement on the SAVED configuration — for the PLAN and the apply alike (a
-        # licensed stack refuses an empty/N0CALL callsign, an unlicensed stack an empty node name),
-        # so a refused start is known before anything is queued; the public `start()` re-checks it
-        # under the locks as the authoritative, race-safe backstop immediately before mutation.
+        # CALL/node enforcement on the SAVED configuration is `_start_outer_refusal`'s, taken before
+        # this prepare by the plan, the apply (under every lock) and the restart preflight.
         _id_band = self._launch_band_hint(target, band)
-        id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band, inst)
-        if not id_ok:
-            return ActionResult(False, f"Cannot start '{target}': {id_msg}",
-                                data={"enforce_fields": id_fields},
-                                next_commands=self._identity_config_hints(target, _id_band, inst))
         # The approved identity must actually LAUNCH: a licensed field that inherits the global
         # operator callsign carries it as a launch value (never persisted) so argv/config-file
         # rendering and post-steps use what enforcement just approved — on the launch band.
@@ -2337,7 +2329,7 @@ class LifecycleOpsMixin:
         _amb = self._config_ambiguity(target, order, band, inst)
         if _amb is not None:
             return ActionResult(False, f"Cannot {op} '{target}': {_amb}",
-                                next_commands=[f"lhpc config {target}"])
+                                next_commands=[f"lhpc config {target}{f'@{inst.rid}' if getattr(inst, 'slot', 0) else ''}"])
         if not check_blockers:
             return None
         blockers = [bl for bl in self.run_blockers(target, band, radio)
