@@ -482,7 +482,7 @@ class StopOpsMixin:
         # restart refused by a pending self-update/uninstall never stops the running stack. The inner
         # _lifecycle_guard (and the nested stop's) reuse this admission reentrantly.
         try:
-            with self._admission_guard("restart", target):
+            with self._admission_guard("restart", f"{target}@{inst.rid}" if inst is not None and inst.slot else target):
                 # ONE CONCRETE OPERATION BAND, resolved ONCE and only HERE — under admission, so the
                 # running/marker state it reads cannot change under another admitted operation before
                 # this one owns the box (resolving before admission let a concurrently

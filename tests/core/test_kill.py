@@ -246,6 +246,33 @@ def test_k2_a_web_start_holding_the_flock_is_killed(tmp_path, clock, procs, monk
     assert "killed by operator" in log.read_text()
 
 
+@pytest.mark.parametrize(("starting", "killed", "named"), [("kiss", "kiss@r3", False), ("kiss@r3", "kiss", False),
+                                                       ("kiss@r3", "kiss@r3", True), ("kiss", "kiss", True)])
+def test_a_kill_ends_only_its_own_copys_in_flight_start(tmp_path, procs, starting, killed, named):
+    # G1-C35 (3): the admission owner record names the copy whose start holds it; a kill plans the end of that start
+    # only for the same copy, never another copy's of the same stack.
+    svc = _copy_svc(tmp_path, {})
+    job = _holder(procs, tmp_path, "start", starting)
+    assert jobs.write_job_marker(svc._paths, "start-kiss-1", job.pid, starting, "start",
+                                 ident=procident.proc_identity(job.pid))
+    plan = kill.kill(svc, killed)
+    assert (job.pid in plan.data.get("pids", [])) is named
+
+
+def test_a_copys_start_and_restart_name_the_copy_in_the_admission_owner_record(tmp_path):
+    from lhpc.core.service_base import ActionResult
+    svc = _copy_svc(tmp_path, {})
+    copy, seen = instances.copy_of(svc, "kiss", "r3")[0], []
+
+    def hook():
+        seen.append(reslock.read_owner(svc._paths, ADMISSION).get("target"))
+        return ActionResult(False, "stop here (test)")                     # nothing launched
+    svc.start("kiss", apply=True, inst=copy, _before_start_locked=hook)
+    svc.restart("kiss", apply=True, inst=copy, _before_restart_locked=hook)
+    svc.start("kiss", apply=True, _before_start_locked=hook)
+    assert seen == ["kiss@r3", "kiss@r3", "kiss"]
+
+
 def _lhpc_script(tmp_path):
     """A program named `lhpc` whose argv reads `lhpc stack start kiss`, holding the flock."""
     s = tmp_path / "bin" / "lhpc"

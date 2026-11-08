@@ -706,7 +706,7 @@ class LifecycleOpsMixin:
         only for a bandless stack. The daemon's REQUESTED radio, read under config stability,
         decides which bands the bundle covers. Raises what the guards raise
         (`_guard_refusal` types it)."""
-        with self._admission_guard(op, target):
+        with self._admission_guard(op, f"{target}@{inst.rid}" if inst is not None and inst.slot else target):   # the copy
             op_band = self.operation_band(target, band)
             if not ensured:                              # issue #5: admitted, before the shared guard
                 _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)), inst=inst)

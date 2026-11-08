@@ -135,7 +135,7 @@ def _arg(argv, opt: str) -> str:
     return ""
 
 
-def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
+def _holder(svc, holder, key: str) -> tuple[int, dict | None, str]:
     """Q-K2: the admission flock's holder from its own owner record, verified against /proc.
     → (pid, identity to terminate, "") for a start of this stack, else (pid or 0, None, why).
     No record, or a corrupt one, is an unverifiable holder: refused, never waited on."""
@@ -158,24 +158,27 @@ def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
         return pid, None, f"unverifiable holder {named}: its owner record carries no process identity"
     if not procident.identity_matches(took, pid):
         return pid, None, f"the task admission's owner record names another process than pid {named} now"
-    if (holder.get("operation") not in ("start", "restart")
-            or svc.stack_of(str(holder.get("target", ""))) != sid):
+    sid, _, rid = key.partition("@")
+    def same(target) -> bool:            # a start of this copy (G1-C35 (3)): its stack and its radio, `<stack>@<rid>`
+        t_sid, _, t_rid = str(target).partition("@")
+        return svc.stack_of(t_sid) == sid and t_rid == rid
+    if holder.get("operation") not in ("start", "restart") or not same(holder.get("target", "")):
         return pid, None, f"the task admission is held by {named}"
     # A web start of this stack: its job marker carries the identity of its process.
     for job in svc.active_jobs(cleanup=False):
         raw = svc._read_job_marker(job.get("log") or "")
-        if (raw and raw.get("pid") == pid and job.get("stack") == sid and raw.get("op") in ("start", "restart")
+        if (raw and raw.get("pid") == pid and raw.get("op") in ("start", "restart")      # the owner record named the copy
                 and procident.identity_matches(raw, pid)):       # the marker's operation agrees (G2-B2 N1)
             return pid, took, ""
     # A CLI `lhpc stack start|restart <stack>`: named by its own cmdline, identity read now.
     verb = argv[argv.index("stack") + 1:argv.index("stack") + 3] if "stack" in argv else []
     if (any(posixpath.basename(t) == "lhpc" for t in argv[:3]) and len(verb) == 2
-            and verb[0] in ("start", "restart") and svc.stack_of(verb[1]) == sid):
+            and verb[0] in ("start", "restart") and same(verb[1])):
         return pid, took, ""
-    return pid, None, f"the task admission is held by {named}, not verifiable as a start of {sid}"
+    return pid, None, f"the task admission is held by {named}, not verifiable as a start of {key}"
 
 
-def _admission(svc, stack, sid: str, notes: list) -> str:
+def _admission(svc, stack, key: str, notes: list) -> str:
     """Flock first (A §2.12), on one deadline of the injected clock (G2-B2 N2): `_SELF_LOCK_WAIT_S` of waiting
     for the admission flock, extended by `_TERM_BUDGET_S` for the one start of this stack that may be ended
     while holding it (through the identity-verified terminate with its KILL leg). A second start taking it
@@ -186,11 +189,11 @@ def _admission(svc, stack, sid: str, notes: list) -> str:
     while True:
         try:
             stack.enter_context(reslock.operation_lock(
-                svc._paths, svc.ADMISSION_KEY, "kill", sid))
+                svc._paths, svc.ADMISSION_KEY, "kill", key))
         except reslock.ResourceBusy as busy:
             own = isinstance(busy.holder, dict) and busy.holder.get("pid") == os.getpid()
             if not own:                     # our own overlapping op releases shortly
-                pid, ident, why = _holder(svc, busy.holder, sid)
+                pid, ident, why = _holder(svc, busy.holder, key)
                 if why:
                     return f"refused: {why}"
                 if pid not in ended:
@@ -203,7 +206,7 @@ def _admission(svc, stack, sid: str, notes: list) -> str:
                         return (f"refused: the start holding the task admission (pid {pid}) "
                                 "could not be ended")
                     ended.add(pid)
-                    notes.append(f"pid {pid}: the in-flight start of {sid} ended")
+                    notes.append(f"pid {pid}: the in-flight start of {key} ended")
                     svc.active_jobs(cleanup=True)      # clears the dead start's job marker
             if deadline - monotonic() < 0.05:          # less than half a poll step left
                 return "refused: the task admission was not freed in time"
@@ -284,6 +287,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
     if err:
         return ActionResult(False, err, next_commands=["lhpc list"])
     what = f"{component} of {target}" if component else target
+    key = f"{stk.id}@{copy.rid}" if copy is not None and copy.slot else stk.id   # the copy whose in-flight start may end
     if not apply:
         targets, unresolved = _targets(svc, stk, copy, comps)
         details = [f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}" for t in targets]
@@ -293,7 +297,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         from . import reslock
         owner = reslock.read_owner(svc._paths, svc.ADMISSION_KEY)
         if owner:
-            pid, _ident, why = _holder(svc, owner, stk.id)
+            pid, _ident, why = _holder(svc, owner, key)
             if not why:
                 details.append(f"  [kill] pid {pid} the in-flight start of {stk.id}")
                 pids.append(pid)
@@ -306,7 +310,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
                             data={"changes": len(pids), "pids": pids})
     notes: list[str] = []
     with contextlib.ExitStack() as stack:
-        refused = _admission(svc, stack, stk.id, notes)
+        refused = _admission(svc, stack, key, notes)
         if refused:
             return ActionResult(False, f"Cannot kill {what}: {refused}", details=notes,
                                 next_commands=[f"lhpc status {stk.id}"])
