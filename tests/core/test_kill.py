@@ -541,7 +541,33 @@ def test_slot0s_kill_never_takes_a_copys_recorded_process(tmp_path, procs):
     svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-serial"), p.pid, band="868",
                                    extra={"rid": "r3", "slot": 1})
     plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
-    assert not plan.ok and p.pid not in plan.data["pids"] and "cannot verify slot 0" in "\n".join(plan.details)
+    assert plan.ok and plan.data["pids"] == []                # G1-C35 (5): the copy's own, not an unresolved candidate
+
+
+def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(tmp_path, procs):
+    # W46 (G1-C35 (6)): a process of slot 0's spec that no record names is slot 0's (a copy runs only as LHPC
+    # starts it, with its record), copies listed or not.
+    p = procs()
+    svc = _copy_svc(tmp_path, {})
+    svc = _copy_svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-serial", svc._config_band("kiss", ""))})
+    plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
+    assert plan.ok and plan.data["pids"] == [p.pid]
+
+
+def test_a_token_hit_recorded_for_another_copy_is_not_slot0s(tmp_path, procs):
+    # G1-C35 (4): slot 0 and kiss@r3 saved the same data socket, so the token cannot tell them apart; the copy's
+    # verified record says whose the process is.
+    from lhpc.core import config as cfgmod
+    p = procs()
+    svc = _copy_svc(tmp_path, {})
+    for key in ("r3", svc._config_band("kiss", "")):
+        cfgmod.update_stack_config(svc._paths, "kiss", {"data_socket": "/tmp/shared.sock"}, band=key)
+    svc = _copy_svc(tmp_path, {p.pid: ["/x/loraham-kiss-tnc", "--data-socket", "/tmp/shared.sock"]})
+    stk = svc.stack("kiss")
+    svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="868",
+                                   extra={"rid": "r3", "slot": 1})
+    assert p.pid not in kill.kill(svc, "kiss", "loraham-kiss-tnc").data["pids"]
+    assert kill.kill(svc, "kiss@r3", "loraham-kiss-tnc").data["pids"] == [p.pid]
 
 
 def test_the_band_by_record_set_is_the_exemptions_owned_by_their_record():

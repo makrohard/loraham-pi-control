@@ -83,19 +83,20 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
                                for p, a in sorted(table.items()) if matches(comp.process, a, None)]
             else:
                 pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
-            if comp.id in BAND_BY_RECORD and (copy is not None or instances.listed_rids(svc._paths, stk.id)):
-                # With copies a bare hit proves no copy: only the copy's own verified record can name it (below),
-                # anything else is refused by name (G2-B2 F4, per copy).
-                own = {r["pid"] for r in life.owned_records(comp.id, band or None, rid=copy.rid if copy else None)
-                       if r.get("slot", 0) == (copy.slot if copy else 0) and life.verify_owned(r)[0]}
-                unresolved += [f"pid {p} {comp.id}: cannot verify {f'band {band}' if band else 'slot 0'} "
-                               "(no verified ownership record of it)" for p in pids if p not in own]
+            # One ownership decision per pid (G1-C35): another copy's verified process is not this one's; with no
+            # record a token hit is this copy's, and a bare hit (no instance token) is slot 0's (W46), never a
+            # copy's: only the copy's own verified record names it (below), anything else is refused (G2-B2 F4).
+            recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}
+            pids = [p for p in pids if p not in recs or _mine(recs[p], copy)]
+            if comp.id in BAND_BY_RECORD and copy is not None:
+                unresolved += [f"pid {p} {comp.id}: cannot verify band {band} (no verified ownership record of it)"
+                               for p in pids if p not in recs]
                 pids = []
         for pid in pids:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
-        for rec in life.owned_records(comp.id, hint or None, rid=copy.rid if copy is not None else None):
-            if rec.get("slot", 0) == (copy.slot if copy is not None else 0) and life.verify_owned(rec)[0]:
+        for rec in life.owned_records(comp.id, hint or None):
+            if _mine(rec, copy) and life.verify_owned(rec)[0]:
                 found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
                                      "pgid": rec["pgid"], "record": rec,
                                      "argv": " ".join(table.get(rec["pid"], []))}
@@ -114,6 +115,11 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
         else:
             unresolved.append(f"pid {pid} {t['component']}: its identity cannot be read or changed while read")
     return out, unresolved
+
+
+def _mine(rec: dict, copy) -> bool:
+    """An ownership record is the selected copy's: its slot, and for a copy (or a radio's daemon) its radio."""
+    return rec.get("slot", 0) == (copy.slot if copy is not None else 0) and (copy is None or rec.get("rid", "") == copy.rid)
 
 
 def _arg(argv, opt: str) -> str:
