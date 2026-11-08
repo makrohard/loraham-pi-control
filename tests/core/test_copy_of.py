@@ -159,3 +159,16 @@ def test_g1_b1_a_running_slot0_keeps_its_recorded_radio_when_a_lower_radio_joins
     finally:
         p.kill()
         p.wait(timeout=5)
+
+
+def test_g1_b1_re_the_parse_carries_one_record_snapshot_into_its_copy(tmp_path, monkeypatch):
+    # G1-B1-RE: kiss@r3 runs as a copy by its record; r1 is disabled, so the list alone makes r3 slot 0's. The record
+    # then vanishes between two reads: the parse and its copy_of share ONE snapshot, so kiss@r3 is still the copy,
+    # never refused or re-keyed half-way (Lifecycle.stop re-verifies ownership before it acts).
+    rows = (R1_OFF, ROWS[1])
+    svc = _svc(tmp_path, rows=rows)
+    reads = iter([{"r3": 1}])
+    monkeypatch.setattr(instances, "recorded", lambda svc, sid: next(reads, {}))
+    sid, copy, band, why = instances.parse_target(svc, "kiss@r3", "stop")
+    assert why == "" and copy is not None, why
+    assert (sid, copy.slot, copy.rid, band) == ("kiss", 1, "r3", "433")

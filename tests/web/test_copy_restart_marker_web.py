@@ -154,3 +154,30 @@ def test_a_disabled_radios_copy_still_stops_but_never_restarts(tmp_path, web, mo
                follow_redirects=True)
     assert [s for s in stops if s[1]] == [("kiss", True, "r3")] and spawns == []
     assert "Cannot restart kiss@r3: kiss@r3: r3 is disabled" in r.get_data(as_text=True)
+
+
+def test_g1_b1_re_a_recorded_slot_0_on_a_disabled_radio_is_not_started_from_the_console(tmp_path, web, monkeypatch,
+                                                                                       csrf):
+    # G1-B1-RE: slot 0 runs on r3 by its verified record, r1 joined 433 (the list makes r3 a copy) and r3 is disabled.
+    # The console's start and restart of kiss@r3 are refused naming the disabled radio; nothing is spawned.
+    import dataclasses
+    import subprocess
+    import sys
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        radios_fixture.write(tmp_path, ROWS[1:])
+        svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+        stk = svc.stack("kiss")
+        assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
+                                              extra={"rid": "r3", "slot": 0})
+        radios_fixture.write(tmp_path, (ROWS[0], dataclasses.replace(ROWS[1], enabled=False)))
+        c = web(service_factory=lambda: ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
+        spawns = _spy_spawns(monkeypatch)
+        for op in ("start", "restart"):
+            r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "kiss", "rid": "r3", "from": "dash"},
+                       follow_redirects=True)
+            assert f"Cannot {op} kiss@r3: kiss@r3: r3 is disabled" in r.get_data(as_text=True), op
+        assert spawns == []
+    finally:
+        p.kill()
+        p.wait(timeout=5)

@@ -996,3 +996,19 @@ def test_backup_holds_a_disabled_radios_copys_state(tmp_path):
     out = tmp_path / "out.tar"
     _backup(svc, out)
     assert "state/r3/meshcore/companion.db" in _names(out)
+
+
+def test_backup_holds_a_removed_radios_copys_secrets_and_state(tmp_path):
+    # G1-B1-RE (2): r3 left the hardware list; meshcore@r3's identity (the config/secrets tree, read whole) and its
+    # state root (state/r3/meshcore, found on disk) are both in the backup.
+    a = _root(tmp_path, "a")
+    svc = _seed(a, pki=False)
+    radios_fixture.write(a, (radios_fixture.R2_868,))
+    (a / "state/r3/meshcore").mkdir(parents=True)
+    (a / "state/r3/meshcore/companion.db").write_bytes(b"c")
+    (a / "config/secrets/r3").mkdir()
+    (a / "config/secrets/r3/meshcore_identity.key").write_bytes(b"k")
+    out = tmp_path / "out.tar"
+    _backup(svc, out)
+    names = _names(out)
+    assert "config/secrets/r3/meshcore_identity.key" in names and "state/r3/meshcore/companion.db" in names

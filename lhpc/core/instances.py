@@ -163,8 +163,9 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
-    if (run := recorded(svc, sid).get(rid)) == 1 or (run is None and rid in copy_rids(stack, svc._paths)):
-        copy, why = copy_of(svc, sid, rid)
+    run = recorded(svc, sid)                     # ONE verified snapshot for the parse and its copy (G1-B1-RE)
+    if run.get(rid) == 1 or (run.get(rid) is None and rid in copy_rids(stack, svc._paths)):
+        copy, why = copy_of(svc, sid, rid, run=run)
         return sid, copy, copy.band if copy is not None else "", why
     radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
     if radio is None:
@@ -214,17 +215,18 @@ def copy_pids(svc, table: dict) -> dict:
     return out
 
 
-def copy_of(svc, sid: str, rid: str = "", band: str = ""):
+def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
     """THE stack copy (CLEANUP-DESIGN-v2 section 2) → (Instance, why); (None, why) when there is none.
     A copy (`rid`, one of copy_rids): its band is its radio row's, and an explicit band that contradicts it is
     refused, never substituted. A disabled radio's copy comes back WITH its why (still addressed: a stop; never
     started). Slot 0 (no `rid`): the operation band (explicit -> running -> fallback -> primary; a fixed-band
     stack's one band) and, on it, the radio slot 0 runs on by its launch record, else DEC-W16's (the band's first
-    enabled one). A running instance keeps its recorded key (13.16, G1-B1): a record decides before copy_rids."""
+    enabled one). A running instance keeps its recorded key (13.16, G1-B1): a record decides before copy_rids;
+    `run` is the caller's recorded() snapshot when it has one."""
     stack = svc.stack(sid)
     if stack is None:
         return None, f"unknown stack {sid!r}"
-    run = recorded(svc, sid)
+    run = recorded(svc, sid) if run is None else run
     rows = radios.load(svc._paths).radios
     if not rid:
         bands = stack_bands(stack)                    # a fixed-band stack's operation band is "" (no store): its band
@@ -240,7 +242,7 @@ def copy_of(svc, sid: str, rid: str = "", band: str = ""):
     if radio.band not in stack_bands(stack):
         return None, f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
     if run.get(rid) == 0:                     # slot 0 runs there (launched before the list gave it a copy)
-        return commands.Instance(0, rid, band=radio.band), ""
+        return commands.Instance(0, rid, band=radio.band), (f"{sid}@{rid}: {rid} is disabled" if not radio.enabled else "")
     if run.get(rid) is None and rid not in copy_rids(stack, svc._paths, "" if radio.enabled else rid):
         return None, f"{sid}@{rid} is not a copy of {sid}: the hardware list gives it none on {rid}"
     copy = commands.Instance(1, rid, band=radio.band)
@@ -280,8 +282,8 @@ def instance_rels(paths, stack, rels, keep: int, base: tuple = ()) -> list:
         key = tuple(q[:keep])
         if key not in on_disk:
             try:
-                on_disk[key] = [n for n, _link in runtime_fs.scandir_nofollow(paths, paths.under(*base, *key))
-                                if commands._RID_RE.fullmatch(n) and n not in listed]
+                on_disk[key] = [n for n, link in runtime_fs.scandir_nofollow(paths, paths.under(*base, *key))
+                                if not link and commands._RID_RE.fullmatch(n) and n not in listed]
             except PathContainmentError:
                 on_disk[key] = []
     def present(rel):                              # no-follow and contained: a link out of the root is not ours
@@ -433,7 +435,7 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
         rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
         return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),
                 "endpoints": endpoints_for(comp.endpoints, inst)}
-    run = recorded(svc, sid)                   # the copies: the list's and the recorded ones, never slot 0's own radio
+    run = svc._request_memo(("recorded", sid), lambda: recorded(svc, sid))   # one snapshot per stop (G1-B1-RE)
     taken = sorted({*copy_rids(svc.stack(sid), svc._paths), *(r for r, k in run.items() if k)}
                    - {inst.rid if inst is not None else "", *(r for r, k in run.items() if not k)})
     if not taken:

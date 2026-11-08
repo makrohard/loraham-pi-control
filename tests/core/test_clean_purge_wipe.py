@@ -332,7 +332,7 @@ def test_purge_wipes_each_copys_state_and_secrets_and_nothing_beside(tmp_path):
     # 7d (DEC-W51): meshcore@r3 keeps its state under state/r3/<name> and its secrets under config/secrets/r3/ (the
     # manifest's {instance_dir} layout). G1-B1 (2): the purge takes what EXISTS on disk under a radio's directory, so
     # r4's (a radio removed from the hardware list) goes too; never a decoy beside them (state/r3's other folders,
-    # logs/r3, a name that is no radio id, a radio directory that is a link out of the runtime root) and nothing of
+    # logs/r3, a name that is no radio id, a radio directory that is a link, out of the runtime root or in it) and nothing of
     # slot 0's is left either.
     svc = _svc(tmp_path)
     radios_fixture.write(tmp_path, (radios_fixture.R2_868, radios_fixture.R3))  # K4ac: meshcore@r3 (868 radio 2)
@@ -347,10 +347,13 @@ def test_purge_wipes_each_copys_state_and_secrets_and_nothing_beside(tmp_path):
     (outside / "meshcore").mkdir(parents=True)
     (outside / "meshcore" / "companion.db").write_text("not LHPC's")
     (tmp_path / "state" / "r5").symlink_to(outside)
+    (tmp_path / "keep" / "meshcore").mkdir(parents=True)                       # G1-B1-RE: a link INSIDE the root too
+    (tmp_path / "keep" / "meshcore" / "companion.db").write_text("x")
+    (tmp_path / "state" / "r6").symlink_to(tmp_path / "keep")
     plan = svc.clean("meshcore")
     assert any("[remove] state/r3/meshcore " in ln + " " for ln in plan.details), plan.details
     assert any("[remove] state/r4/meshcore " in ln + " " for ln in plan.details), plan.details
-    assert not any("r5" in ln for ln in plan.details), plan.details
+    assert not any("r5" in ln or "r6" in ln for ln in plan.details), plan.details
     res = svc.clean("meshcore", apply=True, purge=True)
     assert res.ok, res.details
     for rel in OWNED["meshcore"] + inst:
@@ -358,3 +361,4 @@ def test_purge_wipes_each_copys_state_and_secrets_and_nothing_beside(tmp_path):
     for rel in decoys + KEPT:
         assert _present(tmp_path / rel), rel
     assert (outside / "meshcore" / "companion.db").read_text() == "not LHPC's"
+    assert (tmp_path / "keep" / "meshcore" / "companion.db").read_text() == "x"

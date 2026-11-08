@@ -164,3 +164,38 @@ def test_g1_b1_a_running_slot_0_stays_slot_0_when_a_lower_radio_joins_its_band(b
     finally:
         p.kill()
         p.wait(timeout=5)
+
+
+def test_g1_b1_re_a_running_slot_0_on_a_disabled_radio_stops_but_never_starts(box, stops, tmp_path, capsys):
+    # G1-B1-RE: slot 0 runs on r3 by its record and the list makes r3 a copy now (r1 joined); r3 is then disabled.
+    # A start or restart of kiss@r3 is refused naming the disabled radio; its stop still reaches the running slot 0.
+    import dataclasses
+
+    import radios_fixture
+    run = box(A433[1:])
+    p = _running_with_record(tmp_path, A433[1:], "r3", 0)
+    try:
+        radios_fixture.write(tmp_path, (A433[0], dataclasses.replace(A433[1], enabled=False)))
+        for verb in ("start", "restart"):
+            rc = cli.main(["stack", verb, "kiss@r3", "--yes"])
+            got = capsys.readouterr()
+            assert rc != 0 and "kiss@r3: r3 is disabled" in got.out + got.err, (verb, got.out, got.err)
+        assert stops == []
+        run("stop", "kiss@r3")
+        (kw,) = _tnc(stops)
+        assert "rid" not in kw and "r3" not in kw.get("exclude_rids", ()), kw              # slot 0's own record
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_g1_b1_re_one_stop_reads_one_record_snapshot_for_all_its_components(box, stops, monkeypatch):
+    # G1-B1-RE: every read of the records answers another recorded copy (as records come and go); slot 0's stop
+    # takes ONE snapshot, so its two components exclude the same copies.
+    from lhpc.core import instances
+    n = iter(range(4, 99))
+    monkeypatch.setattr(instances, "recorded", lambda svc, sid: {f"r{next(n)}": 1})
+    run = box((R1, R3))
+    run("stop", "kiss@r1")
+    excl = [kw.get("exclude_rids") for cid, kw in stops if cid in ("loraham-kiss-serial", "loraham-kiss-tnc")]
+    assert len(excl) == 2 and excl[0] == excl[1] and excl[0], stops
