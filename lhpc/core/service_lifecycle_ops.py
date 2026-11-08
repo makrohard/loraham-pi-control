@@ -620,11 +620,9 @@ class LifecycleOpsMixin:
               band: str = "", auto_install_ctx=None, *,
               _before_start_locked=None, _operator: bool = True, _ensured: bool = False,
               position: dict | None = None, position_note: str = "", inst=None) -> ActionResult:
-        """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
-        when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
+        """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         A start runs EXACTLY the saved configuration: there are no per-launch values (Settings is the only place configuration changes). The plan (`apply=False`) and the apply take
-        every decision alike, identity enforcement included, so a refused start is known before
-        anything is queued or mutated.
+        every decision alike, identity enforcement included, so a refused start is known before anything is queued or mutated.
 
         `_before_start_locked` (PRIVATE, keyword-only; ordinary CLI/web callers pass None) is the
         boot-restore claim hook: invoked ONLY on the apply path, AFTER admission +
@@ -649,6 +647,8 @@ class LifecycleOpsMixin:
                 return ActionResult(False, f"Refusing to start '{target}': {ctx_err}")
         if (_bref := self.band_refusal(target, band, "start")) is not None:
             return _bref            # plan and apply take the SAME decision on an explicit band
+        if inst is None and self._owner_stack(target) is not None and not self._is_daemon_target(target):
+            inst = instances.copy_of(self, self._owner_stack_id(target), band=band)[0]   # slot 0 is a real copy (v6)
         if not apply:
             # The plan takes the apply's outer decision (identity, MeshCore position) at the same
             # point and in the same order, so a start the apply would refuse never plans "ok".
@@ -1072,9 +1072,9 @@ class LifecycleOpsMixin:
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
-        return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst else ''}': {len(order)} component(s) in order.",
+        return ActionResult(True, f"Run plan for '{target}{'@' + prep.inst.rid if prep.inst and prep.inst.slot else ''}': {len(order)} component(s) in order.",
                             details=details,
-                            next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst else f"lhpc stack start {target}"
+                            next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst and prep.inst.slot else f"lhpc stack start {target}"
                                            + (f" --band {band}" if band else "") + " --yes"],
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})

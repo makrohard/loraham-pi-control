@@ -368,13 +368,8 @@ def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> boo
     READY; an interactive main is never "already healthy" (its start pass always runs). Otherwise the snapshot
     check as before (`_order_already_healthy`), unchanged for a box without listed instances."""
     sid = svc.stack_of(target) or target                 # the target's stack (the run order starts with the daemon)
-    if inst is None or not inst.slot:                    # slot 0: scoped only while the stack has listed instances
-        if not listed_rids(svc._paths, sid):
-            return svc._order_already_healthy(order, radio)
-        rid, _why = slot0_radio(svc._paths, sid, band)
-        if not rid:
-            return False
-        inst = commands.Instance(0, rid)
+    if (inst is None or not inst.slot) and not listed_rids(svc._paths, sid):   # slot 0 is scoped only beside listed
+        return svc._order_already_healthy(order, radio)      # copies, then as its own copy (start's copy_of, DEC-W16)
     # G1-C7 B4: slot 0's own rule (`_all_components_healthy`: readiness endpoints, DEGRADED) over the instance's
     # statuses: its run state and its own TCP endpoints in place of the snapshot's.
     from .probes.endpoints import tcp_endpoint_match
