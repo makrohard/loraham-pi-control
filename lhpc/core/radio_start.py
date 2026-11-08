@@ -780,27 +780,15 @@ def effective_high_power(svc, rid: str) -> bool:
         return False
 
 
-def set_row_fields(svc, rid: str, fields, done: str):
+def set_row_fields(svc, rid: str, fields, done: str, restart=()):
     """Write `fields(row)` (row settings, e.g. high_power, read from the row as it is under the lock) into radio
-    `rid`'s row and nothing else, under the hardware list's lock (W217); radios.save checks the whole list and writes
-    it whole. `done` is the success summary; `{band}` in it names the row's band."""
+    `rid`'s row and nothing else, under the hardware list's lock (W217). `restart` names the fields its daemon reads
+    only at start: a change of one while that daemon runs sets the restart-required marker first (G1-C59). `done` is
+    the success summary; `{band}` in it names the row's band."""
     from .service_base import ActionResult
     return _with_list_lock(svc._paths, lambda why: ActionResult(False, f"the hardware list is busy ({why}); nothing was "
-                                                               "changed — try again"), _set_row_fields, svc, rid, fields, done)
-
-
-def _set_row_fields(svc, rid: str, fields, done: str):
-    from .service_base import ActionResult
-    state = radios.load(svc._paths)
-    row = next((r for r in state.radios if r.id == rid), None) if state.kind == radios.VALID else None
-    if row is None:
-        return ActionResult(False, f"{rid}: not saved: " + (f"{rid} is not in the hardware list"
-                                   if state.kind == radios.VALID else "the hardware list does not read back"))
-    reasons = radios.save(svc._paths, radios.with_row(state.radios, dataclasses.replace(row, **fields(row))),
-                          radio_models.load())
-    if reasons:
-        return ActionResult(False, f"{rid}: not saved: " + "; ".join(reasons))
-    return ActionResult(True, done.format(band=row.band))
+                                                               "changed — try again"),
+                           _save_row, svc, rid, fields, done, restart)
 
 
 def set_row_dp(svc, rid: str, updates, save=None):
@@ -818,17 +806,49 @@ def _set_row_dp(svc, rid: str, updates, save=None):
         updates, why = _radio_updates(svc, save[0], rid, save[1])
         if why:
             return ActionResult(False, why)
+    return _save_row(svc, rid, lambda row: {"dp": tuple(sorted({k: v for k, v in {**dict(row.dp), **updates}.items()
+                                                                  if v}.items()))},
+                     f"saved the daemon settings of {rid}")
+
+
+def _save_row(svc, rid: str, fields, done: str, restart=()):
+    """The one locked row change (the caller holds the list lock): read the row, apply `fields(row)`, check the whole
+    list, set the restart-required marker for a changed `restart` field while the radio's daemon runs, write."""
+    from .service_base import ActionResult
     state = radios.load(svc._paths)
     row = next((r for r in state.radios if r.id == rid), None) if state.kind == radios.VALID else None
     if row is None:
         return ActionResult(False, f"{rid}'s settings not saved: " + (f"{rid} is not in the hardware list"
                                    if state.kind == radios.VALID else "the hardware list does not read back"))
-    dp = {k: v for k, v in {**dict(row.dp), **updates}.items() if v}
-    reasons = radios.save(svc._paths, radios.with_row(state.radios, dataclasses.replace(row, dp=tuple(sorted(dp.items())))),
-                          radio_models.load())
+    new, models = dataclasses.replace(row, **fields(row)), radio_models.load()
+    rows = radios.with_row(state.radios, new)
+    reasons = radios.check(rows, models)
+    changed = [f for f in restart if getattr(row, f) != getattr(new, f)]
+    if not reasons and changed and daemon_running(svc, row):
+        why = _mark_restart(svc, row, changed)            # first: a crash before the write leaves a safe-side marker
+        if why:
+            return ActionResult(False, f"{rid}'s settings not saved: the restart-required marker failed ({why})")
+    reasons = reasons or radios.save(svc._paths, rows, models)
     if reasons:
         return ActionResult(False, f"{rid}'s settings not saved: " + "; ".join(reasons))
-    return ActionResult(True, f"saved the daemon settings of {rid}")
+    return ActionResult(True, done.format(band=row.band))
+
+
+def _mark_restart(svc, row, changed) -> str:
+    """The daemon's durable restart-required marker for `changed` fields of `row` (one config transaction under the
+    held list lock, merged with the marker as it stands); "" when written, or when an unreadable marker already
+    demands attention; else why."""
+    from . import config, restart_required
+    sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
+    if (pre := svc.restart_required(sid)) is not None and pre.get("unsafe"):
+        return ""
+    target = ("state", restart_required.marker_path(svc._paths, sid),
+              svc.restart_marker_payload(sid, [f"{row.id} {f}" for f in changed], row.band), 0o600)
+    try:                                                 # the list lock IS the config lock, held here (W217)
+        config._apply_config_transaction_locked(svc._paths, [target])
+    except (OSError, config.ConfigError) as exc:
+        return str(exc)
+    return ""
 
 
 def view_radio(svc, band: str, rid: str) -> tuple:

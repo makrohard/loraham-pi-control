@@ -157,9 +157,11 @@ def test_an_illegal_row_value_refuses_the_start_and_sends_no_ocp(tmp_path, monke
 # --- T6: saving restarts nothing ---------------------------------------------------------------------
 
 def test_set_ocp_saves_and_restarts_nothing(tmp_path):
-    svc = _svc(tmp_path)
-    fs = svc._system
+    p = Paths(runtime_root=tmp_path)
+    radios_fixture.write(tmp_path, _LIST["uputronics"])
+    fs = FakeSystem()
+    svc = ControllerService(system=fs.system, paths=p)
     r = svc.set_ocp("r2", "100")
     assert r.ok and "restart" in r.summary
     assert [x.ocp_ma for x in radios.load(svc._paths).radios] == [None, 100]
-    assert fs.runner.sent == [] if hasattr(fs, "runner") and hasattr(fs.runner, "sent") else True
+    assert fs.sent == []                                  # nothing was sent to any daemon (G1-C59 N)

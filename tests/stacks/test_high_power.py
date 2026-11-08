@@ -196,6 +196,47 @@ def test_k2_a_hand_written_grant_without_its_band_is_denied(tmp_path):
                in n for n in notes)
 
 
+@pytest.mark.parametrize("setter,first,second,field", [("set_high_power", "on", "off", "high_power"),
+                                                      ("set_ocp", "120", "130", "ocp_ma")])
+@pytest.mark.parametrize("running", [True, False])
+def test_c59_a_change_while_the_daemon_runs_sets_the_restart_marker(tmp_path, setter, first, second, field, running):
+    # G1-C59 B: the daemon reads the grant and the OCP only at start, so a change while r1's daemon runs is flagged
+    # restart-required (the durable marker), and a change of a stopped one is not. RED on 046d6439: no marker.
+    svc, _ = _svc(tmp_path, status=_status("SX127x", "0") if running else None)
+    assert svc.set_ocp("r1", "auto").ok and svc.restart_required("daemon") is None    # no change: nothing flagged
+    assert getattr(svc, setter)("r1", first).ok
+    marker = svc.restart_required("daemon")
+    assert (marker is not None) is running
+    if running:
+        assert f"r1 {field}" in marker["params"] and marker["band"] == "433"
+    assert getattr(svc, setter)("r1", second).ok
+    assert (svc.restart_required("daemon") is not None) is running
+
+
+def test_c59_two_radios_on_433_only_the_granted_one_reaches_twenty(tmp_path):
+    # W311's safety matrix (G1-C59): r1 and r2 both on 433, both SX127x daemons running and reporting the
+    # permission; only r1 is granted. Start: --high-power on r1 only. Reconfigure: POWER=20 saves on r1, is refused on
+    # r2. Live SET: r1's Apply sends POWER=20; r2's sends none; the band form names no one radio and sends nothing.
+    from lhpc.core import radio_start
+    import radios_fixture
+    p = Paths(runtime_root=tmp_path)
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
+                                    radios.Radio("r2", "b", "uputronics", "433", ce="ce1")))
+    fs = FakeSystem(unix_replies={dc.conf_socket(r): _status("SX127x", "1") for r in ("r1", "r2")})
+    svc = ControllerService(system=fs.system, paths=p)
+    assert svc.set_high_power("r1", "on").ok
+    assert [radio_start.start_plan(svc, r)[0]["hipower"] for r in ("r1", "r2")] == ["on", "off"]
+    assert svc.save_daemon_params("daemon", "433", {"POWER": "20"}, rid="r1").ok
+    assert not svc.save_daemon_params("daemon", "433", {"POWER": "20"}, rid="r2").ok
+    fs.sent.clear()
+    svc.apply_daemon_params("daemon", "433", "r2")
+    assert not any(b"POWER=20" in payload for _path, payload in fs.sent)
+    svc.apply_daemon_params("daemon", "433", "r1")
+    assert [path for path, payload in fs.sent if b"POWER=20" in payload] == [dc.conf_socket("r1")]
+    fs.sent.clear()
+    assert not svc.daemon_set("433", "POWER", "20", apply=True).ok and fs.sent == []
+
+
 def test_set_high_power_saves_and_restarts_nothing(tmp_path):
     svc, fs = _svc(tmp_path)
     r = svc.set_high_power("r1", "on")

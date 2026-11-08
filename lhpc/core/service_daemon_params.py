@@ -124,7 +124,7 @@ class DaemonParamsMixin:
             return ActionResult(False, f"OCP for {rid} must be 'auto' or mA, not {value!r}")
         return radio_start.set_row_fields(self, rid, lambda row: {"ocp_ma": ma},          # auto clears it: unset = auto
                                           f"OCP for {rid}: {value} — saved; takes effect when {rid}'s daemon is next "
-                                          "started (restart it)")
+                                          "started (restart it)", restart=("ocp_ma",))
 
     def high_power_state(self, band: str, view=None, rid: str = "") -> dict:
         """What the console shows for a radio's high-power permission (radio `rid`, else `band`'s one radio) — the
@@ -168,13 +168,12 @@ class DaemonParamsMixin:
         restarted. A model without the switch is refused by the list's own check."""
         if value not in ("off", "on"):
             return ActionResult(False, f"high-power switch must be 'off' or 'on', not {value!r}")
-        on = value == "on"
+        on, fields = value == "on", ("high_power", "high_power_band")
         note = ("saved; takes effect when its daemon is next started (restart it) — at +20 dBm the transmit duty cycle "
                 "must not exceed 1 %, keep the chip cooled; LHPC does not measure or enforce this; warranty void if "
                 "disregarded" if on else "saved; a running daemon keeps its permission until it is restarted")
-        return radio_start.set_row_fields(self, rid, lambda row: {"high_power": on,
-                                                                  "high_power_band": row.band if on else None},
-                                          f"high-power permission for {rid} ({{band}} MHz): {value} — {note}")
+        return radio_start.set_row_fields(self, rid, lambda row: dict(zip(fields, (on, row.band if on else None), strict=True)),
+                                          f"high-power permission for {rid} ({{band}} MHz): {value} — {note}", fields)
 
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
         """The band the daemon-params panel/apply uses: the requested one if valid, else a fixed-band stack's own band,

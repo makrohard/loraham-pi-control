@@ -2000,7 +2000,8 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
     (ONLY under the EXCLUSIVE config-stability guard, the auto-install boundary) and
     `ControllerService.set_operator_identity` (which computes its affected-stack snapshot and commits
     the [operator] patch + restart markers under its own held `config_lock` — the same critical
-    section, so snapshot and write cannot be split by a concurrent start). Everyone else MUST use
+    section, so snapshot and write cannot be split by a concurrent start), and `radio_start._mark_restart` (the
+    daemon's restart marker, written under the hardware list's held `config_lock` before the list). Everyone else MUST use
     `apply_config_transaction()`, which acquires the lock. Steps: recover/block any pending journal; journal each pre-image; atomically replace; roll back
     all on failure; remove the journal on success."""
     if recover_config_transaction(paths)[0] is ConfigRecovery.BLOCKED:
