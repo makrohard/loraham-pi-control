@@ -455,9 +455,8 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     taken = listed_rids(svc._paths, sid)
     if not taken:
         return {}
-    b = svc.running_band(sid, comp.band or band) or comp.band or band
-    rid, _why = slot0_radio(svc._paths, sid, b)
-    return {"exclude_rids": tuple(taken), "token": _token(svc, comp, commands.Instance(0, rid), b) if rid else None}
+    b = svc.running_band(sid, comp.band or band) or comp.band or band      # slot 0's copy (stop's copy_of, DEC-W16)
+    return {"exclude_rids": tuple(taken), "token": _token(svc, comp, inst, b) if inst is not None and inst.rid else None}
 
 
 def log_runs(svc, e, rid: str) -> bool:

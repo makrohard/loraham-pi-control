@@ -121,8 +121,7 @@ class StopOpsMixin:
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "", release_daemon: bool = True, auto_install_ctx=None,
              *, _operator: bool = True, inst=None) -> ActionResult:
-        """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
-        cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
+        """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
         if (_r := self._controller_refusal(target) or self.band_refusal(target, band, "stop")) is not None:
@@ -139,13 +138,14 @@ class StopOpsMixin:
         _stk0 = self.stack(_sid0) if _sid0 else None
         if _stk0 is not None and _stk0.main == self.DAEMON_ID:
             cascade = True
+        _whole, inst = inst is None, inst or (instances.copy_of(self, _sid0, band=band)[0] if _stk0 is not None and _stk0.main != self.DAEMON_ID else None)   # slot 0 is a real copy (v6); _whole: the operator's intent
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
                                    release_daemon=release_daemon, inst=inst)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
-                                      release_daemon=release_daemon, _operator=_operator and inst is None, inst=inst)
+                                      release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
                 # `_operator` is False on every internal route (cascade dependents, the daemon
                 # band release, owner stops for a start, restart's stop leg, uninstall/clean,
