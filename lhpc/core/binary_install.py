@@ -136,7 +136,11 @@ class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
 # --- P1: a transfer failure is retried (DEC-W340) ---------------------------------------------
 
 _RETRY_WAITS = (0, 5, 15, 45, 120)    # the first retry at once, then growing: about 3 min while a user waits
-_DEADLINE_S = 600.0                   # one download (all its attempts and waits) ends by then
+_DEADLINE_S = 600.0                   # one download (all its attempts and waits) ends by about then
+# The bound, stated: the deadline caps every wait, every connect and every body read (each gets at most the time
+# left). A server that trickles its status line, headers or chunk-size lines (each byte inside the socket timeout)
+# is bounded by the per-read timeout, not by the deadline; name resolution is not bounded at all. GitHub's failures
+# (5xx, resets, stalls) are covered; the index's sha256 still decides every file.
 
 
 def _transient(exc) -> bool:
