@@ -1400,10 +1400,13 @@ def _run(argv: list[str] | None = None) -> int:
 
         inst = None
         if args.radio:
-            from lhpc.core import radio_start
-            inst, _band, why = radio_start.daemon_radio(svc, args.radio)
-            if why:
-                jobresult.terminalize(svc._paths, web, aid, "failed", detail=why[:400])
+            from lhpc.core import instances, radio_start
+            if (svc.stack_of(args.target) or args.target) == (svc.stack_of(svc.DAEMON_ID) or "daemon"):
+                inst, _band, why = radio_start.daemon_radio(svc, args.radio)
+            else:                                   # W325: a listed copy's start/restart from its card or marker
+                inst, why = instances.copy_of(svc, args.target, args.radio)
+            if why or inst is None:
+                jobresult.terminalize(svc._paths, web, aid, "failed", detail=(why or "no such copy")[:400])
                 return 1
 
         def _admitted():

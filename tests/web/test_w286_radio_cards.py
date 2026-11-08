@@ -87,11 +87,14 @@ def test_an_unknown_or_disabled_rid_is_refused_and_nothing_runs(tmp_path, monkey
     assert spawns == [] and stops == []
 
 
-def test_a_rid_on_another_target_or_operation_is_a_bad_request(tmp_path, monkeypatch, web, csrf):
+def test_a_rid_on_a_stack_with_no_such_copy_is_refused_and_on_another_operation_is_a_bad_request(tmp_path, monkeypatch, web,
+                                                                                                csrf):
+    # W325: a rid on a stack names its listed copy; with no copy on that radio nothing runs and the refusal says why.
     _box(tmp_path)
     c = web()
     spawns, stops = _spy_spawns(monkeypatch), _spy_stops(monkeypatch)
-    assert c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "kiss", "rid": "r1"}).status_code == 400
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "kiss", "rid": "r1"}, follow_redirects=True)
+    assert "Cannot start kiss@r1: kiss@r1 is not a listed instance" in r.get_data(as_text=True)
     assert c.post("/action", data={"_csrf": csrf(c), "op": "install", "target": "daemon", "rid": "r1"}).status_code == 400
     assert spawns == [] and stops == []
 

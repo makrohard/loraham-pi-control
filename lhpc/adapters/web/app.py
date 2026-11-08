@@ -1723,14 +1723,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = request.form.get("band", "")    # chosen band for a band-switchable stack
         _submitted_band, confirmed = band, request.form.get("confirmed") == "yes"
         rid, inst = request.form.get("rid", ""), None
-        if rid:                                 # W286: one radio's daemon (its Home card; the CLI's --radio)
+        if "@" in target:                       # W325: a listed copy's own forms post `<stack>@<rid>`
+            target, _, rid = target.partition("@")
+        if rid:                                 # W286: one radio's daemon; W325: a listed copy (its card, its marker)
             from lhpc.core import radio_start
-            if op not in ("start", "stop", "restart") or (service.stack_of(target) or target) != (
-                    service.stack_of(service.DAEMON_ID) or "daemon"):
+            if op not in ("start", "stop", "restart"):
                 abort(400)
-            inst, band, why = radio_start.daemon_radio(service, rid)
-            if why:
-                flash(f"Cannot {op} the daemon: {why}.", "warn")
+            if (service.stack_of(target) or target) == (service.stack_of(service.DAEMON_ID) or "daemon"):
+                (inst, band, why), who = radio_start.daemon_radio(service, rid), "the daemon"
+            else:
+                (inst, why), who = _instances.copy_of(service, target, rid), f"{target}@{rid}"
+                band, why = (inst.band if inst else ""), ("" if inst is not None and op == "stop" else why)   # a disabled copy still stops
+            if why or inst is None:
+                flash(f"Cannot {op} {who}: {why}.", "warn")
                 return _redirect_for(target)
         # ONE CONCRETE OPERATION BAND, frozen HERE on every POST (the Apps dropdown / the running
         # band / the marker / the primary — never a confirm control) and carried as the hidden

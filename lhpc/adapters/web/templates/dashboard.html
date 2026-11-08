@@ -63,9 +63,7 @@
       <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
       running stack{{ 's' if restart_required|length > 1 }}:
       {% for sid in restart_required %}
-        {% if "@" in sid %}{# a listed copy (cleanup C7): the console cannot restart it, the CLI can #}
-        <code class="restart-copy">lhpc stack restart {{ sid }}</code>
-        {% else %}
+        {# W325: a listed copy (`<stack>@<rid>`) gets the same button as slot 0; /action restarts exactly it #}
         <form method="post" action="{{ url_for('action') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="restart">
@@ -73,7 +71,6 @@
           <input type="hidden" name="from" value="dash">
           <button type="submit" class="warnbtn">Restart {{ sid }} now</button>
         </form>
-        {% endif %}
       {% endfor %}
     </div>
   {% endif %}
@@ -247,9 +244,17 @@
                 {% if s.rid %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
-                {# G1-C49: the copy's component rows in slot 0's markup, without its Start/Stop forms #}
+                {# G1-C49: the copy's component rows in slot 0's markup; W325: its own Stop and Restart (target `<stack>@<rid>`) #}
                 <ul class="complist">{% for c in s.components %}<li>{{ comp_state(c) }}</li>{% endfor %}</ul>
-                <p class="muted">Stop it: <code>lhpc stack stop {{ s.id }}</code></p>
+                <p class="actrow">{% for op in ("stop", "restart") %}
+                  <form method="post" action="{{ url_for('action') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="op" value="{{ op }}">
+                    <input type="hidden" name="target" value="{{ s.id }}">
+                    <input type="hidden" name="from" value="dash">
+                    <button type="submit">{{ op | capitalize }}</button>
+                  </form>{% endfor %}
+                </p>
                 {% else %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>

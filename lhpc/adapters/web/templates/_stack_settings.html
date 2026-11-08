@@ -70,7 +70,12 @@
       {% if g.copy_restart_required %}
         {# Cleanup C7: the shown copy's own marker; the console cannot restart a copy, so the CLI command is named. #}
         <div class="depnote depnote-warn" id="copy-restart-required">{{ restart_note(g.copy_restart_required) }}
-          Restart it: <code>lhpc stack restart {{ g.copy_key }}</code></div>
+          <form method="post" action="{{ url_for('action') }}" class="act">{# W325: the same button as slot 0's #}
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="restart">
+            <input type="hidden" name="target" value="{{ g.copy_key }}">
+            <button type="submit" class="warnbtn">Restart now</button>
+          </form></div>
       {% endif %}
     {% elif view.bands %}
       <p><strong>Band:</strong>
