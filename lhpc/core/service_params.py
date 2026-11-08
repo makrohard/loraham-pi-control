@@ -1713,15 +1713,11 @@ class ParamsConfigMixin:
             return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
 
-    def meshcore_running_mode(self, inst=None) -> str:
-        """The mode the node is RUNNING in: the `[repeater] role` of the GENERATED config, which
-        write_config_files renders only on the start path — so a saved-but-not-yet-restarted
-        change does not flip a healthy node's status, and a stop verifies the endpoints the
-        launch actually opened. Falls back to the saved mode when nothing was generated yet."""
+    def _meshcore_running_role(self, inst=None):
+        """The copy's node's RUNNING mode: the `[repeater] role` of its GENERATED config (written only by a start, so a
+        saved-but-not-restarted change never flips a healthy node), or None when it cannot be read (G1-C40)."""
         import tomllib
-
-        from . import meshcore_mode as _mm
-        hit = self._component_index().get(_mm.NODE_ID)
+        hit = self._component_index().get(_meshcore_mode.NODE_ID)
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is not None:
             try:
@@ -1731,10 +1727,13 @@ class ParamsConfigMixin:
                     role = (tomllib.loads(raw.decode("utf-8", "replace"))
                             .get("repeater", {}) or {}).get("role")
                     if role:
-                        return _mm.normalize(role)
+                        return _meshcore_mode.normalize(role)
             except (OSError, PathContainmentError, ValueError, UnicodeError):
-                pass                       # unreadable/absent generated file: the saved mode
-        return self.meshcore_mode_display() or _mm.DEFAULT_MODE
+                pass                       # unreadable/absent generated file: unknown
+        return None
+
+    def meshcore_running_mode(self) -> str:      # status and logic: slot 0's running role, else its saved mode
+        return self._meshcore_running_role() or self.meshcore_mode_display() or _meshcore_mode.DEFAULT_MODE
 
     def meshcore_mode_display(self) -> str:
         """The SAVED mode for read-only surfaces (status, the console, stop verification): ""

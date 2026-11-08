@@ -110,7 +110,11 @@ def start_refusal(svc, target: str, inst=None):
     if target in CLIENT_IDS and _node_live(svc, inst):
         # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
         # mode (status and stop verification judge by the same running mode) — the copy's own.
-        mode = svc.meshcore_running_mode(inst)
+        mode = svc._meshcore_running_role(inst)
+        if mode is None:                 # G1-C40: a live node whose mode cannot be read is never assumed to serve TCP 5000
+            key = f"{STACK_ID}@{inst.rid}" if getattr(inst, "slot", 0) else STACK_ID
+            return ActionResult(False, f"Cannot start '{target}': the running mode of {key} cannot be read (its "
+                                f"generated config is missing or unreadable)", details=[f"lhpc stack restart {key}"])
     if target in CLIENT_IDS and not clients_available(mode):
         return ActionResult(
             False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "

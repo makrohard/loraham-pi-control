@@ -42,3 +42,16 @@ def test_a_stopped_copys_client_follows_its_saved_mode_while_slot0_runs(tmp_path
     svc = ControllerService(system=FakeSystem(cmdlines_data={52: slot0}).system, paths=Paths(runtime_root=tmp_path))
     res = svc.start("meshcore-webui", apply=False, inst=instances.copy_of(svc, "meshcore", "r4")[0])
     assert "repeater-only mode" not in res.summary
+
+
+def test_a_live_node_whose_running_mode_cannot_be_read_refuses_its_client(tmp_path):
+    # G1-C40: the copy's node runs, its generated config is gone, its saved mode says chat: the client is refused
+    # (fail closed), never started against a node that may serve no TCP 5000. Slot 0 by the same rule.
+    svc = _svc(tmp_path)
+    (tmp_path / "config" / "files" / "r4" / "meshcore.toml").unlink()
+    res = svc.start("meshcore-webui", apply=False, inst=instances.copy_of(svc, "meshcore", "r4")[0])
+    assert res.ok is False and "the running mode of meshcore@r4 cannot be read" in res.summary
+    slot0 = ["/usr/bin/python", "-m", "meshcore_host", str(tmp_path / "config" / "files" / "meshcore.toml")]
+    svc = ControllerService(system=FakeSystem(cmdlines_data={53: slot0}).system, paths=Paths(runtime_root=tmp_path))
+    res = svc.start("meshcore-webui", apply=False)
+    assert res.ok is False and "the running mode of meshcore cannot be read" in res.summary
