@@ -12,7 +12,7 @@ import json
 import re
 
 RIDS = {"r1": "433", "r2": "868"}                       # the lab's radios: one card each
-DAEMON = re.compile(r".*/api/daemon/(433|868)\?rid=(r[0-9]+)$")
+DAEMON = re.compile(r".*/api/daemon/(r[0-9]+)$")
 LIVE = {"reachable": True, "ready": True, "radio_state": "READY", "channel": {}, "status": {}, "stats": {}, "feed": []}
 
 
@@ -24,10 +24,9 @@ def _open(page, answer, hidden=False):
     seen = dict.fromkeys(RIDS, 0)
 
     def handler(route):
-        band, rid = DAEMON.match(route.request.url).groups()
-        assert band == RIDS[rid]                         # each card asks its own radio on its band
+        rid, = DAEMON.match(route.request.url).groups()   # each card asks its own radio
         seen[rid] += 1
-        answer(route, band)
+        answer(route, RIDS[rid])
 
     page.clock.install()
     page.route(DAEMON, handler)

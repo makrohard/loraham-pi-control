@@ -5,7 +5,7 @@
 // action this file takes is the explicit "Scan now" button, which is a POST with a CSRF token.
 (function () {
   "use strict";
-  var cols = document.querySelectorAll("[data-radio-band]");
+  var cols = document.querySelectorAll("[data-radio-rid]");
 
   function set(id, text) {
     var el = document.getElementById(id);
@@ -17,10 +17,11 @@
 
   // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
   // while rendering is a failure, which the caller answers with the slow interval.
-  // A card's element ids end in its radio's id (its band's on a card without a radio: a stray band).
-  function poll(band, rid) {
-    var key = rid || band;
-    return fetch("/api/daemon/" + encodeURIComponent(band) + (rid ? "?rid=" + encodeURIComponent(rid) : ""))
+  // A card's element ids end in its radio's id. A card without a radio (a stray band) is not polled: the daemon
+  // views are per radio (/api/daemon/<rid>), and that card shows its server-rendered state.
+  function poll(rid) {
+    var key = rid;
+    return fetch("/api/daemon/" + encodeURIComponent(rid))
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
@@ -75,7 +76,7 @@
   // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
   var POLL_MS = 3000, ERROR_MS = 15000;
   cols.forEach(function (col) {
-    var band = col.getAttribute("data-radio-band"), rid = col.getAttribute("data-radio-rid") || "";
+    var rid = col.getAttribute("data-radio-rid") || "";
     var timer = null, polling = false;
 
     function clearTimer() {
@@ -92,7 +93,7 @@
       clearTimer();
       if (polling || document.hidden) return;   // hidden: the visibilitychange handler refreshes
       polling = true;
-      poll(band, rid).then(function (ok) {
+      poll(rid).then(function (ok) {
         polling = false;
         schedule(ok ? POLL_MS : ERROR_MS);
       });
@@ -169,18 +170,17 @@
   // an arriving frame), and this console's contract is that GET is read-only. A GET here could be
   // fired by a refresh, prefetch or retry — which is exactly the accident this whole change undoes.
   Array.prototype.forEach.call(
-    document.querySelectorAll("[data-scan-band]"), function (btn) {
+    document.querySelectorAll("[data-scan-rid]"), function (btn) {
       btn.addEventListener("click", function () {
-        var band = btn.getAttribute("data-scan-band"), rid = btn.getAttribute("data-scan-rid") || "";
-        var cell = document.getElementById("rd-cad-" + (rid || band));
+        var rid = btn.getAttribute("data-scan-rid") || "";
+        var cell = document.getElementById("rd-cad-" + rid);
         var token = btn.getAttribute("data-csrf") || "";
-        if (!band || !token) return;
+        if (!rid || !token) return;
         var body = new URLSearchParams();
         body.set("_csrf", token);
-        if (rid) body.set("rid", rid);
         btn.disabled = true;
         if (cell) cell.textContent = "scanning…";
-        fetch("/api/daemon/" + encodeURIComponent(band) + "/scan",
+        fetch("/api/daemon/" + encodeURIComponent(rid) + "/scan",
               { method: "POST", cache: "no-store", body: body })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {

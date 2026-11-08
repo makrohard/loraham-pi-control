@@ -49,7 +49,6 @@ from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
 from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
-from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
 from lhpc.core.status import (
     component_note,
@@ -1089,7 +1088,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                    "view": {**service.config_view(stack.id, _inst.band if _inst else sband),
+                    "view": {**service.config_view(stack.id, _inst.band if _inst else sband, rid=_view_rid(stack.id, "")),
                              **_instances.settings_choice(service, stack.id, sband, _inst)},   # 7f, DEC-W40
                     "config_groups": service.config_param_groups(stack.id, _inst.band if _inst else sband, _inst),
                     # Folded-in detail sections (all read-only / GET-safe):
@@ -1534,6 +1533,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service.dismiss_dep_note(service.dependency_overview())
         return redirect(request.referrer or url_for("stacks_overview"))
 
+    def _api_radio(rid: str) -> str:
+        """The band of radio `rid` (the radio row's, CLEANUP-DESIGN-v13 13.3) for a per-radio daemon view or setting;
+        a rid that is no enabled radio of the hardware list is a 404 with its reason (JSON), never a 500."""
+        from lhpc.core import radio_start
+        _inst, band, why = radio_start.daemon_radio(service, rid)
+        if why:
+            abort(make_response(jsonify(error=why), 404))
+        return band
+
     def _radio_arg(band: str) -> str:
         """Item 16 (DEC-W53): the radio a daemon view is addressed to (`rid`), "" without one; a rid that is no enabled
         radio of `band` is a 404 with the reason, never a 500."""
@@ -1554,34 +1562,30 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         _inst, rband, why = radio_start.daemon_radio(service, rid)
         return "" if why or (band and rband != band) else rid
 
-    @app.get("/api/daemon/<band>")
-    def daemon_api(band: str):
-        # The dashboard's per-band column polls this every 3 s. It is a GET, so by this app's
+    @app.get("/api/daemon/<rid>")
+    def daemon_api(rid: str):
+        # The dashboard's per-radio column polls this every 3 s. It is a GET, so by this app's
         # contract it must be READ-ONLY — and it now genuinely is: the channel fields come from
         # the PASSIVE read, which never puts the radio into CAD. It used to call `GET CHANNEL`,
         # whose CAD scan destroyed frames in flight and cost ~46 % of reception at SF12/BW125.
-        if band not in ALLOWED_BANDS:
-            abort(404)
-        rid = _radio_arg(band)
+        band = _api_radio(rid)
         view = service.daemon_view(band, rid)
         channel = service.daemon_channel(band, rid) if view.reachable else {}
-        return jsonify(band=band, rid=rid, reachable=view.reachable, ready=view.ready,
+        return jsonify(rid=rid, band=band, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state, status=view.status,
                        stats=view.stats, channel=channel,
                        feed=service.daemon_feed(band, 40, rid))
 
-    @app.get("/api/daemon/<band>/feed")
-    def daemon_feed_api(band: str):
-        # The "RX/TX activity" window polls ONLY this. It used to poll /api/daemon/<band> and
+    @app.get("/api/daemon/<rid>/feed")
+    def daemon_feed_api(rid: str):
+        # The "RX/TX activity" window polls ONLY this. It used to poll /api/daemon/<radio> and
         # throw away everything except `feed`, dragging a full CAD scan behind a text log every
         # 3 s. Nothing here touches the radio.
-        if band not in ALLOWED_BANDS:
-            abort(404)
-        rid = _radio_arg(band)
-        return jsonify(band=band, rid=rid, feed=service.daemon_feed(band, 40, rid))
+        band = _api_radio(rid)
+        return jsonify(rid=rid, band=band, feed=service.daemon_feed(band, 40, rid))
 
-    @app.post("/api/daemon/<band>/scan")
-    def daemon_scan_api(band: str):
+    @app.post("/api/daemon/<rid>/scan")
+    def daemon_scan_api(rid: str):
         # A real CAD measurement, on explicit operator request only.
         #
         # POST + CSRF, NOT a GET: this is state-changing by this app's contract — it takes the
@@ -1589,49 +1593,44 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # it as a nominally-safe GET would let a refresh, prefetch or retry fire it, which is in
         # miniature how a status read came to scan the channel in the first place. No confirm
         # page: the button click is sufficient operator intent.
-        if band not in ALLOWED_BANDS:
-            abort(404)
         if not _csrf_ok():
             abort(400)
-        rid = _radio_arg(band)
+        band = _api_radio(rid)
         view = service.daemon_view(band, rid)
         channel = service.daemon_channel_scan(band, rid) if view.reachable else {}
-        return jsonify(band=band, rid=rid, reachable=view.reachable, channel=channel)
+        return jsonify(rid=rid, band=band, reachable=view.reachable, channel=channel)
 
-    @app.get("/api/daemon/<band>/socket")
-    def daemon_socket_api(band: str):
+    @app.get("/api/daemon/<rid>/socket")
+    def daemon_socket_api(rid: str):
         # READ-ONLY live poll of the CONF socket for the "View Socket" monitor: one bounded,
-        # sanitised status line per request (band validated -> never an arbitrary socket path;
+        # sanitised status line per request (the radio validated -> never an arbitrary socket path;
         # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
-        if band not in ALLOWED_BANDS:
-            abort(404)
-        rid = _radio_arg(band)
+        band = _api_radio(rid)
         line = service.daemon_socket_line(band, rid)
-        return jsonify(band=band, rid=rid, line=line, reachable=bool(line))
+        return jsonify(rid=rid, band=band, line=line, reachable=bool(line))
 
-    @app.post("/radio/<band>/set")
-    def radio_set(band: str):
-        # Apply a LIVE daemon setting (runtime) — a two-step plan + confirm, like install/update/clean.. First POST shows the plan; a confirmed POST
-        # applies. The key is whitelisted by the service; nothing transmits.
-        if band not in ALLOWED_BANDS:
-            abort(404)
+    @app.post("/radio/<rid>/set")
+    def radio_set(rid: str):
+        # Apply a LIVE daemon setting (runtime) on radio `rid` — a two-step plan + confirm, like install/update/clean..
+        # First POST shows the plan; a confirmed POST applies. The key is whitelisted by the service; nothing transmits.
         if not _csrf_ok():
             abort(400)
+        band = _api_radio(rid)
         key = request.form.get("key", "")
         value = request.form.get("value", "")
         if request.form.get("confirmed") != "yes":
-            plan = service.daemon_set(band, key, value, apply=False)
+            plan = service.daemon_set(band, key, value, apply=False, rid=rid)
             fsk = key.upper() == "MODE" and value.upper() == "FSK"
-            return render_template("confirm_radio.html", version=__version__, band=band,
+            return render_template("confirm_radio.html", version=__version__, rid=rid, band=band,
                                    key=key, value=value, plan=plan, fsk=fsk,
-                                   warn_stacks=service.running_lora_stacks(band) if fsk else [])
-        result = service.daemon_set(band, key, value, apply=True)
+                                   warn_stacks=service.running_lora_stacks(band, rid=rid) if fsk else [])
+        result = service.daemon_set(band, key, value, apply=True, rid=rid)
         # Truthful flash: the service summary already distinguishes "applied (confirmed)"
         # from "SENT (unconfirmed)". Never claim "Applied" for a setting the daemon does
         # not report back — an unconfirmed SET is flashed as a warning, not success.
         confirmed = bool(result.data.get("confirmed")) if result.data else False
         flash(result.summary, "ok" if (result.ok and confirmed) else "warn")
-        return redirect(url_for("stacks_overview", band=band, cfg="daemon") + "#stack-settings-daemon")
+        return redirect(url_for("stacks_overview", dp="daemon", rid=rid, cfg="daemon") + "#stack-settings-daemon")
 
     def _redirect_for(target: str):
         # Actions launched from the dashboard return to the dashboard; otherwise land on the

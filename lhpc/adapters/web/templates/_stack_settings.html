@@ -95,45 +95,45 @@
     {% if view.radios %}
       <section class="cfgsec">
         {% for radio in view.radios %}
-          <h3>{{ radio.band }} MHz
+          <h3>{{ radio.rid }} · {{ radio.band }} MHz
             <span class="badge badge-{{ 'running' if radio.reachable else 'stopped' }}">
               {{ 'live' if radio.reachable else 'offline' }}</span></h3>
           {% if not radio.reachable %}
-            <p class="muted">Daemon not serving {{ radio.band }} MHz — start it to tune live.</p>
+            <p class="muted">Daemon not serving {{ radio.rid }} — start it to tune live.</p>
           {% else %}
             <details class="advcfg" open>
               <summary>Monitor</summary>
             <p class="livequery">
-              <button type="button" class="livebtn" data-band="{{ radio.band }}" data-kind="status">Get STATUS</button>
-              <button type="button" class="livebtn" data-band="{{ radio.band }}" data-kind="stats">Get STATS</button>
-              <button type="button" class="socketbtn" data-band="{{ radio.band }}">View Socket</button>
-              <button type="button" class="txbtn" data-band="{{ radio.band }}">RX/TX View</button>
+              <button type="button" class="livebtn" data-rid="{{ radio.rid }}" data-kind="status">Get STATUS</button>
+              <button type="button" class="livebtn" data-rid="{{ radio.rid }}" data-kind="stats">Get STATS</button>
+              <button type="button" class="socketbtn" data-rid="{{ radio.rid }}">View Socket</button>
+              <button type="button" class="txbtn" data-rid="{{ radio.rid }}">RX/TX View</button>
               <span class="muted">live request on the config socket</span>
             </p>
             {# All output panes are a FIXED 22-line-tall window (`stream22`) — they never grow as
                lines arrive; long history scrolls inside. #}
-            <div class="liveout-wrap" id="liveout-{{ radio.band }}" hidden>
+            <div class="liveout-wrap" id="liveout-{{ radio.rid }}" hidden>
               <hr class="sep">
-              <button type="button" class="liveclose" data-band="{{ radio.band }}"
+              <button type="button" class="liveclose" data-rid="{{ radio.rid }}"
                       aria-label="Close" title="Close">✕</button>
-              <pre class="next liveout-body stream22" id="liveout-body-{{ radio.band }}"></pre>
+              <pre class="next liveout-body stream22" id="liveout-body-{{ radio.rid }}"></pre>
             </div>
             {# Live 'View Socket' monitor: a rolling 22-line window streamed from the CONF socket
-               (client-side polling of the read-only /api/daemon/<band>/socket endpoint). The ✕
+               (client-side polling of the read-only /api/daemon/<rid>/socket endpoint). The ✕
                closes the window AND stops the polling (disconnects). #}
-            <div class="liveout-wrap" id="socketout-{{ radio.band }}" hidden>
+            <div class="liveout-wrap" id="socketout-{{ radio.rid }}" hidden>
               <hr class="sep">
-              <button type="button" class="liveclose socketclose" data-band="{{ radio.band }}"
+              <button type="button" class="liveclose socketclose" data-rid="{{ radio.rid }}"
                       aria-label="Close and disconnect" title="Close &amp; disconnect">✕</button>
-              <pre class="next liveout-body stream22" id="socketout-body-{{ radio.band }}"></pre>
+              <pre class="next liveout-body stream22" id="socketout-body-{{ radio.rid }}"></pre>
             </div>
             {# 'TX-Viewer': the same RX/TX activity feed as the dashboard, in a closable 22-line
-               window (read-only /api/daemon/<band> feed). #}
-            <div class="liveout-wrap" id="txout-{{ radio.band }}" hidden>
+               window (read-only /api/daemon/<rid> feed). #}
+            <div class="liveout-wrap" id="txout-{{ radio.rid }}" hidden>
               <hr class="sep">
-              <button type="button" class="liveclose txclose" data-band="{{ radio.band }}"
+              <button type="button" class="liveclose txclose" data-rid="{{ radio.rid }}"
                       aria-label="Close" title="Close">✕</button>
-              <pre class="next liveout-body stream22" id="txout-body-{{ radio.band }}"></pre>
+              <pre class="next liveout-body stream22" id="txout-body-{{ radio.rid }}"></pre>
             </div>
             </details>
             <details class="advcfg">
@@ -145,7 +145,7 @@
               {% for key, spec in view.live_settings.items() %}
                 <div class="setcell">
                   <span class="setkey">{{ key }}</span>
-                  <form method="post" action="{{ url_for('radio_set', band=radio.band) }}" class="setform">
+                  <form method="post" action="{{ url_for('radio_set', rid=radio.rid) }}" class="setform">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                     <input type="hidden" name="key" value="{{ key }}">
                     {% set cur = radio.status.get(key) or radio.config.get(key) %}

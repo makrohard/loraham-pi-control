@@ -32,11 +32,11 @@ def test_live_mode_fsk_confirm_warns(web, csrf):
     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
     c = web()
     tok = csrf(c)
-    body = c.post("/radio/433/set",
+    body = c.post("/radio/r1/set",
                   data={"_csrf": tok, "key": "MODE", "value": "FSK"}).get_data(as_text=True)
     assert "MODE=FSK" in body and "break LoRa" in body        # FSK warning present
     # A non-FSK live change gets no such warning.
-    body2 = c.post("/radio/433/set",
+    body2 = c.post("/radio/r1/set",
                    data={"_csrf": tok, "key": "TXMODE", "value": "DIRECT"}).get_data(as_text=True)
     assert "break LoRa" not in body2
 

@@ -2,11 +2,11 @@
 {% block title %}confirm live setting — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   <div class="card">
-    <header><h2>Confirm live daemon setting <span class="pill">{{ band }} MHz</span></h2></header>
+    <header><h2>Confirm live daemon setting <span class="pill">{{ rid }} · {{ band }} MHz</span></h2></header>
     <div class="body">
       {% if fsk %}
         <p class="depnote depnote-warn"><strong>⚠ MODE=FSK</strong> switches the radio off LoRa and
-          will break LoRa communication on {{ band }} MHz{% if warn_stacks %} — running LoRa
+          will break LoRa communication on {{ rid }}{% if warn_stacks %} — running LoRa
           stack(s) affected: <strong>{{ warn_stacks|join(', ') }}</strong>{% endif %}.</p>
       {% endif %}
       <p>{{ plan.summary }}</p>
@@ -15,7 +15,7 @@
 {% endfor %}</pre>
       {% endif %}
       {% if plan.ok %}
-        <form method="post" action="{{ url_for('radio_set', band=band) }}">
+        <form method="post" action="{{ url_for('radio_set', rid=rid) }}">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="key" value="{{ key }}">
           <input type="hidden" name="value" value="{{ value }}">

@@ -198,7 +198,7 @@ def test_get_routes_make_no_network_calls(tmp_path, web):
 
     client = web(service_factory=factory)
     for path in ("/", "/stacks", "/stacks/daemon",
-                 "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
+                 "/healthz", "/logs/loraham-daemon", "/api/daemon/r1",
                  "/api/dash-signature", "/api/logs/loraham-daemon",
                  "/auto-install", "/api/auto-install", "/api/system"):
         client.get(path)
@@ -402,12 +402,14 @@ def test_daemon_config_page_has_live_settings(tmp_path, web):
 
 
 def test_daemon_api_json(tmp_path, web):
-    j = _daemon_client(web, tmp_path).get("/api/daemon/433").get_json()
+    r = _daemon_client(web, tmp_path).get("/api/daemon/r1")
+    assert r.status_code == 200
+    j = r.get_json()
     assert j["reachable"] and j["status"]["TXMODE"] == "MANAGED"
 
 
 def test_daemon_api_channel_never_scans(tmp_path, web):
-    """The dashboard polls /api/daemon/<band> every 3 s, so it must stay passive.
+    """The dashboard polls /api/daemon/<rid> every 3 s, so it must stay passive.
 
     It used to call `GET CHANNEL`, whose CAD scan destroys a frame in flight — measured at 54 %
     delivery against 100 % with the poll stopped. A GET route is also contractually read-only
@@ -424,7 +426,7 @@ def test_daemon_api_channel_never_scans(tmp_path, web):
     sysobj = FakeSystem().system
     sysobj.unix = Rec()
     c = web(system=sysobj)
-    assert c.get("/api/daemon/433").status_code == 200
+    assert c.get("/api/daemon/r1").status_code == 200
     assert b"GET CHANNEL\n" not in seen           # the scanning form must never be issued here
     assert b"GET CHANNEL NOSCAN\n" in seen
 
@@ -432,7 +434,7 @@ def test_daemon_api_channel_never_scans(tmp_path, web):
 def test_daemon_feed_endpoint_does_not_read_the_radio(tmp_path, web):
     """The RX/TX activity window polls only the feed.
 
-    It used to poll /api/daemon/<band> and discard everything but `feed`, dragging a destructive
+    It used to poll /api/daemon/<rid> and discard everything but `feed`, dragging a destructive
     CAD scan behind a text log every 3 s."""
     seen: list[bytes] = []
 
@@ -445,10 +447,12 @@ def test_daemon_feed_endpoint_does_not_read_the_radio(tmp_path, web):
     sysobj = FakeSystem().system
     sysobj.unix = Rec()
     c = web(system=sysobj)
-    j = c.get("/api/daemon/433/feed").get_json()
+    r = c.get("/api/daemon/r1/feed")
+    assert r.status_code == 200
+    j = r.get_json()
     assert "feed" in j and j["band"] == "433"
     assert seen == []                             # no radio request at all: STATUS, STATS, CHANNEL
-    assert c.get("/api/daemon/999/feed").status_code == 404
+    assert c.get("/api/daemon/r9/feed").status_code == 404
 
 
 def test_daemon_scan_is_post_and_requires_csrf(tmp_path, web, csrf):
@@ -469,17 +473,17 @@ def test_daemon_scan_is_post_and_requires_csrf(tmp_path, web, csrf):
     sysobj = FakeSystem().system
     sysobj.unix = Rec()
     c = web(system=sysobj)
-    r = c.get("/api/daemon/433/scan")                  # GET must never reach it: the stray-GET
+    r = c.get("/api/daemon/r1/scan")                  # GET must never reach it: the stray-GET
     assert r.status_code == 302 and seen == []         # redirect, and not one radio request
-    assert c.post("/api/daemon/433/scan", data={}).status_code == 400   # no CSRF -> refused
-    r = c.post("/api/daemon/433/scan", data={"_csrf": csrf(c)})
+    assert c.post("/api/daemon/r1/scan", data={}).status_code == 400   # no CSRF -> refused
+    r = c.post("/api/daemon/r1/scan", data={"_csrf": csrf(c)})
     assert r.status_code == 200
-    assert c.post("/api/daemon/999/scan", data={"_csrf": csrf(c)}).status_code == 404
+    assert c.post("/api/daemon/r9/scan", data={"_csrf": csrf(c)}).status_code == 404
 
 
 def test_radio_set_requires_csrf(tmp_path, web):
     c = _daemon_client(web, tmp_path)
-    r = c.post("/radio/433/set", data={"key": "TXMODE", "value": "DIRECT"})
+    r = c.post("/radio/r1/set", data={"key": "TXMODE", "value": "DIRECT"})
     assert r.status_code == 400
 
 
@@ -488,10 +492,10 @@ def test_radio_set_is_two_step(tmp_path, web, csrf):
     c = _daemon_client(web, tmp_path)
     token = csrf(c)
     # First POST (no confirmed) -> shows the plan, does NOT apply (200, not 302).
-    r = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE", "value": "DIRECT"})
+    r = c.post("/radio/r1/set", data={"_csrf": token, "key": "TXMODE", "value": "DIRECT"})
     assert r.status_code == 200 and b"Confirm live daemon setting" in r.data
     # Confirmed POST -> applies (redirect to the daemon config page).
-    r2 = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE",
+    r2 = c.post("/radio/r1/set", data={"_csrf": token, "key": "TXMODE",
                                         "value": "DIRECT", "confirmed": "yes"})
     assert r2.status_code == 302
 
@@ -1114,13 +1118,15 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch, web, cs
 @pytest.mark.safety("P0.6")
 def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path, web):
     c = _daemon_client(web, tmp_path)                       # 433 CONF socket reachable
-    j = c.get("/api/daemon/433/socket").get_json()
+    r = c.get("/api/daemon/r1/socket")
+    assert r.status_code == 200
+    j = r.get_json()
     assert j["band"] == "433" and j["reachable"] is True
     assert j["line"].startswith("STATUS")              # one raw, sanitised status line
     # 868 has no reply -> fail-closed, not reachable
-    assert c.get("/api/daemon/868/socket").get_json() == {"band": "868", "rid": "", "line": "", "reachable": False}   # item 16: rid named
-    assert c.get("/api/daemon/999/socket").status_code == 404       # band validated -> no arbitrary path
-    assert c.post("/api/daemon/433/socket").status_code == 405       # read-only (GET only)
+    assert c.get("/api/daemon/r2/socket").get_json() == {"rid": "r2", "band": "868", "line": "", "reachable": False}
+    assert c.get("/api/daemon/r9/socket").status_code == 404        # radio validated -> no arbitrary path
+    assert c.post("/api/daemon/r1/socket").status_code == 405       # read-only (GET only)
 
 
 def test_daemon_socket_line_sanitises_and_bounds(tmp_path):

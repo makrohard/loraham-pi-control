@@ -187,11 +187,11 @@
                     must not run one). "Scan now" takes a real measurement on request. The daemon's
                     listen-before-talk is UNAFFECTED — it still gates every transmission. -#}
                 <tr><th>CAD state</th>
-                    <td class="mono"><span id="rd-cad-{{ key }}">—</span>
-                      <button type="button" class="btn-link" data-scan-band="{{ r.band }}"{% if x %} data-scan-rid="{{ x.rid }}"{% endif %}
+                    <td class="mono"><span id="rd-cad-{{ key }}">—</span>{% if x %}
+                      <button type="button" class="btn-link" data-scan-rid="{{ x.rid }}"
                               data-csrf="{{ csrf_token() }}"
                               title="Take one real CAD measurement. Briefly interrupts reception.">
-                        Scan now</button></td>
+                        Scan now</button>{% endif %}</td>
                     <th>TX active</th><td class="mono" id="rd-tx-{{ key }}">?</td></tr>
                 <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ key }}">?</td>
                     <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ key }}">{{ dv.cadrssi or '?' }}</td></tr>

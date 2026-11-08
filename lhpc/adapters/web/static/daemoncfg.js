@@ -20,51 +20,51 @@
   // "Get STATUS" / "Get STATS": one-shot read of the daemon's config socket.
   function wireLive(b) {
     b.addEventListener("click", function () {
-      var band = b.getAttribute("data-band");
+      var rid = b.getAttribute("data-rid");
       var kind = b.getAttribute("data-kind");
-      var wrap = document.getElementById("liveout-" + band);
-      var body = document.getElementById("liveout-body-" + band);
+      var wrap = document.getElementById("liveout-" + rid);
+      var body = document.getElementById("liveout-body-" + rid);
       if (!wrap || !body) return;
       wrap.hidden = false;
       body.textContent = "loading…";
-      fetch("/api/daemon/" + encodeURIComponent(band))
+      fetch("/api/daemon/" + encodeURIComponent(rid))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
-          if (!d || !d.reachable) { body.textContent = "daemon not reachable on " + band + " MHz"; return; }
+          if (!d || !d.reachable) { body.textContent = "daemon not reachable on " + rid; return; }
           var data = kind === "stats" ? d.stats : d.status;
-          body.textContent = kind.toUpperCase() + " — " + band + " MHz (live)\n" + render(data);
+          body.textContent = kind.toUpperCase() + " — " + rid + " (live)\n" + render(data);
         })
         .catch(function () { body.textContent = "request failed"; });
     });
   }
   function wireLiveClose(x) {
     x.addEventListener("click", function () {
-      var wrap = document.getElementById("liveout-" + x.getAttribute("data-band"));
+      var wrap = document.getElementById("liveout-" + x.getAttribute("data-rid"));
       if (wrap) wrap.hidden = true;
     });
   }
 
   // "View Socket": a live, rolling 22-line window streamed from the daemon CONF socket. The X closes
-  // the window AND stops the polling. textContent only; one poller per band; cleared on close.
+  // the window AND stops the polling. textContent only; one poller per radio; cleared on close.
   function wireSocket(b) {
     b.addEventListener("click", function () {
-      var band = b.getAttribute("data-band");
-      var wrap = document.getElementById("socketout-" + band);
-      var body = document.getElementById("socketout-body-" + band);
+      var rid = b.getAttribute("data-rid");
+      var wrap = document.getElementById("socketout-" + rid);
+      var body = document.getElementById("socketout-body-" + rid);
       if (!wrap || !body || wrap.dataset.timer) return;   // no double-start
       wrap.hidden = false;
       var buf = [];
-      body.textContent = "connecting to config socket (" + band + " MHz)…";
+      body.textContent = "connecting to config socket (" + rid + ")…";
       function push(text) {
         buf.push("[" + stamp() + "] " + text);
         if (buf.length > SOCKET_LINES) buf = buf.slice(-SOCKET_LINES);   // rolling window
         body.textContent = buf.join("\n");                              // textContent -> no HTML injection
       }
       function poll() {
-        fetch("/api/daemon/" + encodeURIComponent(band) + "/socket", { cache: "no-store" })
+        fetch("/api/daemon/" + encodeURIComponent(rid) + "/socket", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
-            push(d && d.reachable && d.line ? d.line : "(no response on " + band + " MHz)");
+            push(d && d.reachable && d.line ? d.line : "(no response on " + rid + ")");
           })
           .catch(function () { push("(request failed)"); });
       }
@@ -74,7 +74,7 @@
   }
   function wireSocketClose(x) {
     x.addEventListener("click", function () {
-      var wrap = document.getElementById("socketout-" + x.getAttribute("data-band"));
+      var wrap = document.getElementById("socketout-" + x.getAttribute("data-rid"));
       if (!wrap) return;
       if (wrap.dataset.timer) {           // stop polling = disconnect the "socket"
         clearInterval(Number(wrap.dataset.timer));
@@ -87,16 +87,16 @@
   // "TX-Viewer": the SAME read-only RX/TX feed as the dashboard, in a closable 22-line window.
   function wireTx(b) {
     b.addEventListener("click", function () {
-      var band = b.getAttribute("data-band");
-      var wrap = document.getElementById("txout-" + band);
-      var body = document.getElementById("txout-body-" + band);
+      var rid = b.getAttribute("data-rid");
+      var wrap = document.getElementById("txout-" + rid);
+      var body = document.getElementById("txout-body-" + rid);
       if (!wrap || !body || wrap.dataset.timer) return;   // no double-start
       wrap.hidden = false;
-      body.textContent = "loading RX/TX activity (" + band + " MHz)…";
+      body.textContent = "loading RX/TX activity (" + rid + ")…";
       function poll() {
-        // FEED ONLY. This used to poll /api/daemon/<band> and discard status/stats/channel,
+        // FEED ONLY. This used to poll /api/daemon/<radio> and discard status/stats/channel,
         // which dragged a destructive CAD scan behind a text log every 3 s.
-        fetch("/api/daemon/" + encodeURIComponent(band) + "/feed", { cache: "no-store" })
+        fetch("/api/daemon/" + encodeURIComponent(rid) + "/feed", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var next = (d && d.feed && d.feed.length) ? d.feed.join("\n")
@@ -111,7 +111,7 @@
   }
   function wireTxClose(x) {
     x.addEventListener("click", function () {
-      var wrap = document.getElementById("txout-" + x.getAttribute("data-band"));
+      var wrap = document.getElementById("txout-" + x.getAttribute("data-rid"));
       if (!wrap) return;
       if (wrap.dataset.timer) { clearInterval(Number(wrap.dataset.timer)); delete wrap.dataset.timer; }
       wrap.hidden = true;
