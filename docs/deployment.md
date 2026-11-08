@@ -85,7 +85,7 @@ Back up `config/`, `profiles/` and the app data under `state/` first
 - **Updating from 0.12.10 or older:** that release runs the update and syncs the venv without
   `requirements.lock`. After `lhpc self-update --repair-integration`, sync it to the lock once,
   from the runtime root (`cd ~/loraham-pi-control`):
-  `venv/lhpc/bin/python -m pip install --require-hashes --no-deps --ignore-installed -r src/loraham-pi-control/requirements.lock && venv/lhpc/bin/python -m pip install --no-deps --no-build-isolation -e src/loraham-pi-control`
+  `venv/lhpc/bin/python -m pip install --require-hashes --no-deps --force-reinstall -r src/loraham-pi-control/requirements.lock && venv/lhpc/bin/python -m pip install --no-deps --no-build-isolation -e src/loraham-pi-control`
   A running console keeps the packages it loaded until it restarts: `systemctl --user restart lhpc-web`.
 
 ### Recovery
