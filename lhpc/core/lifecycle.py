@@ -753,19 +753,23 @@ class Lifecycle:
             sleep(0.1)
         return self._proc_ceased(pid)
 
-    def _verified_main_record(self, comp_id: str, band: str):
-        """The currently VERIFIED main (role="") ownership record for this component+band, or None.
-        A detached post-runner is bound to this exact launch so it can never act for a later one."""
-        for rec in self.owned_records(comp_id, band, role=""):
+    def _verified_main_record(self, comp_id: str, band: str, inst=None):
+        """The currently VERIFIED main (role="") ownership record of this component+band and copy (its slot, and a
+        listed copy's radio), or None. A detached post-runner is bound to this exact launch so it can never act for
+        a later one, nor for another copy's."""
+        slot = getattr(inst, "slot", 0)
+        for rec in self.owned_records(comp_id, band, role="", rid=inst.rid if slot else None):
+            if rec.get("slot", 0) != slot:
+                continue
             ok, _why = self.verify_owned(rec)
             if ok:
                 return rec
         return None
 
-    def _binding_for(self, comp_id: str, band: str) -> dict | None:
-        """Strictly-validated binding to the currently VERIFIED main launch, or None: a non-empty
+    def _binding_for(self, comp_id: str, band: str, inst=None) -> dict | None:
+        """Strictly-validated binding to the copy's currently VERIFIED main launch, or None: a non-empty
         launch id and POSITIVE, non-boolean integer pid/starttime/pgid/sid."""
-        main = self._verified_main_record(comp_id, band)
+        main = self._verified_main_record(comp_id, band, inst)
         if main is None:
             return None
         lid = main.get("launch_id")
@@ -781,7 +785,7 @@ class Lifecycle:
         return out
 
     def spawn_post_start(self, stack: Stack, comp: Component,
-                         params: dict | None = None, band: str = "") -> PostStartSchedule:
+                         params: dict | None = None, band: str = "", inst=None) -> PostStartSchedule:
         """Schedule typed OPTIONAL post-start steps detached, with NO shell: a self-
         contained Python launcher (delay/exec/tcp_wait/tcp_send) is generated and spawned
         via `python3 <launcher>`. NON-GATING, but every scheduling-stage failure (render,
@@ -794,7 +798,7 @@ class Lifecycle:
         # A detached runner MUST be bound to a currently verified main launch — never BINDING=None.
         # No verified main record -> spawn nothing (no launcher) and return a typed integrity
         # failure that gates the main VERIFIED result.
-        binding = self._binding_for(comp.id, band)
+        binding = self._binding_for(comp.id, band, inst)
         if binding is None:
             return PostStartSchedule(False, "no verified main launch to bind the post-start runner "
                                      "to — refusing to spawn an unbound runner", unverified=True)
@@ -806,8 +810,8 @@ class Lifecycle:
         launcher = self.paths.under("state", "post", f"{uid}.py")
         result = self.paths.under("state", "post", f"{uid}.result.json")
         try:
-            script = commands.render_post_launcher(comp.post_steps, comp, params, op,
-                                                   runtime, src, band, binding=binding, gated=True,
+            script = commands.render_post_launcher(comp.post_steps, comp, params, op, runtime, src, band,
+                                                   binding=binding, gated=True, inst=inst or commands.SLOT0,
                                                    result_path=str(result),
                                                    gps=self._gps_post_values(getattr(stack, 'id', '')))
         except (commands.CommandError, validators.ValidationError) as exc:
@@ -927,7 +931,7 @@ class Lifecycle:
     def run_required_post_start(self, stack: Stack, comp: Component,
                                 params: dict | None = None, band: str = "",
                                 timeout: float = REQUIRED_POST_TIMEOUT_S, on_log_open=None,
-                                require_all: bool = False, while_running=None) -> JobResult:
+                                require_all: bool = False, while_running=None, inst=None) -> JobResult:
         """Run a component's REQUIRED post-start steps SYNCHRONOUSLY and bounded (no
         shell): the generated Python launcher exits non-zero if any required step
         fails, so its return code is a typed pass/fail the caller gates VERIFIED on.
@@ -944,7 +948,7 @@ class Lifecycle:
         the launcher above, so a retry window lasting minutes need not lock config saves out."""
         op = self.config.operator
         runtime, src = str(self.paths.runtime_root), str(self.source_dir(comp))
-        binding = self._binding_for(comp.id, band)
+        binding = self._binding_for(comp.id, band, inst)
         if binding is None:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=["no verified main launch to bind the required "
@@ -952,7 +956,7 @@ class Lifecycle:
         result = self.paths.under("state", "post", self.required_result_leaf(binding))
         try:
             script = commands.render_post_launcher(
-                comp.post_steps, comp, params, op, runtime, src, band, binding=binding,
+                comp.post_steps, comp, params, op, runtime, src, band, binding=binding, inst=inst or commands.SLOT0,
                 result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', '')),
                 meta={"comp": comp.id, "band": band or "", "role": "required"},
                 require_all=require_all)

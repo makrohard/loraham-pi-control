@@ -29,7 +29,7 @@ def _bound_life(tmp_path, monkeypatch):
     import os
     life = _real_life(tmp_path)
     st = life._proc_identity(os.getpid()) or {}
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: {
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: {
         "main_launch_id": "test-main", "main_pid": os.getpid(),
         "main_starttime": int(st.get("starttime", 1)),
         "main_pgid": int(st.get("pgid", os.getpgrp())),
@@ -171,7 +171,7 @@ def test_optional_post_start_spawn_failure_is_typed_and_visible(tmp_path, monkey
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     life = _real_life(tmp_path)
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: dict(_FAKE_BINDING))
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: dict(_FAKE_BINDING))
     def boom(*a, **k):
         raise OSError("cannot spawn")
     monkeypatch.setattr(life, "_spawn_post_runner", boom)
@@ -236,7 +236,7 @@ def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatc
     monkeypatch.setattr(ControllerService, "_lifecycle",
                         lambda svc: _fake_life_factory(real_spawn, svc))
     seen = {}
-    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
+    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False, inst=None):
         seen["cfg"] = dict(comp_cfg)
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
@@ -853,7 +853,7 @@ def test_spawn_record_fail_verified_cleanup_leaves_no_runner(tmp_path, monkeypat
     # nothing; proven cessation -> typed scheduling failure, no runner left.
     life = _real_life(tmp_path)
     comp, stack = _pr(_free_port())
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: dict(_FAKE_BINDING))
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: dict(_FAKE_BINDING))
     monkeypatch.setattr(life, "record_launch", lambda *a, **k: False)     # persistence fails
     sched = life.spawn_post_start(stack, comp, {}, "")
     assert sched.ok is False and "terminated" in sched.detail and not sched.unverified
@@ -862,7 +862,7 @@ def test_spawn_record_fail_verified_cleanup_leaves_no_runner(tmp_path, monkeypat
 def test_spawn_record_fail_unverified_cleanup_is_typed(tmp_path, monkeypatch):
     life = _real_life(tmp_path)
     comp, stack = _pr(_free_port())
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: dict(_FAKE_BINDING))
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: dict(_FAKE_BINDING))
     monkeypatch.setattr(life, "record_launch", lambda *a, **k: False)
     monkeypatch.setattr(life, "_terminate_unobserved", lambda pid, ident=None: False)  # not proved
     sched = life.spawn_post_start(stack, comp, {}, "")
@@ -948,7 +948,7 @@ def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
     life = _real_life(tmp_path)
     port = _free_port()
     comp, stack = _pr(port, "PAY\n")
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: dict(_FAKE_BINDING))
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: dict(_FAKE_BINDING))
     monkeypatch.setattr(life, "record_launch", lambda *a, **k: False)   # record never durable
     srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", port)); srv.listen(1); srv.settimeout(4)
@@ -1270,7 +1270,7 @@ def test_poststart_running_component_cancels_then_reruns(tmp_path, monkeypatch, 
             calls["cancel"] += 1
             return (["post-runner pid 1: cancelled"], False)
     monkeypatch.setattr(ControllerService, "_lifecycle", lambda self: _LifeStub())
-    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
+    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False, inst=None):
         calls["rerun"].append(comp.id)
         assert strict is True             # the verb must surface a scheduling failure as FAILED
         return (None, "optional post-start scheduled")
@@ -1347,7 +1347,7 @@ def test_run_post_start_announces_detached_runner_log(tmp_path):
     class _L:
         def has_required_post_start(self, comp):
             return False
-        def spawn_post_start(self, stack, comp, cfg, band=""):
+        def spawn_post_start(self, stack, comp, cfg, band="", inst=None):
             return PostStartSchedule(True, "scheduled", log_path="/rt/logs/post-c-1-2.log")
     details = []
     ok, summary = svc._run_post_start(_L(), STK, _opt_comp(), {}, "",
@@ -1441,7 +1441,7 @@ def test_run_post_start_strict_flag_only_changes_the_optional_failure(tmp_path, 
     class _L:
         def has_required_post_start(self, comp):
             return False
-        def spawn_post_start(self, stack, comp, cfg, band=""):
+        def spawn_post_start(self, stack, comp, cfg, band="", inst=None):
             return PostStartSchedule(False, "launcher write failed: disk full")
     lax, s1 = svc._run_post_start(_L(), STK, _opt_comp(), {}, "")
     strict, s2 = svc._run_post_start(_L(), STK, _opt_comp(), {}, "", strict=True)

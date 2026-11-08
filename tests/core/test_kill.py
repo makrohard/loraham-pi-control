@@ -520,6 +520,16 @@ def test_an_exempt_component_of_a_copy_without_its_record_is_refused_not_taken(t
     assert not plan.ok and p.pid not in plan.data["pids"] and "cannot verify band 868" in "\n".join(plan.details)
 
 
+def test_a_bare_voice_kill_takes_its_running_process(tmp_path, procs):
+    # A stack with one copy (voice): `kill voice` takes its running process by its spec (the bare hit), with or
+    # without a record; the @<band> form that once scoped it is gone (W298).
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-voice", "433")})
+    plan = kill.kill(svc, "voice", "loraham-voice")
+    assert plan.ok and plan.data["pids"] == [p.pid]
+
+
 def test_an_exempt_component_with_a_verified_record_of_the_copy_is_taken(tmp_path, procs):
     # G2-B2 F4, the positive side: a verified ownership record of the copy's radio names it.
     p = procs()

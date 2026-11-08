@@ -473,7 +473,7 @@ def test_a_restart_marker_saved_during_the_launch_survives_the_start(tmp_path, m
     # real `_run_post_start` hands it the released guard, and the save is the marker write a
     # concurrent Settings save makes there.
     def required_step(self, stack, comp, params=None, band="", timeout=0, on_log_open=None,
-                      require_all=False, while_running=None):
+                      require_all=False, while_running=None, inst=None):
         with while_running:
             if save_during_launch:
                 runtime_fs.write_marker(svc._paths, path, newer)

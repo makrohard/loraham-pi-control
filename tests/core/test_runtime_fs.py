@@ -157,7 +157,7 @@ def test_concurrent_post_launchers_are_unique(tmp_path, monkeypatch):
     life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
                      FakeSystem().system)
     # A detached runner requires a verified main binding + goes through the arm-gate spawn.
-    monkeypatch.setattr(life, "_binding_for", lambda cid, band: {
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band, inst=None: {
         "main_launch_id": "m", "main_pid": 1, "main_starttime": 1, "main_pgid": 1, "main_sid": 1})
     def fake_runner(argv, log):
         captured.append(argv[1])

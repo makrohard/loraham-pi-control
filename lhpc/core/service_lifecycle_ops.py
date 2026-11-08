@@ -1534,7 +1534,7 @@ class LifecycleOpsMixin:
             # `required_ok` is True (required passed), False (required failed), or None
             # (no required post-start) — explicit, no enum-attribute confusion.
             required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band,
-                                                             announce=announcer)
+                                                             announce=announcer, inst=prep.inst)
             if required_ok is False:
                 cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                 record(comp, stack, Outcome.UNVERIFIED,
@@ -1671,7 +1671,7 @@ class LifecycleOpsMixin:
         return lines
 
     def _run_post_start(self, life, stack, comp, comp_cfg, band,
-                        announce=None, strict=False, require_all=False) -> tuple[bool | None, str]:
+                        announce=None, strict=False, require_all=False, inst=None) -> tuple[bool | None, str]:
         """Run post-start steps. Returns (required_ok, summary):
           * (None, "")               — no post-start;
           * (None, "…scheduled")     — OPTIONAL steps scheduled detached (never gates);
@@ -1695,7 +1695,7 @@ class LifecycleOpsMixin:
             # is materialized under the guard BEFORE the run, so the guard is released across the
             # EXECUTION: a config save during a long post-start is accepted and reported through
             # restart-required, exactly as a save during any other part of a launch already is.
-            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band,
+            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band, inst=inst,
                                               on_log_open=announce, require_all=require_all,
                                               while_running=self._config_unstable())
             if jr.ok:
@@ -1704,7 +1704,7 @@ class LifecycleOpsMixin:
         # OPTIONAL: scheduling never gates the start, but its typed result makes any
         # scheduling failure VISIBLE in the details (it is no longer swallowed by
         # `spawn_post_start`, so no blanket catch is needed here).
-        sched = life.spawn_post_start(stack, comp, comp_cfg, band=band)
+        sched = life.spawn_post_start(stack, comp, comp_cfg, band=band, inst=inst)
         if sched.ok:
             if announce is not None and sched.log_path:
                 announce(f"post-{comp.id}", sched.log_path)
