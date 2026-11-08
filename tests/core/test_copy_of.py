@@ -119,3 +119,22 @@ def test_an_applied_slot0_start_resolves_its_copy_under_the_locks(tmp_path, monk
     monkeypatch.setattr(svc, "_start_outer_refusal", lambda *a: (seen.append(a[-1]), (ActionResult(False, "x"), None, ""))[1])
     svc.start("kiss", apply=True, band="433")
     assert [(c.slot, c.rid) for c in seen] == [(0, "r3")]
+
+
+def test_an_applied_slot0_stop_resolves_its_copy_under_the_lock(tmp_path, monkeypatch):
+    # G1-C47: as for the start (G1-C45), r1 becomes a listed copy while the stop waits for its lock; the locked stop
+    # acts on slot 0's radio as the lock sees it (r3), never on the r1 resolved before.
+    import contextlib
+    from lhpc.core.service_base import ActionResult
+    svc = _svc(tmp_path, listed="")
+    real, seen = svc._lifecycle_guard, []
+
+    @contextlib.contextmanager
+    def locked(*a, **k):
+        (tmp_path / "config" / "instances.toml").write_text('kiss = ["r1"]\n')     # meanwhile
+        with real(*a, **k) as got:
+            yield got
+    monkeypatch.setattr(svc, "_lifecycle_guard", locked)
+    monkeypatch.setattr(svc, "_stop_impl", lambda *a, **k: seen.append(k["inst"]) or ActionResult(False, "x"))
+    svc.stop("kiss", apply=True, band="433")
+    assert [(c.slot, c.rid) for c in seen] == [(0, "r3")]

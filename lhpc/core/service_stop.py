@@ -131,19 +131,19 @@ class StopOpsMixin:
             ctx_err = self._auto_install_ctx_error(auto_install_ctx, set())
             if ctx_err:
                 return ActionResult(False, f"Refusing to stop '{target}': {ctx_err}")
-        # A daemon stop is FORCED-cascade — resolve that BEFORE acquiring the lock bundle so the
-        # dependents' lifecycle/resource locks are part of the outer guard (no dependent races the
-        # cascade), and so a blocking dependent can gate the daemon stop.
+        # A daemon stop is FORCED-cascade — resolve that BEFORE acquiring the lock bundle so the dependents' lifecycle/
+        # resource locks are part of the outer guard (no dependent races the cascade), and a blocking dependent can gate it.
         _sid0 = self.stack_of(target)
         _stk0 = self.stack(_sid0) if _sid0 else None
         if _stk0 is not None and _stk0.main == self.DAEMON_ID:
             cascade = True
-        _whole, inst = inst is None, inst or (instances.copy_of(self, _sid0, band=band)[0] if _stk0 is not None and _stk0.main != self.DAEMON_ID else None)   # slot 0 is a real copy (v6); _whole: the operator's intent
+        _whole, slot0 = inst is None, inst is None and _stk0 is not None and _stk0.main != self.DAEMON_ID   # v6; the operator's intent
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
-                                   release_daemon=release_daemon, inst=inst)
+                                   release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
+                inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # slot 0's copy under the lock (G1-C47)
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
                                       release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.

@@ -1074,8 +1074,8 @@ class LifecycleOpsMixin:
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
         return ActionResult(True, f"Run plan for '{instances.key(target, prep.inst)}': {len(order)} component(s) in order.",
                             details=details,
-                            next_commands=[f"lhpc stack start {target}@{prep.inst.rid} --yes" if prep.inst and prep.inst.slot else f"lhpc stack start {target}"
-                                           + (f" --band {band}" if band else "") + " --yes"],
+                            next_commands=[f"lhpc stack start {instances.key(target, prep.inst)}"
+                                           + (f" --band {band}" if band and not getattr(prep.inst, "slot", 0) else "") + " --yes"],
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})
 
