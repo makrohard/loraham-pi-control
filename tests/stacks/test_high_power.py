@@ -203,14 +203,14 @@ def test_c59_a_change_while_the_daemon_runs_sets_the_restart_marker(tmp_path, se
     # G1-C59 B: the daemon reads the grant and the OCP only at start, so a change while r1's daemon runs is flagged
     # restart-required (the durable marker), and a change of a stopped one is not. RED on 046d6439: no marker.
     svc, _ = _svc(tmp_path, status=_status("SX127x", "0") if running else None)
-    assert svc.set_ocp("r1", "auto").ok and svc.restart_required("daemon") is None    # no change: nothing flagged
+    assert svc.set_ocp("r1", "auto").ok and svc.restart_required("daemon@r1") is None    # no change: nothing flagged
     assert getattr(svc, setter)("r1", first).ok
-    marker = svc.restart_required("daemon")
+    marker = svc.restart_required("daemon@r1")                  # the radio's own marker (G1-C60-RE)
     assert (marker is not None) is running
     if running:
-        assert f"r1 {field}" in marker["params"] and marker["band"] == "433"
+        assert field in marker["params"] and marker["band"] == "433"
     assert getattr(svc, setter)("r1", second).ok
-    assert (svc.restart_required("daemon") is not None) is running
+    assert (svc.restart_required("daemon@r1") is not None) is running
 
 
 def test_c59_two_radios_on_433_only_the_granted_one_reaches_twenty(tmp_path):

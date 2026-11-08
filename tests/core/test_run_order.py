@@ -1003,13 +1003,14 @@ _D433 = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["/x/lora
 _S433 = {"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
 
 
-def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path, set_call):
+def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path, set_call, monkeypatch):
     """One radio serves ONE band. The "already running on the other band" refusal covered only the
     target's OWN stack, so graywolf — which owns no radio and pulls in the KISS TNC and the daemon
     — was admitted on 868 while that chain ran on 433: every member read already_healthy, so
     nothing started, nothing blocked, and graywolf came up on 868 talking to a 433 TNC. Chain
     members are exempt as conflict HOLDERS (they are in this very run order), so the mismatch has
     to be caught by the band rule or not at all."""
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"kiss": ["kiss@r1"]}.get(sid, []))   # the running instance (no record here)
     svc = _band_svc(set_call, tmp_path, _D433, _S433, {"kiss": "433"})
     # preconditions: the dependency really is live on the other band
     assert svc.running_band("kiss", "") == "433" and svc._band_owner_is_up("kiss")

@@ -246,7 +246,7 @@ class StopOpsMixin:
                                            "no other stack needs it")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).",
                                 details=details,
-                                next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, target)],
+                                next_commands=[f"lhpc stack stop {instances.named(self, target, inst)} --yes"],   # this plan's
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
@@ -426,7 +426,8 @@ class StopOpsMixin:
                 summary = (f"Stop for '{target}' applied but the known-working candidate "
                            f"could not be retired — see details.")
                 details = [*list(details), f"  [candidate] not cleared: {why}"]
-            _rr.clear_marker(self._paths, instances.key(target, inst), getattr(inst, "rid", ""))     # the copy's own
+            for k in instances.marker_keys(self, target, inst):            # the copy's own, a radio daemon's own
+                _rr.clear_marker(self._paths, k)
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
@@ -531,10 +532,7 @@ class StopOpsMixin:
         stop_owners runs them: each running instance of an app stack first, then the daemon of each radio it holds (a
         bare `lhpc stack stop daemon` would stop every client on every band, finding 140; G1-C60)."""
         daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
-        holders = {bl["holder_stack"] for bl in blockers}
-        out = [(k, f"lhpc stack stop {k}") for o in sorted(holders - {daemon_sid}) for k in instances.stop_keys(self, o)]
-        held = sorted({instances.holder_rid(self, daemon_sid, bl) for bl in blockers if bl["holder_stack"] == daemon_sid})
-        return out + [(f"{daemon_sid}@{r}", f"lhpc stack stop {daemon_sid}@{r}") for r in held]
+        return [(k, f"lhpc stack stop {k}") for k in instances.holder_stops(self, blockers, daemon_sid)]   # G1-C60-RE
 
     def owner_stop_commands(self, blockers) -> list[str]:
         """The commands of `owner_stops`."""
@@ -687,7 +685,7 @@ class StopOpsMixin:
                    *res.details]
         return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                             details=details, data=data,
-                            next_commands=[f"lhpc stack restart {instances.named(self, target)} --yes"])
+                            next_commands=[f"lhpc stack restart {instances.named(self, target, inst)} --yes"])
 
     def _restore_optional(self, target: str, band: str, stopped: ActionResult,
                           res: ActionResult, optional_up: list[str]) -> ActionResult:

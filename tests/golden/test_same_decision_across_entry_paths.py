@@ -217,7 +217,8 @@ def _job_state(svc, op, target):
 
 def _cli(box, op, target, web, csrf, monkeypatch):
     from lhpc.core import instances                  # K3 (W323): the CLI names the instance the other entries act on
-    rc = cli_main.main(["stack", op, instances.named(box.svc, target), "--yes"])
+    rid = instances.copy_of(box.svc, target)[0].rid or instances.can_run_on(box.svc, box.svc.stack(target))[0]
+    rc = cli_main.main(["stack", op, f"{target}@{rid}", "--yes"])       # slot 0's radio (a band-less stack: any)
     return {"rc": rc}, rc == 0
 
 

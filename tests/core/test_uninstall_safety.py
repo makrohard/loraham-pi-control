@@ -164,7 +164,8 @@ def test_uninstall_refuses_identity_drift(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()   # tree unchanged
 
 
-def test_update_refuses_while_target_running(tmp_path):
+def test_update_refuses_while_target_running(tmp_path, monkeypatch):
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: ["chat@r1"] if sid == "chat" else [])
     _mksrc(tmp_path, "LoRaHAM_Daemon")
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     res = svc.update("chat", apply=True)

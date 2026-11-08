@@ -157,6 +157,7 @@ def test_a_folder_swapped_after_it_was_opened_still_gets_the_file_where_the_desc
 
 
 def test_backup_is_refused_while_an_included_stack_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"graywolf": ["graywolf@r1"]}.get(sid, []))   # the running instance (no record here)
     a = _root(tmp_path, "a")
     svc = _seed(a)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, s: s == "graywolf")
@@ -566,6 +567,7 @@ def test_restore_is_refused_while_the_console_runs_and_names_both_commands(tmp_p
 
 
 def test_restore_is_refused_while_a_stack_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"meshtastic": ["meshtastic@r1"]}.get(sid, []))   # the running instance (no record here)
     a = _root(tmp_path, "a")
     _backup(_seed(a), tmp_path / "b.tar")
     b = _root(tmp_path, "b")

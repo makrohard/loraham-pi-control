@@ -94,16 +94,19 @@ def test_the_running_instances_are_the_verified_records_and_the_copies_processes
     assert instances.running_keys(svc, "kiss") == ["kiss@r3", "kiss@r12"]
 
 
-def test_a_suggested_command_names_the_bands_first_radio(tmp_path):
-    # instances.named with a band: its first enabled radio by rid order, never a radio of another band (K3).
+def test_a_suggested_command_names_the_one_candidate_or_leaves_the_template(tmp_path):
+    # instances.named (handler DEC G1-C60-RE): never a guess. The band's ONE enabled radio, else `<rid>`.
     radios_fixture.write(tmp_path, (R1, radios.Radio("r12", "b", "meshstick-1262", "868", usb_port="1-1.3"), R3,
                                     radios.Radio("r2", "c", "meshstick-1262", "868", enabled=False, usb_serial="MS123456")))
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert instances.named(svc, "daemon", band="868") == "daemon@r3"
+    assert instances.named(svc, "daemon", band="868") == "daemon@<rid>"           # r3 and r12: no guess
     assert instances.named(svc, "daemon", band="433") == "daemon@r1"
-    assert instances.named(svc, "kiss@r12") == "kiss@r12"                    # already named
+    assert instances.named(svc, "meshcom") == "meshcom@r1"                       # 433 only: its one radio
+    assert instances.named(svc, "kiss") == "kiss@<rid>"                          # three radios it can run on
+    assert instances.named(svc, "kiss@r12") == "kiss@r12"                        # already named
+    assert instances.stop_keys(svc, "kiss") == []                                # nothing runs: no command
 
 
 def _two_433(tmp_path):
@@ -114,20 +117,25 @@ def _two_433(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def test_c60_b1_an_ocp_change_on_r2_names_r2s_restart_and_r1s_restart_keeps_it(tmp_path, monkeypatch):
-    # G1-C60 B1: r1 and r2 both on 433, both daemons running; r2's OCP changes. The restart-required remedy names
-    # daemon@r2 (not the first running, r1), and r1's daemon restart does not clear r2's marker.
-    from lhpc.core import radio_start, restart_required
+def test_c60_b1_each_radios_change_is_its_own_marker_its_own_remedy_and_its_own_clear(tmp_path, monkeypatch):
+    # G1-C60(-RE) B1/A: r1 and r2 on 433, both daemons running; both OCPs change. Each radio has its own marker
+    # (daemon@r1, daemon@r2), the status names each restart, r1's restart clears r1's only, the whole daemon's both.
+    from lhpc.core import commands, radio_start, restart_required
     svc = _two_433(tmp_path)
     monkeypatch.setattr(radio_start, "daemon_running", lambda svc, radio, procs=None: True)
-    monkeypatch.setattr(instances, "running_keys", lambda svc, sid: ["daemon@r1", "daemon@r2"], raising=False)
-    assert svc.set_ocp("r2", "120").ok
-    text = "\n".join(svc.status("daemon").details)                       # the public status names the remedy
-    assert "(lhpc stack restart daemon@r2)" in text and "daemon@r1" not in text, text
-    restart_required.clear_marker(svc._paths, "daemon", "r1")              # r1's restart
-    assert svc.restart_required("daemon") is not None
-    restart_required.clear_marker(svc._paths, "daemon", "r2")              # r2's own restart clears it
-    assert svc.restart_required("daemon") is None
+    assert svc.set_ocp("r2", "120").ok and svc.set_ocp("r1", "130").ok
+    assert svc.restart_required_stacks() == ["daemon@r1", "daemon@r2"]
+    text = "\n".join(svc.status("daemon").details)                       # the public status names each remedy
+    assert "(lhpc stack restart daemon@r1)" in text and "(lhpc stack restart daemon@r2)" in text, text
+    mp = restart_required.marker_path(svc._paths, "daemon")                      # a whole-daemon change too
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    mp.write_text(svc.restart_marker_payload("daemon", ["log_level"], "433"))
+    for k in instances.marker_keys(svc, "daemon", commands.Instance(0, "r1")):   # r1's restart: r1's only
+        restart_required.clear_marker(svc._paths, k)
+    assert sorted(svc.restart_required_stacks()) == ["daemon", "daemon@r2"]
+    for k in instances.marker_keys(svc, "daemon"):                              # the whole daemon's
+        restart_required.clear_marker(svc._paths, k)
+    assert svc.restart_required_stacks() == []
 
 
 def test_c60_b2_a_daemon_holding_r2_is_stopped_as_daemon_at_r2(tmp_path):
@@ -136,12 +144,15 @@ def test_c60_b2_a_daemon_holding_r2_is_stopped_as_daemon_at_r2(tmp_path):
     assert svc.owner_stops(blockers) == [("daemon@r2", "lhpc stack stop daemon@r2")]
 
 
-def test_c60_note_a_stack_wide_remedy_names_every_running_instance(tmp_path, monkeypatch):
+def test_c60_a_holder_is_stopped_exactly_and_a_stack_wide_remedy_names_each_instance(tmp_path, monkeypatch):
     svc = _two_433(tmp_path)
     monkeypatch.setattr(instances, "running_keys", lambda svc, sid: ["kiss@r1", "kiss@r3"] if sid == "kiss" else [],
                         raising=False)
     blockers = [{"resource": "loraham.radio.r1", "holder": "k", "holder_stack": "kiss", "band": "433"}]
-    assert svc.owner_stops(blockers) == [("kiss@r1", "lhpc stack stop kiss@r1"), ("kiss@r3", "lhpc stack stop kiss@r3")]
+    assert svc.owner_stops(blockers) == [("kiss@r1", "lhpc stack stop kiss@r1")]       # exactly the holder (G1-C60-RE B)
+    assert instances.stop_keys(svc, "kiss") == ["kiss@r1", "kiss@r3"]                 # a stack-wide remedy: each one
+    band = [{"resource": "loraham.radio.433", "holder": "k", "holder_stack": "kiss", "band": "433"}]
+    assert svc.owner_stops(band) == [("kiss@r1", "lhpc stack stop kiss@r1")]          # the running ones on 433 (r1, r2)
 
 
 def test_transitional_a_radios_daemon_set_and_its_live_view_and_running_list(tmp_path, monkeypatch):

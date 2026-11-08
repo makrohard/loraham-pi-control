@@ -584,8 +584,8 @@ def test_the_held_band_question_names_the_daemon_by_radio(monkeypatch):
     prompts = []
     monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: (
         ActionResult(True, "plan", data={"changes": 1, "blockers": [
-            {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "d", "band": "868"},
-            {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "m",
+            {"resource": "loraham.radio.r2", "holder_stack": "daemon", "holder": "d", "band": "868"},
+            {"resource": "loraham.radio.r2", "holder_stack": "meshcore", "holder": "m",
              "band": "868"}]})))
     for stream in (_sys.stdin, _sys.stdout):
         monkeypatch.setattr(stream, "isatty", lambda: True, raising=False)
@@ -658,7 +658,7 @@ def _held_band(monkeypatch, *, tty, answer=""):
     def run(self, op, target, **kw):
         if not kw.get("apply"):
             return ActionResult(True, "Run plan for 'kiss'.", data={"changes": 2, "blockers": [
-                {"resource": "loraham.radio.433", "holder_stack": "meshtastic",
+                {"resource": "loraham.radio.r1", "holder_stack": "meshtastic",
                  "holder": "meshtasticd"}]})
         applies.append(kw.get("stop_owners"))
         return ActionResult(True, "Run applied for 'kiss'.")
@@ -681,7 +681,7 @@ def test_a_start_on_a_held_band_asks_to_stop_the_holder(monkeypatch, capsys, arg
     seen, prompts = _held_band(monkeypatch, tty=tty, answer=answer)
     assert main(["stack", "start", "kiss@r1", *argv]) == rc
     assert seen == applies
-    assert prompts == (["\nloraham.radio.433 held by meshtastic@r1 — stop them and start kiss@r1? [y/N] "]
+    assert prompts == (["\nloraham.radio.r1 held by meshtastic@r1 — stop them and start kiss@r1? [y/N] "]
                        if tty and not argv else [])
     if rc:
         out = capsys.readouterr().out

@@ -54,7 +54,7 @@ def test_w4_1_two_radios_on_one_band_refuse_the_client_naming_both(tmp_path, mon
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append(c.id))
     res = svc.start("kiss", apply=True, band="868")
     assert not res.ok and launched == []
-    assert res.summary == "Cannot run 'kiss': meshtastic@r1 must be stopped first.", res.summary
+    assert res.summary == "Cannot run 'kiss': meshtastic@<rid> must be stopped first.", res.summary   # shared band: no guess
     plan = svc.start("kiss", band="868")
     assert {b["resource"] for b in plan.data["blockers"]} >= {"loraham.radio.868 (radios r1, r2)"}, plan.data
 

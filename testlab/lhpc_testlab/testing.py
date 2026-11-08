@@ -63,15 +63,24 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
 
 
 def named(env: dict, target: str, band: str = "") -> str:
-    """`<target>@<rid>` on the lab root's own hardware list, as lhpc names it (instances.named, W323): every stack
-    verb of a lane names its instance."""
-    from lhpc.core import instances
+    """`<target>@<rid>` on the lab root's own hardware list (W323): every stack verb of a lane names its instance.
+    lhpc's own suggestion (instances.named) when it has one candidate; with several, the lab picks the first (the
+    band's first enabled radio, else the first running instance, else the first radio the stack can run on), a
+    test's choice that lhpc itself never makes (G1-C60-RE)."""
+    from lhpc.core import instances, radios
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
     if "LHPC_RUNTIME_ROOT" not in env:                  # a unit lane's stubbed env: no lab root to read
         return f"{target}@<rid>"
     svc = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))
-    return instances.named(svc, target, band=band)
+    if not (name := instances.named(svc, target, band=band)).endswith("@<rid>"):
+        return name
+    sid = target if svc.stack(target) is not None else (svc.stack_of(target) or "")
+    if not sid:
+        return name
+    rids = ([r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band] if band else
+            [k.partition("@")[2] for k in instances.running_keys(svc, sid)] or instances.can_run_on(svc, svc.stack(sid)))
+    return f"{target}@{rids[0]}" if rids else name
 
 
 def running(env: dict, sid: str) -> list:

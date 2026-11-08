@@ -79,6 +79,7 @@ def _inject_running_at(monkeypatch, svc, point: str):
 
 
 def test_update_rechecks_running_after_locks(tmp_path, monkeypatch):
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"kiss": ["kiss@r1"]}.get(sid, []))   # the running instance (no record here)
     paths, dest = _seed_kiss_env(tmp_path)
     svc = _svc(tmp_path)
     before = _snapshot_state(tmp_path, paths)

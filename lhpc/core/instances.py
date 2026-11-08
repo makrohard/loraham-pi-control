@@ -265,40 +265,54 @@ def running_keys(svc, sid: str) -> list:
 
 
 def named(svc, target: str, inst=None, band: str = "") -> str:
-    """`<target>@<rid>` for a command lhpc suggests (W323: a bare stack is refused): the instance's radio, else the
-    band's first enabled radio, else the stack's running instance, else the first radio it can run on; `<rid>` when
-    none is known. A target that already names its radio is kept."""
+    """`<target>@<rid>` for a command lhpc suggests (W323: a bare stack is refused): the instance's radio, else the ONE
+    candidate: the band's one enabled radio when a band is given, else the stack's one running instance, else the one
+    radio it can run on. Never a guess (handler DEC G1-C60-RE): with several candidates, or none, the suggestion keeps
+    `<target>@<rid>` for the operator to fill in. A target that already names its radio is kept."""
     if not isinstance(target, str) or "@" in target:
         return target
-    rid = getattr(inst, "rid", "") or ""
     sid = target if svc.stack(target) is not None else (svc.stack_of(target) or "")
     stack = svc.stack(sid) if sid else None
-    if not rid and band and stack is not None:             # the band's first enabled radio, by rid order
-        rid = next(iter(sorted((r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band),
-                               key=lambda x: int(x[1:]))), "")
-    if not rid and stack is not None:
-        run = running_keys(svc, sid)
-        rid = run[0].partition("@")[2] if run else next(iter(can_run_on(svc, stack)), "")
-    return f"{target}@{rid or '<rid>'}"
+    cands = ([inst.rid] if getattr(inst, "rid", "") else [] if stack is None else
+             [r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band] if band else
+             [k.partition("@")[2] for k in running_keys(svc, sid)] or can_run_on(svc, stack))
+    return f"{target}@{cands[0] if len(cands) == 1 else '<rid>'}"
 
 
 def stop_keys(svc, sid: str) -> list:
-    """A stack-wide remedy's instances (G1-C60 NOTE): every running one, else the one `named` names."""
-    return running_keys(svc, sid) or [named(svc, sid)]
+    """A stack-wide remedy's instances (G1-C60 NOTE): every running one; none when none runs (never a guess)."""
+    return running_keys(svc, sid)
 
 
-def restart_keys(svc, sid: str, marker) -> list:
-    """The instances a restart-required marker asks to restart: the radios it names (the daemon's "r2 ocp_ma",
-    G1-C60 B1), else stop_keys."""
-    from . import restart_required
-    return [f"{sid}@{r}" for r in restart_required.marker_rids(marker)] or stop_keys(svc, sid)
+def holder_keys(svc, blocker: dict) -> list:
+    """The instances holding a resource blocker: the one its claim's radio names (`loraham.radio.r2` -> daemon@r2),
+    else every running instance of the holder on the claim's band, else the holder with `<rid>` for the operator to
+    fill in (a process without an ownership record; G1-C60-RE: never a guess)."""
+    sid = blocker.get("holder_stack", "")
+    if m := re.search(r"\.(r[1-9][0-9]?)$", str(blocker.get("resource", ""))):
+        return [f"{sid}@{m.group(1)}"]
+    on = {r.id for r in radios.load(svc._paths).radios if r.band == blocker.get("band", "")}
+    return [k for k in running_keys(svc, sid) if k.partition("@")[2] in on] or [f"{sid}@<rid>"]
 
 
-def holder_rid(svc, sid: str, blocker: dict) -> str:
-    """The radio a resource blocker's holder holds: the one its claim names (`loraham.radio.r2`, G1-C60 B2), else its
-    band's first radio (named)."""
-    m = re.search(r"\.(r[1-9][0-9]?)$", str(blocker.get("resource", "")))
-    return m.group(1) if m else named(svc, sid, band=blocker.get("band", "")).partition("@")[2]
+def holder_stops(svc, blockers, daemon_sid: str) -> list:
+    """The instances a start's stop_owners stops, in its order: the app holders first, then the daemon's radios;
+    exactly the holders (holder_keys), a `<rid>` template only for a holder no other blocker names (G1-C60-RE)."""
+    keys = dict.fromkeys(k for bl in sorted(blockers, key=lambda bl: bl["holder_stack"] == daemon_sid)
+                         for k in holder_keys(svc, bl))
+    known = {k.partition("@")[0] for k in keys if not k.endswith("@<rid>")}
+    return [k for k in keys if not (k.endswith("@<rid>") and k.partition("@")[0] in known)]
+
+
+def marker_keys(svc, target: str, inst=None) -> list:
+    """The restart-required markers a start or stop of `target` satisfies: a radio's daemon its own `daemon@<rid>`
+    (radio_start._mark_restart writes one per radio, G1-C60-RE), the whole daemon its own and every radio's, any
+    other target its instance key."""
+    if target != (svc.stack_of(svc.DAEMON_ID) or "daemon"):
+        return [key(target, inst)]
+    if getattr(inst, "rid", ""):
+        return [f"{target}@{inst.rid}"]
+    return [target, *(f"{target}@{r.id}" for r in radios.load(svc._paths).radios)]
 
 
 def parse_target(svc, target: str, verb: str = "start"):

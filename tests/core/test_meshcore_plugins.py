@@ -380,6 +380,7 @@ def test_build_of_kiss_is_not_gated_and_an_old_marker_lets_meshcore_build(tmp_pa
 def test_build_refusal_names_the_stop_when_meshcore_is_healthy_and_running(tmp_path, monkeypatch):
     """A healthy repeater carries a current-boot marker too; `build` has no running check, so its
     refusal must name the plain remedy (stop the stack), not a reboot."""
+    monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"meshcore": ["meshcore@r2"]}.get(sid, []))   # the running instance (no record here)
     _mksrc(tmp_path, "openhop-core", "openhop-repeater")
     _own(tmp_path, "openhop-core", ("meshcore-node",))
     _own(tmp_path, "openhop-repeater", ("openhop-repeater-src",))

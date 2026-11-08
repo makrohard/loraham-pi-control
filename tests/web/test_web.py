@@ -2735,9 +2735,9 @@ def test_the_confirm_page_names_the_daemon_by_radio(tmp_path, monkeypatch, web, 
     # in the order the stops run (the app first). Stubbed: the plan (its blocker list).
     from lhpc.core.services import ActionResult, ControllerService
     plan = ActionResult(True, "Run plan for 'daemon'.", data={"changes": 1, "blockers": [
-        {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "loraham-daemon",
+        {"resource": "loraham.radio.r2", "holder_stack": "daemon", "holder": "loraham-daemon",
          "band": "868"},
-        {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "meshcore-node",
+        {"resource": "loraham.radio.r2", "holder_stack": "meshcore", "holder": "meshcore-node",
          "band": "868"}]})
     monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: plan)
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"

@@ -839,11 +839,11 @@ def _mark_restart(svc, row, changed) -> str:
     held list lock, merged with the marker as it stands); "" when written, or when an unreadable marker already
     demands attention; else why."""
     from . import config, restart_required
-    sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
-    if (pre := svc.restart_required(sid)) is not None and pre.get("unsafe"):
+    key = f"{svc.stack_of(svc.DAEMON_ID) or 'daemon'}@{row.id}"        # the radio's own marker (G1-C60-RE)
+    if (pre := svc.restart_required(key)) is not None and pre.get("unsafe"):
         return ""
-    target = ("state", restart_required.marker_path(svc._paths, sid),
-              svc.restart_marker_payload(sid, [f"{row.id} {f}" for f in changed], row.band), 0o600)
+    target = ("state", restart_required.marker_path(svc._paths, key),
+              svc.restart_marker_payload(key, list(changed), row.band), 0o600)
     try:                                                 # the list lock IS the config lock, held here (W217)
         config._apply_config_transaction_locked(svc._paths, [target])
     except (OSError, config.ConfigError) as exc:
