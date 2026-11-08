@@ -1724,8 +1724,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         _submitted_band, confirmed = band, request.form.get("confirmed") == "yes"
         rid, inst = request.form.get("rid", ""), None
         if "@" in target:                       # W325: a listed copy's own forms post `<stack>@<rid>`
-            target, _, rid = target.partition("@")
-        if rid:                                 # W286: one radio's daemon; W325: a listed copy (its card, its marker)
+            target, _, suffix = target.partition("@")
+            if not suffix or rid not in ("", suffix):   # G1-C54: never slot 0 for `kiss@`, never a guess between rids
+                abort(400)
+            rid = suffix
+        if rid:                               # W286: one radio's daemon; W325: a listed copy (its card, its marker)
             from lhpc.core import radio_start
             if op not in ("start", "stop", "restart"):
                 abort(400)

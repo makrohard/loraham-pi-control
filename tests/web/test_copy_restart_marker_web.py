@@ -99,6 +99,16 @@ def test_an_unlisted_copy_target_is_refused_and_nothing_runs(tmp_path, web, monk
 
 
 
+def test_an_empty_or_conflicting_copy_suffix_is_refused_and_nothing_runs(tmp_path, web, monkeypatch, csrf):
+    # G1-C54: `kiss@` (no rid) must not fall to slot 0, and `kiss@r3` with the form's rid r1 must not pick either radio.
+    svc = _marked(tmp_path)
+    c = web(service_factory=lambda: svc)
+    spawns = _spy_spawns(monkeypatch)
+    codes = [c.post("/action", data={"_csrf": csrf(c), "op": "restart", "from": "dash", **extra}).status_code
+             for extra in ({"target": "kiss@"}, {"target": "kiss@r3", "rid": "r1"})]
+    assert (codes, spawns) == ([400, 400], [])
+
+
 def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monkeypatch):
     # W325: the detached start of a copy (`_stack-start kiss --radio r3`, log web-start-kiss-r3.log) starts kiss as r3's
     # copy, not slot 0.
