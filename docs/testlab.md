@@ -122,13 +122,13 @@ proves. Everything else is acquired before the lane's tests run, with the transf
 (`backoff` in `.github/scripts/retry.sh`: retry at once, then after 1, 2, 5 and 10 min, then
 every 10 min until the waits would pass 30 min): the lab image and the upstream git sources of the
 testlab and release-verify lanes in workflow steps of their own, release-verify's Python packages
-at the start of its lane's step. The testlab lane's Python packages (with the Meshtastic CLI venv
-its reset builds), Chromium and the Meshtastic web client's `build.tar` are acquired in a step of
-their own, proved complete in a container with no network by the lane's own install commands
-(`.github/scripts/lab-lane-install.sh`), and read by the lane with no index (a `pip.conf` in the lab
-user's HOME, which the product's command runner passes on), through `PLAYWRIGHT_BROWSERS_PATH`, and
-through `LHPC_MESHTASTIC_WEB_TARBALL` (the web client script's own offline input, verified against
-the same sha256 pin). The sources are git mirrors
+at the start of its lane's step. The testlab lane's own Python packages, Chromium and the
+Meshtastic web client's `build.tar` are acquired in a step of their own, proved complete in a
+container with no network by the lane's own install commands (`.github/scripts/lab-lane-install.sh`),
+and read by the lane: its installs with `--no-index --find-links`, Chromium through
+`PLAYWRIGHT_BROWSERS_PATH`, the tarball through `LHPC_MESHTASTIC_WEB_TARBALL` (the web client
+script's own offline input, verified against the same sha256 pin). The product's own pip steps
+(the Meshtastic CLI venv, the meshcore builds) still fetch from PyPI, as they do for a user. The sources are git mirrors
 (`.github/scripts/mirror-sources.py`): the lane copies a git config with one `insteadOf` per
 remote to the lab user's `~/.gitconfig`, so the product's own, unchanged `git clone` resolves to
 them. It is a file in `HOME` because the product's command runner passes `HOME` to git and drops

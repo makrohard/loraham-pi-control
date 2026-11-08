@@ -2,8 +2,8 @@
 
 ## 0.14.0
 
-- Test lab: the testlab lane's Python packages, Chromium and Meshtastic web client are fetched before the lane
-  and proved complete offline; the lane itself downloads none of them.
+- Test lab: the testlab lane's own Python packages, Chromium and Meshtastic web client are fetched before the
+  lane and proved complete offline; the product's pip steps still fetch from PyPI, as for a user.
 - `LHPC_MESHTASTIC_WEB_TARBALL` (a local Meshtastic web client `build.tar`, still sha256-checked) now reaches
   `lhpc build`'s web client step.
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon

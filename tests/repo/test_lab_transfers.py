@@ -41,11 +41,17 @@ def test_the_testlab_lane_fetches_no_package_browser_or_web_client_itself():
 
 def test_the_lane_install_reads_only_the_acquired_wheels():
     assert LANE_INSTALL.is_file(), "no lab-lane-install.sh: the lane installs from an index"
-    text = LANE_INSTALL.read_text()
-    conf = "no-index = true\\nfind-links = /xfer/wheels"
-    assert conf in text and PIP_INSTALL in text
-    assert text.index(conf) < text.index(PIP_INSTALL)
-    assert "~/.config/pip" in text            # in HOME: the product runner passes HOME on
+    installs = [ln for ln in LANE_INSTALL.read_text().splitlines() if ln.startswith(PIP_INSTALL)]
+    assert len(installs) == 3 and all(NO_INDEX in ln for ln in installs), installs
+
+
+def test_the_product_pip_steps_do_not_inherit_no_index():
+    """The lane's no-index is on its own installs only. A pip configuration (a pip.conf in the
+    lab user's HOME, which the product's command runner passes on) also reached the product's
+    pip steps, and the acceptance lane's meshcore builds found no wheel (testlab 42493471891)."""
+    text = LANE_INSTALL.read_text() + _step("Run the lab lanes in the image")
+    for config in ("pip.conf", ".config/pip", "pip config", "PIP_", "XDG_CONFIG_HOME"):
+        assert config not in text, f"the lane writes a pip configuration ({config})"
 
 
 def test_the_acquisition_and_its_offline_proof_come_before_the_lane():
