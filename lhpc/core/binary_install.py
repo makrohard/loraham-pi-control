@@ -29,11 +29,14 @@ Ordering is the security contract:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.error
@@ -81,18 +84,20 @@ class IndexEntry:
 
 # --- index ---------------------------------------------------------------------------------
 
-def _open_stream(url: str):
-    """The single streaming-download seam (HTTPS-only, redirect-guarded). Tests stub this."""
+def _open_stream(url: str, timeout: float):
+    """The network door (HTTPS-only redirects). Tests stub this; every download reaches it through `_open`."""
     req = urllib.request.Request(url, headers={"User-Agent": "lhpc-binary-channel"})
+    # Release assets ALWAYS redirect; urllib would happily follow https -> http, and the
+    # index carries the artifact hashes, so a downgraded hop defeats the whole chain.
     opener = urllib.request.build_opener(_HttpsOnlyRedirect)
-    return opener.open(req, timeout=_HTTP_TIMEOUT_S)
+    return opener.open(req, timeout=timeout)
 
 
-def _unlink_quiet(p) -> None:
-    try:
-        os.unlink(p)
-    except OSError:
-        pass
+def _open(url: str, timeout: float):
+    """THE opener of every download (the index, an artifact): an http:// or file:// URL never opens."""
+    if not url.startswith("https://"):
+        raise BinaryInstallError(f"refusing a non-HTTPS download URL: {url}")
+    return _open_stream(url, timeout)
 
 
 class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
@@ -104,21 +109,82 @@ class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _http_get(url: str, max_bytes: int) -> bytes:
-    if not url.startswith("https://"):
-        raise BinaryInstallError(f"refusing a non-HTTPS download URL: {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "lhpc-binary-channel"})
+# --- P1: a transfer failure is retried (DEC-W340) ---------------------------------------------
+
+_RETRY_WAITS = (0, 5, 15, 45, 120)    # the first retry at once, then growing: about 3 min while a user waits
+_DEADLINE_S = 600.0                   # one download (all its attempts and waits) ends by then
+
+
+def _transient(exc) -> bool:
+    """A TRANSFER failure, worth another attempt: a 5xx, a timeout, a reset/refused/aborted connection, a DNS failure,
+    a stream cut short; urllib wraps most of them in a URLError, so its reason is classified the same way. Never
+    retried: a 4xx, a TLS error (no `ssl.SSLError` is one of the classes below), the HTTPS-only redirect refusal (a
+    string reason), a local file error."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    if isinstance(exc, urllib.error.URLError):
+        exc = exc.reason
+    return isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror, http.client.HTTPException))
+
+
+def _time_left(url: str, end: float) -> float:
+    """The timeout of the next connect or read: at most 60 s, never past the download's deadline."""
+    left = end - time.monotonic()
+    if left <= 0:
+        raise BinaryInstallError(f"download of {url} did not finish within {_DEADLINE_S:.0f} s — try again later")
+    return min(_HTTP_TIMEOUT_S, left)
+
+
+def _read(resp, url: str, end: float) -> bytes:
+    """One bounded chunk; the socket's timeout is lowered to the time left first, so the deadline holds across a
+    blocking read (urllib's response keeps its socket at fp.raw._sock)."""
+    t = _time_left(url, end)
+    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+    if sock is not None:
+        sock.settimeout(t)
+    return resp.read(1 << 20)
+
+
+def _retrying(url: str, attempt):
+    """`attempt(end)` until it succeeds, with P1's waits after a transfer failure; any other failure, the last one,
+    or the deadline ends it with the typed refusal."""
+    end = time.monotonic() + _DEADLINE_S
+    for planned in (*_RETRY_WAITS, None):
+        try:
+            return attempt(end)
+        except BinaryInstallError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+            if planned is None or not _transient(exc):
+                raise BinaryInstallError(f"download failed: {exc}") from None
+            _time_left(url, end)                          # past the deadline: the typed refusal, no wait
+            wait = min(planned, end - time.monotonic())
+            print(f"download failed: {exc} — retrying in {wait:.0f} s", file=sys.stderr, flush=True)
+            time.sleep(wait)
+    raise AssertionError("unreachable")    # pragma: no cover
+
+
+def _remove_staging(p) -> None:
+    """A failed download's file goes; a removal that fails is reported, never taken for done."""
     try:
-        # Release assets ALWAYS redirect; urllib would happily follow https -> http, and the
-        # index carries the artifact hashes, so a downgraded hop defeats the whole chain.
-        opener = urllib.request.build_opener(_HttpsOnlyRedirect)
-        with opener.open(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            data = resp.read(max_bytes + 1)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise BinaryInstallError(f"download failed: {exc}") from None
-    if len(data) > max_bytes:
-        raise BinaryInstallError(f"download exceeds the {max_bytes} byte bound: {url}")
-    return data
+        os.unlink(p)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise BinaryInstallError(f"could not remove the partial download {p}: {exc}") from None
+
+
+def _http_get(url: str, max_bytes: int) -> bytes:
+    """The index read: bounded, through the one opener, retried like an artifact."""
+    def attempt(end):
+        data = bytearray()
+        with _open(url, _time_left(url, end)) as resp:
+            while chunk := _read(resp, url, end):
+                data += chunk
+                if len(data) > max_bytes:
+                    raise BinaryInstallError(f"download exceeds the {max_bytes} byte bound: {url}")
+        return bytes(data)
+    return _retrying(url, attempt)
 
 
 def fetch_index(index_url: str) -> dict:
@@ -355,35 +421,30 @@ def download_artifact(entry: IndexEntry, dest_path) -> None:
     """STREAM the artifact to a staging file with an incremental hash, then verify sha256 AND
     size BEFORE the caller may extract anything. Streaming matters: this feature exists for
     small boxes, and buffering a 50 MB artifact in RAM on a 512 MB Zero is how you OOM the
-    controller before the hash could ever reject it. A failed verification removes the file."""
-    if not entry.url.startswith("https://"):
-        raise BinaryInstallError(f"refusing a non-HTTPS download URL: {entry.url}")
-    h = hashlib.sha256()
-    total = 0
-    try:
-        with _open_stream(entry.url) as resp, open(dest_path, "wb") as fh:
-            while True:
-                chunk = resp.read(1 << 20)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > entry.size:            # bounded by the PUBLISHED size, not a ceiling
-                    raise BinaryInstallError(
-                        f"artifact is larger than its published size ({entry.size}) — refusing")
-                h.update(chunk)
-                fh.write(chunk)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        _unlink_quiet(dest_path)
-        raise BinaryInstallError(f"download failed: {exc}") from None
-    except BinaryInstallError:
-        _unlink_quiet(dest_path)
-        raise
+    controller before the hash could ever reject it. A failed verification removes the file.
+    A transfer failure is retried (P1, `_retrying`); each attempt starts its file, hash and count afresh."""
+    def attempt(end):
+        h, total = hashlib.sha256(), 0           # per attempt: never a failed stream's bytes
+        try:
+            with _open(entry.url, _time_left(entry.url, end)) as resp, open(dest_path, "wb") as fh:
+                while chunk := _read(resp, entry.url, end):
+                    total += len(chunk)
+                    if total > entry.size:            # bounded by the PUBLISHED size, not a ceiling
+                        raise BinaryInstallError(
+                            f"artifact is larger than its published size ({entry.size}) — refusing")
+                    h.update(chunk)
+                    fh.write(chunk)
+        except Exception:
+            _remove_staging(dest_path)
+            raise
+        return h, total
+    h, total = _retrying(entry.url, attempt)
     if total != entry.size:
-        _unlink_quiet(dest_path)
+        _remove_staging(dest_path)
         raise BinaryInstallError(
             f"downloaded artifact size {total} != published size {entry.size}")
     if h.hexdigest() != entry.sha256:
-        _unlink_quiet(dest_path)
+        _remove_staging(dest_path)
         raise BinaryInstallError(
             f"artifact sha256 mismatch (got {h.hexdigest()[:12]}…, expected "
             f"{entry.sha256[:12]}…) — refusing to extract")

@@ -85,7 +85,7 @@ def _serve_stream(monkeypatch, blobs):
     import contextlib
     import io
 
-    def fake_stream(url):
+    def fake_stream(url, timeout):
         if url not in blobs:
             raise OSError(f"no route to {url}")
         return contextlib.closing(io.BytesIO(blobs[url]))
@@ -589,7 +589,7 @@ def test_download_is_streamed_not_buffered(tmp_path, monkeypatch):
             return super().read(n)
 
     monkeypatch.setattr(bi, "_open_stream",
-                        lambda url: contextlib.closing(ChunkedOnly(data)))
+                        lambda url, timeout: contextlib.closing(ChunkedOnly(data)))
     dest = tmp_path / "dl.tar.zst"
     bi.download_artifact(e, dest)
     assert dest.read_bytes() == data

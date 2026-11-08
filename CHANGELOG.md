@@ -26,6 +26,8 @@
   an old `start-<comp>-<band>.log` stays until the next start, and `lhpc logs` shows it until then.
 - README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
   after the reboot; the German block installs from the lock file like the English one.
+- Binary installs: a download that fails in transfer (HTTP 5xx, timeout, reset, DNS) is retried at once, then after
+  5, 15, 45 and 120 s, at most 10 min in all; a 4xx, a TLS error or a wrong sha256 still fails at once.
 - `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
   rc it returned, instead of only its last output line.
 - Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
