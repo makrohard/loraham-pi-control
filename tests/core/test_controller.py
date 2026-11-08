@@ -730,7 +730,7 @@ def test_controller_deps_sync_cmd_is_deployment_specific(tmp_path):
                             paths=Paths(runtime_root=Path("/home/x/loraham-pi-control")))
     cmd = svc._controller_deps_sync_cmd()
     py, co = "/home/x/loraham-pi-control/venv/lhpc/bin/python", "/home/x/loraham-pi-control/src/loraham-pi-control"
-    assert cmd == (f"{py} -m pip install --require-hashes --no-deps -r {co}/requirements.lock && "
+    assert cmd == (f"{py} -m pip install --require-hashes --no-deps --ignore-installed -r {co}/requirements.lock && "
                    f"{py} -m pip install --no-deps --no-build-isolation -e {co}")
     assert "pip install -e ." not in cmd
 
@@ -756,8 +756,9 @@ def test_restart_instructions_use_deployment_cmd():
     assert any(dep in c for c in instr["commands"])
     # dev fallback when no controller command is supplied
     fb = selfupdate.restart_instructions(deps_changed=True, deps_sync_cmd="")
-    assert any(c.startswith("python -m pip install --require-hashes --no-deps -r ./requirements.lock && "
-                            "python -m pip install --no-deps --no-build-isolation -e .") for c in fb["commands"])
+    assert ("python -m pip install --require-hashes --no-deps --ignore-installed -r ./requirements.lock && "
+            "python -m pip install --no-deps --no-build-isolation -e .    # sync the venv FIRST — dependencies changed "
+            "(LHPC never installs packages for you)") in fb["commands"]
 
 
 # --- controller's own system dependencies (git the missed one, nginx optional) ---------------

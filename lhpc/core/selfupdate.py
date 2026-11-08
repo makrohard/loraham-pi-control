@@ -937,10 +937,11 @@ LOCK_FILE = "requirements.lock"
 
 def venv_sync_argvs(python: str, root) -> list[list[str]]:
     """The venv sync of a checkout: its locked runtime dependencies and build backend, every file
-    hash-checked, then LHPC itself without dependencies and without build isolation (the backend
-    comes from the lock), so pip takes nothing from the index that the lock does not name."""
+    hash-checked (--ignore-installed: never an apt copy a system-site venv offers at a locked version), then
+    LHPC itself without dependencies and without build isolation (the backend comes from the lock), so pip
+    takes nothing from the index that the lock does not name."""
     root = str(root)
-    return [[python, "-m", "pip", "install", "--require-hashes", "--no-deps", "-r",
+    return [[python, "-m", "pip", "install", "--require-hashes", "--no-deps", "--ignore-installed", "-r",
              os.path.join(root, LOCK_FILE)],
             [python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e", root]]
 

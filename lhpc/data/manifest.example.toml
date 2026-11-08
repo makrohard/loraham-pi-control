@@ -3218,8 +3218,8 @@ note = "spi + gpio group membership — needed to drive the radio without root"
 [[stack.component.require]]
 # dpkg RECEIPTS, not dist-packages paths and not `module`: a dist-packages path is
 # Python-version and arch specific, and `module` resolves inside the CONTROLLER venv,
-# which is built with include-system-site-packages = false and can never see an apt
-# binding. The package receipt is stable across Python and arch.
+# which an older install built with include-system-site-packages = false (it sees no apt
+# binding). The package receipt is stable across Python and arch.
 check_file = "/var/lib/dpkg/info/python3-libgpiod.list"
 install = "sudo apt install -y python3-libgpiod python3-spidev"
 note = "Python libgpiod binding as a SYSTEM package. The stack venv is built with --system-site-packages and inherits it, so the radio needs no compiler — which is what makes this installable on a Pi Zero, where the pip wheels cannot build."
