@@ -2120,9 +2120,9 @@ class ParamsConfigMixin:
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
         gps_values = self._gps_config_values(target)
 
-        # W3-13: a client's socket keys name the copy's radio, else its band's one; unresolved, its daemon refuses
-        _rids: dict = {}
-        _rid = lambda b: _rids.setdefault(b, getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
+        # W3-13: a client's socket keys name the copy's radio (slot 0's: DEC-W16's), else its band's one; unresolved, it refuses
+        _rids, _sid = {}, self._owner_stack_id(target)
+        _rid = lambda b: _rids.setdefault(b, _radio_start.client_rid(self, _sid, b) or getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
 
         def subst(text: str) -> str:
             out = (text.replace("{callsign}", call)

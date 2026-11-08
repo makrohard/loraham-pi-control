@@ -3,6 +3,7 @@ radios on one band, slot 0 and a listed copy each name their own radio (`band_ri
 which left `/tmp/loraf-{rid}.sock` in both files)."""
 import tomllib
 
+import pytest
 import radios_fixture
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -37,3 +38,13 @@ def test_slot0s_config_names_dec_w16s_radio_on_a_two_radio_band(tmp_path):
     assert (copy.rid, why) == ("r2", "")
     svc.write_config_files("meshcore-node", "868", inst=copy)
     assert _sockets(tmp_path, "meshcore.toml") == ("/tmp/loraf-r2.sock", "/tmp/loraconf-r2.sock")
+
+
+@pytest.mark.parametrize(("listed", "rid"), [("", "r2"), ('meshcore = ["r2"]\n', "r4")], ids=["no-copy", "r2-listed"])
+def test_slot0s_config_without_a_copy_names_dec_w16s_radio(tmp_path, listed, rid):
+    # G1-C30: slot 0's config written without a copy (inst=None) on a band with two radios: DEC-W16's radio of the STACK
+    radios_fixture.write(tmp_path, ROWS)
+    (tmp_path / "config" / "instances.toml").write_text(listed)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc.write_config_files("meshcore-node", "868")
+    assert _sockets(tmp_path, "meshcore.toml") == (f"/tmp/loraf-{rid}.sock", f"/tmp/loraconf-{rid}.sock")
