@@ -116,3 +116,14 @@ def test_a_bandless_daemon_stop_stops_every_client_instance_too(box):
     assert svc.stop("daemon", apply=True).ok
     assert stops == [*((c, None, None, ("r2",)) for c in KISS), *((c, None, "r2", ()) for c in KISS),
                      ("loraham-daemon", None, None, ())]
+
+
+def test_one_radios_daemon_stop_clears_its_own_window_only(box, tmp_path):
+    # G1-C21 note 1, the stop's side: r2's daemon stops; r1's daemon runs on and keeps its RF activity window
+    svc, _stops = box
+    floors = {rid: tmp_path / "state" / f"daemon-feed-floor-433-{rid}" for rid in ("r1", "r2")}
+    for p in floors.values():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("123")
+    assert svc.stop("daemon", apply=True, band="433", inst=radio_start.daemon_inst("r2")).ok
+    assert floors["r2"].read_text() != "123" and floors["r1"].read_text() == "123"

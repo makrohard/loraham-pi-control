@@ -124,7 +124,7 @@ def test_a_band_owner_on_the_daemon_is_stopped_per_band(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "stop", lambda self, t, apply=False, band="", **k: (
         stops.append((t, band)), ActionResult(True, "stopped"))[1])
 
-    def launched(self, b):
+    def launched(self, b, rid=""):
         raise _Launched()
     monkeypatch.setattr(ControllerService, "clear_daemon_feed", launched)
     with pytest.raises(_Launched):
