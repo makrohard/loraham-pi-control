@@ -135,6 +135,18 @@ def test_c23_b1_a_fault_that_recovers_and_returns_shows_again(web, tmp_path, mon
     assert [line for _h, line in _lines(_home(web, again))] == ["MeshCore (OpenHop) is degraded"]
 
 
+def test_c23_re_a_recovery_nobody_saw_on_home_still_reopens_the_banner(web, tmp_path, monkeypatch, csrf):
+    # G1-C23-RE F1: closed on {MeshCore degraded}; it recovered while no one opened Home, and the console's maintenance
+    # pass (the web watchdog's) ran; then it degraded again with the same key: Home shows it.
+    from lhpc.core import maintenance
+    svc = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
+    c = web(service_factory=lambda: svc)
+    assert _dismiss_shown(c, csrf).status_code == 302 and _lines(c.get("/").get_data(as_text=True)) == []
+    maintenance.run(_svc(tmp_path, monkeypatch))                                         # recovered, unseen on Home
+    again = _svc(tmp_path, monkeypatch, states={"meshcore-node": RunState.DEGRADED})
+    assert [line for _h, line in _lines(_home(web, again))] == ["MeshCore (OpenHop) is degraded"]
+
+
 def test_c23_b2_the_x_hides_the_set_it_showed_never_one_that_arrived_since(web, tmp_path, monkeypatch, csrf):
     # Gate 1 C23 B2: the page showed {degraded}; before the ✕ is pressed an unsafe task arrives. The ✕ hides the shown
     # set only, so the new set (degraded + unsafe) stays visible.

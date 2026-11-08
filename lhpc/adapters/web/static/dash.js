@@ -25,9 +25,10 @@
       .then(function (d) {
         if (!d) return;
         var badge = document.getElementById("rd-badge-" + key);
-        if (badge) {
-          badge.textContent = d.reachable ? "daemon live" : "daemon offline";
-          badge.className = "badge badge-" + (d.reachable ? "running" : "stopped");
+        if (badge) {      // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
+          badge.textContent = d.ready ? "daemon usable (READY)"
+            : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
+          badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"));
         }
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";

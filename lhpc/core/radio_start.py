@@ -378,7 +378,7 @@ def hardware_view(svc) -> dict:
         usb = m is not None and m.transport != "spi"
         rows.append({"rid": r.id, "name": r.name, "model": r.model, "band": r.band, "enabled": r.enabled,
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
-                     "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
+                     "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready, "radio_state": v.radio_state,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
                      "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
                      "attention": _attention(pr, _radio_users(svc, r))})
@@ -1004,12 +1004,14 @@ def chip_family(svc, band: str, rid: str = ""):
 
 def band_radios(svc, band: str) -> list:
     """W6-2/W6-3: every enabled radio of `band` in list order, each with its own daemon's view (its rid's CONF
-    socket), so two radios of one band are two entries, never one band view; [] without a valid list."""
+    socket), so two radios of one band are two entries, never one band view; [] without a valid list. `log`: its daemon's
+    start log (G1-C28 N3), `radio_state` its radio's (REMOVALS row 11)."""
     from . import daemon_control
     out = []
     for r in (r for r in radios.load(svc._paths).radios if r.enabled and r.band == band):
         v = daemon_control.read_view(svc._system, r.id)
-        out.append({"rid": r.id, "name": r.name, "model": r.model, "reachable": v.reachable, "ready": v.ready})
+        out.append({"rid": r.id, "name": r.name, "model": r.model, "reachable": v.reachable, "ready": v.ready,
+                    "radio_state": v.radio_state, "log": start_log_name(svc.DAEMON_ID, band, r.id)})
     return out
 
 
