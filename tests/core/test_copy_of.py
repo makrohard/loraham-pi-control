@@ -138,3 +138,13 @@ def test_an_applied_slot0_stop_resolves_its_copy_under_the_lock(tmp_path, monkey
     monkeypatch.setattr(svc, "_stop_impl", lambda *a, **k: seen.append(k["inst"]) or ActionResult(False, "x"))
     svc.stop("kiss", apply=True, band="433")
     assert [(c.slot, c.rid) for c in seen] == [(0, "r3")]
+
+
+def test_a_box_without_listed_copies_judges_slot0_by_the_snapshot(tmp_path):
+    # C10a: start_state reads the copy only beside listed copies; on a box without any, a hand-started kiss-serial
+    # (no instance token, no record) keeps the snapshot's state (today's whole-component judgement).
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path, listed="")
+    comp = svc.stack("kiss").component("loraham-kiss-serial")
+    copy = instances.copy_of(svc, "kiss", band="433")[0]
+    assert instances.start_state(svc, "kiss", comp, copy, "433", RunState.RUNNING) is RunState.RUNNING

@@ -433,18 +433,6 @@ def endpoints_for(endpoints, inst) -> list:
             else e for e in endpoints]
 
 
-def scoped(svc, sid: str, inst, band: str):
-    """The instance a start of stack `sid` concerns, when it is not just "the stack": the listed instance itself
-    (slot k), or slot 0 on its radio while the stack has listed instances; None for a stack without any (today's
-    by-component judgement stays)."""
-    if inst is not None and inst.slot:
-        return inst
-    if not listed_rids(svc._paths, sid):
-        return None
-    rid, _why = slot0_radio(svc._paths, sid, band)
-    return commands.Instance(0, rid) if rid else None
-
-
 def instance_state(svc, comp, inst, band: str, snap_state):
     """A component's run state for one instance: RUNNING when it runs as that instance, else STOPPED. The daemon, a
     library/firmware/oneshot and a component without a process spec keep the snapshot's state."""
@@ -459,10 +447,11 @@ def instance_state(svc, comp, inst, band: str, snap_state):
 
 
 def start_state(svc, sid: str, comp, inst, band: str, snap_state):
-    """The state a start judges `comp` by (item 7c2): its scoped instance's own (instance_state) when the start
-    concerns one (scoped), else the snapshot's."""
-    si = scoped(svc, sid, inst, band)
-    return snap_state if si is None else instance_state(svc, comp, si, band, snap_state)
+    """The state a start judges `comp` by (item 7c2): the copy's own (instance_state) for a listed copy, and for slot
+    0 (start's copy, on its DEC-W16 radio) while the stack has listed copies; else the snapshot's."""
+    if inst is None or not inst.rid or (not inst.slot and not listed_rids(svc._paths, sid)):
+        return snap_state
+    return instance_state(svc, comp, inst, band, snap_state)
 
 
 def claim_key(claim, inst) -> str:
