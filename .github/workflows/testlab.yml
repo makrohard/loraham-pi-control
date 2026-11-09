@@ -24,7 +24,7 @@ on:
 permissions:
   contents: read
 
-# As in ci.yml: only a newer push to a topic branch (`cons/*`) cancels its superseded run.
+# As in ci.yml: on a topic branch (`cons/*`, run by dispatch only) a newer run cancels the older one.
 concurrency:
   group: testlab-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/cons/') }}

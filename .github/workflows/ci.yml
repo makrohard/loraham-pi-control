@@ -12,7 +12,7 @@ on:
 permissions:
   contents: read
 
-# A newer push to a topic branch (`cons/*`) cancels its superseded run. Never on main, dev, a
+# On a topic branch (`cons/*`, run by dispatch only) a newer run cancels the older one. Never on main, dev, a
 # release or bot branch, or a pull request: every commit there keeps its own complete result.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
