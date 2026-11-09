@@ -160,15 +160,24 @@ class LabServer:
                            + (self.root / "weblog.txt").read_text()[-2000:])
 
     def stop(self) -> None:
-        if self.proc is None:
-            return
-        self.proc.send_signal(signal.SIGTERM)
-        try:
-            self.proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait(timeout=5)
-        self.proc = None
+        """Stop `lhpc web` (when started) and the fakes the lab root's init/reset spawned (W389: they outlived it)."""
+        if self.proc is not None:
+            self.proc.send_signal(signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+            self.proc = None
+        stop_lab_fakes(self.root)
+
+
+def stop_lab_fakes(root) -> list:
+    """The fakes of the lab root `root` stopped (ops.stop_fakes): for a lab brought up with `run_lab` alone."""
+    from types import SimpleNamespace
+
+    from . import ops
+    return ops.stop_fakes(SimpleNamespace(_paths=Paths(runtime_root=Path(root))))
 
 
 def make_lab_root(tmp_path, monkeypatch) -> Paths:

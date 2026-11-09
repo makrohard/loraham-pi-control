@@ -6,7 +6,7 @@ here (row D1, 2026-11-02)."""
 from __future__ import annotations
 
 import pytest
-from lhpc_testlab.testing import lab_env, named, run_lab, run_lhpc
+from lhpc_testlab.testing import lab_env, named, run_lab, run_lhpc, stop_lab_fakes
 
 
 @pytest.mark.slow
@@ -25,3 +25,4 @@ def test_the_first_daemon_start_on_a_fresh_runtime_creates_the_rf_log_dir_and_co
         assert view.returncode == 0 and "Radio: READY" in view.stdout, view.stdout[-2000:]
     finally:
         run_lhpc(env, "stack", "stop", named(env, "daemon"), "--yes", timeout=300)
+        stop_lab_fakes(root)                                    # W389: its init/reset's fakes stop with it

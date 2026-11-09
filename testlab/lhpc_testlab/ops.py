@@ -488,6 +488,25 @@ def _aprs_sink_pid_path(svc):
     return svc._paths.under("state", "testlab", "aprs-sink.pid")
 
 
+def stop_fakes(svc, grace_s: float = 5.0) -> list:
+    """Stop the fakes this lab root's init/reset spawned (the fake gpsd, the APRS-IS sink), W389: each one its pid
+    file names while that pid is still the fake (its argv), with its whole process group (it was spawned as the leader
+    of a new one): SIGTERM, then SIGKILL after `grace_s`. Returns the pids it stopped."""
+    import contextlib
+    fakes = [(p, needle) for p, needle in ((_gpsd_pid(svc), "lhpc_testlab _gpsd"), (_aprs_sink_pid(svc), "aprs_sink.py")) if p]
+    for pid, _needle in fakes:
+        with contextlib.suppress(OSError):
+            os.killpg(pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace_s
+    while any(supervisor.pid_alive(p, n) for p, n in fakes) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    for pid, needle in fakes:
+        if supervisor.pid_alive(pid, needle):
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGKILL)
+    return [p for p, _n in fakes]
+
+
 def _respawn_gpsd(svc, details: list) -> None:
     from . import gpsd
     old = _gpsd_pid(svc)
