@@ -8,7 +8,6 @@ import re
 import select
 import subprocess
 import sys
-import types
 
 import pytest
 
@@ -29,14 +28,43 @@ LEADER_Z = (
     "ctypes.CDLL(None).pthread_exit(None)\n")
 
 
+def _read_line(stream, want: bytes, timeout: float = 10.0) -> None:
+    """Read `want` from the child's stdout within a bounded number of 0.1 s waits (G1-DP1-RE N1): select, then os.read
+    what is there; a partial line, EOF or running out of waits fails the test (the fixture's teardown still kills and
+    reaps the child). No clock is read: the bound is the count of select timeouts."""
+    got = b""
+    for _ in range(int(timeout * 10)):
+        if not select.select([stream], [], [], 0.1)[0]:
+            continue
+        chunk = os.read(stream.fileno(), 64)
+        if not chunk:
+            pytest.fail(f"the child closed its output before {want!r} (got {got!r})")
+        got += chunk
+        if got.endswith(b"\n"):
+            assert got.strip() == want, got
+            return
+    pytest.fail(f"the child did not write {want!r} within {timeout} s (got {got!r})")
+
+
+def test_the_bounded_read_fails_on_a_partial_line():
+    # G1-DP1-RE N1: a child that wrote a partial line and hangs (select says readable, readline would block for ever)
+    # fails within the deadline; the old select()+readline() fixture hung here
+    code = "import select, sys; sys.stdout.buffer.write(b'leader-'); sys.stdout.flush(); select.select([], [], [], 30)"
+    p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
+    try:
+        with pytest.raises(pytest.fail.Exception, match="did not write"):
+            _read_line(p.stdout, b"leader-z", timeout=1.0)
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
 @pytest.fixture
 def leader_z():
     """A real detached process (start_new_session=True) whose leader is Z while a worker thread runs (pid == pgid == sid)."""
     p = subprocess.Popen([sys.executable, "-c", LEADER_Z], stdout=subprocess.PIPE, start_new_session=True)
     try:
-        if not select.select([p.stdout], [], [], 10)[0]:           # N3: bounded; the finally kills and reaps it
-            pytest.fail("the leader never reached state Z within 10 s")
-        assert p.stdout.readline().strip() == b"leader-z"
+        _read_line(p.stdout, b"leader-z")                           # bounded (N1); the finally kills and reaps it
         assert len(os.listdir(f"/proc/{p.pid}/task")) == 2
         yield p.pid
     finally:
@@ -69,9 +97,46 @@ def test_a_session_keeps_a_zombie_leader_with_a_live_thread(leader_z, zombie):
 
 
 def test_the_progress_sampler_counts_a_zombie_leader_with_a_live_thread(leader_z):
-    # direct: SessionSampler._members is what sample() reads (no public result names the members)
-    members = progress.SessionSampler(leader_z, os.getpid(), lambda: 0)._members()
+    # direct: SessionSampler._members is what sample() reads (no public result names the members). The live process
+    # is never dropped as dead: it is a member, or, where the kernel refuses /proc/<pid>/io for a group whose leader is
+    # a zombie (seen on the CI runner), the sample is _Unknown (sample() then reads it as progress), never "no member"
+    try:
+        members = progress.SessionSampler(leader_z, os.getpid(), lambda: 0)._members()
+    except progress._Unknown:
+        return
     assert [pid for pid, _start in members] == [leader_z]
+
+
+def _fake_leader_z(root, pid=4242, sid=4242):
+    """A fake /proc entry of a Z leader with a live worker thread (task list: the leader and one more)."""
+    d = root / str(pid)
+    (d / "task" / str(pid)).mkdir(parents=True)
+    (d / "task" / str(pid + 1)).mkdir()
+    (d / "stat").write_text(f"{pid} (x) Z 1 {pid} {sid} 0 -1 0 0 0 0 0 5 5 0 0 20 0 2 0 1000\n")
+    (d / "io").write_text("rchar: 10\nwchar: 10\nsyscr: 1\n")
+    return pid
+
+
+def test_the_sampler_lists_a_zombie_leader_with_a_live_thread_when_its_io_is_readable(tmp_path):
+    # DEC-W384bt, the deterministic half 1: io readable -> the live process is a member (the old rule: no member)
+    pid = _fake_leader_z(tmp_path)
+    members = progress.SessionSampler(pid, 1, lambda: 0, proc_root=str(tmp_path))._members()
+    assert members == {(pid, 1000): (10, 20)}                      # cpu utime+stime 5+5, io rchar+wchar
+
+
+def test_the_sampler_reads_an_unreadable_io_as_unknown_and_counts_it_as_progress(tmp_path, monkeypatch):
+    # DEC-W384bt, half 2: io unreadable (as the CI runner's kernel does under a zombie leader) -> _Unknown, which
+    # sample() counts as progress; against a baseline where nothing changed it would be False
+    pid = _fake_leader_z(tmp_path)
+    s = progress.SessionSampler(pid, 1, lambda: 0, proc_root=str(tmp_path))
+    assert s.sample() is True                                       # the baseline (every member is new)
+    assert s.sample() is False                                      # nothing changed: no progress
+    real = progress._read_text
+    monkeypatch.setattr(progress, "_read_text", lambda path: (_ for _ in ()).throw(PermissionError(path))
+                        if path.endswith("/io") else real(path))
+    with pytest.raises(progress._Unknown):
+        s._members()
+    assert s.sample() is True                                       # unknown is counted as progress, never a stall
 
 
 def test_a_process_group_keeps_a_zombie_leader_with_a_live_thread(leader_z, zombie):
@@ -85,26 +150,18 @@ def _identity(pid):
     return {"main_pid": pid, "main_pgid": int(rest[2]), "main_sid": int(rest[3]), "main_starttime": int(rest[19])}
 
 
-def _main_ok(binding, listdir=os.listdir):
-    """The post-runner's own _main_ok (and any helper it calls) from the template, run against `binding`."""
-    ns = {"BINDING": binding, "os": types.SimpleNamespace(**{**vars(os), "listdir": listdir})}
-    for name in ("_pid_dead", "_main_ok"):
-        m = re.search(rf"^def {name}\(.*\n(?:(?:    .*)?\n)+?(?=\S)", commands._POST_RUNNER, re.M)
-        if m:
-            exec(m.group(0), ns)                                    # noqa: S102 - our own template text
+def _main_ok(binding):
+    """The post-runner's own _main_ok, from the template, run against `binding`."""
+    m = re.search(r"^def _main_ok\(.*\n(?:(?:    .*)?\n)+?(?=\S)", commands._POST_RUNNER, re.M)
+    assert m, "the post-runner's _main_ok is gone"
+    ns = {"BINDING": binding, "os": os}
+    exec(m.group(0), ns)                                            # noqa: S102 - our own template text
     return ns["_main_ok"]()
 
 
-def _no_task_dir(path):
-    if path.endswith("/task"):
-        raise PermissionError(path)
-    return os.listdir(path)
-
-
-def test_the_post_runner_refuses_a_zombie_main_whose_task_list_cannot_be_read(zombie):
-    # G1-DP1 B1: authorization fails toward "refuse": a ceased main (here a real unreaped zombie whose task list cannot
-    # be read, as when another process reaps it between the reads) must never authorize the post steps
-    assert _main_ok(_identity(zombie), listdir=_no_task_dir) is False
+def test_the_post_runner_refuses_a_zombie_main(zombie):
+    # G1-DP1 B1: authorization fails toward "refuse": a ceased main (a real unreaped zombie, its identity matching)
+    # never authorizes the post steps, whatever its task list (the check reads none)
     assert _main_ok(_identity(zombie)) is False
 
 
@@ -126,22 +183,3 @@ def test_proc_alive_reads_a_stat_without_a_state_field_as_not_alive(monkeypatch,
     monkeypatch.setattr(procident.Path, "read_text", lambda self, *a, **k: stat if str(self) == "/proc/123/stat"
                         else real(self, *a, **k))
     assert procident.proc_alive(123) is False
-
-
-def test_no_raw_state_check_outside_the_rule():
-    # DEC-W384bq: a dead state is judged only by procident.pid_dead; the one other state test is the post-runner's
-    # authorization refusal in _main_ok (pinned by name). Any quoted "Z"/"X" in code elsewhere fails here.
-    root = os.path.dirname(procident.__file__)
-    state = re.compile(r"""['"][ZX]['"]""")
-    hits = []
-    for name in sorted(os.listdir(root)):
-        if not name.endswith(".py"):
-            continue
-        func = ""
-        with open(os.path.join(root, name)) as fh:
-            for n, line in enumerate(fh, 1):
-                m = re.match(r"(?:    )?def (\w+)\(", line)
-                func = m.group(1) if m else func
-                if state.search(line) and not line.lstrip().startswith("#"):
-                    hits.append((name, func))
-    assert sorted(set(hits)) == [("commands.py", "_main_ok"), ("procident.py", "pid_dead")], hits

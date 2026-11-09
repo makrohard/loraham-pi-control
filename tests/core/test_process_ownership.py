@@ -351,13 +351,29 @@ LEADER_Z = (
     "ctypes.CDLL(None).pthread_exit(None)\n")
 
 
+def _read_line(stream, want: bytes, timeout: float = 10.0) -> None:
+    """Read `want` from the child's stdout within a bounded number of 0.1 s waits (G1-DP1-RE N1): select, then os.read
+    what is there; a partial line, EOF or running out of waits fails the test (the fixture's teardown still kills and
+    reaps the child). No clock is read: the bound is the count of select timeouts."""
+    got = b""
+    for _ in range(int(timeout * 10)):
+        if not select.select([stream], [], [], 0.1)[0]:
+            continue
+        chunk = os.read(stream.fileno(), 64)
+        if not chunk:
+            pytest.fail(f"the child closed its output before {want!r} (got {got!r})")
+        got += chunk
+        if got.endswith(b"\n"):
+            assert got.strip() == want, got
+            return
+    pytest.fail(f"the child did not write {want!r} within {timeout} s (got {got!r})")
+
+
 def test_g1_zb1_a_zombie_leader_with_a_live_thread_is_not_ceased(tmp_path, reaper):
     life = _life(tmp_path)
     p = subprocess.Popen([sys.executable, "-c", LEADER_Z], stdout=subprocess.PIPE, start_new_session=True)
     reaper.append(p)                                              # killed and reaped at teardown, also on a timeout
-    if not select.select([p.stdout], [], [], 10)[0]:              # G1-DP1 N3: bounded readiness wait
-        pytest.fail("the leader never reached state Z within 10 s")
-    assert p.stdout.readline().strip() == b"leader-z"            # the worker saw its leader in state Z
+    _read_line(p.stdout, b"leader-z")                             # bounded (G1-DP1-RE N1): its leader is in state Z
     assert len(os.listdir(f"/proc/{p.pid}/task")) == 2
     assert life._proc_ceased(p.pid) is False                      # alive: a thread still runs
     assert life._terminate_unobserved(p.pid, None) is False       # the stop/verify path: cessation not proven
