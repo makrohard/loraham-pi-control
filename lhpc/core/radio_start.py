@@ -877,8 +877,17 @@ def radio_dependents(svc, band: str, inst=None):
     if not rows or not rids <= rows:
         return None
     daemon_sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
-    told = {sid for sid, _r, _c, _p in instances.instance_processes(svc, svc._system.procfs.cmdlines())}
-    out = [s for s in svc.stop_dependents(daemon_sid, bands={band}) if s not in told]   # fail-safe: no instance told
+    table = svc._system.procfs.cmdlines()
+    procs = instances.instance_processes(svc, table)
+    told = {sid for sid, _r, _c, _p in procs}
+
+    def bare(sid):
+        """G1-K4B 4: a running dependent is named by its bare id unless every process of it is an instance's: none
+        told, or one no instance claims (an instance on another radio does not vouch for it)."""
+        stk = svc.stack(sid)
+        return sid not in told or stk is None or any(instances.unclaimed(svc, c, table, procs)
+                                                     for c in stk.components if c.process is not None)
+    out = [s for s in svc.stop_dependents(daemon_sid, bands={band}) if bare(s)]          # fail-safe
     for stk in svc.stacks():
         if stk.id == daemon_sid or not any(svc.DAEMON_ID in c.depends_on for c in stk.components):
             continue

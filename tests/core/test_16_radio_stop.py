@@ -128,3 +128,22 @@ def test_one_radios_daemon_stop_clears_its_own_window_only(box, tmp_path):
         p.write_text("123")
     assert svc.stop("daemon", apply=True, band="433", inst=radio_start.daemon_inst("r2")).ok
     assert floors["r2"].read_text() != "123" and floors["r1"].read_text() == "123"
+
+
+def test_g1_k4b_4_an_unclaimed_dependent_is_kept_though_another_radio_has_a_claimed_one(tmp_path, monkeypatch):
+    # kiss@r1 runs by its own token; a second kiss process carries no token and has no record (hand-started on r2):
+    # a stop of r2's daemon names it by its bare id; kiss@r1's token does not vouch for it.
+    from lhpc.core.commands import Instance
+    radios_fixture.write(tmp_path, TWO_433)
+    plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    tnc = plain.stack("kiss").component("loraham-kiss-tnc")
+    tok = instances._token(plain, tnc, Instance("r1"), "433")
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])  # the band's view
+    svc = ControllerService(system=FakeSystem(cmdlines_data={71: ["/x/loraham-kiss-tnc", *tok],
+                                                             72: ["/x/loraham-kiss-tnc"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert instances.running_keys(svc, "kiss") == ["kiss@r1"]
+    assert radio_start.radio_dependents(svc, "433", inst=radio_start.daemon_inst("r2")) == ["kiss"]
+    claimed = ControllerService(system=FakeSystem(cmdlines_data={71: ["/x/loraham-kiss-tnc", *tok]}).system,
+                                paths=Paths(runtime_root=tmp_path))
+    assert radio_start.radio_dependents(claimed, "433", inst=radio_start.daemon_inst("r2")) == []   # all told: none

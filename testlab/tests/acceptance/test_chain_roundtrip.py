@@ -18,7 +18,7 @@ from lhpc_testlab.release import (
     wait_http,
     wait_tcp,
 )
-from lhpc_testlab.testing import named, port_of, run_lab, run_lhpc
+from lhpc_testlab.testing import named, port_of, run_lab, run_lhpc, running
 
 
 def _kiss_serving() -> bool:
@@ -38,8 +38,11 @@ def chain(lab):
     run_lhpc(lab.env, "build", "kiss", "--yes", check=True, timeout=600)
     run_lhpc(lab.env, "stack", "start", named(lab.env, "kiss"), "--yes", check=True, timeout=300)
     yield lab
-    run_lhpc(lab.env, "stack", "stop", named(lab.env, "kiss"), "--yes", timeout=300)
-    run_lhpc(lab.env, "stack", "stop", named(lab.env, "daemon"), "--yes", timeout=300)
+    # every running instance (testing.running): one named daemon left the other radio's running after the module,
+    # and a live lab daemon on this host's /tmp sockets breaks the next lab's reset
+    for sid in ("kiss", "daemon"):
+        for key in running(lab.env, sid):
+            run_lhpc(lab.env, "stack", "stop", key, "--yes", timeout=300)
 
 
 @pytest.mark.slow
@@ -90,10 +93,10 @@ def test_graywolf_shows_injected_station(chain):
         assert wait_http(f"http://127.0.0.1:{GRAYWOLF_UI}/", 120, accept=(200, 401, 403)), \
             "graywolf's UI never answered on 8080"
         # authenticate exactly like the production provision step: the generated admin
-        # password lives under state/graywolf (0600), sessions ride a cookie jar
+        # password lives in the instance's state/<rid>/graywolf (0600, K4b), sessions ride a cookie jar
         import http.cookiejar
-        pw = (chain.root / "state" / "graywolf" / "graywolf-admin.txt") \
-            .read_text().strip()
+        rid = named(chain.env, "graywolf").partition("@")[2]
+        pw = (chain.root / "state" / rid / "graywolf" / "graywolf-admin.txt").read_text().strip()
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         login = urllib.request.Request(

@@ -96,11 +96,17 @@ def running_keys(svc, sid: str) -> list:
 def recorded(svc, sid: str) -> set:
     """The radios `sid`'s running instances were launched on, by their verified launch records (13.16): a running
     instance keeps its radio, whatever the hardware list says now."""
-    life, out = svc._lifecycle(), set()
+    return set(recorded_bands(svc, sid))
+
+
+def recorded_bands(svc, sid: str) -> dict:
+    """{rid: the band it was launched on} of `sid`'s running instances, by their verified launch records (13.16): the
+    launch's own evidence, never the hardware row as it reads now (G1-K4B 3, 6). A record without a band: ""."""
+    life, out = svc._lifecycle(), {}
     for rec in life.owned_inventory()[0]:
         if rec.get("rid") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
                 and life.verify_owned(rec)[0]:
-            out.add(rec["rid"])
+            out[rec["rid"]] = out.get(rec["rid"]) or str(rec.get("band") or "")
     return out
 
 
@@ -121,9 +127,12 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
 
 
 def running_bands(svc, sid: str) -> set:
-    """The bands of the radios `sid`'s running instances run on (running_keys): a live stack's band evidence."""
-    keys = set(running_keys(svc, sid))
-    return {r.band for r in radios.load(svc._paths).radios if f"{sid}@{r.id}" in keys}
+    """The bands `sid`'s running instances were LAUNCHED on (their verified records' bands; G1-K4B 6: an edited
+    hardware row is no evidence). Empty, so the caller holds every band (fail-safe), when one running instance's
+    band is not told by its record (a hand-started token-only process, or a record without a band)."""
+    told = recorded_bands(svc, sid)
+    keys = {k.partition("@")[2] for k in running_keys(svc, sid)}
+    return set() if not keys or any(not told.get(r) for r in keys) else {told[r] for r in keys}
 
 
 def stop_keys(svc, sid: str) -> list:
@@ -255,12 +264,18 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
         rid0 = next((r.id for r in rows if r.id in run and r.band == band), "") or band_radio(svc._paths, band)
         return commands.Instance(rid0, band=band), ""
     radio = next((r for r in rows if r.id == rid), None)
-    if radio is None:
-        return None, f"{sid}@{rid}: {rid} is not in the hardware list"
+    bands = stack_bands(stack)
+    if radio is None or (bands and radio.band not in bands):
+        why = (f"{sid}@{rid}: {rid} is not in the hardware list" if radio is None else
+               f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz")
+        # G1-K4B 3: a running instance whose radio left the list (or changed band) is still addressed by its verified
+        # launch record, with its launch band and the why: a stop reaches it, a start refuses on the why
+        launched = recorded_bands(svc, sid)
+        if rid in launched and (run is None or rid in run):
+            return commands.Instance(rid, band=launched[rid]), why
+        return None, why
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
-    if (bands := stack_bands(stack)) and radio.band not in bands:        # a stack without bands runs on any radio
-        return None, f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
     return commands.Instance(rid, band=radio.band), ("" if radio.enabled else f"{sid}@{rid}: {rid} is disabled")
 
 

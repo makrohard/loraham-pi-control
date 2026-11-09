@@ -2509,12 +2509,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/stacks/<stack_id>/webserver")
     def stack_web_configure(stack_id: str):
-        """Web-UI proxy policy for ONE proxied page of the stack (`page`, `<page>@<rid>`, K4b; without one there is no
-        bare page to default to, so it is refused, 404). Same typed-confirmation contract as /webserver/configure."""
+        """Web-UI proxy policy for ONE proxied page of the stack (`page`, `<page>@<rid>`, K4b). A bare page (none given,
+        or one without `@<rid>`: the 0.13.x form) is the stack's instance on its lowest enabled radio (W290: kept, not
+        removed); with no such radio the reason is shown (no hardware list, or no radio for the stack). Same
+        typed-confirmation contract as /webserver/configure."""
         if not _csrf_ok():
             abort(400)
         f = request.form
         page_id = (f.get("page") or stack_id).strip()
+        if "@" not in page_id and service.stack(stack_id) is not None:
+            can = _instances.can_run_on(service, service.stack(stack_id))
+            if not can:
+                from lhpc.core import radio_start as _rs
+                flash(_rs.no_list_notice(service._paths)
+                      or f"{stack_id} can run on no enabled radio of the hardware list: add one on the Hardware page", "err")
+                return redirect(url_for("stacks_overview") + "#stackrow-" + stack_id)
+            page_id = f"{page_id}@{can[0]}"
         page = service.web_page(page_id)
         if service.stack(stack_id) is None or page is None or page.stack_id != stack_id:
             abort(404)                                   # unknown stack, or not one of its pages

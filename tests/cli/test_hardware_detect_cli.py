@@ -51,6 +51,11 @@ def box(tmp_path, monkeypatch, capsys):
         opened = []
         procs = [radio_daemon.DaemonProc(4242, "id", rid="r1", band="433")] if daemon else []
         monkeypatch.setattr(radio_start, "_daemon_procs", lambda svc: list(procs))
+        # the CONF-socket read too: a lab daemon on this host's /tmp/loraconf-r1.sock must not decide the case
+        from types import SimpleNamespace
+
+        from lhpc.core import daemon_control
+        monkeypatch.setattr(daemon_control, "read_view", lambda system, rid: SimpleNamespace(reachable=False))
         monkeypatch.setattr(run, "spi_bus", lambda pins, chip, lock: opened.append(chip) or _Sx127x(version))
 
         def cli(*argv):

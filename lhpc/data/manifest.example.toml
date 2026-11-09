@@ -988,7 +988,7 @@ main = "graywolf"
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
   # belongs on loopback. Reach it through this stack's web proxy, or an SSH tunnel; exposing it
   # directly would need a real bind param.
-  note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
+  note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/<rid>/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/{instance_dir}graywolf", mode = "700" } ]
   # No tcp_wait: its port must be a manifest literal, and the provisioning step below does
   # its own bounded readiness wait against the API it is about to write to.

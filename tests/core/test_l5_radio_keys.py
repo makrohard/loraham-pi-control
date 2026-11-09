@@ -169,14 +169,52 @@ def test_w1_11_one_radio_or_none_keeps_the_per_band_stop(tmp_path, rows, band):
     assert svc.band_refusal("kiss", "868", "stop") is None           # a client's stop is never this rule's
 
 
-@pytest.mark.parametrize("rid,held", [("r1", False), ("r2", True)])
-def test_k4b_a_running_multi_band_stack_holds_only_its_instances_band(tmp_path, rid, held):
-    # K4b writes no per-stack band marker: kiss's band is its running instance's radio's (r1 433, r2 868), so a
-    # MeshCore start on 868 is blocked by kiss@r2 and not by kiss@r1 (no "band unknown, every band").
+@pytest.mark.parametrize("rid,recorded,held", [("r1", True, False), ("r2", True, True),
+                                               ("r1", False, True), ("r2", False, True)])
+def test_k4b_a_running_multi_band_stack_holds_only_its_instances_launch_band(tmp_path, rid, recorded, held):
+    # K4b writes no per-stack band marker: kiss's band is its running instance's LAUNCH band (its verified record,
+    # G1-K4B 6), so a MeshCore start on 868 is blocked by kiss@r2 and not by kiss@r1. A process told only by its
+    # token (no record of the band it runs on) holds every band (fail-safe).
+    import subprocess
+    import sys
+
     from lhpc.core import instances
     from lhpc.core.commands import Instance
     svc = _svc(tmp_path, MIXED)
-    opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), Instance(rid), "")
-    svc = _svc(tmp_path, MIXED, cmdlines_data={62: ["/x/loraham-kiss-tnc", opt, val]})
-    assert instances.running_keys(svc, "kiss") == [f"kiss@{rid}"]
-    assert any(b["holder_stack"] == "kiss" for b in svc.run_blockers("meshcore", "868")) is held
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    opt, val = instances._token(svc, tnc, Instance(rid), "")
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        if recorded:
+            assert svc._lifecycle().record_launch(svc.stack("kiss"), tnc, p.pid, band={"r1": "433", "r2": "868"}[rid],
+                                                  extra={"rid": rid})
+        svc = _svc(tmp_path, MIXED, cmdlines_data={p.pid: ["/x/loraham-kiss-tnc", opt, val]})
+        assert instances.running_keys(svc, "kiss") == [f"kiss@{rid}"]
+        assert any(b["holder_stack"] == "kiss" for b in svc.run_blockers("meshcore", "868")) is held
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_g1_k4b_6_one_instance_without_a_told_band_makes_the_stack_hold_every_band(tmp_path):
+    # kiss@r1 has its verified launch record (433); kiss@r2 runs by its token alone (no record of its band): the
+    # stack's running bands are not told, so a MeshCore start on 868 is blocked (fail-safe), never judged by r1's.
+    import subprocess
+    import sys
+
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
+    svc = _svc(tmp_path, MIXED)
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    p1 = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        assert svc._lifecycle().record_launch(svc.stack("kiss"), tnc, p1.pid, band="433", extra={"rid": "r1"})
+        table = {p1.pid: ["/x/loraham-kiss-tnc", *instances._token(svc, tnc, Instance("r1"), "")],
+                 62: ["/x/loraham-kiss-tnc", *instances._token(svc, tnc, Instance("r2"), "")]}
+        svc = _svc(tmp_path, MIXED, cmdlines_data=table)
+        assert instances.running_keys(svc, "kiss") == ["kiss@r1", "kiss@r2"]
+        assert instances.running_bands(svc, "kiss") == set()
+        assert any(b["holder_stack"] == "kiss" for b in svc.run_blockers("meshcore", "868"))
+    finally:
+        p1.kill()
+        p1.wait(timeout=5)

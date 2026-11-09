@@ -344,11 +344,25 @@ def test_the_route_saves_the_named_page_and_refuses_a_foreign_one(tmp_path, web,
     # a page that belongs to another stack, or no page at all, is not this stack's form
     assert client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "solo@r1"}).status_code == 404
     assert client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "b"}).status_code == 404
-    # K4b: no `page` field names no instance (a bare stack id is no page any more): refused, nothing saved
-    assert client.post("/stacks/two/webserver", data={"_csrf": tok, "mode": "local", "port": "8445",
-                                                      "scheme": "https",
-                                                      "access_mode": "local-open-remote-auth"}).status_code == 404
-    assert "two@r1" not in _stackweb(tmp_path)
+    # W290 (kept): no `page` field, or a bare one, is the stack's page on its lowest enabled radio (r1 here)
+    r = client.post("/stacks/two/webserver", data={"_csrf": tok, "mode": "local", "port": "8445", "scheme": "https",
+                                                   "access_mode": "local-open-remote-auth"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-two@r1")
+    assert _stackweb(tmp_path)["two@r1"].port == 8445
+
+
+@pytest.mark.no_default_hardware
+def test_a_bare_page_without_a_hardware_list_says_so_and_saves_nothing(tmp_path, web, csrf):
+    from lhpc.core import radio_start
+    svc = _svc(tmp_path)
+    client = web(service_factory=lambda: svc)
+    r = client.post("/stacks/two/webserver", data={"_csrf": csrf(client), "page": "two", "mode": "local",
+                                                   "port": "8445", "scheme": "https",
+                                                   "access_mode": "local-open-remote-auth"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stackrow-two")
+    with client.session_transaction() as sess:
+        assert ("err", radio_start.NO_LIST_TEXT) in sess.get("_flashes", [])
+    assert not _stackweb(tmp_path)
 
 
 def test_the_bulk_policy_covers_every_page(tmp_path):

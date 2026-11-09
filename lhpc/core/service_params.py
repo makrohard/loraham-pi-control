@@ -1394,13 +1394,9 @@ class ParamsConfigMixin:
         return ActionResult(True, f"hardware setup set to {setup_id}", details=[f"  served band(s): {', '.join(self.radio_bands()) or '(none)'}", f"  {rows_line}"])
 
     def meshcore_identity_candidates(self, inst=None) -> tuple:
-        """Files that may already hold the MeshCore identity (an instance's: its own generated file), newest-authority first.
-
-        Resolved from the MANIFEST (never hardcoded paths): the generated config, then the
-        upstream template it is built from — the only two places a key could be living
-        before LHPC owned it, the second because an operator may have pinned the identity
-        by hand-editing that template.
-        """
+        """Files that may already hold the MeshCore identity, newest-authority first, from the MANIFEST (never
+        hardcoded paths): the generated config, then (the template only) the upstream template it is built from, where
+        an operator may have pinned the identity by hand. G1-K4B 2: an instance adopts only its own generated file."""
         hit = self._component_index().get(MESHCORE_COMPONENT)
         comp = hit[1] if hit else None
         fc = getattr(comp, "config_file", None) if comp else None
@@ -1408,8 +1404,10 @@ class ParamsConfigMixin:
             return ()
         out = []
         inst = self._meshcore_inst(inst)
-        own = inst.subst(fc.path_template) if getattr(inst, "rid", "") and fc.path_template else fc.path
-        for raw, is_base in ((own, False), (fc.base, True)):
+        rid = getattr(inst, "rid", "")
+        own = inst.subst(fc.path_template) if rid and fc.path_template else fc.path
+        # the shared base is one file for every radio: two instances could adopt one key (moved by hand, DEC-W384i)
+        for raw, is_base in ((own, False),) + (() if rid else ((fc.base, True),)):
             if not raw:
                 continue
             # An lhpc-shipped asset base is OUR read-only packaged file: it never

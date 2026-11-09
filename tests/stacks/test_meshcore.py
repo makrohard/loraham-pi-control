@@ -688,3 +688,28 @@ def test_manual_command_carries_saved_settings(tmp_path):
     cmd = cmd.split("&&", 1)[1].split(";", 1)[0].split()      # the meshcli argv itself
     assert cmd[cmd.index("-p") + 1] == "5005"
     assert "-D" in cmd
+
+
+def test_g1_k4b_2_two_instances_never_adopt_one_shared_base_key(tmp_path):
+    # A base a runtime file can hold a key (an operator's pinned template); it is one file for every radio, so an
+    # instance adopts only its own generated file: meshcore@r2 and meshcore@r4 mint two keys, neither the base's.
+    import radios_fixture
+    from lhpc.core import manifest, radios
+    from lhpc.core.commands import Instance
+    src = manifest.default_manifest_path().read_text()
+    assert src.count('base = "{asset}/bases/meshcore.toml"') == 1
+    man = tmp_path / "manifest.toml"
+    man.write_text(src.replace('base = "{asset}/bases/meshcore.toml"', 'base = "{runtime}/config/pinned-meshcore.toml"'))
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    shipped = (manifest.default_manifest_path().parent / "bases" / "meshcore.toml").read_text()
+    assert shipped.count("[identity]\n") == 1
+    (tmp_path / "config" / "pinned-meshcore.toml").write_text(shipped.replace("[identity]\n", f'[identity]\nkey = "{KEY}"\n'))
+    radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
+                                    radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path), manifest_path=man)
+    base = tmp_path / "config" / "pinned-meshcore.toml"
+    assert base not in svc.meshcore_identity_candidates(Instance("r2")) + svc.meshcore_identity_candidates(Instance("r4"))
+    for rid in ("r2", "r4"):
+        assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868", inst=Instance(rid)))
+    keys = {rid: mi.secret_path(svc._paths, rid=rid).read_text().strip() for rid in ("r2", "r4")}
+    assert keys["r2"] != keys["r4"] and KEY not in keys.values(), keys

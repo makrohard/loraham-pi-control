@@ -150,6 +150,8 @@ def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, 
     assert _gone(pk)
     assert p0.poll() is None and daemon.poll() is None       # slot 0 and the daemon live
     assert marker.is_file() and svc._stop_intent_stacks() == {"kiss@r3"}   # the copy's own intent alone
+    del table[pk.pid]                                         # /proc no longer lists it (the static table would)
+    svc = _copy_svc(tmp_path, table)
     assert kill.kill(svc, "kiss", apply=True).ok
     assert _gone(p0) and daemon.poll() is None
     assert not marker.exists() and svc._stop_intent_stacks() == {"kiss@r3", "kiss"}
@@ -579,6 +581,25 @@ def test_a_bare_kill_takes_every_instances_recorded_process(tmp_path, procs):
                                    extra={"rid": "r3"})
     plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
     assert plan.ok and plan.data["pids"] == [p.pid]
+
+
+def test_g1_k4b_5_a_bare_kill_takes_every_radios_unrecorded_daemon_client(tmp_path, procs):
+    # kiss@r2 and kiss@r3 (both 868) started by hand with their own sockets, no record: a bare kill of the TNC takes
+    # both (every instance's token), not only the band's first radio's; `kiss@r3` takes r3's alone.
+    p2, p3 = procs(), procs()
+    svc = _copy_svc(tmp_path, {})
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+
+    def argv(rid):
+        inst = instances.copy_of(svc, "kiss", rid)[0]
+        src = str(svc._paths.resolve_source(tnc.source.path)) if tnc.source else str(svc._paths.runtime_root)
+        return commands.expand_argv(tnc.run_argv, tnc, svc.stack_config(tnc.id, "868", inst), Config().operator,
+                                    str(svc._paths.runtime_root), src, "868", inst=inst)
+    svc = _copy_svc(tmp_path, {p2.pid: argv("r2"), p3.pid: argv("r3")})
+    plan = kill.kill(svc, "kiss", "loraham-kiss-tnc")
+    assert plan.ok and sorted(plan.data["pids"]) == sorted([p2.pid, p3.pid]), (plan.summary, plan.details)
+    one = kill.kill(svc, "kiss@r3", "loraham-kiss-tnc")
+    assert one.ok and one.data["pids"] == [p3.pid], (one.summary, one.details)
 
 
 def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(tmp_path, procs):

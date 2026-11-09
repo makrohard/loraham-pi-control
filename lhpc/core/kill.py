@@ -10,7 +10,7 @@ import signal
 import time
 from pathlib import Path
 
-from . import instances, procident, radio_start
+from . import instances, procident
 from .outcomes import CompResult, Outcome
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -68,20 +68,22 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
             # A spec exempt in NO_INSTANCE_ARG (voice, voice_cli, kiss-serial) matches by its
             # stack identity, i.e. any instance: sound only while today's one-band rule allows
             # one instance per box, until L5 gives them a socket token (W98).
-            instance = None
-            with contextlib.suppress(Exception):       # an unresolvable value: records only
-                # stage L5 (W3): a daemon client's instance value names its radio, as its start renders it (the
-                # one token rule, instances._token)
-                inst = copy or radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.TEMPLATE
-                instance = instances._token(svc, comp, inst, cfg_band or comp.band)
-            if comp.process.instance_arg and instance is None:
-                # The value cannot be resolved, so the matcher cannot scope this component: a process of
+            # stage L5 (W3): an instance's value names its radio, as its start renders it (the one token rule,
+            # instances._token). G1-K4B 5: a bare kill takes every instance's token, never one radio's.
+            tokens = []
+            for inst in ([copy] if copy is not None else commands.stack_instances(stk, svc._paths) or (commands.TEMPLATE,)):
+                tok = None
+                with contextlib.suppress(Exception):       # an unresolvable value: records only
+                    tok = instances._token(svc, comp, inst, inst.band or cfg_band or comp.band)
+                tokens.append(tok)
+            if comp.process.instance_arg and None in tokens:
+                # A value cannot be resolved, so the matcher cannot scope this component: a process of
                 # its spec that runs is a gap, not a non-target (G2-B2 F3).
                 pids = []
                 unresolved += [f"pid {p} {comp.id}: its instance value cannot be resolved"
                                for p, a in sorted(table.items()) if matches(comp.process, a, None)]
             else:
-                pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
+                pids = [p for p, a in sorted(table.items()) if any(matches(comp.process, a, t) for t in tokens)]
             # One ownership decision per pid (G1-C35): another instance's verified process is not this one's; with no
             # record a token hit is this instance's; a bare kill of the stack takes every instance's (its promise).
             pids = [p for p in pids if p not in recs or _mine(recs[p], copy)]
