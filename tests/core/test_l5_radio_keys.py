@@ -43,7 +43,7 @@ def test_w4_1_two_radios_on_one_band_refuse_the_client_naming_both(tmp_path, mon
     # so the band's two radios are named and the start is refused, nothing launched.
     from lhpc.core.lifecycle import Lifecycle
     svc = _svc(tmp_path, TWO_868, cmdlines_data={300: ["meshtasticd"]})
-    svc._set_running_band("meshtastic", "868")
+    svc.running_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
@@ -73,7 +73,7 @@ def test_a_conflict_names_the_radio(tmp_path):
     svc = _svc(tmp_path, radios_fixture.RADIOS,
                cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r2"], 300: ["meshtasticd"]},
                unix_replies={"/tmp/loraconf-r2.sock": READY % b"r2"})
-    svc._set_running_band("meshtastic", "868")
+    svc.running_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
     msgs = [c.message for c in svc._observed_conflicts()]
     assert any(m.endswith("on loraham.radio.r2 — both running") for m in msgs), msgs
     assert not any("{radio:" in m or "loraham.radio.868" in m for m in msgs)

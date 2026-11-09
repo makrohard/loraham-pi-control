@@ -240,9 +240,8 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
                               unix_replies={"/tmp/loraconf-r1.sock":
                                             b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
-        # The band marker a start records — seeded through the product's own recorder, since no
-        # public setter exists and a real start needs a radio.
-        svc._set_running_band("meshtastic", "868")
+        # The band a running instance gives (K6: no band marker; a real start needs a radio)
+        svc.running_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))
@@ -275,9 +274,8 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-rns-node", "--config", "x"]},
                               unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
-        # The band marker a start records — seeded through the product's own recorder, since no
-        # public setter exists and a real start needs a radio.
-        svc._set_running_band("reticulum", "433")
+        # The band a running instance gives (K6: no band marker; a real start needs a radio)
+        svc.running_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
@@ -398,7 +396,7 @@ def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                                              200: ["loraham-rns-node", "--config", "x"]}).system,
             paths=Paths(runtime_root=tmp_path))
-        svc._set_running_band("reticulum", "433")
+        svc.running_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     doc = parse(web(service_factory=factory).get("/stacks/reticulum/body").get_data(as_text=True))
     assert len(_links(doc, "rns", "rf-reticulum.log", "433")) == 1

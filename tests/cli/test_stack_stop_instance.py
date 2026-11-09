@@ -196,7 +196,7 @@ def test_g1_b1_re_records_coming_and_going_never_widen_an_instances_stop(box, st
     # stop scopes both its components to r1 all the same (no exclusion list to drift between them).
     from lhpc.core import instances
     n = iter(range(4, 99))
-    monkeypatch.setattr(instances, "recorded", lambda svc, sid: {f"r{next(n)}": 1})
+    monkeypatch.setattr(instances, "recorded", lambda svc, sid: {f"r{next(n)}"})       # recorded() is a set of rids
     run = box((R1, R3))
     run("stop", "kiss@r1")
     rids = [kw.get("rid") for cid, kw in stops if cid in ("loraham-kiss-serial", "loraham-kiss-tnc")]
