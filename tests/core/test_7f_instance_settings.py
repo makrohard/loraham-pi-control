@@ -38,14 +38,17 @@ def test_an_instances_own_value_reaches_its_generated_config_file(tmp_path):
     assert _conf(tmp_path, "r3/lorachat.conf")["CALL"] == "DL1ABC"
 
 
-def test_slot0s_saved_value_is_not_an_instances_and_the_instance_runs_on_the_defaults(tmp_path):
+def test_a_global_files_radio_value_is_no_instances_and_each_runs_on_its_own(tmp_path):
+    # K6 (13.8): a radio value left in the global chat.toml (0.13.x's slot 0 file) is read by no instance: r1 (the
+    # band caller's) and r3 run on their own files' values, else the defaults
     svc, inst = _svc(tmp_path)
-    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL2XYZ"})       # chat is fixed-band: chat.toml
-    default = svc.file_config_values("chat", "433", inst)["call"]
-    assert svc.file_config_values("chat", "433")["call"] == "DL2XYZ"            # slot 0's own
-    assert default != "DL2XYZ"                                                    # the instance: no inheritance
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL2XYZ"})       # the global chat.toml
+    assert svc.file_config_values("chat", "433", inst)["call"] != "DL2XYZ"
+    assert svc.file_config_values("chat", "433")["call"] != "DL2XYZ"            # chat@r1 too
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL3ABC"}, inst=Instance("r1"))
+    assert svc.file_config_values("chat", "433")["call"] == "DL3ABC" != svc.file_config_values("chat", "433", inst)["call"]
     svc.write_config_files("chat", "433", inst=inst)
-    assert _conf(tmp_path, "r3/lorachat.conf")["CALL"] != "DL2XYZ"                # its file: its default, not slot 0's
+    assert _conf(tmp_path, "r3/lorachat.conf")["CALL"] not in ("DL2XYZ", "DL3ABC")  # r3's file: its own default
 
 
 def test_an_instances_value_is_never_slot0s(tmp_path):
@@ -112,15 +115,16 @@ def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_sett
     radios_fixture.write(tmp_path, rows)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _sid, inst, _band, _why = instances.resolve(svc, "meshcore@r4")
-    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_repeater_name": "Slot Zero"})
+    cfgmod.update_stack_config(svc._paths, "meshcore", {"file_repeater_name": "Slot Zero"}, inst=Instance("r2"))
     cfgmod.update_stack_config(svc._paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "Relay Four"},
                                inst=Instance("r4"))
     svc._invalidate_config()
     ops.start_ensure(svc, "meshcore", inst=inst)
     own = json.loads(ops.file_path(svc._paths, inst).read_text())
     assert own["repeater.node_name"] == "Relay Four" and len(own["repeater.identity_key"]) == 64
-    assert not ops.file_path(svc._paths).exists()
-    assert svc._stored_param_value("meshcore", "file", "meshcore-node", "repeater_name") == "Slot Zero"
+    assert not ops.file_path(svc._paths, Instance("r2")).exists() and not ops.file_path(svc._paths).exists()
+    assert svc._stored_param_value("meshcore", "file", "meshcore-node", "repeater_name",
+                                   inst=Instance("r2")) == "Slot Zero"                    # r2's own, untouched
 
 
 def test_an_instances_openhop_gps_switch_is_its_own(tmp_path):

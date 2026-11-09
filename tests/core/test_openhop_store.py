@@ -110,14 +110,13 @@ def _legacy_sources(svc):
 
 
 def _legacy_removed(svc):
-    """Every legacy source gone from the bytes: both secret files absent and none of the three keys left in the
-    stack config (gate 2 r2b, the second reader's F1: a value check cannot see what was never seeded)."""
+    """Every legacy row of the instance gone from the bytes: none of the three keys left in its own stack config
+    (gate 2 r2b, the second reader's F1: a value check cannot see what was never seeded). The shared legacy secret
+    files are never removed (DEC-W384p: test_w384p_the_shared_legacy_secret_files_are_neither_read_nor_removed)."""
     import tomllib
     stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"
     keys = list(tomllib.loads(stack.read_text())) if stack.exists() else []
-    return (not any(re.search(r"(^|_)(repeater_name|repeater_mode|airtime)$", k) for k in keys)
-            and not any(mi.secret_path(svc._paths, f).exists()
-                        for f in (mi.REPEATER_IDENTITY_FILENAME, mi.REPEATER_ADMIN_FILENAME)))
+    return not any(re.search(r"(^|_)(repeater_name|repeater_mode|airtime)$", k) for k in keys)
 
 
 def test_rows_scale_between_lhpc_and_openhop():
@@ -127,15 +126,16 @@ def test_rows_scale_between_lhpc_and_openhop():
 
 
 def test_ensure_moves_the_legacy_values_then_removes_them(env):
-    """gate 2 r2b sweep S1: the legacy values are STORED (stack config + secrets), read by ensure itself
-    under its lock, and every stored copy is gone afterwards (TOML keys and secret files)."""
+    """gate 2 r2b sweep S1: the instance's legacy rows are STORED (its stack config), read by ensure itself
+    under its lock, and every stored copy is gone afterwards; its key and password are its own (DEC-W384p)."""
     svc, helper = env
     _seed_legacy(svc)
     ops.ensure(svc, None, "10")
-    assert helper.file() == {
-        "repeater.node_name": "Relay 1", "repeater.mode": "monitor",
-        "duty_cycle.max_airtime_per_minute": 3000,
-        "repeater.security.admin_password": "Legacy-Pass-1234", "repeater.identity_key": KEY}
+    conf = helper.file()
+    minted = {k: conf.pop(k) for k in ("repeater.security.admin_password", "repeater.identity_key")}
+    assert conf == {"repeater.node_name": "Relay 1", "repeater.mode": "monitor",
+                    "duty_cycle.max_airtime_per_minute": 3000}
+    assert minted["repeater.identity_key"] != KEY and minted["repeater.security.admin_password"] != "Legacy-Pass-1234"
     assert helper.calls[-3:] == ["set", "sync", "check"]   # durable + usable before any legacy goes
     assert _legacy_removed(svc)
 
@@ -250,7 +250,7 @@ def test_remove_stack_keys_drops_both_stored_forms_only(env):
 
 def test_the_password_section_reads_openhops_file_once_it_exists(env):
     svc, helper = env
-    _secret(svc, mi.REPEATER_ADMIN_FILENAME, "Legacy-Pass-1234")
+    _secret(svc, mi.REPEATER_ADMIN_FILENAME, "Legacy-Pass-1234", "r2")      # K6: meshcore@r2's own file
     assert svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)["value"] == "Legacy-Pass-1234"   # before
     ops.ensure(svc, {"repeater_name": "Relay"}, "10")
     creds = svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)
@@ -763,3 +763,31 @@ def test_co12_a_same_boot_record_refuses_the_instances_start(env, monkeypatch):
     res, text = _repeater_start(svc, monkeypatch, [{"component": mm.NODE_ID, "band": "868",
                                                     "boot_id": "boot-now"}])
     assert not res.ok and "not verified" in text, text
+
+
+def test_w384p_the_shared_legacy_secret_files_are_neither_read_nor_removed(env):
+    # DEC-W384p: the pre-issue-5 repeater key and password in config/secrets/ are no instance's: meshcore@r2's
+    # first repeater start mints its own, and both legacy files keep their bytes (the CHANGELOG step moves them by
+    # hand). Its own legacy rows still move into its file.
+    svc, helper = env
+    _seed_legacy(svc)
+    legacy = [mi.secret_path(svc._paths, f) for f in (mi.REPEATER_IDENTITY_FILENAME, mi.REPEATER_ADMIN_FILENAME)]
+    before = [p.read_bytes() for p in legacy]
+    ops.ensure(svc, None, "10")
+    conf = helper.file()
+    assert conf["repeater.identity_key"] != KEY and conf["repeater.security.admin_password"] != "Legacy-Pass-1234"
+    assert len(conf["repeater.identity_key"]) == len(KEY)                 # a key of its own, minted
+    assert conf["repeater.node_name"] == "Relay 1"                        # its own row, moved
+    assert [p.read_bytes() for p in legacy] == before
+
+
+def test_w384p_the_changelog_move_keeps_the_repeater_identity(env):
+    # The CHANGELOG step: a 0.13.x box's repeater key and password moved to config/secrets/<rid>/ are that
+    # instance's on its first repeater start (and stay on disk); without them it mints its own.
+    svc, helper = env
+    _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY, "r2")
+    _secret(svc, mi.REPEATER_ADMIN_FILENAME, "Moved-Pass-12345", "r2")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    conf = helper.file()
+    assert (conf["repeater.identity_key"], conf["repeater.security.admin_password"]) == (KEY, "Moved-Pass-12345")
+    assert mi.secret_path(svc._paths, mi.REPEATER_IDENTITY_FILENAME, "r2").read_text().strip() == KEY

@@ -34,7 +34,7 @@ def test_a_meshcore_instances_page_shows_its_own_dashboard_password(web, tmp_pat
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
     monkeypatch.setattr(ops, "_helper", _helper)
-    _write(tmp_path / "state" / "openhop" / "config.yaml", json.dumps({KEY: "Slot0-Pass-5678"}))
+    _write(tmp_path / "state" / "r2" / "openhop" / "config.yaml", json.dumps({KEY: "Slot0-Pass-5678"}))   # K6: r2's own
     _write(tmp_path / "state" / "r4" / "openhop" / "config.yaml", json.dumps({KEY: "Inst-Pass-1234"}))
     c = web()
     [own] = _password_sections(c.get("/stacks?cfg=meshcore&radio=r4").get_data(as_text=True))

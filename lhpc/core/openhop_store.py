@@ -203,10 +203,10 @@ def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
     """Before a repeater-mode start: every one-store key present in openHop's file. `legacy` maps
     row name -> the pre-issue-5 stored value (or ''); None reads the stored values INSIDE the lock,
     so a save committed before it is migrated, never removed unread. Legacy copies are removed only
-    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact. K6: every instance
-    writes its own file; the shared legacy secret files (config/secrets/, pre-issue-5) are adopted by the FIRST
-    instance whose repeater start runs this (under the config lock) and then removed, so a second instance finds none
-    and mints its own (never one key on two radios); its legacy rows are removed from its own store."""
+    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact. K6 (DEC-W384p): every
+    instance writes its own file; its key and password come from its OWN config/secrets/<rid>/ files (where the
+    CHANGELOG step moves a 0.13.x box's), else are minted; the shared pre-issue-5 files in config/secrets/ are never
+    read nor removed (one key never lands on two radios). Its own legacy rows move from its own store into its file."""
     inst = _inst(svc, inst)
     with cfgmod.config_lock(svc._paths):
         why = blocked(svc, inst)
@@ -221,9 +221,11 @@ def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
         for name, (key, _scale) in ROWS.items():
             if have.get(key) is not None:
                 continue
-            value = legacy.get(name, "")
-            if not value and name in _SECRET_ROWS:
-                value = _mci.read_secret(svc._paths, _SECRET_ROWS[name])
+            rid = getattr(inst, "rid", "")
+            # a secret row: the instance's OWN file config/secrets/<rid>/ (where the CHANGELOG step moves a 0.13.x
+            # one), never the shared legacy one (DEC-W384p); kept on disk
+            value = ((_mci.read_secret(svc._paths, _SECRET_ROWS[name], rid) if rid else "") if name in _SECRET_ROWS
+                     else legacy.get(name, ""))
             if not value:
                 value = _mint(name, airtime_default)
             if value:
@@ -238,9 +240,7 @@ def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
         _helper(svc, "sync", str(file_path(svc._paths, _inst(svc, inst))))
         # usable by upstream's start rules (the host's own check, one seam) before any legacy goes
         _helper(svc, "check", str(file_path(svc._paths, _inst(svc, inst))))
-        # durable: now the legacy copies go, for every key the file holds
-        for filename in _SECRET_ROWS.values():
-            _mci.remove_secret(svc._paths, filename)
+        # durable: now the instance's own legacy rows go, for every key the file holds
         cfgmod.remove_stack_keys(svc._paths, STACK_ID, NODE_ID, [n for n in ROWS if n not in _SECRET_ROWS], inst=inst)
 
 
@@ -373,9 +373,8 @@ def chat_name_refusal(svc, current: dict, merged: dict, inst=None) -> str:
 
 
 def password_view(svc, comp, inst=None) -> dict | None:
-    """The Password section once openHop's file exists (it holds the dashboard password), else
-    None (before the first repeater-mode start the legacy secret file is shown, and for any other
-    component's password)."""
+    """The Password section once the instance's openHop file exists (it holds the dashboard password), else
+    None (before its first repeater-mode start, and for any other component's password)."""
     if not comp.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) or not file_path(svc._paths, _inst(svc, inst)).exists():
         return None
     try:
