@@ -956,6 +956,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service calls run for just that stack instead of all of them. On the whole page those calls
         run only for the rows rendered inline (`_row_inline`); a closed row carries what its summary
         and row actions show, and its body comes from the lazy route when it is opened."""
+        from lhpc.core import radio_start as _radio_start
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
@@ -1103,14 +1104,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
                     "view": {**service.config_view(stack.id, _inst.band if _inst else sband, rid=_view_rid(stack.id, "")),
-                             **_instances.settings_choice(service, stack.id, sband, _inst)},   # 7f, DEC-W40
+                             **_instances.settings_choice(service, stack.id, sband, _inst),   # 7f, DEC-W40
+                             "live_radios": _radio_start.view_radios(service._paths)},   # W3: the daemon's radio links
                     "config_groups": service.config_param_groups(stack.id, _inst.band if _inst else sband, _inst),
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
                     "needs_build": service.unbuilt_components(stack.id),
                     "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
-                    "daemon_params": service.daemon_params_view(stack.id, band, _view_rid(stack.id, band)),
+                    "daemon_params": service.daemon_params_view(stack.id, band, _dp_rid(stack.id, band)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
@@ -1578,15 +1580,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(make_response(jsonify(error=why), 404))
         return band
 
-    def _radio_arg(band: str) -> str:
-        """Item 16 (DEC-W53): the radio a daemon view is addressed to (`rid`), "" without one; a rid that is no enabled
-        radio of `band` is a 404 with the reason, never a 500."""
+    def _dp_rid(stack_id: str, band: str) -> str:
+        """W3: the radio a stack's daemon panel shows and saves: the page radio; for the daemon's own panel without
+        one, its first enabled radio (of `band` when the page names one). A client stack's panel stays its band's."""
         from lhpc.core import radio_start
-        rid = request.values.get("rid", "")
-        _key, why = radio_start.view_radio(service, band, rid)
-        if why:
-            abort(make_response(jsonify(error=why), 404))
-        return rid
+        rid = _view_rid(stack_id, band)
+        if rid or not service._is_daemon_target(stack_id):
+            return rid
+        return next((r for r, _n, b in radio_start.view_radios(service._paths) if not band or b == band), "")
 
     def _view_rid(stack_id: str, band: str) -> str:
         """The radio a stack's daemon panel shows: the page radio (W2's one selector, `?radio=rN`, every stack's panel:
@@ -2060,8 +2061,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        inst = _settings_copy(stack_id, request.form.get("radio", ""), refuse=True)
-        band = inst.band if inst else request.form.get("band", "")
+        inst = _settings_form_inst(stack_id)
+        band = inst.band if inst else ""
         view = service.config_view(stack_id, band)
         # Fold each submitted Config-page field (`c_`/`f_`, component-qualified when the name
         # collides) into the canonical API key (`name` or `component.name`; file keys carry the
@@ -2097,28 +2098,42 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             stack_id, values=values, band=band, remotes=remotes, inst=inst)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
-                                cfg=stack_id) + "#stack-settings-" + stack_id)
+        return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
+                        + "#stack-settings-" + stack_id)
 
     def _settings_copy(stack_id, rid, refuse=False):
-        """The listed copy `<stack>@<rid>` a Settings page or form names (instances.copy_of: its band is its radio's),
-        None for slot 0 (the routes' band= form field, as before); a form naming a radio without a copy, or a disabled
-        one, is a 404, a page falls back to slot 0."""
+        """The instance `<stack>@<rid>` a Settings page or form names (instances.copy_of: its band is its radio's), None
+        without a rid; a form naming a radio without an instance, or a disabled one, is a 404, a page shows its default."""
         copy, why = _instances.copy_of(service, stack_id, rid) if rid else (None, "")
         if why and refuse:
             abort(make_response(why, 404))
         return None if why else copy
 
-    def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
+    def _settings_form_inst(stack_id):
+        """W3 (13.2): the instance a Settings Save or Reset writes: its `radio`, required when the stack has one (no
+        hardware list, or the daemon: the global settings); a `band` field is a 400 by name, never a radio's stand-in."""
+        if "band" in request.form:
+            abort(make_response("a band field is refused: Settings name the radio (radio=rN)", 400))
+        rid = request.form.get("radio", "")
+        if not rid and _instances.settings_choice(service, stack_id, "")["radio"]:
+            abort(make_response(f"{stack_id}'s settings are per radio: name the radio (radio=rN)", 400))
+        return _settings_copy(stack_id, rid, refuse=True)
+
+    def _daemon_param_form():  # (band, rid, {PARAM: value}) from the submitted panel
+        """W3: `radio` names the radio (its band is its row's; unknown or disabled: a 404 by name); a `band` or `rid`
+        beside it, or a `rid` alone, is a 400. Without a radio, a client stack's panel keeps its `band` (pending)."""
         from lhpc.core import daemon_params as _dp
-        band = request.form.get("band", "")
-        return band, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
+        rid = request.form.get("radio", "")
+        if "rid" in request.form or (rid and "band" in request.form):
+            abort(make_response(jsonify(error="name the radio alone (radio=rN): no band or rid field"), 400))
+        band = _api_radio(rid) if rid else request.form.get("band", "")
+        return band, rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
     def _dp_back(stack_id: str, band: str, rid: str = ""):
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
         # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
         # `open=<stack_id>` forces the row and the anchor scrolls to it.
-        return redirect(url_for("stacks_overview", band=band or None, radio=rid or None,    # item 16, W2: its radio
+        return redirect(url_for("stacks_overview", band=None if rid else band or None, radio=rid or None,   # W3: its radio
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 
@@ -2338,8 +2353,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band, values = _daemon_param_form()
-        rid = _radio_arg(band)
+        band, rid, values = _daemon_param_form()
         result = service.save_daemon_params(stack_id, band, values, rid)
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, band, rid)
@@ -2350,8 +2364,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band, values = _daemon_param_form()
-        rid = _radio_arg(band)
+        band, rid, values = _daemon_param_form()
         save = service.save_daemon_params(stack_id, band, values, rid)   # persist first
         if not save.ok:
             flash(save.summary, "warn")
@@ -2370,8 +2383,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band = request.form.get("band", "")
-        rid = _radio_arg(band)
+        band, rid, _values = _daemon_param_form()
         result = service.reset_daemon_params(stack_id, band, rid)
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, band, rid)
@@ -2396,12 +2408,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        inst = _settings_copy(stack_id, request.form.get("radio", ""), refuse=True)
-        band = inst.band if inst else request.form.get("band", "")
-        result = service.reset_config(stack_id, band, inst)
+        inst = _settings_form_inst(stack_id)
+        result = service.reset_config(stack_id, inst.band if inst else "", inst)
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", band=None if inst else band or None, radio=inst.rid if inst else None,
-                                cfg=stack_id) + "#stack-settings-" + stack_id)
+        return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
+                        + "#stack-settings-" + stack_id)
 
     @app.get("/healthz")
     def healthz():

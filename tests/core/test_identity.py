@@ -1080,8 +1080,10 @@ def test_settings_and_cli_may_clear_an_identity(tmp_path, monkeypatch):
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
                     client.get("/stacks").get_data(as_text=True)).group(1)
-    client.post("/stacks/meshtastic/config",
-                data={"_csrf": tok, "p_node_name": "", "p_node_short": "SHCK"})
+    from lhpc.core import instances                        # W3: the form names the radio it shows
+    rid = instances.settings_choice(svc, "meshtastic", "")["radio"]
+    assert client.post("/stacks/meshtastic/config", data={"_csrf": tok, "radio": rid, "p_node_name": "",
+                                                          "p_node_short": "SHCK"}).status_code == 302
     assert svc._stored_param_value("meshtastic", "run", "meshtastic", "node_name") == ""
 
 

@@ -15,6 +15,17 @@
         suitable supply and cooling. LHPC does not measure or enforce the duty cycle. Warranty void if
         disregarded.</p>
     {% endif %}
+    {% if daemon_params.rid %}
+      {# W3 (W319/W320): the daemon's panel per radio, its Save/Apply/Reset name it (radio=) #}
+      <p><strong>Radio:</strong>
+        <span class="bandswitch">
+          {% for rid, _name, band in daemon_params.radios %}
+            <a class="{{ 'sel' if rid == daemon_params.rid else '' }}"
+               href="{{ url_for('stacks_overview', radio=rid, open=stack_id, dp=stack_id) }}#stack-daemon-params-{{ stack_id }}">{{ rid }} · {{ band }}</a>
+          {% endfor %}
+        </span>
+        <span class="muted">— each radio has its own daemon radio parameters</span></p>
+    {% else %}
       {# 433/868 chooser (like the Settings band switch); bands this stack can't use are disabled. #}
       <p><strong>Band:</strong>
         <span class="bandswitch">
@@ -28,10 +39,12 @@
           {% endfor %}
         </span>
         <span class="muted">— each band has its own daemon radio parameters</span></p>
+    {% endif %}
     <form method="post" class="dparams-form"
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="band" value="{{ daemon_params.band }}">
+      {% if daemon_params.rid %}<input type="hidden" name="radio" value="{{ daemon_params.rid }}">
+      {% else %}<input type="hidden" name="band" value="{{ daemon_params.band }}">{% endif %}
       <table class="paramgrid dptab">
         {% for r in daemon_params.rows %}
           <tr class="{% if r.app_owned %}greyed{% endif %}">

@@ -62,7 +62,7 @@
           {% for c in view.radio_choices %}
             {% if c.disabled %}<span class="disabled" title="{{ c.title }}">{{ c.label }}</span>
             {% else %}<a class="{{ 'sel' if c.sel else '' }}"
-               href="{{ url_for('stacks_overview', band=c.band or None, radio=c.radio or None, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ c.label }}</a>{% endif %}
+               href="{{ url_for('stacks_overview', radio=c.radio, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ c.label }}</a>{% endif %}
           {% endfor %}
         </span>
         <span class="muted">— each radio has its own config</span></p>
@@ -77,19 +77,16 @@
             <button type="submit" class="warnbtn">Restart now</button>
           </form></div>
       {% endif %}
-    {% elif view.bands %}
-      <p><strong>Band:</strong>
+    {% elif view.live_band and view.live_radios | length > 1 %}
+      {# W3 (W319/W320): the daemon's live block per radio, in place of the band switch #}
+      <p><strong>Radio:</strong>
         <span class="bandswitch">
-          {% for b in view.bands %}
-            <a class="{{ 'sel' if b == view.band else '' }}"
-               href="{{ url_for('stacks_overview', band=b, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ b }} MHz</a>
+          {% for rid, _name, band in view.live_radios %}
+            <a class="{{ 'sel' if view.radios and rid == view.radios[0].rid else '' }}"
+               href="{{ url_for('stacks_overview', radio=rid, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ rid }} · {{ band }}</a>
           {% endfor %}
         </span>
-        {% if view.live_band %}
-          <span class="muted">— select the band to tune live below</span>
-        {% else %}
-          <span class="muted">— each band has its own config (frequencies, pins…)</span>
-        {% endif %}</p>
+        <span class="muted">— select the radio to tune live below</span></p>
     {% endif %}
 
     {% if view.radios %}
@@ -178,7 +175,6 @@
     {% if view.live_band %}<details class="advcfg"><summary>Repository &amp; RadioLib (applies to both bands)</summary>{% endif %}
     <form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="band" value="{{ view.band }}">
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
 
       {% if config_groups %}
@@ -259,7 +255,6 @@
 
     <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act cfgreset">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="band" value="{{ view.band }}">
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
       <button type="submit">Reset to defaults</button>
     </form>

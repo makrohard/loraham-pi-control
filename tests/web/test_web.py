@@ -1085,7 +1085,7 @@ def test_config_page_post_persists_scoped_and_reloads(tmp_path, web, csrf):
     m, c = _collide_app(web, tmp_path)
     tok = csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     r = c.post("/stacks/ostack2/config",
-               data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+               data={"_csrf": tok, "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                      "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     assert r.status_code in (200, 302)
     from lhpc.core.probes.backends import FakeSystem
@@ -1105,7 +1105,7 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch, web, cs
     m, c = _collide_app(web, tmp_path)
     tok = csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     c.post("/stacks/ostack2/config",
-           data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+           data={"_csrf": tok, "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                  "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     seen = {}
     def stub(self, stack, comp, cfg, band="", **_scope):
@@ -1178,7 +1178,7 @@ def test_settings_embedded_post_persists(tmp_path, web, csrf):                  
     from lhpc.core.config import load_stack_config
     c = web()
     tok = csrf(c)
-    r = c.post("/stacks/chat/config", data={"_csrf": tok, "band": "", "f_call": "XX0XXA-7"})
+    r = c.post("/stacks/chat/config", data={"_csrf": tok, "radio": "r1", "f_call": "XX0XXA-7"})
     assert r.status_code in (200, 302)
     from lhpc.core.commands import Instance              # K6: chat@r1's own file (the default list's 433 radio)
     assert load_stack_config(Paths(runtime_root=tmp_path), "chat", inst=Instance("r1")).get("file_call") == "XX0XXA-7"
@@ -1218,16 +1218,16 @@ def test_settings_partial_loads_and_renders(tmp_path):                       # (
 
 # --- Settings reset button: exact "Reset to defaults" text for every stack/band --------------
 
-def test_reset_post_submits_band_and_redirects_to_settings(web, csrf):         # (3)
+def test_reset_post_names_the_radio_and_redirects_to_settings(web, csrf):         # (3)
     c = web()
-    tok = csrf(c)             # selected-band reset semantics preserved
-    r = c.post("/stacks/kiss/config/reset", data={"_csrf": tok, "band": "868"})
+    tok = csrf(c)             # W3: the selected radio's reset
+    r = c.post("/stacks/kiss/config/reset", data={"_csrf": tok, "radio": "r2"})
     assert r.status_code in (302, 303)
     loc = r.headers["Location"]
-    assert "band=868" in loc and "cfg=kiss" in loc
+    assert "radio=r2" in loc and "cfg=kiss" in loc and "band=" not in loc
     assert loc.endswith("#stack-settings-kiss")              # back to the opened Settings section
     # CSRF still enforced on the reset route
-    assert c.post("/stacks/kiss/config/reset", data={"band": "868"}).status_code == 400
+    assert c.post("/stacks/kiss/config/reset", data={"radio": "r2"}).status_code == 400
 
 
 # --- Self-Update: footer indicator, page, apply flow, Apps entry -----------------------------
@@ -2569,7 +2569,7 @@ def test_the_settings_card_refusal_does_not_ask_for_two_saves(tmp_path, web, csr
     c = web()
     tok = csrf(c)
     svc = ControllerService(paths=Paths(runtime_root=tmp_path))
-    form = {"_csrf": tok}
+    form = {"_csrf": tok, "radio": "r2"}                                    # W3: the 868 radio's settings
     for f in svc.config_param_fields("meshcore", ""):
         if f["flag"]:
             continue

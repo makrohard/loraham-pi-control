@@ -28,7 +28,8 @@ def box(web, tmp_path, csrf):
     token = csrf(c, "/stacks?dp=daemon")
 
     def post(**form):
-        return c.post("/stacks/daemon/daemon-params", data={"_csrf": token, "band": "433", **form})
+        band = {} if "radio" in form else {"band": "433"}               # W3: a radio's save names the radio alone
+        return c.post("/stacks/daemon/daemon-params", data={"_csrf": token, **band, **form})
     return post, tmp_path
 
 
@@ -47,7 +48,7 @@ def test_a_save_is_judged_on_the_list_its_lock_reads(box, monkeypatch):
             radios_fixture.write(tmp_path, _rows(False))
             yield
     monkeypatch.setattr(cfgmod, "config_lock", after_another_writer)
-    post(rid="r2", dp_POWER="20")
+    post(radio="r2", dp_POWER="20")
     assert _dp(tmp_path, "r2") == {}
 
 
@@ -55,7 +56,7 @@ def test_a_radio_keeps_its_source_default_over_the_bands_value(box):
     # B2: the band saves SF 9; r2 set to the source default (12) keeps 12, never the band's 9
     post, tmp_path = box
     post(dp_SF="9")
-    post(rid="r2", dp_SF="12")
+    post(radio="r2", dp_SF="12")
     assert _dp(tmp_path, "r2") == {"SF": "12"}
 
 
@@ -64,5 +65,5 @@ def test_a_value_posted_as_shown_stays_inherited(box):
     # change reaches r2
     post, tmp_path = box
     post(dp_FREQ="433.600")
-    post(rid="r2", dp_FREQ="433.600", dp_SF="10")
+    post(radio="r2", dp_FREQ="433.600", dp_SF="10")
     assert _dp(tmp_path, "r2") == {"SF": "10"}

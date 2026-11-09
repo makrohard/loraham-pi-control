@@ -38,7 +38,7 @@ def _row(tmp_path, rid):
 
 def test_a_save_for_one_radio_writes_its_row_alone_and_keeps_the_reserved_ids(box):
     c, post, _fake, tmp_path = box
-    r = post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_FREQ="433.600")
+    r = post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="433.600")
     assert r.status_code == 302
     assert dict(_row(tmp_path, "r2").dp) == {"FREQ": "433.600"} and _row(tmp_path, "r1").dp == ()
     assert radios.load(Paths(runtime_root=tmp_path)).retired == ("r9",)
@@ -47,10 +47,10 @@ def test_a_save_for_one_radio_writes_its_row_alone_and_keeps_the_reserved_ids(bo
 
 def test_a_blank_value_clears_the_radios_own_value_and_reset_clears_them_all(box):
     _c, post, _fake, tmp_path = box
-    post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_FREQ="433.600", dp_SF="9")
-    post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_FREQ="", dp_SF="9")
+    post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="433.600", dp_SF="9")
+    post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="", dp_SF="9")
     assert dict(_row(tmp_path, "r2").dp) == {"SF": "9"}
-    post("/stacks/daemon/daemon-params/reset", band="433", rid="r2")
+    post("/stacks/daemon/daemon-params/reset", radio="r2")
     assert _row(tmp_path, "r2").dp == ()
 
 
@@ -63,20 +63,20 @@ def test_a_busy_hardware_list_changes_nothing(box, monkeypatch):
         raise cfgmod.ConfigLockBusy("held by another save")
         yield
     monkeypatch.setattr(cfgmod, "config_lock", busy)
-    post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_FREQ="433.600")
+    post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="433.600")
     assert (tmp_path / "config" / "radios.toml").read_bytes() == before
 
 
 def test_an_invalid_value_is_refused_and_writes_nothing(box):
     _c, post, _fake, tmp_path = box
     before = (tmp_path / "config" / "radios.toml").read_bytes()
-    post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_SF="99")
+    post("/stacks/daemon/daemon-params", radio="r2", dp_SF="99")
     assert (tmp_path / "config" / "radios.toml").read_bytes() == before
 
 
 def test_the_panel_shows_each_radios_own_values_and_every_radio_to_choose(box):
     _c, post, _fake, tmp_path = box
-    post("/stacks/daemon/daemon-params", band="433", rid="r2", dp_FREQ="433.600")
+    post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="433.600")
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     v2, v1 = svc.daemon_params_view("daemon", "433", "r2"), svc.daemon_params_view("daemon", "433", "r1")
@@ -88,7 +88,7 @@ def test_the_panel_shows_each_radios_own_values_and_every_radio_to_choose(box):
 
 def test_apply_for_one_radio_sets_that_radios_daemon_only(box):
     _c, post, fake, _tmp_path = box
-    post("/stacks/daemon/daemon-params/apply", band="433", rid="r2", dp_FREQ="433.600")
+    post("/stacks/daemon/daemon-params/apply", radio="r2", dp_FREQ="433.600")
     assert {path for path, _payload in fake.sent} == {"/tmp/loraconf-r2.sock"}
     assert ("/tmp/loraconf-r2.sock", b"SET FREQ=433.600\n") in fake.sent
 
@@ -98,7 +98,7 @@ def test_apply_for_one_radio_sets_that_radios_daemon_only(box):
 def test_a_rid_that_is_no_enabled_radio_of_the_band_is_a_404_and_writes_nothing(box, path):
     _c, post, _fake, tmp_path = box
     before = (tmp_path / "config" / "radios.toml").read_bytes()
-    r = post(path, band="433", rid="r9", dp_FREQ="433.600")
+    r = post(path, radio="r9", dp_FREQ="433.600")
     assert (r.status_code, r.get_json()) == (404, {"error": "r9 is not a radio of the hardware list"})
     assert (tmp_path / "config" / "radios.toml").read_bytes() == before
 
