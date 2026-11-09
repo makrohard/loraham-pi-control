@@ -916,10 +916,13 @@ def test_remote_override_accepts_safe(tmp_path):
                           "git@github.com:x/y.git")   # scp-style ssh allowed
 
 
-def test_stack_config_path_rejected_for_bad_band(tmp_path):
+def test_stack_config_path_rejected_for_a_bad_radio_id(tmp_path):
+    # K6: the store is keyed by the instance's radio id (the band is no key any more): a traversal in it is refused
+    from types import SimpleNamespace
+
     from lhpc.core.config import _stack_config_path
     with pytest.raises(validators.ValidationError):
-        _stack_config_path(Paths(runtime_root=tmp_path), "kiss", "../../x")
+        _stack_config_path(Paths(runtime_root=tmp_path), "kiss", "", SimpleNamespace(rid="../../x"))
 
 
 def test_under_rejects_symlink_escape(tmp_path):

@@ -60,9 +60,10 @@ def test_a_radio_id_key_is_a_radio_id_only(tmp_path):
     import pytest
     from lhpc.core import validators
     paths = Paths(runtime_root=tmp_path)
+    from types import SimpleNamespace                      # K6: the radio id keys the store (not the band)
     for bad in ("r0", "r100", "r1/../x", "R1", "x"):
         with pytest.raises(validators.ValidationError):
-            cfgmod.load_stack_config(paths, "chat", bad)
+            cfgmod.load_stack_config(paths, "chat", inst=SimpleNamespace(rid=bad))
 
 
 def test_a_listed_meshcore_instance_mints_its_own_identity_never_slot0s(tmp_path):

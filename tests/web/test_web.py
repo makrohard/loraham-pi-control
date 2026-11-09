@@ -507,11 +507,12 @@ def test_config_path_cannot_escape_via_band_or_id(tmp_path):
     from lhpc.core.paths import Paths
     paths = Paths(runtime_root=tmp_path)
     stacks = (tmp_path / "config" / "stacks").resolve()
-    # A traversal band or id must be rejected, never resolve outside config/stacks/.
-    for sid, band in [("daemon", "../../etc"), ("../../evil", "433"), ("a/b", ""),
-                      ("daemon", "433/../../x")]:
+    # A traversal radio id or stack id must be rejected, never resolve outside config/stacks/ (K6: the radio
+    # id keys the store, the band is no key).
+    from types import SimpleNamespace
+    for sid, rid in [("daemon", "../../etc"), ("../../evil", "r1"), ("a/b", ""), ("daemon", "r1/../../x")]:
         with _pytest.raises(ValidationError):
-            _stack_config_path(paths, sid, band)
+            _stack_config_path(paths, sid, "", SimpleNamespace(rid=rid))
     # A legitimate write stays inside config/stacks/.
     p = save_stack_config(paths, "kiss", {"x": "1"}, "868")
     assert stacks in p.resolve().parents
@@ -1085,7 +1086,11 @@ def test_config_page_post_persists_scoped_and_reloads(tmp_path, web, csrf):
                data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                      "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     assert r.status_code in (200, 302)
-    cfg = cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "ostack2")
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from stores_fixture import inst_of                  # K6: the band caller's save is its instance's own file
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path), manifest_path=m)
+    cfg = cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "ostack2", inst=inst_of(svc, "ostack2"))
     assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"    # scoped run keys
     assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"    # scoped file keys
     assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
@@ -1173,7 +1178,8 @@ def test_settings_embedded_post_persists(tmp_path, web, csrf):                  
     tok = csrf(c)
     r = c.post("/stacks/chat/config", data={"_csrf": tok, "band": "", "f_call": "XX0XXA-7"})
     assert r.status_code in (200, 302)
-    assert load_stack_config(Paths(runtime_root=tmp_path), "chat").get("file_call") == "XX0XXA-7"
+    from lhpc.core.commands import Instance              # K6: chat@r1's own file (the default list's 433 radio)
+    assert load_stack_config(Paths(runtime_root=tmp_path), "chat", inst=Instance("r1")).get("file_call") == "XX0XXA-7"
     # embedded form persists (unique config-file param -> flat `file_<name>` key)
 
 

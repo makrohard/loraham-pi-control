@@ -11,6 +11,7 @@ import pytest
 
 from lhpc.core import config as cfgmod
 from lhpc.core import rflog
+from lhpc.core.commands import Instance
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -20,13 +21,18 @@ def _svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def _store(svc, sid, band=""):
-    return cfgmod.load_stack_config(svc._paths, sid, band)
+def _store(svc, sid, rid=""):
+    # K6: an instance's own file; no rid: the global <sid>.toml
+    return cfgmod.load_stack_config(svc._paths, sid, inst=Instance(rid) if rid else None)
 
 
-def _live(monkeypatch, svc, sid, band):
-    monkeypatch.setattr(type(svc), "stack_running", lambda self, s: s == sid)
-    monkeypatch.setattr(type(svc), "running_band", lambda self, s, d="": band if s == sid else d)
+def _live(monkeypatch, svc, sid, rid):
+    # the instance `sid@rid` runs (its own process; K6: a save of an instance asks about that instance)
+    from lhpc.core import instances
+    real = instances.instance_runs
+    monkeypatch.setattr(instances, "instance_runs",
+                        lambda s, c, i, b="": (getattr(i, "rid", "") == rid and s.stack_of(c.id) == sid) or (
+                            real(s, c, i, b) if getattr(i, "rid", "") != rid else False))
 
 
 def _logs(tmp_path, name, text=""):
@@ -36,56 +42,55 @@ def _logs(tmp_path, name, text=""):
     return d / name
 
 
-# ---- the band-less switch ---------------------------------------------------------------
+# ---- the switch, per instance (K6, DEC-W384k) ---------------------------------------------
 
-def test_a_banded_save_changes_only_the_bandless_store(tmp_path):
+def test_a_band_callers_switch_save_is_its_instances_own(tmp_path):
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("kiss", values={"rx_only": "on"}, band="433").ok
-    banded = cfgmod._stack_config_path(svc._paths, "kiss", "433").read_text()
     assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok
-    assert _store(svc, "kiss")["rf_log"] == "off"
-    assert cfgmod._stack_config_path(svc._paths, "kiss", "433").read_text() == banded
+    assert _store(svc, "kiss", "r1") == {"rx_only": "on", "rf_log": "off"}          # kiss@r1's own file, both
+    assert "rf_log" not in _store(svc, "kiss", "r2") and "rf_log" not in _store(svc, "kiss")
 
 
-def test_cli_and_rflog_paths_store_the_same_value_in_the_same_file(tmp_path):
+def test_cli_and_rflog_paths_set_every_instance_in_the_same_files(tmp_path):
     a, b = _svc(tmp_path / "a"), _svc(tmp_path / "b")
-    assert a.save_config_bundle("kiss", values={"rf_log": "off"}).ok       # lhpc config kiss rf_log off
-    assert b.set_rflog("graywolf", "off").ok                                # the graywolf log page
-    pa, pb = cfgmod._stack_config_path(a._paths, "kiss", ""), cfgmod._stack_config_path(b._paths, "kiss", "")
-    assert pa.read_text() == pb.read_text() and _store(b, "kiss")["rf_log"] == "off"
-    assert "rf_log" not in _store(b, "graywolf")                            # never the proxy's store
-    assert not cfgmod._stack_config_path(b._paths, "graywolf", "").exists()
+    assert a.set_rflog("graywolf", "off").ok                                 # lhpc rflog graywolf off (kiss's store)
+    assert b.set_rflog("graywolf", "off").ok                                 # the graywolf log page
+    for rid in ("r1", "r2"):
+        pa = cfgmod._stack_config_path(a._paths, "kiss", "", Instance(rid))
+        pb = cfgmod._stack_config_path(b._paths, "kiss", "", Instance(rid))
+        assert pa.read_text() == pb.read_text() and _store(b, "kiss", rid)["rf_log"] == "off"
+    assert all("rf_log" not in _store(b, "graywolf", rid) for rid in ("", "r1", "r2"))   # never the proxy's store
 
 
-def test_the_switch_survives_a_band_change(tmp_path):
+def test_each_instance_has_its_own_switch(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok
-    assert svc.stack_config("kiss", "868")["rf_log"] == "off"
-    # The resolver is what spawn reads per band; there is no public per-band accessor for a
-    # single param, and the line above already proves the store through the public view.
-    assert svc._resolved_param_value("kiss", "run", "loraham-kiss-tnc", "rf_log", "868") == "off"
-    assert svc.rflog_switch("graywolf")["value"] == "off"
+    assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok    # kiss@r1 alone
+    assert svc.stack_config("kiss", "433")["rf_log"] == "off" and svc.stack_config("kiss", "868")["rf_log"] == "on"
+    assert svc._resolved_param_value("kiss", "run", "loraham-kiss-tnc", "rf_log", "868") == "on"
+    assert svc.rflog_switch("graywolf")["value"] == "mixed"
+    assert svc.set_rflog("graywolf", "off").ok and svc.rflog_switch("graywolf")["value"] == "off"
 
 
 def test_on_is_the_default_and_clears_the_key(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("kiss", values={"rf_log": "off"}).ok
-    assert svc.save_config_bundle("kiss", values={"rf_log": "on"}).ok
-    assert "rf_log" not in _store(svc, "kiss")                              # no third state
+    assert svc.set_rflog("graywolf", "off").ok
+    assert svc.set_rflog("graywolf", "on").ok
+    assert all("rf_log" not in _store(svc, "kiss", rid) for rid in ("r1", "r2"))   # no third state
     assert svc.rflog_switch("graywolf")["value"] == "on"
 
 
-def test_a_file_param_owner_stores_its_file_key_bandless(tmp_path):
+def test_a_file_param_owner_stores_its_file_key_in_its_instances_file(tmp_path):
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("meshcore", values={"file_rf_log": "off"}).ok
-    assert _store(svc, "meshcore")["file_rf_log"] == "off"
+    assert _store(svc, "meshcore", "r2")["file_rf_log"] == "off"                 # meshcore@r2 (868)
     assert svc.file_config_values("meshcore")["rf_log"] == "off"
     assert svc.rflog_switch("meshcore")["value"] == "off"
 
 
-def test_the_daemon_switch_is_read_per_band_at_spawn(tmp_path):
+def test_the_daemon_switch_is_read_per_radio_at_spawn(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("daemon", values={"rf_log": "off"}).ok
+    assert svc.set_rflog("daemon", "off").ok                                     # every radio's daemon
     for band in ("433", "868"):
         assert svc._resolved_param_value("daemon", "run", "loraham-daemon", "rf_log", band) == "off"
 
@@ -94,33 +99,32 @@ def test_a_bad_value_is_refused(tmp_path):
     svc = _svc(tmp_path)
     assert not svc.set_rflog("graywolf", "maybe").ok
     assert not svc.set_rflog("chat", "off").ok
-    assert "rf_log" not in _store(svc, "kiss") and "rf_log" not in _store(svc, "graywolf")
+    assert all("rf_log" not in _store(svc, s, rid) for s in ("kiss", "graywolf") for rid in ("", "r1", "r2"))
 
 
-# ---- the restart marker -----------------------------------------------------------------
+# ---- the restart marker, per instance ------------------------------------------------------
 
-def test_a_cross_band_edit_of_the_switch_marks_the_live_band(tmp_path, monkeypatch):
+def test_a_live_instances_switch_edit_marks_that_instance(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
-    assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok
-    m = svc.restart_required("kiss")
+    _live(monkeypatch, svc, "kiss", "r2")
+    assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="868").ok    # kiss@r2's own switch
+    m = svc.restart_required("kiss@r2")
     assert m is not None and m["params"] == ["rf_log"] and m["band"] == "868"
     assert svc.rflog_switch("graywolf")["restart_required"] is True
 
 
-def test_a_mixed_cross_band_save_names_only_the_bandless_param(tmp_path, monkeypatch):
+def test_another_instances_edit_marks_nothing(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
-    assert svc.save_config_bundle("kiss", values={"rf_log": "off", "rx_only": "on"}, band="433").ok
-    m = svc.restart_required("kiss")
-    assert m is not None and m["params"] == ["rf_log"] and m["band"] == "868"
+    _live(monkeypatch, svc, "kiss", "r2")
+    assert svc.save_config_bundle("kiss", values={"rf_log": "off", "rx_only": "on"}, band="433").ok   # kiss@r1
+    assert svc.restart_required("kiss") is None
 
 
-def test_a_same_band_save_marks_every_changed_restart_param(tmp_path, monkeypatch):
+def test_a_live_instances_save_marks_every_changed_restart_param(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
+    _live(monkeypatch, svc, "kiss", "r2")
     assert svc.save_config_bundle("kiss", values={"rf_log": "off", "rx_only": "on"}, band="868").ok
-    m = svc.restart_required("kiss")
+    m = svc.restart_required("kiss@r2")
     assert m is not None and m["params"] == ["rf_log", "rx_only"] and m["band"] == "868"
 
 
@@ -128,21 +132,14 @@ def test_switching_every_log_off_and_on_again_leaves_no_marker(tmp_path, monkeyp
     # F-M1 (hardware matrix 2026-09-25): `lhpc rflog --all off` then `on` left the running
     # stacks flagged although they run with exactly the saved value again.
     svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
+    _live(monkeypatch, svc, "kiss", "r2")
     before = svc.rflog_switch("graywolf")["value"]                              # what kiss launched with
     other = "off" if before == "on" else "on"
     assert svc.set_rflog_all(other).ok
-    assert svc.restart_required("kiss")["params"] == ["rf_log"]
+    assert svc.restart_required("kiss@r2")["params"] == ["rf_log"]
     assert svc.set_rflog_all(before).ok
     assert svc.restart_required("kiss") is None
     assert svc.rflog_switch("graywolf")["restart_required"] is False
-
-
-def test_a_cross_band_edit_of_a_banded_param_alone_marks_nothing(tmp_path, monkeypatch):
-    svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
-    assert svc.save_config_bundle("kiss", values={"rx_only": "on"}, band="433").ok
-    assert svc.restart_required("kiss") is None
 
 
 # ---- the viewer --------------------------------------------------------------------------
@@ -205,21 +202,24 @@ def test_the_shown_band_is_the_arg_else_the_files_band_else_the_stacks_own(tmp_p
 # ---- every stack at once -----------------------------------------------------------------
 
 def test_set_rflog_all_writes_every_owner_once_and_marks_each_running_one(tmp_path, monkeypatch):
+    # K6 (DEC-W384k): every owner once per instance (its own file), one result line per owner
+    from lhpc.core.commands import stack_instances
     svc = _svc(tmp_path)
-    _live(monkeypatch, svc, "kiss", "868")
+    _live(monkeypatch, svc, "kiss", "r2")
     saved = []
     real = ControllerService.save_config_bundle
     monkeypatch.setattr(ControllerService, "save_config_bundle",
-                        lambda self, target, **kw: saved.append(target) or real(self, target, **kw))
+                        lambda self, target, **kw: saved.append((target, kw["inst"].rid)) or real(self, target, **kw))
     res = svc.set_rflog_all("off")
     owners = list(dict.fromkeys(e.owner for e in rflog.REGISTRY))
-    assert res.ok and saved == owners and len(res.details) == len(owners)
+    every = [(o, i.rid) for o in owners for i in stack_instances(svc.stack(o), svc._paths)]
+    assert res.ok and saved == every and len(res.details) == len(owners)
     for e in rflog.REGISTRY:
-        assert _store(svc, e.owner)[e.key] == "off"
-    assert svc.restart_required("kiss")["params"] == ["rf_log"]
-    assert svc.restart_required("daemon") is None                              # not running: no marker
+        assert all(_store(svc, e.owner, i.rid)[e.key] == "off" for i in stack_instances(svc.stack(e.owner), svc._paths))
+    assert svc.restart_required("kiss@r2")["params"] == ["rf_log"]
+    assert svc.restart_required("kiss@r1") is None and svc.restart_required("daemon") is None   # not running
     bad = svc.set_rflog_all("maybe")
-    assert not bad.ok and bad.data["reason"] == "invalid-choice" and saved == owners
+    assert not bad.ok and bad.data["reason"] == "invalid-choice" and saved == every
 
 
 def test_logging_state_is_on_off_or_mixed(tmp_path):

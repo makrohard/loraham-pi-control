@@ -2078,7 +2078,10 @@ def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
     sid = validators.path_component(stack_id, field="stack id")
-    key = validators.path_component(inst.rid, field="radio id") if getattr(inst, "rid", "") else ""
+    key = str(getattr(inst, "rid", "") or "")
+    from .commands import _RID_RE
+    if key and not _RID_RE.fullmatch(key):
+        raise validators.ValidationError(f"radio id must be r1..r99, got {key!r}")
     name = f"{sid}@{key}.toml" if key else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.

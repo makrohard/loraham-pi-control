@@ -1613,8 +1613,9 @@ class ParamsConfigMixin:
         rid = getattr(inst, "rid", "")
         # K6: an instance's save asks about THAT instance: its own process or record, else (below) the presented
         # command / GUI fallback on its band (the interactive marker is per stack until it is per instance)
-        if (_instances.instance_runs(self, main, inst, inst.band) if rid and main is not None
-                else self.stack_running(stack_id)):
+        if (_instances.instance_runs(self, main, inst, inst.band)
+                or (self.stack_running(stack_id) and _instances.unclaimed(self, main))      # fail-safe: maybe this one
+                if rid and main is not None and main.process is not None else self.stack_running(stack_id)):
             return True, (inst.band if rid else self._effective_band(stack_id, ""))
         # An INTERACTIVE main whose command has been prepared and presented is a live consumer too:
         # the operator can still run it, and it carries the identity that was generated FOR it
