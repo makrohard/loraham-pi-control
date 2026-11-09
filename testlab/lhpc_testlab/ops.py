@@ -199,15 +199,18 @@ def reset(svc) -> ActionResult:
         except Exception as exc:
             stop_failed.append(f"{s.id} ({exc})")
     if stop_failed:
-        return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}.",
-                            details=[*details, f"  stop failed: {', '.join(stop_failed)}"])
-    if stopped:
+        details.append(f"  stop failed: {', '.join(stop_failed)}")
+    elif stopped:
         details.append(f"  stopped {stopped} running stack(s)")
-    foreign = _foreign_live_sockets()              # W389 (2): before anything of this root is cleared
+    # W389 (2), before anything of this root is cleared. Checked on a failed stop too: a foreign daemon on the shared
+    # sockets reads as this root's running stack, which this root then cannot stop.
+    foreign = _foreign_live_sockets()
     if foreign:
         return ActionResult(False, "Reset refused — another daemon serves " + ", ".join(foreign)
                             + ": a second lab root (or a real daemon) on this host shares the radio sockets; stop it "
                             "first.", details=[*details, *(f"  live foreign socket: {p}" for p in foreign)])
+    if stop_failed:
+        return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}.", details=details)
     _clear_runtime_state(svc)                      # clean baseline (no surviving state/config)
     boot = svc.bootstrap(apply=True)
     details.append(f"  bootstrap: {'ok' if boot.ok else boot.summary}")

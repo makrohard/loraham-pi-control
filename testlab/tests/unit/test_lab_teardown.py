@@ -105,6 +105,14 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         r = ops.reset(svc)
         assert not r.ok and str(sockdir / "loraconf-r1.sock") in r.summary, r.summary
         assert "loraconf-r2.sock" not in r.summary                   # a stale file is no foreign daemon
+        # The foreign daemon reads as this root's running stack, which this root cannot stop: still named.
+        from types import SimpleNamespace
+        first = svc.stacks()[0].id
+        monkeypatch.setattr(svc, "stack_running", lambda sid: sid == first)
+        monkeypatch.setattr(svc, "stop", lambda *a, **k: SimpleNamespace(ok=False))
+        r = ops.reset(svc)
+        assert not r.ok and str(sockdir / "loraconf-r1.sock") in r.summary, r.summary
+        assert f"stop failed: {first}" in "\n".join(r.details)
     finally:
         live.close()
         stop_lab_fakes(tmp_path)
