@@ -163,7 +163,13 @@ def test_meshcore_real_process_over_fake_868(chain):
     run_lhpc(chain.env, "build", "meshcore", "--yes", check=True, timeout=900)
     r = run_lhpc(chain.env, "stack", "start", named(chain.env, "meshcore"), "--yes", timeout=300)
     try:
-        assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
+        # DEC-W384aq: a failed start names itself: the whole `stack start` output and the gps feed's own log
+        # (its exit reason), never a cut repr
+        gps_logs = sorted((chain.root / "logs").glob("start-meshcore-gps-*.log"))
+        gps_name = gps_logs[-1].name if gps_logs else "no gps feed log"
+        gps_tail = gps_logs[-1].read_text(errors="replace")[-2000:] if gps_logs else ""
+        assert r.returncode == 0, (f"stack start meshcore failed\n--- stdout\n{r.stdout}\n--- stderr\n{r.stderr}\n"
+                                   f"--- {gps_name}\n{gps_tail}")
         port = port_of(chain.env, "meshcore", MESHCORE_COMPANION)          # meshcore@<rid>'s own (DEC-W348)
         assert wait_tcp(port, 180), f"MeshCore companion never opened TCP {port}"
         # chat mode runs no repeater and therefore no plugin manager (the repeater roles are
