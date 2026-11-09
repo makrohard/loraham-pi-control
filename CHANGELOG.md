@@ -8,8 +8,8 @@
   `lhpc build`'s web client step.
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
   starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
-- USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
-  setup as one command; a start is refused by name when the stick or its access is missing.
+- USB radios (Meshstick and PINE64 adapter at 868 MHz, CH341A + RFM98PW stick at 433 MHz): Hardware adds and binds
+  a stick, offers the USB setup as one command; a start is refused by name when the stick or its access is missing.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
   radio id (`lhpc stack stop daemon --radio rN`).
 - LoRaHAM daemon v1.4.0 (3ffee009, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA

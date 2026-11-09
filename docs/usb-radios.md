@@ -17,15 +17,11 @@ hardware list (`config/radios.toml`), added on the console's *Add Hardware* page
 | stick | chip | band | model in LHPC | state in this release |
 |---|---|---|---|---|
 | ELECROW Meshstick | SX1262 + TCXO | 868 MHz | `meshstick-1262` | supported |
-| [PINE64 USB LoRa adapter](https://pine64.org/documentation/Pinedio/USB_adapter/) (Pinedio) | SX1262 | see the adapter's label | `pinedio-usb-1262` | not yet: needs LoRaHAM daemon 1.4.0 |
-| CH341A + RFM98PW, a self-built stick ([build guide](usb-radio-433-build.md)) | SX127x (RFM98PW, high power) | 433 MHz | `ch341-rfm98pw-433` | not yet: needs LoRaHAM daemon 1.4.0 |
+| [PINE64 USB LoRa adapter](https://pine64.org/documentation/Pinedio/USB_adapter/) (Pinedio) | SX1262 | 868 MHz | `pinedio-usb-1262` | supported |
+| CH341A + RFM98PW, a self-built stick ([build guide](usb-radio-433-build.md)) | SX127x (RFM98PW, high power) | 433 MHz | `ch341-rfm98pw-433` | supported |
 
-A model marked *not yet* is not offered until the release that ships it lists it in the
-[changelog](../CHANGELOG.md).
-
-**PINE64 adapter:** PINE64's page above is the reference for its wiring and drivers. Its reset and
-BUSY lines sit on the CH341's RST# and SLCT pins, not on the D0–D7 lines that the Meshstick uses. That
-is why it needs a newer daemon than the Meshstick does.
+**PINE64 adapter:** PINE64's page above is the reference for its wiring and drivers. Its IRQ and
+BUSY lines sit on the CH341's INT# and SLCT status pins, not on the D0–D7 lines the other sticks use.
 
 ## One USB id for every stick
 
