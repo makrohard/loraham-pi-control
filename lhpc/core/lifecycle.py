@@ -637,11 +637,7 @@ class Lifecycle:
             return True                         # process is gone
         except OSError:
             return False                        # transient read failure — not proof
-        try:
-            tasks = os.listdir(f"/proc/{pid}/task")
-        except OSError:
-            tasks = None                        # unreadable: not proof (procident.pid_dead fails closed)
-        return procident.pid_dead(pid, data, tasks)     # G1-ZB1: a Z leader with a live thread is alive
+        return procident.pid_dead(pid, data, procident.task_list(pid))   # G1-ZB1: a Z leader with a live thread lives
 
     def _terminate_unobserved(self, pid: int, launch_ident: dict | None = None,
                               kill_after: float = 0.0, sleep=time.sleep) -> bool:
@@ -724,10 +720,10 @@ class Lifecycle:
                 return None                     # unreadable is no proof that it ended
             try:
                 rest = stat[stat.rindex(")") + 2:].split()
-                state, pg, se, start = rest[0], int(rest[2]), int(rest[3]), int(rest[19])
+                pg, se, start = int(rest[2]), int(rest[3]), int(rest[19])
             except (ValueError, IndexError):
                 return None
-            if pg == pgid and se == sid and state not in ("Z", "X", "x"):
+            if pg == pgid and se == sid and not procident.pid_dead(int(name), stat, procident.task_list(int(name))):
                 out.append({"pid": int(name), "starttime": start})
         return out
 

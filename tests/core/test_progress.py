@@ -35,11 +35,11 @@ class _Proc:
         d.mkdir(exist_ok=True)
         (d / "stat").write_text(_stat(pid, cpu, start, sid, state))
         (d / "io").write_text(f"rchar: {io[0]}\nwchar: {io[1]}\nsyscr: 1\n")
+        (d / "task" / str(pid)).mkdir(parents=True, exist_ok=True)   # as the kernel does: a process lists its own thread
 
     def drop(self, pid):
-        for f in (self.root / str(pid)).iterdir():
-            f.unlink()
-        (self.root / str(pid)).rmdir()
+        import shutil
+        shutil.rmtree(self.root / str(pid))                      # the whole entry, its task/ directory too
 
     def sampler(self):
         return progress.SessionSampler(SID, exclude_pid=1, out_size=lambda: self.size,

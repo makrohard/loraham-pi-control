@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+from . import procident
+
 
 @dataclass(frozen=True)
 class SessionToken:
@@ -87,8 +89,8 @@ def session_member_details(sid: int, exclude_pid: int) -> list[tuple[int, int]]:
             with open(f"/proc/{pid}/stat") as fh:
                 data = fh.read()
             rest = data[data.rindex(")") + 2:].split()   # state ppid pgrp session…
-            if rest[0] in ("Z", "X", "x"):
-                continue
+            if procident.pid_dead(pid, data, procident.task_list(pid)):
+                continue                                  # dead (DEC-W384bm: a Z leader with a live thread is a member)
             if int(rest[3]) == sid:
                 out.append((pid, int(rest[2])))
         except (OSError, ValueError, IndexError):
@@ -130,8 +132,8 @@ def session_members(sid: int, exclude_pid: int) -> list[int]:
             with open(f"/proc/{pid}/stat") as fh:
                 data = fh.read()
             rest = data[data.rindex(")") + 2:].split()   # after comm: state ppid pgrp session…
-            if rest[0] in ("Z", "X", "x"):
-                continue                                  # zombie/dead -> already ceased
+            if procident.pid_dead(pid, data, procident.task_list(pid)):
+                continue                                  # dead -> already ceased (procident.pid_dead, DEC-W384bm)
             if int(rest[3]) == sid:
                 out.append(pid)
         except (OSError, ValueError, IndexError):

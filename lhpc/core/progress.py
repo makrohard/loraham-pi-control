@@ -19,6 +19,8 @@ import math
 import os
 import time
 
+from . import procident
+
 STALL_S = 600.0             # policy: 10 min with no observable activity counts as stalled
 BUILD_CEILING_S = 86400.0   # 24 h runaway guard for a busy-looping step; no supported build nears it
 SAMPLE_S = 15.0             # seconds between samples
@@ -113,7 +115,7 @@ class SessionSampler:
                 raise _Unknown from None
             try:
                 rest = data[data.rindex(")") + 2:].split()   # state ppid pgrp session…
-                if rest[0] in ("Z", "X", "x") or int(rest[3]) != self._sid:
+                if procident.pid_dead(pid, data, procident.task_list(pid, self._proc)) or int(rest[3]) != self._sid:
                     continue
                 cpu = sum(int(rest[i]) for i in (11, 12, 13, 14))   # utime stime cutime cstime
                 start = int(rest[19])

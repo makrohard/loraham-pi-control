@@ -826,6 +826,15 @@ def _armed():
     except OSError:
         return False
 
+def _pid_dead(pid, stat, tasks):
+    # procident.pid_dead, inlined: this runner is stdlib-only and cannot import lhpc (DEC-W384bm; the parity test
+    # tests/core/test_dead_pid_rule.py keeps the two equal). Dead ONLY when Z/X AND the task list is the leader alone.
+    rp = stat.rfind(")")
+    if rp == -1 or stat[rp + 2:rp + 3] not in ("Z", "X", "x"):
+        return False
+    return list(tasks or []) == [str(pid)]
+
+
 def _main_ok():
     # BOUND to one exact main launch: before any side-effectful step re-verify that main pid is
     # ALIVE (not zombie/dead) and still has the SAME start time + session/group. A ceased, replaced
@@ -834,12 +843,16 @@ def _main_ok():
         return True
     try:
         with open("/proc/%d/stat" % BINDING["main_pid"], "rb") as f:
-            rest = f.read().rsplit(b") ", 1)[1].split()
-        state = rest[0].decode("ascii", "replace")
+            data = f.read().decode("ascii", "replace")
+        rest = data.rsplit(") ", 1)[1].split()
         pgrp, session, starttime = int(rest[2]), int(rest[3]), int(rest[19])
     except (OSError, ValueError, IndexError):
         return False
-    if state in ("Z", "X", "x"):          # zombie / dead -> treat as ceased
+    try:
+        tasks = os.listdir("/proc/%d/task" % BINDING["main_pid"])
+    except OSError:
+        tasks = None
+    if _pid_dead(BINDING["main_pid"], data, tasks):     # dead (a Z leader with a live thread is alive)
         return False
     return (starttime == BINDING["main_starttime"] and session == BINDING["main_sid"]
             and pgrp == BINDING["main_pgid"])

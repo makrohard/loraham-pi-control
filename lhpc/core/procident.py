@@ -47,17 +47,13 @@ def proc_identity(pid: int) -> dict | None:
 
 
 def proc_alive(pid: int) -> bool:
-    """True only if the pid exists AND is not a zombie/dead — a reaped-pending zombie
-    (state Z/X) has ceased even though its pid still exists in /proc."""
+    """True only if the pid exists AND is not dead by pid_dead (a reaped-pending zombie has ceased even though its pid
+    still exists in /proc; a Z leader with a live thread is alive, DEC-W384bm). An unreadable or malformed stat: False."""
     try:
         data = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
         return False
-    try:
-        state = data[data.rindex(")") + 2]
-    except (ValueError, IndexError):
-        return False
-    return state not in ("Z", "X", "x")
+    return ")" in data and not pid_dead(pid, data, task_list(pid))
 
 
 def signal0_state(pid) -> str:
@@ -144,6 +140,14 @@ def stat_start_time(pid: int) -> int:
 # The kernel's starttime (clock ticks since boot) is an unsigned 64-bit field; anything at or
 # beyond it is no process's start time.
 _START_TIME_LIMIT = 1 << 64
+
+
+def task_list(pid: int, proc_root: str = "/proc"):
+    """The pid's thread ids (/proc/<pid>/task), or None when unreadable: pid_dead's second read."""
+    try:
+        return os.listdir(f"{proc_root}/{pid}/task")
+    except OSError:
+        return None
 
 
 def pid_dead(pid: int, stat: str, tasks) -> bool:
