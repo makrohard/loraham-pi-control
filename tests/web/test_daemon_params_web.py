@@ -83,7 +83,7 @@ def test_daemon_panel_follows_upper_band_switch(web):
     # The per-component band badge (Dependencies list) carries each stack's configured band. A 433
     # stack shows (433 MHz), an 868 stack shows (868 MHz); both now live in their lazy stack bodies.
     assert "(433 MHz)" in c.get("/stacks?open=meshcom").get_data(as_text=True)          # 433-band stack
-    assert "(868 MHz)" in c.get("/stacks?open=meshcore&band=868").get_data(as_text=True)  # 868-band stack
+    assert "(868 MHz)" in c.get("/stacks?open=meshcore").get_data(as_text=True)           # 868-band stack
 
 
 @pytest.mark.contract

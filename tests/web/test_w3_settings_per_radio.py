@@ -172,16 +172,24 @@ def test_k8d_a_client_panel_posts_its_radio_never_a_band(box):
         assert hidden.get("radio") == rid and "band" not in hidden, (url, hidden)
 
 
-def test_g1_w3_n3_the_daemons_panel_never_reads_a_page_band(box):
+def test_g1_w3_n3_the_daemons_panel_without_a_page_radio_is_its_first_radio(box):
     c, _post, _tmp = box
-    form = _hidden(c, "/stacks?band=868&open=daemon&dp=daemon", "stack-daemon-params-daemon",
-                   "/stacks/daemon/daemon-params")
+    form = _hidden(c, "/stacks?open=daemon&dp=daemon", "stack-daemon-params-daemon", "/stacks/daemon/daemon-params")
     assert form.get("radio") == "r1" and "band" not in form          # its first enabled radio, never a band's
+
+
+@pytest.mark.parametrize("url", ["/stacks?band=868&open=daemon&dp=daemon", "/stacks?band=433",
+                                 "/stacks/kiss/body?band=433", "/stacks?radio=r2&band=433&cfg=chat"])
+def test_item_c_a_page_band_on_stacks_is_refused_by_name(box, url):
+    # Open item (c) of G1-W3-RE (DEC-W384bi): the band is a radio's attribute; no in-app link sends one any more
+    c, _post, _tmp = box
+    r = c.get(url)
+    assert (r.status_code, "band is a radio's attribute: use radio=<rid>" in r.get_data(as_text=True)) == (400, True)
 
 
 @pytest.mark.parametrize("rows", [pytest.param(None, marks=pytest.mark.no_default_hardware), (), tuple(radios.Radio(r.id, r.name, r.model, r.band, ce=r.ce, enabled=False)
                                                     for r in ROWS[:2])], ids=["no-list", "empty-list", "all-disabled"])
-@pytest.mark.parametrize("url", ["/stacks?open=daemon&dp=daemon", "/stacks?band=433&open=daemon&dp=daemon"])
+@pytest.mark.parametrize("url", ["/stacks?open=daemon&dp=daemon", "/stacks?open=daemon&dp=daemon&cfg=daemon"])
 def test_g1_w3_re_without_an_enabled_radio_the_daemon_has_no_panel_to_post(web, tmp_path, rows, url):
     # Pin (G1-W3-RE, DEC-W384bl): no enabled radio, no served band -> daemon_params_view gives {} -> no daemon form, so
     # no band-only write can be posted from the page, with or without a page band

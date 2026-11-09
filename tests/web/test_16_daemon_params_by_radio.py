@@ -106,8 +106,9 @@ def test_a_rid_that_is_no_enabled_radio_of_the_band_is_a_404_and_writes_nothing(
 
 def test_the_overview_never_fails_on_a_rid_it_cannot_use(box):
     c, _post, _fake, _tmp_path = box
-    for q in ("dp=daemon&radio=r9", "dp=daemon&radio=r2&band=868", "dp=kiss&radio=r2"):          # W2: ?radio=
+    for q in ("dp=daemon&radio=r9", "dp=kiss&radio=r2"):                                        # W2: ?radio=
         assert c.get(f"/stacks?{q}").status_code == 200, q
+    assert c.get("/stacks?dp=daemon&radio=r2&band=868").status_code == 400        # a band: refused by name (item c)
     assert re.search(r"daemon", c.get("/stacks?dp=daemon&radio=r2").get_data(as_text=True))
 
 

@@ -1198,16 +1198,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     def _page_radio() -> tuple:
         """W2 (G1-W2-RE F2, DEC-W384ad): the page's radio, resolved ONCE per request from its row: (rid, band, why).
-        Every per-stack view keys on that rid; no stack row is hidden. No `?radio=`: ("", `?band=` until W3, ""); an
-        empty one is a 400 by name; a rid the list does not have: ("", "", why), reported on the page."""
+        Every per-stack view keys on that rid; no stack row is hidden. No `?radio=`: ("", "", ""); an empty one is a
+        400 by name; a rid the list does not have: ("", "", why), reported on the page; a `?band=` is a 400 by name
+        (open item (c) of G1-W3-RE, DEC-W384bi: the band is a radio's attribute)."""
         if "lhpc.page_radio" not in request.environ:
+            if "band" in request.args:
+                abort(make_response(_BAND_REFUSAL, 400))
             rid = request.args.get("radio")
             if rid == "":
                 abort(make_response("?radio= is empty: name a radio (?radio=rN)", 400))
             row = next((r for r in _radios_mod.load(service._paths).radios if r.id == rid), None) if rid else None
             request.environ["lhpc.page_radio"] = ((rid, row.band, "") if row else
                                                   ("", "", f"{rid} is not a radio of the hardware list") if rid else
-                                                  ("", request.args.get("band", ""), ""))
+                                                  ("", "", ""))
         return request.environ["lhpc.page_radio"]
 
     def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
@@ -2140,7 +2143,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(make_response(f"{stack_id}'s settings are per radio: name the radio (radio=rN)", 400))
         return _settings_copy(stack_id, rid, refuse=True)
 
-    def _daemon_param_form(stack_id):  # (band, rid, {PARAM: value}) from the submitted panel
+    def _daemon_param_form(stack_id):  # (rid, {PARAM: value}) from the submitted panel
         """W3, G1-W3 B1: `radio` names the radio (its band is its row's; unknown or disabled: a 404 by name), and the
         daemon's own panel needs it. A `rid` (form or query), a `band` in the query, beside a radio or for the daemon
         is a 400 by name. K8d (DEC-W384az): every panel is one radio's, a client stack's too (its instance set there)."""
@@ -2152,14 +2155,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(make_response(jsonify(error=_BAND_REFUSAL), 400))
         if not rid:
             abort(make_response(jsonify(error="the daemon's radio parameters are per radio: name it (radio=<rid>)"), 400))
-        return _api_radio(rid), rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
+        _api_radio(rid)                                  # a rid that is no enabled radio: a 404 by name
+        return rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
-    def _dp_back(stack_id: str, band: str, rid: str = ""):
+    def _dp_back(stack_id: str, rid: str):
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
         # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
         # `open=<stack_id>` forces the row and the anchor scrolls to it.
-        return redirect(url_for("stacks_overview", band=None if rid else band or None, radio=rid or None,   # W3: its radio
-                                open=stack_id, dp=stack_id)
+        return redirect(url_for("stacks_overview", radio=rid, open=stack_id, dp=stack_id)    # W3, K8d: always its radio
                         + "#stack-daemon-params-" + stack_id)
 
     @app.get("/api/gps")
@@ -2379,10 +2382,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band, rid, values = _daemon_param_form(stack_id)
+        rid, values = _daemon_param_form(stack_id)
         result = service.save_daemon_params(stack_id, values, rid=rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band, rid)
+        return _dp_back(stack_id, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/apply")
     def daemon_params_apply(stack_id: str):
@@ -2390,18 +2393,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band, rid, values = _daemon_param_form(stack_id)
+        rid, values = _daemon_param_form(stack_id)
         save = service.save_daemon_params(stack_id, values, rid=rid)   # persist first
         if not save.ok:
             flash(save.summary, "warn")
-            return _dp_back(stack_id, band, rid)
+            return _dp_back(stack_id, rid)
         result = service.apply_daemon_params(stack_id, rid=rid)         # then push live
         # Truthful: partial/total apply failure flashes as a warning (never green), and the
         # timing override stays saved regardless.
         flash("Saved. Apply live: " + result.summary
               + (" — " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band, rid)
+        return _dp_back(stack_id, rid)
 
     @app.post("/stacks/<stack_id>/daemon-params/reset")
     def daemon_params_reset(stack_id: str):
@@ -2409,10 +2412,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        band, rid, _values = _daemon_param_form(stack_id)
+        rid, _values = _daemon_param_form(stack_id)
         result = service.reset_daemon_params(stack_id, rid=rid)
         flash(result.summary, "ok" if result.ok else "warn")
-        return _dp_back(stack_id, band, rid)
+        return _dp_back(stack_id, rid)
 
     @app.post("/stacks/<stack_id>/mode")
     def stack_mode_save(stack_id: str):
