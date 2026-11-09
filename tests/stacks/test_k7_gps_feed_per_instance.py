@@ -22,7 +22,7 @@ def _marker(root, rid, state="ready", age=0, pid=None):
     d = root / "state" / rid / "gps" / "meshtastic"
     d.mkdir(parents=True, exist_ok=True)
     (d / "readiness.json").write_text(json.dumps({"state": state, "detail": "", "sentences": 7, "fixes": 1,
-                                                  "updated": int(time.time()) - age, "pid": pid or os.getpid()}))
+                                                  "updated": int(time.time()) - age, "pid": pid or os.getpid()}))  # wallclock: the record's timestamp, data the product ages against its clock
 
 
 def _feed(svc):
