@@ -146,3 +146,70 @@ def test_clear_all_also_empties_every_radios_own_rf_logs(box, csrf):
         dict.fromkeys(("rf-kiss.log", "r1/rf-kiss.log", "r2/rf-kiss.log", "r2/rf-daemon.log"), "")
     assert not (logs / "r2" / "rf-kiss.log.1").exists()
     assert (logs / "start-loraham-kiss-tnc-433-r1.log").read_text() == "process-of-r1\n"           # a run log stays
+
+
+def test_g1_w5_re_b1_a_disabled_radios_file_pills_open_each_radios_own_file(web, tmp_path):
+    # r1 disabled (its file stays readable through the route), r2 enabled: the r2 pill opens r2's file, never r1's
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0", enabled=False),
+                                    radios.Radio("r2", "b", "uputronics", "433", ce="ce1")))
+    for rid in ("r1", "r2"):
+        (tmp_path / "logs" / rid).mkdir(parents=True)
+        (tmp_path / "logs" / rid / "rf-kiss.log").write_text(f"2026-11-09T19:00:00.000Z RX rssi=-70 snr=9 len=1 hex=01 {rid}\n")
+    c = web()
+    doc = parse(c.get("/logs/loraham-kiss-tnc?job=r1/rf-kiss.log&radio=r1").get_data(as_text=True))
+    pill = next(a["href"] for a in _radio_row(doc).find("a") if a.text == "r2 · 433")
+    assert parse_qs(urlsplit(pill).query) == {"job": ["r2/rf-kiss.log"], "radio": ["r2"]}
+    page = parse(c.get(pill).get_data(as_text=True))
+    assert page.within(page.by_id("rflog-clear")).field_default("job") == "r2/rf-kiss.log"
+
+
+def test_g1_w5_re_n3_clear_all_removes_a_lone_previous_segment(box, csrf):
+    c, tmp_path = box
+    logs = tmp_path / "logs"
+    (logs / "r2" / "rf-kiss.log").unlink()
+    (logs / "r2" / "rf-kiss.log.1").write_text("older\n")                         # an orphaned segment, no live file
+    token = csrf(c, "/logs/loraham-kiss-tnc?job=r1/rf-kiss.log&radio=r1")
+    r = c.post("/rflog/clear-all", data={"_csrf": token, "job": "r1/rf-kiss.log", "radio": "r1"})
+    assert r.status_code == 302 and not (logs / "r2" / "rf-kiss.log.1").exists()
+    assert "Every RF log cleared." in c.get(r.headers["Location"]).get_data(as_text=True)
+
+
+def test_g1_w5_re_n4_an_unreadable_radio_dir_is_named_by_clear_all_never_a_silent_success(box, csrf):
+    import os
+    c, tmp_path = box
+    r2 = tmp_path / "logs" / "r2"
+    token = csrf(c, "/logs/loraham-kiss-tnc?job=r1/rf-kiss.log&radio=r1")
+    os.chmod(r2, 0)
+    try:
+        if os.access(r2, os.R_OK):
+            pytest.skip("running with a privilege that reads a mode-0 directory")
+        r = c.post("/rflog/clear-all", data={"_csrf": token, "job": "r1/rf-kiss.log", "radio": "r1"})
+        page = (c.get(r.headers["Location"]) if r.status_code == 302 else r).get_data(as_text=True)
+        logpage = c.get("/logs/loraham-kiss-tnc?job=r1/rf-kiss.log&radio=r1")
+    finally:
+        os.chmod(r2, 0o755)
+    assert r.status_code == 302 and "not cleared: r2 (permission denied)" in page and "Every RF log cleared" not in page
+    assert (tmp_path / "logs" / "r1" / "rf-kiss.log").read_text() == ""          # the readable radio's file is cleared
+    assert logpage.status_code == 200                                                # the log page leaves it out, no 500
+
+
+def test_g1_w5_re_n4_a_radio_dir_that_vanishes_is_skipped_quietly(tmp_path, monkeypatch):
+    import pathlib
+
+    from lhpc.core import rflog
+    from lhpc.core.paths import Paths
+    for rid in ("r1", "r2"):
+        (tmp_path / "logs" / rid).mkdir(parents=True)
+        (tmp_path / "logs" / rid / "rf-kiss.log").write_text("x\n")
+    real = pathlib.Path.iterdir
+
+    def iterdir(self):
+        if self.name == "r2":
+            raise FileNotFoundError(2, "No such file or directory")              # gone between the scan and its read
+        return real(self)
+    monkeypatch.setattr(pathlib.Path, "iterdir", iterdir)
+    try:
+        got = rflog.radio_jobs(Paths(runtime_root=tmp_path))
+    except FileNotFoundError as exc:          # what reached the route as a 500 before N4
+        got = exc
+    assert got == (["r1/rf-kiss.log"], [])

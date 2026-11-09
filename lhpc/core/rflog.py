@@ -348,14 +348,26 @@ def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
             "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
 
 
-def radio_jobs(paths) -> list:
-    """The per-radio RF logs on disk, `<rid>/<file>` (RADIO_JOB, W7-8a, K7: every instance), in name order: what Clear
-    all empties besides the registered band-less jobs (DEC-W384bo). An absent logs/ has none."""
+def radio_jobs(paths) -> tuple:
+    """(jobs, unreadable): the per-radio RF logs on disk, `<rid>/<file>` (RADIO_JOB, W7-8a, K7: every instance), in name
+    order, a lone previous segment `<file>.1` naming its job too (G1-W5-RE N3): what Clear all empties besides the
+    registered band-less jobs (DEC-W384bo). A radio directory that vanishes meanwhile is skipped; an unreadable one is
+    named, `rN (reason)` (N4, DEC-W384bs), never a silent success. An absent logs/ has none."""
     try:
-        dirs = sorted(d for d in paths.under("logs").iterdir() if d.is_dir() and not d.is_symlink())
+        dirs = sorted(d for d in paths.under("logs").iterdir() if _RID.fullmatch(d.name) and d.is_dir() and not d.is_symlink())
     except FileNotFoundError:
-        return []
-    return [j for d in dirs for f in sorted(d.iterdir()) if RADIO_JOB.fullmatch(j := f"{d.name}/{f.name}")]
+        return [], []
+    jobs, unreadable = [], []
+    for d in dirs:
+        try:
+            names = sorted(f.name for f in d.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            unreadable.append(f"{d.name} ({(exc.strerror or type(exc).__name__).lower()})")
+            continue
+        jobs += [j for j in dict.fromkeys(f"{d.name}/{n.removesuffix(PREVIOUS_SUFFIX)}" for n in names) if RADIO_JOB.fullmatch(j)]
+    return jobs, unreadable
 
 
 def switcher(svc, job: str, rid: str = "") -> dict:
@@ -384,6 +396,6 @@ def switcher(svc, job: str, rid: str = "") -> dict:
         if e.banded:
             return e.radio_job(r) or e.job(b)
         own = f"{r}/{job.partition('/')[2]}"
-        return (own if by_job(own) else e.job()) if key in rids else job
+        return (own if by_job(own) else e.job()) if RADIO_JOB.fullmatch(job) else job   # G1-W5-RE B1: by its shape
     radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]
     return {"radio": shown, "radios": radios, "stacks": stacks}
