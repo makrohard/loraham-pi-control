@@ -352,14 +352,15 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
     svc = _svc(tmp_path)
     assert svc._has_daemon_params("meshcom-qemu") and svc._has_daemon_params("meshcore-node")
     nd = "9" if dp.default_value("meshcom", "433", "SF") != "9" else "8"
-    assert svc.save_daemon_params("meshcom-qemu", "433", {"SF": nd}).ok
-    assert cfgmod.load_stack_config(svc._paths, "meshcom").get("dp_433_SF") == nd   # OWNER stack
+    from lhpc.core import commands, radio_start
+    assert svc.save_daemon_params("meshcom-qemu", {"SF": nd}, rid="r1").ok
+    assert cfgmod.load_stack_config(svc._paths, "meshcom", inst=commands.Instance("r1")).get("dp_SF") == nd   # OWNER's
     assert _none_stored(svc, "meshcom-qemu")               # NOT the component
-    assert svc._daemon_param_overrides("meshcom-qemu", "433") == {"SF": nd}         # read back via comp
-    sf = next(r for r in svc.daemon_params_view("meshcom-qemu", "433")["rows"] if r["name"] == "SF")
+    assert radio_start.instance_dp(svc, "meshcom-qemu", "r1") == {"SF": nd}         # read back via comp
+    sf = next(r for r in svc.daemon_params_view("meshcom-qemu", rid="r1")["rows"] if r["name"] == "SF")
     assert sf["value"] == nd                                                        # panel shows owner value
-    assert svc.save_daemon_params("meshcore-node", "868", {"CADWAIT": "1234"}).ok
-    assert cfgmod.load_stack_config(svc._paths, "meshcore").get("dp_868_CADWAIT") == "1234"
+    assert svc.save_daemon_params("meshcore-node", {"CADWAIT": "1234"}, rid="r2").ok
+    assert cfgmod.load_stack_config(svc._paths, "meshcore", inst=commands.Instance("r2")).get("dp_CADWAIT") == "1234"
 
 
 def test_direct_component_config_save_owner_scope(tmp_path):

@@ -36,7 +36,7 @@ def _settings(**kw):
 
 
 def _resolve(radio, model):
-    return _radios().radio_settings(radio, MODELS[model], {}, DEFAULTS)
+    return _radios().radio_settings(radio, MODELS[model], DEFAULTS)
 
 
 @pytest.mark.parametrize("hipower,ocp,want", [(False, "auto", 100), (True, "auto", 140), (True, "100", 100),

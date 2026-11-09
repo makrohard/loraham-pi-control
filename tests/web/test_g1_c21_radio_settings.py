@@ -1,7 +1,7 @@
 """Gate-1 C-21 on item 16 batch 2, a radio's daemon settings save through the console's route (the panel posts every
 param as dp_<PARAM>, as it shows it): B1 the save is judged on the hardware list as it reads under the list's lock
-(W217), never on one read before it; B2 a radio keeps what the operator set, its source default included, and a
-value posted as shown stays inherited from the band."""
+(W217), never on one read before it; B2 a radio keeps what the operator set, and a value posted as shown stays
+inherited (DEC-W384az: from the default; no band value exists to inherit)."""
 import contextlib
 
 import pytest
@@ -32,13 +32,6 @@ def box(web, tmp_path, csrf):
     return post, tmp_path
 
 
-def _band_save(tmp_path, values):
-    # The band's saved values (0.13.x dp_433_*, read until K8d): the service's band save; the console posts a radio (W3)
-    from lhpc.core.services import ControllerService
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.save_daemon_params("daemon", "433", values).ok
-
-
 def _dp(tmp_path, rid):
     return dict(next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == rid).dp)
 
@@ -58,18 +51,26 @@ def test_a_save_is_judged_on_the_list_its_lock_reads(box, monkeypatch):
     assert _dp(tmp_path, "r2") == {}
 
 
-def test_a_radio_keeps_its_source_default_over_the_bands_value(box):
-    # B2: the band saves SF 9; r2 set to the source default (12) keeps 12, never the band's 9
+def test_w384az_a_post_without_its_radio_on_a_shared_band_saves_nothing(box):
+    # DEC-W384az: no band store; two radios on 433 and no rid: refused, no row and no daemon.toml written
     post, tmp_path = box
-    _band_save(tmp_path, {"SF": "9"})
-    post(radio="r2", dp_SF="12")
-    assert _dp(tmp_path, "r2") == {"SF": "12"}
+    before = (tmp_path / "config" / "radios.toml").read_bytes()
+    post(dp_SF="9")
+    assert (tmp_path / "config" / "radios.toml").read_bytes() == before
+    assert cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "daemon") == {}
+
+
+def test_a_radio_keeps_what_the_operator_set(box):
+    # B2: r2 set to 9 keeps 9; set back to what it shows (its 9) it keeps 9
+    post, tmp_path = box
+    post(radio="r2", dp_SF="9")
+    post(radio="r2", dp_SF="9")
+    assert _dp(tmp_path, "r2") == {"SF": "9"}
 
 
 def test_a_value_posted_as_shown_stays_inherited(box):
-    # note 2: r2 shows the band's FREQ and the operator changes only SF; FREQ stays the band's, so a later band
-    # change reaches r2
+    # note 2: r2 shows the default FREQ and the operator changes only SF; FREQ stays inherited
+    from lhpc.core import daemon_params
     post, tmp_path = box
-    _band_save(tmp_path, {"FREQ": "433.600"})
-    post(radio="r2", dp_FREQ="433.600", dp_SF="10")
+    post(radio="r2", dp_FREQ=daemon_params.default_value("daemon", "433", "FREQ"), dp_SF="10")
     assert _dp(tmp_path, "r2") == {"SF": "10"}

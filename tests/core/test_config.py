@@ -316,9 +316,9 @@ def test_known_working_symlinked_dir_is_empty(tmp_path):
     assert known_working.load(Paths(runtime_root=rt), "s") == []
 
 
-def _seed_stack_toml(paths, stack_id, raw, band=""):
+def _seed_stack_toml(paths, stack_id, raw, band="", inst=None):
     from lhpc.core.config import _stack_config_path
-    p = _stack_config_path(paths, stack_id)
+    p = _stack_config_path(paths, stack_id, inst)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(raw)
     return p
@@ -397,12 +397,13 @@ def test_manual_bool_survives_daemon_param_save_end_to_end(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.config import load_stack_config
+    from lhpc.core.commands import Instance
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    _seed_stack_toml(svc._paths, "meshcom", 'operator_ready = true\nretries = 3\n')
-    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
-    cfg = load_stack_config(svc._paths, "meshcom")
+    _seed_stack_toml(svc._paths, "meshcom", 'operator_ready = true\nretries = 3\n', inst=Instance("r1"))
+    assert svc.save_daemon_params("meshcom", rid="r1", values={"CADIDLE": "40"}).ok    # DEC-W384az: meshcom@r1's set
+    cfg = load_stack_config(svc._paths, "meshcom", inst=Instance("r1"))
     assert cfg["operator_ready"] is True and cfg["retries"] == 3          # typed values survive
-    assert cfg["dp_433_CADIDLE"] == "40"
+    assert cfg["dp_CADIDLE"] == "40"
 
 
 def _svc(tmp_path):
@@ -413,18 +414,21 @@ def _svc(tmp_path):
 
 def test_daemon_override_survives_save_config(tmp_path):
     from lhpc.core.config import load_stack_config
+    from lhpc.core.commands import Instance
     svc = _svc(tmp_path)
-    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
-    assert svc.save_config("meshcom", {}).ok                          # normal save (no run change)
-    assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
+    assert svc.save_daemon_params("meshcom", rid="r1", values={"CADIDLE": "40"}).ok
+    assert svc.save_config_bundle("meshcom", values={}, inst=Instance("r1", band="433")).ok   # normal save of meshcom@r1
+    assert svc.save_config("meshcom", {}).ok
+    assert load_stack_config(svc._paths, "meshcom", inst=Instance("r1"))["dp_CADIDLE"] == "40"
 
 
 def test_daemon_override_survives_save_config_bundle(tmp_path):
     from lhpc.core.config import load_stack_config
+    from lhpc.core.commands import Instance
     svc = _svc(tmp_path)
-    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
-    assert svc.save_config_bundle("meshcom", values={}, remotes={}).ok
-    assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
+    assert svc.save_daemon_params("meshcom", rid="r1", values={"CADIDLE": "40"}).ok
+    assert svc.save_config_bundle("meshcom", values={}, remotes={}, inst=Instance("r1", band="433")).ok
+    assert load_stack_config(svc._paths, "meshcom", inst=Instance("r1"))["dp_CADIDLE"] == "40"
 
 
 def test_daemon_override_survives_public_save_stack_config(tmp_path):
@@ -450,18 +454,19 @@ def test_daemon_override_survives_normal_reset(tmp_path):
 
 
 def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
+    from lhpc.core.commands import Instance
     from lhpc.core.config import load_stack_config, _stack_config_path
     svc = _svc(tmp_path)
-    p = _stack_config_path(svc._paths, "meshcom")
+    p = _stack_config_path(svc._paths, "meshcom", Instance("r1"))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('autostart_meshcom-gps-relay = "on"\nfile_x = "y"\ndp_868_CADIDLE = "77"\n')
-    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
-    st = load_stack_config(svc._paths, "meshcom")
+    assert svc.save_daemon_params("meshcom", rid="r1", values={"CADIDLE": "40"}).ok
+    st = load_stack_config(svc._paths, "meshcom", inst=Instance("r1"))
     assert st["autostart_meshcom-gps-relay"] == "on" and st["file_x"] == "y"
-    assert st["dp_868_CADIDLE"] == "77" and st["dp_433_CADIDLE"] == "40"   # other band survives
-    assert svc.reset_daemon_params("meshcom", "433").ok
-    st = load_stack_config(svc._paths, "meshcom")
-    assert st["dp_868_CADIDLE"] == "77" and "dp_433_CADIDLE" not in st     # only 433 cleared
+    assert st["dp_868_CADIDLE"] == "77" and st["dp_CADIDLE"] == "40"   # an old key is kept, unread
+    assert svc.reset_daemon_params("meshcom", rid="r1").ok
+    st = load_stack_config(svc._paths, "meshcom", inst=Instance("r1"))
+    assert st["dp_868_CADIDLE"] == "77" and "dp_CADIDLE" not in st     # only the set cleared
     assert st["autostart_meshcom-gps-relay"] == "on"                      # normal untouched
 
 

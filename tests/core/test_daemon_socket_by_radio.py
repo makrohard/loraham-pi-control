@@ -188,9 +188,9 @@ def test_without_a_hardware_list_the_band_socket_is_read(tmp_path):
     assert fake.asked[0] == "/tmp/loraconf433.sock"
 
 
-# ---- G2-0.14.0-1 item 1 (W5-6/W5-7): the row's dp_* reach its radio's daemon ------------------------------------
+# ---- G2-0.14.0-1 item 1 (W5-6/W5-7), DEC-W384az: the row's dp_* and an instance's set reach its radio's daemon ----
 
-def _svc_dp(tmp_path, r1_dp=(("CADWAIT", "200"),), legacy=("daemon", {"dp_433_CADWAIT": "1500"})):
+def _svc_dp(tmp_path, r1_dp=(("CADWAIT", "200"),), legacy=("daemon", {"dp_433_CADWAIT": "900"})):
     from lhpc.core import config as cfgmod
     from lhpc.core import radios
     svc, fake = _svc(tmp_path)
@@ -208,26 +208,39 @@ def _sets(fake, name):
 
 def test_apply_sends_the_rows_dp_value_to_its_radio_over_a_conflicting_legacy_value(tmp_path):
     svc, fake = _svc_dp(tmp_path)
-    res = svc.apply_daemon_params("daemon", "433")                     # the public Apply
+    res = svc.apply_daemon_params("daemon", rid="r1")                  # the public Apply
     assert "CADWAIT" in res.data["applied"], (res.summary, res.details)
-    assert _sets(fake, "CADWAIT") == [("/tmp/loraconf-r1.sock", "SET CADWAIT=200")]     # the row wins, r1 only
+    assert _sets(fake, "CADWAIT") == [("/tmp/loraconf-r1.sock", "SET CADWAIT=200")]     # the row, r1 only
     _no_band_socket(fake)
 
 
 def test_the_start_loops_apply_after_ready_sends_the_rows_dp_value(tmp_path):
-    # The call _ensure_daemon makes once per READY band (service_lifecycle_ops: `_apply_stack_daemon_params(start_sid,
-    # b)`); a public start of an already-serving daemon is a no-op, so the start loop's own call is driven here.
+    # The call _ensure_daemon makes once per READY radio (service_lifecycle_ops: `_apply_stack_daemon_params(start_sid,
+    # b, rid)`); a public start of an already-serving daemon is a no-op, so the start loop's own call is driven here.
     svc, fake = _svc_dp(tmp_path)
-    lines, _tx_ok, gate = svc._apply_stack_daemon_params("daemon", "433")
+    lines, _tx_ok, gate = svc._apply_stack_daemon_params("daemon", "433", "r1")
     assert gate == "" and _sets(fake, "CADWAIT") == [("/tmp/loraconf-r1.sock", "SET CADWAIT=200")], lines
 
 
-def test_without_a_row_value_the_stacks_own_value_is_applied(tmp_path):
+def test_w384az_an_instance_start_sends_its_own_set_over_its_radios_row(tmp_path):
+    # kiss@r1's own CADWAIT goes to r1 at its start (over r1's row 200); r1's row CADIDLE is kept under it; kiss's
+    # old per-band value (dp_433_* in kiss.toml) goes nowhere.
+    svc, fake = _svc_dp(tmp_path, r1_dp=(("CADWAIT", "200"), ("CADIDLE", "400")), legacy=("kiss", {"dp_433_CADWAIT": "900"}))
+    assert svc.save_daemon_params("kiss", rid="r1", values={"CADWAIT": "300"}).ok
+    lines, _tx_ok, gate = svc._apply_stack_daemon_params("kiss", "433", "r1")
+    assert gate == "", lines
+    assert _sets(fake, "CADWAIT") == [("/tmp/loraconf-r1.sock", "SET CADWAIT=300")]
+    assert _sets(fake, "CADIDLE") == [("/tmp/loraconf-r1.sock", "SET CADIDLE=400")]
+    _no_band_socket(fake)
+
+
+def test_without_a_row_value_the_default_is_applied_never_an_old_band_value(tmp_path):
     svc, fake = _svc_dp(tmp_path, r1_dp=())
-    svc.apply_daemon_params("daemon", "433")
+    svc.apply_daemon_params("daemon", rid="r1")
     assert _sets(fake, "CADWAIT") == [("/tmp/loraconf-r1.sock", "SET CADWAIT=1500")]
 
 
 def test_the_view_shows_the_rows_dp_value(tmp_path):
     svc, _fake = _svc_dp(tmp_path)
-    assert svc._daemon_param_applies("daemon", "433").get("CADWAIT") == "200"
+    assert svc._daemon_param_applies("daemon", "r1").get("CADWAIT") == "200"
+    assert {r["name"]: r["value"] for r in svc.daemon_params_view("daemon", rid="r1")["rows"]}["CADWAIT"] == "200"

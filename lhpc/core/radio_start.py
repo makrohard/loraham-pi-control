@@ -7,7 +7,6 @@ from __future__ import annotations
 import dataclasses
 
 from . import config as cfgmod
-from . import daemon_params as _dp
 from . import radio_daemon, radio_models, radios, rflog
 from .paths import PathContainmentError
 
@@ -15,8 +14,8 @@ from .paths import PathContainmentError
 def start_plan(svc, rid: str) -> tuple:
     """L5 (unused until the wiring table lands, B4-D7): what a start of radio `rid`'s daemon would launch, from
     the hardware list alone. Returns (params, refusal, notes): `params` the daemon's run params
-    (radio_daemon.daemon_params) or None, `refusal` the reason it may not start or "", `notes` the legacy values
-    not carried. Launch, verify (READY, ID=, BOUND=) and the exit actions stay with the wiring."""
+    (radio_daemon.daemon_params) or None, `refusal` the reason it may not start or "", `notes` what its settings
+    dropped (a grant given on another band). Launch, verify (READY, ID=, BOUND=) and the exit actions stay with the wiring."""
     state = radios.load(svc._paths)
     if not state.startable:
         why = "; ".join(state.reasons) if state.reasons else "no hardware list (config/radios.toml)"
@@ -51,26 +50,17 @@ def launch_plan(svc, rid: str) -> tuple:
 
 
 def _settings(svc, radio, model):
-    """The radio's resolved settings (radios.radio_settings) from its row and the client stacks'
-    `dp_<band>_<PARAM>` values; ValueError as radio_settings raises it."""
-    legacy_dp = {}
-    for sid in _dp.CLIENT_STACKS:
-        stored = cfgmod.load_stack_config(svc._paths, sid)
-        vals = {name: str(stored[f"dp_{radio.band}_{name}"]) for name in _dp.ALL_PARAMS
-                if f"dp_{radio.band}_{name}" in stored}
-        if vals:
-            legacy_dp[sid] = vals
+    """The radio's resolved settings (radios.radio_settings) from its row alone; ValueError as radio_settings raises
+    it."""
     defaults = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off"}   # manifest defaults
-    return radios.radio_settings(radio, model, legacy_dp, defaults)
+    return radios.radio_settings(radio, model, defaults)
 
 
-def row_dp(svc, band: str, rid: str = "") -> dict:
-    """W5-6/W5-7 (G2-0.14.0-1 item 1): the daemon params of radio `rid`, or of `band`'s one enabled radio — its row's
-    `dp_*` and the old client values every holding stack agrees on — which its daemon gets after READY and on Apply.
-    {} when the list does not resolve the band to one radio, or its settings do not resolve (that radio's start is
+def row_dp(svc, rid: str) -> dict:
+    """W5-6/W5-7: the daemon params of radio `rid`'s row (`dp_*`), which its daemon gets after READY and on Apply under
+    an instance's own set (DEC-W384az). {} for no such radio, or settings that do not resolve (its start is
     refused)."""
-    t = band_rid(svc, band) if not rid else radio_daemon.Target("proceed", rid, "")
-    row = next((r for r in radios.load(svc._paths).radios if r.id == t.rid), None) if t.outcome == "proceed" else None
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
     model = radio_models.load().get(row.model) if row else None
     if model is None:
         return {}
@@ -714,10 +704,10 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
-def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None) -> tuple:
+def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None, inherited=None) -> tuple:
     """The daemon-param edits of a settings save, ({PARAM: canonical value, or "" to clear}, ""), or ({}, why): a
     param not in `values` is left out; a blank clears; a value is validated for the chip, then canonicalised, and one
-    equal to its default clears. A radio's save (`shown`: the values its panel shows) keeps only what the operator
+    equal to what it inherits (`inherited`, an instance's: its radio's row; else its default) clears. A radio's save (`shown`: the values its panel shows) keeps only what the operator
     changed, a default included; a value as shown stays inherited (G1-C21 B2)."""
     from . import daemon_control, daemon_params
     out = {}
@@ -729,35 +719,75 @@ def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=N
             return {}, f"{name}: {err}"
         canon = daemon_control.canonical_value(name, raw) if raw else ""
         if shown is None:
-            out[name] = "" if canon == daemon_params.default_value(sid, band, name) else canon
+            out[name] = "" if canon == (inherited or {}).get(name, daemon_params.default_value(sid, band, name)) else canon
         elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name)):
             out[name] = canon
     return out, ""
 
 
-def radio_params_view(svc, target: str, rid: str) -> dict:
-    """Item 16 (DEC-W53): the daemon settings panel of radio `rid`: its row's dp_* over the band's saved values over
-    the defaults, for the daemon's own page only; {} for a client stack's page or a rid that is no enabled radio."""
-    from . import daemon_control, daemon_params
-    _inst, band, why = daemon_radio(svc, rid)
-    if why or not svc._is_daemon_target(target):
+def instance_dp(svc, sid: str, rid: str) -> dict:
+    """DEC-W384az: the daemon params instance `<sid>@<rid>`'s own set holds (`dp_<PARAM>` in its settings), the ones
+    valid for rid's chip and grant; {} for the daemon (its radio's row is its store)."""
+    from . import commands, daemon_control, daemon_params
+    if svc._is_daemon_target(sid):
         return {}
-    sid = svc._owner_stack_id(target)
-    ov = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
-    return {"stack": target, "band": band, "rid": rid, "bands": [band], "all_bands": list(svc.RADIO_BANDS),
-            "is_daemon": True, "can_apply": True, "radios": view_radios(svc._paths),
+    stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
+    chip, grant = chip_family(svc, "", rid) or "", effective_high_power(svc, rid)
+    return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
+            and daemon_control.validate_set(name, str(v), chip, grant) is None}
+
+
+def dp_target(svc, target: str, rid: str) -> tuple:
+    """(owner stack, is the daemon, rid's band, "") of `target`'s daemon settings on radio `rid`, or ("", False, "",
+    why): rid is no enabled radio, or `target` is no daemon client able to run on it."""
+    from . import daemon_params, instances
+    _inst, band, why = daemon_radio(svc, rid)
+    sid, is_daemon = svc._owner_stack_id(target), svc._is_daemon_target(target)
+    if not why and not is_daemon and not (daemon_params.is_client(sid) and rid in instances.radios_able(svc, sid)):
+        why = f"{target} has no daemon parameters on {rid}"
+    return (sid, is_daemon, band, "") if not why else ("", False, "", why)
+
+
+def params_view(svc, target: str, rid: str) -> dict:
+    """DEC-W384az: the daemon settings panel of `target` on radio `rid`: the daemon's own shows rid's row dp_* over the
+    defaults; a client stack's its instance set `<sid>@<rid>` over the row over its defaults (what its start applies).
+    {} when `dp_target` refuses."""
+    from . import daemon_control, daemon_params, instances
+    sid, is_daemon, band, why = dp_target(svc, target, rid)
+    if why:
+        return {}
+    ov = {**row_dp(svc, rid), **instance_dp(svc, sid, rid)}
+    able = None if is_daemon else set(instances.radios_able(svc, sid))
+    choose = [r for r in view_radios(svc._paths) if able is None or r[0] in able]     # the radios this panel can show
+    return {"stack": target, "band": band, "rid": rid, "bands": sorted({r[2] for r in choose}),
+            "all_bands": list(svc.RADIO_BANDS), "is_daemon": is_daemon,
+            "can_apply": is_daemon or radio_clients(svc, band, rid, sid)[1], "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
-            "rows": daemon_params.stack_view(sid, band, ov, svc.chip_family_for_band(band, rid),
-                                             effective_high_power(svc, rid))}
+            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, band, rid) or "", effective_high_power(svc, rid))}
 
 
-def save_radio_params(svc, target: str, rid: str, values: dict):
-    """Item 16 (DEC-W53): save the daemon settings of radio `rid` into its row of the hardware list (its dp_* fields
-    only), under the list's lock (W217, set_row_dp); for the daemon's own page only. Never applies live."""
+def save_params(svc, target: str, rid: str, values: dict):
+    """DEC-W384az: save `target`'s daemon settings on radio `rid`, never applied live. The daemon's own: rid's row (its
+    dp_* fields only, under the list's lock, W217). A client stack's: its instance set `dp_<PARAM>` in
+    `<sid>@<rid>.toml` (locked merge; other keys survive); a value equal to what it inherits (the row, else the
+    default) clears, so the set holds only what differs."""
+    from . import commands
     from .service_base import ActionResult
-    if not svc._is_daemon_target(target):
-        return ActionResult(False, f"Cannot save the settings of {rid}: a radio's settings are the daemon's")
-    return set_row_dp(svc, rid, None, (target, values))
+    sid, is_daemon, band, why = dp_target(svc, target, rid)
+    if why:
+        return ActionResult(False, f"Cannot save the daemon settings of {target} on {rid}: {why}")
+    if is_daemon:
+        return set_row_dp(svc, rid, None, (target, values))
+    edits, err = dp_updates(svc, sid, band, values, chip_family(svc, band, rid) or "", effective_high_power(svc, rid),
+                            inherited=row_dp(svc, rid))
+    if err:
+        return ActionResult(False, err)
+    try:
+        cfgmod.update_stack_config(svc._paths, sid, {f"dp_{n}": v for n, v in edits.items()}, inst=commands.Instance(rid))
+    except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
+        return ActionResult(False, f"could not save the daemon settings of {sid}@{rid}: {exc}")
+    svc._invalidate_config()
+    return ActionResult(True, f"saved the daemon settings of {sid}@{rid}")
 
 
 def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
@@ -768,7 +798,7 @@ def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
     if why:
         return {}, f"Cannot save the settings of {rid}: {why}"
     sid = svc._owner_stack_id(target)
-    shown = {**svc._daemon_param_overrides(target, band), **row_dp(svc, band, rid)}
+    shown = row_dp(svc, rid)
     return dp_updates(svc, sid, band, values, svc.chip_family_for_band(band, rid), effective_high_power(svc, rid),
                       {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()})
 

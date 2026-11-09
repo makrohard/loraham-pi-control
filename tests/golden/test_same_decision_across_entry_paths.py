@@ -369,7 +369,8 @@ def _tx_without_permission(box):
     """kiss saved to transmit at POWER=20 (r1, 433's radio, granted) while the running daemon does
     not report the high-power permission — the explicit TX authorisation the start gates on."""
     assert box.svc.set_high_power("r1", "on").ok
-    cfgmod.update_stack_config(box.svc._paths, "kiss", {"dp_433_POWER": "20"})
+    from lhpc.core.commands import Instance                       # DEC-W384az: kiss@r1's own set
+    cfgmod.update_stack_config(box.svc._paths, "kiss", {"dp_POWER": "20"}, inst=Instance("r1"))
     box.svc._invalidate_config()
 
 

@@ -79,11 +79,12 @@ def test_the_panel_shows_each_radios_own_values_and_every_radio_to_choose(box):
     post("/stacks/daemon/daemon-params", radio="r2", dp_FREQ="433.600")
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    v2, v1 = svc.daemon_params_view("daemon", "433", "r2"), svc.daemon_params_view("daemon", "433", "r1")
+    v2, v1 = svc.daemon_params_view("daemon", rid="r2"), svc.daemon_params_view("daemon", rid="r1")
     freq = lambda v: next(row["value"] for row in v["rows"] if row["name"] == "FREQ")  # noqa: E731
     assert (v2["rid"], freq(v2)) == ("r2", "433.600") and freq(v1) != "433.600"
     assert v1["radios"] == [("r1", "a", "433"), ("r2", "b", "433")]
-    assert svc.daemon_params_view("kiss", "433", "r2") == {}                  # a radio's settings are the daemon's
+    k2 = svc.daemon_params_view("kiss", rid="r2")                             # DEC-W384az: kiss@r2's own set over r2's row
+    assert (k2["rid"], k2["is_daemon"], freq(k2)) == ("r2", False, "433.600")
 
 
 def test_apply_for_one_radio_sets_that_radios_daemon_only(box):
@@ -115,8 +116,8 @@ def test_a_direct_save_of_some_params_keeps_the_radios_other_values(box):
     from lhpc.core.services import ControllerService
     _c, _post, _fake, tmp_path = box
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.save_daemon_params("daemon", "433", {"SF": "9"}, "r2").ok
-    assert svc.save_daemon_params("daemon", "433", {"FREQ": "433.600"}, "r2").ok
+    assert svc.save_daemon_params("daemon", {"SF": "9"}, rid="r2").ok
+    assert svc.save_daemon_params("daemon", {"FREQ": "433.600"}, rid="r2").ok
     assert dict(_row(tmp_path, "r2").dp) == {"FREQ": "433.600", "SF": "9"}
 
 

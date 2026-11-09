@@ -1113,7 +1113,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "deps_report": service.deps_report(stack.id),
                     "needs_build": service.unbuilt_components(stack.id),
                     "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
-                    "daemon_params": service.daemon_params_view(stack.id, band, _dp_rid(stack.id, _live_radios)),
+                    "daemon_params": service.daemon_params_view(stack.id, rid=_dp_rid(stack.id, _live_radios, _inst)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
@@ -1581,11 +1581,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(make_response(jsonify(error=why), 404))
         return band
 
-    def _dp_rid(stack_id: str, radios: list) -> str:
-        """W3: the radio a stack's daemon panel shows and saves: the page radio; for the daemon's own panel without one,
-        its first enabled radio of `radios` (view_radios), never a band's (G1-W3 N3). A client's panel stays its band's."""
-        rid = _view_rid(stack_id, "")
-        return rid or (radios[0][0] if radios and service._is_daemon_target(stack_id) else "")
+    def _dp_rid(stack_id: str, radios: list, inst=None) -> str:
+        """W3, K8d (DEC-W384az): the radio a stack's daemon panel shows and saves: the page radio; without one, for the
+        daemon's own panel its first enabled radio of `radios` (view_radios), for a client stack's the shown instance's,
+        else its first radio able to run it; never a band's (G1-W3 N3)."""
+        if rid := _view_rid(stack_id, ""):
+            return rid
+        if service._is_daemon_target(stack_id):
+            return radios[0][0] if radios else ""
+        return inst.rid if inst is not None and inst.rid else next(iter(_instances.radios_able(service, stack_id)), "")
 
     def _view_rid(stack_id: str, band: str) -> str:
         """The radio a stack's daemon panel shows: the page radio (W2's one selector, `?radio=rN`, every stack's panel:
@@ -2122,17 +2126,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _daemon_param_form(stack_id):  # (band, rid, {PARAM: value}) from the submitted panel
         """W3, G1-W3 B1: `radio` names the radio (its band is its row's; unknown or disabled: a 404 by name), and the
         daemon's own panel needs it. A `rid` (form or query), a `band` in the query, beside a radio or for the daemon
-        is a 400 by name. A client stack's panel keeps its form `band` until K8d (DEC-W384ba)."""
+        is a 400 by name. K8d (DEC-W384az): every panel is one radio's, a client stack's too (its instance set there)."""
         from lhpc.core import daemon_params as _dp
-        rid, daemon = request.form.get("radio", ""), service._is_daemon_target(stack_id)
+        rid = request.form.get("radio", "")
         if "rid" in request.values:
             abort(make_response(jsonify(error="rid is no field here: name the radio (radio=<rid>)"), 400))
-        if "band" in request.args or ((rid or daemon) and "band" in request.form):
+        if "band" in request.values:
             abort(make_response(jsonify(error=_BAND_REFUSAL), 400))
-        if daemon and not rid:
-            abort(make_response(jsonify(error="the daemon's radio parameters are per radio: name it (radio=<rid>)"), 400))
-        band = _api_radio(rid) if rid else request.form.get("band", "")
-        return band, rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
+        if not rid:
+            abort(make_response(jsonify(error="the daemon radio parameters are per radio: name it (radio=<rid>)"), 400))
+        return _api_radio(rid), rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
     def _dp_back(stack_id: str, band: str, rid: str = ""):
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
@@ -2359,7 +2362,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, rid, values = _daemon_param_form(stack_id)
-        result = service.save_daemon_params(stack_id, band, values, rid)
+        result = service.save_daemon_params(stack_id, values, rid=rid)
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, band, rid)
 
@@ -2370,11 +2373,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, rid, values = _daemon_param_form(stack_id)
-        save = service.save_daemon_params(stack_id, band, values, rid)   # persist first
+        save = service.save_daemon_params(stack_id, values, rid=rid)   # persist first
         if not save.ok:
             flash(save.summary, "warn")
             return _dp_back(stack_id, band, rid)
-        result = service.apply_daemon_params(stack_id, band, rid)         # then push live
+        result = service.apply_daemon_params(stack_id, rid=rid)         # then push live
         # Truthful: partial/total apply failure flashes as a warning (never green), and the
         # timing override stays saved regardless.
         flash("Saved. Apply live: " + result.summary
@@ -2389,7 +2392,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band, rid, _values = _daemon_param_form(stack_id)
-        result = service.reset_daemon_params(stack_id, band, rid)
+        result = service.reset_daemon_params(stack_id, rid=rid)
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, band, rid)
 

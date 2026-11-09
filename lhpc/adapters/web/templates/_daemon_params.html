@@ -15,8 +15,8 @@
         suitable supply and cooling. LHPC does not measure or enforce the duty cycle. Warranty void if
         disregarded.</p>
     {% endif %}
-    {% if daemon_params.rid %}
-      {# W3 (W319/W320): the daemon's panel per radio, its Save/Apply/Reset name it (radio=) #}
+      {# W3 (W319/W320), K8d (DEC-W384az): every panel is one radio's (a client stack's: its instance there); its
+         Save/Apply/Reset name it (radio=) #}
       <p><strong>Radio:</strong>
         <span class="bandswitch">
           {% for rid, _name, band in daemon_params.radios %}
@@ -25,26 +25,10 @@
           {% endfor %}
         </span>
         <span class="muted">— each radio has its own daemon radio parameters</span></p>
-    {% else %}
-      {# 433/868 chooser (like the Settings band switch); bands this stack can't use are disabled. #}
-      <p><strong>Band:</strong>
-        <span class="bandswitch">
-          {% for b in daemon_params.all_bands %}
-            {% if b in daemon_params.bands %}
-              <a class="{{ 'sel' if b == daemon_params.band else '' }}"
-                 href="{{ url_for('stacks_overview', band=b, open=stack_id, dp=stack_id) }}#stack-daemon-params-{{ stack_id }}">{{ b }} MHz</a>
-            {% else %}
-              <span class="disabled" title="{{ stack_id }} runs on one band only">{{ b }} MHz</span>
-            {% endif %}
-          {% endfor %}
-        </span>
-        <span class="muted">— each band has its own daemon radio parameters</span></p>
-    {% endif %}
     <form method="post" class="dparams-form"
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      {% if daemon_params.rid %}<input type="hidden" name="radio" value="{{ daemon_params.rid }}">
-      {% else %}<input type="hidden" name="band" value="{{ daemon_params.band }}">{% endif %}
+      <input type="hidden" name="radio" value="{{ daemon_params.rid }}">
       <table class="paramgrid dptab">
         {% for r in daemon_params.rows %}
           <tr class="{% if r.app_owned %}greyed{% endif %}">

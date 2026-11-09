@@ -32,11 +32,10 @@ def _svc(tmp_path, **fake):
 
 
 # ---- item 1: a radio's row dp_*, through the public Apply ----------------------------------------------------
-# The Apply button's service call (apply_daemon_params) sends the band's params to its daemon as CONF SETs; the fake
-# daemon answers on the sockets it serves only and records each SET. A RED case sends the stack's own conflicting
-# value before the fix (4a38458d) and the row's value after it; a CONTROL passes on both sides (tests/README rule 12)
-# and pins what the fix must not change. The legacy values (700, 900, 300) differ from the default (CADWAIT 1500,
-# CADIDLE 250), so the row, the stack's value and the default are told apart.
+# The Apply button's service call (apply_daemon_params) sends the radio's params to its daemon as CONF SETs; the fake
+# daemon answers on the sockets it serves only and records each SET. DEC-W384az: the radio is named (rid), never a
+# band, and an old per-band value (`dp_<band>_*` in daemon.toml: 700, 900, 300) is read nowhere — the row's value or
+# the default (CADWAIT 1500, CADIDLE 250) is sent, to that radio's socket only.
 
 @dataclasses.dataclass
 class _ConfDaemon(FakeSystem):
@@ -68,11 +67,12 @@ def _status(rid, band):
 
 
 RID_SOCKETS = {"/tmp/loraconf-r1.sock": ("r1", "433"), "/tmp/loraconf-r2.sock": ("r2", "868")}
+BAND_SOCKETS = {"/tmp/loraconf433.sock": ("-", "433"), "/tmp/loraconf868.sock": ("-", "868")}   # 0.13.x: never used
 
 
-def _apply(tmp_path, rows, legacy, band, *, sockets=RID_SOCKETS, raw=None):
-    """Apply on `band` with the list `rows` (or the raw radios.toml `raw`; neither = no list) and the daemon stack's
-    `legacy` config; returns (result, [(socket, "SET CADWAIT=…"/"SET CADIDLE=…"), …] in order)."""
+def _apply(tmp_path, rows, legacy, rid, *, sockets=RID_SOCKETS, raw=None, target="daemon"):
+    """Apply on radio `rid` with the list `rows` (or the raw radios.toml `raw`; neither = no list) and the old per-band
+    `legacy` values in daemon.toml; returns (result, [(socket, "SET CADWAIT=…"/"SET CADIDLE=…"), …] in order)."""
     from lhpc.core import config as cfgmod
     from lhpc.core.services import ControllerService
     p = Paths(runtime_root=tmp_path)
@@ -81,10 +81,10 @@ def _apply(tmp_path, rows, legacy, band, *, sockets=RID_SOCKETS, raw=None):
         (tmp_path / "config" / "radios.toml").write_text(raw)
     elif rows is not None:
         _write(tmp_path, rows)
-    fake = _ConfDaemon(serve={path: _status(rid, b) for path, (rid, b) in sockets.items()})
+    fake = _ConfDaemon(serve={path: _status(r, b) for path, (r, b) in sockets.items()})
     svc = ControllerService(system=fake.system, paths=p)
     cfgmod.update_stack_config(p, "daemon", legacy)
-    res = svc.apply_daemon_params("daemon", band)
+    res = svc.apply_daemon_params(target, rid=rid)
     sets = [(path, v.decode().strip()) for path, v in fake.sent
             if v.decode().startswith(("SET CADWAIT=", "SET CADIDLE="))]
     return res, sets
@@ -95,11 +95,11 @@ def _pair(dp433=(("CADWAIT", "100"),), dp868=(("CADWAIT", "300"),), band="868"):
     return [R("r1", "a", "uputronics", "433", ce="ce0", dp=dp433), R("r2", "b", "uputronics", band, ce="ce1", dp=dp868)]
 
 
-@pytest.mark.parametrize("band,sock,row", [("433", "/tmp/loraconf-r1.sock", "100"),
-                                           ("868", "/tmp/loraconf-r2.sock", "300")])
-def test_r4_each_band_gets_its_own_radios_row_value_over_its_conflicting_legacy_value(tmp_path, band, sock, row):
-    """RED before the fix: SET CADWAIT=700 / 900 (the stack's own value)."""
-    res, sets = _apply(tmp_path, _pair(), {"dp_433_CADWAIT": "700", "dp_868_CADWAIT": "900"}, band)
+@pytest.mark.parametrize("rid,sock,row", [("r1", "/tmp/loraconf-r1.sock", "100"),
+                                          ("r2", "/tmp/loraconf-r2.sock", "300")])
+def test_r4_each_radio_gets_its_own_rows_value_and_no_old_band_value(tmp_path, rid, sock, row):
+    """RED before the G2 fix: SET CADWAIT=700 / 900 (the stack's own value); DEC-W384az: that value is read nowhere."""
+    res, sets = _apply(tmp_path, _pair(), {"dp_433_CADWAIT": "700", "dp_868_CADWAIT": "900"}, rid)
     assert res.ok, (res.summary, res.details)
     assert sets == [(sock, f"SET CADWAIT={row}"), (sock, "SET CADIDLE=250")]       # that radio's socket only
 
@@ -107,77 +107,79 @@ def test_r4_each_band_gets_its_own_radios_row_value_over_its_conflicting_legacy_
 def test_r8_every_row_param_wins_over_its_legacy_value(tmp_path):
     """RED before the fix: SET CADWAIT=700, SET CADIDLE=300."""
     res, sets = _apply(tmp_path, _pair(dp433=(("CADIDLE", "400"), ("CADWAIT", "200")), dp868=()),
-                       {"dp_433_CADWAIT": "700", "dp_433_CADIDLE": "300"}, "433")
+                       {"dp_433_CADWAIT": "700", "dp_433_CADIDLE": "300"}, "r1")
     assert res.ok, (res.summary, res.details)
     assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=200"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=400")]
 
 
 def test_r9_a_row_value_equal_to_the_default_still_wins_over_the_legacy_value(tmp_path):
     """RED before the fix: SET CADWAIT=700."""
-    res, sets = _apply(tmp_path, _pair(dp433=(("CADWAIT", "1500"),), dp868=()), {"dp_433_CADWAIT": "700"}, "433")
+    res, sets = _apply(tmp_path, _pair(dp433=(("CADWAIT", "1500"),), dp868=()), {"dp_433_CADWAIT": "700"}, "r1")
     assert res.ok, (res.summary, res.details)
     assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=1500"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=250")]
 
 
-def test_r1_control_two_enabled_radios_on_a_band_apply_nothing(tmp_path):
-    """CONTROL: the band names no one radio, so no value is sent at all: neither row value, nor the stack's, which
-    went to the 0.13.x band socket before ledger L27 (DEC-W27); the refusal names the radios."""
+def test_w384az_an_old_band_value_alone_is_not_sent_the_default_is(tmp_path):
+    """DEC-W384az: a row without dp_* and only an old dp_433_* in daemon.toml: the default goes, never 700."""
+    res, sets = _apply(tmp_path, _pair(dp433=(), dp868=()), {"dp_433_CADWAIT": "700"}, "r1")
+    assert res.ok, (res.summary, res.details)
+    assert sets == [("/tmp/loraconf-r1.sock", "SET CADWAIT=1500"), ("/tmp/loraconf-r1.sock", "SET CADIDLE=250")]
+
+
+@pytest.mark.parametrize("rid,sock,row", [("r1", "/tmp/loraconf-r1.sock", "100"),
+                                          ("r2", "/tmp/loraconf-r2.sock", "300")])
+def test_r1_control_two_enabled_radios_on_a_band_each_gets_its_own_row(tmp_path, rid, sock, row):
+    """CONTROL: two radios on 868; each Apply names its radio and sends that radio's row to its socket alone, never
+    the other's and never the 0.13.x band socket (ledger L27, DEC-W27)."""
     R = _radios().Radio
     rows = [R("r1", "a", "uputronics", "868", ce="ce0", dp=(("CADWAIT", "100"),)),
             R("r2", "b", "uputronics", "868", ce="ce1", dp=(("CADWAIT", "300"),))]
-    res, sets = _apply(tmp_path, rows, {"dp_868_CADWAIT": "900"}, "868",
-                       sockets={"/tmp/loraconf868.sock": ("-", "868"), **RID_SOCKETS})
-    from lhpc.core import radio_daemon
-    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 868 MHz: 2 radios can run it on "
-                                            f"868 MHz: r1 (a), r2 (b); {radio_daemon.SHARED_BAND_TEXT}")
-    assert sets == []
+    res, sets = _apply(tmp_path, rows, {"dp_868_CADWAIT": "900"}, rid,
+                       sockets={**BAND_SOCKETS, "/tmp/loraconf-r1.sock": ("r1", "868"), "/tmp/loraconf-r2.sock": ("r2", "868")})
+    assert res.ok, (res.summary, res.details)
+    assert sets == [(sock, f"SET CADWAIT={row}"), (sock, "SET CADIDLE=250")]
 
 
-@pytest.mark.parametrize("case", [pytest.param("no list", marks=pytest.mark.no_default_hardware),   # really absent
-                                  "invalid list", "radio disabled"])
-def test_r2_r3_r5_control_a_band_without_its_one_radio_applies_the_stacks_value(tmp_path, case):
-    """CONTROL: no hardware list, a list that does not load, or the band's only radio disabled: no row value. Without
-    a list the stack's value goes to the 0.13.x band socket (the upgrade case); with a list that names no one radio
-    for the band, nothing is sent (ledger L27, DEC-W27)."""
+@pytest.mark.parametrize("case,why", [pytest.param("no list", "r1 is not a radio of the hardware list",
+                                                   marks=pytest.mark.no_default_hardware),   # really absent
+                                      ("invalid list", "r1 is not a radio of the hardware list"),
+                                      ("radio disabled", "r1 is disabled")])
+def test_r2_r3_r5_control_a_radio_the_list_does_not_hold_enabled_is_refused(tmp_path, case, why):
+    """CONTROL: no hardware list, a list that does not load, or the radio disabled: refused by name, nothing sent —
+    not the old band value to the 0.13.x band socket either (DEC-W384az: no band form)."""
     R = _radios().Radio
     rows = {"no list": None, "invalid list": None,
             "radio disabled": [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False, dp=(("CADWAIT", "100"),)),
                                R("r2", "b", "uputronics", "868", ce="ce1")]}[case]
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    res, sets = _apply(tmp_path, rows, {"dp_433_CADWAIT": "700"}, "433",
-                       sockets={"/tmp/loraconf433.sock": ("-", "433"), **RID_SOCKETS},
+    res, sets = _apply(tmp_path, rows, {"dp_433_CADWAIT": "700"}, "r1", sockets={**BAND_SOCKETS, **RID_SOCKETS},
                        raw="[[radio]]\nid = 7\n" if case == "invalid list" else None)
-    if case == "no list":
-        assert res.ok, (res.summary, res.details)
-        assert sets == [("/tmp/loraconf433.sock", "SET CADWAIT=700"), ("/tmp/loraconf433.sock", "SET CADIDLE=250")]
-    else:
-        assert not res.ok and res.summary.split(": ")[0] == "the hardware list names no one radio for 433 MHz", res.summary
-        if case == "radio disabled":
-            assert res.summary == "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz"
-        assert sets == []
+    assert (res.ok, res.summary) == (False, f"Cannot apply daemon's daemon parameters: {why}")
+    assert sets == []
 
 
 @pytest.mark.parametrize("setup", ["uputronics-868", "uputronics"])
-def test_k1_an_explicit_band_the_list_does_not_serve_is_refused_never_remapped(tmp_path, setup):
-    """K1 (S2): the list has one radio, on 868; Apply on 433 is refused by name and sends nothing to 868's radio. RED
-    before K1 with the 868-only setup: the setup's single band remapped the 433 request onto 868 (applied 17/17)."""
+def test_k1_a_radio_the_list_does_not_hold_is_refused_never_remapped(tmp_path, setup):
+    """K1 (S2): the list has one radio, r1 on 868; Apply on r2 is refused by name and sends nothing to r1. RED before
+    K1 with the 868-only setup: the setup's single band remapped a 433 request onto 868 (applied 17/17)."""
     from lhpc.core import config as cfgmod
     from lhpc.core.services import ControllerService
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, setup)
     _write(tmp_path, [_radios().Radio("r1", "b", "uputronics", "868", ce="ce1")])
     fake = _ConfDaemon(serve={"/tmp/loraconf-r1.sock": _status("r1", "868"), "/tmp/loraconf868.sock": _status("-", "868")})
-    res = ControllerService(system=fake.system, paths=p).apply_daemon_params("daemon", "433")
-    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz")
+    res = ControllerService(system=fake.system, paths=p).apply_daemon_params("daemon", rid="r2")
+    assert (res.ok, res.summary) == (False, "Cannot apply daemon's daemon parameters: r2 is not a radio of the hardware list")
     assert fake.sent == []
 
 
-@pytest.mark.parametrize("band", ["", "433", "868"])
-def test_c57_a_fixed_band_client_keeps_its_band_when_its_radio_is_disabled(tmp_path, monkeypatch, band):
-    """G1-C57 B1: meshcom (433 only) beside a list whose 433 radio is disabled and whose 868 radio runs: its panel
-    stays on 433 (an explicit 868 too: the panel clamps to the stack's band) and its Apply is refused by name, nothing
-    reaches r2. RED on b872e622: the panel moved to 868 and its Apply sent the SETs to r2's socket."""
+@pytest.mark.parametrize("rid", ["r1", "r2"])
+def test_c57_a_fixed_band_client_has_no_panel_on_a_disabled_or_other_band_radio(tmp_path, monkeypatch, rid):
+    """G1-C57 B1: meshcom (433 only) beside a list whose 433 radio is disabled and whose 868 radio runs: no panel on
+    either radio, and its Apply on either is refused by name, nothing reaches r2. RED on b872e622: the panel moved to
+    868 and its Apply sent the SETs to r2's socket."""
     from lhpc.core import config as cfgmod
+    from lhpc.core import radio_start
     from lhpc.core.services import ControllerService
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, "uputronics")
@@ -185,37 +187,38 @@ def test_c57_a_fixed_band_client_keeps_its_band_when_its_radio_is_disabled(tmp_p
     _write(tmp_path, [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False), R("r2", "b", "uputronics", "868", ce="ce1")])
     fake = _ConfDaemon(serve={"/tmp/loraconf-r2.sock": _status("r2", "868")})
     svc = ControllerService(system=fake.system, paths=p)
-    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "meshcom")
-    view = svc.daemon_params_view("meshcom", band)
-    assert (view["band"], view["bands"]) == ("433", ["433"])
-    res = svc.apply_daemon_params("meshcom", view["band"])     # the band the panel shows, as its Apply button sends it
-    assert (res.ok, res.summary) == (False, "the hardware list names no one radio for 433 MHz: no enabled radio on 433 MHz")
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, r, sid: ([], sid == "meshcom"))   # "it runs there"
+    assert svc.daemon_params_view("meshcom", rid=rid) == {}
+    res = svc.apply_daemon_params("meshcom", rid=rid)
+    assert not res.ok and res.summary == ("Cannot apply meshcom's daemon parameters: "
+                                          + ("r1 is disabled" if rid == "r1" else "meshcom has no daemon parameters on r2"))
     assert fake.sent == []
 
 
-def test_c57_a_switchable_client_without_a_requested_band_takes_a_band_the_list_serves(tmp_path, monkeypatch):
-    """The other half of G1-C57 B1: kiss (433 or 868) on a list with r1 on 868 only applies on 868 when no band is
-    requested, never on its primary 433."""
+def test_c57_a_switchable_client_applies_on_the_radio_the_list_serves(tmp_path, monkeypatch):
+    """The other half of G1-C57 B1: kiss (433 or 868) on a list with r1 on 868 only: its panel and Apply are r1's,
+    on 868, never its primary 433."""
     from lhpc.core import config as cfgmod
+    from lhpc.core import radio_start
     from lhpc.core.services import ControllerService
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, "uputronics")
     _write(tmp_path, [_radios().Radio("r1", "b", "uputronics", "868", ce="ce1")])
     fake = _ConfDaemon(serve={"/tmp/loraconf-r1.sock": _status("r1", "868")})
     svc = ControllerService(system=fake.system, paths=p)
-    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
-    assert svc.daemon_params_view("kiss")["band"] == "868"
-    res = svc.apply_daemon_params("kiss")
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, r, sid: ([], sid == "kiss"))
+    assert svc.daemon_params_view("kiss", rid="r1")["band"] == "868"
+    res = svc.apply_daemon_params("kiss", rid="r1")
     assert res.data["band"] == "868" and fake.sent and {path for path, _v in fake.sent} == {"/tmp/loraconf-r1.sock"}
 
 
-@pytest.mark.parametrize("band", ["915", "", "r1"])
-def test_r6_a_band_outside_433_868_applies_nothing(tmp_path, band):
-    """A unit check: Apply resolves every band it is given to a served one first, so the public path never hands
-    this guard a band outside 433/868."""
+@pytest.mark.parametrize("rid", ["r9", "", "433"])
+def test_r6_a_rid_that_is_no_enabled_radio_applies_nothing(tmp_path, rid):
+    """A unit check: Apply refuses a rid the list does not hold first, so the public path never hands this guard
+    one."""
     R = _radios().Radio
     _write(tmp_path, [R("r1", "a", "uputronics", "433", ce="ce0", dp=(("CADWAIT", "100"),))])
-    assert _svc(tmp_path)._daemon_param_applies("daemon", band) == {}
+    assert _svc(tmp_path)._daemon_param_applies("daemon", rid) == {}
 
 
 # ---- item 2: every pid judged from argv, exe and comm --------------------------------------------------------

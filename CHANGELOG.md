@@ -31,10 +31,10 @@
   QEMU guest on its radio's ports and its own bridge (socat per connection, one XR password); rebuild it from source.
 - meshcom-qemu-raspi: 722b5e8e5 -> b9e5be298 (b9e5be2), used by meshcom-gps-relay, meshcom-qemu
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
-- `lhpc config <stack>@<rid> --daemon-param|--apply-daemon|--reset-daemon` (and `daemon@<rid>`) act on radio rN's own
-  daemon settings, its row of the hardware list, as the web's panel does; before, they saved per band.
-- Upgrade: a per-band daemon value saved before (`dp_<band>_<PARAM>` in a stack's settings) is not migrated; it stays
-  the radio's default until saved over, and a radio's reset returns to it.
+- Daemon parameters per radio and per instance: `daemon@<rid>`'s (CLI `--daemon-param`, its panel) are radio rN's row;
+  `<stack>@<rid>`'s are that instance's own, in `<stack>@<rid>.toml`, applied over the row when it starts there.
+- Upgrade: per-band daemon values (`dp_<band>_<PARAM>` in `<stack>.toml` or `daemon.toml`) are no longer read; move each
+  by hand to `dp_<PARAM>` in `<stack>@<rid>.toml`, or to the radio's row with `lhpc config daemon@<rid> --daemon-param`.
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

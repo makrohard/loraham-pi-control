@@ -541,7 +541,7 @@ def _drive_args(svc):
     return {
         "target": "meshtastic", "stack_id": "meshtastic", "sid": "meshtastic",
         "comp_id": "meshtastic", "component_id": "meshtastic", "surface": "meshtastic",
-        "band": "868", "op": "start", "job": "rf-meshtastic.log", "name": "region",
+        "band": "868", "rid": "r2", "op": "start", "job": "rf-meshtastic.log", "name": "region",
         "comp": comp, "c": comp, "stack": stack, "req": comp.requires[0],
         "run_id": "x", "index": 0, "offset": 0, "channel": "0", "label": "x", "page_id": "x",
         "page": (svc.web_pages() or [None])[0], "summary": {}, "selection": {}, "scopes": [],

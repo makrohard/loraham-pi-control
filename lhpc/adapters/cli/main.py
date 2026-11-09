@@ -14,7 +14,6 @@ apply only after confirmation (or --yes).
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import os
 import sys
 
@@ -337,7 +336,6 @@ def _cmd_config(svc, args) -> int:
         if inst is None or why:
             print(f"ERR   {why or f'{stack}@{rids[0]} cannot be addressed'}")
             return 1
-        band = inst.band
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
                               ("<param>", positional)) if on]
@@ -355,17 +353,13 @@ def _cmd_config(svc, args) -> int:
         if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
             print("ERR   choose one of --daemon-param / --apply-daemon / --reset-daemon")
             return 2
-        # K8e (DEC-W53, DEC-W384ak): an instance's daemon parameters are its radio's own settings (its row, the daemon's
-        # store, as the web's panel), whether named as daemon@<rid> or as <stack>@<rid>; never the band's
+        # DEC-W384az: daemon@<rid> = the radio's own settings (its row); <stack>@<rid> = that instance's own set, applied
+        # over the row when it starts there; never the band's
         drid = inst.rid                         # every daemon-param form has its instance by now (no rid "": no band)
-        def via(res):                            # the summary names the instance it came through
-            return (dataclasses.replace(res, summary=f"{res.summary} (via {stack}@{drid})")
-                    if drid and not svc._is_daemon_target(stack) else res)
-        dsid = svc.DAEMON_ID
         if args.apply_daemon:
-            return _render(via(svc.apply_daemon_params(dsid, band, rid=drid)))
+            return _render(svc.apply_daemon_params(stack, rid=drid))
         if args.reset_daemon:
-            return _render(via(svc.reset_daemon_params(dsid, band, rid=drid)))
+            return _render(svc.reset_daemon_params(stack, rid=drid))
         from lhpc.core import daemon_params as _dp
         vals = {}
         for kv in args.daemon_param:
@@ -378,7 +372,7 @@ def _cmd_config(svc, args) -> int:
                 print(f"ERR   unknown daemon parameter {key!r} — valid: {', '.join(_dp.ALL_PARAMS)}")
                 return 2
             vals[key] = val.strip()
-        return _render(via(svc.save_daemon_params(dsid, band, vals, rid=drid)))
+        return _render(svc.save_daemon_params(stack, vals, rid=drid))
 
     if args.param is None or args.param == "list":
         return _config_list(svc, stack, band, inst)
@@ -720,12 +714,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.add_argument("--reset", action="store_true", help="Reset this stack's settings to defaults")
     p_cfg.add_argument("--yes", action="store_true", help="Apply --reset without confirmation")
     p_cfg.add_argument("--daemon-param", metavar="KEY=VALUE", action="append", dest="daemon_param",
-                       help="Persist a band-scoped daemon parameter override, e.g. TXMODE=DIRECT "
-                            "(repeatable)")
+                       help="Save a daemon parameter of this instance, e.g. TXMODE=DIRECT (repeatable); "
+                            "daemon@<rid>: the radio's own, applied under every instance's own")
     p_cfg.add_argument("--apply-daemon", action="store_true", dest="apply_daemon",
-                       help="Apply this stack's saved daemon params to the running daemon")
+                       help="Apply this instance's saved daemon parameters to its radio's running daemon")
     p_cfg.add_argument("--reset-daemon", action="store_true", dest="reset_daemon",
-                       help="Reset this stack's daemon parameters")
+                       help="Reset this instance's daemon parameters")
     p_cfg.add_argument("--callsign", help="(operator only) set the global operator callsign")
 
     p_build = sub.add_parser("build", help="Build a stack/component")

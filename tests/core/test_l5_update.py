@@ -94,7 +94,7 @@ def test_resolving_a_radios_settings_writes_nothing(tmp_path):
     assert rad.save(_paths(tmp_path), [_r("r1")], MODELS) == []
     p = tmp_path / "config" / "radios.toml"
     before = p.read_bytes()
-    s = rad.radio_settings(_r("r1", txmode="direct"), MODELS["loraham"], {}, defaults)
+    s = rad.radio_settings(_r("r1", txmode="direct"), MODELS["loraham"], defaults)
     assert s.txmode == "direct"
     assert p.read_bytes() == before
 

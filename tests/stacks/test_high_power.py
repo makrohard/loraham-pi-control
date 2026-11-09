@@ -226,12 +226,12 @@ def test_c59_two_radios_on_433_only_the_granted_one_reaches_twenty(tmp_path):
     svc = ControllerService(system=fs.system, paths=p)
     assert svc.set_high_power("r1", "on").ok
     assert [radio_start.start_plan(svc, r)[0]["hipower"] for r in ("r1", "r2")] == ["on", "off"]
-    assert svc.save_daemon_params("daemon", "433", {"POWER": "20"}, rid="r1").ok
-    assert not svc.save_daemon_params("daemon", "433", {"POWER": "20"}, rid="r2").ok
+    assert svc.save_daemon_params("daemon", {"POWER": "20"}, rid="r1").ok
+    assert not svc.save_daemon_params("daemon", {"POWER": "20"}, rid="r2").ok
     fs.sent.clear()
-    svc.apply_daemon_params("daemon", "433", "r2")
+    svc.apply_daemon_params("daemon", rid="r2")
     assert not any(b"POWER=20" in payload for _path, payload in fs.sent)
-    svc.apply_daemon_params("daemon", "433", "r1")
+    svc.apply_daemon_params("daemon", rid="r1")
     assert [path for path, payload in fs.sent if b"POWER=20" in payload] == [dc.conf_socket("r1")]
     fs.sent.clear()
     assert not svc.daemon_set("433", "POWER", "20", apply=True).ok and fs.sent == []
@@ -307,15 +307,15 @@ def test_live_set_against_an_older_daemon_admits_only_the_intersection(tmp_path)
 def _chat_wants_twenty(svc):
     assert svc.set_operator_identity(callsign="XX0XXA").ok          # chat refuses to start without one
     assert svc.set_high_power("r1", "on").ok
-    assert svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
+    assert svc.save_daemon_params("chat", {"POWER": "20"}, rid="r1").ok
 
 
 def test_saving_twenty_into_a_profile_needs_the_saved_switch(tmp_path):
     svc, _ = _svc(tmp_path)
-    assert not svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
+    assert not svc.save_daemon_params("chat", {"POWER": "20"}, rid="r1").ok
     assert svc.set_high_power("r1", "on").ok
-    assert svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
-    assert not svc.save_daemon_params("chat", "433", {"POWER": "19"}).ok
+    assert svc.save_daemon_params("chat", {"POWER": "20"}, rid="r1").ok
+    assert not svc.save_daemon_params("chat", {"POWER": "19"}, rid="r1").ok
 
 
 @pytest.mark.contract
@@ -345,7 +345,7 @@ def test_a_refused_permission_does_not_report_the_daemon_as_failed(tmp_path):
     2026-09-26, row 6)."""
     svc, fs = _svc(tmp_path, status=_status("SX127x", "0"))
     assert svc.set_high_power("r1", "on").ok
-    assert svc.save_daemon_params("kiss", "433", {"POWER": "20"}).ok
+    assert svc.save_daemon_params("kiss", {"POWER": "20"}, rid="r1").ok
     res = svc.start("kiss", apply=True)
     text = "\n".join((res.summary, *res.details))
     assert not res.ok, text
@@ -359,7 +359,10 @@ def test_saved_off_after_saving_twenty_filters_it_but_revokes_nothing(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "1"))
     _chat_wants_twenty(svc)
     assert svc.set_high_power("r1", "off").ok
-    assert "POWER" not in svc._daemon_param_overrides("chat", "433")     # filtered, not deleted
+    from lhpc.core import commands, radio_start
+    from lhpc.core import config as cfgmod
+    assert "POWER" not in radio_start.instance_dp(svc, "chat", "r1")      # filtered, not deleted
+    assert cfgmod.load_stack_config(svc._paths, "chat", inst=commands.Instance("r1"))["dp_POWER"] == "20"
     st = svc.high_power_state("433")
     assert st["live"] is True and st["warn"] and "not granted" in st["mismatch"]
 

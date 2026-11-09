@@ -36,7 +36,7 @@ def test_daemon_needs_band_and_tx_from_app(tmp_path):
     assert radio == "433" and tx == "MANAGED"         # bridge requires MANAGED
     # CADIDLE is no longer forced via requires_daemon_cadidle — it is a configurable per-stack
     # daemon param (default 28 for meshcom) applied at start:
-    assert svc._daemon_param_applies("meshcom", "433").get("CADIDLE") == "28"
+    assert svc._daemon_param_applies("meshcom", "r1").get("CADIDLE") == "28"
 
 
 def test_daemon_stack_uses_the_requested_band(tmp_path):
@@ -605,8 +605,8 @@ def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     launch_band_fixture.set_launch_band(svc, "voice", "433")
-    for b in ("433", "868"):                              # the SAVED daemon params (Settings)
-        assert svc.save_daemon_params("daemon", b, {"MODE": "FSK"}).ok
+    for rid in ("r1", "r2"):                              # the SAVED daemon params (Settings): each radio's row
+        assert svc.save_daemon_params("daemon", {"MODE": "FSK"}, rid=rid).ok
     res = svc.run_action("start", "daemon", apply=True)
     text = "\n".join(res.details)
     assert "[keep] 433 in use by voice" in text          # 433 left untouched
@@ -784,7 +784,7 @@ def test_healthy_client_start_sends_no_daemon_set(tmp_path, set_call):
 def test_healthy_start_with_saved_fsk_sends_no_set(tmp_path, set_call):
     svc = _healthy_kiss(tmp_path)
     set_call(svc)
-    assert svc.save_daemon_params("kiss", "433", {"MODE": "FSK"}).ok
+    assert svc.save_daemon_params("kiss", {"MODE": "FSK"}, rid="r1").ok
     res = svc.start("kiss", apply=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("MODE" in d or "sent" in d.lower() for d in res.details)       # FSK not applied

@@ -425,12 +425,12 @@ def save(paths, radios, models: dict | None = None, retired: tuple | None = None
     return []
 
 
-def radio_settings(radio, model, legacy_dp: dict, defaults: dict) -> RadioSettings:
+def radio_settings(radio, model, defaults: dict) -> RadioSettings:
     """The settings a radio's daemon starts with: each field from the row (an explicit false included), else
     `defaults`, else "auto" for ocp. No old per-band value is read (CLEANUP-DESIGN-v13 13.7, W311). The +20 dBm
-    permission is the row's grant AND the model's high-power switch, default denied. Each dp PARAM: the row, else the
-    one value every client stack holding it agrees on (the stack stores, until they are per radio). Nothing is written
-    (W12). ValueError names a value that fails its rule."""
+    permission is the row's grant AND the model's high-power switch, default denied. The dp PARAMs are the row's alone
+    (DEC-W384az: a client stack's own set is its instance's, applied by SET at its start). Nothing is written (W12).
+    ValueError names a value that fails its rule."""
     band, chip, notes = radio.band, model.chip, []
 
     def row_or_default(row_value, default_key):
@@ -459,23 +459,7 @@ def radio_settings(radio, model, legacy_dp: dict, defaults: dict) -> RadioSettin
     if why:
         raise ValueError(f"{radio.id}: {why} (from {src_ocp})")
     ocp = str(ocp) if type(ocp) is int else ocp
-    dp = dict(radio.dp)
-    held: dict = {}
-    for stack, values in sorted(legacy_dp.items()):
-        for name, value in values.items():
-            if name in dp or name not in ALL_PARAMS:
-                continue
-            if value == "" or _dp_error(name, value, chip, hp):
-                notes.append(f"dp_{band}_{name}={value!r} of {stack} dropped (empty or not valid for {chip})")
-                continue
-            held.setdefault(name, {})[stack] = value
-    for name, by_stack in held.items():
-        if len(set(by_stack.values())) == 1:
-            dp[name] = next(iter(by_stack.values()))
-        else:
-            notes.append(f"dp_{band}_{name} not carried: the client stacks disagree "
-                         f"({', '.join(f'{s}={v!r}' for s, v in sorted(by_stack.items()))})")
-    return RadioSettings(str(txmode), str(cadmon), cadrssi_i, hp, ocp, dp, tuple(notes))
+    return RadioSettings(str(txmode), str(cadmon), cadrssi_i, hp, ocp, dict(radio.dp), tuple(notes))
 
 
 def daemon_control_int(value) -> int:

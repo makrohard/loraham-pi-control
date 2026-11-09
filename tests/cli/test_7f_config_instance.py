@@ -1,6 +1,6 @@
 """Item 7f, DEC-W60 on the CLI: `lhpc config <stack>@<rid> [<param> [<value>]]` lists, shows, sets and resets the
-listed instance's own settings in config/stacks/<stack>@<rid>.toml, never slot 0's; its daemon parameters are its
-radio's, so that form is refused; a target that is no listed instance, or a --band other than its radio's, is
+listed instance's own settings in config/stacks/<stack>@<rid>.toml, never slot 0's; its daemon parameters are its own
+set there too (DEC-W384az; daemon@<rid>'s are the radio's row); a target that is no listed instance, or a --band other than its radio's, is
 refused and writes nothing."""
 import tomllib
 
@@ -68,17 +68,27 @@ def _row_dp(tmp_path):
     return {r.id: dict(r.dp) for r in radios.load(Paths(runtime_root=tmp_path)).radios}
 
 
-@pytest.mark.parametrize("target", ["chat@r3", "daemon@r3"])
-def test_k8e_an_instances_daemon_params_are_its_radios_own_settings(run, tmp_path, target):
-    # DEC-W53, DEC-W384ak: chat@r3 and daemon@r3 write the same store, r3's row of the hardware list; r1 (also on 433)
-    # keeps its own. Before, daemon@r3 saved per band ("daemon (433)") and chat@r3 was refused while two radios shared 433
-    rc, out = run(target, "--daemon-param", "SF=9")
-    via = " (via chat@r3)" if target.startswith("chat") else ""
-    assert (rc, out.splitlines()[0]) == (0, f"OK    saved the daemon settings of r3{via}"), out
+def test_k8e_daemon_at_rid_writes_its_radios_own_row(run, tmp_path):
+    # DEC-W53: daemon@r3 writes r3's row of the hardware list; r1 (also on 433) keeps its own. Before, daemon@r3 saved
+    # per band ("daemon (433)")
+    rc, out = run("daemon@r3", "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (0, "OK    saved the daemon settings of r3"), out
     assert _row_dp(tmp_path) == {"r1": {}, "r3": {"SF": "9"}}
-    rc, out = run(target, "--reset-daemon")
-    assert (rc, out.splitlines()[0]) == (0, f"OK    saved the daemon settings of r3{via}"), out
+    rc, out = run("daemon@r3", "--reset-daemon")
+    assert (rc, out.splitlines()[0]) == (0, "OK    saved the daemon settings of r3"), out
     assert _row_dp(tmp_path) == {"r1": {}, "r3": {}}
+
+
+def test_w384az_an_app_instances_daemon_params_are_its_own_set(run, tmp_path):
+    # DEC-W384az (supersedes DEC-W384ak (a)): chat@r3 writes its own set in chat@r3.toml, never r3's row (red on
+    # 8690b049: "saved the daemon settings of r3 (via chat@r3)" into the row); chat@r1 and the rows keep theirs
+    rc, out = run("chat@r3", "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (0, "OK    saved the daemon settings of chat@r3"), out
+    assert _stored(tmp_path, "chat@r3.toml").get("dp_SF") == "9" and "dp_SF" not in _stored(tmp_path, "chat@r1.toml")
+    assert _row_dp(tmp_path) == {"r1": {}, "r3": {}}
+    rc, out = run("chat@r3", "--reset-daemon")
+    assert (rc, out.splitlines()[0]) == (0, "OK    saved the daemon settings of chat@r3"), out
+    assert "dp_SF" not in _stored(tmp_path, "chat@r3.toml")
 
 
 @pytest.mark.parametrize("target", ["chat", "chat@r1"])
@@ -86,8 +96,8 @@ def test_g1_k8a_2_with_one_radio_able_to_run_it_the_daemon_params_save_as_before
     # W290 (handler): one radio of chat's band, the bare form addresses it, as before K8; so does its instance
     radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios_fixture.R3))
     rc, out = run(target, "--daemon-param", "SF=9")
-    assert rc == 0 and out.splitlines()[0] == "OK    saved the daemon settings of r1 (via chat@r1)", out
-    assert _row_dp(tmp_path)["r1"] == {"SF": "9"}
+    assert rc == 0 and out.splitlines()[0] == "OK    saved the daemon settings of chat@r1", out
+    assert _stored(tmp_path, "chat@r1.toml").get("dp_SF") == "9" and _row_dp(tmp_path)["r1"] == {}
 
 
 def test_g1_k8a_re_b_a_disabled_radios_instance_never_reaches_the_daemon_params(run, tmp_path):
@@ -100,13 +110,14 @@ def test_g1_k8a_re_b_a_disabled_radios_instance_never_reaches_the_daemon_params(
     assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before
 
 
-@pytest.mark.parametrize("target", ["chat@r3", "daemon@r3"])
-def test_k8e_an_instances_apply_reaches_its_radios_daemon(run, target):
-    # --apply-daemon goes to r3's own daemon: while it is down, the refusal names it (before: the band's two radios)
+@pytest.mark.parametrize("target,why", [("chat@r3", "Apply live is only available while chat@r3 is running"),
+                                        ("daemon@r3", "the daemon of r3 is not running — start it first: lhpc stack "
+                                                      "start daemon@r3")])
+def test_k8e_an_instances_apply_reaches_its_radios_daemon(run, target, why):
+    # --apply-daemon goes to r3's own daemon: while it is down, the refusal names it (before: the band's two radios);
+    # an app instance's only while it runs there
     rc, out = run(target, "--apply-daemon")
-    via = " (via chat@r3)" if target.startswith("chat") else ""
-    assert (rc, out.splitlines()[0]) == (1, "ERR   the daemon of r3 is not running — start it first: lhpc stack start "
-                                            f"daemon@r3{via}"), out
+    assert (rc, out.splitlines()[0]) == (1, f"ERR   {why}"), out
 
 
 @pytest.mark.parametrize("argv", [("daemon", "--daemon-param", "SF=9"), ("daemon", "--reset-daemon"),
@@ -147,14 +158,16 @@ def test_g1_k8e_a_stack_without_daemon_parameters_is_refused(run, tmp_path, targ
     assert _row_dp(tmp_path) == {"r1": {}, "r3": {}}
 
 
-def test_g1_k8e_3_a_reset_returns_to_the_old_band_value_until_saved_over(run, tmp_path):
-    # W269 (CHANGELOG): a 0.13 per-band value (chat's dp_433_SF) stays the radio's default; a reset returns to it
-    from lhpc.core import radio_start
+def test_w384az_an_old_band_value_is_read_nowhere_and_a_reset_returns_to_the_default(run, tmp_path):
+    # DEC-W384az, W269 (CHANGELOG: move it by hand): a 0.13 per-band value (chat's dp_433_SF) is no store any more:
+    # not r3's row, not chat@r3's; a reset of chat@r3's set returns to the default (was: to the old band value)
+    from lhpc.core import daemon_params, radio_start
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"dp_433_SF": "7"})
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert radio_start.row_dp(svc, "433", "r3")["SF"] == "7"
-    assert run("chat@r3", "--daemon-param", "SF=9")[0] == 0 and radio_start.row_dp(svc, "433", "r3")["SF"] == "9"
-    assert run("chat@r3", "--reset-daemon")[0] == 0 and radio_start.row_dp(svc, "433", "r3")["SF"] == "7"
+    default = daemon_params.default_value("chat", "433", "SF")
+    assert default != "7" and radio_start.row_dp(svc, "r3") == {} and svc._daemon_param_applies("chat", "r3")["SF"] == default
+    assert run("chat@r3", "--daemon-param", "SF=9")[0] == 0 and svc._daemon_param_applies("chat", "r3")["SF"] == "9"
+    assert run("chat@r3", "--reset-daemon")[0] == 0 and svc._daemon_param_applies("chat", "r3")["SF"] == default
 
 
 def test_g1_k8e_4_an_apply_reaches_r3s_running_daemon_only(tmp_path, monkeypatch, capsys):

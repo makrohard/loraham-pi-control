@@ -116,23 +116,6 @@ def _commit_config(paths, targets: list, held: bool) -> None:
 
 class ParamsConfigMixin:
 
-    def _daemon_param_overrides(self, stack_id: str, band: str) -> dict:
-        """Persisted operator overrides for a stack's daemon params, read from the stack's
-        runtime-local config as flat `dp_<band>_<PARAM>` keys (dot-free, so TOML never nests
-        them). Only validated keys are returned; {} when none."""
-        from . import config as cfgmod
-        from . import daemon_params
-        stored = cfgmod.load_stack_config(self._paths, self._owner_stack_id(stack_id))
-        family = self.chip_family_for_band(band)
-        high_power = self._granted(band)                     # the band radio's grant: future overrides only
-        out: dict[str, str] = {}
-        for name in daemon_params.ALL_PARAMS:
-            v = stored.get(f"dp_{band}_{name}")
-            if v not in (None, "") and daemon_control.validate_set(name, str(v), family,
-                                                                   high_power) is None:
-                out[name] = str(v)
-        return out
-
     def _has_daemon_params(self, target: str) -> bool:
         """True when `target` gets a daemon-param panel: a daemon-client stack/component, the daemon
         component, or the daemon stack. Owner-stack scoped, so a direct daemon-backed COMPONENT
@@ -900,7 +883,7 @@ class ParamsConfigMixin:
                 # PASSIVE channel read: this renders a settings form, it is not an operator
                 # asking to measure the channel. A scan here would destroy an arriving frame.
                 actual = {**self.daemon_channel(live_band, rid), **dv.status}
-                cfg = self._daemon_param_applies("daemon", live_band, rid) if dv.reachable else {}
+                cfg = self._daemon_param_applies("daemon", rid) if dv.reachable else {}
                 view["radios"] = [{"band": live_band, "rid": rid, "reachable": dv.reachable,
                                    "error": dv.error, "status": actual, "config": cfg}]
                 # Order the live per-parameter controls the same as the daemon-params panel

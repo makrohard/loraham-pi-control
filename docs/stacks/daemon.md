@@ -70,15 +70,10 @@ Types are exact: `enabled = "true"` or `cadrssi = "-90"` is refused. The pins of
 not) must not overlap.
 
 **A field left out is not set** and is resolved at the daemon's start:
-- `txmode`, `cadmon`, `cadrssi` and `high_power` take the band's old setting (`tx_<band>`, `cadmon_<band>`, …)
-  when there is one, else the default. An old `hipower_<band>` is not carried to a model without a high-power
-  switch.
-- `ocp_ma` takes the old `ocp_<band>`, else `auto`.
-- A `dp_<PARAM>` left out takes the old per-band value (`dp_<band>_<PARAM>`) when every client stack that holds it
-  agrees; when they disagree, or a value is empty or not valid for the chip, it is not carried, and the start
-  names it.
-- A carried old value that breaks its rule refuses the start, naming the value and where it came from; it is
-  never silently replaced.
+- `txmode`, `cadmon`, `cadrssi` and `high_power` take the default; no old per-band setting (`tx_<band>`,
+  `hipower_<band>`, …) is read.
+- `ocp_ma` takes `auto`.
+- A `dp_<PARAM>` left out is not sent at the start; a client stack's own values are its instance's (below).
 
 A field that is set wins, `false` included. The row's `dp_` values reach that radio's daemon after READY and on
 every Apply. Nothing is written back to the file at a start.
@@ -146,13 +141,14 @@ limits in [reticulum](reticulum.md#band-limits). Defaults:
 Set them in the **Daemon radio parameters** panel of each stack's Settings (*Save* persists,
 *Apply* pushes live, *Reset* restores defaults) or with the CLI (`<stack>` may be `daemon`). The daemon's own
 panel is per radio (`?rid=rN`) and saves that radio's `dp_<PARAM>` in its row of `config/radios.toml`
-([the list file](#the-list-file)); `lhpc config chat@r3 --daemon-param …` and `lhpc config daemon@r3 --daemon-param …`
-write that same row of r3 (a value saved per band before 0.14, `dp_<band>_<PARAM>` in a stack's settings,
-stays the radio's default until saved over; a reset returns to it):
+([the list file](#the-list-file)), as `lhpc config daemon@r3 --daemon-param …` does for r3. A client stack's panel
+and `lhpc config chat@r3 --daemon-param …` save chat@r3's own set (`dp_<PARAM>` in `config/stacks/chat@r3.toml`);
+chat@r3's start applies it over r3's row, over the stack's defaults above. A value equal to what it would get
+anyway clears. A value saved per band before 0.14 (`dp_<band>_<PARAM>`) is not read:
 
 ```
 lhpc config <stack>@<rid> --daemon-param KEY=VALUE [--daemon-param ...]   # persist
-lhpc config <stack>@<rid> --apply-daemon                                  # push live (the stack must be running)
+lhpc config <stack>@<rid> --apply-daemon     # push live (an app instance: while it runs there, alone on its radio)
 lhpc config <stack>@<rid> --reset-daemon
 ```
 

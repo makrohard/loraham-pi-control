@@ -332,8 +332,8 @@ def test_run_starts_lets_an_interrupt_through():
 DEFAULTS = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off", "ocp": "auto"}
 
 
-def _resolve(radio, model="loraham", legacy_dp=None):
-    return _radios().radio_settings(radio, MODELS[model], legacy_dp or {}, DEFAULTS)
+def _resolve(radio, model="loraham"):
+    return _radios().radio_settings(radio, MODELS[model], DEFAULTS)
 
 
 def test_k2_an_unset_row_takes_the_defaults_and_nothing_is_carried():
@@ -361,22 +361,13 @@ def test_k2_a_grant_holds_only_on_the_band_it_was_given_on(granted_on, band, wan
     assert p["hipower"] == ("on" if want else "off")
 
 
-def test_dp_carried_only_when_every_client_stack_agrees():
-    """B4-D4: dp carried only when every client stack agrees, else named and not carried."""
-    agree = _resolve(_r("r1", band="433"), legacy_dp={"loraham-chat": {"CADWAIT": "200"},
-                                                      "loraham-kiss-tnc": {"CADWAIT": "200"}})
-    assert agree.dp.get("CADWAIT") == "200"
-    differ = _resolve(_r("r1", band="433"), legacy_dp={"loraham-chat": {"CADWAIT": "200"},
-                                                       "loraham-kiss-tnc": {"CADWAIT": "300"}})
-    assert "CADWAIT" not in differ.dp
-
-
-def test_dp_empty_or_invalid_legacy_values_are_dropped():
-    """B4-D4: "" or invalid → dropped (and named); they do not count against agreement."""
-    s = _resolve(_r("r1", band="433"), legacy_dp={"loraham-chat": {"CADWAIT": "200"},
-                                                  "loraham-kiss-tnc": {"CADWAIT": ""},
-                                                  "loraham-voice": {"CADWAIT": "not-a-number"}})
-    assert s.dp.get("CADWAIT") == "200"
+def test_w384az_the_daemons_dp_are_the_rows_alone():
+    """DEC-W384az (was B4-D4: the client stacks' agreed dp_<band>_* carried): the radio's start takes its row's dp_*
+    only; a client stack's own set is its instance's, applied by SET at that instance's start."""
+    import inspect
+    assert list(inspect.signature(_radios().radio_settings).parameters) == ["radio", "model", "defaults"]
+    assert _resolve(_r("r1", band="433", dp=(("CADWAIT", "200"),))).dp == {"CADWAIT": "200"}
+    assert _resolve(_r("r1", band="433")).dp == {}
 
 
 def test_check_refuses_invalid_settings_on_the_row():
