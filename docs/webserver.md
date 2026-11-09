@@ -142,7 +142,7 @@ fronts each with its own nginx listener carrying the console's mTLS + source-CID
 native port firewalled and use the proxy port:
 
 ```
-lhpc webserver proxy meshtastic --mode lan --port 8447 --access-mode local-open-remote-auth \
+lhpc webserver proxy meshtastic@r2 --mode lan --port 8450 --access-mode local-open-remote-auth \
      --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
@@ -152,8 +152,10 @@ lhpc webserver apply
   `no-auth` or `http`. Non-`local` needs `--confirm-phrase enable-remote`; there a public range,
   `no-auth` or an `http` `--scheme` need `enable-remote-danger`.
 - `--port`: `0` = not proxied (omitted: the saved port is kept). The console suggests console port + 1 + the page's
-  position (first pages sorted by id, then further pages; fresh box: graywolf `8444`, meshcom
-  `8445`, meshcore `8446`, meshtastic `8447`, reticulum `8448`), skipping ports already saved;
+  position, radio by radio (each radio's first pages sorted by id, then its further pages; a page is
+  `<page>@<rid>`; a box with r1 on 433 and r2 on 868: graywolf@r1 `8444`, meshcom@r1 `8445`, meshtastic@r1
+  `8446`, reticulum@r1 `8447`, graywolf@r2 `8448`, meshcore@r2 `8449`, meshtastic@r2 `8450`,
+  meshcore-meshcore-node@r2 `8451`), skipping ports already saved;
   any free port ≥ 1024 works.
 - `--access-mode` (alias `--auth`) takes the console's values and the same client certificates.
   Pass it explicitly: a page whose stored policy is `no-auth` otherwise refuses with *elevated
