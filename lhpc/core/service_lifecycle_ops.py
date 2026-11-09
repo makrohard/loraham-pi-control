@@ -2606,20 +2606,28 @@ class LifecycleOpsMixin:
         frames to loraham-kiss-tnc, which owns the tuning — so listing both as a conflict is
         simply wrong, and it is the kind of red banner an operator learns to ignore. Drop any
         entry that depends (directly or transitively) on a component of another entry, and a
-        group that collapses to one claimant is no conflict at all.
+        group that collapses to one claimant is no conflict at all. K6: one app stack per RADIO (W286/W322):
+        instances compete only on the same radio (`rid`); an entry without one (not told by an instance) is on
+        every radio of the band (fail-safe), and an instance's stack is its `sid`.
         """
         if len(entries) < 2:
             return []
         stack_of = {c.id: st.id for st in self.stacks() for c in st.components}
-        ids = {e["id"] for e in entries}
-        competitors = []
-        for e in entries:
-            st = self.stack(e["id"])
-            upstream = {stack_of.get(c.id) for c in self._tx_chain_components(st)} if st else set()
-            if ids & (upstream - {e["id"]}):
-                continue                      # reaches the radio through another listed stack
-            competitors.append(e["name"])
-        return competitors if len(competitors) > 1 else []
+        rids = {e.get("rid", "") for e in entries} - {""}
+        out = []
+        for rid in sorted(rids) or [""]:
+            group = [e for e in entries if e.get("rid", "") in (rid, "")]
+            ids = {e.get("sid") or e["id"] for e in group}
+            competitors = []
+            for e in group:
+                sid = e.get("sid") or e["id"]
+                st = self.stack(sid)
+                upstream = {stack_of.get(c.id) for c in self._tx_chain_components(st)} if st else set()
+                if ids & (upstream - {sid}):
+                    continue                      # reaches the radio through another listed stack
+                competitors.append(e["name"])
+            out += [n for n in competitors if n not in out] if len(competitors) > 1 else []
+        return out
 
     def stack_running(self, target: str) -> bool:
         """True if the stack's main component is currently running/degraded."""

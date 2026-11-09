@@ -310,3 +310,17 @@ def test_radio_not_ready_hint_names_a_running_hardware_claimant(tmp_path, monkey
     _St.run_state = _RS.DEGRADED
     hint = svc._radio_not_ready_hint("433")
     assert "meshtastic" in hint and "POWER-CYCLE" not in hint
+
+
+def test_k6_instances_compete_only_on_their_own_radio(tmp_path):
+    # W286/W322 per radio: two stacks on one band's two radios are no rivals; on one radio they are; a client
+    # instance (graywolf@r2 -> kiss@r2) is filtered by its stack; an entry without a radio is on every radio.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    def e(sid, name, rid=""):
+        return {"id": f"{sid}@{rid}", "sid": sid, "rid": rid, "name": name} if rid else {"id": sid, "name": name}
+    kiss2, core3 = e("kiss", "KISS r2", "r2"), e("meshcore", "MeshCore r3", "r3")
+    assert svc._radio_competitors([kiss2, core3]) == []                                   # two radios
+    assert sorted(svc._radio_competitors([kiss2, e("meshcore", "MeshCore r2", "r2")])) == ["KISS r2", "MeshCore r2"]
+    assert svc._radio_competitors([kiss2, e("graywolf", "Graywolf r2", "r2")]) == []       # client, by its sid
+    assert sorted(svc._radio_competitors([kiss2, core3, e("chat", "Chat")])) == ["Chat", "KISS r2", "MeshCore r3"]
