@@ -165,7 +165,7 @@
                     {% if comp.build_steps %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
                     {% if comp.test_argv %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
                     {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
-                    {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', band=comp.band, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
+                    {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', radio=g.view.radio or None, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
                     {# Last button: per-component remote freshness probe. #}
                     {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
                   </div>

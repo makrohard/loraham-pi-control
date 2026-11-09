@@ -1,6 +1,6 @@
 // In a param grid driven by a "radio" select, show only the chosen radio's per-radio cells: a cell marked
 // data-radio="rN" hides unless rN is chosen; a choice that names no radio (all, a band) shows every cell.
-// W2 (WEB-LANE-PLAN-v5 "data-band -> data-radio", the handler's W290 lens on G1-W2-RE): the band filter, keyed by the
+// W2 (WEB-LANE-PLAN-v5: the band attribute became data-radio, G1-W2-RE): the filter, keyed by the
 // selected radio. init(root) re-runs on lhpc:bodyloaded so lazily-loaded stack bodies get wired too.
 (function () {
   "use strict";
