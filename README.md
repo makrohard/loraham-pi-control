@@ -311,7 +311,7 @@ from what is compiled. Host tests and `--tx`: [auto-install](docs/cli.md#auto-in
 <details><summary><em>Per-stack instead of everything</em></summary>
 
 ```bash
-# daemon — LoRaHAM daemon, owns the radios (both bands); binary by default (no build step)
+# daemon — LoRaHAM daemon, owns the radios (one process per radio); binary by default (no build step)
 lhpc install daemon
 #   from source instead:  lhpc install daemon --source pinned && lhpc build daemon
 
@@ -382,7 +382,7 @@ lhpc config <stack>                # list the stack's options and current values
 lhpc config chat call YOURCALL-10 # set one option (YOURCALL-10 = your callsign+SSID)
 lhpc config <stack>@<rid> <param> <value>         # one instance's value (its radio's)
 lhpc stack start|stop|restart <stack>@<rid>       # plans + confirms; --yes to skip the prompt
-lhpc stack stop daemon --radio r1                 # stop one radio's daemon only
+lhpc stack stop daemon@r1                         # stop one radio's daemon only
 lhpc logs <target>                 # tail a component log
 lhpc rflog <stack>@<rid>          # tail an instance's RF log (what the radio heard and sent)
 lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)

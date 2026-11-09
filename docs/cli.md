@@ -190,8 +190,8 @@ lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
 lhpc hardware waveshare-433  # Waveshare SX1262 (433)
 lhpc hardware waveshare-868  # Waveshare SX1262 (868)
-lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes effect at that band's next daemon start
-lhpc hardware --ocp 433 auto|<mA>     # the band's PA over-current limit (auto: 140 with high power, else 100); next daemon start
+lhpc hardware --high-power r1 on|off  # allow POWER=20 on radio r1 (an SX127x board); takes effect at its daemon's next start
+lhpc hardware --ocp r1 auto|<mA>      # radio r1's PA over-current limit (auto: 140 with high power, else 100); next daemon start
 ```
 
 Web: *Apps › Daemon › Hardware* (`/hardware`) lists the radios. Each radio's detail page
@@ -306,7 +306,7 @@ whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack> --y
 holders and starts, also from a script — the apps first, then the daemon on the held band only.
 A single daemon process serving both bands stops on both when the other band has no clients, and
 the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
-stopped. `lhpc stack {start|stop|restart} daemon --radio rN` acts on the daemon of radio rN alone (its clients
+stopped. `lhpc stack {start|stop|restart} daemon@rN` (`daemon --radio rN` in scripts) acts on the daemon of radio rN alone (its clients
 first on a stop) — the remedy a held radio names. A band option is refused by name with the instance form. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.

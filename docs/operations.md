@@ -168,7 +168,7 @@ install` keeps an installed source as it is and points there); a binary install 
   it holds each band's radio claim from that check to the last frame, so a start cannot take the band
   in between.
 - Read-only status/doctor/page loads never transmit and never initialise a radio.
-- +20 dBm on an SX127x board is off by default and needs a per-band switch and a daemon restart;
+- +20 dBm on an SX127x board is off by default and needs the radio's own switch and a restart of its daemon;
   its limits, and the LoRaHAM 433 caveat, are in [daemon](stacks/daemon.md#settings).
 
 ## Secrets and passwords
