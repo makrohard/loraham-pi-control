@@ -9,7 +9,15 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
+from . import (
+    commands,
+    config_save,
+    daemon_control,
+    listeners,
+    runtime_fs,
+    spi_mode,
+    validators,
+)
 from . import instances as _instances
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
@@ -668,10 +676,29 @@ class ParamsConfigMixin:
                     run_counts.get(p.name, 0))
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
+                elif (po := self._port_of_default(p, _instances.store_inst(self, owner.id, cfg_band, inst))):
+                    out[p.name] = po                          # K6S-2: the other stack's EFFECTIVE port there
                 else:
                     bd = self._band_default(p, cfg_band or band, inst)
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
+
+    def _port_of_default(self, p, inst) -> str:
+        """A `{port_of:STACK:BASE}` default for instance `inst` (K6S-2, G1-K7G): STACK's instance on the same radio
+        listens on its saved base (the param whose default is `{port:BASE}`, in its own store) else BASE, + 133 x
+        (n - 1); "" for any other default or without a radio. A saved value of `p` wins (the caller's)."""
+        m = commands._PORT_OF_RE.fullmatch(getattr(p, "default_template", "") or "")
+        if not m or not getattr(inst, "rid", "") or self.stack(m.group(1)) is None:
+            return ""
+        other, base = self.stack(m.group(1)), int(m.group(2))
+        stored = _instances.stores(self, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))[0]
+        counts = self._owner_param_counts(other)[0]
+        for c in other.components:
+            for q in c.run_params:
+                if getattr(q, "default_template", "") == f"{{port:{base}}}":
+                    saved = self._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0]
+                    base = int(saved) if str(saved or "").strip().isdigit() else base
+        return str(inst.port(base))
 
     def gui_unavailable_components(self, stack) -> tuple:
         """Component ids of `stack` that CANNOT work here because a GUI-only dependency of theirs is
