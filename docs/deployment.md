@@ -154,7 +154,7 @@ loginctl enable-linger "$USER"     # keep running after logout
 | `KillMode=process` on `lhpc-web.service` and `lhpc-boot-restore.service` | the stacks and detached jobs LHPC starts live in the unit's control group; the default `control-group` would kill them on every web restart, self-update, or (for the oneshot) stop, restart or start timeout. Controller uninstall stops them explicitly |
 | `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`, `XDG_CACHE_HOME`, `PIP_CACHE_DIR` → `build/tool-cache/` | build and QEMU toolchain caches stay under the runtime root, not in `~/.platformio`, `~/.espressif` or `~/.cache` (install the ESP QEMU/toolchain into `IDF_TOOLS_PATH`) |
 | `MemoryDenyWriteExecute` omitted | QEMU's TCG JIT (the meshcom emulator) needs writable-executable memory |
-| `PrivateTmp=false` | the console must see the daemon's shared sockets in `/tmp` (`/tmp/loraconf*.sock`, `/tmp/lora*.sock`) |
+| `PrivateTmp=false` | the console must see the daemon's shared sockets in `/tmp`, one set per radio (`/tmp/loraconf-<rid>.sock`, `/tmp/lora-<rid>.sock`, `/tmp/loraf-<rid>.sock`) |
 
 ## Controller status & updates on the web console
 

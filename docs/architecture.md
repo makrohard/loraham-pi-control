@@ -158,9 +158,9 @@ or within 30 s; a recheck under the operation locks never uses it (`core/source_
 
 ## Radios, bands and resource claims
 
-The LoRaHAM daemon runs one instance per band (`--radio 433|868`), each with its own CONF socket
-(`/run/loraham/loraconf{band}.sock` when it exists, else `/tmp/loraconf{band}.sock`), raw data socket (`/tmp/lora{band}.sock`) and framed socket
-(`/tmp/lora{band}f.sock`). Components declare **resource claims** in the manifest
+The LoRaHAM daemon runs one process per enabled radio of the hardware list (`--radio <band> --id <rid>`), each with
+its own CONF socket (`/tmp/loraconf-<rid>.sock`; `/run/loraham/loraconf-<rid>.sock` when that exists), raw data
+socket (`/tmp/lora-<rid>.sock`) and framed socket (`/tmp/loraf-<rid>.sock`). Components declare **resource claims** in the manifest
 (`[[stack.component.resource]]`: key, kind, mode); `core/resources.py` turns declared claims plus
 observed state into conflicts, and a start is blocked, with the holder named, if a running stack
 already holds a resource it needs. The modes:
