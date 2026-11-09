@@ -1239,7 +1239,7 @@ class ParamsConfigMixin:
 
             if not live_modes:
                 return _unmarked()                # nothing that needs a restart changed
-            live, live_band = (_instances.instance_runs(self, self._owner_stack(sid).main_component, inst, inst.band), inst.band) if getattr(inst, "rid", "") else self.active_config_consumer(sid, fresh=True)
+            live, live_band = self.active_config_consumer(sid, fresh=True, inst=inst)    # K6: the instance's consumers
             live_seen["v"] = live          # reused by the apply hints — never probed twice
             if not live:
                 return _unmarked()                # nobody is reading this configuration
@@ -1594,7 +1594,7 @@ class ParamsConfigMixin:
 
     # ---- durable restart-required state (schema, read, merge, clear: restart_required.py) ------
 
-    def active_config_consumer(self, stack_id: str, *, fresh: bool = False) -> tuple[bool, str]:
+    def active_config_consumer(self, stack_id: str, *, fresh: bool = False, inst=None) -> tuple[bool, str]:
         """Is this stack a LIVE consumer of its saved configuration, and on which band?
 
         ONE predicate for every writer that must warn "the running thing no longer matches
@@ -1608,10 +1608,14 @@ class ParamsConfigMixin:
             # operation cached before it acquired the lock (a stack that went live
             # while the save queued for the exclusive lock was committed with no marker).
             self.build_snapshot(fresh=True)
-        if self.stack_running(stack_id):
-            return True, self._effective_band(stack_id, "")
         st = self.stack(stack_id)
         main = st.main_component if st is not None else None
+        rid = getattr(inst, "rid", "")
+        # K6: an instance's save asks about THAT instance: its own process or record, else (below) the presented
+        # command / GUI fallback on its band (the interactive marker is per stack until it is per instance)
+        if (_instances.instance_runs(self, main, inst, inst.band) if rid and main is not None
+                else self.stack_running(stack_id)):
+            return True, (inst.band if rid else self._effective_band(stack_id, ""))
         # An INTERACTIVE main whose command has been prepared and presented is a live consumer too:
         # the operator can still run it, and it carries the identity that was generated FOR it
         # (Chat fell through this gap — its presented command kept the old callsign
@@ -1620,7 +1624,7 @@ class ParamsConfigMixin:
         if st is not None and (getattr(main, "interactive", False)
                                or self.gui_fallback_active(st)):
             ib = self.interactive_band(stack_id)
-            if ib is not None:
+            if ib is not None and (not rid or not ib or ib == inst.band):
                 return True, ib
         return False, ""
 
@@ -2475,13 +2479,15 @@ class ParamsConfigMixin:
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file alone
-        label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
+        cfg_band = self._config_band(target, band)
+        inst = _instances.store_inst(self, target, cfg_band, inst)       # K6: a band caller resets its band's instance
+        own = _instances.own_rid(self._paths, inst)
+        label = f"'{_instances.key(target, inst)}'" if own else f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
-        # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
-        # reset of one band owns that file too; a band-less stack has only the one.
-        files = [""] if own else ([cfg_band, ""] if cfg_band else [""])   # a listed copy: its own file, by the copy
+        # K6: the instance's own file, and the stack's global `<sid>.toml` (its autostart, 13.12.1); without an
+        # instance the global one holds everything
+        files = [inst, None] if own else [None]
         cleared: list = []
         _gps_busy: dict = {}
 
@@ -2489,10 +2495,10 @@ class ParamsConfigMixin:
             return [k for k in stored
                     if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
 
-        def _render_reset(pth, b):
+        def _render_reset(pth, i):
             # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
             # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
-            merged = merge_stack_values(pth, target, b, {}, inst=inst)
+            merged = merge_stack_values(pth, target, "", {}, inst=i)
             normal = _normal(merged)
             if not normal:
                 return None
@@ -2521,8 +2527,8 @@ class ParamsConfigMixin:
         try:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
-                ("stack", _stack_config_path(self._paths, target, b, inst),
-                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
+                ("stack", _stack_config_path(self._paths, target, "", i),
+                 lambda pth, i=i: _render_reset(pth, i), 0o644) for i in files] + [
                 self._restart_marker_target(target, target, band, cfg_band, params, set(), {}, inst)])
             if cleared:
                 self._invalidate_config()

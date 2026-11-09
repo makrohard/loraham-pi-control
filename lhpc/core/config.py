@@ -2179,10 +2179,10 @@ def _render_stack_config(stack_id: str, values: dict) -> str:
     return rendered
 
 
-def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "") -> Path:
-    """Persist a stack/band's configuration (flat key/value, stored as strings).
-    Atomic + locked so concurrent web saves cannot corrupt or interleave."""
-    path = _stack_config_path(paths, stack_id, band)
+def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "", inst=None) -> Path:
+    """Persist a stack's configuration (flat key/value, stored as strings): the instance's own file, else the
+    global one (K6). Atomic + locked so concurrent web saves cannot corrupt or interleave."""
+    path = _stack_config_path(paths, stack_id, band, inst)
     with config_lock(paths):
         _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
     return path
