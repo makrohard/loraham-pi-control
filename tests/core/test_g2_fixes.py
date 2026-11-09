@@ -222,15 +222,17 @@ def test_r6_a_band_outside_433_868_applies_nothing(tmp_path, band):
 
 def _refusal(tmp_path, procs):
     """r1's start-plan refusal with /proc holding `procs`: pid -> (argv or None, exe or None, comm or None, exists[,
-    state]): an optional fifth element is the process state written to /proc/<pid>/stat (e.g. "Z")."""
+    state[, task ids]]): the process state written to /proc/<pid>/stat (e.g. "Z") and its /proc/<pid>/task listing."""
     from lhpc.core import radio_start
     R = _radios().Radio
     _write(tmp_path, [R("r1", "low", "loraham", "433")])
     fake = {"cmdlines_data": {}, "links": {}, "files": {}, "paths": set(), "dirs": {"/proc": []}}
-    for pid, (argv, exe, comm, exists, *state) in procs.items():
+    for pid, (argv, exe, comm, exists, *more) in procs.items():
         fake["dirs"]["/proc"].append(str(pid))
-        if state:
-            fake["files"][f"/proc/{pid}/stat"] = f"{pid} ({comm or 'x'}) {state[0]} 1 {pid} {pid} 0 -1 4194560"
+        if more:                                    # (state[, task ids]): /proc/<pid>/stat and /proc/<pid>/task
+            fake["files"][f"/proc/{pid}/stat"] = f"{pid} ({comm or 'x'}) {more[0]} 1 {pid} {pid} 0 -1 4194560"
+            if len(more) > 1:
+                fake["dirs"][f"/proc/{pid}/task"] = [str(t) for t in more[1]]
         if argv is not None:
             fake["cmdlines_data"][pid] = argv
         if exe is not None:
@@ -259,8 +261,15 @@ def test_p6_a_daemon_zombie_holds_no_radio(tmp_path):
     # W3-LAB-FLAKES-DIAG (a8c40e57): a `[loraham_daemon] <defunct>` left unreaped by any process on the host (argv [],
     # no exe, comm loraham_daemon, state Z) was read as an unknown daemon holding every radio, so r1's start was
     # refused. A zombie has released everything (Lifecycle._proc_ceased: Z/X = ceased): it holds no radio.
-    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "Z")}) == ""
-    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "X")}) == ""
+    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "Z", [4242])}) == ""
+    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "X", [4242])}) == ""
+
+
+def test_g1_zb1_a_zombie_leader_with_a_live_thread_still_holds_the_radio(tmp_path):
+    # DEC-W384bk: the leader shows Z after pthread_exit while a worker thread runs on (and may hold the radio): only a
+    # task list of the leader alone is dead; more threads, or no readable task list, keep the daemon counted
+    assert "4242" in _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "Z", [4242, 4243])})
+    assert "4242" in _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "Z")})
 
 
 def test_p6_the_same_entry_alive_still_refuses(tmp_path):

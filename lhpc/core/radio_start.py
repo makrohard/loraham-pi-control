@@ -193,15 +193,17 @@ def _daemon_procs(svc) -> list:
     unknown). G2-0.14.0-1 item 2: every pid is judged (the command lines and the /proc listing) from all three sources
     (argv, the exe link, comm). A pid any readable source names as another program is not the daemon (a kernel
     thread, another user's process, G2-D12); one whose three sources are all unreadable while it still exists is
-    "unknown", which the start and save rules refuse; one gone by the reads is not counted; a zombie (state Z/X in its
-    stat, Lifecycle._proc_ceased's rule) holds no radio and is not counted (W3-LAB-FLAKES-DIAG)."""
+    "unknown", which the start and save rules refuse; one gone by the reads is not counted; a dead pid (procident.pid_dead:
+    state Z/X and no thread but the leader, the lifecycle's own rule) holds no radio and is not counted."""
+    # local import: the module's import block is another lane's hunk (K8d)
+    from . import procident
+
     fs, argvs = svc._system.fs, svc._system.procfs.cmdlines()
     pids = set(argvs) | {int(e) for e in fs.listdir("/proc", 100_000) if e.isdigit()}
     out = []
     for pid in sorted(pids):
-        stat = fs.read_text(f"/proc/{pid}/stat", 512) or ""
-        if stat[stat.rfind(")") + 2:stat.rfind(")") + 3] in ("Z", "X", "x") and ")" in stat:
-            continue                    # a zombie has released everything: it holds no radio (an unreadable stat counts)
+        if procident.pid_dead(pid, fs.read_text(f"/proc/{pid}/stat", 512) or "", fs.listdir(f"/proc/{pid}/task", 64)):
+            continue                    # a dead pid holds no radio; a Z leader with a live thread counts (G1-ZB1)
         argv = argvs.get(pid)
         exe = fs.readlink(f"/proc/{pid}/exe") or None
         comm = fs.read_text(f"/proc/{pid}/comm", 64) or None

@@ -146,6 +146,17 @@ def stat_start_time(pid: int) -> int:
 _START_TIME_LIMIT = 1 << 64
 
 
+def pid_dead(pid: int, stat: str, tasks) -> bool:
+    """THE rule for "this pid is dead" from its own /proc reads (G1-ZB1, DEC-W384bk): its stat state (after the last ")")
+    is Z/X AND its thread list (/proc/<pid>/task, the caller's read) is exactly the leader. A leader shows Z after
+    pthread_exit while a worker thread still runs (and may hold a radio): that process is alive. A stat without ")",
+    a live state, an unreadable/empty task list (None or []) or more than one thread = alive (fail closed)."""
+    rp = stat.rfind(")")
+    if rp == -1 or stat[rp + 2:rp + 3] not in ("Z", "X", "x"):
+        return False
+    return list(tasks or []) == [str(pid)]
+
+
 def recorded_ceased(pid, start_time) -> bool:
     """True when the recorded (pid, start_time) process no longer exists (dead, or the PID was
     reused by a different process). Conservative: unknown/malformed identity → NOT ceased.

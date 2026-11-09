@@ -629,17 +629,19 @@ class Lifecycle:
     @staticmethod
     def _proc_ceased(pid: int) -> bool:
         """True ONLY when the process is provably no longer running: /proc/<pid> is gone
-        (ENOENT) or its state is a reaped-pending zombie (Z/X). A TRANSIENT /proc read
-        failure (any other OSError) is NOT proof of cessation -> False."""
+        (ENOENT) or it is dead by procident.pid_dead (state Z/X AND no thread but the leader). A TRANSIENT /proc
+        read failure (any other OSError) is NOT proof of cessation -> False."""
         try:
             data = Path(f"/proc/{pid}/stat").read_text()
         except FileNotFoundError:
             return True                         # process is gone
         except OSError:
             return False                        # transient read failure — not proof
-        rp = data.rfind(")")
-        state = data[rp + 2:rp + 3] if rp != -1 else ""
-        return state in ("Z", "X", "x")
+        try:
+            tasks = os.listdir(f"/proc/{pid}/task")
+        except OSError:
+            tasks = None                        # unreadable: not proof (procident.pid_dead fails closed)
+        return procident.pid_dead(pid, data, tasks)     # G1-ZB1: a Z leader with a live thread is alive
 
     def _terminate_unobserved(self, pid: int, launch_ident: dict | None = None,
                               kill_after: float = 0.0, sleep=time.sleep) -> bool:

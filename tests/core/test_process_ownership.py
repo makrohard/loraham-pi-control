@@ -6,6 +6,7 @@ Uses controlled real subprocesses."""
 import os
 import signal
 import subprocess
+import sys
 import time
 
 import pytest
@@ -331,6 +332,43 @@ def test_record_launch_rejects_empty_exec(tmp_path, reaper, monkeypatch):
     monkeypatch.setattr(type(life), "_proc_identity", staticmethod(
         lambda pid: {"starttime": 1, "pgid": pid, "sid": pid, "exec": "", "argv_fp": "ab"}))
     assert life.record_launch(STACK, COMP, p.pid, band="433") is False
+
+
+# G1-ZB1 (DEC-W384bk): the leader of a thread group shows state Z after pthread_exit while a worker thread runs on
+# (and may hold a radio); only a pid whose task list is the leader alone is dead (procident.pid_dead).
+LEADER_Z = (
+    "import ctypes, os, select, sys, threading\n"
+    "def w():\n"
+    "    while True:\n"
+    "        st = open('/proc/self/stat').read()\n"
+    "        if st[st.rindex(')') + 2] == 'Z':\n"
+    "            break\n"
+    "        select.select([], [], [], 0.01)\n"
+    "    sys.stdout.write('leader-z\\n'); sys.stdout.flush()\n"
+    "    select.select([], [], [], 60)\n"
+    "threading.Thread(target=w).start()\n"
+    "ctypes.CDLL(None).pthread_exit(None)\n")
+
+
+def test_g1_zb1_a_zombie_leader_with_a_live_thread_is_not_ceased(tmp_path, reaper):
+    life = _life(tmp_path)
+    p = subprocess.Popen([sys.executable, "-c", LEADER_Z], stdout=subprocess.PIPE, start_new_session=True)
+    reaper.append(p)
+    assert p.stdout.readline().strip() == b"leader-z"            # the worker saw its leader in state Z
+    assert len(os.listdir(f"/proc/{p.pid}/task")) == 2
+    assert life._proc_ceased(p.pid) is False                      # alive: a thread still runs
+    assert life._terminate_unobserved(p.pid, None) is False       # the stop/verify path: cessation not proven
+
+
+def test_g1_zb1_a_true_zombie_is_ceased(tmp_path):
+    life = _life(tmp_path)
+    z = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        os.waitid(os.P_PID, z.pid, os.WEXITED | os.WNOWAIT)        # exited, NOT reaped: a zombie
+        assert os.listdir(f"/proc/{z.pid}/task") == [str(z.pid)]
+        assert life._proc_ceased(z.pid) is True
+    finally:
+        z.wait()
 
 
 def test_proc_ceased_transient_read_failure_is_not_cessation(tmp_path, reaper, monkeypatch):
