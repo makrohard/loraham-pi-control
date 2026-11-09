@@ -9,7 +9,7 @@ Unmodified MeshCom firmware running headless under QEMU, bridged to the LoRaHAM 
 |---|---|
 | Components | `meshcom-bridge` · `meshcom-gps` (position feed, admitted by the global GPS plan) · `meshcom-gps-relay` (test fixture) · `meshcom-qemu` (main) · `meshcom-firmware` (the PlatformIO image, cloned by ref during the build) |
 | Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `icssw-org/MeshCom-Firmware` branch `dev`, pinned by commit |
-| Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000 --rflog on --rflog-path <runtime>/logs/rf-meshcom.log`; consumes `/tmp/lora433f.sock`; built with cmake (needs `libssl-dev`) |
+| Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000 --rflog on --rflog-path <runtime>/logs/<rid>/rf-meshcom.log`; consumes `/tmp/lora433f.sock`; built with cmake (needs `libssl-dev`) |
 | QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary> --node-image <runtime>/state/meshcom/node-flash.bin`; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323`; readiness window 600 s |
 | Firmware image | `.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin`, completion marker `.lhpc-build-complete` beside it |
 | Callsign | `mc_callsign` is pushed over the net-console (`--setcall`) after boot, unless a `--info` probe shows the node already has it (it persists in the node's NVS); an empty or cut reply counts as not ready. Re-sent on a stepped schedule (~13 min) until the firmware ACKs; a call never confirmed shows `UNVERIFIED` in `lhpc status` and does not fail the start. `lhpc stack poststart meshcom` re-runs it |
@@ -37,7 +37,7 @@ Unmodified MeshCom firmware running headless under QEMU, bridged to the LoRaHAM 
 | `backend` | bridge | `loraham` | `fake` = no RF |
 | `password_file` | bridge | blank = open auth | managed only by the HMAC flow, never by generic config |
 | `ping_interval` / `pong_timeout` | bridge | 30000 / 90000 ms | XR keepalive sized for QEMU/TCG stalls (the bridge's own 15 s / 10 s defaults flap under emulation) |
-| `rf_log` | bridge | on | RF log `logs/rf-meshcom.log`: raw MeshCom frames received (RSSI/SNR) or sent — TX on the daemon's `TX_RESULT` (`ok`; `unconfirmed` when the bridge faulted with the frame already handed over), never on submit; no decoding. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | bridge | on | RF log `logs/<rid>/rf-meshcom.log`: raw MeshCom frames received (RSSI/SNR) or sent — TX on the daemon's `TX_RESULT` (`ok`; `unconfirmed` when the bridge faulted with the frame already handed over), never on submit; no decoding. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 | `rate` / `loop` | gps-relay | 5 / on | fixture replay only |
 
 RF parameters come from the firmware over the XR protocol; the daemon-side profile is in

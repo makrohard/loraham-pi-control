@@ -31,7 +31,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | `data_socket` / `conf_socket` | per band | advanced |
 | `rx_only` | off | `lhpc config kiss rx_only on` — the TNC never transmits; visible in its argv and read by `lhpc status` |
 | `verbose` | off | |
-| `rf_log` | on | RF log `logs/rf-kiss.log`: RX frames with RSSI/SNR, TX frames after the daemon's result (`ok`, or `unconfirmed` when the confirmation was lost), the TNC2 text where the frame carries it. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | on | RF log `logs/<rid>/rf-kiss.log`: RX frames with RSSI/SNR, TX frames after the daemon's result (`ok`, or `unconfirmed` when the confirmation was lost), the TNC2 text where the frame carries it. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 
 Radio parameters (the LoRaHAM amateur profile, SF12/BW125): [daemon](daemon.md#radio-parameters).
 

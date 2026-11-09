@@ -222,7 +222,7 @@ lhpc hardware remove r3 --confirm-phrase remove-r3   # remove r3
   ("stop meshcore and stop its daemon, then remove r2"). The Hardware page greys its Remove with the same line.
 - What goes: the radio's row, its binding to the stick, and the daemon settings on that row.
 - What stays: the stick (plugged in, it shows up again as a new stick), the other radios and their
-  stacks, the per-band stack settings (`config/stacks/`), and the RF logs already written (`logs/<rid>/`).
+  stacks, the instances' stack settings (`config/stacks/<stack>@<rid>.toml`), and the RF logs already written (`logs/<rid>/`).
 - The id stays reserved: `retired = ["r3"]` in `config/radios.toml`. No later radio gets it, so logs
   and ports stay unambiguous; a row that uses it is refused.
 - A stack that ran on the radio before the last reboot is not restored at the next boot; the boot
@@ -390,7 +390,7 @@ daemon params: [`config`](#config).
 
 ### logs
 `lhpc logs <target> [--lines N]` — bounded tail of a component's log (default 200 lines). The
-older part of a capped run log: `logs/start-<comp>[-<band>].prev.log`
+older part of a capped run log: `logs/start-<comp>[-<band>][-<rid>].prev.log`
 ([maintenance](maintenance.md#running-on-a-pi), "Run-log cap").
 
 ### rflog

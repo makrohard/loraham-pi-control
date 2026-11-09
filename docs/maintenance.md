@@ -440,7 +440,7 @@ to run one: [test](cli.md#test).
 
 **Job logs.** Build and host-test logs are `logs/build-<comp>.log` (single step) or
 `logs/build-<comp>-<N>.log` (multi-step), host tests `test-<comp>…`; run logs are
-`start-<comp>[-<band>].log`. `lhpc logs <comp>` resolves to the newest matching file; each job
+`start-<comp>[-<band>][-<rid>].log`. `lhpc logs <comp>` resolves to the newest matching file; each job
 announces its path at start. A job log is recreated per run; a run log is appended to by every
 start. When a build or console job runs, the pruner deletes the oldest counted logs while they
 exceed 200 files or 64 MiB. It neither deletes nor counts: the registered RF logs, the controller's
@@ -451,7 +451,7 @@ whole can exceed those figures.
 **Run-log cap.** A run log is checked when its component starts and at each console maintenance
 pass (every 60 s on a box with the access point or while a web-server Apply or PKI normalisation is
 pending, else every 300 s). Above 8 MiB its last 1 MiB, from just after the first newline in it, is
-written to `start-<comp>[-<band>].prev.log` (replacing the previous one) and the run log is
+written to `start-<comp>[-<band>][-<rid>].prev.log` (replacing the previous one) and the run log is
 emptied; the running process keeps writing to it. A window that starts on a line start loses that
 line; a last line without a newline is kept; a 1 MiB window without a newline keeps nothing. Lines
 written during the cut can be lost. A failed cut (a full disk, say) leaves the run log unchanged,
@@ -469,29 +469,33 @@ the console stopped nothing cuts them.
 
 ### RF logs
 
-`logs/rf-*.log` are the per-stack RF logs: what a stack's radio heard and sent, one line per frame,
-written by the stack's own process at its radio boundary, kept across restarts. The registry in
+The RF logs are per radio: what a stack's radio heard and sent, one line per frame, written by the
+stack's own process at its radio boundary, kept across restarts. The daemon's file is
+`logs/<rid>/rf-daemon.log`, an instance's `logs/<rid>/rf-<stack>.log`; a one-node stack (Reticulum)
+writes one `logs/rf-reticulum.log`. The registry in
 `lhpc/core/rflog.py` (six stacks) is the **only** authorization for the log page, its rows,
-switches and Clear: a file absent from it is never an RF log, whatever its name. `rf_log` is a
-stack-level, band-less switch (`_BANDLESS_STACK_PARAMS`) in the owner's Settings (group
-*RF-Logs*; the daemon has no Settings form, its switch is the log page or the CLI), read at the
-writer's next start; graywolf uses the kiss TNC's switch.
+switches and Clear: a file absent from it is never an RF log, whatever its name. `rf_log` is each
+instance's own switch (`config/stacks/<stack>@<rid>.toml`) in the owner's Settings (group *RF-Logs*;
+the daemon has no Settings form), read at the writer's next start; the log page and the CLI set it
+on every instance of the stack at once. Graywolf uses the kiss TNC's switch.
 
 Retention, per job: the writer copy-truncates at 5 MB into `<job>.1` (the inode never changes, so
 Clear — truncate in place, delete `.1` — is safe under a running writer), keeping at most ~10 MB
-per job (the daemon: per band). The viewer reads `.1` + the live file as one. RF logs are outside
+per file. The viewer reads `.1` + the live file as one. RF logs are outside
 the job-log pruning; a roll or Clear holds a per-job lock in `state/locks/`. **Meshtastic** is the
 exception: its log is meshtasticd's own `TraceFile`, which the node only appends to, so lhpc rolls
 it when over the cap (keeping the last ~5 MB in `.1`) at stack start, when a page read finds it
 over, and at each console pass; a failed roll is retried at the next check. Between checks it grows
 by what the node writes.
 
-**The log page** (`/logs/<writer>?job=<file>`) serves every RF log. Each dashboard radio card links
-it under the daemon control: the band's daemon log, then *RF log:* the daemon's file for that band
-and the file of each running registered stack. Under the header, a band row lists every band; a
-stack row lists the shown band's RF logs (the daemon's file, then every stack whose components
-declare that band, in registry order). The shown band is the `band` query arg, else the file's own
-band (daemon), else the band the stack runs on. The table shows one row per frame, oldest first;
+**The log page** (`/logs/<writer>?job=<file>[&radio=<rid>]`) serves every RF log. Each dashboard radio card
+links it under the daemon control: the radio's daemon log, then *RF log:* the radio's daemon file and
+the file of each registered stack on that radio. Under the header, a radio row lists every enabled
+radio (each pill opens that radio's own file); a stack row lists the shown radio's RF logs (its
+daemon's file, then every stack whose components declare the radio's band, in registry order). The
+shown radio is the `radio` query arg, else the file's own radio, else one the stack runs on. A `band`
+query arg is refused by name (400, "use radio=<rid>"); a `radio` that is no radio of the hardware
+list is a 404. The table shows one row per frame, oldest first;
 a header tap sorts, a second reverses. Columns are per browser (default *dir*, *ascii*,
 *decoded*); *Raw* shows the file as the CLI prints it; a row tap expands its payload. Rows come from
 `GET /api/rflog/<writer>?job=…` (parsed by `rflog.parse_line`; an unknown line is still a row with
@@ -500,7 +504,8 @@ its raw text). Column and sort choices live in the browser's `localStorage`
 Logging** (saves the shown stack's switch on its config owner, the key Settings saves; "restart
 required" while the writer runs), **Clear stack RF log** (empties the file, removes its `.1`),
 **Global RF Logging** (every stack's switch; reads *on*, *off* or *mixed*), **Clear all RF logs**
-(every registered file, each under its own lock; run logs untouched). CLI:
+(every registered file and every radio's own `<rid>/` file, each under its own lock; a radio
+directory it cannot read is named as not cleared; run logs untouched). CLI:
 [`lhpc rflog`](cli.md#rflog).
 
 **Decrypt.** For meshtastic, meshcore and reticulum the log page has a **Decrypt** toggle below the

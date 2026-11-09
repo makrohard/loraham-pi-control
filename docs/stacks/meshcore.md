@@ -41,7 +41,7 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 | `frequency` | blank = the preset's | Hz; an explicit value overrides the preset frequency |
 | `airtime` | 10 % | duty-cycle limit of the repeater modes, enforced by openHop over a 60 s window. Kept in openHop's file (below) |
 | `use_gps` | on | use the global position source |
-| `rf_log` | on | `logs/rf-meshcore.log`, written by the host's radio adapter in every mode: frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start; Decrypt: [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | on | `logs/<rid>/rf-meshcore.log`, written by the host's radio adapter in every mode: frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start; Decrypt: [maintenance](../maintenance.md#rf-logs) |
 | `mode` | `chat` | see [Mode](#mode) |
 | `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign. Kept in openHop's file (below) |
 | `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives. Kept in openHop's file (below) |
