@@ -266,7 +266,8 @@ def marks_of(fn) -> dict[str, str | None]:
         if not isinstance(f, ast.Attribute):
             continue
         v = f.value
-        if (isinstance(v, ast.Attribute) and v.attr == "mark") or (isinstance(v, ast.Name) and v.id == "mark"):
+        if (isinstance(v, ast.Attribute) and v.attr == "mark" and isinstance(v.value, ast.Name)
+                and v.value.id == "pytest") or (isinstance(v, ast.Name) and v.id == "mark"):
             a = d.args[0] if isinstance(d, ast.Call) and d.args else None
             ok = isinstance(a, ast.Constant) and isinstance(a.value, str) and a.value.strip()
             out[f.attr] = a.value.strip() if ok else None

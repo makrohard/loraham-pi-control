@@ -626,3 +626,19 @@ def test_a_sleep_outside_the_wallclock_scope_stays_a_warning(repo):
     _commit(repo, {"lhpc/data/rfdecode/tests/test_x.py": "import time\n\n\ndef test_x():\n    " + TSL + "(0)\n"})
     _rc, rows = _run(repo)
     assert rows["patterns"] == "WARN" and rows["wallclock"] == "OK"
+
+
+@pytest.mark.parametrize("deco", ["@Helper.mark.wallclock('not an exemption')", "@helpers.pytest.mark.wallclock('x')"])
+def test_wallclock_only_pytest_mark_or_mark_is_a_marker(repo, deco):
+    # G1-TR1-C-RE (2): another object's `.mark` attribute is no pytest mark
+    _commit(repo, _test(f"\n{deco}\ndef test_two():\n    import time\n    " + TSL + "(0)\n"))
+    rc, line = _out(repo)
+    assert rc == 1 and line.split()[-1] == "HARD", line
+
+
+def test_wallclock_the_bare_mark_form_is_a_marker(repo):
+    # `from pytest import mark`: @mark.wallclock("reason") is the same mark
+    _commit(repo, _test("\nfrom pytest import mark\n\n\n@mark.wallclock('real waiting')\ndef test_two():\n    import time\n    "
+                        + TSL + "(0)\n"))
+    rc, line = _out(repo)
+    assert rc == 0 and "test_ok.py::test_two (real waiting)" in line, line
