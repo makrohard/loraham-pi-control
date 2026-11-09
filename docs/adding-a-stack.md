@@ -118,7 +118,7 @@ cannot run, refused as a direct start target.
 
 ```toml
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-meshcom.log"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {data_socket} {conf_socket} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-meshcom.log"
 
     [stack.component.process]
     exec_name = "meshcom-loraham-bridge"   # identity for ownership + stop

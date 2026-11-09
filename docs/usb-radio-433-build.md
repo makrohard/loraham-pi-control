@@ -2,7 +2,8 @@
 
 A self-built USB radio: a CH341A USB-to-SPI board, an AT24C02N EEPROM that gives the stick its own
 serial, and a HopeRF RFM98PW (SX127x, 433 MHz, high power). It reports the USB id `1a86:5512`, like
-the other [USB radios](usb-radios.md). In LHPC it is the model `ch341-rfm98pw-433`.
+the other [USB radios](usb-radios.md). In LHPC it is the model `ch341-rfm98pw-433`, which needs
+LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that ships it).
 
 The build order is: adapter checks → EEPROM wiring and programming → radio wiring → receive → controlled
 transmit. Keep power off while soldering.
@@ -217,6 +218,7 @@ The first SPI check reads the chip's version register (0x42). An RFM98PW reads `
 
 ## Sources
 
+The full source list is in the build guide (v2, 23 Oct 2026), from which this page is translated:
 - HopeRF RFM98PW/RFM95PW REV1.1 (pins, limits, current);
 - WCH CH341DS1 v2D (pins, 3.3 V operation, EEPROM format);
 - Atmel AT24C02 doc0180;

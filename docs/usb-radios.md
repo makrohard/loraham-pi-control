@@ -20,6 +20,8 @@ hardware list (`config/radios.toml`), added on the console's *Add Hardware* page
 | [PINE64 USB LoRa adapter](https://pine64.org/documentation/Pinedio/USB_adapter/) (Pinedio) | SX1262 | 868 / 915 MHz (LHPC uses 868) | `pinedio-usb-1262` | supported |
 | CH341A + RFM98PW, a self-built stick ([build guide](usb-radio-433-build.md)) | SX127x (RFM98PW, high power) | 433 MHz | `ch341-rfm98pw-433` | supported |
 
+The release that ships these sticks is listed in the [changelog](../CHANGELOG.md).
+
 **PINE64 adapter:** PINE64's page above is the reference for its wiring and drivers. Its IRQ and
 BUSY lines sit on the CH341's INT# and SLCT status pins, not on the D0–D7 lines the other sticks use.
 

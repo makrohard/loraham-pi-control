@@ -113,9 +113,10 @@ radio params. `lhpc daemon <rid> --feed` shows recent RX/TX activity.
 
 ## Radio parameters
 
-Each daemon client (chat, kiss, voice, meshcom, meshcore) and the daemon carry a profile per band; an instance gets
-the one of its radio's band (`lhpc/core/daemon_params.py`), applied **once** after the daemon reports READY and before the
-stack's components start.
+Each daemon client (chat, kiss, voice, meshcom, meshcore) and the daemon carry a default profile per band
+(`lhpc/core/daemon_params.py`). An instance starts from the profile of its radio's band; the radio row's `dp_`
+values go over it, then the instance's own set (below), so two radios on one band, or two instances, can differ.
+The result is applied **once** after the daemon reports READY and before the stack's components start.
 
 | group | params | ranges |
 |---|---|---|

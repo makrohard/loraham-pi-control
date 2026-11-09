@@ -491,7 +491,8 @@ by what the node writes.
 **The log page** (`/logs/<writer>?job=<file>[&radio=<rid>]`) serves every RF log. Each dashboard radio card
 links it under the daemon control: the radio's daemon log, then *RF log:* the radio's daemon file and
 the file of each registered stack on that radio. Under the header, a radio row lists every enabled
-radio (each pill opens that radio's own file); a stack row lists the shown radio's RF logs (its
+radio (a pill opens that radio's own file where the stack writes one per radio; Reticulum's one file stays the
+same); a stack row lists the shown radio's RF logs (its
 daemon's file, then every stack whose components declare the radio's band, in registry order). The
 shown radio is the `radio` query arg, else the file's own radio, else one the stack runs on. A `band`
 query arg is refused by name (400, "use radio=<rid>"); a `radio` that is no radio of the hardware
