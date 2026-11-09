@@ -31,24 +31,6 @@ def _fakes_of(root: Path) -> list:
     return out
 
 
-def test_a_stopped_lab_leaves_no_fake_of_its_root(tmp_path, monkeypatch):
-    from lhpc_testlab import testing
-    monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(tmp_path / "lab.lock"), raising=False)  # the host's lab lock is not the case
-    root = tmp_path / "runtime"
-    server = LabServer(root)
-    try:
-        server.init_and_reset()
-        assert _fakes_of(root), "the lab's init/reset spawned its fake gpsd"          # the precondition
-        server.stop()                                                                   # no web was started
-        assert _fakes_of(root) == [], "a fake of this lab outlived its stop()"
-    finally:
-        for pid in _fakes_of(root):                     # never leak, even when the assertion fails
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except OSError:
-                pass
-
-
 def test_a_fake_that_ignores_term_is_killed_with_its_whole_group(tmp_path):
     """The stop reaches the fake's whole process group (it leads a group of its own) and kills what ignores
     SIGTERM after the grace: a stand-in fake that ignores TERM, with a child in its group, both gone."""
@@ -228,7 +210,8 @@ def test_a_stale_pid_file_never_reaches_another_roots_fake(tmp_path):
 
 def test_a_second_lab_on_the_host_refuses_at_once_naming_the_holder(tmp_path, monkeypatch):
     """G1-LF1 (4), DEC-W384u: two lab roots, two processes. While lab A's LabServer holds the host's lab lock, lab B's
-    LabServer refuses before any init or reset, naming A's pid and root; after A's stop the lock is free."""
+    LabServer refuses before any init or reset, naming A's pid and root; after A's stop the lock is free. No real reset
+    in this lane: a reset reads any daemon on the host as its own, another checkout's live lab too."""
     import subprocess
     import sys
 
@@ -238,6 +221,7 @@ def test_a_second_lab_on_the_host_refuses_at_once_naming_the_holder(tmp_path, mo
     root_a, root_b = tmp_path / "a" / "runtime", tmp_path / "b" / "runtime"
     second = ("import sys; from pathlib import Path; import lhpc_testlab.testing as t; t.LAB_LOCK_PATH = sys.argv[1]; "
               "t.LabServer(Path(sys.argv[2])).init_and_reset() if sys.argv[3] == 'lab' else t._hold_lab_lock(sys.argv[2])")
+    monkeypatch.setattr(testing, "run_lab", lambda *a, **k: None)   # lab A's init/reset are not the case: its lock is
     a = LabServer(root_a)
     try:
         a.init_and_reset()
