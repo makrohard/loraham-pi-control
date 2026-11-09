@@ -704,3 +704,30 @@ def binary_receipt():
         svc.invalidate_snapshot()
         return rec
     return _lay_down
+
+
+class FakeClock:
+    """A clock a test drives: `monotonic()` and `time()` move only by `advance(s)` or `sleep(s)`, which never
+    blocks. Nothing is patched: hand `fake_clock.monotonic` to a seam (e.g. `progress.Watch(..., clock=...)`) or
+    monkeypatch a module's clock name yourself."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.epoch = 1_700_000_000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.epoch
+
+    def advance(self, s: float) -> None:
+        self.now += s
+        self.epoch += s
+
+    sleep = advance
+
+
+@pytest.fixture
+def fake_clock():
+    return FakeClock()
