@@ -49,11 +49,11 @@ def test_k8_a_stop_of_kiss_at_r2_addresses_r2_alone_beside_an_ambient_433(svc, m
 
 @pytest.mark.parametrize("op", ["start", "restart"])
 def test_k8_the_daemons_own_instance_keeps_its_band_rule(svc, op):
-    # the daemon's instance carries no band (radio_start.daemon_inst): K8d leaves its start and restart as they were
-    # (its plan names no band; its radio comes from the rid), never r2's row band
+    # the daemon's instance carries no band (radio_start.daemon_inst): its start and restart keep the caller's band;
+    # the plan names the one daemon it launches, r2's (its argv: --radio 868 --id r2), never "all bands"
     from lhpc.core import radio_start
     res = getattr(svc, op)("daemon", inst=radio_start.daemon_inst("r2"))
-    assert res.ok and res.details == ["  [daemon] start/ensure --radio all bands"], res.details
+    assert res.ok and res.details == ["  [daemon] start/ensure --radio 868 --id r2"], res.details
 
 
 @pytest.mark.parametrize("op,word", [("start", "start"), ("restart", "restart")])

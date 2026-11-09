@@ -1007,10 +1007,9 @@ class LifecycleOpsMixin:
         return prep
 
     def _start_preview(self, prep) -> ActionResult:
-        """The start PLAN from the prepared start: what the apply would do, per component, plus
-        the apply's firewall gate and ambiguity refusal behind its healthy shortcut and the
-        running holders as `[conflict]` details. Advisory only: the apply decides everything
-        again under its own guards and never reads this result."""
+        """The start PLAN from the prepared start: what the apply would do, per component, plus the apply's firewall
+        gate and ambiguity refusal behind its healthy shortcut and the running holders as `[conflict]` details.
+        Advisory only: the apply decides everything again under its own guards and never reads this result."""
         target, band, order, radio, tx, cfg_band = (prep.target, prep.band, prep.order,
                                                     prep.radio, prep.tx, prep.cfg_band)
         details = []
@@ -1024,8 +1023,9 @@ class LifecycleOpsMixin:
                     details.append(f"  [daemon] start/ensure --radio {served} ({skips} — skipped)"
                                    + (f", TXMODE={tx}" if tx else ""))
                 else:
-                    details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
-                                   + (f", TXMODE={tx}" if tx else ""))
+                    _r = getattr(prep.inst, "rid", "") if self._is_daemon_target(target) else ""   # K8d: one radio's daemon
+                    _on = f"{radio_start.daemon_radio(self, _r)[1]} --id {_r}" if _r else (radio or "all bands")
+                    details.append(f"  [daemon] start/ensure --radio {_on}" + (f", TXMODE={tx}" if tx else ""))
             elif comp.interactive:
                 # The PLAN obeys the same fallback policy as the apply path: where the
                 # GUI main is usable, voice's terminal variant is not offered — neither
