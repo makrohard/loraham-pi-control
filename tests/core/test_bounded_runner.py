@@ -75,10 +75,19 @@ def test_timeout_terminates_child_tree(tmp_path, monkeypatch):
     # The grandchild was killed with the group. Use the PRODUCTION liveness predicate, which reads
     # /proc/<pid>/stat and treats a reaped-pending zombie (Z/X) as ceased — `kill -0` would call a
     # zombie "alive", so it fails on any non-reaping init (containers/some CI).
+    import os
+    import select
+
     from lhpc.core import procident
-    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
-    while procident.proc_alive(child_pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
+    try:
+        fd = os.pidfd_open(child_pid)                  # readable once it has exited (a zombie too): no sleep loop
+    except ProcessLookupError:
+        fd = None                                      # already gone
+    if fd is not None:
+        try:
+            select.select([fd], [], [], 5.0)           # bounded: the KILL lands well within it
+        finally:
+            os.close(fd)
     assert not procident.proc_alive(child_pid)
 
 
