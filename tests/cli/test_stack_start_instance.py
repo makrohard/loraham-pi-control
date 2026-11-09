@@ -108,3 +108,46 @@ def test_a_running_copy_the_start_pass_reaches_is_judged_at_its_own_port(box, mo
     rc, out, launches = run("start", "kiss@r3")
     assert "readiness evidence is absent" not in out and "already running" in out, out
     assert rc == 0 and not [x for x in launches if x[0] == "loraham-kiss-tnc"], (launches, out)
+
+
+# ---- 13.5 (CLEANUP-DESIGN-v13): graywolf is the only stack without its own radio ---------------------------------
+
+def _graywolf_box(box, monkeypatch, procs=None):
+    """The default list's shape (r1 433, r2 868) with a callsign set; every launch's component, instance and params."""
+    from lhpc.core.lifecycle import Lifecycle
+    run = box((R1, R2_868), procs=procs, ports=(8134, 8213))
+    assert cli.ControllerService().set_operator_identity(callsign="DL1ABC").ok
+    seen, fake = [], Lifecycle.start
+
+    def start(self, stack, comp, params=None, band="", **kw):
+        seen.append((comp, params, kw.get("inst")))
+        return fake(self, stack, comp, params, band, **kw)
+    monkeypatch.setattr(Lifecycle, "start", start)
+    return run, seen
+
+
+def test_graywolf_at_r2_starts_kiss_at_r2_and_r2s_daemon(box, monkeypatch):
+    # The cross-stack dependency takes the dependent's radio: graywolf@r2 starts r2's daemon and kiss@r2, then itself.
+    run, _seen = _graywolf_box(box, monkeypatch)
+    _rc, out, launches = run("start", "graywolf@r2")
+    assert launches == [("loraham-daemon", "868", "r2"), ("loraham-kiss-tnc", "868", "r2"),
+                        ("graywolf", "868", "r2")], (launches, out)
+
+
+def test_graywolfs_kiss_port_is_kiss_at_its_own_radios(box, monkeypatch):
+    # {port_of:kiss:8001} is kiss@r2's port (8001 + 133), and graywolf@r2's web UI is r2's (8080 + 133): no picking.
+    run, seen = _graywolf_box(box, monkeypatch)
+    run("start", "graywolf@r2")
+    comp, params, inst = next(s for s in seen if s[0].id == "graywolf")
+    op = cli.ControllerService().config().operator
+    step = next(st["argv"] for st in comp.post_steps if st.get("kind") == "exec")       # the provisioning: graywolf's TNC
+    tnc = commands.expand_argv([t for t in step if t in ("{param:tnc_host}", "{param:tnc_port}")], comp, params, op,
+                               "/rt", "/src", "868", inst=inst)
+    assert (inst.rid, tnc) == ("r2", ["--tnc-host", "127.0.0.1", "--tnc-port", "8134"]), tnc
+    assert "127.0.0.1:8213" in commands.expand_argv(comp.run_argv, comp, params, op, "/rt", "/src", "868", inst=inst)
+
+
+def test_graywolf_at_r2_leaves_a_running_kiss_at_r1_alone(box, monkeypatch):
+    run, _seen = _graywolf_box(box, monkeypatch, procs={4100: _kiss_on("r1")})
+    _rc, out, launches = run("start", "graywolf@r2")
+    assert [x for x in launches if x[0] == "loraham-kiss-tnc"] == [("loraham-kiss-tnc", "868", "r2")], (launches, out)
