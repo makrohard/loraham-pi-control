@@ -1,4 +1,4 @@
-"""The RF log page — band row, stack row, the switches at the bottom, the scoped Clear and
+"""The RF log page — radio row (W4), stack row, the switches at the bottom, the scoped Clear and
 Clear all — and the dashboard's RF-log links: all driven by the registry, authorized by nothing
 else."""
 
@@ -23,9 +23,9 @@ def _logs(tmp_path, name, text=""):
     return tmp_path / "logs" / name
 
 
-def _links(doc, target, job, band=""):
+def _links(doc, target, job, radio=""):
     """The links to one RF log, by their parsed URL (query order is nobody's contract)."""
-    want = {"job": [job], **({"band": [band]} if band else {})}
+    want = {"job": [job], **({"radio": [radio]} if radio else {})}
     return [a for a in doc.find("a") if a["href"] and urlsplit(a["href"]).path == f"/logs/{target}"
             and parse_qs(urlsplit(a["href"]).query) == want]
 
@@ -118,37 +118,44 @@ def test_logging_sets_every_owner_at_once_and_shows_mixed(tmp_path, web, csrf):
 
 # ---- the page ----------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("band", ControllerService.RADIO_BANDS)
-def test_the_page_has_a_band_row_and_the_stack_row_of_that_band(tmp_path, band, web):
-    """Both rows are plain links. The band row lists every band and marks the shown one; the
-    stack row is the registry's answer for that band (owned by tests/core), rendered complete,
-    each pill carrying the band so the next page opens on the same one."""
+@pytest.mark.parametrize("rid, band", [("r1", "433"), ("r2", "868")])
+def test_the_page_has_a_radio_row_and_the_stack_row_of_that_radio(tmp_path, rid, band, web):
+    """W4: both rows are plain links. The radio row lists every enabled radio and marks the shown one; the stack row
+    is the registry's answer for that radio (owned by tests/core), rendered complete, each pill carrying the radio so
+    the next page opens on the same one."""
     c = web()
-    doc = parse(c.get(f"/logs/loraham-kiss-tnc?job=rf-kiss.log&band={band}").get_data(as_text=True))
-    bands = _row(doc, "RF log bands")
-    assert [a.text for a in bands.find("a")] == list(ControllerService.RADIO_BANDS)
-    assert [a.text for a in bands.find("a", **{"aria-current": "page"})] == [band]
-    for b in ControllerService.RADIO_BANDS:
-        assert len(_links(bands, "loraham-kiss-tnc", "rf-kiss.log", b)) == 1
+    doc = parse(c.get(f"/logs/loraham-kiss-tnc?job=rf-kiss.log&radio={rid}").get_data(as_text=True))
+    radios_row = _row(doc, "RF log radios")
+    assert [a.text for a in radios_row.find("a")] == ["r1 · 433", "r2 · 868"]
+    assert [a.text for a in radios_row.find("a", **{"aria-current": "page"})] == [f"{rid} · {band}"]
+    for r in ("r1", "r2"):
+        assert len(_links(radios_row, "loraham-kiss-tnc", "rf-kiss.log", r)) == 1
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    expected = svc.rflog_switcher("rf-kiss.log", band)["stacks"]
+    expected = svc.rflog_switcher("rf-kiss.log", rid)["stacks"]
     stacks = _row(doc, "RF logs")
     assert len(stacks.find("a")) == len(expected) > 1
     for st in expected:
-        assert len(_links(stacks, st["target"], st["job"], band)) == 1, st
+        assert len(_links(stacks, st["target"], st["job"], rid)) == 1, st
     assert [a.text for a in stacks.find("a", **{"aria-current": "page"})] == ["graywolf"]
-    assert doc.find("form", action="/logs/loraham-kiss-tnc/clear")
     assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-kiss.log"
+    assert doc.within(doc.by_id("rflog-clear")).field_default("radio") == rid
 
 
 @pytest.mark.no_default_hardware   # the 0.13.x band files of a box without a list (per-radio files: below)
-def test_the_shown_band_falls_back_to_the_files_own_band(web):
-    doc = parse(web().get("/logs/loraham-daemon?job=rf-daemon-868.log").get_data(as_text=True))
-    bands = _row(doc, "RF log bands")
-    assert [a.text for a in bands.find("a", **{"aria-current": "page"})] == ["868"]
-    assert [a.text for a in _row(doc, "RF logs").find("a", **{"aria-current": "page"})] == ["daemon 868"]
-    # On the daemon's page a band pill opens THAT band's file in one tap (one file per band).
-    assert len(_links(bands, "loraham-daemon", "rf-daemon-433.log", "433")) == 1
+def test_without_a_list_the_page_shows_the_file_with_no_radio_row_and_band_is_no_filter(web):
+    c = web()
+    doc = parse(c.get("/logs/loraham-daemon?job=rf-daemon-868.log&band=433").get_data(as_text=True))
+    assert not _row(doc, "RF log radios").find("a")
+    assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-daemon-868.log"
+    assert not doc.find("input", name="band") and not doc.find("input", name="radio")
+
+
+def test_a_rid_that_is_no_radio_of_the_list_is_refused_by_name(web):
+    c = web()
+    r = c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log&radio=r9")
+    assert (r.status_code, "r9" in r.get_data(as_text=True)) == (404, True)
+    assert c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log&radio=").status_code == 400
+    assert c.get("/api/logs/loraham-kiss-tnc?radio=r9").status_code == 404
 
 
 @pytest.mark.parametrize("url", ["/logs/loraham-kiss-tnc?job=rf-made-up.log",
@@ -248,14 +255,14 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     doc = parse(c.get("/").get_data(as_text=True))
     col433 = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
     col868 = doc.within(doc.find("div", **{"data-radio-band": "868"})[0])
-    # Every link carries the card's band, so the page opens on it (the stack's running band, not
+    # Every link carries the card's radio (W4), so the page opens on it (the stack's running band, not
     # its manifest default).
-    assert len(_links(col433, "loraham-daemon", "r1/rf-daemon.log", "433")) == 1
-    assert not _links(col433, "meshtastic", "rf-meshtastic.log", "433")
-    assert len(_links(col868, "loraham-daemon", "r2/rf-daemon.log", "868")) == 1
-    assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "868")) == 1
-    assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "868")    # not running
-    r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "868")[0]["href"])
+    assert len(_links(col433, "loraham-daemon", "r1/rf-daemon.log", "r1")) == 1
+    assert not _links(col433, "meshtastic", "rf-meshtastic.log", "r1")
+    assert len(_links(col868, "loraham-daemon", "r2/rf-daemon.log", "r2")) == 1
+    assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "r2")) == 1
+    assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "r2")    # not running
+    r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "r2")[0]["href"])
     assert r.status_code == 200
     # The empty state as a typed field: the page's viewer data reports no file (the empty path).
     d = c.get("/api/rflog/meshtastic?job=rf-meshtastic.log").get_json()
@@ -265,11 +272,10 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
 @pytest.mark.parametrize("url,data", [("/stacks/reticulum/rflog", {"value": "on", "from": "logs"}),
                                       ("/rflog/all", {"value": "on"}), ("/logs/rns/clear", {}),
                                       ("/rflog/clear-all", {})])
-def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
-                                                                                   url, data):
-    """Reticulum declares both bands and defaults to 868. Running on 433, its RF-log link on the
-    433 card, the page it opens, and every bottom action's redirect stay on 433 — the band is
-    carried, never re-guessed from the manifest."""
+def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
+                                                                                    url, data):
+    """W4: Reticulum declares both bands and defaults to 868. Running on 433 (r1), its RF-log link on r1's card,
+    the page it opens, and every bottom action's redirect stay on r1 — the radio is carried, never re-guessed."""
     def factory():
         svc = ControllerService(
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-rns-node", "--config", "x"]},
@@ -280,18 +286,15 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
         return svc
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
-    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "rf-reticulum.log", "433")
+    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "rf-reticulum.log", "r1")
     assert len(link) == 1
     doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
-    assert [a.text for a in _row(doc, "RF log bands").find("a", **{"aria-current": "page"})] == ["433"]
-    assert doc.within(doc.by_id("rflog-switch")).field_default("band") == "433"
-    r = c.post(url, data={"_csrf": csrf(c), "job": "rf-reticulum.log", "band": "433", **data})
+    assert [a.text for a in _row(doc, "RF log radios").find("a", **{"aria-current": "page"})] == ["r1 · 433"]
+    assert doc.within(doc.by_id("rflog-switch")).field_default("radio") == "r1"
+    r = c.post(url, data={"_csrf": csrf(c), "job": "rf-reticulum.log", "radio": "r1", **data})
     loc = urlsplit(r.headers["Location"])
     assert r.status_code == 302 and loc.path == "/logs/rns"
-    assert parse_qs(loc.query) == {"job": ["rf-reticulum.log"], "band": ["433"]}
-    # Without the arg the page still shows the band the stack RUNS on, not its manifest default.
-    doc = parse(c.get("/logs/rns?job=rf-reticulum.log").get_data(as_text=True))
-    assert [a.text for a in _row(doc, "RF log bands").find("a", **{"aria-current": "page"})] == ["433"]
+    assert parse_qs(loc.query) == {"job": ["rf-reticulum.log"], "radio": ["r1"]}
 
 
 # ---- the viewer's records and the Decrypt toggle -----------------------------------------------
@@ -389,15 +392,20 @@ def test_a_run_log_page_keeps_the_plain_viewer(web):
     assert any(s.endswith("/logs.js") for s in scripts) and not any(s.endswith("/rflog.js") for s in scripts)
 
 
-def test_a_running_stacks_rf_log_link_carries_its_launch_band(tmp_path, web):
-    """Moved from the dashboard's 433 card (W250): Reticulum declares both bands and defaults to 868; running on 433,
-    its RF-log link on its Apps row carries 433."""
+def test_a_running_stacks_rf_log_link_and_page_name_the_radio_it_runs_on(tmp_path, web, monkeypatch):
+    """W4 (moved from the dashboard's card, W250): Reticulum declares both bands; its instance runs on r2 (its launch
+    record), so its Apps row's RF-log link carries r2 (its one file: one node, DEC-W342), and its page without a
+    radio opens on r2, never on the first radio."""
+    from lhpc.core import instances
+    monkeypatch.setattr(instances, "recorded", lambda svc, sid: {"r2"} if sid == "reticulum" else set())
+
     def factory():
-        svc = ControllerService(
-            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
+        return ControllerService(
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r2"],
                                              200: ["loraham-rns-node", "--config", "x"]}).system,
             paths=Paths(runtime_root=tmp_path))
-        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
-        return svc
-    doc = parse(web(service_factory=factory).get("/stacks/reticulum/body").get_data(as_text=True))
-    assert len(_links(doc, "rns", "rf-reticulum.log", "433")) == 1
+    c = web(service_factory=factory)
+    doc = parse(c.get("/stacks/reticulum/body").get_data(as_text=True))
+    assert len(_links(doc, "rns", "rf-reticulum.log", "r2")) == 1
+    page = parse(c.get("/logs/rns?job=rf-reticulum.log").get_data(as_text=True))
+    assert [a.text for a in _row(page, "RF log radios").find("a", **{"aria-current": "page"})] == ["r2 · 868"]

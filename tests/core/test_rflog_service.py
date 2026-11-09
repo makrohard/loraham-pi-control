@@ -160,43 +160,40 @@ def _declared(svc, surface):
     return {b for c in svc.stack(surface).components for b in (c.bands or ([c.band] if c.band else []))}
 
 
-@pytest.mark.parametrize("band", ControllerService.RADIO_BANDS)
-def test_the_stack_row_is_the_registry_for_that_band(tmp_path, band):
-    """Every band in the band row; in the stack row the daemon's file for the band plus every
-    registered stack whose manifest components declare it, in registry order — nothing
-    hand-typed here, the registry and the manifest are the expectation."""
+@pytest.mark.parametrize("rid, band", [("r1", "433"), ("r2", "868")])
+def test_the_stack_row_is_the_registry_for_that_radio(tmp_path, rid, band):
+    """W4: every enabled radio in the radio row; in the stack row the radio's daemon file plus every registered stack
+    whose manifest components declare the radio's band (its band-less file, then that radio's own `<rid>/<file>`), in
+    registry order — nothing hand-typed here, the registry and the manifest are the expectation."""
     svc = _svc(tmp_path)
-    sw = svc.rflog_switcher("rf-kiss.log", band)
-    assert sw["band"] == band
-    assert [(b["band"], b["current"]) for b in sw["bands"]] == [(b, b == band) for b in ControllerService.RADIO_BANDS]
-    rid = {"433": "r1", "868": "r2"}[band]              # S2: the baseline list's radio of the band owns the daemon's file
-    from lhpc.core import instances
+    sw = svc.rflog_switcher("rf-kiss.log", rid)
+    assert sw["radio"] == rid
+    assert [(r["rid"], r["band"], r["current"]) for r in sw["radios"]] == [("r1", "433", rid == "r1"),
+                                                                            ("r2", "868", rid == "r2")]
     expected = []
     for e in rflog.REGISTRY:
         if e.banded:
             expected.append((e.writer, e.radio_job(rid), e.surface))
-        elif band in _declared(svc, e.surface):          # the stack's row, then each instance's on the band (K4b)
+        elif band in _declared(svc, e.surface):          # the stack's row, then its instance's on this radio (K4b)
             expected.append((e.writer, e.job(), e.surface))
-            expected += [(e.writer, f"{r}/{e.job()}", e.surface) for r in instances.radios_of(svc.stack(e.owner), svc._paths)
-                         if r == rid and rflog.by_job(f"{r}/{e.job()}")]       # a log the instance writes per radio
+            expected += [(e.writer, f"{rid}/{e.job()}", e.surface)] if rflog.by_job(f"{rid}/{e.job()}") else []
     assert [(s["target"], s["job"], s["surface"]) for s in sw["stacks"]] == expected
     assert [s["surface"] for s in sw["stacks"] if s["current"]] == ["graywolf"]
-    assert [s["label"] for s in sw["stacks"] if s["surface"] == "daemon"] == [f"daemon {band}"]
+    assert [s["label"] for s in sw["stacks"] if s["surface"] == "daemon"] == [f"daemon {rid}"]
     assert svc.rflog_switch("chat") is None
     assert svc.rflog_job("loraham-kiss-tnc", "rf-kiss.log")["surface"] == "graywolf"
     assert svc.rflog_job("loraham-daemon", "rf-kiss.log") is None        # not this writer's
     assert svc.rflog_job("loraham-kiss-tnc", "rf-made-up.log") is None
 
 
-def test_the_shown_band_is_the_arg_else_the_files_band_else_the_stacks_own(tmp_path):
+def test_the_shown_radio_is_the_arg_else_the_files_radio_else_one_on_the_stacks_bands(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.rflog_switcher("rf-daemon-868.log")["band"] == "868"            # the file's band
-    assert svc.rflog_switcher("rf-daemon-868.log", "433")["band"] == "433"     # the arg wins
-    assert svc.rflog_switcher("rf-daemon-868.log", "900")["band"] == "868"     # an invalid arg is ignored
-    primary = next(c.band for c in svc.stack("meshtastic").components if c.band)
-    assert svc.rflog_switcher("rf-meshtastic.log")["band"] == primary          # the stack's own band
-    assert [s["current"] for s in svc.rflog_switcher("rf-daemon-868.log", "433")["stacks"]] == \
-        [False] * len(svc.rflog_switcher("rf-daemon-868.log", "433")["stacks"])   # the 868 file is not on 433
+    assert svc.rflog_switcher("r2/rf-daemon.log")["radio"] == "r2"             # the file's radio
+    assert svc.rflog_switcher("r2/rf-daemon.log", "r1")["radio"] == "r1"       # the arg wins
+    assert svc.rflog_switcher("r2/rf-daemon.log", "r9")["radio"] == "r2"       # a rid of no enabled radio is ignored
+    assert svc.rflog_switcher("rf-meshcore.log")["radio"] == "r2"              # nothing runs: the first on its 868
+    assert svc.rflog_switcher("rf-daemon-868.log")["radio"] == "r1"            # a 0.13.x band file: the first radio
+    assert not [s for s in svc.rflog_switcher("r2/rf-daemon.log", "r1")["stacks"] if s["current"]]   # not on r1
 
 
 # ---- every stack at once -----------------------------------------------------------------

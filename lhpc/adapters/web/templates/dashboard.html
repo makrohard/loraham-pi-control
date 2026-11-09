@@ -106,8 +106,8 @@
          page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
       {% set links %}
         <p class="links">
-          <a href="{{ url_for('logs_view', target='loraham-daemon', job=x.log) if x else url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
-          <span class="rfline">RF log: {% for l in r.rflogs if not (x and "/" in (l.job or "") and not l.job.startswith(x.rid ~ "/")) %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
+          <a href="{{ url_for('logs_view', target='loraham-daemon', job=x.log) if x else url_for('logs_view', target='loraham-daemon') }}">Daemon log</a>
+          <span class="rfline">RF log: {% for l in r.rflogs if not (x and "/" in (l.job or "") and not l.job.startswith(x.rid ~ "/")) %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=x.rid if x else None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if x %} data-radio-rid="{{ x.rid }}"{% endif %}>

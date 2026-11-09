@@ -92,15 +92,18 @@ def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
     assert path == str(fresh) and any("NEW multi-step" in ln for ln in tail)
 
 
-def test_logs_band_scoped_still_uses_start_log(tmp_path):
-    # a band-scoped caller (RX/TX feed) still gets the exact band's START log, unchanged.
+def test_logs_for_a_radio_use_that_instances_start_log(tmp_path):
+    # W4: a radio's caller (the log page's ?radio=) gets that instance's START log, never another radio's.
+    import radios_fixture
+    radios_fixture.write(tmp_path)                                       # r1 on 433, r2 on 868
     comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
     life = _life(FakeSystem().system, tmp_path)
     logs = life.logs_dir(); logs.mkdir(parents=True, exist_ok=True)
-    (logs / "start-widget-868.log").write_text("run log 868\n")
+    (logs / "start-widget-868-r2.log").write_text("run log r2\n")
+    (logs / "start-widget-433-r1.log").write_text("run log r1\n")
     (logs / "build-widget.log").write_text("build log\n")
-    path, _ = life.logs(comp, band="868")
-    assert path == str(logs / "start-widget-868.log")
+    assert life.logs(comp, rid="r2")[0] == str(logs / "start-widget-868-r2.log")
+    assert life.logs(comp, rid="r1")[0] == str(logs / "start-widget-433-r1.log")
 
 
 def test_log_announcer_records_details_and_emits_live_and_dedups(tmp_path):
@@ -254,16 +257,18 @@ def test_start_log_skips_symlinked_band_entries(tmp_path):
     assert life.start_log(comp) == d / "start-c.log"          # symlinked band entry ignored
 
 
-def test_logs_reads_the_band_suffixed_start_log(tmp_path):
+def test_logs_reads_the_radios_start_log(tmp_path):
     life = _life(FakeSystem().system, tmp_path)
     comp = _start_log_comp()
     d = tmp_path / "logs"
     d.mkdir(parents=True)
-    (d / "start-c-868.log").write_text("a\nb\n")
-    path, tail = life.logs(comp, lines=5, band="868")
-    assert path == str(d / "start-c-868.log") and tail == ["a", "b"]
+    import radios_fixture
+    radios_fixture.write(tmp_path)                                       # r2 on 868
+    (d / "start-c-868-r2.log").write_text("a\nb\n")
+    path, tail = life.logs(comp, lines=5, rid="r2")
+    assert path == str(d / "start-c-868-r2.log") and tail == ["a", "b"]
     # still finds a legacy band-less log when that is all there is (pre-upgrade process)
-    (d / "start-c-868.log").unlink()
+    (d / "start-c-868-r2.log").unlink()
     (d / "start-c.log").write_text("legacy\n")
     path, tail = life.logs(comp, lines=5)
     assert path == str(d / "start-c.log") and tail == ["legacy"]

@@ -34,12 +34,12 @@ def test_an_instances_log_records_come_from_its_file(web, tmp_path):
 
 def test_the_log_page_shows_the_instances_file_and_names_it_in_its_stack_row(web, tmp_path):
     _seed(tmp_path)
-    page = web().get(f"/logs/meshcore-node?job={JOB}&band=868").get_data(as_text=True)
+    page = web().get(f"/logs/meshcore-node?job={JOB}&radio=r4").get_data(as_text=True)                  # W4
     assert f'data-job="{JOB}"' in page and str(tmp_path / "logs" / "r4" / "rf-meshcore.log") in page
     row = page[page.index('class="rfswitch"'):]
     row = row[:row.index("</nav>")]                                       # the log page's stack row alone
-    assert 'href="/logs/meshcore-node?job=r4/rf-meshcore.log&amp;band=868" aria-current="page">meshcore r4</a>' in row
-    assert 'href="/logs/meshcore-node?job=rf-meshcore.log&amp;band=868">meshcore</a>' in row   # slot 0's row stays
+    assert 'href="/logs/meshcore-node?job=r4/rf-meshcore.log&amp;radio=r4" aria-current="page">meshcore r4</a>' in row
+    assert 'href="/logs/meshcore-node?job=rf-meshcore.log&amp;radio=r4">meshcore</a>' in row   # the band-less file's row stays
 
 
 @pytest.mark.parametrize("target,job", [("loraham-kiss-tnc", JOB), ("meshcom-bridge", "r4/rf-meshcore.log"),

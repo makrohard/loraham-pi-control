@@ -398,19 +398,18 @@ def _at(path, **query):
     return match
 
 
-def test_the_band_row_leads_to_the_stack_row_of_that_band(page, seeded_rf_logs):
-    """Two rows of plain links: a band pill reloads the same log on that band, and the stack
-    row then offers that band's logs — the daemon's file for it first."""
+def test_the_radio_row_leads_to_the_stack_row_of_that_radio(page, seeded_rf_logs):
+    """W4: two rows of plain links: a radio pill reloads the same log on that radio, and the stack
+    row then offers that radio's logs — its daemon's own file first."""
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
-    page.locator("nav.rfbands a", has_text="868").click()
-    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="868"), timeout=15000)
-    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
+    page.locator("nav.rfbands a", has_text="r2 · 868").click()             # r2 is the lab list's 868 radio
+    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", radio="r2"), timeout=15000)
+    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "r2 · 868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "graywolf"
-    page.locator("nav.rfswitch a", has_text="daemon 868").click()
-    # stage L5 (W7-8a): 868 is r2 in the lab's hardware list, so the band's daemon log is r2's own file
-    page.wait_for_url(_at("/logs/loraham-daemon", job="r2/rf-daemon.log", band="868"), timeout=15000)
-    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
-    assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon 868"
+    page.locator("nav.rfswitch a", has_text="daemon r2").click()
+    page.wait_for_url(_at("/logs/loraham-daemon", job="r2/rf-daemon.log", radio="r2"), timeout=15000)
+    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "r2 · 868"
+    assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon r2"
     assert page.locator("#log-card").get_attribute("data-job") == "r2/rf-daemon.log"
 
 
@@ -418,12 +417,12 @@ def test_the_bottom_forms_switch_one_stack_and_every_stack(page, seeded_rf_logs)
     """The shown stack's switch and every stack's at once, each a form that returns to this
     page; the Logging state reads "mixed" while they disagree. Leaves every switch on."""
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
-    back = _at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="*")
+    back = _at("/logs/loraham-kiss-tnc", job="rf-kiss.log", radio="*")
     assert page.locator("#rflog-all-state").get_attribute("data-state") == "on"
     page.locator("#rf-switch").select_option("off")
     with page.expect_response(lambda r: "/stacks/graywolf/rflog" in r.url, timeout=15000):
         page.locator("#rflog-switch button[type=submit]").click()
-    page.wait_for_url(back, timeout=15000)                                # back here, band carried
+    page.wait_for_url(back, timeout=15000)                                # back here, radio carried
     assert page.locator("#rf-switch").input_value() == "off"
     assert page.locator("#rflog-all-state").get_attribute("data-state") == "mixed"
     page.locator("#rf-all").select_option("on")
@@ -460,7 +459,7 @@ def test_clear_all_asks_first(page, seeded_rf_logs):
     page.once("dialog", lambda d: d.accept())
     with page.expect_response(lambda r: r.url.endswith("/rflog/clear-all"), timeout=15000):
         page.locator("#rflog-clear-all button[type=submit]").click()
-    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="*"), timeout=15000)
+    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", radio="*"), timeout=15000)
     assert len(sent) == 1
 
 

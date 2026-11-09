@@ -1050,16 +1050,6 @@ def rf_path(paths, job: str):
     return paths.under("logs", job)
 
 
-def daemon_rf_job(svc, e, band: str):
-    """A banded entry's job for `band`: the per-radio entry's file of the band's one radio when the hardware list
-    resolves the band (W7-8a), else the 0.13.x band file (read-only legacy, I11)."""
-    if e.per_radio:
-        job = e.radio_job(key_for(svc._paths, band))           # the file's name, not a socket (L27)
-        if job:
-            return job
-    return e.job(band)
-
-
 def rf_band(svc, key: str) -> str:
     """The band behind a job's key: a radio id's band from the hardware list, else the key as given."""
     if isinstance(key, str) and key[:1] == "r":

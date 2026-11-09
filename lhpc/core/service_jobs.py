@@ -13,13 +13,12 @@ from .snapshot_memo import invalidates_snapshot
 
 class JobsOpsMixin:
 
-    def log_tail(self, target: str, lines: int = 300, job: str | None = None,
-                 band: str = ""):
+    def log_tail(self, target: str, lines: int = 300, job: str | None = None, *, rid: str = ""):
         """Raw (path, lines) for `target`'s log — for the live web log view.
 
         With `job` (a logs/<name>.log filename) it tails that specific job log
         (e.g. a build/test run); otherwise it tails the component's process log —
-        `band` selects the instance of a band-scoped component (empty = newest).
+        `rid` selects the instance on that radio (W4, DEC-W384bh; empty = newest).
         """
         if job:
             # A web-supplied job selector may name ONLY an approved logs/<name>.log
@@ -54,7 +53,7 @@ class JobsOpsMixin:
             if target not in idx:
                 return "", []
             comp = idx[target][1]
-        return self._lifecycle().logs(comp, lines, band=band)
+        return self._lifecycle().logs(comp, lines, rid=rid)
 
     _WEB_ADMIT_TIMEOUT_S = 3.0
 
@@ -703,14 +702,14 @@ class JobsOpsMixin:
                     pass
         return out
 
-    def logs(self, target: str, lines: int = 200, band: str = "") -> ActionResult:
+    def logs(self, target: str, lines: int = 200) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         life = self._lifecycle()
         details = []
         for _, comp in items:
-            path, tail = life.logs(comp, lines, band=band)
+            path, tail = life.logs(comp, lines)
             if not path:
                 details.append(f"[{comp.id}] no log found")
                 continue

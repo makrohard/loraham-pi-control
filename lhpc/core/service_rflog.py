@@ -156,31 +156,9 @@ class RflogOpsMixin:
                 out.append({"label": e.surface, "target": e.writer, "job": e.job()})
         return out
 
-    def rflog_switcher(self, job: str, band: str = "") -> dict:
-        """The log page's two rows for a registered `job`: every band, and the RF logs of the
-        shown band — the daemon's file for it plus every registered stack whose declared bands
-        include it. The shown band is `band` when valid, else the job's own band (the daemon),
-        else the band the shown stack runs on (its declared band when it is not running), else
-        the first active band."""
-        e, jband = _rflog.by_job(job)
-        stack_band = next((c.band for c in self.stack(e.surface).components if c.band), "")
-        shown = (band if band in self.RADIO_BANDS else "") or radio_start.rf_band(self, jband) \
-            or self.launch_band(e.surface, stack_band) or (self.radio_bands() or self.RADIO_BANDS)[0]
-        stacks = []
-        for x in self._rflog_entries():
-            if x.banded:
-                xjob, xband = radio_start.daemon_rf_job(self, x, shown), shown
-            elif shown in self._declared_bands(self.stack(x.surface)):
-                xjob, xband = x.job(), ""
-            else:
-                continue
-            stacks.append({"target": x.writer, "job": xjob, "surface": x.surface, "band": xband,
-                           "label": f"{x.surface} {xband}".strip(), "current": xjob == job})
-            stacks += [] if x.banded else _rflog.rf_rows(self, x, xjob, shown, job)     # 7f: each listed instance
-        # A band pill keeps the shown file, except the daemon's: there it opens that band's file.
-        bands = [{"band": b, "current": b == shown, "target": e.writer,
-                  "job": radio_start.daemon_rf_job(self, e, b) if e.banded else job} for b in self.RADIO_BANDS]
-        return {"band": shown, "bands": bands, "stacks": stacks}
+    def rflog_switcher(self, job: str, rid: str = "") -> dict:
+        """The log page's radio row and the shown radio's RF logs (W4: rflog.switcher)."""
+        return _rflog.switcher(self, job, rid)
 
     def _rflog_switch_value(self, e) -> str:
         """The owner's switch: "on"/"off" when every instance agrees, else "mixed" (K6: one per instance); "" without

@@ -1588,16 +1588,17 @@ class Lifecycle:
                 newest, newest_mtime = p, mtime
         return newest
 
-    def logs(self, comp: Component, lines: int = 200,
-             band: str = "") -> tuple[str, list[str]]:
+    def logs(self, comp: Component, lines: int = 200, rid: str = "") -> tuple[str, list[str]]:
         for path in comp.log_paths:
             p = Path(path)
             if p.exists():
                 return str(p), tail_log(p, lines)
-        # A band-scoped caller (the RX/TX feed) wants the exact band's start log; a band-less
+        # A radio's caller (the log page's ?radio=, W4) wants that instance's start log; a radio-less
         # `lhpc logs <comp>` wants the NEWEST job log across start/build/test — so it resolves to the
         # very file a just-finished build wrote, matching the [log] line the job announced.
-        job_log = self.start_log(comp, band) if band else self._newest_job_log(comp.id)
+        from . import radios
+        band = next((r.band for r in radios.load(self.paths).radios if r.id == rid), "") if rid else ""
+        job_log = self.start_log(comp, band, rid) if band else self._newest_job_log(comp.id)
         if job_log is not None:
             # runtime-owned log -> no-follow tail through the authoritative API.
             return str(job_log), runtime_fs.tail(self.paths, job_log, lines)

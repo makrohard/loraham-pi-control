@@ -1,5 +1,5 @@
 """0.14.0 (REL14-D33): a radio's daemon RF log `r<rid>/rf-daemon.log` (W7-8a) opens through the web routes: the
-page shows the file with its band and stack rows, and the records API serves it. Any other path stays refused.
+page shows the file with its radio and stack rows (W4), and the records API serves it. Any other path stays refused.
 Found by the release run's browser lane (the page dropped the job and rendered empty)."""
 import pytest
 import radios_fixture
@@ -13,14 +13,14 @@ def _seed(tmp_path):
     (tmp_path / "logs" / "r2" / "rf-daemon.log").write_text(LINE + "\n")
 
 
-def test_a_radios_daemon_log_page_shows_the_file_and_its_band_row(web, tmp_path):
+def test_a_radios_daemon_log_page_shows_the_file_and_its_radio_row(web, tmp_path):
     _seed(tmp_path)
-    page = web().get("/logs/loraham-daemon?job=r2/rf-daemon.log&band=868").get_data(as_text=True)
+    page = web().get("/logs/loraham-daemon?job=r2/rf-daemon.log").get_data(as_text=True)
     assert 'data-job="r2/rf-daemon.log"' in page
     assert str(tmp_path / "logs" / "r2" / "rf-daemon.log") in page
     assert 'class="rfbands"' in page
-    band_row = page[page.index('class="rfbands"'):page.index('class="rfswitch"')]
-    assert band_row.count('aria-current="page"') == 1 and '>868</a>' in band_row.split('aria-current="page"')[1][:20]
+    radio_row = page[page.index('class="rfbands"'):page.index('class="rfswitch"')]
+    assert radio_row.count('aria-current="page"') == 1 and '>r2 · 868</a>' in radio_row.split('aria-current="page"')[1][:20]
 
 
 def test_a_radios_daemon_log_records_come_from_its_file(web, tmp_path):

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-band="{{ band or '' }}" data-decoder="{{ '1' if rflog and rflog.decoder else '0' }}">
+  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-radio="{{ radio or '' }}" data-decoder="{{ '1' if rflog and rflog.decoder else '0' }}">
     <header>
       <h2>{{ 'RF log' if rflog else 'Logs' }} <span class="pill">{{ rflog.label if rflog else target }}</span></h2>
       <span class="badge badge-{{ 'running' if running else 'stopped' }}" id="log-status">
@@ -9,15 +9,15 @@
     </header>
     {% if switcher %}
       {# Two rows, plain links (a full page load — rflog.js polls whatever data-job the loaded
-         card carries): every band, then the RF logs of the shown band in registry order. #}
-      <nav class="rfbands" aria-label="RF log bands">
-        {% for b in switcher.bands %}
-          <a class="pill" href="{{ url_for('logs_view', target=b.target, job=b.job, band=b.band) }}"{% if b.current %} aria-current="page"{% endif %}>{{ b.band }}</a>
+         card carries): every radio, then the RF logs of the shown radio in registry order (W4). #}
+      <nav class="rfbands" aria-label="RF log radios">
+        {% for b in switcher.radios %}
+          <a class="pill" href="{{ url_for('logs_view', target=b.target, job=b.job, radio=b.rid) }}"{% if b.current %} aria-current="page"{% endif %}>{{ b.rid }} · {{ b.band }}</a>
         {% endfor %}
       </nav>
       <nav class="rfswitch" aria-label="RF logs">
         {% for s in switcher.stacks %}
-          <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job, band=band) }}"{% if s.current %} aria-current="page"{% endif %}>{{ s.label }}</a>
+          <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job, radio=radio or None) }}"{% if s.current %} aria-current="page"{% endif %}>{{ s.label }}</a>
         {% endfor %}
       </nav>
     {% endif %}
@@ -63,7 +63,7 @@
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="from" value="logs">
             <input type="hidden" name="job" value="{{ job }}">
-            <input type="hidden" name="band" value="{{ band }}">
+            {% if radio %}<input type="hidden" name="radio" value="{{ radio }}">{% endif %}
             <label for="rf-switch">Stack RF Logging</label>
             <select id="rf-switch" name="value" aria-label="Stack RF Logging switch">
               <option value="on"{% if switch.value == 'on' %} selected{% endif %}>on</option>
@@ -79,7 +79,7 @@
                 id="rflog-clear" data-confirm="Do you really want to delete the RF log?">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="job" value="{{ job }}">
-            <input type="hidden" name="band" value="{{ band }}">
+            {% if radio %}<input type="hidden" name="radio" value="{{ radio }}">{% endif %}
             <button type="submit">Clear stack RF log</button>
             <span class="muted">empties {{ job }} and removes {{ job }}.1</span>
           </form>
@@ -88,7 +88,7 @@
           <form method="post" action="{{ url_for('rflog_all') }}" class="inline" id="rflog-all">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="job" value="{{ job }}">
-            <input type="hidden" name="band" value="{{ band }}">
+            {% if radio %}<input type="hidden" name="radio" value="{{ radio }}">{% endif %}
             <label for="rf-all">Global RF Logging</label>
             <select id="rf-all" name="value" aria-label="Global RF Logging switch for every stack">
               <option value="on"{% if logging == 'on' %} selected{% endif %}>on</option>
@@ -103,7 +103,7 @@
                 id="rflog-clear-all" data-confirm="Do you really want to delete every RF log?">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="job" value="{{ job }}">
-            <input type="hidden" name="band" value="{{ band }}">
+            {% if radio %}<input type="hidden" name="radio" value="{{ radio }}">{% endif %}
             <button type="submit">Clear all RF logs</button>
           </form>
         </div>

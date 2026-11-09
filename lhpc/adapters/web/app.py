@@ -41,7 +41,7 @@ from flask import (
 
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
-from lhpc.core import auto_install_form, validators, web_client
+from lhpc.core import auto_install_form, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
 from lhpc.core import instances as _instances
@@ -945,6 +945,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             lis = None
         return fw, lis
 
+    def _stack_rflog(stack_id):
+        """W4: a running stack's RF log link on its first running instance's radio, that instance's own `<rid>/<file>`
+        where the stack writes one (else its one file: Reticulum's one node, DEC-W342); None for a banded one."""
+        e = _rflog.entry(stack_id)
+        if e is None or e.banded:
+            return None
+        rid = min(_instances.recorded(service, stack_id), key=lambda r: int(r[1:]), default="")
+        own = f"{rid}/{e.job()}"
+        return {"target": e.writer, "radio": rid or None, "job": own if rid and _rflog.by_job(own) else e.job()}
+
     def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None,
                       restored_open=frozenset()):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
@@ -1078,9 +1088,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                               if any(h in member_ids for h in c.holders)],
                 "jobs": _jobs,
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
-                # W250: what Home's band card showed for a running stack: its RF log on its band, its tools' launch lines
-                "rflog": ({"target": _e.writer, "job": _e.job(), "band": service.launch_band(stack.id, "") or None}
-                          if rollup[stack.id] in _RUNNING and (_e := _rflog.entry(stack.id)) and not _e.banded else None),
+                # W250: what Home's card showed for a running stack: its RF log (W4: its instance's), its tools' launch lines
+                "rflog": _stack_rflog(stack.id) if rollup[stack.id] in _RUNNING else None,
                 "tools": [(c.id, c.name, service.manual_start_command(c)) for c in stack.components
                           if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
                 "inline": inline,
@@ -1947,30 +1956,28 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return value
         return value if "/" not in value and ".." not in value else None
 
-    def _safe_band(value):
-        # `band` picks the instance of a band-scoped component and reaches a FILENAME
-        # (start-<id>-<band>.log), so it must pass the canonical whitelist, never raw input.
-        # Empty/invalid -> "" (the resolver then picks the newest band's log).
-        if not value:
+    def _log_radio() -> str:
+        """W4 (DEC-W384bh): the radio a log view or an RF log form is addressed to (`radio`), "" without one; an empty
+        value is a 400 and a rid that is no radio of the hardware list a 404, both by name. `band` is no filter."""
+        rid = request.values.get("radio")
+        if rid is None:
             return ""
-        try:
-            return validators.band(value, allow_both=False)
-        except validators.ValidationError:
-            return ""
+        if not any(r.id == rid for r in _radios_mod.load(service._paths).radios):
+            abort(make_response(f"radio={rid!r} is not a radio of the hardware list", 404 if rid else 400))
+        return rid
 
     @app.get("/logs/<target>")
     def logs_view(target: str):
         if service.stack_of(target) is None:
             abort(404)
-        job = _safe_job(request.args.get("job"))
-        band = _safe_band(request.args.get("band"))
-        path, lines = service.log_tail(target, 300, job=job, band=band)
+        job, rid = _safe_job(request.args.get("job")), _log_radio()
+        path, lines = service.log_tail(target, 300, job=job, rid=rid)
         # An RF log (registry-authorized, never by name): the writer's run state is the badge,
-        # the header carries the band row and the stack row, the bottom the switches and Clear.
+        # the header carries the radio row and the stack row, the bottom the switches and Clear.
         rf = service.rflog_job(target, job)
-        switcher = service.rflog_switcher(job, band) if rf else None
+        switcher = service.rflog_switcher(job, rid) if rf else None
         return render_template("logs.html", version=__version__, target=target, job=job,
-                               band=switcher["band"] if rf else band,
+                               radio=switcher["radio"] if rf else rid,
                                stack_id=service.stack_of(target), path=path, lines=lines,
                                running=(service.rflog_running(job) if rf
                                         else service.log_running(target, job)),
@@ -1978,12 +1985,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                switch=service.rflog_switch(rf["surface"]) if rf else None,
                                logging=service.rflog_logging_state() if rf else "")
 
-    def _rflog_back(job, band):
-        # Back to the RF log page a bottom form came from — same job, same band (a registered
+    def _rflog_back(job):
+        # Back to the RF log page a bottom form came from — same job, same radio (a registered
         # job, else the dashboard).
-        job, band = _safe_job(job), _safe_band(band)
+        job, rid = _safe_job(job), _log_radio()
         rf = _rflog.by_job(job or "")
-        return redirect(url_for("logs_view", target=rf[0].writer, job=job, band=band or None) if rf
+        return redirect(url_for("logs_view", target=rf[0].writer, job=job, radio=rid or None) if rf
                         else url_for("dashboard"))
 
     @app.post("/rflog/all")
@@ -1993,7 +2000,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.set_rflog_all(request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
-        return _rflog_back(request.form.get("job"), request.form.get("band"))
+        return _rflog_back(request.form.get("job"))
 
     @app.post("/rflog/clear-all")
     def rflog_clear_all():
@@ -2001,7 +2008,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.rflog_clear_all()
         flash(result.summary, "ok" if result.ok else "warn")
-        return _rflog_back(request.form.get("job"), request.form.get("band"))
+        return _rflog_back(request.form.get("job"))
 
     @app.get("/api/rflog/<target>")
     def rflog_records_api(target: str):
@@ -2043,16 +2050,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)                      # not a registered RF log of this writer
         result = service.rflog_clear(target, job)
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("logs_view", target=target, job=job,
-                                band=_safe_band(request.form.get("band")) or None))
+        return redirect(url_for("logs_view", target=target, job=job, radio=_log_radio() or None))
 
     @app.get("/api/logs/<target>")
     def logs_api(target: str):
         if service.stack_of(target) is None:
             abort(404)
         job = _safe_job(request.args.get("job"))
-        band = _safe_band(request.args.get("band"))
-        path, lines = service.log_tail(target, 300, job=job, band=band)
+        path, lines = service.log_tail(target, 300, job=job, rid=_log_radio())
         return jsonify(target=target, path=path, lines=lines,
                        running=(service.rflog_running(job) if service.rflog_job(target, job)
                                 else service.log_running(target, job)))
@@ -2352,7 +2357,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         result = service.set_rflog(stack_id, request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
         if request.form.get("from") == "logs":       # the log page's bottom form
-            return _rflog_back(request.form.get("job"), request.form.get("band"))
+            return _rflog_back(request.form.get("job"))
         return redirect(url_for("stacks_overview", open=stack_id) + "#stack-settings-" + stack_id)
 
     @app.post("/stacks/<stack_id>/daemon-params")

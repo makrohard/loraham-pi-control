@@ -6,10 +6,10 @@
   if (!card) return;
   var target = card.getAttribute("data-target");
   var job = card.getAttribute("data-job");
-  var band = card.getAttribute("data-band");
+  var radio = card.getAttribute("data-radio");
   var q = [];
   if (job) q.push("job=" + encodeURIComponent(job));
-  if (band) q.push("band=" + encodeURIComponent(band));
+  if (radio) q.push("radio=" + encodeURIComponent(radio));
   var url = "/api/logs/" + encodeURIComponent(target) + (q.length ? "?" + q.join("&") : "");
   var box = document.getElementById("logbox");
   var status = document.getElementById("log-status");

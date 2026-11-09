@@ -727,12 +727,12 @@ def test_logs_view(web):
     assert web().get("/logs/loraham-daemon").status_code == 200
 
 
-def test_logs_view_keeps_the_band_for_the_live_poll(web):
-    # logs.js rebuilds the API URL from the card's data attributes: a band-scoped page must
-    # keep polling the same band's log, not swap to another log two seconds later.
-    body = web().get("/logs/loraham-daemon?band=433").get_data(as_text=True)
-    assert 'data-band="433"' in body
-    assert 'data-band=""' in web().get("/logs/loraham-daemon").get_data(as_text=True)
+def test_logs_view_keeps_the_radio_for_the_live_poll(web):
+    # logs.js rebuilds the API URL from the card's data attributes: a radio's page must keep
+    # polling the same radio's log, not swap to another log two seconds later (W4).
+    body = web().get("/logs/loraham-daemon?radio=r1").get_data(as_text=True)
+    assert 'data-radio="r1"' in body and "data-band" not in body
+    assert 'data-radio=""' in web().get("/logs/loraham-daemon?band=433").get_data(as_text=True)    # band: no filter
     assert web().get("/logs/bogus").status_code == 404
 
 
@@ -2032,19 +2032,19 @@ def test_clear_daemon_feed_is_band_scoped_and_ignores_bad_band(tmp_path):
     svc.clear_daemon_feed("nonsense")                            # invalid band -> no-op, no crash
 
 
-def test_logs_view_band_selects_the_per_band_process_log(tmp_path, web):
-    # `?band=` picks the instance of a band-scoped component; an absent/invalid band falls back to
-    # the newest band's log (never empty just because the caller had no band to offer).
+def test_logs_view_radio_selects_the_instances_process_log(tmp_path, web):
+    # W4: `?radio=` picks the instance's start log; `?band=` is no filter; a rid of no radio is a 404.
     c = web()
     d = tmp_path / "logs"
     d.mkdir(parents=True, exist_ok=True)
     (d / "start-loraham-daemon-433-r1.log").write_text("four-three-three\n")
     (d / "start-loraham-daemon-868-r2.log").write_text("eight-six-eight\n")
-    assert "four-three-three" in c.get("/logs/loraham-daemon?band=433").get_data(as_text=True)
-    assert "eight-six-eight" in c.get("/logs/loraham-daemon?band=868").get_data(as_text=True)
-    # A band outside the whitelist is dropped (never reaches the filename), not a 500/traversal.
-    r = c.get("/logs/loraham-daemon?band=../../etc/passwd")
-    assert r.status_code == 200 and "passwd" not in r.get_data(as_text=True)
+    assert "four-three-three" in c.get("/logs/loraham-daemon?radio=r1").get_data(as_text=True)
+    assert "eight-six-eight" in c.get("/logs/loraham-daemon?radio=r2").get_data(as_text=True)
+    assert "four-three-three" not in c.get("/logs/loraham-daemon?radio=r2&band=433").get_data(as_text=True)
+    # A radio of no list row never reaches a filename: a 404 by name, not a 500/traversal.
+    r = c.get("/logs/loraham-daemon?radio=../../etc/passwd")
+    assert r.status_code == 404 and "root:" not in r.get_data(as_text=True)
 
 
 def test_meshcore_power_frequency_defaults_start_clean(tmp_path):

@@ -348,13 +348,27 @@ def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
             "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
 
 
-def rf_rows(svc, e, job_name: str, band: str, shown_job: str) -> list:
-    """7f: the RF log page's stack-row entries of entry `e`'s instances on `band`, each its own `<rid>/<file>`."""
+def switcher(svc, job: str, rid: str = "") -> dict:
+    """W4 (DEC-W384bh): the RF log page's two rows for registered `job`: every enabled radio, and the RF logs of the
+    shown radio, its daemon's `<rid>/rf-daemon.log` and every registered stack's `<rid>/<file>` (a stack whose declared
+    bands hold the radio's band; its 0.13.x band-less file too). The shown radio: `rid` when it is an enabled radio,
+    else the job's own radio, else one the shown stack runs on, else the first on its bands, else the first one."""
     from . import instances, radio_start
-    out = []
-    for rid in instances.radios_of(svc.stack(e.owner), svc._paths):
-        job = f"{rid}/{job_name}"
-        if radio_start.rf_band(svc, rid) == band and by_job(job):
-            out.append({"target": e.writer, "job": job, "surface": e.surface, "band": rid, "label": f"{e.surface} {rid}",
-                        "current": job == shown_job})
-    return out
+    e, key = by_job(job)
+    rows, own = radio_start.view_radios(svc._paths), svc._declared_bands(svc.stack(e.surface))
+    rids = [r for r, _n, _b in rows]
+    shown = next((r for r in (rid, key, *sorted(instances.recorded(svc, e.surface)), *(r for r, _n, b in rows if b in own))
+                  if r in rids), rids[0] if rids else "")
+    band, stacks = radio_start.rf_band(svc, shown), []
+    for x in svc._rflog_entries():
+        if x.banded:
+            jobs = [(x.radio_job(shown) or x.job(band), f"{x.surface} {shown}")]
+        elif band and band in svc._declared_bands(svc.stack(x.surface)):
+            jobs = [(x.job(), x.surface), (f"{shown}/{x.job()}", f"{x.surface} {shown}")]
+        else:
+            continue
+        stacks += [{"target": x.writer, "job": j, "surface": x.surface, "label": label, "current": j == job}
+                   for j, label in jobs if j and by_job(j)]
+    radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer,
+               "job": (e.radio_job(r) or e.job(b)) if e.banded else job} for r, _n, b in rows]
+    return {"radio": shown, "radios": radios, "stacks": stacks}
