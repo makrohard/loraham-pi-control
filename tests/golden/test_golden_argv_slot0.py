@@ -25,8 +25,8 @@ EXCEPTIONS = {
     "meshcom-gps": ["--state", "/rt/state/gps/meshcom"],
     "meshcore-gps": ["--state", "/rt/state/gps/meshcore"],
     "meshtastic-gps": ["--state", "/rt/state/gps/meshtastic"],
-    # K7 (DEC-W384s): each guest's run.sh instance, host ports and bridge redirect (the template: r1's, = the base's)
-    "meshcom-qemu": ["--instance", "0", "--ports", "18083:12323", "--xr-redirect", "7000:7000"],
+    # K7 (DEC-W384s/af): each guest's run.sh instance and host ports (the template: r1's, = the base's)
+    "meshcom-qemu": ["--instance", "0", "--ports", "18083:12323"],
 }
 # Stage L5 (W3, an I11 difference, A:142): a daemon client's socket pairs are its radio's. They are compared apart
 # from the rest of the argv: each client carries exactly these pairs (on r1), and every other token is the base's.

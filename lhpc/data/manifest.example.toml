@@ -2018,11 +2018,11 @@ main = "meshcom-qemu"
   # --node-image: QEMU runs on the node's own flash image, kept under state/ (outside the checkout and every
   # publish root), so a binary install/update or a rebuild keeps the node's settings and message counter;
   # run.sh carries them into a new build when its partition table is unchanged (finding R21).
-  # K7 (DEC-W384s/v): meshcom@rN is its own guest: run.sh --instance N - 1 (its .run/<n>/; r1 the single-guest layout),
-  # its radio's host ports (--ports), and the firmware's compiled-in bridge address 10.0.2.2:7000 redirected to ITS
-  # bridge at its radio's default port (--xr-redirect; the bridge port stays "= firmware XR_PORT" as before); the XR
-  # password is the one shared secret (DEC-W384v).
-  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323} --xr-redirect 7000:{port:7000}"
+  # K7 (DEC-W384s/v): meshcom@rN's guest runs as run.sh --instance N - 1 (its .run/<n>/; r1 the single-guest layout) on its
+  # radio's host ports (--ports). No --xr-redirect (DEC-W384af): QEMU's tcp guestfwd connects to the bridge once at QEMU
+  # start, not per firmware connection, so the firmware's link never came up; the firmware's compiled-in 10.0.2.2:7000
+  # reaches the host's 7000 natively, so MeshCom runs one instance at a time until a per-connection redirect lands.
+  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323}"
   state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env

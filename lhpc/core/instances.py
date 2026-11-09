@@ -24,6 +24,10 @@ def stack_bands(stack) -> tuple:
     return tuple(sorted({c.band for c in stack.components if getattr(c, "band", "")}))
 
 
+# TRANSITIONAL (DEC-W384af): a stack whose instances cannot run side by side yet, with the reason the refusal names
+ONE_AT_A_TIME = {"meshcom": "its guests share the firmware's bridge address 10.0.2.2:7000"}
+
+
 def fixed_ports_only(stack) -> bool:                          # transitional: per-radio Reticulum (next week)
     """DEC-W384h, by property: every TCP listener of the stack has a fixed port (no `{port:B}` template), so one set
     of ports serves whichever radio it runs on, and it gets ONE instance's pages and firewall rows."""
