@@ -136,3 +136,13 @@ def test_w384q_a_secret_hidden_row_keeps_todays_behaviour(tmp_path, sid, name):
     inst = Instance("r2", band="868") if sid == "meshcore" else Instance("r1", band="433")
     assert svc.save_config_bundle(sid, values={f"file_{name}": "Operator-Set-123"}, inst=inst).ok
     assert svc.file_config_values(sid, inst.band, inst)[name] == "Operator-Set-123"
+
+
+@pytest.mark.parametrize("inst", [Instance("r2", band="868"), Instance("r2")], ids=["with-band", "bare"])
+def test_g1_k6c_n5_an_instances_save_is_compared_with_its_own_bands_defaults(tmp_path, inst):
+    # kiss@r2 (868): saving tx_freq = 868's default (869.525) stores nothing; before, it was compared with the
+    # stack default band's (433.775) and stored as an override
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    assert svc.save_config_bundle("kiss", values={"tx_freq": "869.525"}, inst=inst).ok
+    assert "tx_freq" not in svc._stack_config_cached("kiss", "", Instance("r2"))
+    assert svc.stack_config("loraham-kiss-tnc", "868", Instance("r2", band="868"))["tx_freq"] == "869.525"

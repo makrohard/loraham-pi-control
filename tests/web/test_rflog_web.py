@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from urllib.parse import parse_qs, urlsplit
 
+import launch_band_fixture
 import pytest
 
 from htmlq import parse
@@ -241,7 +242,7 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
                                             b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
-        svc.launch_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
+        launch_band_fixture.set_launch_band(svc, "meshtastic", "868")   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))

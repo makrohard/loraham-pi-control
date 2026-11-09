@@ -1,6 +1,7 @@
 """Tests for dependency run-order and the daemon auto-start/reconfigure logic."""
 
 from __future__ import annotations
+
 import pytest
 import launch_band_fixture
 import radios_fixture
@@ -87,8 +88,7 @@ def test_a_stack_running_on_one_band_is_not_offered_on_the_other(tmp_path, monke
     snap = svc.build_snapshot()
     snap.stack("graywolf").components["graywolf"].run_state = RunState.RUNNING
     monkeypatch.setattr(svc, "build_snapshot", lambda *a, **k: snap)
-    monkeypatch.setattr(svc, "launch_band",
-                        lambda sid, default="": "868" if sid == "graywolf" else default)
+    launch_band_fixture.set_launch_band(svc, "graywolf", "868")
     cards = {r["band"]: r for r in svc.radio_overview()}
     assert "graywolf" in {s["id"] for s in cards["868"]["running"]}
     assert "graywolf" not in {s["id"] for s in cards["433"]["running"]}

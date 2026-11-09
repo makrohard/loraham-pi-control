@@ -277,7 +277,7 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
 
 
 
-def own_rid(paths, inst) -> str:
+def own_rid(inst) -> str:
     """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60, K6: every
     instance); "" without one (the stack's global `<sid>.toml`)."""
     return inst.rid if inst is not None and inst.rid else ""
@@ -290,23 +290,26 @@ def elsewhere(svc, target_rid: str):
     held = {}
     if target_rid:
         from . import radio_start
-        for s_id, r_id, _c, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
-            held.setdefault(s_id, set()).add(r_id)
+        for s_id, r_id, c_id, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
+            held.setdefault((s_id, c_id), set()).add(r_id)          # G1-K6C 1: per component, not per stack
         dprocs = radio_start._daemon_procs(svc)
         if dprocs and all(p.kind == "id" for p in dprocs):
-            held[svc.stack_of(svc.DAEMON_ID)] = {p.rid for p in dprocs}
+            held[(svc.stack_of(svc.DAEMON_ID), svc.DAEMON_ID)] = {p.rid for p in dprocs}
 
     def other(stack_id, comp) -> bool:
-        rids = held.get(stack_id, set())
+        rids = held.get((stack_id, comp.id), set())
         told = rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp))
         return bool(target_rid and told and target_rid not in rids)
     return other
 
 
 def saved_insts(svc, sid: str) -> list:
-    """The stack's instances whose own settings a stack-wide entry means (each its own, K6); [None] (the global
-    store) without a hardware list."""
-    return [i for i in commands.stack_instances(svc.stack(sid), svc._paths) if i.rid] or [None]
+    """The instances whose own settings a stack-wide entry means (each its own, K6): every radio of the stack's bands,
+    a disabled one too (G1-K6C N3: its file is what it reads when it returns); [None] (the global store) without a
+    hardware list."""
+    bands = stack_bands(svc.stack(sid))
+    return [commands.Instance(r.id, band=r.band) for r in sorted(radios.load(svc._paths).radios, key=lambda r: int(r.id[1:]))
+            if not bands or r.band in bands] or [None]
 
 
 def port_of_default(svc, p, inst) -> str:
@@ -331,6 +334,13 @@ def store_inst(svc, sid: str, band: str = "", inst=None):
     """The instance whose own settings a caller means: its own; a band caller (no radio; the web's ?band= until W5)
     its band's instance (copy_of: the running radio, else the band's first); TEMPLATE-like (no rid) without a list."""
     return inst if getattr(inst, "rid", "") else (copy_of(svc, sid, band=band)[0] or inst)
+
+
+def saved_inst(svc, sid: str, band: str = "", inst=None):
+    """store_inst for a save or a reset: a bare instance with its radio's band (G1-K6C N5: its band's defaults are
+    what a value is compared with)."""
+    inst = store_inst(svc, sid, band, inst)
+    return (copy_of(svc, sid, inst.rid)[0] or inst) if getattr(inst, "rid", "") and not inst.band else inst
 
 
 
@@ -532,7 +542,7 @@ def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     stack = svc.stack(sid)
     bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
     rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
-    shown = own_rid(svc._paths, store_inst(svc, sid, band, inst)) if rows else ""
+    shown = own_rid(store_inst(svc, sid, band, inst)) if rows else ""
     out = [{"label": f"{r.id} · {r.band}", "radio": r.id, "band": "", "sel": r.id == shown, "disabled": False}
            for r in rows]
     return {"radio": shown, "radio_choices": out if len(out) > 1 else []}

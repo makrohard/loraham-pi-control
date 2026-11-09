@@ -203,6 +203,7 @@ def test_the_shown_band_is_the_arg_else_the_files_band_else_the_stacks_own(tmp_p
 
 def test_set_rflog_all_writes_every_owner_once_and_marks_each_running_one(tmp_path, monkeypatch):
     # K6 (DEC-W384k): every owner once per instance (its own file), one result line per owner
+    from lhpc.core import instances
     from lhpc.core.commands import stack_instances
     svc = _svc(tmp_path)
     _live(monkeypatch, svc, "kiss", "r2")
@@ -212,7 +213,7 @@ def test_set_rflog_all_writes_every_owner_once_and_marks_each_running_one(tmp_pa
                         lambda self, target, **kw: saved.append((target, kw["inst"].rid)) or real(self, target, **kw))
     res = svc.set_rflog_all("off")
     owners = list(dict.fromkeys(e.owner for e in rflog.REGISTRY))
-    every = [(o, i.rid) for o in owners for i in stack_instances(svc.stack(o), svc._paths)]
+    every = [(o, i.rid) for o in owners for i in instances.saved_insts(svc, o)]     # every radio of its bands (N3)
     assert res.ok and saved == every and len(res.details) == len(owners)
     for e in rflog.REGISTRY:
         assert all(_store(svc, e.owner, i.rid)[e.key] == "off" for i in stack_instances(svc.stack(e.owner), svc._paths))
@@ -519,3 +520,33 @@ def test_an_intermediate_logs_link_is_judged_before_the_radio_level(tmp_path, ma
     paths = Paths(runtime_root=root)
     assert rflog.radio_dir_state(paths, "r1/rf-daemon.log") == state
     assert rflog.radio_dir_ok(paths, "r1/rf-daemon.log") is (state == "present")
+
+
+def test_g1_k6c_n3_the_stack_wide_switch_reaches_a_disabled_radios_own_file(tmp_path):
+    # r1 disabled while `lhpc rflog --all off` runs: kiss@r1's own file gets it, so r1 reads it when it returns
+    import dataclasses
+
+    import radios_fixture
+    rows = list(radios_fixture.RADIOS)
+    radios_fixture.write(tmp_path, [dataclasses.replace(rows[0], enabled=False), *rows[1:]])
+    svc = _svc(tmp_path)
+    assert svc.set_rflog("graywolf", "off").ok
+    assert _store(svc, "kiss", "r1")["rf_log"] == "off" and "rf_log" not in _store(svc, "kiss")
+    radios_fixture.write(tmp_path, rows)                                        # r1 back
+    svc = _svc(tmp_path)
+    assert svc.stack_config("kiss", "433")["rf_log"] == "off"
+
+
+def test_g1_k6c_n4_a_partly_saved_switch_names_the_saved_and_the_failed_instances(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    real = ControllerService.save_config_bundle
+
+    def save(self, target, **kw):
+        from lhpc.core.service_base import ActionResult
+        if kw.get("inst") is not None and kw["inst"].rid == "r2":
+            return ActionResult(False, "Config not saved for 'kiss'.", ["disk full"])
+        return real(self, target, **kw)
+    monkeypatch.setattr(ControllerService, "save_config_bundle", save)
+    r = svc.set_rflog("graywolf", "off")
+    assert not r.ok and r.summary == "RF log not saved on every instance: saved kiss@r1; not saved kiss@r2"
+    assert "disk full" in r.details

@@ -325,3 +325,33 @@ def test_k6_instances_compete_only_on_their_own_radio(tmp_path):
     assert sorted(svc._radio_competitors([kiss2, e("meshcore", "MeshCore r2", "r2")])) == ["KISS r2", "MeshCore r2"]
     assert svc._radio_competitors([kiss2, e("graywolf", "Graywolf r2", "r2")]) == []       # client, by its sid
     assert sorted(svc._radio_competitors([kiss2, core3, e("chat", "Chat")])) == ["Chat", "KISS r2", "MeshCore r3"]
+
+
+def test_g1_k6c_n2_a_stack_launched_on_two_bands_shows_in_both_columns(tmp_path):
+    # meshtastic@r1 (433) and meshtastic@r2 (868) both run by their verified records: each band's column holds it
+    # running, so each card links its RF log; before, the one-band answer kept it in its primary column only
+    import subprocess
+    import sys
+
+    import radios_fixture
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS)
+    plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    mt = plain.stack("meshtastic")
+    node = mt.component("meshtastic")
+    procs, table = [], {}
+    try:
+        for rid, band in (("r1", "433"), ("r2", "868")):
+            p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+            procs.append(p)
+            assert plain._lifecycle().record_launch(mt, node, p.pid, band=band, extra={"rid": rid})
+            table[p.pid] = ["/x/meshtasticd", *instances._token(plain, node, Instance(rid), band)]
+        svc = ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
+        assert instances.launch_bands(svc, "meshtastic") == {"433", "868"}
+        links = {row["band"]: [x["label"] for x in row["rflogs"]] for row in svc.radio_overview()}
+        assert links == {"433": ["daemon r1 (433)", "meshtastic"], "868": ["daemon r2 (868)", "meshtastic"]}, links
+    finally:
+        for p in procs:
+            p.kill()
+            p.wait(timeout=5)

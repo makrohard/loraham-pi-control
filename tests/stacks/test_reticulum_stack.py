@@ -1301,9 +1301,9 @@ def test_another_stack_is_never_refused_for_reticulums_configuration(tmp_path):
     # stack resolves its OWN band, under which reticulum's saved values read as defaults anyway.
     # The scoping is what must hold, whatever the bands happen to be.
     band = svc._config_band("rns", "")
-    assert svc._reticulum_internet_preflight(svc._run_order("rns"), band), \
+    assert svc._reticulum_internet_verdict(svc._run_order("rns"), band)[0], \
         "it speaks for a run order that contains the node"
-    assert svc._reticulum_internet_preflight(svc._run_order("kiss"), band) == "", \
+    assert svc._reticulum_internet_verdict(svc._run_order("kiss"), band)[0] == "", \
         "and is silent for one that does not, even on the node's own band"
 
 

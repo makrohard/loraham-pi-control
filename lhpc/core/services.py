@@ -847,7 +847,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             sig = (st.st_ino, st.st_size, st.st_mtime_ns)
         except OSError:
             sig = None
-        return self._request_memo(("stack-config", stack_id, band, instances.own_rid(self._paths, inst), sig),
+        return self._request_memo(("stack-config", stack_id, band, instances.own_rid(inst), sig),
                                   lambda: load_stack_config(self._paths, stack_id, band, inst))
 
     # ---- read-only operations --------------------------------------------

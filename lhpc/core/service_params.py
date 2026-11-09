@@ -251,7 +251,7 @@ class ParamsConfigMixin:
         # input.
         id_rows = {(r["comp"], r["kind"], r["name"]): r
                    for r in self.identity_resolution(target, band, inst)}
-        cfg_band = self._config_band(target, band)
+        cfg_band = self._config_band(target, band, inst)
         groups: list[dict] = []
         for c in self._target_components(target):
             # Rows keyed by settings sub-group ("" = the component's own block). A param's `group`
@@ -388,7 +388,7 @@ class ParamsConfigMixin:
         """Like `_resolved_param_value` but STORED-ONLY: "" when nothing was explicitly saved,
         never the (operator-substituted) default. Identity fields resolve through this so an
         inherited value is never mistaken for — or round-tripped into — a saved local one."""
-        cfg_band = self._config_band(target, band)
+        cfg_band = self._config_band(target, band, inst)
         owner = self._owner_stack(target)
         stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
@@ -401,7 +401,7 @@ class ParamsConfigMixin:
                               band: str = "", inst=None) -> str:
         """The component's OWN persisted value (component-scoped, else a UNIQUE flat) or its
         operator-substituted default — never masked by a same-named sibling."""
-        cfg_band = self._config_band(target, band)
+        cfg_band = self._config_band(target, band, inst)
         owner = self._owner_stack(target)
         stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
@@ -652,7 +652,7 @@ class ParamsConfigMixin:
         UNIQUE flat value, else the per-band/manifest default (operator `{callsign}`
         tokens substituted in DEFAULTS only — a saved value is used verbatim). An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
-        cfg_band = self._config_band(target, band)
+        cfg_band = self._config_band(target, band, inst)
         owner = self._owner_stack(target)
         # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); a listed instance's in its own.
         stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
@@ -983,9 +983,9 @@ class ParamsConfigMixin:
                                    {vid: (vurl or None) for vid, vurl in patch.items()})
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
-        cfg_band = self._config_band(target, band)
-        inst = _instances.store_inst(self, sid, cfg_band, inst)          # K6: a band caller saves its band's instance's
-        own = _instances.own_rid(self._paths, inst)                      # its own file, all of it
+        inst = _instances.saved_inst(self, sid, self._config_band(target, band), inst)   # K6: a band caller's: its band's
+        cfg_band = self._config_band(target, band, inst)                 # G1-K6C N5: the instance's band's defaults
+        own = _instances.own_rid(inst)                      # its own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -1658,7 +1658,7 @@ class ParamsConfigMixin:
         """Stored file-config values (component-scoped `__f__<comp>__<name>`, else a UNIQUE flat
         `file_<name>`), falling back to the per-band default, then the FileParam default. An
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
-        cfg_band = self._config_band(target, band)
+        cfg_band = self._config_band(target, band, inst)
         owner = self._owner_stack(target)
         stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
         _, file_counts = self._owner_param_counts(owner)
@@ -1730,7 +1730,7 @@ class ParamsConfigMixin:
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is None or not any(p.name == "mode" for p in fc.params):
             return _mm.DEFAULT_MODE
-        if _instances.own_rid(self._paths, inst):          # 7f: an instance's own store's mode (DEC-W52)
+        if _instances.own_rid(inst):          # 7f: an instance's own store's mode (DEC-W52)
             return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
 
@@ -2445,9 +2445,9 @@ class ParamsConfigMixin:
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band = self._config_band(target, band)
-        inst = _instances.store_inst(self, target, cfg_band, inst)       # K6: a band caller resets its band's instance
-        own = _instances.own_rid(self._paths, inst)
+        inst = _instances.saved_inst(self, target, self._config_band(target, band), inst)   # K6: a band caller's
+        cfg_band = self._config_band(target, band, inst)
+        own = _instances.own_rid(inst)
         label = f"'{_instances.key(target, inst)}'" if own else f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}

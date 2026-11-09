@@ -2212,10 +2212,6 @@ class LifecycleOpsMixin:
         venv = self._paths.resolve_source(node.source.path) / ".venv" / "lib"
         return any(venv.glob("python3*/site-packages/loraham_rns/framing.py"))
 
-    def _reticulum_internet_preflight(self, order, band: str) -> str:
-        """The sentence of `_reticulum_internet_verdict` ("" = nothing to refuse)."""
-        return self._reticulum_internet_verdict(order, band)[0]
-
     def _reticulum_internet_verdict(self, order, band: str) -> tuple[str, str]:
         """The Internet interface's cross-field verdict for a run order that contains the RNS
         node, as `(sentence, reason token)` — both "" when there is nothing to refuse or the
@@ -2404,11 +2400,13 @@ class LifecycleOpsMixin:
         return self._paths.under("state", "running", f"{sid}.band")
 
     def launch_band(self, stack_id: str, default: str = "") -> str:
-        """The band the stack's running instances were launched on, when it is one band (instances.launch_bands,
-        their verified records); else `default`. K6 (13.12.5): no per-stack band marker is read; an old one is
-        ignored."""
-        told = self._request_memo(("running-bands", stack_id), lambda: instances.launch_bands(self, stack_id))
+        """The one band the stack's running instances were launched on, else `default` (K6, 13.12.5: no band marker)."""
+        told = self._launch_bands_of(stack_id)
         return next(iter(told)) if len(told) == 1 else default
+
+    def _launch_bands_of(self, stack_id: str) -> set:
+        """Every band the stack's running instances were launched on (instances.launch_bands), memoised per request."""
+        return self._request_memo(("launch-bands", stack_id), lambda: instances.launch_bands(self, stack_id))
 
     def _live_bands(self, stack_id: str, declared: str) -> set:
         """The band(s) a LIVE multi-band component must be arbitrated against.
@@ -2529,15 +2527,11 @@ class LifecycleOpsMixin:
                       if d in outcome and outcome[d] not in good)
 
     def runs_on_band(self, stack_id: str, band: str) -> bool:
-        """Whether a MULTI-band stack is running on THIS band.
-
-        A multi-band stack runs on exactly one band at a time, so "is a band-carrying
-        component up?" is the same answer in every column — it rendered the stack as
-        running on 433 while it was actually on 868. Evidence order: the start marker,
-        then the band an interactive app was launched on, then the DECLARED primary.
-        Never "every band it could use".
-        """
-        return self._effective_band(stack_id, self._config_band(stack_id, "")) == band
+        """Whether a MULTI-band stack is running on THIS band: one of its instances' launch bands (G1-K6C N2: one per
+        radio), else the band an interactive app was launched on, else the DECLARED primary; never "every band it
+        could use" (that rendered it running on 433 while it ran on 868)."""
+        told = self._launch_bands_of(stack_id)
+        return band in told if told else self._effective_band(stack_id, self._config_band(stack_id, "")) == band
 
     def running_lora_stacks(self, band: str, rid: str = "") -> list:
         """Daemon-client (LoRa) stacks currently running on `band`, or on radio `rid` (its instances, running_keys;
@@ -2559,14 +2553,14 @@ class LifecycleOpsMixin:
                 return tuple(b for b in c.bands if b in active)
         return ()
 
-    def _config_band(self, target: str, band: str) -> str:
-        """The band key used for per-band config storage ("" for single-band stacks).
-        With no explicit band, defaults to the stack's declared primary band (the
-        band-component's `band`, e.g. 868 for meshtastic) rather than the first
-        allowed band."""
+    def _config_band(self, target: str, band: str, inst=None) -> str:
+        """The band key used for per-band config storage ("" for single-band stacks): an instance's radio's band
+        (G1-K6C N5), else `band`; with neither, the stack's declared primary band (the band-component's `band`, e.g.
+        868 for meshtastic) rather than the first allowed band."""
         allowed = self.stack_bands(target)
         if not allowed:
             return ""
+        band = inst.band if getattr(inst, "band", "") in allowed else band
         if band in allowed:
             return band
         s = self._owner_stack(target)
@@ -3066,8 +3060,8 @@ class LifecycleOpsMixin:
 
                 # A running multi-band stack belongs to the column of the band it
                 # was actually started on (tracked at start time).
-                if multi and running_up:
-                    if self.launch_band(s.id, min(sbands)) != band:
+                if multi and running_up:                  # G1-K6C N2: in every band it was launched on
+                    if band not in (self._launch_bands_of(s.id) or {min(sbands)}):
                         continue
                     is_up = True
                 elif up_elsewhere:

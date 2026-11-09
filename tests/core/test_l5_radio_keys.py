@@ -247,3 +247,28 @@ def test_k6_one_app_stack_per_radio_a_start_is_blocked_on_its_own_radio_only(tmp
     finally:
         p.kill()
         p.wait(timeout=5)
+
+
+def test_g1_k6c_1_a_component_is_judged_by_its_own_radios_not_its_stacks(tmp_path):
+    # kiss's TNC runs on r2 and its serial bridge on r3 (two instances' components): for a start on r3 the TNC is
+    # told elsewhere (r2 only); before, every radio of the stack counted for every component.
+    import subprocess
+    import sys
+
+    from lhpc.core import instances
+    svc = _svc(tmp_path, THREE)
+    kiss = svc.stack("kiss")
+    a = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    b = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        assert svc._lifecycle().record_launch(kiss, kiss.component("loraham-kiss-tnc"), a.pid, band="868",
+                                              extra={"rid": "r2"})
+        assert svc._lifecycle().record_launch(kiss, kiss.component("loraham-kiss-serial"), b.pid, band="868",
+                                              extra={"rid": "r3"})
+        other = instances.elsewhere(svc, "r3")
+        assert other("kiss", kiss.component("loraham-kiss-tnc")) is True
+        assert other("kiss", kiss.component("loraham-kiss-serial")) is False
+    finally:
+        for p in (a, b):
+            p.kill()
+            p.wait(timeout=5)

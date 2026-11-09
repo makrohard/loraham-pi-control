@@ -208,11 +208,13 @@ class RflogOpsMixin:
         return values.pop() if len(values) == 1 else "mixed"
 
     def _rflog_save(self, owner: str, key: str, v: str) -> ActionResult:
-        """The switch on every instance of `owner`, each through the one-key bundle path (its own file and its own
-        restart marker); one result."""
-        results = [self.save_config_bundle(owner, values={key: v}, inst=i) for i in instances.saved_insts(self, owner)]
-        bad = [r for r in results if not r.ok]
-        return bad[0] if bad else results[0]
+        """The switch on every instance of `owner` through the one-key bundle path (its own file and restart marker)."""
+        results = [(i, self.save_config_bundle(owner, values={key: v}, inst=i)) for i in instances.saved_insts(self, owner)]
+        if all(r.ok for _i, r in results):
+            return results[0][1]
+        names = {ok: ", ".join(instances.key(owner, i) for i, r in results if r.ok == ok) or "none" for ok in (True, False)}
+        return ActionResult(False, f"RF log not saved on every instance: saved {names[True]}; not saved {names[False]}",
+                            [d for _i, r in results if not r.ok for d in (r.summary, *r.details)])
 
     @invalidates_snapshot
     def set_rflog_all(self, value) -> ActionResult:
