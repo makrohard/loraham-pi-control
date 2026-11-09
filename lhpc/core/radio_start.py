@@ -193,11 +193,15 @@ def _daemon_procs(svc) -> list:
     unknown). G2-0.14.0-1 item 2: every pid is judged (the command lines and the /proc listing) from all three sources
     (argv, the exe link, comm). A pid any readable source names as another program is not the daemon (a kernel
     thread, another user's process, G2-D12); one whose three sources are all unreadable while it still exists is
-    "unknown", which the start and save rules refuse; one gone by the reads is not counted."""
+    "unknown", which the start and save rules refuse; one gone by the reads is not counted; a zombie (state Z/X in its
+    stat, Lifecycle._proc_ceased's rule) holds no radio and is not counted (W3-LAB-FLAKES-DIAG)."""
     fs, argvs = svc._system.fs, svc._system.procfs.cmdlines()
     pids = set(argvs) | {int(e) for e in fs.listdir("/proc", 100_000) if e.isdigit()}
     out = []
     for pid in sorted(pids):
+        stat = fs.read_text(f"/proc/{pid}/stat", 512) or ""
+        if stat[stat.rfind(")") + 2:stat.rfind(")") + 3] in ("Z", "X", "x") and ")" in stat:
+            continue                    # a zombie has released everything: it holds no radio (an unreadable stat counts)
         argv = argvs.get(pid)
         exe = fs.readlink(f"/proc/{pid}/exe") or None
         comm = fs.read_text(f"/proc/{pid}/comm", 64) or None

@@ -221,13 +221,16 @@ def test_r6_a_band_outside_433_868_applies_nothing(tmp_path, band):
 # ---- item 2: every pid judged from argv, exe and comm --------------------------------------------------------
 
 def _refusal(tmp_path, procs):
-    """r1's start-plan refusal with /proc holding `procs`: pid -> (argv or None, exe or None, comm or None, exists)."""
+    """r1's start-plan refusal with /proc holding `procs`: pid -> (argv or None, exe or None, comm or None, exists[,
+    state]): an optional fifth element is the process state written to /proc/<pid>/stat (e.g. "Z")."""
     from lhpc.core import radio_start
     R = _radios().Radio
     _write(tmp_path, [R("r1", "low", "loraham", "433")])
     fake = {"cmdlines_data": {}, "links": {}, "files": {}, "paths": set(), "dirs": {"/proc": []}}
-    for pid, (argv, exe, comm, exists) in procs.items():
+    for pid, (argv, exe, comm, exists, *state) in procs.items():
         fake["dirs"]["/proc"].append(str(pid))
+        if state:
+            fake["files"][f"/proc/{pid}/stat"] = f"{pid} ({comm or 'x'}) {state[0]} 1 {pid} {pid} 0 -1 4194560"
         if argv is not None:
             fake["cmdlines_data"][pid] = argv
         if exe is not None:
@@ -250,6 +253,20 @@ def test_p2_a_daemon_named_only_by_its_exe_refuses(tmp_path):
 
 def test_p3_a_daemon_comm_beside_another_programs_argv_refuses(tmp_path):
     assert "4242" in _refusal(tmp_path, {4242: (["/usr/bin/python3", "x.py"], None, "loraham_daemon", True)})
+
+
+def test_p6_a_daemon_zombie_holds_no_radio(tmp_path):
+    # W3-LAB-FLAKES-DIAG (a8c40e57): a `[loraham_daemon] <defunct>` left unreaped by any process on the host (argv [],
+    # no exe, comm loraham_daemon, state Z) was read as an unknown daemon holding every radio, so r1's start was
+    # refused. A zombie has released everything (Lifecycle._proc_ceased: Z/X = ceased): it holds no radio.
+    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "Z")}) == ""
+    assert _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "X")}) == ""
+
+
+def test_p6_the_same_entry_alive_still_refuses(tmp_path):
+    # the state decides, not the empty argv: the same entry in state S (or with no readable stat) still refuses
+    assert "4242" in _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True, "S")})
+    assert "4242" in _refusal(tmp_path, {4242: ([], None, "loraham_daemon", True)})
 
 
 def test_p4_a_pid_only_in_the_listing_that_cannot_be_read_refuses(tmp_path):
