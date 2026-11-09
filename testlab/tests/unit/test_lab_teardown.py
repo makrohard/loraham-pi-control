@@ -220,6 +220,7 @@ def test_a_second_lab_on_the_host_refuses_at_once_naming_the_holder(tmp_path, mo
     monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(lock), raising=False)
     root_a, root_b = tmp_path / "a" / "runtime", tmp_path / "b" / "runtime"
     second = ("import sys; from pathlib import Path; import lhpc_testlab.testing as t; t.LAB_LOCK_PATH = sys.argv[1]; "
+              "t.LAB_LOCK_WAIT_S = 0; "
               "t.LabServer(Path(sys.argv[2])).init_and_reset() if sys.argv[3] == 'lab' else t._hold_lab_lock(sys.argv[2])")
     monkeypatch.setattr(testing, "run_lab", lambda *a, **k: None)   # lab A's init/reset are not the case: its lock is
     a = LabServer(root_a)
@@ -356,3 +357,53 @@ def test_the_turn_lock_is_skipped_only_for_a_pytest_its_holder_runs(tmp_path):
     finally:
         other.kill()
         other.wait(timeout=5)
+
+
+@pytest.mark.wallclock("waits on another process: a fake-daemon test holding the lock in a child pytest")
+def test_a_lab_waits_for_a_fake_daemon_test_of_another_process_then_takes_its_turn(tmp_path, monkeypatch):
+    """DEC-W384x option (a), the browser-lane flake: a lab_serial test (one that runs a fake daemon) in ANOTHER process
+    holds the host's lab lock through the real conftest fixture; a LabServer here waits for it and, past its wait,
+    refuses naming that test; once the test ends, the LabServer takes its turn. (Before: the test held a lock of its
+    own, so the lab came up beside the fake daemon and read it as its own.)"""
+    import subprocess
+    import sys
+    import time
+
+    from lhpc_testlab import testing
+    lock, inside, release = tmp_path / "lab.lock", tmp_path / "inside", tmp_path / "release"
+    (tmp_path / "test_holder.py").write_text(
+        "import pathlib, time\nimport pytest\n\n\n@pytest.mark.lab_serial\ndef test_holder():\n"
+        f"    pathlib.Path({str(inside)!r}).touch()\n"
+        f"    while not pathlib.Path({str(release)!r}).exists():\n        time.sleep(0.05)\n")  # rule-1 exception: the holder waits for its release
+    here = Path(__file__).resolve().parents[1]                        # testlab/tests: its conftest, as a plugin
+    env = {k: v for k, v in os.environ.items() if k != "LHPC_LAB_SERIAL_HELD"}
+    env.update(LHPC_TESTLAB_LOCK=str(lock), PYTHONPATH=f"{here}:{env.get('PYTHONPATH', '')}")
+    child = subprocess.Popen([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "conftest",
+                              "--rootdir", str(tmp_path), str(tmp_path / "test_holder.py")], env=env, cwd=tmp_path,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        for _ in range(300):                                          # bounded: up to 30 s for the child to hold it
+            if inside.exists() or child.poll() is not None:
+                break
+            time.sleep(0.1)  # rule-1 exception: waits on another process (the child's hold)
+        assert inside.exists(), child.communicate(timeout=30)[0][-1500:]
+        monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(lock), raising=False)
+        monkeypatch.setattr(testing, "run_lab", lambda *a, **k: None)    # the lab's init/reset are not the case
+        monkeypatch.setattr(testing, "LAB_LOCK_WAIT_S", 0.5, raising=False)
+        lab = LabServer(tmp_path / "runtime")
+        try:
+            lab.init_and_reset()
+            raise AssertionError("the lab came up while a fake-daemon test of another process held the host")
+        except RuntimeError as exc:
+            assert f"pid {child.pid} root test " in str(exc) and "test_holder" in str(exc), exc
+        import threading
+        threading.Timer(1.0, release.touch).start()                   # the test ends 1 s into the lab's wait
+        monkeypatch.setattr(testing, "LAB_LOCK_WAIT_S", 30.0, raising=False)
+        lab.init_and_reset()                                          # it waited, then took its turn: no refusal
+        lab.stop()
+        assert child.wait(timeout=30) == 0, child.communicate(timeout=5)[0][-1500:]
+    finally:
+        release.touch()
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)

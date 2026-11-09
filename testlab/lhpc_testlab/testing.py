@@ -121,28 +121,40 @@ def run_lhpc(env: dict, *args: str, timeout: float = 300.0,
     return r
 
 
-# W389: the radio daemons' sockets are the host's (/tmp, /run/loraham), not a lab root's, so one lab per HOST may run
-# them. A LabServer holds this lock from its init/reset or start until its stop; several LabServers of one process (one
-# test run: the run-wide lab fixture, a case's own root) share it, a lab of another process refuses at once, naming the holder.
-LAB_LOCK_PATH = "/tmp/lhpc-testlab-radio.lock"
-_LAB_LOCK: dict = {"fd": None, "holders": 0}
+# W389: a loraham_daemon on this host is every lab root's daemon to the product (the radio sockets are the host's, and
+# the run state matches the exec name host-wide), so ONE holder per host may run one: a LabServer from its init/reset or
+# start until its stop, a test that resets a lab or runs a fake daemon (`lab_serial`, testlab/tests/conftest.py) for its
+# own run. Holders of one process share the lock (the run-wide lab fixture, a case's own root); a holder of another
+# process (another worker, another run) is waited for up to `wait_s`, then the lab refuses, naming it.
+LAB_LOCK_PATH = os.environ.get("LHPC_TESTLAB_LOCK", "/tmp/lhpc-testlab-radio.lock")   # the env: a test's own lock
+LAB_LOCK_WAIT_S = 120.0          # a LabServer rides out a test's short hold; another lab's lifetime it refuses
+_LAB_LOCKS: dict = {}              # path -> [fd, holders] of this process (a test may point LAB_LOCK_PATH elsewhere)
 
 
-def _hold_lab_lock(root) -> None:
+def _hold_lab_lock(root, wait_s: float | None = None) -> str:
+    """Hold the host's lab lock (LAB_LOCK_PATH as it is now) for `root`; returns that path, for _release_lab_lock."""
     import fcntl
-    if _LAB_LOCK["fd"] is None:
-        fd = os.open(LAB_LOCK_PATH, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)    # never a planted symlink
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            holder = os.read(fd, 512).decode("utf-8", "replace").strip()
-            os.close(fd)
-            raise RuntimeError(f"another lab holds this host's radio sockets ({holder or 'holder unknown'}, lock "
-                               f"{LAB_LOCK_PATH}): one lab per host, stop it first") from None
+    path = LAB_LOCK_PATH
+    if path not in _LAB_LOCKS:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)    # never a planted symlink
+        deadline = time.monotonic() + (LAB_LOCK_WAIT_S if wait_s is None else wait_s)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() < deadline:
+                    time.sleep(0.2)
+                    continue
+                holder = os.read(fd, 512).decode("utf-8", "replace").strip()
+                os.close(fd)
+                raise RuntimeError(f"another lab holds this host's radio sockets ({holder or 'holder unknown'}, lock "
+                                   f"{path}): one lab per host, stop it first") from None
         os.ftruncate(fd, 0)
         os.write(fd, f"pid {os.getpid()} root {root}\n".encode())
-        _LAB_LOCK["fd"] = fd
-    _LAB_LOCK["holders"] += 1
+        _LAB_LOCKS[path] = [fd, 0]
+    _LAB_LOCKS[path][1] += 1
+    return path
 
 
 def serial_held_by_ancestor() -> bool:
@@ -164,11 +176,12 @@ def serial_held_by_ancestor() -> bool:
     return False
 
 
-def _release_lab_lock() -> None:
-    _LAB_LOCK["holders"] -= 1
-    if _LAB_LOCK["holders"] == 0:
-        os.close(_LAB_LOCK["fd"])
-        _LAB_LOCK["fd"] = None
+def _release_lab_lock(path: str) -> None:
+    held = _LAB_LOCKS[path]
+    held[1] -= 1
+    if held[1] == 0:
+        os.close(held[0])
+        del _LAB_LOCKS[path]
 
 
 class LabServer:
@@ -179,17 +192,16 @@ class LabServer:
         self.env = lab_env(root)
         self.port = 0
         self.proc: subprocess.Popen | None = None
-        self._locked = False
+        self._locked = ""                              # the lock path this lab holds, "" when none
 
     def _lock(self) -> None:
         if not self._locked:
-            _hold_lab_lock(self.root)
-            self._locked = True
+            self._locked = _hold_lab_lock(self.root)
 
     def _unlock(self) -> None:
         if self._locked:
-            self._locked = False
-            _release_lab_lock()
+            path, self._locked = self._locked, ""
+            _release_lab_lock(path)
 
     @property
     def base(self) -> str:
