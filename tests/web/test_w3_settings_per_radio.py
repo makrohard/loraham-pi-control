@@ -177,3 +177,18 @@ def test_g1_w3_n3_the_daemons_panel_never_reads_a_page_band(box):
     form = _hidden(c, "/stacks?band=868&open=daemon&dp=daemon", "stack-daemon-params-daemon",
                    "/stacks/daemon/daemon-params")
     assert form.get("radio") == "r1" and "band" not in form          # its first enabled radio, never a band's
+
+
+@pytest.mark.parametrize("rows", [pytest.param(None, marks=pytest.mark.no_default_hardware), (), tuple(radios.Radio(r.id, r.name, r.model, r.band, ce=r.ce, enabled=False)
+                                                    for r in ROWS[:2])], ids=["no-list", "empty-list", "all-disabled"])
+@pytest.mark.parametrize("url", ["/stacks?open=daemon&dp=daemon", "/stacks?band=433&open=daemon&dp=daemon"])
+def test_g1_w3_re_without_an_enabled_radio_the_daemon_has_no_panel_to_post(web, tmp_path, rows, url):
+    # Pin (G1-W3-RE, DEC-W384bl): no enabled radio, no served band -> daemon_params_view gives {} -> no daemon form, so
+    # no band-only write can be posted from the page, with or without a page band
+    if rows is not None:
+        radios_fixture.write(tmp_path, rows)
+    r = web().get(url)
+    doc = parse(r.get_data(as_text=True))
+    assert r.status_code == 200 and doc.present("stack-settings-daemon")       # the daemon's row renders, opened
+    assert not doc.present("stack-daemon-params-daemon")
+    assert not [f for f in doc.find("form") if f["action"] == "/stacks/daemon/daemon-params"]
