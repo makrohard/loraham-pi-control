@@ -591,8 +591,9 @@ class WebPage:
 
     @property
     def primary(self) -> bool:
-        """The stack's first page — the one keyed by the stack id."""
-        return self.page_id == self.stack_id
+        """The stack's first page of its instance: keyed by the stack id, `<stack>@<rid>` (K4b: every page is an
+        instance's)."""
+        return self.page_id.partition("@")[0] == self.stack_id
 
     @property
     def anchor(self) -> str:
@@ -603,7 +604,7 @@ class WebPage:
 def web_pages(stack: Stack, instances=None, paths=None) -> tuple:
     """The stack's proxied web pages — one per component that declares a client http/https
     endpoint (its first such endpoint), for each of the stack's `instances` (commands.Instance;
-    None = `commands.stack_instances`, its one instance at slot 0 until L5). Empty for a stack
+    None = `commands.stack_instances`, one per radio of the stack, K4b). Empty for a stack
     without a web UI.
 
     ORDER decides which page keeps the stack id: the components in manifest order, except that
@@ -612,14 +613,14 @@ def web_pages(stack: Stack, instances=None, paths=None) -> tuple:
 
     `label` is the ONE spelling every stack-external list uses: the stack name for the first
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
-    component name alone suffices — `name`). A slot-k instance's page is `<page>@<rid>` (A §2.6), its
-    upstream the instance's own port, its deny list and deny answer the slot-0 page's."""
+    component name alone suffices — `name`). An instance's page is `<page>@<rid>` (A §2.6), its upstream the
+    instance's own port, its deny list and deny answer the component's; the template's (no radio) keeps `<page>`."""
     from . import commands
     out: list = []
     ordered = ([c for c in stack.components if c.id != stack.main]
                + [c for c in stack.components if c.id == stack.main])
     for inst in commands.stack_instances(stack, paths) if instances is None else instances:
-        slot_k = inst is not None and inst.slot > 0
+        slot_k = inst is not None and bool(inst.rid)
         first_of_instance = True
         for comp in ordered:
             for ep in comp.endpoints:
@@ -701,16 +702,6 @@ class ComponentStatus:
     endpoints: list[EndpointObservation] = field(default_factory=list)
     dependencies: list[DependencyObservation] = field(default_factory=list)
     pids: list[int] = field(default_factory=list)
-    copy_pids: list[int] = field(default_factory=list)   # the listed copies' own processes (C7)
-
-    @property
-    def own_run_state(self) -> RunState:
-        """Slot 0's own run state, for the slot-0 displays only (C7, decision B): STOPPED while only listed copies'
-        processes run. Every safety reader keeps `run_state`, any process of the spec."""
-        if (self.copy_pids and self.run_state in (RunState.RUNNING, RunState.DEGRADED)
-                and not set(self.pids) - set(self.copy_pids)):
-            return RunState.STOPPED
-        return self.run_state
     evidence: dict[str, str] = field(default_factory=dict)
 
 

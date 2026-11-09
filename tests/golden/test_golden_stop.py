@@ -13,6 +13,8 @@ from lhpc.core.lifecycle import Lifecycle
 
 pytestmark = pytest.mark.needs_session
 
+# K4b: a bare stop locks its running instances' bands (kiss@r1: 433's), with nothing running the band caller's (433's);
+# only an unowned process no instance is told by locks every band (test_unowned_process_is_manual_required)
 STOP_LOCKS = ["lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
               "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"]
 SIGNAL = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc"]
@@ -21,7 +23,7 @@ RELEASE_DAEMON = ["lock:claim.audio.default", "lock:claim.tcp.port.12323",
                   "lock:claim.tcp.port.8080", "lock:lifecycle.chat", "lock:lifecycle.daemon",
                   "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.voice",
                   "mutate:signal:loraham-daemon", "mutate:feed-floor:433"]
-FINAL = ["final:clear-restart-marker:kiss", "final:stop-intent:['kiss']"]
+FINAL = ["final:clear-restart-marker:kiss@r1", "final:stop-intent:['kiss@r1']"]      # K5: per instance
 APPLIED = {"ok": True, "summary": "Stop applied for 'kiss'.", "data_keys": [],
            "next_commands": ["lhpc status kiss"]}
 
@@ -40,7 +42,7 @@ def test_plan_is_read_only(kiss_box, run_op):
 
 def test_stop_a_running_stack(kiss_box, run_op):
     """intended: locks → verified SIGTERM → daemon band released → finalization; the ownership
-    record and the running-band marker go, the operator's stop intent is written."""
+    record goes, the operator's stop intent is written (K4b: no per-stack band marker exists)."""
     box = kiss_box()
     assert box.svc.start("kiss", apply=True).ok
     run = run_op(box.root, lambda: box.svc.stop("kiss", apply=True))
@@ -52,9 +54,8 @@ def test_stop_a_running_stack(kiss_box, run_op):
                                        ("loraham-daemon", "stopped")]}
     assert run.phases == STOP_LOCKS + SIGNAL + RELEASE_DAEMON + FINAL
     assert run.kinds == ["lock", "mutate", "lock", "mutate", "final"]
-    assert run.files == {"added": ["state/stop-intent/kiss.json"],
-                         "removed": ["state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json",
-                                     "state/running/kiss.band"],
+    assert run.files == {"added": ["state/stop-intent/kiss@r1.json"],
+                         "removed": ["state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json"],
                          "changed": []}
     assert box.owned() == []
 
@@ -73,7 +74,7 @@ def test_stop_when_nothing_runs(kiss_box, run_op):
                                        ("loraham-kiss-tnc", "already_stopped"),
                                        ("loraham-daemon", "stopped")]}
     assert run.phases == STOP_LOCKS + SIGNAL + RELEASE_DAEMON + FINAL
-    assert run.files == {"added": ["state/daemon-feed-floor-433-r1", "state/stop-intent/kiss.json"],
+    assert run.files == {"added": ["state/daemon-feed-floor-433-r1", "state/stop-intent/kiss@r1.json"],
                          "removed": [], "changed": []}
 
 
@@ -98,7 +99,7 @@ def test_unowned_process_is_manual_required(kiss_box, run_op):
 
 def test_process_that_does_not_cease(kiss_box, run_op, monkeypatch):
     """intended: a TNC that really ignores SIGTERM is STILL_RUNNING after the bounded wait — no
-    SIGKILL, the ownership record and the running-band marker are retained, no stop intent, no
+    SIGKILL, the ownership record is retained, no stop intent, no
     daemon release, and the process is still alive."""
     box = kiss_box()
     box.survives_sigterm()

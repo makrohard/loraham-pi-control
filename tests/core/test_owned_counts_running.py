@@ -17,7 +17,7 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.status import StatusProber
 
-R1 = Instance(0, "r1")                                   # 433's radio in radios_fixture
+R1 = Instance("r1")                                   # 433's radio in radios_fixture
 # The spec names an executable no process here runs: only an ownership record can say "running".
 COMP = Component(id="x-node", name="x", kind=ComponentKind.SERVICE,
                  process=ProcessSpec(exec_name="x-node-binary"))

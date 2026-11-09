@@ -3,7 +3,7 @@ sockets; with no such radio, or two, its start is refused by name, and an unreso
 import pytest
 import radios_fixture
 
-from lhpc.core import commands, radio_start, radios
+from lhpc.core import commands, instances, radio_start, radios
 from lhpc.core.config import Config
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.paths import Paths
@@ -33,9 +33,9 @@ CASES = [
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "433", "r1", ""),
     (radios_fixture.RADIOS, "loraham-kiss-tnc", "868", "r2", ""),
     (radios_fixture.RADIOS, "meshcom-bridge", "", None, "2 radios can run it for this stack: r1 (low), r2 (high); name one"),
-    (TWO_433, "meshcom-bridge", "433", "r1", ""),       # DEC-W16: slot 0 runs on the band's first enabled radio
+    (TWO_433, "meshcom-bridge", "433", "r1", ""),       # a band caller: the band's first enabled radio (until K6)
     (TWO_433, "loraham-kiss-tnc", "868", None, "no enabled radio on 868 MHz"),
-    pytest.param(NO_LIST, "graywolf", "433", "", "", marks=_ABSENT),   # not a daemon client: slot 0 without a radio, any list
+    pytest.param(NO_LIST, "graywolf", "433", "", "", marks=_ABSENT),   # not a daemon client: the template, any list
     (TWO_433, "graywolf", "", "", ""),
 ]
 
@@ -48,7 +48,7 @@ def test_a_client_runs_as_its_bands_one_radio_or_is_refused_by_name(tmp_path, ro
     if rid is None:
         assert (inst, refusal) == (None, REFUSED + why)
     else:
-        assert refusal == "" and (inst.slot, inst.rid) == (0, rid)
+        assert refusal == "" and inst.rid == rid
 
 
 @_ABSENT
@@ -68,7 +68,7 @@ def test_an_unresolved_radio_template_never_renders(tmp_path):
         commands.expand_argv(comp.run_argv, comp, {"data_socket": "/tmp/loraf-{rid}.sock"}, Config().operator,
                              str(tmp_path), src, "433")
     argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, str(tmp_path), src, "433",
-                                inst=commands.Instance(0, "r7"))
+                                inst=commands.Instance("r7"))
     assert "/tmp/loraf-r7.sock" in argv and not any("{rid}" in a for a in argv)
 
 
@@ -110,12 +110,18 @@ def test_the_manual_command_without_a_list_says_why(tmp_path):
 
 def test_a_config_file_client_names_its_bands_radio(tmp_path):
     # W3-13: the MeshCore node reads its daemon sockets (frame + CONF) from its config file; on 868 they are r2's, and
-    # the other radio's never appear.
+    # the other radio's never appear. K4b: the file is meshcore@r2's own, and its companion and dashboard ports are the
+    # ports that instance's endpoints are verified on (r2: base + 133).
+    import tomllib
     svc = _svc(tmp_path, radios_fixture.RADIOS)
     assert all(w.status == "written" for w in svc.write_config_files("meshcore"))
-    toml = (tmp_path / "config" / "files" / "meshcore.toml").read_text()
+    toml = (tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text()
     assert 'data_socket = "/tmp/loraf-r2.sock"' in toml and 'config_socket = "/tmp/loraconf-r2.sock"' in toml, toml
     assert "-r1.sock" not in toml and "{rid}" not in toml
+    doc, node = tomllib.loads(toml), svc.stack("meshcore").component("meshcore-node")
+    eps = {int(e.address.rsplit(":", 1)[1]) for e in instances.endpoints_for(node.endpoints, commands.Instance("r2"))
+           if e.kind == "tcp"}
+    assert (doc["companion"]["port"], doc["repeater"]["dashboard_port"]) == (5133, 8133) and {5133, 8133} <= eps
 
 
 def test_a_fixed_band_client_starts_on_its_bands_radio_beside_the_other_band(tmp_path, monkeypatch):
@@ -135,5 +141,5 @@ def test_a_fixed_band_client_starts_on_its_bands_radio_beside_the_other_band(tmp
                         or StartLaunch(True, ""))
     res = svc.start("meshcom", apply=True)
     bridge = [inst for cid, inst in launched if cid == "meshcom-bridge"]
-    assert bridge and (bridge[0].slot, bridge[0].rid) == (0, "r1"), (res.summary, [r.summary for r in res.results])
+    assert bridge and bridge[0].rid == "r1", (res.summary, [r.summary for r in res.results])
     assert not any("name one" in r.summary for r in res.results)

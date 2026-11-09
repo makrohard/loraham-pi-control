@@ -40,7 +40,7 @@ def _repeater(tmp_path, name="Relay R3", rid=""):
     from lhpc.core import config as cfgmod
     if rid:
         cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore",
-                                   {"file_mode": "repeater", "file_repeater_name": name}, inst=Instance(1, rid))
+                                   {"file_mode": "repeater", "file_repeater_name": name}, inst=Instance(rid))
         return
     svc = cli.ControllerService()
     r = svc.save_config("meshcore", {"file_mode": "repeater", "file_repeater_name": name})
@@ -90,11 +90,15 @@ def test_an_instances_file_waits_only_for_its_own_records(box, tmp_path, monkeyp
         assert rc == 1 and ops.UNVERIFIED.split(";")[0] in out, out
 
 
-def test_slot_0s_file_stays_where_it_was(box, tmp_path, monkeypatch):
-    run = box((R1, R3), ports=(5000, 8000, 8788))
+def test_the_bands_only_radios_file_sits_under_its_rid_too(box, tmp_path, monkeypatch):
+    # K4b: paths sit under <rid>/ for every instance; meshcore@r3 (868's only radio here) reads the band's store
+    # (a band-store save marks its reader <sid>@<band's first radio>) and writes state/r3/openhop, never the 0.13.x file.
+    run = box((R1, R3), ports=(5266, 8266, 9054))
     calls = []
     monkeypatch.setattr(ops, "_helper", _helper(calls))
     _repeater(tmp_path, "Relay 0")
-    run("start", "meshcore@r3")                                   # K3: slot 0 named on its radio (868: r3 here)
-    assert (tmp_path / "state" / "openhop" / "config.yaml").is_file(), calls
-    assert not (tmp_path / "state" / "r3").exists()
+    run("start", "meshcore@r3")
+    mine = tmp_path / "state" / "r3" / "openhop" / "config.yaml"
+    assert mine.is_file(), calls
+    assert json.loads(mine.read_text()).get("repeater.node_name") == "Relay 0"
+    assert not (tmp_path / "state" / "openhop" / "config.yaml").exists(), calls

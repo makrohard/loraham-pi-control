@@ -32,15 +32,15 @@ class _Helper:
     def __init__(self, svc):
         self.svc, self.calls, self.fail = svc, [], ""
 
-    def _load(self):
-        p = ops.file_path(self.svc._paths)
+    def _load(self, path=None):                       # K4b: the path the controller names (an instance's own)
+        p = Path(path) if path else ops.file_path(self.svc._paths)
         return json.loads(p.read_text()) if p.exists() else {}
 
     def __call__(self, svc, verb, path, *keys, stdin=""):
         self.calls.append(verb)
         if verb == self.fail:
             raise ops.OneStoreError(f"openhop_file {verb}: disk full")
-        conf = self._load()
+        conf = self._load(path)
         if verb == "get":
             return json.dumps({k: conf.get(k) for k in keys})
         if verb == "check":                          # the rule only; upstream's loader is the host suite's
@@ -55,7 +55,7 @@ class _Helper:
             conf.update(json.loads(stdin))
             if verb == "render":                     # the text; the controller's transaction writes it
                 return json.dumps(conf)
-            p = ops.file_path(self.svc._paths)
+            p = Path(path) if path else ops.file_path(self.svc._paths)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(conf))
         return ""
@@ -649,14 +649,16 @@ def test_the_cli_restart_of_a_repeater_ends_ok_with_the_real_config_lock(env, mo
     _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY)
     assert svc.save_config(mm.STACK_ID, {"file_mode": "repeater", "file_repeater_name": "Relay"}).ok
     svc._invalidate_config()
-    ops.ensure(svc, None, "10")                       # a running repeater has its file
+    from lhpc.core import instances
+    ops.ensure(svc, None, "10", inst=instances.copy_of(svc, mm.STACK_ID, "r2")[0])   # its file (K4b: r2's)
     svc._invalidate_config()
     calls = _restart_without_processes(monkeypatch, svc)
     monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == mm.STACK_ID and not calls)
     assert cli.main(["stack", "restart", f"{mm.STACK_ID}@r2", "--yes"]) == 0, capsys.readouterr()   # K3: 868 is r2
     assert calls == [("stop", mm.STACK_ID), ("start", mm.STACK_ID)]
-    assert helper.file()["repeater.node_name"] == "Relay"
+    r2 = ops.file_path(svc._paths, instances.copy_of(svc, mm.STACK_ID, "r2")[0])
+    assert helper._load(r2)["repeater.node_name"] == "Relay"                    # r2's own file
 
 
 def test_a_repeater_start_migrates_with_the_real_config_lock(env, monkeypatch):

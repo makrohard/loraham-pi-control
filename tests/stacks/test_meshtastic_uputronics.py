@@ -320,7 +320,7 @@ def test_asset_base_generates_without_any_source(tmp_path):
     written = svc.write_config_files("meshtastic", "868")
     row = next(w for w in written if w.component == "meshtastic")
     assert row.status == "written", (row.status, row.detail)
-    text = (tmp_path / "config" / "files" / "meshtasticd.yaml").read_text()
+    text = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     active = text.split("# 433 MHz", 1)[0]
     assert "Module: RF95" in active
     assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())
@@ -353,7 +353,7 @@ def test_generated_yaml_never_references_an_overlay_config_directory(tmp_path):
     base = asset_text("bases/meshtasticd.yaml")
     svc, _ = _svc(tmp_path)
     svc.write_config_files("meshtastic", "868")
-    generated = (tmp_path / "config" / "files" / "meshtasticd.yaml").read_text()
+    generated = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     for text, what in ((base, "packaged base"), (generated, "generated yaml")):
         active = [ln for ln in text.splitlines()
                   if "ConfigDirectory" in ln and not ln.lstrip().startswith("#")]
@@ -366,7 +366,7 @@ def test_packaged_base_is_the_authoritative_hardware_config(tmp_path):
     # operator-editable overlay and not from the apt package's examples.
     svc, _ = _svc(tmp_path)
     svc.write_config_files("meshtastic", "868")
-    generated = (tmp_path / "config" / "files" / "meshtasticd.yaml").read_text()
+    generated = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     active = generated.split("# 433 MHz", 1)[0]
     assert "Module: RF95" in active and "CS: 7" in active and "IRQ: 16" in active
     assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())
@@ -380,7 +380,7 @@ def test_web_port_is_fixed_at_9443_and_not_a_parameter(tmp_path):
     comp = _meshtastic_comp(svc)
     assert not any(p.name == "web_port" for p in comp.config_file.params)
     svc.write_config_files("meshtastic", "868")
-    generated = (tmp_path / "config" / "files" / "meshtasticd.yaml").read_text()
+    generated = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     assert "Port: 9443" in generated
     assert "Port: 443 " not in generated and "Port: 443\n" not in generated
     ep = [e.address for e in comp.endpoints if e.scheme == "https"]

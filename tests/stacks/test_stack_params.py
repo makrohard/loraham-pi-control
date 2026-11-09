@@ -89,7 +89,7 @@ def test_start_refusal_text_carries_the_local_command(tmp_path):
     res = svc.run_action("start", "meshcom", apply=True)
     assert not res.ok
     assert [c.split("   #", 1)[0] for c in res.next_commands] == [
-        "lhpc config meshcom mc_callsign YOURCALL-99"], (res.summary, res.next_commands)
+        "lhpc config meshcom@r1 mc_callsign YOURCALL-99"], (res.summary, res.next_commands)   # K4b: the instance
 
 
 def test_unlicensed_requires_deliberate_local_names(tmp_path, set_call):
@@ -133,7 +133,7 @@ def test_meshcore_preset_owns_frequency_for_all_presets(tmp_path):
     frequency alongside a changed preset put the daemon 93 kHz off the passband."""
     import tomllib
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     for preset in ("eu_uk_long", "eu_uk_medium", "eu_uk_narrow"):
         res = svc.write_config_files("meshcore", overrides={"preset": preset})
         assert any(w.status == "written" for w in res), [(w.component, w.status, w.detail) for w in res]

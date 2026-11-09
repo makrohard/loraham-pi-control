@@ -1,8 +1,8 @@
 """T-G1 at L3 (PROOF §1, A §2.3): the resolved argv of every component's slot 0 equals the golden
-base, dev after step D (0af1d413), token for token, with the TWO named exceptions of the L3
-process tokens and nothing else:
-- each `_gps-bridge` feed gains `--state <state/gps/<stack>>`;
-- chat gains `--data-socket` and `--conf-socket` with slot 0's paths (the daemon's /tmp sockets).
+base, dev after step D (0af1d413), token for token, with the named exceptions and nothing else:
+- each `_gps-bridge` feed gains `--state <state/gps/<stack>>` (L3);
+- a daemon client carries its radio's `--data-socket` / `--conf-socket` (r1's, stage L5);
+- K4b (no slots): an instance's own paths sit under `<rid>/` on r1 too (K4B_PATHS, each base token named).
 
 The fixture `argv_slot0_0af1d413.json` was resolved at 0af1d413 with this module's `_resolve`; the
 package's own directory reads `<lhpc>` and the controller's interpreter `<python>`, so neither the
@@ -37,6 +37,15 @@ SOCKETS = {
 }
 
 
+# K4b: the base token -> r1's (its {instance_dir} path is `r1/` now, no slot 0 keeping today's path)
+K4B_PATHS = {
+    "loraham-voice": {"/rt/config/files/loraham_voice": "/rt/config/files/r1/loraham_voice"},
+    "loraham-voice-cli": {"/rt/config/files/loraham_voice_cli": "/rt/config/files/r1/loraham_voice_cli"},
+    "loraham-kiss-tnc": {"/rt/logs/rf-kiss.log": "/rt/logs/r1/rf-kiss.log"},
+    "meshcom-bridge": {"/rt/logs/rf-meshcom.log": "/rt/logs/r1/rf-meshcom.log"},
+}
+
+
 def _without_sockets(argv):
     out, skip = [], False
     for t in argv:
@@ -64,7 +73,7 @@ def _resolve() -> dict:
                 continue
             src = str(svc._paths.resolve_source(c.source.path)) if c.source else str(RT)
             # stage L5 (W3): a daemon client runs as its radio's instance; slot 0 on r1
-            inst = commands.Instance(0, "r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.SLOT0
+            inst = commands.Instance("r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.TEMPLATE
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
                                         Config().operator, str(RT), src, c.band, inst=inst)
             out[c.id] = ["<python>" if t == python else t.replace(pkg, "<lhpc>") for t in argv]
@@ -82,4 +91,6 @@ def test_slot0_argv_equals_the_base_but_for_the_two_named_exceptions():
         assert argv[len(argv) - len(extra):] == extra, cid       # each exception is really there
         rest = argv[:len(argv) - len(extra)]
         assert _pairs(rest) == SOCKETS.get(cid, []), cid             # the radio's sockets, exactly
-        assert _without_sockets(rest) == _without_sockets(base[cid]), cid   # and nothing else differs
+        moved = K4B_PATHS.get(cid, {})
+        assert set(moved) <= set(base[cid]), cid                      # each named path is really the base's
+        assert _without_sockets(rest) == [moved.get(t, t) for t in _without_sockets(base[cid])], cid   # nothing else

@@ -55,7 +55,7 @@ def test_a_reset_clears_the_instances_own_file_alone(run, tmp_path):
     assert _stored(tmp_path, "chat.toml").get("file_call") == "DL2XYZ"
 
 
-@pytest.mark.parametrize("argv,rc", [(("chat@r1", "tx_freq", "433.900"), 1), (("chat@r3", "tx_freq", "433.900", "--band", "868"), 2),
+@pytest.mark.parametrize("argv,rc", [(("chat@r9", "tx_freq", "433.900"), 1), (("chat@r3", "tx_freq", "433.900", "--band", "868"), 2),
                                      (("chat@r3", "--daemon-param", "SF=9"), 2)])
 def test_a_target_that_is_no_listed_instance_or_a_daemon_param_is_refused_and_writes_nothing(run, tmp_path, argv, rc):
     before = sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir())

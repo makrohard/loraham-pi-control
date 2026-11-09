@@ -1,6 +1,6 @@
 """Cleanup C7, the console's part: a listed copy's restart-required marker (`<stack>@<rid>`) shows on that copy's
-settings view and in Home's banner, each with the same "Restart now" button as slot 0 (W325), posting `<stack>@<rid>`,
-while slot 0's row and its "Restart now" stay as they are."""
+settings view and in Home's banner, each with its own "Restart now" button (W325), posting `<stack>@<rid>`, while
+the other instance's row (kiss@r1, the band's first radio's) and its "Restart now" stay as they are (K5)."""
 import re
 
 import radios_fixture
@@ -15,7 +15,7 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 
 
 def _marked(tmp_path):
-    """kiss@r3 runs and its saved restart-mode change marked it (the core's real write path); slot 0 is unmarked."""
+    """kiss@r3 runs and its saved restart-mode change marked it (the core's real write path); kiss@r1 is unmarked."""
     radios_fixture.write(tmp_path, ROWS)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     copy = instances.copy_of(svc, "kiss", "r3")[0]
@@ -34,7 +34,7 @@ def test_a_copys_marker_shows_on_its_settings_with_its_own_restart_button_and_no
     c = web(service_factory=lambda: _marked(tmp_path))
     doc = parse(c.get("/stacks?cfg=kiss&radio=r3&open=kiss").get_data(as_text=True))
     notes = [e for e in doc.find("div", class_="depnote") if "Restart required" in e.text]
-    assert [n["id"] for n in notes] == ["copy-restart-required"]           # the copy's own; slot 0's row carries none
+    assert [n["id"] for n in notes] == ["copy-restart-required"]           # the copy's own; kiss@r1's row carries none
     assert _text(notes[0]) == ("Restart required — saved start-time settings (kiss_port) differ from what the running "
                                "stack uses. Restart now")
     form = doc.within(doc.within(notes[0]).find("form", action="/action")[0])
@@ -76,7 +76,7 @@ def test_the_copys_stop_confirms_and_stops_exactly_that_copy(tmp_path, web, monk
 
     def stop(self, target, apply=False, cascade=False, band="", release_daemon=True, auto_install_ctx=None, *,
              _operator=True, inst=None):
-        stops.append((target, apply, inst.rid if inst is not None else None, inst.slot if inst is not None else None))
+        stops.append((target, apply, inst.rid if inst is not None else None))
         return ActionResult(True, f"Stopped '{target}'.")
     monkeypatch.setattr(ControllerService, "stop", stop)
     page = parse(c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r3", "from": "dash"})
@@ -85,16 +85,17 @@ def test_the_copys_stop_confirms_and_stops_exactly_that_copy(tmp_path, web, monk
     assert (form.field_default("target"), form.field_default("rid")) == ("kiss", "r3")
     c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss", "rid": "r3", "band": "433",
                             "confirmed": "yes", "from": "dash"})
-    assert [s for s in stops if s[1]] == [("kiss", True, "r3", 1)]                 # the apply: kiss@r3 (slot 1), only it
+    assert [s for s in stops if s[1]] == [("kiss", True, "r3")]                    # the apply: kiss@r3, only it
 
 
-def test_an_unlisted_copy_target_is_refused_and_nothing_runs(tmp_path, web, monkeypatch, csrf):
+def test_a_target_on_a_radio_off_the_list_is_refused_and_nothing_runs(tmp_path, web, monkeypatch, csrf):
+    # K4b: every radio of the band is an instance (kiss@r1 too); a radio the hardware list does not have is refused.
     svc = _marked(tmp_path)
     c = web(service_factory=lambda: svc)
     spawns = _spy_spawns(monkeypatch)
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r1", "from": "dash"},
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r9", "from": "dash"},
                follow_redirects=True)
-    assert spawns == [] and "Cannot restart kiss@r1: kiss@r1 is not a copy of kiss: the hardware list gives it none on r1" in r.get_data(as_text=True)
+    assert spawns == [] and "Cannot restart kiss@r9: kiss@r9: r9 is not in the hardware list" in r.get_data(as_text=True)
 
 
 
@@ -128,11 +129,11 @@ def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monke
 
     def start(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
               _before_start_locked=None, inst=None, **k):
-        calls.append((target, band, inst.rid if inst is not None else None, inst.slot if inst is not None else None))
+        calls.append((target, band, inst.rid if inst is not None else None))
         return _before_start_locked() or ActionResult(True, "started (stub)")
     monkeypatch.setattr(ControllerService, "start", start)
     assert main(["_stack-start", "kiss", "--web-result", log, "--attempt-id", aid, "--band", "433", "--radio", "r3"]) == 0
-    assert calls == [("kiss", "433", "r3", 1)]
+    assert calls == [("kiss", "433", "r3")]
 
 
 def test_a_disabled_radios_copy_still_stops_but_never_restarts(tmp_path, web, monkeypatch, csrf):
@@ -158,7 +159,7 @@ def test_a_disabled_radios_copy_still_stops_but_never_restarts(tmp_path, web, mo
 
 def test_g1_b1_re_a_recorded_slot_0_on_a_disabled_radio_is_not_started_from_the_console(tmp_path, web, monkeypatch,
                                                                                        csrf):
-    # G1-B1-RE: slot 0 runs on r3 by its verified record, r1 joined 433 (the list makes r3 a copy) and r3 is disabled.
+    # G1-B1-RE: kiss@r3 runs by its verified record, r1 joined 433 and r3 is disabled.
     # The console's start and restart of kiss@r3 are refused naming the disabled radio; nothing is spawned.
     import dataclasses
     import subprocess
@@ -169,7 +170,7 @@ def test_g1_b1_re_a_recorded_slot_0_on_a_disabled_radio_is_not_started_from_the_
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         stk = svc.stack("kiss")
         assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
-                                              extra={"rid": "r3", "slot": 0})
+                                              extra={"rid": "r3"})
         radios_fixture.write(tmp_path, (ROWS[0], dataclasses.replace(ROWS[1], enabled=False)))
         c = web(service_factory=lambda: ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
         spawns = _spy_spawns(monkeypatch)

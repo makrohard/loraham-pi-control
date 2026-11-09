@@ -321,7 +321,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             st = radio_daemon.Tri.UNKNOWN
         text = {radio_daemon.Tri.YES: radio_daemon.OLD_CONFIG_TEXT,
                 radio_daemon.Tri.UNKNOWN: radio_daemon.OLD_CONFIG_UNREADABLE}.get(st, "")
-        return {"old_radio_notice": text[:1].upper() + text[1:] if text else ""}
+        from lhpc.core import radio_start
+        no_list = "" if text else radio_start.no_list_notice(service._paths)     # DEC-W384g: never silently empty
+        return {"old_radio_notice": text[:1].upper() + text[1:] if text else "", "no_list_notice": no_list}
 
     @app.context_processor
     def _inject_disk_notice():
@@ -1100,7 +1102,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
-                    "restart_required": service.restart_required(stack.id),
+                    # K5: any instance's marker, with that instance's own button; not twice beside its settings view
+                    "restart_required": (_rr if not (_inst and _rr and _rr.get("stack") == _instances.key(stack.id, _inst))
+                                         else None) if (_rr := service.restart_required(stack.id)) else None,
                     # Cleanup C7: the shown listed copy's own marker (its settings view), keyed `<sid>@<rid>`.
                     "copy_key": _instances.key(stack.id, _inst),
                     "copy_restart_required": service.restart_required(_instances.key(stack.id, _inst)) if _inst else None,
@@ -2505,8 +2509,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/stacks/<stack_id>/webserver")
     def stack_web_configure(stack_id: str):
-        """Web-UI proxy policy for ONE proxied page of the stack (`page`; default the stack's first
-        page, whose id is the stack id). Same typed-confirmation contract as /webserver/configure."""
+        """Web-UI proxy policy for ONE proxied page of the stack (`page`, `<page>@<rid>`, K4b; without one there is no
+        bare page to default to, so it is refused, 404). Same typed-confirmation contract as /webserver/configure."""
         if not _csrf_ok():
             abort(400)
         f = request.form

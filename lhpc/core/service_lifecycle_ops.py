@@ -920,21 +920,13 @@ class LifecycleOpsMixin:
         # values are equal for every client stack; they differ only for the daemon, which is exactly
         # the case this separation exists for.
         op_band = self.operation_band(target, band)
-        # A band-switchable stack runs on ONE band. Asking for the other one while its
-        # band owner is up must not be a silent no-op (every component reads
-        # already_healthy and the radio stays put). Refuse with the reason and the commands that actually switch it.
-        _sid = self.stack_of(target) or target
-        _live = self.running_band(_sid, "")
-        if band and _live and band != _live and self.stack_bands(_sid) and not getattr(inst, "slot", 0) \
-                and self._band_owner_is_up(_sid):
-            return ActionResult(
-                False,
-                f"'{_sid}' is already running on {_live} MHz — refusing to start it on "
-                f"{band} MHz.",
-                details=["  [blocked] a band-switchable stack runs on ONE band at a time",
-                         f"  Stop it first, then start it on {band} MHz."],
-                next_commands=[*(f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, _sid)),
-                               f"lhpc stack start {instances.named(self, _sid, inst, band)} --yes"])
+        _sid = self.stack_of(target) or target    # K5: an instance runs on its radio's band (the one-band rule is gone)
+        # TRANSITIONAL until K7 (W330): a stack outside instances.MAY runs ONE instance at a time, judged by the
+        # running instances (records and tokens), so a named start and a band caller's are refused alike.
+        if (not self._is_daemon_target(_sid) and _sid not in instances.MAY
+                and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst)])):
+            return ActionResult(False, f"'{_sid}' runs one instance at a time until its per-radio work: {_run[0]} runs",
+                                next_commands=[f"lhpc stack stop {_run[0]} --yes"])
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
         # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only
         # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
@@ -1205,7 +1197,7 @@ class LifecycleOpsMixin:
             return self._overrides_for_comp(target, "file", file_over, comp_id)
 
         for stack, comp in order:
-            state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state)   # 7c2
+            state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state, st_index[comp.id])
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
             # A DEGRADED component (process up but a ready endpoint missing) must not
             # be treated as healthy and must not trigger a duplicate launch. A GPS feed is judged
@@ -1394,9 +1386,8 @@ class LifecycleOpsMixin:
                 if comp.pre_steps:
                     from . import commands
                     try:
-                        commands.run_pre_steps(comp.pre_steps,
-                                               str(self._paths.runtime_root),
-                                               str(life.source_dir(comp)), cfg_band)
+                        commands.run_pre_steps(comp.pre_steps, str(self._paths.runtime_root),     # K4b: its instance's
+                                               str(life.source_dir(comp)), cfg_band, inst=prep.inst or commands.TEMPLATE)
                     except commands.CommandError as exc:
                         record(comp, stack, Outcome.BLOCKED,
                                f"interactive start blocked — pre-start setup failed: {exc}")
@@ -1545,29 +1536,7 @@ class LifecycleOpsMixin:
                 continue
             if post_summary:
                 summary += f"; {post_summary}"
-            # Persist the running-band marker BEFORE declaring VERIFIED: it drives
-            # multi-band decisions + dashboard state, so a write failure must surface in
-            # the typed result (UNVERIFIED), not hide behind a clean VERIFIED.
-            band_ok = True
-            # Only a BAND-CARRYING component may define the stack's band: an optional
-            # client started with band=868 must not write that marker while `rns` is
-            # tuned to 433, or status, the dashboard, arbitration and per-band config
-            # all describe a band the radio is not on.
-            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands) and not getattr(prep.inst, "slot", 0):   # slot 0's marker
-                band_ok = self._set_running_band(stack.id, cfg_band)
-            if band_ok:
-                record(comp, stack, Outcome.VERIFIED, summary)
-            else:
-                # Leaving the owner up without durable band evidence is the dangerous
-                # outcome: later arbitration falls back to the DECLARED band, so a node
-                # actually on 433 reads as 868 and a second 433 owner can be admitted.
-                # Stop what we just started rather than run a radio we cannot account for.
-                cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
-                record(comp, stack, Outcome.UNVERIFIED,
-                       summary + "; running-band marker could not be persisted — "
-                       + ("started process stopped again (no durable band evidence)"
-                          if cleanup.outcome == Outcome.STOPPED
-                          else "cessation NOT verified — ownership retained"))
+            record(comp, stack, Outcome.VERIFIED, summary)          # K5: no per-stack band marker (13.12.5)
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
         run.pre_marker = _pre_marker
         return run
@@ -1719,7 +1688,7 @@ class LifecycleOpsMixin:
 
     @invalidates_snapshot
     def poststart(self, target: str, apply: bool = False, band: str = "",
-                  require_all: bool = False) -> ActionResult:
+                  require_all: bool = False, inst=None) -> ActionResult:
         """Re-run a RUNNING stack's post-start steps WITHOUT restarting it — e.g. re-apply the
         MeshCom callsign after the console-readiness retry window expired (a restart would cost
         another multi-minute QEMU boot). Reuses the exact readiness-gated senders the start path
@@ -1765,7 +1734,8 @@ class LifecycleOpsMixin:
         from . import reslock
         try:
             with self._admission_guard("poststart", target), self._config_stable():
-                return self._poststart_impl(target, order, band, require_all=require_all)
+                return self._poststart_impl(target, order, band, require_all=require_all,     # K4b: its instance's
+                                            inst=inst or instances.copy_of(self, self.stack_of(target) or target, band=band)[0])
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
@@ -1779,8 +1749,7 @@ class LifecycleOpsMixin:
                                 f"guard unavailable ({exc})",
                                 next_commands=[f"lhpc status {target}"])
 
-    def _poststart_impl(self, target: str, order, band: str,
-                        require_all: bool = False) -> ActionResult:
+    def _poststart_impl(self, target: str, order, band: str, require_all: bool = False, inst=None) -> ActionResult:
         life = self._lifecycle()
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]
@@ -1835,7 +1804,7 @@ class LifecycleOpsMixin:
                        "a live post-start runner could not be verified stopped — refusing to "
                        "run a second sender against the same console")
                 continue
-            comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            comp_cfg = dict(self.stack_config(comp.id, cfg_band, inst))   # the instance's own values (K4b)
             # The payload carries the AUTHORITATIVE effective identity from the pre-pass
             # stash (validated under THIS guard, before any cancellation) — never the raw
             # {callsign} substitution stack_config performs.
@@ -1844,7 +1813,7 @@ class LifecycleOpsMixin:
                     comp_cfg[_r["name"]] = _r["effective"]
             required_ok, summary = self._run_post_start(
                 life, stack, comp, comp_cfg, cfg_band,
-                announce=self._log_announcer(comp.id, out), strict=True, require_all=require_all)
+                announce=self._log_announcer(comp.id, out), strict=True, require_all=require_all, inst=inst)
             if required_ok is False:
                 record(comp, stack, Outcome.FAILED, summary)
             elif required_ok is None:
@@ -2457,8 +2426,8 @@ class LifecycleOpsMixin:
         if eb in ALLOWED_BANDS:
             return {eb}
         allowed = self.stack_bands(stack_id)
-        if len(allowed) > 1:
-            return set(allowed)
+        if len(allowed) > 1:                                 # K4b: its running instances' radios' bands when told
+            return (instances.running_bands(self, stack_id) & set(allowed)) or set(allowed)
         return {declared} if declared else set()
 
     def _dep_band_block(self, target: str, order, band: str):
@@ -2722,7 +2691,7 @@ class LifecycleOpsMixin:
         # The saved values a start would use, resolved as `_saved_launch_refusal` does: the band
         # the stack runs (or was presented) on, its stored config and the inherited identity.
         sid = self.stack_of(comp.id) or comp.id
-        hint = radio_start.rf_band(self, inst.rid) if inst is not None and inst.slot else self._launch_band_hint(sid, "")
+        hint = radio_start.rf_band(self, inst.rid) if inst is not None and inst.rid else self._launch_band_hint(sid, "")
         band = self._config_band(sid, hint)
         params = dict(self.stack_config(comp.id, band, inst))          # 7f: a listed instance's own values and radio
         run_over, _file_over = self._materialize_inherited_identity(sid, hint, inst)
@@ -2731,8 +2700,7 @@ class LifecycleOpsMixin:
         cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst) if inst else ""
         if not cmd:
             return f"(no run command: {_why})" if _why else "(no run command)"
-        cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "")
-               if comp.run_cwd else src)
+        cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "", inst=inst) if comp.run_cwd else src)   # its dir
         # Restore the terminal afterwards. A full-screen TUI (NomadNet) puts the tty
         # in raw mode; interrupted with Ctrl+C it exits WITHOUT restoring it, leaving
         # ECHO and ICANON off — the shell then looks dead, echoing nothing. Measured:
@@ -2997,6 +2965,7 @@ class LifecycleOpsMixin:
         occupied_bands = [b for b, v in dvs.items() if v.reachable]
         usable_bands = [b for b, v in dvs.items() if v.ready]
         out = []
+        _procs = instances.instance_processes(self, self._system.procfs.cmdlines())   # ONE read (G1-C51)
         for band in self.radio_bands():                  # only the list's bands get a normal column
             dv = dvs[band]
             other_served = [b for b in usable_bands if b != band]
@@ -3006,7 +2975,7 @@ class LifecycleOpsMixin:
                 if band not in sbands:
                     continue
                 multi = bool(self.stack_bands(s.id))
-                running_up = any(c.id in live and live[c.id].own_run_state in up
+                running_up = any(c.id in live and live[c.id].run_state in up
                                  for c in s.components if c.band or c.bands)
                 # A MULTI-band stack runs on exactly ONE band at a time, so "is a
                 # band-carrying component up?" is not enough — that answer is the same
@@ -3022,7 +2991,7 @@ class LifecycleOpsMixin:
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads
                     # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
-                    booting = c.id in live and live[c.id].own_run_state in up and self._component_booting(c.id)
+                    booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
                     comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
                           "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
@@ -3038,7 +3007,7 @@ class LifecycleOpsMixin:
                                          else bool(c.log_paths)
                                          or bool(c.run_argv and not c.interactive)),
                           "state": ("booting" if booting
-                                    else (live[c.id].own_run_state.value if c.id in live else "unknown")),
+                                    else (live[c.id].run_state.value if c.id in live else "unknown")),
                           # No web-UI/client link while booting — it isn't serving yet.
                           "interfaces": ([] if booting
                                          else self._client_interfaces(live.get(c.id), s.id))})
@@ -3101,7 +3070,7 @@ class LifecycleOpsMixin:
                 elif multi:
                     is_up = False     # not running -> startable on every allowed band
                 else:
-                    is_up = any(c.id in live and live[c.id].own_run_state in up
+                    is_up = any(c.id in live and live[c.id].run_state in up
                                 for c in s.components if c.band == band)
                 (running if is_up else startable).append(entry)
             out.append({
@@ -3136,7 +3105,8 @@ class LifecycleOpsMixin:
                     # the saved switch (a stray band after a Hardware change renders it too).
                     "high_power": self.high_power_state(band, dv),
                 },
-                "running": running + radio_start.running_copies(self, band, live),   # C7c: a running copy, on its radio
+                "running": [e for e in running if e["id"] not in {p[0] for p in _procs}]       # K5: told by instance
+                           + radio_start.running_instances(self, band, live, _procs),
                 "startable": startable,
                 "interactive": interactive,
                 "rflogs": self._rflogs_for_band(band, running),
@@ -3231,7 +3201,7 @@ class LifecycleOpsMixin:
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band, inst=inst),
             "restart": lambda: self.restart(target, apply=apply, stop_owners=stop_owners,
                                             band=band, cascade=cascade, inst=inst),
-            "poststart": lambda: self.poststart(target, apply=apply, band=band),
+            "poststart": lambda: self.poststart(target, apply=apply, band=band, inst=inst),
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
             "test-tx": lambda: self.test(target, tx=True, apply=apply),

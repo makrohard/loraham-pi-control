@@ -3,8 +3,8 @@ of a stack that runs per radio, every string of the shipped manifest that names 
 logs/, config/files/ or config/secrets/ — run lines, argv, pre-steps, environment, config files and their params, param
 defaults, endpoint addresses, the UI password file — carries {instance_dir} right after that directory; a file under
 /dev/shm (MeshCore's gps_file) carries {instance_suffix} in its name and no per-radio directory (another user could
-pre-create one there). Slot 0 renders today's path, every slot k a path of its own. And no value the loader hands to a
-consumer keeps a token unrendered.
+pre-create one there). The template (no radio) renders the base path, every radio's instance a path of its own (r1's
+too, K4b). And no value the loader hands to a consumer keeps a token unrendered.
 
 Out of scope, named: the daemon (one per radio from L5, named by the radio id; its /tmp sockets with it), the Reticulum
 stack (one node, A-r65 §2.4), a stack's `state_root` (the stack's purge root), build-time fields (`build`,
@@ -43,8 +43,7 @@ def _bare(text: str) -> bool:
     return bool(RUNTIME_BARE.search(text))
 
 
-INSTANCES = [commands.SLOT0] + [commands.Instance(k, rid) for k, rid in zip(range(1, 8),
-                                                                           ("r1", "r12", "r2", "r21", "r9", "r99", "r3"))]
+INSTANCES = [commands.TEMPLATE] + [commands.Instance(rid) for rid in ("r1", "r12", "r2", "r21", "r9", "r99", "r3")]
 
 
 def _strings(node, key=""):

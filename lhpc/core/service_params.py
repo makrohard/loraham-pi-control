@@ -966,7 +966,7 @@ class ParamsConfigMixin:
                                    {vid: (vurl or None) for vid, vurl in patch.items()})
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(inst)   # 7f: an instance's own file, all of it
+        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -1121,7 +1121,8 @@ class ParamsConfigMixin:
         (`(kind, component, param, post-save value)`), decided INSIDE the transaction — shared by
         a Settings save and a reset. Fills `modes` with the apply-modes of what changes and
         `live_seen["v"]` with the live consumer it probed."""
-        def _render_marker(_paths, tgt=target, _sid=_instances.key(sid, inst), _band=band, _cfg=cfg_band,  # noqa: B008
+        mkey = _instances.key(sid, inst if getattr(inst, "rid", "") else _instances.copy_of(self, sid, band=cfg_band)[0])  # K5
+        def _render_marker(_paths, tgt=target, _sid=mkey, _band=band, _cfg=cfg_band,
                            _params=tuple(params)):
             id_recs = {(r["kind"], r["comp"], r["name"]): r
                        for r in self._identity_fields(tgt)}
@@ -1195,7 +1196,7 @@ class ParamsConfigMixin:
 
             if not live_modes:
                 return _unmarked()                # nothing that needs a restart changed
-            live, live_band = (_instances.instance_runs(self, self._owner_stack(sid).main_component, inst, inst.band), inst.band) if getattr(inst, "slot", 0) else self.active_config_consumer(_sid, fresh=True)
+            live, live_band = (_instances.instance_runs(self, self._owner_stack(sid).main_component, inst, inst.band), inst.band) if getattr(inst, "rid", "") else self.active_config_consumer(sid, fresh=True)
             live_seen["v"] = live          # reused by the apply hints — never probed twice
             if not live:
                 return _unmarked()                # nobody is reading this configuration
@@ -1216,7 +1217,7 @@ class ParamsConfigMixin:
                 mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
                 else "restart", current=cur,
                 launched={_key(c, p): _pre_effective(k, c, p) for k, c, p in marked})
-        return ("state", _rr.marker_path(self._paths, _instances.key(sid, inst)), _render_marker, 0o600)
+        return ("state", _rr.marker_path(self._paths, mkey), _render_marker, 0o600)
 
     def operator_callsign_correction(self) -> str:
         """A VALIDATED base-callsign suggestion derived from a non-base stored global, or ""
@@ -1315,15 +1316,15 @@ class ParamsConfigMixin:
                 _config._patch_local_table(data, "operator", {"callsign": new_call})
                 targets = [("local", local_path,
                             _config.render_local_tables(data), 0o600)]
-                for sid, run_band in affected:
-                    _pre = self.restart_required(sid)
-                    if _pre is not None and _pre.get("unsafe"):
-                        keep_unsafe.append(sid)      # left byte-identical, and disclosed below
-                        continue
-                    targets.append((
-                        "state", _rr.marker_path(self._paths, sid),
-                        self.restart_marker_payload(
-                            sid, ["callsign (inherited global)"], run_band), 0o600))
+                for sid, run_band in affected:       # K5: each running instance's own marker (else the band's reader)
+                    for k in (_instances.running_keys(self, sid)
+                              or [_instances.key(sid, _instances.copy_of(self, sid, band=run_band)[0])]):
+                        _pre = self.restart_required(k)
+                        if _pre is not None and _pre.get("unsafe"):
+                            keep_unsafe.append(k)    # left byte-identical, and disclosed below
+                            continue
+                        targets.append(("state", _rr.marker_path(self._paths, k),
+                                        self.restart_marker_payload(k, ["callsign (inherited global)"], run_band), 0o600))
                 _config._apply_config_transaction_locked(self._paths, targets)
         except _config.ConfigRecoveryRequired:
             return ActionResult(False, "a pending configuration transaction could "
@@ -1392,8 +1393,8 @@ class ParamsConfigMixin:
         self._invalidate_config()
         return ActionResult(True, f"hardware setup set to {setup_id}", details=[f"  served band(s): {', '.join(self.radio_bands()) or '(none)'}", f"  {rows_line}"])
 
-    def meshcore_identity_candidates(self) -> tuple:
-        """Files that may already hold the MeshCore identity, newest-authority first.
+    def meshcore_identity_candidates(self, inst=None) -> tuple:
+        """Files that may already hold the MeshCore identity (an instance's: its own generated file), newest-authority first.
 
         Resolved from the MANIFEST (never hardcoded paths): the generated config, then the
         upstream template it is built from — the only two places a key could be living
@@ -1406,7 +1407,9 @@ class ParamsConfigMixin:
         if fc is None:
             return ()
         out = []
-        for raw, is_base in ((fc.path, False), (fc.base, True)):
+        inst = self._meshcore_inst(inst)
+        own = inst.subst(fc.path_template) if getattr(inst, "rid", "") and fc.path_template else fc.path
+        for raw, is_base in ((own, False), (fc.base, True)):
             if not raw:
                 continue
             # An lhpc-shipped asset base is OUR read-only packaged file: it never
@@ -1484,7 +1487,9 @@ class ParamsConfigMixin:
             return ""
         from . import meshcore_identity
         try:
-            meshcore_identity.adopt_identity(self._paths, self.meshcore_identity_candidates())
+            from .commands import stack_instances
+            for inst in stack_instances(self._component_index()[MESHCORE_COMPONENT][0], self._paths):   # each its own
+                meshcore_identity.adopt_identity(self._paths, self.meshcore_identity_candidates(inst), rid=inst.rid)
         except meshcore_identity.MeshCoreIdentityError as exc:
             return str(exc)
         except (OSError, PathContainmentError) as exc:
@@ -1498,10 +1503,9 @@ class ParamsConfigMixin:
         caller adopts only. An unusable existing key raises rather than being replaced.
         """
         from . import meshcore_identity
-        rid = inst.rid if inst is not None and inst.slot else ""      # 7f: a listed instance's own, never slot 0's
+        rid = inst.rid if inst is not None and inst.rid else ""       # 7f: the instance's own (13.8: no legacy adoption)
         if name == meshcore_identity.IDENTITY_FILENAME:
-            return meshcore_identity.ensure_identity(self._paths, () if rid else self.meshcore_identity_candidates(),
-                                                     rid=rid)
+            return meshcore_identity.ensure_identity(self._paths, self.meshcore_identity_candidates(inst), rid=rid)
         if name == meshcore_identity.REPEATER_JWT_FILENAME:
             return meshcore_identity.ensure_password(self._paths, name, rid)
         raise ValueError(f"unknown controller secret {name!r}")
@@ -1593,13 +1597,18 @@ class ParamsConfigMixin:
     def restart_required(self, stack_id: str) -> dict | None:
         """The durable restart-required marker, tri-state (None / dict / safe-side unsafe dict):
         set atomically with a config save that changed restart/build-mode params while the stack
-        ran; cleared on a verified stop or a successful start/restart. Never cleared by a read."""
-        return _rr.read_marker(self._paths, stack_id)
+        ran; cleared on a verified stop or a successful start/restart. Never cleared by a read. A bare stack id (K5)
+        reads its instances' markers, the first set one (an old bare-key file is ignored, as no start clears it);
+        `<stack>@<rid>` and the daemon's keys read their own."""
+        if "@" in stack_id or self.stack(stack_id) is None or self._is_daemon_target(stack_id):
+            return _rr.read_marker(self._paths, stack_id)
+        return next((m for k in _instances.keys(self, stack_id) if (m := _rr.read_marker(self._paths, k)) is not None), None)
 
     def restart_required_stacks(self) -> list:
         """All stacks currently flagged restart-required — including SAFE-SIDE unsafe markers
         (for the dashboard + CLI status + dash signature)."""
-        return [k for s in self.stacks() for k in dict.fromkeys([*_instances.keys(self, s.id), *_instances.marker_keys(self, s.id)]) if self.restart_required(k) is not None]   # a radio daemon's own marker too
+        return [k for s in self.stacks() for k in dict.fromkeys([*_instances.keys(self, s.id), *_instances.marker_keys(self, s.id)])
+                if ("@" in k or self._is_daemon_target(k)) and self.restart_required(k) is not None]   # a radio daemon's too
 
     @invalidates_snapshot
     def save_component_remote(self, component_id: str, url: str) -> ActionResult:
@@ -1710,9 +1719,16 @@ class ParamsConfigMixin:
         fc = getattr(hit[1], "config_file", None) if hit else None
         if fc is None or not any(p.name == "mode" for p in fc.params):
             return _mm.DEFAULT_MODE
-        if inst is not None and inst.slot:                  # 7f: a listed instance's own mode (DEC-W52)
+        if _instances.own_rid(self._paths, inst):          # 7f: an instance's own store's mode (DEC-W52)
             return _mm.normalize(self.file_config_values(_mm.NODE_ID, "", inst).get("mode", _mm.DEFAULT_MODE))
         return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
+
+    def _meshcore_inst(self, inst=None):
+        """The MeshCore instance whose files a caller means: its own; without a radio (a band caller until K6) the one
+        write_config_files writes for (instances.copy_of: its running radio, else the band's first)."""
+        if getattr(inst, "rid", ""):
+            return inst
+        return _instances.copy_of(self, _meshcore_mode.STACK_ID, band=getattr(inst, "band", "") or "")[0] or inst
 
     def _meshcore_running_role(self, inst=None):
         """The copy's node's RUNNING mode: the `[repeater] role` of its GENERATED config (written only by a start, so a
@@ -1720,9 +1736,10 @@ class ParamsConfigMixin:
         import tomllib
         hit = self._component_index().get(_meshcore_mode.NODE_ID)
         fc = getattr(hit[1], "config_file", None) if hit else None
+        inst = self._meshcore_inst(inst)
         if fc is not None:
             try:
-                dest = self._resolve_config_dest(hit[1], inst.subst(fc.path_template) if getattr(inst, 'slot', 0) and fc.path_template else fc.path, for_base=False)   # a listed copy's own file
+                dest = self._resolve_config_dest(hit[1], inst.subst(fc.path_template) if getattr(inst, 'rid', '') and fc.path_template else fc.path, for_base=False)   # the instance's own file
                 if dest.status == "ok" and dest.path is not None:
                     raw = runtime_fs.read_bytes(self._paths, dest.path)
                     role = (tomllib.loads(raw.decode("utf-8", "replace"))
@@ -2084,7 +2101,9 @@ class ParamsConfigMixin:
         `position` is MeshCore's STATIC position ({"lat": …, "lon": …}) from
         `meshcore_position`, set only for a `fixed` source. Absent or empty means "no static
         position" — a live source is fed by the meshcore-gps bridge instead — and the
-        coordinate keys are then omitted, which also strips a stale pair from an earlier start."""
+        coordinate keys are then omitted, which also strips a stale pair from an earlier start. Without an instance (a
+        band caller until K6) the files are its band's instance's (K4b: written where that instance reads them)."""
+        inst = inst if getattr(inst, "rid", "") else _instances.copy_of(self, self.stack_of(target) or target, band=band)[0] or inst
         cfg = self.config()
         op = cfg.operator
         runtime = str(self._paths.runtime_root)
@@ -2218,7 +2237,7 @@ class ParamsConfigMixin:
                         runtime, _rflog.is_on(self._resolved_param_value(
                             target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
                     continue
-                default = inst.subst(p.default_template) if inst is not None and inst.slot and p.default_template else p.default
+                default = inst.subst(p.default_template) if inst is not None and inst.rid and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 raw = default if raw == p.default else raw        # 7d: a listed instance's own controller paths
                 raw, default = (v.replace("{rid}", getattr(inst, "rid", "") or _rid(c.band or cfg_band or band or _sb)) if isinstance(v, str) else v for v in (raw, default))   # the default too: the fallback below
@@ -2241,7 +2260,7 @@ class ParamsConfigMixin:
                 written.append(ConfigWrite(c.id, str(fc.path), "failed", secret_error))
                 continue
             # THREE explicit destination policies (P1 generated-config containment):
-            dest = self._resolve_config_dest(c, inst.subst(fc.path_template) if inst is not None and inst.slot and fc.path_template else fc.path)
+            dest = self._resolve_config_dest(c, inst.subst(fc.path_template) if inst is not None and inst.rid and fc.path_template else fc.path)
             if dest.status != "ok":
                 written.append(ConfigWrite(c.id, dest.detail_path, dest.status, dest.detail))
                 continue
@@ -2415,7 +2434,7 @@ class ParamsConfigMixin:
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(inst)   # 7f: an instance's own file alone
+        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file alone
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}

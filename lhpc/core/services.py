@@ -560,7 +560,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover,
-                            owned_running=self._lifecycle().owned_running(), sources=sources, copy_pids=lambda table: instances.copy_pids(self, table),
+                            owned_running=self._lifecycle().owned_running(), sources=sources,
                             cache=None if fresh else source_cache.SHARED,
                             meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
@@ -846,7 +846,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             sig = (st.st_ino, st.st_size, st.st_mtime_ns)
         except OSError:
             sig = None
-        return self._request_memo(("stack-config", stack_id, band, getattr(inst, "rid", "") if getattr(inst, "slot", 0) else "", sig),
+        return self._request_memo(("stack-config", stack_id, band, instances.own_rid(self._paths, inst), sig),
                                   lambda: load_stack_config(self._paths, stack_id, band, inst))
 
     # ---- read-only operations --------------------------------------------
@@ -868,7 +868,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return self._unknown_stack(stack_id)
         snap = self.build_snapshot()
         rollup = rollup_states(snap)
-        details: list[str] = []
+        details: list[str] = [n] if (n := radio_start.no_list_notice(self._paths)) else []   # DEC-W384g
         if not stack_id:
             counts = summarize(snap)["states"]
             tally = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
@@ -1849,8 +1849,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
         # Stop verification probes the endpoints the RUNNING launch opened (MeshCore: by mode).
-        running = self._request_memo(("meshcore-running-mode",), self.meshcore_running_mode)
-        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(comp, running)
+        # read when a stop verifies, not here: the mode's instance comes from the records this lifecycle reads
+        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(
+            comp, self._request_memo(("meshcore-running-mode",), self.meshcore_running_mode))
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
             # A provider may wrap the detached-spawn path (the one call that bypasses the
@@ -2244,7 +2245,7 @@ def _render_component(comp, status) -> list[str]:
     eff_band = status.band or comp.band       # runtime-actual band wins over the manifest default
     band = f"band {eff_band}" if eff_band else "band -"
     line = (
-        f"  {comp.id:24s} {status.own_run_state.value:14s} "
+        f"  {comp.id:24s} {status.run_state.value:14s} "
         f"[{comp.kind.value}] {band}  tx {status.tx_state.value}  "
         f"src {status.source_state.value}"
     )

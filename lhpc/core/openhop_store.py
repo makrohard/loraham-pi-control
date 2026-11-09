@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import meshcore_identity as _mci
+from .instances import own_rid as _own_rid
 from .meshcore_mode import NODE_ID, STACK_ID
 
 # param name -> (openHop key, scale): the LHPC Settings row and where it lives in the file.
@@ -52,8 +53,8 @@ class OneStoreError(ValueError):
 
 def file_path(paths, inst=None) -> Path:
     """openHop's file of `inst` (slot 0 when None): state/openhop/config.yaml, a listed instance's under state/<rid>/ (7d)."""
-    from .commands import SLOT0
-    return Path(paths.runtime_root) / (inst or SLOT0).subst("state/{instance_dir}openhop") / "config.yaml"
+    from .commands import TEMPLATE
+    return Path(paths.runtime_root) / (inst or TEMPLATE).subst("state/{instance_dir}openhop") / "config.yaml"
 
 
 def _python(svc) -> Path:
@@ -103,7 +104,7 @@ def blocked(svc, inst=None) -> str:
     """'' when LHPC may write the file (no node process, no unverified stop), else the reason. A listed instance
     (7d) looks at its own process and records only; slot 0 as before."""
     svc.build_snapshot(fresh=True)
-    rid = inst.rid if inst is not None and inst.slot else None
+    rid = inst.rid if inst is not None and inst.rid else None
     if rid is None and svc.stack_running(STACK_ID):
         return RUNNING
     if rid is not None:
@@ -158,7 +159,7 @@ def chat_name_taken(svc, name: str, inst=None) -> bool:
     if not name or not file_path(svc._paths, inst).exists():
         return False
     companions = read(svc, ["identities.companions"], inst).get("identities.companions") or []
-    mine = _mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.slot else "")
+    mine = _mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.rid else "")
     return any(isinstance(c, dict) and c.get("name") == name
                and str(c.get("identity_key") or "").strip().lower() != mine
                for c in companions)
@@ -195,9 +196,10 @@ def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
     """Before a repeater-mode start: every one-store key present in openHop's file. `legacy` maps
     row name -> the pre-issue-5 stored value (or ''); None reads the stored values INSIDE the lock,
     so a save committed before it is migrated, never removed unread. Legacy copies are removed only
-    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact. A listed instance
-    (7d) writes its own file, mints its own secrets and removes nothing: the legacy copies are slot 0's."""
-    own = inst is not None and inst.slot
+    after the write AND the fsyncs succeeded; any failure raises with everything legacy intact. An instance with its
+    own store (7d, instances.own_rid) writes its own file, mints its own secrets and removes nothing: the legacy
+    copies are the per-band store's (until K6)."""
+    own = bool(_own_rid(svc._paths, inst))
     with cfgmod.config_lock(svc._paths):
         why = blocked(svc, inst)
         if why:
@@ -337,7 +339,7 @@ def rendered(svc, name: str, target: str, inst=None):
         return "on" if svc.gps_enabled_for(target, inst) else "off"     # G1-C24 B2: an instance's own
     if name == "chat_node_id":                          # the pure repeater's handle, never secret
         try:
-            return key_id(_mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.slot else ""))
+            return key_id(_mci.read_secret(svc._paths, _mci.IDENTITY_FILENAME, inst.rid if inst and inst.rid else ""))
         except (OSError, ValueError):
             return ""                                    # no usable chat key: nothing is "mine"
     return None

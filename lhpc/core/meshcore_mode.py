@@ -90,8 +90,9 @@ def expected_endpoints(comp, mode) -> list:
 
 
 def _node_live(svc, inst) -> bool:
-    """The copy's node process runs: slot 0's by the snapshot, a listed copy's by its own token or record."""
-    if inst is None or not inst.slot:
+    """The instance's node process runs, by its own token or record; without an instance (a template caller): by the
+    snapshot."""
+    if inst is None or not inst.rid:
         return svc._meshcore_node_live()
     from . import instances
     return instances.instance_runs(svc, svc.stack(STACK_ID).component(NODE_ID), inst, inst.band)

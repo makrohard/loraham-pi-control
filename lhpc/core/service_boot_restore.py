@@ -167,7 +167,7 @@ class BootRestoreOpsMixin:
         except (OSError, PathContainmentError):
             return None
 
-    def _classify_boot_evidence(self, cur_boot: str, listed=None):
+    def _classify_boot_evidence(self, cur_boot: str):
         """(evidence, skipped, integrity_issues, dir_state). Same-boot stamped records are NEVER
         evidence; a record whose boot stamp is empty (the boot id was unreadable when it was
         written) is evidence only when its process is provably gone (`verify_owned`)."""
@@ -189,20 +189,20 @@ class BootRestoreOpsMixin:
                 launch_id=rec["launch_id"], stack=rec.get("stack", ""),
                 component=rec.get("component", ""), band=rec.get("band", ""),
                 launched_at=float(rec.get("launched_at", 0)),
-                rid=boot_restore.rid_of(rec.get("rid")), slot=boot_restore.slot_of(rec.get("slot")),
+                rid=boot_restore.rid_of(rec.get("rid")),
                 start_scope=rec.get("start_scope", ""),
                 requested_target=rec.get("requested_target", "")))
         # OPERATOR STOP INTENT beats leftover evidence (see the section note above), per instance key (7e). The
         # skipped records are pruned by the CALLER; the intent is cleared only by an applied operator start.
         intents = self._stop_intent_stacks()
         if intents is None:
-            skipped.extend({"stack": ev.stack, "reason": self.INTENTS_UNREADABLE_REASON,
+            skipped.extend({"stack": boot_restore.instance_key(ev.stack, ev.rid), "reason": self.INTENTS_UNREADABLE_REASON,
                             "evidence_ids": [ev.launch_id]} for ev in evidence)
             evidence = []
         elif intents:
             kept = []
             for ev in evidence:
-                if (key := boot_restore.instance_key(ev.stack, ev.rid, listed or {}, ev.slot)) in intents:
+                if (key := boot_restore.instance_key(ev.stack, ev.rid)) in intents:
                     # NOT pruned here: like every other skip reason, the CALLER prunes, after the admission gates and
                     # with the journal in place (a prune inside classification destroyed a later-disabled run's evidence).
                     skipped.append({"stack": key,
@@ -348,8 +348,7 @@ class BootRestoreOpsMixin:
             if not ok:
                 return ActionResult(False, f"Boot restore blocked: {why}.")
 
-        listed = boot_restore.listed_instances(self)                                   # 7e: instance keys
-        evidence, skipped, issues, dir_state = self._classify_boot_evidence(cur_boot, listed)
+        evidence, skipped, issues, dir_state = self._classify_boot_evidence(cur_boot)
         if dir_state == "unsafe":
             return ActionResult(False, "Boot restore blocked: state/owned/ is unsafe "
                                        "(containment/symlink failure) — nothing was consumed.")
@@ -365,9 +364,9 @@ class BootRestoreOpsMixin:
         metas = self._boot_stack_metas()
         markers = {sid: self._boot_marker_view(sid) for sid in
                    {e.stack for e in evidence}}
-        plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID, listed)
+        plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
-        boot_restore.radio_filter(plan, radios.load(self._paths).radios, listed)   # D14/D15, 7e
+        boot_restore.radio_filter(plan, radios.load(self._paths).radios)   # D14/D15, 7e
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),

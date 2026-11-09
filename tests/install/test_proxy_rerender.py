@@ -29,7 +29,7 @@ from lhpc.core.services import ControllerService
 
 _LISTENERS = [Listener("ipv4", "127.0.0.1", 8443, 1),      # loopback console
               Listener("ipv4", "0.0.0.0", 8446, 3),        # the proxy itself
-              Listener("ipv4", "127.0.0.1", 8788, 2)]      # upstream, loopback
+              Listener("ipv4", "127.0.0.1", 8921, 2)]      # upstream meshcore@r2 (8788 + 133), loopback
 
 
 def _box(tmp_path, monkeypatch, *, nginx_t):
@@ -39,7 +39,7 @@ def _box(tmp_path, monkeypatch, *, nginx_t):
     paths = Paths(runtime_root=tmp_path)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
     boot.webserver_init(dns_sans=["pi.local"])
-    assert boot.stack_web_configure("meshcore", mode="lan", port=8446,
+    assert boot.stack_web_configure("meshcore@r2", mode="lan", port=8446,
                                     cidrs=["192.168.1.0/24"], confirm=True).ok
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
@@ -126,7 +126,7 @@ def test_a_saved_but_unapplied_proxy_edit_is_not_pushed_live_by_the_update(tmp_p
     """Save is not Apply: with an edit saved and not applied, the update applies nothing in the
     background. The marker stays and says the saved settings wait for their Apply."""
     svc, paths, previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
-    assert svc().stack_web_configure("meshcore", cidrs=["192.168.2.0/24"], confirm=True).ok
+    assert svc().stack_web_configure("meshcore@r2", cidrs=["192.168.2.0/24"], confirm=True).ok
     svc().self_update_apply_operator()
     assert _deployed(paths) == previous
     why = proxy_rerender.pending(paths)

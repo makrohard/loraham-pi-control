@@ -114,19 +114,19 @@ def test_a_daemon_start_for_one_radio_launches_that_radios_daemon_only(tmp_path,
 
 
 def test_another_stacks_client_on_the_other_radio_keeps_no_settings_from_this_radio(tmp_path, monkeypatch):
-    # G1-C18 (2): chat runs as slot 0 on r1; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
+    # G1-C18 (2): chat@r1 runs; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
     svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
-    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["chat"])
+    monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: (svc.stack_of(c.id), i.rid) == ("chat", "r1"))
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     res = svc.start(sid, apply=True, band=band, inst=inst)
     assert {path for path, _payload in svc.fake.sent} == {"/tmp/loraconf-r2.sock"}, res.details
     assert not any("[keep]" in line for line in res.details), res.details
 
 
-def test_slot0_running_on_the_other_radio_keeps_no_settings_from_this_radio(tmp_path, monkeypatch):
-    # G1-C18 (2): kiss runs as slot 0 on r1; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
+def test_the_same_stack_on_the_other_radio_keeps_no_settings_from_this_radio(tmp_path, monkeypatch):
+    # G1-C18 (2): kiss@r1 runs; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
     svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
-    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
+    monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: (svc.stack_of(c.id), i.rid) == ("kiss", "r1"))
     monkeypatch.setattr(ControllerService, "_stack_running_on_band", lambda self, sid, band: True)
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     res = svc.start(sid, apply=True, band=band, inst=inst)

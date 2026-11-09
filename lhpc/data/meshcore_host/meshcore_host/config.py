@@ -100,6 +100,7 @@ class HostConfig:
     mode: str = "chat"
     jwt_secret: str = ""             # the dashboard's login-signing secret, minted by LHPC
     repeater_state_dir: str = ""
+    dashboard_port: int = DASHBOARD_PORT     # the repeater dashboard's loopback port (LHPC: its instance's)
     presets_file: str = ""           # upstream's radio-presets.json in the pinned checkout
     plugins_on: bool = True          # the plugin manager runs beside the repeater
     use_gps: bool = True             # on: openHop's `gps` section is LHPC's (file source below)
@@ -261,6 +262,9 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.jwt_secret = _opt(rep, "jwt_secret", "", str, "repeater")
     cfg.repeater_state_dir = _opt(rep, "state_dir", "", str, "repeater")
     cfg.presets_file = _opt(rep, "presets_file", "", str, "repeater")
+    cfg.dashboard_port = _opt(rep, "dashboard_port", DASHBOARD_PORT, int, "repeater")
+    if not 1 <= cfg.dashboard_port <= 65535:
+        raise ConfigError("[repeater] dashboard_port out of range")
     if cfg.companion_on:
         if bool(cfg.key_file) == bool(cfg.key):
             raise ConfigError("[identity] exactly one of key_file or key must be set")

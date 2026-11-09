@@ -459,7 +459,7 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
     res = svc.start("voice", apply=True)
     assert not res.ok and res.data.get("enforce_fields")
     assert [c.split("   #", 1)[0] for c in res.next_commands] == [
-        "lhpc config voice callsign YOURCALL --band 868"], res.next_commands
+        "lhpc config voice@r2 callsign YOURCALL --band 868"], res.next_commands   # the instance's key (K5)
     # a bandless stack's hint stays without --band
     assert not any("--band" in c for c in svc._identity_config_hints("meshtastic"))
 
@@ -545,9 +545,9 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     _lite_voice_marker(svc, "868")                              # voice inheriting, marker 868
     # chat: running with a PRE-EXISTING build marker
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "chat")
-    mp = restart_required.marker_path(svc._paths, "chat")
+    mp = restart_required.marker_path(svc._paths, "chat@r1")
     mp.parent.mkdir(parents=True, exist_ok=True)
-    mp.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
+    mp.write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "build",
                               "params": ["firmware env"], "band": "433",
                               "created_at": 1.0}))
     r = svc.set_operator_identity(callsign="XX0XXB")
@@ -564,7 +564,7 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     svc2 = _svc(tmp_path / "b")
     assert svc2.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc2), "stack_running", lambda self, sid: sid == "chat")
-    mp2 = restart_required.marker_path(svc2._paths, "chat")
+    mp2 = restart_required.marker_path(svc2._paths, "chat@r1")
     mp2.parent.mkdir(parents=True, exist_ok=True)
     mp2.write_text("{ garbage")
     r2 = svc2.set_operator_identity(callsign="XX0XXB")
@@ -682,13 +682,13 @@ def test_fresh_identity_hints_are_shell_safe_templates(tmp_path):
 
 
 @pytest.mark.parametrize("bad", [
-    {"version": 1, "stack": "chat", "mode": "unexpected", "params": [], "band": "",
+    {"version": 1, "stack": "chat@r1", "mode": "unexpected", "params": [], "band": "",
      "created_at": 1.0},
-    {"version": 1, "stack": "chat", "mode": "build", "params": "firmware env",
+    {"version": 1, "stack": "chat@r1", "mode": "build", "params": "firmware env",
      "band": "", "created_at": 1.0},
-    {"version": 1, "stack": "chat", "mode": "build", "params": 42, "band": "",
+    {"version": 1, "stack": "chat@r1", "mode": "build", "params": 42, "band": "",
      "created_at": 1.0},
-    {"version": 1, "stack": "chat", "mode": "build", "params": ["x"], "band": "9zz",
+    {"version": 1, "stack": "chat@r1", "mode": "build", "params": ["x"], "band": "9zz",
      "created_at": 1.0},
 ])
 def test_structurally_invalid_markers_are_unsafe_and_never_rewritten(tmp_path, monkeypatch, bad):
@@ -698,7 +698,7 @@ def test_structurally_invalid_markers_are_unsafe_and_never_rewritten(tmp_path, m
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "chat")
-    mp = restart_required.marker_path(svc._paths, "chat")
+    mp = restart_required.marker_path(svc._paths, "chat@r1")
     mp.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(bad)
     mp.write_text(raw)
@@ -905,9 +905,9 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    path = restart_required.marker_path(svc._paths, "chat")
+    path = restart_required.marker_path(svc._paths, "chat@r1")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
+    path.write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "build",
                                 "params": ["firmware env"], "band": "433",
                                 "created_at": time.time()}))
     assert svc.set_operator_identity(callsign="XX0XXA").ok
@@ -927,10 +927,10 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    path = restart_required.marker_path(svc._paths, "chat")
+    path = restart_required.marker_path(svc._paths, "chat@r1")
     # another writer commits a marker; the payload is built AFTERWARDS, inside the transaction
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
+    path.write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "build",
                                 "params": ["callsign (inherited global)"], "band": "868",
                                 "created_at": time.time()}))
     merged = json.loads(svc.restart_marker_payload("chat", ["call"], "433"))
@@ -1005,7 +1005,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     assert svc.restart_required("chat") is None
     # B: explicit local EQUAL to the global, then switch to inheritance
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}).ok
-    restart_required.marker_path(svc._paths, "chat").unlink(missing_ok=True)
+    restart_required.marker_path(svc._paths, "chat@r1").unlink(missing_ok=True)
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     assert svc.restart_required("chat") is None, svc.restart_required("chat")
     # C: the effective identity genuinely changes -> marker
@@ -1013,8 +1013,8 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     m = svc.restart_required("chat")
     assert m is not None and "call" in m["params"], m
     # D: an existing BUILD marker survives a genuine change, never downgraded
-    restart_required.marker_path(svc._paths, "chat").write_text(json.dumps(
-        {"version": 1, "stack": "chat", "mode": "build", "params": ["firmware env"],
+    restart_required.marker_path(svc._paths, "chat@r1").write_text(json.dumps(
+        {"version": 1, "stack": "chat@r1", "mode": "build", "params": ["firmware env"],
          "band": "433", "created_at": time.time()}))
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-4"}).ok
     m = svc.restart_required("chat")

@@ -27,7 +27,7 @@ def _dash(web, tmp_path, monkeypatch, states, evidence=None, absent=(), proxied=
     endpoints of the components in `absent` observed absent, and the web UI's page proxied when `proxied`."""
     if proxied:
         from lhpc.core.config import save_stackweb_config
-        save_stackweb_config(Paths(runtime_root=tmp_path), "meshcore", mode="lan", port=8451)
+        save_stackweb_config(Paths(runtime_root=tmp_path), "meshcore@r2", mode="lan", port=8451)   # K4b: 868, r2
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     st = svc.stack("meshcore")
     snap = Snapshot(runtime_root_exists=True)

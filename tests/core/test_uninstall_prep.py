@@ -127,7 +127,7 @@ def test_prep_stops_clients_before_daemon_via_real_public_stop(tmp_path, monkeyp
                for cid in ss.components}
     monkeypatch.setattr(ControllerService, "build_snapshot", _running_then_clean(svc, run_ids))
     order = []
-    def _rec_stop(_life, comp, band="", _svc=svc, _order=order):
+    def _rec_stop(_life, comp, band="", _svc=svc, _order=order, **_scope):
         _order.append(_svc.stack_of(comp.id) or comp.id)
         return CompResult(component=comp.id, stack=comp.id, action="stop",
                           outcome=Outcome.STOPPED, summary="stopped")
@@ -154,7 +154,7 @@ def test_prep_client_stop_failure_returns_before_daemon(tmp_path, monkeypatch):
                 cs.run_state = RunState.RUNNING
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *, fresh=False: running)
     stopped = []
-    def fail_client(self, comp, band=""):
+    def fail_client(self, comp, band="", **_scope):
         sid = svc.stack_of(comp.id) or comp.id
         stopped.append(sid)
         out = Outcome.FAILED if sid == client_sid else Outcome.STOPPED

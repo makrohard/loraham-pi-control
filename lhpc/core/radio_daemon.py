@@ -253,14 +253,11 @@ def old_config_state(paths) -> Tri:
     return Tri.YES if isinstance(data.get("radio"), dict) else Tri.NO
 
 
-def restore_plan(items: list, radios, listed=None) -> tuple:
+def restore_plan(items: list, radios) -> tuple:
     """(kept, refused) of boot-restore items (D14, D15): a pre-0.14.0 band item without `rid` is dropped silently
     (W12); a band-less item without `rid` is kept; an item whose radio is gone, disabled or on another band now is
-    refused with its reason. A listed instance's item (`<stack>@<rid>`) starts on its own radio, so that is all it
-    needs. A slot-0 band item starts on slot 0's radio of its band (DEC-W16: the first enabled one not listed for its
-    stack in `listed`, {stack: rids}), so it is kept only while that radio is its own (7e, DEC-W49; it replaces
-    G2-0.14.0-1 item 3's "the band's enabled radios are exactly its radio"). The rest are kept in order."""
-    from .instances import slot0_of
+    refused with its reason. Every other item (`<stack>@<rid>`, K4b) starts on its own radio, so that is all it needs.
+    The rest are kept in order."""
     by_id = {r.id: r for r in radios}
     kept, refused = [], []
     for it in items:
@@ -277,10 +274,6 @@ def restore_plan(items: list, radios, listed=None) -> tuple:
             refused.append((it, f"radio {rid} is disabled"))
         elif (band := it.get("band")) and r.band != band:
             refused.append((it, f"radio {rid} is on {r.band} MHz now, not {band} MHz"))
-        elif band and "@" not in (sid := it.get("target", "")) and (
-                on := slot0_of([x for x in radios if x.enabled and x.band == band], (listed or {}).get(sid, ()))) != rid:
-            refused.append((it, f"slot 0 of {sid} on {band} MHz starts on {on} now, not {rid}" if on
-                            else f"slot 0 of {sid} has no radio on {band} MHz now"))
         else:
             kept.append(it)
     return kept, refused

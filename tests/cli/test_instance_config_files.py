@@ -14,7 +14,7 @@ from lhpc.core.paths import Paths
 
 def _node(tmp_path, name="Node3"):
     # the instance's own node name, config/stacks/meshcore@r3.toml (7f, DEC-W60: slot 0's is never lent)
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"file_node_name": name}, inst=Instance(1, "r3"))
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"file_node_name": name}, inst=Instance("r3"))
 
 
 def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, monkeypatch):
@@ -22,7 +22,7 @@ def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, mon
     monkeypatch.setattr(ops, "_helper", lambda *a, **k: json.dumps({}))
     _node(tmp_path)
     rc, out, launches = run("start", "meshcore@r3")
-    assert ("meshcore-node", "", 1, "r3") in launches, (launches, out)
+    assert ("meshcore-node", "", "r3") in launches, (launches, out)
     mine = tmp_path / "config" / "files" / "r3" / "meshcore.toml"
     assert mine.is_file(), out
     text = mine.read_text()

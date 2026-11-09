@@ -1,8 +1,8 @@
-"""Item 7c2b: `lhpc stack stop|restart <stack>@<rid>` act on that instance alone, and a plain stop is slot 0's alone.
+"""Item 7c2b: `lhpc stack stop|restart <stack>@<rid>` act on that instance alone.
 
 A stop is record-driven (Lifecycle.stop): an instance's stop takes only the records of its radio (rid), judges a
-leftover process by the instance's own token and verifies cessation on the instance's own endpoints; slot 0's stop,
-once the stack has copies (the hardware list's, K4ac), leaves those copies' records alone. The service level records what each
+leftover process by the instance's own token and verifies cessation on the instance's own endpoints. K4b: every
+instance's stop is scoped so, with or without other instances on the list (no slots, no exclusion list). The service level records what each
 component's Lifecycle.stop is asked; the Lifecycle level runs the real filter on given records."""
 import pytest
 from radios_fixture import R1, R2_868, R3, kiss_on as _kiss_on
@@ -38,32 +38,35 @@ def test_an_instance_stop_takes_its_radios_records_its_token_and_its_endpoints(b
     assert [e.address for e in kw["endpoints"]] == ["127.0.0.1:8267"]          # DEC-W348: 8001 + 133 x 2
 
 
-def test_slot_0s_stop_leaves_the_copies_alone(box, stops):
-    run = box((R1, R2_868, R3), procs={4100: _kiss_on("r1")})
-    svc = cli.ControllerService()
-    assert svc._set_running_band("kiss", "433")
-    rc, out, _ = run("stop", "kiss@r1")                          # K3: slot 0 named on its radio
-    (kw,) = _tnc(stops)
-    assert (kw["exclude_rids"], kw["token"]) == (("r3",), ("--data-socket", "/tmp/loraf-r1.sock"))
-
-
-def test_without_copies_the_stop_is_as_before(box, stops):
-    box((R1, R3))("stop", "kiss@r1")
-    assert _tnc(stops) == [{}]
+@pytest.mark.parametrize("rows", [(R1, R2_868, R3), (R1, R3)], ids=["another-868-instance", "one-per-band"])
+def test_kiss_at_r1s_stop_takes_only_r1s_records_and_token(box, stops, rows):
+    # Every pass (the stop, then the daemon stop's dependents check while the faked process still runs) is r1's.
+    run = box(rows, procs={4100: _kiss_on("r1")})
+    rc, out, _ = run("stop", "kiss@r1")
+    tnc = _tnc(stops)
+    assert tnc, (stops, out)
+    assert {(kw["rid"], kw["token"]) for kw in tnc} == {("r1", ("--data-socket", "/tmp/loraf-r1.sock"))}
+    assert all("exclude_rids" not in kw for _cid, kw in stops)
 
 
 def test_an_instance_restart_stops_and_starts_that_instance(box, stops):
     rc, out, launches = box((R1, R2_868, R3), ports=(8267,))("restart", "kiss@r3")
     assert [kw["rid"] for kw in _tnc(stops)] == ["r3"], (stops, out)
-    assert ("loraham-kiss-tnc", "868", 1, "r3") in launches, (launches, out)
+    assert ("loraham-kiss-tnc", "868", "r3") in launches, (launches, out)
 
 
-def test_an_instance_stop_leaves_slot_0s_band_marker(box, stops, tmp_path):
+@pytest.mark.parametrize("marker", [None, "433\n"], ids=["no-marker", "a-0.13.x-marker"])
+def test_the_stop_writes_and_clears_no_per_stack_band_marker(box, stops, tmp_path, marker):
+    # K4b (design 13.12.5): an instance's band is its radio's; state/running/<sid>.band is not read, so no stop
+    # writes one, and a 0.13.x file is left as it was (it goes with the band choosers, K6).
     run = box((R1, R2_868, R3))
-    svc = cli.ControllerService()
-    assert svc._set_running_band("kiss", "433")
-    assert run("stop", "kiss@r3")[0] == 0
-    assert cli.ControllerService().running_band("kiss", "") == "433"
+    f = tmp_path / "state" / "running" / "kiss.band"
+    if marker is not None:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(marker)
+    for target in ("kiss@r1", "kiss@r3"):
+        run("stop", target)
+    assert (f.read_text() if f.exists() else None) == marker
 
 
 # ---- Lifecycle.stop's own filter -------------------------------------------------------------------------
@@ -92,8 +95,8 @@ def test_owned_records_filter_by_rid_and_role(tmp_path):
 
 def test_an_instance_stop_with_no_record_never_names_another_instances_process(tmp_path):
     comp = _tnc_comp()
-    inst = commands.Instance(1, "r3")
-    life = _life(tmp_path, [], procs={4100: _kiss_on("r1")}, ports=(8001,))     # only slot 0 runs, on 8001
+    inst = commands.Instance("r3")
+    life = _life(tmp_path, [], procs={4100: _kiss_on("r1")}, ports=(8001,))     # only kiss@r1 runs, on 8001
     from lhpc.core import instances
     res = life.stop(comp, rid="r3", token=("--data-socket", "/tmp/loraf-r3.sock"),
                     endpoints=instances.endpoints_for(comp.endpoints, inst))
@@ -107,18 +110,19 @@ def test_an_unowned_process_of_the_instance_itself_is_named(tmp_path):
     assert res.outcome == Outcome.MANUAL_REQUIRED and res.summary.split("kill ")[1] == "4200", res.summary
 
 
-def test_slot_0s_stop_never_takes_a_listed_instances_record(tmp_path):
+def test_an_instance_stop_never_takes_another_radios_record(tmp_path):
+    # K4b: kiss@r1's stop takes r1's records alone; kiss@r3's record (and its process, by r3's token) are r3's
     comp = _tnc_comp()
     recs = [{"component": "loraham-kiss-tnc", "role": "", "band": "868", "rid": "r3", "pid": 4200}]
     life = _life(tmp_path, recs, procs={4200: _kiss_on("r3")})
-    res = life.stop(comp, exclude_rids=("r3",), token=("--data-socket", "/tmp/loraf-r1.sock"))
+    res = life.stop(comp, rid="r1", token=("--data-socket", "/tmp/loraf-r1.sock"))
     assert res.outcome == Outcome.ALREADY_STOPPED and res.pid is None, res.summary
 
 
 # ---- G1-B1 (1): a running instance keeps its recorded key when the hardware list changes (13.16) -----------------
 
-def _running_with_record(tmp_path, rows, rid, slot):
-    """A real process of kiss-tnc recorded as `kiss` on `rid` at `slot` (its verified launch record) over `rows`."""
+def _running_with_record(tmp_path, rows, rid):
+    """A real process of kiss-tnc recorded as `kiss@<rid>` (its verified launch record) over `rows`."""
     import subprocess
     import sys
 
@@ -129,7 +133,7 @@ def _running_with_record(tmp_path, rows, rid, slot):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     stk = svc.stack("kiss")
     assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
-                                          extra={"rid": rid, "slot": slot})
+                                          extra={"rid": rid})
     return p
 
 
@@ -142,38 +146,37 @@ def test_g1_b1_a_running_copy_stays_the_copy_when_its_bands_first_radio_is_disab
 
     import radios_fixture
     run = box(A433)
-    p = _running_with_record(tmp_path, A433, "r3", 1)                            # kiss@r3 runs, slot 1
+    p = _running_with_record(tmp_path, A433, "r3")                               # kiss@r3 runs
     try:
         radios_fixture.write(tmp_path, (dataclasses.replace(A433[0], enabled=False), A433[1]))   # r3 is 433's first now
         rc, out, _ = run("stop", "kiss@r3")
-        assert [kw.get("rid") for kw in _tnc(stops)] == ["r3"], (stops, out)     # the copy's records, never slot 0's
+        assert {kw.get("rid") for kw in _tnc(stops)} == {"r3"}, (stops, out)     # its own records, never r1's
     finally:
         p.kill()
         p.wait(timeout=5)
 
 
-def test_g1_b1_a_running_slot_0_stays_slot_0_when_a_lower_radio_joins_its_band(box, stops, tmp_path):
+def test_g1_b1_a_running_instance_keeps_its_radio_when_a_lower_radio_joins_its_band(box, stops, tmp_path):
     import radios_fixture
     run = box(A433[1:])
-    p = _running_with_record(tmp_path, A433[1:], "r3", 0)                        # slot 0 runs on r3, 433's only radio
+    p = _running_with_record(tmp_path, A433[1:], "r3")                           # kiss@r3 runs, 433's only radio
     try:
-        radios_fixture.write(tmp_path, A433)                                     # r1 joins: the list now makes r3 a copy
+        radios_fixture.write(tmp_path, A433)                                     # r1 joins 433, below r3
         rc, out, _ = run("stop", "kiss@r3")
-        (kw,) = _tnc(stops)
-        assert "rid" not in kw and "r3" not in kw.get("exclude_rids", ()), (kw, out)   # slot 0's own record is taken
+        assert {kw.get("rid") for kw in _tnc(stops)} == {"r3"}, (stops, out)     # kiss@r3's own record is taken
     finally:
         p.kill()
         p.wait(timeout=5)
 
 
-def test_g1_b1_re_a_running_slot_0_on_a_disabled_radio_stops_but_never_starts(box, stops, tmp_path, capsys):
-    # G1-B1-RE: slot 0 runs on r3 by its record and the list makes r3 a copy now (r1 joined); r3 is then disabled.
-    # A start or restart of kiss@r3 is refused naming the disabled radio; its stop still reaches the running slot 0.
+def test_g1_b1_re_a_running_instance_on_a_disabled_radio_stops_but_never_starts(box, stops, tmp_path, capsys):
+    # G1-B1-RE: kiss@r3 runs by its record; r1 joins 433 and r3 is then disabled. A start or restart of kiss@r3 is
+    # refused naming the disabled radio; its stop still reaches the running kiss@r3.
     import dataclasses
 
     import radios_fixture
     run = box(A433[1:])
-    p = _running_with_record(tmp_path, A433[1:], "r3", 0)
+    p = _running_with_record(tmp_path, A433[1:], "r3")
     try:
         radios_fixture.write(tmp_path, (A433[0], dataclasses.replace(A433[1], enabled=False)))
         for verb in ("start", "restart"):
@@ -182,20 +185,19 @@ def test_g1_b1_re_a_running_slot_0_on_a_disabled_radio_stops_but_never_starts(bo
             assert rc != 0 and "kiss@r3: r3 is disabled" in got.out + got.err, (verb, got.out, got.err)
         assert stops == []
         run("stop", "kiss@r3")
-        (kw,) = _tnc(stops)
-        assert "rid" not in kw and "r3" not in kw.get("exclude_rids", ()), kw              # slot 0's own record
+        assert {kw.get("rid") for kw in _tnc(stops)} == {"r3"}, stops                    # kiss@r3's own record
     finally:
         p.kill()
         p.wait(timeout=5)
 
 
-def test_g1_b1_re_one_stop_reads_one_record_snapshot_for_all_its_components(box, stops, monkeypatch):
-    # G1-B1-RE: every read of the records answers another recorded copy (as records come and go); slot 0's stop
-    # takes ONE snapshot, so its two components exclude the same copies.
+def test_g1_b1_re_records_coming_and_going_never_widen_an_instances_stop(box, stops, monkeypatch):
+    # G1-B1-RE, K4b: every read of the records answers another recorded instance (as records come and go); kiss@r1's
+    # stop scopes both its components to r1 all the same (no exclusion list to drift between them).
     from lhpc.core import instances
     n = iter(range(4, 99))
     monkeypatch.setattr(instances, "recorded", lambda svc, sid: {f"r{next(n)}": 1})
     run = box((R1, R3))
     run("stop", "kiss@r1")
-    excl = [kw.get("exclude_rids") for cid, kw in stops if cid in ("loraham-kiss-serial", "loraham-kiss-tnc")]
-    assert len(excl) == 2 and excl[0] == excl[1] and excl[0], stops
+    rids = [kw.get("rid") for cid, kw in stops if cid in ("loraham-kiss-serial", "loraham-kiss-tnc")]
+    assert rids == ["r1", "r1"], stops

@@ -634,32 +634,27 @@ def test_the_console_falls_back_to_the_running_band(monkeypatch):
 
 
 def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch):
-    """A band-switchable stack runs on ONE band. Asking for the other one while its
-    band owner is up was a silent no-op: every component read already_healthy, the
-    console said "Run applied", and the radio stayed where it was — so the operator
-    believed they had switched bands when they had not.
+    """A stack that runs once (reticulum, outside instances.MAY until its per-radio work, K7) runs ONE instance.
+    Asking for the other band while it runs was a silent no-op once (every component read already_healthy, the
+    console said "Run applied", the radio stayed where it was). K4b: the band caller resolves 868's instance,
+    reticulum@r2, and the start refuses it, naming the instance that runs and how to stop it; nothing moves.
 
-    Driven against a runtime root this test builds. It used to read the DEVELOPER's box and skip
-    unless reticulum happened to be running there — which, with the hermetic runtime-root fixture,
-    was every single run on every machine.
+    Driven against a runtime root this test builds; the running instance is stubbed (this test is about the
+    one-at-a-time rule, not process discovery).
     """
-    from lhpc.core import config as _cfg
+    from lhpc.core import config as _cfg, instances
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
 
     svc = ControllerService(paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham")   # else the refusal fires for the wrong reason
     svc._invalidate_config()
-    svc._set_running_band("reticulum", "433")
-    # stubbed: the real check is a full system snapshot scan; this test is about band
-    # arbitration, not process discovery.
-    monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid: True)
-    assert svc.running_band("reticulum", "") == "433"
+    monkeypatch.setattr(instances, "running_keys", lambda svc_, sid: ["reticulum@r1"] if sid == "reticulum" else [])
 
     res = svc.run_action("start", "reticulum", band="868", apply=False)
-    assert res.ok is False
-    assert "433" in res.summary and "868" in res.summary
-    assert svc.running_band("reticulum", "") == "433", "the refusal must not move the band"
+    assert res.ok is False, res.summary
+    assert res.summary == "'reticulum' runs one instance at a time until its per-radio work: reticulum@r1 runs"
+    assert res.next_commands == ["lhpc stack stop reticulum@r1 --yes"]
 
 
 def test_only_a_band_carrying_component_defines_the_band():

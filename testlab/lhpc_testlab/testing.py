@@ -94,6 +94,23 @@ def running(env: dict, sid: str) -> list:
     return instances.running_keys(svc, sid) or [named(env, sid)]
 
 
+def port_of(env: dict, stack: str, base: int) -> int:
+    """The TCP port `stack`'s `named` instance serves where the manifest says `base`: its endpoint as lhpc renders it
+    for that instance (DEC-W348's per-radio ports), so a lane waits where the instance listens; `base` when no
+    endpoint of the stack is on it, or for a unit lane's stubbed env."""
+    from lhpc.core import instances
+    from lhpc.core.services import ControllerService
+    if "LHPC_RUNTIME_ROOT" not in env:
+        return base
+    svc = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))
+    _sid, inst, _band, _why = instances.resolve(svc, named(env, stack))
+    for comp in (svc.stack(stack).components if inst is not None else ()):
+        for tpl, ep in zip(comp.endpoints, instances.endpoints_for(comp.endpoints, inst), strict=True):
+            if tpl.kind == "tcp" and tpl.address.endswith(f":{base}"):
+                return int(ep.address.rsplit(":", 1)[1])
+    return base
+
+
 def run_lhpc(env: dict, *args: str, timeout: float = 300.0,
              check: bool = False) -> subprocess.CompletedProcess:
     r = subprocess.run([str(lhpc_bin()), *args], env=env, capture_output=True,

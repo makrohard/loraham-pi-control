@@ -72,9 +72,9 @@ def test_d15_an_item_on_a_gone_radio_is_refused_and_the_restore_continues_with_t
     assert svc.boot_restore_run().ok
     assert starts == [("kiss", "868")]                                # the other item still runs
     j = json.loads((tmp_path / "state" / "boot-restore.json").read_text())
-    assert [(s["stack"], s["reason"]) for s in j["skipped"]] == [("chat", "radio r9 no longer exists")]
+    assert [(s["stack"], s["reason"]) for s in j["skipped"]] == [("chat@r9", "radio r9 no longer exists")]
     assert j["skipped"][0]["evidence_ids"] == [gone["launch_id"]]
-    assert [(i["target"], i["rid"]) for i in j["items"]] == [("kiss", "r2")]
+    assert [(i["target"], i["rid"]) for i in j["items"]] == [("kiss@r2", "r2")]
 
 
 @pytest.mark.parametrize("op", ["stop", "restart"])

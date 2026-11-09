@@ -18,7 +18,7 @@ def test_a_start_clears_its_own_radios_window_only(box, tmp_path):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("123")
     rc, out, launches = run("start", "kiss@r1")                   # slot 0 of kiss on r1 (K3: named)
-    assert rc == 0 and ("loraham-kiss-tnc", "433", 0, "r1") in launches, (out, launches)
+    assert rc == 0 and ("loraham-kiss-tnc", "433", "r1") in launches, (out, launches)
     assert floors["r1"].read_text() != "123"
     assert floors["r2"].read_text() == "123"
 

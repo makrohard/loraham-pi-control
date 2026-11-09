@@ -1,7 +1,7 @@
-"""Stack instances (item 7, CLEANUP-DESIGN-v13 13.2): every operator entry names `<stack>@<rid>`. A stack runs as
-slot 0 on the radio it is named on and, for a stack whose resources are all per instance (MAY), as a copy on each
-other radio the hardware list gives it (copy_rids). config/instances.toml and add-instance/remove-instance are gone
-(DEC-W344): nothing is listed first."""
+"""Stack instances (item 7, CLEANUP-DESIGN-v13 13.2, DEC-W327: no slots): every operator entry names `<stack>@<rid>`,
+and a stack has one instance on each enabled radio of its bands (radios_of), each with its radio's paths and ports.
+A MAY stack's instances run side by side; any other stack runs one at a time until its 13.6 work (K7).
+config/instances.toml and add-instance/remove-instance are gone (DEC-W344): nothing is listed first."""
 from __future__ import annotations
 
 import dataclasses
@@ -10,10 +10,10 @@ import re
 from . import commands, radios
 
 _RID_RE = re.compile(r"r[1-9][0-9]?")
-# T2.2 (DEC-W4/W15): the daemon clients whose exclusive resources are all per instance run as a copy beyond slot 0.
-# TRANSITIONAL (handler DEC on K4ac): the other stacks run once until their 13.6 work in K7 (meshtastic's pins,
-# meshcom's ports, voice.ui, Reticulum's one node, graywolf 13.5); W330 removes MAY there, the K8 grep checks it.
-MAY = ("kiss", "meshcore", "chat")
+# T2.2 (DEC-W4/W15): the stacks whose instances may run side by side, one per radio (DEC-W384d: voice and graywolf
+# too, their 13.17/13.5 work follows in the web lane). TRANSITIONAL: the others run one at a time until their 13.6 work
+# in K7 (meshtastic's pins, meshcom's ports, Reticulum's one node); W330 removes MAY there, the K8 grep checks it.
+MAY = ("kiss", "meshcore", "chat", "voice", "graywolf")
 
 
 def stack_bands(stack) -> tuple:
@@ -24,34 +24,57 @@ def stack_bands(stack) -> tuple:
     return tuple(sorted({c.band for c in stack.components if getattr(c, "band", "")}))
 
 
-def copy_rids(stack, paths, disabled: str = "") -> tuple:
-    """The radios a stack runs on as a copy (K4ac): a MAY stack's every enabled radio of its bands but each band's
-    first (DEC-W16: slot 0's), in rid order; () for any other stack. The hardware list decides, nothing is listed.
-    `disabled`: one disabled radio counted as enabled (copy_of: the copy it would be, still addressed for a stop)."""
-    if stack is None or stack.id not in MAY:
+def fixed_ports_only(stack) -> bool:                          # transitional: per-radio Reticulum (next week)
+    """DEC-W384h, by property: every TCP listener of the stack has a fixed port (no `{port:B}` template), so one set
+    of ports serves whichever radio it runs on, and it gets ONE instance's pages and firewall rows."""
+    eps = [e for c in stack.components for e in c.endpoints if e.kind == "tcp"]
+    return bool(eps) and not any("{port" in (getattr(e, "address_template", "") or "") for e in eps)
+
+
+def recorded_radio(paths, sid: str, rids) -> str:              # transitional: per-radio Reticulum (next week)
+    """The radio of `sid`'s launch record among `rids` (the ownership records as written; their pids are verified
+    by every reader that acts on a process), or ""."""
+    from .lifecycle import Lifecycle
+    recs = Lifecycle(paths, (), None, None).owned_inventory()[0]
+    return next((r["rid"] for r in recs if r.get("stack") == sid and r.get("rid") in rids), "")
+
+
+def band_first(paths, inst) -> bool:                                       # transitional: removed in K6
+    """DEC-W384e: the instance's radio is its band's first enabled one (the radio the slot builds called slot 0's): its settings are
+    still the per-band store (<sid>.toml / <sid>@<band>.toml) until K6 moves every store to <sid>@<rid>.toml. The
+    settings-store choice is its ONLY use."""
+    rows = sorted((r for r in radios.load(paths).radios if r.enabled), key=lambda r: int(r.id[1:]))
+    band = next((r.band for r in rows if r.id == getattr(inst, "rid", "")), None)
+    return band is not None and next(r.id for r in rows if r.band == band) == inst.rid
+
+
+def radios_of(stack, paths, disabled: str = "") -> tuple:
+    """The radios a stack has an instance on (K4b): every enabled radio of its bands (any radio for a stack without
+    bands), in rid order; the hardware list
+    decides, nothing is listed. `disabled`: one disabled radio counted as enabled (copy_of: the instance it would be,
+    still addressed for a stop)."""
+    if stack is None:
         return ()
-    rows = sorted((r for r in radios.load(paths).radios
-                   if (r.enabled or r.id == disabled) and r.band in stack_bands(stack)),
-                  key=lambda r: int(r.id[1:]))
-    first = {}
-    for r in rows:
-        first.setdefault(r.band, r.id)
-    return tuple(r.id for r in rows if first[r.band] != r.id)
+    bands = stack_bands(stack)                     # a stack without bands (graywolf: KISS over TCP) on every radio
+    return tuple(r.id for r in sorted((r for r in radios.load(paths).radios
+                                       if (r.enabled or r.id == disabled) and (not bands or r.band in bands)),
+                                      key=lambda r: int(r.id[1:])))
 
 
 # ---- item 7c2: addressing an instance -------------------------------------------------------------------
 
 def resolve(svc, target: str):
-    """`<stack>@<rid>` → (stack id, its listed copy, the radio's band, ""), or (stack id, None, "", why) when it
-    cannot be started (see `copy_of`; a disabled radio's copy comes back WITH its why). A target without "@" →
-    (target, None, "", "") — today's slot 0."""
+    """`<stack>@<rid>` -> (stack id, its instance, the radio's band, ""), or (stack id, None, "", why) when it cannot
+    be started (see `copy_of`; a disabled radio's instance comes back WITH its why). A target without "@" ->
+    (target, None, "", "")."""
     if not isinstance(target, str) or "@" not in target:
         return target, None, "", ""
     sid, _, rid = target.partition("@")
     if not rid:
         return sid, None, "", f"{sid}@ names no radio: use {sid}@<rid>"
-    copy, why = copy_of(svc, sid, rid)
-    return sid, copy, copy.band if copy is not None else "", why
+    inst, why = copy_of(svc, sid, rid)
+    return sid, inst, inst.band if inst is not None else "", why
+
 
 
 def can_run_on(svc, stack) -> list:
@@ -62,26 +85,24 @@ def can_run_on(svc, stack) -> list:
 
 
 def running_keys(svc, sid: str) -> list:
-    """`<sid>@<rid>` of each running instance of the stack, by rid order: slot 0 by its verified ownership record's
-    radio, a copy by copy_processes (W323: a bare stop or restart names them)."""
-    life, rids = svc._lifecycle(), set()
-    for rec in life.owned_inventory()[0]:
-        if (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid and rec.get("rid") \
-                and life.verify_owned(rec)[0]:
-            rids.add(rec["rid"])
-    rids |= {rid for s, rid, _c, _p in copy_processes(svc, svc._system.procfs.cmdlines()) if s == sid and rid}
+    """`<sid>@<rid>` of each running instance of the stack, by rid order: by its verified ownership record's radio or
+    its own argv token (instance_processes; W323: a bare stop or restart names them)."""
+    rids = recorded(svc, sid) | {rid for s, rid, _c, _p in instance_processes(svc, svc._system.procfs.cmdlines())
+                                 if s == sid and rid}
     return [f"{sid}@{r}" for r in sorted(rids, key=lambda x: int(x[1:]))]
 
 
-def recorded(svc, sid: str) -> dict:
-    """{rid: slot} of `sid`'s running instances by their verified launch records (13.16, G1-B1): a running instance
-    keeps the key it was launched as (slot 0 or a copy, 1), whatever the hardware list says now."""
-    life, out = svc._lifecycle(), {}
+
+def recorded(svc, sid: str) -> set:
+    """The radios `sid`'s running instances were launched on, by their verified launch records (13.16): a running
+    instance keeps its radio, whatever the hardware list says now."""
+    life, out = svc._lifecycle(), set()
     for rec in life.owned_inventory()[0]:
         if rec.get("rid") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
                 and life.verify_owned(rec)[0]:
-            out[rec["rid"]] = 1 if rec.get("slot", 0) else 0
+            out.add(rec["rid"])
     return out
+
 
 
 def named(svc, target: str, inst=None, band: str = "") -> str:
@@ -97,6 +118,12 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
              [r.id for r in radios.load(svc._paths).radios if r.enabled and r.band == band] if band else
              [k.partition("@")[2] for k in running_keys(svc, sid)] or can_run_on(svc, stack))
     return f"{target}@{cands[0] if len(cands) == 1 else '<rid>'}"
+
+
+def running_bands(svc, sid: str) -> set:
+    """The bands of the radios `sid`'s running instances run on (running_keys): a live stack's band evidence."""
+    keys = set(running_keys(svc, sid))
+    return {r.band for r in radios.load(svc._paths).radios if f"{sid}@{r.id}" in keys}
 
 
 def stop_keys(svc, sid: str) -> list:
@@ -140,8 +167,8 @@ def parse_target(svc, target: str, verb: str = "start"):
     `<stack>@<rid>` (or `<component>@<rid>`: its stack's instance) -> (the stack or component id, Instance, its
     radio's band, ""), or (that id, None, "", why). A bare `<stack>` is refused
     with the radios it can run on ("kiss can run on r1 or r3: use kiss@r1 or kiss@r3"), one radio included; a bare
-    stop, restart or kill names its running instances. A copy's radio (copy_rids) is that copy; any other radio of
-    the stack is slot 0 on it (until K4b). A disabled radio's instance comes back WITH its why (a stop still reaches
+    stop, restart or kill names its running instances. Every radio of the stack's bands is its instance there
+    (copy_of). A disabled radio's instance comes back WITH its why (a stop still reaches
     it, G1-C7 B3)."""
     name, at, rid = target.partition("@") if isinstance(target, str) else ("", "", "")
     sid = name if svc.stack(name) is not None else (svc.stack_of(name) or "")
@@ -154,7 +181,7 @@ def parse_target(svc, target: str, verb: str = "start"):
 
 def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
     """parse_target's rule for `name` (a stack or one of its components) of `stack`."""
-    sid, target = stack.id, f"{name}{at}{rid}"
+    sid = stack.id
     if not at and verb in ("stop", "restart", "kill") and (run := running_keys(svc, sid)):
         named = [f"{name}@{k.partition('@')[2]}" for k in run]
         return sid, None, "", f"{name} runs as {' and '.join(named)}: name one ({named[0]})"
@@ -163,161 +190,138 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
-    run = recorded(svc, sid)                     # ONE verified snapshot for the parse and its copy (G1-B1-RE)
-    if run.get(rid) == 1 or (run.get(rid) is None and rid in copy_rids(stack, svc._paths)):
-        copy, why = copy_of(svc, sid, rid, run=run)
-        return sid, copy, copy.band if copy is not None else "", why
-    radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
-    if radio is None:
-        return sid, None, "", f"{target}: {rid or '(no radio)'} is not a radio of the hardware list"
-    if (bands := stack_bands(stack)) and radio.band not in bands:
-        return sid, None, "", f"{target}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
-    inst = commands.Instance(0, rid, band=radio.band)
-    return sid, inst, radio.band, (f"{target}: {rid} is disabled" if not radio.enabled else "")
+    run = recorded(svc, sid)                     # ONE verified snapshot for the parse and its instance (G1-B1-RE)
+    inst, why = copy_of(svc, sid, rid, run=run)
+    if inst is None and why.endswith("is not in the hardware list"):
+        why = f"{name}@{rid}: {rid or '(no radio)'} is not a radio of the hardware list"
+    return sid, inst, inst.band if inst is not None else "", why
+
 
 
 def key(target: str, inst) -> str:
-    """The one copy-key formatter: `<target>@<rid>` for a listed copy, `<target>` for slot 0 (or no copy)."""
-    return f"{target}@{inst.rid}" if inst is not None and inst.slot else target
+    """The one instance-key formatter: `<target>@<rid>`; `<target>` only without a radio (the manifest's template)."""
+    return f"{target}@{inst.rid}" if inst is not None and inst.rid else target
+
 
 
 def keys(svc, sid: str) -> list:
-    """The stack's copy keys: slot 0's, then each listed copy's (`key`)."""
+    """The stack's instance keys, one per radio it has (`key`)."""
     return [key(sid, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)]
 
 
-def copy_processes(svc, table: dict) -> list:
-    """[(sid, rid, component, pid)], sorted, of each process a copy runs: a verified slot-k record (listed now or not,
-    G1-C48 (1)) or a listed copy's own argv token in `table` (the caller's one cmdline table). The one copy-ownership
-    collection (G1-C51): copy_pids, running_copies_on and a radio's users read it."""
+
+def instance_processes(svc, table: dict) -> list:
+    """[(sid, rid, component, pid)], sorted, of each process an instance runs: a verified record with its radio, or an
+    instance's own argv token in `table` (the caller's one cmdline table; a hand-started one). The one
+    instance-ownership collection (G1-C51): running_keys, running_instances_on and a radio's users read it."""
     from .probes.process import matches
     life, out = svc._lifecycle(), set()
-    for rec in life.owned_inventory()[0]:            # a verified slot-k record, listed now or not (G1-C48 (1))
-        if rec.get("slot", 0) and life.verify_owned(rec)[0]:
+    for rec in life.owned_inventory()[0]:
+        if rec.get("rid") and life.verify_owned(rec)[0]:
             cid = rec.get("component", "")
-            out.add((rec.get("stack") or svc.stack_of(cid) or "", rec.get("rid", ""), cid, rec["pid"]))
-    copies = [(stk, inst) for stk in svc.stacks() for inst in commands.stack_instances(stk, svc._paths)[1:]]
-    bands = {r.id: r.band for r in radios.load(svc._paths).radios} if copies else {}
-    for stk, inst in copies:                         # a hand-started copy without a record: its own token
+            out.add((rec.get("stack") or svc.stack_of(cid) or "", rec["rid"], cid, rec["pid"]))
+    # a hand-started instance without a record: its own token, rendered only for a spec a process matches (a token
+    # narrows a spec match; DEC-W384j: no stack's settings read for nothing)
+    live = {comp.id for stk in svc.stacks() for comp in stk.components
+            if comp.process is not None and any(matches(comp.process, a, None) for a in table.values())}
+    every = [(stk, inst) for stk in svc.stacks() if any(c.id in live for c in stk.components)
+             for inst in commands.stack_instances(stk, svc._paths)]
+    bands = {r.id: r.band for r in radios.load(svc._paths).radios} if every else {}
+    for stk, inst in every:
         for comp in stk.components:
-            tok = _token(svc, comp, inst, bands.get(inst.rid, "")) if comp.process is not None else None
+            tok = _token(svc, comp, inst, bands.get(inst.rid, "")) if comp.id in live else None
             if tok is not None:
                 out.update((stk.id, inst.rid, comp.id, p) for p, a in table.items() if matches(comp.process, a, tok))
     return sorted(out)
 
 
-def copy_pids(svc, table: dict) -> dict:
-    """{component: pids} of the copies' processes (copy_processes): the snapshot never counts them as slot 0's (C7,
-    W286). `table` is the snapshot's own cmdline table."""
-    out: dict = {}
-    for _sid, _rid, cid, pid in copy_processes(svc, table):
-        out.setdefault(cid, set()).add(pid)
-    return out
 
 
 def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
-    """THE stack copy (CLEANUP-DESIGN-v2 section 2) → (Instance, why); (None, why) when there is none.
-    A copy (`rid`, one of copy_rids): its band is its radio row's, and an explicit band that contradicts it is
-    refused, never substituted. A disabled radio's copy comes back WITH its why (still addressed: a stop; never
-    started). Slot 0 (no `rid`): the operation band (explicit -> running -> fallback -> primary; a fixed-band
-    stack's one band) and, on it, the radio slot 0 runs on by its launch record, else DEC-W16's (the band's first
-    enabled one). A running instance keeps its recorded key (13.16, G1-B1): a record decides before copy_rids;
-    `run` is the caller's recorded() snapshot when it has one."""
+    """THE stack instance (CLEANUP-DESIGN-v13) -> (Instance, why); (None, why) when there is none.
+    `<sid>@<rid>`: its band is its radio row's, and an explicit band that contradicts it is refused, never
+    substituted. A disabled radio's instance comes back WITH its why (still addressed: a stop; never started).
+    Without `rid` (the band callers until K6): the operation band (explicit -> running -> fallback -> primary; a
+    fixed-band stack's one band) and, on it, the radio the stack runs on by its launch record (13.16), else the band's
+    first enabled one. `run` is the caller's recorded() snapshot when it has one (G1-B1-RE)."""
     stack = svc.stack(sid)
     if stack is None:
         return None, f"unknown stack {sid!r}"
-    run = recorded(svc, sid) if run is None else run
     rows = radios.load(svc._paths).radios
     if not rid:
+        run = recorded(svc, sid) if run is None else run
         bands = stack_bands(stack)                    # a fixed-band stack's operation band is "" (no store): its band
         band = svc.operation_band(sid, band) or (bands[0] if len(bands) == 1 else "")
-        rid0 = next((r.id for r in rows if run.get(r.id) == 0 and r.band == band), "")
-        rid0, why = (rid0, "") if rid0 else slot0_radio(svc._paths, sid, band) if band else ("", "")
-        return commands.Instance(0, rid0, band=band), why
+        rid0 = next((r.id for r in rows if r.id in run and r.band == band), "") or band_radio(svc._paths, band)
+        return commands.Instance(rid0, band=band), ""
     radio = next((r for r in rows if r.id == rid), None)
     if radio is None:
         return None, f"{sid}@{rid}: {rid} is not in the hardware list"
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
-    if radio.band not in stack_bands(stack):
-        return None, f"{sid}@{rid}: {sid} runs on {' or '.join(stack_bands(stack))} MHz, {rid} is on {radio.band} MHz"
-    if run.get(rid) == 0:                     # slot 0 runs there (launched before the list gave it a copy)
-        return commands.Instance(0, rid, band=radio.band), (f"{sid}@{rid}: {rid} is disabled" if not radio.enabled else "")
-    if run.get(rid) is None and rid not in copy_rids(stack, svc._paths, "" if radio.enabled else rid):
-        return None, f"{sid}@{rid} is not a copy of {sid}: the hardware list gives it none on {rid}"
-    copy = commands.Instance(1, rid, band=radio.band)
-    if not radio.enabled:                     # G1-C7 B3: still addressed (a stop, a running check), never started
-        return copy, f"{sid}@{rid}: {rid} is disabled"
-    return copy, ""
+    if (bands := stack_bands(stack)) and radio.band not in bands:        # a stack without bands runs on any radio
+        return None, f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
+    return commands.Instance(rid, band=radio.band), ("" if radio.enabled else f"{sid}@{rid}: {rid} is disabled")
 
 
-def own_rid(inst) -> str:
-    """A listed instance's radio id, whose own settings file it has (DEC-W60); "" for slot 0 or no instance."""
-    return inst.rid if inst is not None and inst.slot else ""
+
+def own_rid(paths, inst) -> str:
+    """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60); "" for the
+    band's first radio's instance, which reads the per-band store until K6 (band_first, DEC-W384e)."""
+    return inst.rid if inst is not None and inst.rid and not band_first(paths, inst) else ""
+
 
 
 def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
-    """(stored, bandless): the saved settings a component of stack `sid` reads. Slot 0: its band's file and the
-    band-less file (the stack-level params), as before; a listed instance: its own `config/stacks/<sid>@<rid>.toml`
-    for both (DEC-W60) — nothing of slot 0's is shared, an instance without its file runs on the defaults."""
-    if inst is not None and inst.slot:
+    """(stored, bandless): the saved settings a component of stack `sid` reads. The band's first radio's instance:
+    its band's file and the band-less file (the stack-level params), as before (until K6, band_first); any other
+    instance: its own `config/stacks/<sid>@<rid>.toml` for both (DEC-W60), an instance without its file runs on the
+    defaults."""
+    if own_rid(svc._paths, inst):
         own = svc._stack_config_cached(sid, "", inst)
         return own, own
     stored = svc._stack_config_cached(sid, cfg_band)
     return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
 
 
+
 def instance_rels(paths, stack, rels, keep: int, base: tuple = ()) -> list:
-    """7d: `rels` plus, for each copy of `stack` (copy_rids), the same with `<rid>` after their first `keep` segments
-    (the manifest's {instance_dir} layout: a state root state/<name> -> state/<rid>/<name> with keep=1; a secret
-    file <name> -> <rid>/<name> with keep=0). G1-B1 (2): also every one that EXISTS under a `<rid>/` directory on
-    disk (`rels` are relative to the runtime directory `base`), so a disabled or removed radio's copy is still
-    purged and backed up. Read no-follow and contained (runtime_fs); a container that is unsafe adds nothing."""
+    """7d: `rels` plus, for every instance of `stack`, the same with `<rid>` after their first `keep` segments (the
+    manifest's {instance_dir} layout: a state root state/<name> -> state/<rid>/<name> with keep=1; a secret file
+    <name> -> <rid>/<name> with keep=0) that EXISTS on disk (`rels` are relative to the runtime directory `base`): a
+    listed, disabled or removed radio's alike (G1-B1 (2)), so the purge and the backup take what is there and a box's
+    set never depends on its hardware list. Read no-follow and contained (runtime_fs: a radio directory that is a link,
+    in or out of the root, is never followed); a container that is unsafe adds nothing. The bare `rels` stay: the
+    files of the slot builds, until the operator moves them under `<rid>/` (13.8)."""
     from . import runtime_fs
     from .paths import PathContainmentError
     parts, out = [r.split("/") for r in rels], list(rels)
-    listed = copy_rids(stack, paths)
     on_disk: dict = {}
     for q in parts:
         key = tuple(q[:keep])
         if key not in on_disk:
             try:
-                on_disk[key] = [n for n, link in runtime_fs.scandir_nofollow(paths, paths.under(*base, *key))
-                                if not link and commands._RID_RE.fullmatch(n) and n not in listed]
+                on_disk[key] = [n for n, _link in runtime_fs.scandir_nofollow(paths, paths.under(*base, *key))
+                                if commands._RID_RE.fullmatch(n)]
             except PathContainmentError:
                 on_disk[key] = []
+
     def present(rel):                              # no-follow and contained: a link out of the root is not ours
         try:
             return runtime_fs.stat_leaf_nofollow(paths, paths.under(*base, *rel.split("/"))) is not None
         except PathContainmentError:
             return False
     for q in parts:
-        out += ["/".join([*q[:keep], rid, *q[keep:]]) for rid in listed]
         out += [rel for rid in on_disk[tuple(q[:keep])] if present(rel := "/".join([*q[:keep], rid, *q[keep:]]))]
     return out
 
 
-def slot0_radio(paths, sid: str, band: str):
-    """Slot 0's radio on `band` (DEC-W16): the first enabled radio of the band, by rid order (the band's other radios
-    are the copies, copy_rids). (rid, ""); ("", "") when the band has no enabled radio at all (the caller's own
-    refusal names that)."""
-    return slot0_of([r for r in radios.load(paths).radios if r.enabled and r.band == band], ()), ""
-
-
-def slot0_of(rows, taken) -> str:
-    """DEC-W16's choice among one band's enabled radios: the first by rid order not in `taken`, else ""."""
-    return next((r.id for r in sorted(rows, key=lambda r: int(r.id[1:])) if r.id not in taken), "")
-
-
-def slot0_note(paths, stack, band: str, rid: str) -> str:
-    """The DEC-W16 line when slot 0's radio was chosen among several: "kiss starts on r1 (433 MHz); kiss@r3 is a
-    separate instance"; "" when the band has one radio."""
-    others = sorted(r.id for r in radios.load(paths).radios if r.enabled and r.band == band and r.id != rid)
-    if not others:
-        return ""
-    sid, taken = stack.id, copy_rids(stack, paths)
-    parts = [f"{sid}@{x} is a separate instance" if x in taken else f"{x} is not used by {sid}" for x in others]
-    return f"{sid} starts on {rid} ({band} MHz); " + "; ".join(parts)
+def band_radio(paths, band: str) -> str:                     # transitional: the band callers go in K6
+    """The band's first enabled radio by rid order ("" when it has none): the instance a band-addressed caller means
+    until K6 (the CLI and console name `<stack>@<rid>` already). Without a band (a stack without bands runs on any
+    radio): the first enabled radio."""
+    return next((r.id for r in sorted(radios.load(paths).radios, key=lambda r: int(r.id[1:]))
+                 if r.enabled and (r.band == band or not band)), "")
 
 
 def _token(svc, comp, inst, band: str):
@@ -336,7 +340,7 @@ def _token(svc, comp, inst, band: str):
 
 
 def instance_runs(svc, comp, inst, band: str) -> bool:
-    """`comp` runs AS `inst`: a verified ownership record of the instance's radio (a slot-k launch records its rid),
+    """`comp` runs AS `inst`: a verified ownership record of the instance's radio (every launch records its rid),
     or a process whose argv carries the instance's own token. Never "any process of the spec" (that is every
     instance at once)."""
     from .probes.process import matches
@@ -349,40 +353,37 @@ def instance_runs(svc, comp, inst, band: str) -> bool:
 
 
 def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> bool:
-    """The start's already-healthy no-op (item 7c2). For a listed instance, and for slot 0 once its stack has
-    listed instances, every service component of `order` must run as THAT instance and the daemon of its band be
-    READY; an interactive main is never "already healthy" (its start pass always runs). Otherwise the snapshot
-    check as before (`_order_already_healthy`), unchanged for a box without listed instances."""
-    sid = svc.stack_of(target) or target                 # the target's stack (the run order starts with the daemon)
-    if (inst is None or not inst.slot) and not copy_rids(svc.stack(sid), svc._paths):   # slot 0 is scoped only beside listed
-        return svc._order_already_healthy(order, radio)      # copies, then as its own copy (start's copy_of, DEC-W16)
-    # G1-C7 B4: slot 0's own rule (`_all_components_healthy`: readiness endpoints, DEGRADED) over the instance's
-    # statuses: its run state and its own TCP endpoints in place of the snapshot's.
+    """The start's already-healthy no-op (item 7c2): every service component of `order` runs as THAT instance (its
+    run state and its own TCP endpoints in place of the snapshot's) and its radio's daemon is READY; an interactive
+    main is never "already healthy" (its start pass always runs). Without an instance (a template caller): the
+    snapshot check (`_order_already_healthy`)."""
+    if inst is None or not inst.rid:
+        return svc._order_already_healthy(order, radio)
     snap = svc.build_snapshot()
     idx = {c.id: ss.components[c.id] for ss in snap.stacks for c in ss.stack.components}
     for _s, comp in order:
         cs = idx.get(comp.id)
         if cs is None or comp.id == svc.DAEMON_ID or comp.process is None:
             continue
-        idx[comp.id] = dataclasses.replace(cs, run_state=instance_state(svc, comp, inst, band, cs.run_state),
+        idx[comp.id] = dataclasses.replace(cs, run_state=instance_state(svc, comp, inst, band, cs.run_state, cs),
                                            endpoints=endpoint_statuses(svc, cs, inst))
-    return svc._all_components_healthy(order, idx, radio, inst.rid if inst is not None else "")
+    return svc._all_components_healthy(order, idx, radio, inst.rid)
+
 
 
 def running_claim_keys(svc, sid: str, comp, claim) -> set:
-    """G1-C7 B5: `claim`'s keys as stack `sid`'s running `comp` holds them: slot 0's key and the key of each listed
-    instance of it that runs (claim_key), so two stacks' instances on one derived key conflict."""
-    keys = {claim.key}
-    for i in commands.stack_instances(svc.stack(sid), svc._paths):
-        if i.slot and instance_runs(svc, comp, i, resolve(svc, f"{sid}@{i.rid}")[2]):
-            keys.add(claim_key(claim, i))
-    return keys
+    """G1-C7 B5: `claim`'s keys as stack `sid`'s running `comp` holds them: the key of each instance of it that runs
+    (claim_key), so two stacks' instances on one derived key conflict; the declared key when it has no instances."""
+    keys = {claim_key(claim, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)
+            if instance_runs(svc, comp, i, resolve(svc, f"{sid}@{i.rid}")[2])}
+    return keys or {claim.key}
+
 
 
 def endpoint_statuses(svc, cs, inst) -> list:
     """`cs`'s endpoint statuses as instance `inst` serves them: each TCP endpoint probed at its own address
-    (endpoints_for); slot 0 / no instance: the snapshot's as they are."""
-    if inst is None or not inst.slot:
+    (endpoints_for); without an instance (a template caller): the snapshot's as they are."""
+    if inst is None or not inst.rid:
         return list(cs.endpoints or ())
     from .probes.endpoints import tcp_endpoint_match
     return [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
@@ -390,81 +391,95 @@ def endpoint_statuses(svc, cs, inst) -> list:
 
 
 def endpoints_for(endpoints, inst) -> list:
-    """The endpoints as instance `inst` serves them (item 7c2): a slot-k copy of each templated address
-    (inst.subst(address_template), e.g. 127.0.0.1:8011); slot 0 / no instance: unchanged."""
-    if inst is None or not inst.slot:
+    """The endpoints as instance `inst` serves them (item 7c2): each templated address rendered for its radio
+    (inst.subst(address_template), e.g. 127.0.0.1:8267 on r3); without an instance: unchanged."""
+    if inst is None or not inst.rid:
         return list(endpoints)
     return [dataclasses.replace(e, address=inst.subst(e.address_template)) if getattr(e, "address_template", "")
             else e for e in endpoints]
 
 
-def instance_state(svc, comp, inst, band: str, snap_state):
-    """A component's run state for one instance: RUNNING when it runs as that instance, else STOPPED. The daemon, a
-    library/firmware/oneshot and a component without a process spec keep the snapshot's state."""
+def instance_state(svc, comp, inst, band: str, snap_state, cs=None):
+    """A component's run state for one instance: RUNNING when it runs as that instance (its own endpoints judge
+    DEGRADED, endpoint_statuses), the snapshot's when a process of the spec runs that no instance claims, else
+    STOPPED. The daemon, a library/firmware/oneshot and a component without a process spec keep the snapshot's."""
     from .model import ComponentKind, RunState
     if (comp.id == svc.DAEMON_ID or comp.process is None
             or comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE, ComponentKind.ONESHOT)):
         return snap_state
-    if not instance_runs(svc, comp, inst, band):
-        return RunState.STOPPED
-    # G1-C7 B4: slot 0 keeps the snapshot's DEGRADED (judged on slot 0's endpoints); a listed instance's comes from its own
-    return RunState.DEGRADED if snap_state == RunState.DEGRADED and not inst.slot else RunState.RUNNING
+    if instance_runs(svc, comp, inst, band):
+        if str(getattr(comp, "readiness", "")) == "endpoint":     # its own endpoints judge it, never the template's
+            if cs is not None:                                    # the start's one view (endpoint_statuses)
+                absent = any(not o.present for o in endpoint_statuses(svc, cs, inst) if o.spec.kind == "tcp" and o.spec.ready)
+            else:
+                from .probes.endpoints import tcp_endpoint_match
+                absent = any(not tcp_endpoint_match(svc._system, e.address)[0]
+                             for e in endpoints_for(comp.endpoints, inst) if e.kind == "tcp" and e.ready)
+            return RunState.DEGRADED if absent else RunState.RUNNING
+        # another readiness (a GPS feed's): the snapshot's DEGRADED is this instance's when only it runs comp
+        return RunState.DEGRADED if snap_state == RunState.DEGRADED and _alone(svc, comp, inst) else RunState.RUNNING
+    # Fail-safe (G1-C48): a process of the spec that no instance claims (hand-started, no token, no record) keeps the
+    # snapshot's state, so a start judges it (its own endpoints, else "foreign") and never launches a second one.
+    return snap_state if snap_state in (RunState.RUNNING, RunState.DEGRADED) and unclaimed(svc, comp) else RunState.STOPPED
 
 
-def start_state(svc, sid: str, comp, inst, band: str, snap_state):
-    """The state a start judges `comp` by (item 7c2): the copy's own (instance_state) for a listed copy, and for slot
-    0 (start's copy, on its DEC-W16 radio) while the stack has listed copies; else the snapshot's."""
-    if inst is None or not inst.rid or (not inst.slot and not copy_rids(svc.stack(sid), svc._paths)):
+def _alone(svc, comp, inst) -> bool:
+    """No other instance runs `comp` (instance_processes), so the snapshot's component state is this instance's."""
+    return not any(c == comp.id and r != inst.rid for _s, r, c, _p in instance_processes(svc, svc._system.procfs.cmdlines()))
+
+
+def unclaimed(svc, comp, table=None, procs=None) -> bool:
+    """A process of `comp`'s spec runs that no instance claims (by record or token, instance_processes); `table` and
+    `procs` are the caller's one cmdline table and its instance_processes, when it checks many components."""
+    from .probes.process import matches
+    table = svc._system.procfs.cmdlines() if table is None else table
+    procs = instance_processes(svc, table) if procs is None else procs
+    claimed = {p for _s, _r, c, p in procs if c == comp.id}
+    return any(p not in claimed and matches(comp.process, a, None) for p, a in table.items())
+
+
+
+def start_state(svc, sid: str, comp, inst, band: str, snap_state, cs=None):
+    """The state a start judges `comp` by (item 7c2): the instance's own (instance_state); the snapshot's without
+    an instance (a template caller)."""
+    if inst is None or not inst.rid:
         return snap_state
-    return instance_state(svc, comp, inst, band, snap_state)
+    return instance_state(svc, comp, inst, band, snap_state, cs)
+
 
 
 def claim_key(claim, inst) -> str:
-    """A resource claim's key for instance `inst` (item 7a): slot k's own key from its template (`tcp.port.8011`,
-    `serial.loraham-kiss-r3`); slot 0 or a claim without instance tokens: its key as declared."""
-    if inst is None or not inst.slot or not getattr(claim, "key_template", ""):
+    """A resource claim's key for instance `inst` (item 7a): its own key from its template (`tcp.port.8267`,
+    `serial.loraham-kiss-r3`); without an instance or for a claim without instance tokens: its key as declared."""
+    if inst is None or not inst.rid or not getattr(claim, "key_template", ""):
         return claim.key
     return inst.subst(claim.key_template)
 
 
+
 def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
-    """The keyword arguments a component's Lifecycle.stop takes for one instance (item 7c2b): for `<stack>@<rid>`
-    its rid, its process token and its own endpoints; for slot 0 of a stack with listed instances every record but
-    the listed instances' (exclude_rids) and slot 0's token; otherwise none (today's whole-component stop)."""
-    if inst is not None and inst.slot:
-        rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
-        return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),
-                "endpoints": endpoints_for(comp.endpoints, inst)}
-    run = svc._request_memo(("recorded", sid), lambda: recorded(svc, sid))   # one snapshot per stop (G1-B1-RE)
-    taken = sorted({*copy_rids(svc.stack(sid), svc._paths), *(r for r, k in run.items() if k)}
-                   - {inst.rid if inst is not None else "", *(r for r, k in run.items() if not k)})
-    if not taken:
+    """The keyword arguments a component's Lifecycle.stop takes for one instance (item 7c2b): its rid, its process
+    token and its own endpoints; without an instance (a template caller) none (the whole component)."""
+    if inst is None or not inst.rid:
         return {}
-    b = svc.running_band(sid, comp.band or band) or comp.band or band      # slot 0's copy (stop's copy_of, DEC-W16)
-    return {"exclude_rids": tuple(taken), "token": _token(svc, comp, inst, b) if inst is not None and inst.rid else None}
-
-
-
-
-
+    rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
+    return {"rid": inst.rid, "token": _token(svc, comp, inst, rband), "endpoints": endpoints_for(comp.endpoints, inst)}
 
 
 
 def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     """7f, DEC-W40: the Settings page's radio chooser of stack `sid`, one entry per enabled radio of its bands
-    ("rN · band"): a copy opens its own settings (`radio=`); slot 0's radio of a band opens slot 0's on that band
-    (`band=`, so a band-switchable stack's slot 0 moves there). Nothing is added first (DEC-W344): a MAY stack has
-    an entry on every radio. `radio` is the shown instance's rid ("" for slot 0)."""
+    ("rN · band"): an instance with its own store opens it (`radio=`); the band's first radio opens the band's store
+    (`band=`, until K6, band_first). Nothing is added first (DEC-W344). `radio` is the shown instance's own rid."""
     stack = svc.stack(sid)
     bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
     rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
-    listed, shown = copy_rids(stack, svc._paths), inst.rid if inst is not None and inst.slot else ""
-    out = []
+    shown, out = own_rid(svc._paths, inst), []
     for r in rows:
-        label = f"{r.id} · {r.band}"
-        if r.id in listed:
-            out.append({"label": label, "radio": r.id, "band": "", "sel": shown == r.id, "disabled": False})
-        elif slot0_radio(svc._paths, sid, r.band)[0] == r.id:
-            out.append({"label": label, "radio": "", "band": r.band, "sel": not shown and r.band == (band or r.band),
-                        "disabled": False})
-    return {"radio": shown, "radio_choices": out if len(out) > 1 or listed else []}
+        label, own = f"{r.id} · {r.band}", own_rid(svc._paths, commands.Instance(r.id, band=r.band))
+        out.append({"label": label, "radio": own, "band": "" if own else r.band,
+                    "sel": shown == own if own else (not shown and r.band == (band or r.band)), "disabled": False})
+    return {"radio": shown, "radio_choices": out if len(out) > 1 else []}
+
+
+

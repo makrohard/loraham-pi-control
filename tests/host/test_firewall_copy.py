@@ -16,7 +16,7 @@ ROW = "loraham-kiss-tnc-r3.tcp-8001"
 def _svc(tmp_path, own):
     radios_fixture.write(tmp_path, ROWS)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    cfgmod.update_stack_config(svc._paths, "kiss", own, inst=Instance(1, "r3"))              # kiss@r3's own file only
+    cfgmod.update_stack_config(svc._paths, "kiss", own, inst=Instance("r3"))              # kiss@r3's own file only
     return svc
 
 

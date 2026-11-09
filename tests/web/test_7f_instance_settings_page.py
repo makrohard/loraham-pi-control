@@ -48,7 +48,7 @@ def test_the_chooser_names_each_radio_slot0s_by_band_and_the_instance_by_radio(b
 
 def test_an_instances_settings_show_its_own_value_and_say_it_starts_from_defaults(box):
     c, _post, tmp_path = box
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL1ABC"}, inst=Instance(1, "r3"))
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL1ABC"}, inst=Instance("r3"))
     s = _section(c.get("/stacks?cfg=chat&radio=r3").get_data(as_text=True))
     assert "chat@r3 starts from the defaults" in s
     assert 'value="DL1ABC"' in s and 'value="DL2XYZ"' not in s
@@ -75,7 +75,8 @@ def test_an_instances_reset_clears_its_own_file_alone(box):
 def test_a_form_naming_a_radio_without_an_instance_is_refused_and_writes_nothing(box):
     _c, post, tmp_path = box
     before = sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir())
-    assert post("/stacks/chat/config", radio="r1", f_call="DL1ABC").status_code == 404
+    # K4b: every enabled radio of chat's band has an instance (chat@r1 too), so only a radio of no list row is refused
+    assert post("/stacks/chat/config", radio="r9", f_call="DL1ABC").status_code == 404
     assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before
 
 
@@ -93,7 +94,7 @@ def test_a_fixed_band_stacks_second_radio_is_its_copy_with_no_add_instance_entry
 
 def test_an_instances_page_shows_its_own_value_of_every_field(box):
     c, _post, tmp_path = box
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_tx_freq": "433.900"}, inst=Instance(1, "r3"))
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_tx_freq": "433.900"}, inst=Instance("r3"))
     assert 'value="433.900"' in _section(c.get("/stacks?cfg=chat&radio=r3").get_data(as_text=True))
     assert 'value="433.900"' not in _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
 

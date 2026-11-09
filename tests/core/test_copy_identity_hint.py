@@ -29,4 +29,4 @@ def test_a_copys_identity_refusal_names_the_copys_own_config_command(tmp_path):
 def test_slot0s_identity_refusal_names_the_stack(tmp_path):
     res = _svc(tmp_path).start("chat", apply=False)
     assert res.ok is False and res.data.get("enforce_fields")
-    assert res.next_commands == [f"lhpc config chat call {TAIL}"]
+    assert res.next_commands == [f"lhpc config chat@r1 call {TAIL}"]       # K5: the instance's key

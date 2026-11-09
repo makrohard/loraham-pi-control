@@ -250,3 +250,23 @@ def test_the_pure_repeater_removes_the_chat_node_by_the_controllers_handle_only(
     assert [c["name"] for c in kept] == ["Mine", "Chat 1"]                     # no handle: nothing removed
     alone = rep.apply_overlay(conf, _cfg(mode="repeater", key="", chat_node_id=rep.ofile.key_id(SEED)))
     assert [c["name"] for c in alone["identities"]["companions"]] == ["Mine"]
+
+
+@pytest.mark.parametrize("line,port", [("", 8000), ("dashboard_port = 8133", 8133)])
+def test_the_dashboard_listens_on_the_port_lhpc_renders_and_defaults_to_8000(tmp_path, line, port):
+    # LHPC renders each instance's dashboard port (base 8000 + 133 x (n - 1)); the endpoint it verifies is that port.
+    p = tmp_path / "c.toml"
+    p.write_text(f'[companion]\nname = "Chat 1"\n[identity]\nkey = "{SEED}"\n[radio]\npreset = "eu_uk_narrow"\n'
+                 f'[repeater]\nrole = "chat"\n{line}\n')
+    assert load_config(p).dashboard_port == port
+    assert rep.apply_overlay(_user_file(), _cfg(dashboard_port=port))["http"]["port"] == port
+
+
+@pytest.mark.parametrize("value", ["0", "65536", '"8133"'])
+def test_a_dashboard_port_out_of_range_or_not_a_number_refuses(tmp_path, value):
+    from meshcore_host.config import ConfigError
+    p = tmp_path / "c.toml"
+    p.write_text(f'[companion]\nname = "Chat 1"\n[identity]\nkey = "{SEED}"\n[radio]\npreset = "eu_uk_narrow"\n'
+                 f'[repeater]\nrole = "chat"\ndashboard_port = {value}\n')
+    with pytest.raises(ConfigError):
+        load_config(p)

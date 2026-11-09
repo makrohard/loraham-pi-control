@@ -1483,11 +1483,11 @@ def test_operator_stop_intent_blocks_restore_and_prunes(tmp_path, monkeypatch):
     svc = _drv(tmp_path, monkeypatch)
     rec = _v1()
     _write_record(tmp_path, rec)
-    svc._write_stop_intent(["kiss"])
+    svc._write_stop_intent(["kiss@r1"])
 
     evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
     assert not evidence
-    hit = next(s for s in skipped if s["stack"] == "kiss")
+    hit = next(s for s in skipped if s["stack"] == "kiss@r1")
     assert "operator stop intent" in hit["reason"]
     # The CLASSIFIER does not prune — the caller does, past the gates, journalled (the
     # run-level test asserts the record leaves the disk). The record is still here:
@@ -1495,13 +1495,13 @@ def test_operator_stop_intent_blocks_restore_and_prunes(tmp_path, monkeypatch):
     assert (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists()
 
     # Intent cleared (the operator started the stack again) -> same record restores again.
-    svc._clear_stop_intent("kiss")
+    svc._clear_stop_intent("kiss@r1")
     evidence, _sk, _is, _st = svc._classify_boot_evidence("CURBOOT")
     assert [e.stack for e in evidence] == ["kiss"]
 
     # A malformed intent file still counts as intent — existence is the signal; failing toward
     # restore would resurrect the stack the operator stopped.
-    (tmp_path / "state" / "stop-intent" / "kiss.json").write_text("not json{")
+    (tmp_path / "state" / "stop-intent" / "kiss@r1.json").write_text("not json{")
     evidence, skipped, _is, _st = svc._classify_boot_evidence("CURBOOT")
     assert not evidence
 
@@ -1518,7 +1518,7 @@ def test_an_unreadable_stop_intent_dir_restores_nothing(tmp_path, monkeypatch):
 
     evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
     assert not evidence
-    hit = next(s for s in skipped if s["stack"] == "kiss")
+    hit = next(s for s in skipped if s["stack"] == "kiss@r1")
     assert hit["reason"] != svc.INTENT_SKIP_REASON and "unreadable" in hit["reason"]
     assert hit["evidence_ids"] == [rec["launch_id"]]
     assert (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists()
@@ -1529,12 +1529,12 @@ def test_stop_writes_intent_and_start_clears_it(tmp_path, monkeypatch):
     running — the operator's word stands against any stale leftovers), an applied stack start
     removes it. Component starts deliberately do not clear."""
     svc = _svc(tmp_path)
-    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+    intent = tmp_path / "state" / "stop-intent" / "kiss@r1.json"
 
     assert svc.stop("kiss", apply=True).ok
     assert intent.exists(), "an applied stack stop must record operator intent"
     body = json.loads(intent.read_text())
-    assert body["stack"] == "kiss" and body["at"] > 0
+    assert body["stack"] == "kiss@r1" and body["at"] > 0
 
     # The applied start path clears it (impl stubbed: only the wrapper hook is under test).
     monkeypatch.setattr(ControllerService, "_start_impl",
@@ -1548,7 +1548,7 @@ def test_boot_restore_run_honors_stop_intent_end_to_end(tmp_path, monkeypatch):
     and the evidence is gone from disk."""
     svc = _drv(tmp_path, monkeypatch)
     _write_record(tmp_path, _v1())
-    svc._write_stop_intent(["kiss"])
+    svc._write_stop_intent(["kiss@r1"])
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
 
@@ -1579,16 +1579,16 @@ def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, mo
     assert svc.stop("kiss", apply=True, _operator=False).ok     # internal route
     assert tombstones() == []
     assert svc.stop("kiss", apply=True, band="433").ok          # the console's client Stop
-    assert tombstones() == ["kiss.json"]
-    (intents / "kiss.json").unlink()
+    assert tombstones() == ["kiss@r1.json"]
+    (intents / "kiss@r1.json").unlink()
     assert svc.stop("kiss", apply=True).ok                      # the CLI's
-    assert tombstones() == ["kiss.json"]
+    assert tombstones() == ["kiss@r1.json"]
     # A cascade from that console Stop is the operator's too. Stubbed: kiss's dependents.
-    (intents / "kiss.json").unlink()
+    (intents / "kiss@r1.json").unlink()
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: (
         ["graywolf"] if t == "kiss" else []))
     assert svc.stop("kiss", apply=True, band="433", cascade=True).ok
-    assert tombstones() == ["graywolf.json", "kiss.json"]
+    assert tombstones() == ["graywolf@r1.json", "kiss@r1.json"]
 
 
 def test_a_refused_start_keeps_the_tombstone(tmp_path, monkeypatch):
@@ -1596,7 +1596,7 @@ def test_a_refused_start_keeps_the_tombstone(tmp_path, monkeypatch):
     down — the resurrect-after-reboot bug came straight back for unverified-stop leftovers."""
     svc = _svc(tmp_path)
     assert svc.stop("kiss", apply=True).ok
-    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+    intent = tmp_path / "state" / "stop-intent" / "kiss@r1.json"
     assert intent.exists()
 
     monkeypatch.setattr(ControllerService, "_start_impl",
@@ -1615,7 +1615,7 @@ def test_clean_purge_removes_the_tombstone(tmp_path):
     reinstall to inherit — every reboot would skip the stack as 'operator stopped'."""
     svc = _svc(tmp_path)
     assert svc.stop("kiss", apply=True).ok
-    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+    intent = tmp_path / "state" / "stop-intent" / "kiss@r1.json"
     assert intent.exists()
     res = svc.clean("kiss", apply=True, purge=True)
     assert res.ok, res.summary
@@ -1653,17 +1653,18 @@ def test_round2_scoping_regressions(tmp_path, monkeypatch):
         return ActionResult(True, "ok", results=())
     monkeypatch.setattr(ControllerService, "_stop_impl", impl_cascade)
     assert svc.stop("daemon", apply=True).ok
-    assert (intents / "kiss.json").exists(), "operator cascade must tombstone the dependent"
-    (intents / "kiss.json").unlink(); (intents / "daemon.json").unlink()
+    assert (intents / "kiss@r1.json").exists(), "operator cascade must tombstone the dependent"
+    (intents / "kiss@r1.json").unlink(); (intents / "daemon.json").unlink()
     monkeypatch.undo()
+    radios_fixture.write(tmp_path)          # the undo took the default list too (tests/conftest.py _default_hardware)
 
     # (c)+(d): tombstone kiss, then an INTERNAL start must not clear; a PARTIAL start must.
     assert svc.stop("kiss", apply=True).ok
-    assert (intents / "kiss.json").exists()
+    assert (intents / "kiss@r1.json").exists()
     monkeypatch.setattr(ControllerService, "_start_impl",
                         lambda self, target, **kw: ActionResult(True, "up"))
     assert svc.start("kiss", apply=True, _operator=False).ok
-    assert (intents / "kiss.json").exists(), "an internal start must not clear operator intent"
+    assert (intents / "kiss@r1.json").exists(), "an internal start must not clear operator intent"
     from lhpc.core.outcomes import CompResult as _CR
     monkeypatch.setattr(ControllerService, "_start_impl",
                         lambda self, target, **kw: ActionResult(False, "manual required",
@@ -1671,7 +1672,7 @@ def test_round2_scoping_regressions(tmp_path, monkeypatch):
                                          action="start", outcome=Outcome.STARTED,
                                          summary="launched"),)))
     assert svc.start("kiss", apply=True).ok is False
-    assert not (intents / "kiss.json").exists(), \
+    assert not (intents / "kiss@r1.json").exists(), \
         "a PARTIAL start left the stack running — the tombstone must go"
 
 
@@ -1957,13 +1958,13 @@ def test_a_start_refused_before_the_claim_names_its_reason(tmp_path, monkeypatch
                         _stub_start(calls, ok=False, call_hook=False, summary="Cannot start kiss: busy"))
     res = svc.boot_restore_run()
     assert not res.ok and res.summary == ("Boot restore: 0 restored, 1 pending (run truncated — "
-                                          "restart the unit to continue; kiss not attempted — "
+                                          "restart the unit to continue; kiss@r1 not attempted — "
                                           "Cannot start kiss: busy).")
     (item,) = _journal_on_disk(tmp_path)["items"]
     assert item["state"] == "pending" and item["result"] == {"ok": False,
                                                              "summary": "Cannot start kiss: busy"}
     st = svc.boot_restore_status()
-    assert st["state"] == "truncated" and st["reason"] == "kiss: not attempted — Cannot start kiss: busy"
+    assert st["state"] == "truncated" and st["reason"] == "kiss@r1: not attempted — Cannot start kiss: busy"
 
 
 # --- stage L5: items by radio (D14, D15; B4 commit 4) -------------------------------------------
@@ -1989,7 +1990,8 @@ def test_a_band_item_is_restored_only_on_its_enabled_radio(tmp_path, monkeypatch
     res = svc.boot_restore_run()
     assert res.ok and calls == []                                     # nothing started
     j = _journal_on_disk(tmp_path)
-    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [("kiss", reason)]
+    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [(f"kiss@{br.rid_of(rid)}" if br.rid_of(rid)
+                                                                                       else "kiss", reason)]
     assert j["skipped"][0]["evidence_ids"] == [rec["launch_id"]]
 
 
@@ -2001,13 +2003,15 @@ def test_an_item_on_its_radio_is_restored_with_its_rid(tmp_path, monkeypatch):
     assert svc.boot_restore_run().ok
     assert calls == [{"target": "kiss", "band": "433"}]
     item = _journal_on_disk(tmp_path)["items"][0]
-    assert (item["target"], item["band"], item["rid"]) == ("kiss", "433", "r1")
+    assert (item["target"], item["band"], item["rid"]) == ("kiss@r1", "433", "r1")
 
 
-def test_two_main_records_on_two_radios_are_ambiguous(tmp_path, monkeypatch):
+def test_two_main_records_of_one_instance_on_two_bands_are_ambiguous(tmp_path, monkeypatch):
+    # K4b: two radios are two instances (each restored on its own); one instance with main records on two bands is
+    # the ambiguity left, and nothing of it is started.
     svc = _drv(tmp_path, monkeypatch)
     _write_record(tmp_path, _v1())
-    _write_record(tmp_path, _v1(pid=999997, nonce="cd" * 16, rid="r2"))
+    _write_record(tmp_path, _v1(pid=999997, nonce="cd" * 16, band="868", rid="r1"))
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     assert svc.boot_restore_run().ok and calls == []
@@ -2024,28 +2028,22 @@ def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
     assert br.rid_of(value) == (value if ok else "")
 
 
-@pytest.mark.parametrize("rows,rid,reason", [
-    ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")), "r1",
-     "radio r1 is on 868 MHz now, not 433 MHz"),
-    ((radios.Radio("r1", "hat", "waveshare-sx1262", "433"), radios.Radio("r2", "low", "loraham", "433")), "r2",
-     "slot 0 of kiss on 433 MHz starts on r1 now, not r2"),
-], ids=["the-radio-moved-band", "slot-0-starts-on-another-radio"])
-def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, monkeypatch, rows, rid, reason):
-    # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but its band no longer resolves to it; a band-addressed
-    # start would launch the client on another radio, so the item is refused, naming why. Since 7e (DEC-W49) the band
-    # resolves to slot 0's radio (DEC-W16: its first enabled radio; K4ac: the band's others are the copies), not to
-    # "its one radio". The record is slot 0's by its own slot (7e), so r2 becoming kiss@r2's radio does not make it
-    # the copy's.
+def test_an_item_whose_radio_moved_band_is_refused_naming_both_bands(tmp_path, monkeypatch):
+    # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but it is on another band now; starting it there would
+    # launch the client on another band, so the item is refused, naming why (K4b: an item starts its own radio's
+    # instance, `<stack>@<rid>`; the slot-0 rule, the band's first radio, is gone).
+    rows, rid, reason = ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")),
+                         "r1", "radio r1 is on 868 MHz now, not 433 MHz")
     radios_fixture.write(tmp_path, rows)
     svc = _drv(tmp_path, monkeypatch)
-    rec = {**_v1(), "rid": rid, "slot": 0}                            # kiss slot 0 on 433, the radio it ran on
+    rec = {**_v1(), "rid": rid}                                       # kiss on 433, the radio it ran on
     _write_record(tmp_path, rec)
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     res = svc.boot_restore_run()
     assert res.ok and calls == []                                     # nothing started on another radio
     j = _journal_on_disk(tmp_path)
-    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [("kiss", reason)]
+    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [(f"kiss@{rid}", reason)]
 
 
 def test_a_disabled_second_radio_of_the_band_does_not_block_the_restore(tmp_path, monkeypatch):

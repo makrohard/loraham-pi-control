@@ -63,8 +63,7 @@ pytestmark = pytest.mark.needs_session
 PATHS = ("cli", "web", "job", "boot")
 _BOOKKEEPING = re.compile(r"^(state/(jobresults|jobs|owned|locks)/|state/boot-restore\.json$|"
                           r"logs/web-|config/secrets/web_session\.key$|config/\.lock$|state/hotplug\.json\.lock$)")
-KISS_STARTED = ["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1",
-                "state/running/kiss.band"]
+KISS_STARTED = ["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"]   # K4b: no band marker
 
 
 def _files(root):
@@ -466,7 +465,7 @@ def test_firewall_gate(entry, monkeypatch):
         "web": {"status": 302, "admission": None, "child_rc": None, "job": None},
         "job": {"rc": 1, "job": ("failed", True)},
         "boot": {"rc": 0, "journal": "failed", "items": ["failed"], "skipped": []}}
-    exposed = '"id": "loraham-kiss-tnc.tcp-8001", "port": 9001'
+    exposed = '"id": "loraham-kiss-tnc-r1.tcp-8001", "port": 9001'                # K4b: kiss@r1's row
     for path in PATHS:
         script = res[path]["root"] / "config" / "files" / "firewall" / "firewall-apply.sh"
         assert f"sudo bash {script}" in res[path]["next_commands"]
@@ -527,7 +526,7 @@ def test_interactive_launch(entry):
     res = _all(entry, "start", "chat", _chat_installed,
                evidence=("chat", "loraham-daemon", "433"))
     _same(res, started=True, refusal="manual_required", live=[],
-          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
+          files=["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
                  "state/interactive/chat.show"])
     assert _renders(res) == SUCCEEDED
 
@@ -551,7 +550,7 @@ def test_restart_of_an_interactive_stack(entry):
     Boot-restore never restarts."""
     res = _all(entry, "restart", "chat", _chat_installed)
     _same(res, started=True, refusal="manual_required", live=[],
-          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
+          files=["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
                  "state/interactive/chat.show"])
     assert _renders(res) == {
         "cli": {"rc": 0},

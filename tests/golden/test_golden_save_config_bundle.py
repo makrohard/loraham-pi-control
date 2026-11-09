@@ -42,12 +42,12 @@ def test_save_while_running_writes_the_restart_marker(tmp_path, run_op):
     run = run_op(tmp_path, lambda: svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}))
     assert run.fields == SAVED
     assert run.res.details == ["Restart the stack to apply."]
-    assert run.phases == WRITES + ["mutate:write:state/restart-required/chat.json"]
-    assert run.files == {"added": [FILE, "state/restart-required/chat.json"], "removed": [],
+    assert run.phases == WRITES + ["mutate:write:state/restart-required/chat@r1.json"]
+    assert run.files == {"added": [FILE, "state/restart-required/chat@r1.json"], "removed": [],
                          "changed": []}
-    marker = json.loads((tmp_path / "state/restart-required/chat.json").read_text())
+    marker = json.loads((tmp_path / "state/restart-required/chat@r1.json").read_text())
     marker.pop("created_at")
-    assert marker == {"version": 1, "stack": "chat", "mode": "restart", "params": ["tx_freq"],
+    assert marker == {"version": 1, "stack": "chat@r1", "mode": "restart", "params": ["tx_freq"],
                       "band": "", "launched": {"|loraham-chat|tx_freq": "433.775"}}
 
 

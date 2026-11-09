@@ -589,39 +589,40 @@ def render_reset_script() -> str:
     return "\n".join(lines) + "\n"
 
 
-# ---- candidate rows per instance (A §2.5; until L5 each stack has its one instance at slot 0) ----
+# ---- candidate rows per instance (A §2.5; K4b: one per radio of the stack, `<component>-<rid>`) ----
 
 def instance_port(port: int, inst) -> int:
-    """An instance's port: a copy's is the base port (configured or not) + 133 x (n - 1) for rN (DEC-W348), slot 0's
-    the base (until K4b); refused outside 1024..65535 and above r64 (Instance.port over commands.rid_port)."""
-    from .commands import SLOT0
-    return (inst or SLOT0).port(port)
+    """An instance's port: the base port (configured or not) + 133 x (n - 1) for rN (DEC-W348; r1 and the template:
+    the base); refused outside 1024..65535 and above r64 (Instance.port over commands.rid_port)."""
+    from .commands import TEMPLATE
+    return (inst or TEMPLATE).port(port)
 
 
 def instance_eid(comp_id: str, static_port, inst) -> str:
-    """The row id: `<component>.tcp-<base>` at slot 0, `<component>-<rid>.tcp-<base>` at slot k."""
-    if inst is not None and inst.slot:
+    """The row id: `<component>-<rid>.tcp-<base>` for an instance, `<component>.tcp-<base>` for the template's."""
+    if inst is not None and inst.rid:
         return f"{comp_id}-{inst.rid}.tcp-{static_port}"
     return f"{comp_id}.tcp-{static_port}"
 
 
 def base_id(eid: str) -> str:
-    """The slot-0 id of an instance row's id: `<component>-<rid>.tcp-<base>` -> `<component>.tcp-<base>`."""
+    """The base id of an instance row's id: `<component>-<rid>.tcp-<base>` -> `<component>.tcp-<base>`."""
     return re.sub(r"-r[1-9][0-9]?(\.tcp-\d+)$", r"\1", eid)
 
 
 def endpoint_rows(stack, bands, resolve, selected, paths=None) -> list:
     """The candidate rows of one endpoint, for each instance of the stack (`commands.stack_instances`).
-    `resolve(band, inst)` is the endpoint's scope. Each band is resolved and DISTINCT scopes are kept,
+    `resolve(band, inst)` is the endpoint's scope. An instance is resolved on its radio's band only (K4b); the template
+    (no radio) on each band, and DISTINCT scopes are kept,
     never two bands merged into one row: when every band yields the same scope (the common case) there is
     ONE band-agnostic row (band=""), so the model and its hash are unchanged; only genuinely diverging
     per-band scopes get band-labelled rows (so compatibility mode drops the real per-band port). A
-    loopback-only scope without a knob gives no row. A tick on the slot-0 id selects every instance's row."""
-    from . import commands
-    rows = []
-    for inst in commands.stack_instances(stack, paths):              # item 7: each listed instance
+    loopback-only scope without a knob gives no row. A tick on the base id selects every instance's row."""
+    from . import commands, radios
+    rows, on = [], {r.id: r.band for r in radios.load(paths).radios} if paths is not None else {}
+    for inst in commands.stack_instances(stack, paths):              # item 7: each instance
         per_scope = {}
-        for band in bands:
+        for band in ([on[inst.rid]] if getattr(inst, "rid", "") in on else bands):   # K4b: an instance, its radio's band
             sc = resolve(band, inst)
             if sc["loopback"] and not sc["deny"]:
                 continue

@@ -156,13 +156,13 @@ def test_a_mode_change_is_saved_only_and_status_follows_the_running_launch(tmp_p
 def test_chat_mode_mints_no_repeater_secrets(tmp_path):
     svc = _svc(tmp_path)
     svc.write_config_files(mm.STACK_ID)
-    secrets = tmp_path / "config" / "secrets"
+    secrets = tmp_path / "config" / "secrets" / "r2"
     assert (secrets / mi.IDENTITY_FILENAME).exists()
     assert not (secrets / mi.REPEATER_IDENTITY_FILENAME).exists()
     assert not (secrets / mi.REPEATER_ADMIN_FILENAME).exists()
     assert not (secrets / mi.REPEATER_JWT_FILENAME).exists()
     import tomllib
-    rep_tbl = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())["repeater"]
+    rep_tbl = tomllib.loads((tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text())["repeater"]
     assert "key" not in rep_tbl and "admin_password" not in rep_tbl and rep_tbl["role"] == "chat"
     assert "jwt_secret" not in rep_tbl
 
@@ -230,31 +230,31 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     assert r.ok, (r.summary, r.details)
     svc.write_config_files(mm.STACK_ID)                           # generation = the one mint site
     import tomllib
-    doc = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())
+    doc = tomllib.loads((tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text())
     rep = doc["repeater"]
     assert rep["role"] == "chat+repeater"
     assert not {"name", "behaviour", "key", "admin_password"} & set(rep)
     assert "airtime" not in doc["radio"]
-    assert not (tmp_path / "config" / "secrets" / mi.REPEATER_IDENTITY_FILENAME).exists()
-    assert not (tmp_path / "config" / "secrets" / mi.REPEATER_ADMIN_FILENAME).exists()
-    assert rep["state_dir"] == str(tmp_path / "state" / "openhop")
-    assert rep["use_gps"] == "on" and rep["gps_file"] == "/dev/shm/lhpc-meshcore-gps.nmea"
-    assert rep["cli_lock"] == str(tmp_path / "state" / "meshcore-cli.lock")
+    assert not (tmp_path / "config" / "secrets" / "r2" / mi.REPEATER_IDENTITY_FILENAME).exists()
+    assert not (tmp_path / "config" / "secrets" / "r2" / mi.REPEATER_ADMIN_FILENAME).exists()
+    assert rep["state_dir"] == str(tmp_path / "state" / "r2" / "openhop")      # 13.8: the instance's own
+    assert rep["use_gps"] == "on" and rep["gps_file"] == "/dev/shm/lhpc-meshcore-gps-r2.nmea"   # {instance_suffix}
+    assert rep["cli_lock"] == str(tmp_path / "state" / "r2" / "meshcore-cli.lock")    # {instance_dir}
     import shlex, sys
     assert shlex.split(rep["restart_cmd"]) == ["env", f"LHPC_RUNTIME_ROOT={tmp_path}", sys.executable,
                                                "-m", "lhpc", "stack", "restart", "meshcore@r2", "--yes"]   # 868: r2 (K3)
     import hashlib
     assert rep["chat_node_id"] == hashlib.sha256(doc["identity"]["key"].lower().encode()).hexdigest()[:16]
-    (tmp_path / "config" / "secrets" / mi.IDENTITY_FILENAME).unlink()
+    (tmp_path / "config" / "secrets" / "r2" / mi.IDENTITY_FILENAME).unlink()
     _set_mode(svc, "repeater", name="Relay 1")
     svc.write_config_files(mm.STACK_ID)                           # no chat key: an empty handle
     assert "chat_node_id" not in tomllib.loads(
-        (tmp_path / "config" / "files" / "meshcore.toml").read_text())["repeater"]
+        (tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text())["repeater"]
     _set_mode(svc, "chat+repeater", name="Relay 1")
     assert svc.save_stack_config(mm.STACK_ID, {"use_gps": "off"}).ok    # derived, never stored
     svc._invalidate_config()
     svc.write_config_files(mm.STACK_ID)
-    doc = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())
+    doc = tomllib.loads((tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text())
     assert doc["repeater"]["use_gps"] == "off"
     assert rep["presets_file"] == str(tmp_path / "src" / "openhop-repeater" / "radio-presets.json")
     assert doc["companion"]["name"] == "Chat 1"
@@ -267,13 +267,13 @@ def test_the_dashboard_login_secret_survives_every_regeneration(tmp_path):
     import tomllib
     svc = _svc(tmp_path)
     _set_mode(svc, "repeater", name="Relay 1")
-    toml = tmp_path / "config" / "files" / "meshcore.toml"
+    toml = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     svc.write_config_files(mm.STACK_ID)
     first = tomllib.loads(toml.read_text())["repeater"]["jwt_secret"]
     svc.write_config_files(mm.STACK_ID)
     assert tomllib.loads(toml.read_text())["repeater"]["jwt_secret"] == first
     assert len(first) == 64 and first.isalnum()
-    stored = tmp_path / "config" / "secrets" / mi.REPEATER_JWT_FILENAME
+    stored = tmp_path / "config" / "secrets" / "r2" / mi.REPEATER_JWT_FILENAME
     assert stored.read_text().strip() == first and stat.S_IMODE(stored.stat().st_mode) == 0o600
 
 
@@ -311,8 +311,8 @@ def test_repeater_only_neither_mints_nor_depends_on_the_chat_identity(tmp_path):
     generation mints/adopts it and fails closed on a damaged or lax file, as today. The pure
     repeater runs no Companion: generation neither mints a key it will never use nor can be
     blocked by a fault in one — the same rule as the chat name, GPS and the clients."""
-    key = tmp_path / "config" / "secrets" / mi.IDENTITY_FILENAME
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    key = tmp_path / "config" / "secrets" / "r2" / mi.IDENTITY_FILENAME
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
 
     def identity_line():
         text = gen.read_text()
@@ -412,7 +412,7 @@ def test_a_malformed_meshcore_stack_file_breaks_neither_status_nor_stop_verifica
     assert "(unreadable stack config)" in "\n".join(svc.status(mm.STACK_ID).details)
     node = _node(svc)
     assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [5000]
-    assert svc.page_mode_note(svc.web_page("meshcore-meshcore-node")) == ""
+    assert svc.page_mode_note(svc.web_page("meshcore-meshcore-node@r2")) == ""   # K4b: meshcore is r2's (868)
 
 
 # --- a Companion-client start follows the RUNNING node -------------------------------------------------

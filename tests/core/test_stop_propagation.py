@@ -41,8 +41,9 @@ class _FakeLife:
     """A lifecycle stand-in whose stop() returns a scripted outcome per component."""
     def __init__(self, outcome): self._outcome = outcome
     def owned_running(self): return {}                 # no ownership records (status reads them)
-    def owned_inventory(self): return [], [], None     # (C7: copy_pids reads the records too)
-    def stop(self, comp, band=None):
+    def owned_inventory(self): return [], [], None     # (the instances' records are read too)
+    def owned_records(self, comp_id, band=None, role="", rid=None): return []
+    def stop(self, comp, band=None, **_scope):
         return CompResult(component=comp.id, action="stop", outcome=self._outcome,
                           summary="scripted")
 

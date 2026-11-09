@@ -19,7 +19,7 @@ def _svc(tmp_path, cmdlines=None):
                              paths=Paths(runtime_root=tmp_path))
 
 
-def _marker(tmp_path, sid="chat"):
+def _marker(tmp_path, sid="chat@r1"):            # K5: an instance's own marker (chat's band 433 is r1's on the default list)
     p = tmp_path / "state" / "restart-required" / f"{sid}.json"
     return json.loads(p.read_text()) if p.exists() else None
 
@@ -29,10 +29,10 @@ def test_marker_set_when_running_param_changes(tmp_path):
     res = svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"})
     assert res.ok, res.details
     m = _marker(tmp_path)
-    assert m and m["stack"] == "chat" and m["mode"] == "restart"
+    assert m and m["stack"] == "chat@r1" and m["mode"] == "restart"
     assert "tx_freq" in m["params"]
     assert svc.restart_required("chat") is not None
-    assert "chat" in svc.restart_required_stacks()
+    assert "chat@r1" in svc.restart_required_stacks()
 
 
 def test_marker_not_set_when_stopped_or_unchanged(tmp_path):
@@ -90,7 +90,7 @@ def test_a_param_without_a_recorded_launch_value_is_never_cleared_by_a_revert(tm
     assert _svc(tmp_path).save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
-    (d / "chat.json").write_text(json.dumps({"version": 1, "stack": "chat", "mode": "restart",
+    (d / "chat@r1.json").write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "restart",
                                              "params": ["tx_freq"], "band": "",
                                              "created_at": 1.0}))
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
@@ -139,7 +139,7 @@ def test_marker_write_failure_rolls_back_whole_save(tmp_path):
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
     (tmp_path / "evil.json").write_text("x")
-    os.symlink(tmp_path / "evil.json", d / "chat.json")
+    os.symlink(tmp_path / "evil.json", d / "chat@r1.json")
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     res = svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"})
     assert not res.ok                                                # typed failure
@@ -153,7 +153,7 @@ def test_reset_of_a_running_stack_writes_the_restart_marker(tmp_path):
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})           # launched with 434.500
     assert svc.reset_config("chat").ok
     assert _marker(tmp_path)["params"] == ["tx_freq"]
-    assert "chat" in svc.restart_required_stacks()
+    assert "chat@r1" in svc.restart_required_stacks()
 
 
 def test_reset_marker_write_failure_resets_nothing(tmp_path):
@@ -162,7 +162,7 @@ def test_reset_marker_write_failure_resets_nothing(tmp_path):
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
     (tmp_path / "evil.json").write_text("x")
-    os.symlink(tmp_path / "evil.json", d / "chat.json")
+    os.symlink(tmp_path / "evil.json", d / "chat@r1.json")
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     assert not svc.reset_config("chat").ok                           # typed failure
     assert load_stack_config(svc._paths, "chat")["file_tx_freq"] == "434.500"   # not reset
@@ -230,9 +230,12 @@ class _StoppedLife:
         return {}                                        # no ownership records (status reads them)
 
     def owned_inventory(self):
-        return [], [], None                              # (C7: copy_pids reads the records too)
+        return [], [], None                              # (the instances' records are read too)
 
-    def stop(self, comp, band=None, rid=None):
+    def owned_records(self, comp_id, band=None, role="", rid=None):
+        return []
+
+    def stop(self, comp, band=None, rid=None, **_scope):
         from lhpc.core.outcomes import CompResult, Outcome
         return CompResult(component=comp.id, action="stop", outcome=Outcome.STOPPED,
                           summary="scripted")
@@ -302,20 +305,20 @@ def test_unsafe_marker_is_safe_side_tri_state(tmp_path):
     d.mkdir(parents=True)
     assert svc.restart_required("chat") is None                      # SAFELY absent -> None
     for setup in (
-        lambda: (d / "chat.json").write_text("not json"),            # malformed
-        lambda: os.symlink("real.json", d / "chat.json"),            # symlink (dangling)
-        lambda: (d / "chat.json").mkdir(),                           # directory leaf
-        lambda: (d / "chat.json").write_text(
+        lambda: (d / "chat@r1.json").write_text("not json"),            # malformed
+        lambda: os.symlink("real.json", d / "chat@r1.json"),            # symlink (dangling)
+        lambda: (d / "chat@r1.json").mkdir(),                           # directory leaf
+        lambda: (d / "chat@r1.json").write_text(
             json.dumps({"version": 1, "stack": "OTHER"})),           # wrong stack
     ):
         setup()
         m = svc.restart_required("chat")
         assert m is not None and m.get("unsafe") is True             # SAFE-SIDE, never absent
-        assert "chat" in svc.restart_required_stacks()
-        assert (d / "chat.json").exists() or (d / "chat.json").is_symlink() \
-            or (d / "chat.json").is_dir()                            # never silently cleared
+        assert "chat@r1" in svc.restart_required_stacks()
+        assert (d / "chat@r1.json").exists() or (d / "chat@r1.json").is_symlink() \
+            or (d / "chat@r1.json").is_dir()                            # never silently cleared
         # cleanup for the next shape
-        p = d / "chat.json"
+        p = d / "chat@r1.json"
         (p.rmdir() if p.is_dir() else p.unlink())
     assert svc.restart_required("chat") is None                      # absent again -> no warning
 
@@ -323,7 +326,7 @@ def test_unsafe_marker_is_safe_side_tri_state(tmp_path):
 def test_unsafe_marker_renders_safe_side_on_stack_and_dashboard(tmp_path):
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
-    (d / "chat.json").write_text("not json")                         # unsafe present marker
+    (d / "chat@r1.json").write_text("not json")                         # unsafe present marker
     from lhpc.adapters.web.app import create_app
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
@@ -333,8 +336,8 @@ def test_unsafe_marker_renders_safe_side_on_stack_and_dashboard(tmp_path):
     body = c.get("/stacks?open=chat").get_data(as_text=True)     # banner now in the stack's (lazy) Install section
     assert "Restart required (safe-side)" in body and "Restart now" in body
     dash = c.get("/").get_data(as_text=True)
-    assert "Restart required" in dash and "Restart chat now" in dash
-    assert (d / "chat.json").read_text() == "not json"               # GET did not mutate
+    assert "Restart required" in dash and "Restart chat@r1 now" in dash        # K5: the instance's key, as rendered
+    assert (d / "chat@r1.json").read_text() == "not json"               # GET did not mutate
 
 
 def test_dash_signature_includes_flags(tmp_path):
@@ -468,9 +471,9 @@ def test_a_restart_marker_saved_during_the_launch_survives_the_start(tmp_path, m
     manifest.write_text(_POST_START_MANIFEST)
     svc = ControllerService(manifest_path=manifest, system=RealSystem(),
                             paths=Paths(runtime_root=tmp_path / "rt"))
-    path = rr.marker_path(svc._paths, "s")
-    runtime_fs.write_marker(svc._paths, path, svc.restart_marker_payload("s", ["old"], ""))
-    newer = svc.restart_marker_payload("s", ["old", "newer"], "")
+    path = rr.marker_path(svc._paths, "s@r1")          # K5: the instance's own (a stack without bands: the first radio)
+    runtime_fs.write_marker(svc._paths, path, svc.restart_marker_payload("s@r1", ["old"], ""))
+    newer = svc.restart_marker_payload("s@r1", ["old", "newer"], "")
 
     # Stubbed collaborator, and why: the step's own process (it would run `true`); the start's
     # real `_run_post_start` hands it the released guard, and the save is the marker write a

@@ -98,6 +98,6 @@ def test_t_p3_a_stack_port_param_meeting_the_console_is_refused(tmp_path):
 
 def test_t_p3_a_stack_web_port_meeting_a_stack_listener_is_refused(tmp_path):
     svc = _svc(tmp_path)
-    r = svc.stack_web_configure("graywolf", port=8001)          # kiss's KISS port
+    r = svc.stack_web_configure("graywolf@r1", port=8001)       # kiss's KISS port (K4b: the page is per instance)
     assert not r.ok and any("port 8001 is already kiss/loraham-kiss-tnc's listener" in d
                             for d in (r.summary, *r.details)), (r.summary, r.details)

@@ -2080,14 +2080,15 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 # --- per-stack user configuration (set via the web Config page) -----------
 
 def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -> Path:
-    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml"; a listed copy (`inst`, slot k) its
-    # own, "<id>@<rid>.toml" (DEC-W60), named by the copy, never by a band argument (CLEANUP C10).
+    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml"; an instance with its own store
+    # (instances.own_rid; until K6 not the band's first radio's) "<id>@<rid>.toml" (DEC-W60), never by a band argument.
     # Defence in depth: the id is a single path component and the band must be a
     # real radio band, so neither can introduce a separator or "..". The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
+    from .instances import own_rid
     sid = validators.path_component(stack_id, field="stack id")
-    key = inst.rid if inst is not None and inst.slot else (validators.band(band, allow_both=True) if band else "")
+    key = own_rid(paths, inst) or (validators.band(band, allow_both=True) if band else "")
     name = f"{sid}@{key}.toml" if key else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.

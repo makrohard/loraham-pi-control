@@ -54,14 +54,6 @@ def test_a_two_band_client_stacks_band_keys_never_collide(tmp_path):
     assert k868 == {"loraham.radio.r2", "loraham.daemon-socket.r2"}
 
 
-def test_the_one_band_rule_still_refuses_the_second_band(tmp_path, monkeypatch):
-    # A §2.3 / Q-B2-4: at L3 a band-switchable client stack runs on one band at a time.
-    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, default="": "433")
-    monkeypatch.setattr(ControllerService, "_band_owner_is_up", lambda self, sid: True)
-    res = _svc(tmp_path, {}).start("kiss", apply=True, band="868")
-    assert not res.ok and "'kiss' is already running on 433 MHz" in res.summary, res.summary
-
-
 @pytest.mark.parametrize("band", ["433", "868"])
 def test_a_band_is_never_its_own_collateral_twice(tmp_path, band):
     svc = _svc(tmp_path, {11: ["/x/loraham_daemon", "--radio", band]})

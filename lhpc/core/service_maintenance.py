@@ -2631,7 +2631,7 @@ class MaintenanceOpsMixin:
                             if c.config_file and c.config_file.path.startswith(gen_prefix)
                             and "/" not in c.config_file.path[len(gen_prefix):]}), 0, ("config", "files"))   # 7d: copies' too
         # The links a component's pre_steps publish there (voice's launcher links).
-        link_dsts = [commands.SLOT0.subst(str(st.get("dst", ""))) for c in stack.components   # slot 0's names
+        link_dsts = [commands.TEMPLATE.subst(str(st.get("dst", ""))) for c in stack.components   # the template's names
                      for st in c.pre_steps if st.get("kind") == "symlink"]
         link_files = sorted({d[len(gen_prefix):] for d in link_dsts
                              if d.startswith(gen_prefix) and "/" not in d[len(gen_prefix):]})
@@ -2640,7 +2640,8 @@ class MaintenanceOpsMixin:
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
                    known_working.candidate_path(self._paths, sid),
-                   restart_required.marker_path(self._paths, sid),
+                   restart_required.marker_path(self._paths, sid),   # K5: and each instance's, also a removed radio's
+                   *sorted(restart_required.marker_path(self._paths, sid).parent.glob(f"{sid}@r*.json")),
                    known_working.store_path(self._paths, sid),
                    # a clean that promises a fresh slate must not leave a stale operator stop
                    # intent behind (its own or an instance's, 7e) for the reinstall to inherit.

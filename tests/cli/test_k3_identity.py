@@ -57,12 +57,11 @@ def test_a_named_radio_of_another_band_is_refused(box):
     assert (rc, calls) == (1, []) and out.err == "ERR   meshcom@r3: meshcom runs on 433 MHz, r3 is on 868 MHz\n"
 
 
-@pytest.mark.parametrize("inst,whole", [(commands.Instance(0, "r1"), True), (commands.Instance(1, "r3"), False),
+@pytest.mark.parametrize("inst,whole", [(commands.Instance("r1"), True), (commands.Instance("r3"), True),
                                         (None, True)])
-def test_slot_0_named_on_its_radio_is_the_whole_stacks_operator_stop(tmp_path, monkeypatch, inst, whole):
-    # K3: `kiss@r1` (slot 0) is what a bare stop was: its cascade passes the operator's word down, so a dependent it
-    # stops keeps its stop intent (boot restore does not resurrect it). A listed copy's stop does not. RED before K3:
-    # an explicit slot-0 instance was not whole (False).
+def test_every_instances_stop_is_the_operators_stop(tmp_path, monkeypatch, inst, whole):
+    # K3, K4b (no slots): an instance's stop passes the operator's word down its cascade, so a dependent it stops
+    # keeps its stop intent (boot restore does not resurrect it); kiss@r3 is an instance like kiss@r1, no lesser copy.
     radios_fixture.write(tmp_path, (R1, R3))
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
@@ -74,9 +73,9 @@ def test_slot_0_named_on_its_radio_is_the_whole_stacks_operator_stop(tmp_path, m
     assert seen == [whole]
 
 
-def test_the_running_instances_are_the_verified_records_and_the_copies_processes(tmp_path, monkeypatch):
-    # running_keys: slot 0 by its VERIFIED ownership record's radio (an unverified or other stack's record is not),
-    # a listed copy by copy_processes; by rid order, each once.
+def test_the_running_instances_are_the_verified_records_and_the_instances_processes(tmp_path, monkeypatch):
+    # running_keys: an instance by its VERIFIED ownership record's radio (an unverified, radio-less or other stack's
+    # record is not), or by its own process (instance_processes); by rid order, each once.
     radios_fixture.write(tmp_path, (R1, R3))
     from lhpc.core.lifecycle import Lifecycle
     from lhpc.core.paths import Paths
@@ -88,7 +87,7 @@ def test_the_running_instances_are_the_verified_records_and_the_copies_processes
             {"stack": "kiss", "component": "loraham-kiss-tnc", "rid": "", "pid": 14}]         # no radio
     monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: (recs, [], "ok"))
     monkeypatch.setattr(Lifecycle, "verify_owned", lambda self, rec: (rec["pid"] != 12, ""))
-    monkeypatch.setattr(instances, "copy_processes", lambda svc, table: [("kiss", "r12", "loraham-kiss-tnc", 21),
+    monkeypatch.setattr(instances, "instance_processes", lambda svc, table: [("kiss", "r12", "loraham-kiss-tnc", 21),
                                                                         ("chat", "r2", "loraham-chat", 22),
                                                                         ("kiss", "r3", "loraham-kiss-tnc", 23)])
     assert instances.running_keys(svc, "kiss") == ["kiss@r3", "kiss@r12"]
@@ -130,7 +129,7 @@ def test_c60_b1_each_radios_change_is_its_own_marker_its_own_remedy_and_its_own_
     mp = restart_required.marker_path(svc._paths, "daemon")                      # a whole-daemon change too
     mp.parent.mkdir(parents=True, exist_ok=True)
     mp.write_text(svc.restart_marker_payload("daemon", ["log_level"], "433"))
-    for k in instances.marker_keys(svc, "daemon", commands.Instance(0, "r1")):   # r1's restart: r1's only
+    for k in instances.marker_keys(svc, "daemon", commands.Instance("r1")):   # r1's restart: r1's only
         restart_required.clear_marker(svc._paths, k)
     assert sorted(svc.restart_required_stacks()) == ["daemon", "daemon@r2"]
     for k in instances.marker_keys(svc, "daemon"):                              # the whole daemon's

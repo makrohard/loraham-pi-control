@@ -36,7 +36,7 @@ from lhpc_testlab.release import (
     wait_http,
     wait_tcp,
 )
-from lhpc_testlab.testing import named, run_lhpc
+from lhpc_testlab.testing import named, port_of, run_lhpc
 
 from lhpc.core.manifest import default_manifest_path, load_manifest
 
@@ -148,7 +148,7 @@ def test_release_kiss(env, svc):
     """The KISS TNC over the fake daemon: its own TCP listener is the evidence."""
     install_build(env, svc, "kiss")
     _start(env, "kiss")
-    assert wait_tcp(KISS_TCP, 120), readiness_failed(
+    assert wait_tcp(port_of(env, "kiss", KISS_TCP), 120), readiness_failed(
         env, "kiss", "loraham-kiss-tnc", "kiss is not serving KISS/TCP on 8001")
     assert alive(env, "loraham-kiss-tnc"), readiness_failed(
         env, "kiss", "loraham-kiss-tnc", "LHPC does not report loraham-kiss-tnc running")
@@ -159,7 +159,7 @@ def test_release_graywolf(env, svc):
     require_prerequisite(env, "kiss", left_by="test_release_kiss")
     install_build(env, svc, "graywolf")
     _start(env, "graywolf", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{GRAYWOLF_UI}/", 120,
+    assert wait_http(f"http://127.0.0.1:{port_of(env, 'graywolf', GRAYWOLF_UI)}/", 120,
                      accept=(200, 401, 403)) in (200, 401, 403), \
         readiness_failed(env, "graywolf", "graywolf", "graywolf web UI never answered on 8080")
     assert alive(env, "graywolf"), readiness_failed(
@@ -273,12 +273,12 @@ def test_release_meshcore_chat(env, svc):
     install_build(env, svc, "meshcore", timeout=2400)
     _meshcore_mode(env, "chat")
     _start(env, "meshcore", timeout=900)
-    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+    assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
     assert alive(env, "meshcore-node"), readiness_failed(
         env, "meshcore", "meshcore-node", "LHPC does not report meshcore-node running")
     start_component(env, "meshcore-webui", stack="meshcore")
-    assert wait_http(f"http://127.0.0.1:{MESHCORE_WEBUI}/", 180,
+    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', MESHCORE_WEBUI)}/", 180,
                      accept=(200, 401, 403)) in (200, 401, 403), \
         readiness_failed(env, "meshcore", "meshcore-webui", "MeshCore Web UI never answered")
     assert alive(env, "meshcore-webui"), readiness_failed(
@@ -290,10 +290,10 @@ def test_release_meshcore_chat_repeater(env):
     """The repeater hosting the companion: BOTH the dashboard and the companion answer."""
     _meshcore_mode(env, "chat+repeater")
     _start(env, "meshcore", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{REPEATER_DASHBOARD}/", 240,
+    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', REPEATER_DASHBOARD)}/", 240,
                      accept=(200, 401, 403)) in (200, 401, 403), \
         readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
-    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+    assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "hosted companion never opened TCP 5000")
     _assert_plugin_manager_running(env)
     stop(env, "meshcore")
@@ -308,12 +308,12 @@ def test_release_meshcore_repeater(env):
     """
     _meshcore_mode(env, "repeater")
     _start(env, "meshcore", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{REPEATER_DASHBOARD}/", 240,
+    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', REPEATER_DASHBOARD)}/", 240,
                      accept=(200, 401, 403)) in (200, 401, 403), \
         readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
     # Unmarked: mode wiring between LHPC's config and the upstream repeater, not one of the
     # four phases — a freeze would be the wrong remedy.
-    assert not wait_tcp(MESHCORE_COMPANION, 20), \
+    assert not wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 20), \
         "repeater-only mode is hosting a companion on 5000"
     _assert_plugin_manager_running(env)
     stop(env, "meshcore")
@@ -325,7 +325,7 @@ def test_release_meshcore_cli(env, svc):
     """The MeshCore CLI is an interactive component: proved on a terminal against the running
     companion, not by `--version`."""
     _start(env, "meshcore", timeout=900)
-    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+    assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
     comp = next(c for c in svc.stack("meshcore").components if c.id == "meshcore-cli")
     try:
@@ -430,7 +430,7 @@ def test_release_meshtastic(env, svc):
     install_build(env, svc, "meshtastic", timeout=2400)
     _artifact_intact(svc, "meshtastic")
     _start(env, "meshtastic", timeout=900)
-    assert wait_tcp(MESHTASTIC_API, 180), readiness_failed(
+    assert wait_tcp(port_of(env, "meshtastic", MESHTASTIC_API), 180), readiness_failed(
         env, "meshtastic", "meshtastic", "meshtasticd never opened its API port 4403")
     info = run_lhpc(env, "meshtastic", "--info", timeout=300)
     assert info.returncode == 0, (f"{stack_regression('meshtastic', 'readiness')}\n"
@@ -483,7 +483,7 @@ def test_release_meshcom(env, svc):
     install_build(env, svc, "meshcom", timeout=2400)
     _artifact_intact(svc, "meshcom")
     _start(env, "meshcom", timeout=1200)
-    assert wait_http(f"http://127.0.0.1:{MESHCOM_UI}/", 900, accept=(200,)) == 200, \
+    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcom', MESHCOM_UI)}/", 900, accept=(200,)) == 200, \
         readiness_failed(env, "meshcom", "meshcom-qemu",
                          "MeshCom web UI never reached 200 — the firmware did not finish booting")
     stop(env, "meshcom")

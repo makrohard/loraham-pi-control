@@ -18,7 +18,7 @@ def test_b2_an_instance_start_keeps_slot_0s_stop_intent(box, tmp_path):
     intent = svc._stop_intent_path("kiss")
     assert intent.is_file()
     rc, out, launches = run("start", "kiss@r3")
-    assert ("loraham-kiss-tnc", "868", 1, "r3") in launches, (launches, out)
+    assert ("loraham-kiss-tnc", "868", "r3") in launches, (launches, out)
     assert intent.is_file()                                             # slot 0's intent survives
 
 

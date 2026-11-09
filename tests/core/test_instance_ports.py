@@ -1,7 +1,7 @@
-"""L4: the instance context of every resolved template (A §2.3). `{port:BASE}` is the instance's radio's port,
-BASE + 133 x (n - 1) for rN (DEC-W348; r1 and no radio keep BASE, r1..r64), `{port_of:STACK:BASE}` STACK's port on
-the same radio, and `{instance_dir}` a per-radio path level ("" at slot 0). Slot 0 without a radio, or on r1,
-resolves every template to today's value (T-P2's unit half); slot k needs a radio id."""
+"""L4/K4b: the instance context of every resolved template (A §2.3, DEC-W327: no slots). `{port:BASE}` is the
+instance's radio's port, BASE + 133 x (n - 1) for rN (DEC-W348; r1 keeps BASE, r1..r64), `{port_of:STACK:BASE}`
+STACK's port on the same radio, and `{instance_dir}` the radio's path level `<rid>/`, r1's too. The manifest's
+template values (no radio, commands.TEMPLATE) are the bases without a radio level (T-P2's unit half)."""
 
 import ast
 
@@ -25,7 +25,7 @@ class _Op:
 
 
 def _argv(tokens, inst=None, params=None):
-    kw = {} if inst is None else {"inst": inst}     # no instance: today's call, unchanged (slot 0)
+    kw = {} if inst is None else {"inst": inst}     # no instance: the template values
     return commands.expand_argv(tokens, _C(), params or {}, _Op(), "/rt", "/src", "", **kw)
 
 
@@ -37,9 +37,17 @@ def _argv(tokens, inst=None, params=None):
     (["{param:kiss_port}"], ["--port", "8001"]),
     (["--tnc", "127.0.0.1:{port_of:kiss:8001}"], ["--tnc", "127.0.0.1:8001"]),
 ])
-def test_slot_0_resolves_every_template_to_today(tokens, today):
+def test_the_template_resolves_every_token_to_its_base(tokens, today):
     assert _argv(tokens) == today
-    assert _argv(tokens, Instance(0, "r1")) == today       # r1 keeps its base (DEC-W348)
+
+
+@pytest.mark.parametrize("tokens, r1", [
+    (["--port", "{port:8798}"], ["--port", "8798"]),                     # r1 keeps its base ports (DEC-W348)
+    (["{runtime}/state/{instance_dir}meshcore"], ["/rt/state/r1/meshcore"]),   # and its paths sit under r1/ (K4b)
+    (["/dev/shm/lhpc-meshcore-gps{instance_suffix}.nmea"], ["/dev/shm/lhpc-meshcore-gps-r1.nmea"]),
+])
+def test_r1_keeps_its_base_ports_and_has_its_own_paths(tokens, r1):
+    assert _argv(tokens, Instance("r1")) == r1
 
 
 @pytest.mark.parametrize("tokens, slot3_r12", [
@@ -51,39 +59,33 @@ def test_slot_0_resolves_every_template_to_today(tokens, today):
     (["--tnc", "127.0.0.1:{port_of:kiss:8001}"], ["--tnc", "127.0.0.1:9464"]),   # kiss on the same radio (W331)
 ])
 def test_an_instance_resolves_its_radios_ports_and_its_radio_level(tokens, slot3_r12):
-    assert _argv(tokens, Instance(3, "r12")) == slot3_r12
+    assert _argv(tokens, Instance("r12")) == slot3_r12
 
 
-def test_k4a_the_port_is_the_radios_whatever_the_slot():
-    # DEC-W348: a copy's port is its radio's, whatever the slot; slot 0 keeps today's base on any radio (TRANSITIONAL:
-    # it moves to rN's in K4b with its paths).
-    assert _argv(["--port", "{port:8798}"], Instance(1, "r2")) == _argv(["--port", "{port:8798}"], Instance(5, "r2")) \
-        == ["--port", "8931"]
-    assert _argv(["--port", "{port:8798}"], Instance(0, "r2")) == ["--port", "8798"]
-    assert _argv(["{port:8001}"], Instance(1, "r64")) == ["16380"]              # the top radio
+def test_the_port_is_the_radios():
+    # DEC-W348: every instance's port is its radio's (K4b: no slot keeps the base on another radio).
+    assert _argv(["--port", "{port:8798}"], Instance("r2")) == ["--port", "8931"]
+    assert _argv(["{port:8001}"], Instance("r64")) == ["16380"]              # the top radio
     with pytest.raises(CommandError, match=r"radio r65 has no ports: .* r1\.\.r64"):
-        _argv(["{port:8001}"], Instance(1, "r65"))
+        _argv(["{port:8001}"], Instance("r65"))
 
 
-def test_a_saved_port_param_is_the_slot_0_port_and_slot_k_derives_from_it():
-    # A configured port param is the base (r1's); a copy on rN derives from it (+ 133 x (n - 1), DEC-W348), slot 0
-    # keeps it on any radio until K4b: the rule the firewall rows follow (tests/host/test_firewall_instances.py).
-    # argv and process specs take the same port.
+def test_a_saved_port_param_is_r1s_port_and_rn_derives_from_it():
+    # A configured port param is the base (r1's); rN derives from it (+ 133 x (n - 1), DEC-W348): the rule the
+    # firewall rows follow (tests/host/test_firewall_instances.py). argv and process specs take the same port.
     saved = {"kiss_port": "8099"}
     assert _argv(["{param:kiss_port}"], params=saved) == ["--port", "8099"]
-    assert _argv(["{param:kiss_port}"], Instance(0, "r1"), saved) == ["--port", "8099"]
-    assert _argv(["{param:kiss_port}"], Instance(0, "r2"), saved) == ["--port", "8099"]
-    assert _argv(["{param:kiss_port}"], Instance(1, "r2"), saved) == ["--port", "8232"]
-    assert _argv(["{param:kiss_port}"], Instance(3, "r12"), saved) == ["--port", "9562"]
+    assert _argv(["{param:kiss_port}"], Instance("r1"), saved) == ["--port", "8099"]
+    assert _argv(["{param:kiss_port}"], Instance("r2"), saved) == ["--port", "8232"]
+    assert _argv(["{param:kiss_port}"], Instance("r12"), saved) == ["--port", "9562"]
     assert commands.instance_value("{param:kiss_port}", _C(), saved, "/rt", "/src", "",
-                                   inst=Instance(3, "r12")) == "9562"
+                                   inst=Instance("r12")) == "9562"
 
 
-@pytest.mark.parametrize("slot, rid", [(8, "r1"), (-1, "r1"), (True, "r1"), ("1", "r1"),
-                                       (1, ""), (1, "r0"), (1, "r100"), (1, "x1"), (0, "r1x")])
-def test_an_instance_outside_slots_0_to_7_or_without_a_radio_id_is_refused(slot, rid):
+@pytest.mark.parametrize("rid", ["r0", "r100", "x1", "r1x", "R1", " r1"])
+def test_an_instance_on_no_radio_id_is_refused(rid):
     with pytest.raises(CommandError):
-        Instance(slot, rid)
+        Instance(rid)
 
 
 @pytest.mark.parametrize("base", [1023, 65536])
@@ -95,14 +97,14 @@ def test_a_base_outside_the_port_range_is_refused(base):
 def test_a_post_step_port_follows_the_instance():
     steps = [{"kind": "tcp_wait", "port": "{port:12323}"}, {"kind": "tcp_send", "port": 12323, "data": "x"}]
     script = commands.render_post_launcher(steps, _C(), {}, _Op(), "/rt", "/src", "",
-                                           inst=Instance(2, "r3"))     # r3: + 266
+                                           inst=Instance("r3"))     # r3: + 266
     rendered = next(ast.literal_eval(n.value) for n in ast.parse(script).body
                     if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "STEPS")
     assert [s["port"] for s in rendered] == [12589, 12323]   # a literal int stays what it says
 
 
-def test_slot_0_pre_steps_env_and_post_steps_resolve_through_todays_callers():
-    # The callers as every runtime path calls them today (no instance argument) get today's values.
+def test_the_template_pre_steps_env_and_post_steps_without_an_instance():
+    # A caller without an instance argument (a manifest-level reader) gets the template values.
     pre = commands.normalize_pre_steps([{"kind": "mkdir", "path": "{runtime}/state/{instance_dir}x"}],
                                        "/rt", "/src")
     env = commands.build_env([("STATE", "{runtime}/state/{instance_dir}x")], "/rt", "/src")
@@ -115,24 +117,24 @@ def test_slot_0_pre_steps_env_and_post_steps_resolve_through_todays_callers():
 
 def test_pre_steps_and_env_take_the_instance_level():
     pre = commands.normalize_pre_steps([{"kind": "mkdir", "path": "{runtime}/state/{instance_dir}x"}],
-                                       "/rt", "/src", inst=Instance(1, "r2"))
+                                       "/rt", "/src", inst=Instance("r2"))
     env = commands.build_env([("STATE", "{runtime}/state/{instance_dir}x")], "/rt", "/src",
-                             inst=Instance(1, "r2"))
+                             inst=Instance("r2"))
     assert pre[0][1] == "/rt/state/r2/x" and env == {"STATE": "/rt/state/r2/x"}
 
 
 
-def test_a_saved_port_whose_slot_k_port_leaves_the_range_is_refused_in_argv():
+def test_a_saved_port_whose_rn_port_leaves_the_range_is_refused_in_argv():
     # B3-D15: rN = saved + 133 x (n - 1); a derived port above 65535 is refused with an error naming the radio and
     # the saved port (never the param validator's bare "above maximum 65535").
     with pytest.raises(CommandError, match="65530 on r2 gives 65663"):
-        _argv(["{param:kiss_port}"], Instance(1, "r2"), {"kiss_port": "65530"})
-    assert _argv(["{param:kiss_port}"], Instance(1, "r2"), {"kiss_port": "65402"}) == ["--port", "65535"]
+        _argv(["{param:kiss_port}"], Instance("r2"), {"kiss_port": "65530"})
+    assert _argv(["{param:kiss_port}"], Instance("r2"), {"kiss_port": "65402"}) == ["--port", "65535"]
 
 
-def test_a_slot_k_firewall_port_that_leaves_the_range_is_refused():
+def test_an_rn_firewall_port_that_leaves_the_range_is_refused():
     # B3-D15, the firewall rows: the same rule refuses the derived port instead of writing a port above 65535.
     from lhpc.core import firewall
     with pytest.raises(CommandError, match="65530 on r2 gives 65663"):
-        firewall.instance_port(65530, Instance(1, "r2"))
-    assert firewall.instance_port(65530, commands.SLOT0) == 65530
+        firewall.instance_port(65530, Instance("r2"))
+    assert firewall.instance_port(65530, commands.TEMPLATE) == 65530

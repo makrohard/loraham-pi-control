@@ -35,7 +35,7 @@ def test_slot0s_config_names_dec_w16s_radio_on_a_two_radio_band(tmp_path):
     copy, why = instances.copy_of(svc, "meshcore", band="868")
     assert (copy.rid, why) == ("r2", "")
     svc.write_config_files("meshcore-node", "868", inst=copy)
-    assert _sockets(tmp_path, "meshcore.toml") == ("/tmp/loraf-r2.sock", "/tmp/loraconf-r2.sock")
+    assert _sockets(tmp_path, "r2/meshcore.toml") == ("/tmp/loraf-r2.sock", "/tmp/loraconf-r2.sock")   # K4b: r2's dir
 
 
 def test_slot0s_config_without_a_copy_names_dec_w16s_radio(tmp_path):
@@ -44,4 +44,4 @@ def test_slot0s_config_without_a_copy_names_dec_w16s_radio(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     svc.write_config_files("meshcore-node", "868")
-    assert _sockets(tmp_path, "meshcore.toml") == ("/tmp/loraf-r2.sock", "/tmp/loraconf-r2.sock")
+    assert _sockets(tmp_path, "r2/meshcore.toml") == ("/tmp/loraf-r2.sock", "/tmp/loraconf-r2.sock")   # K4b: r2's dir

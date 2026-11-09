@@ -47,19 +47,18 @@ def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     assert run.fields == _fields("Boot restore: 1 restored.")
     assert not _noted(run.res.details)                  # this version's unit: no units note
     assert run.res.data == {"driver_completed": True}
-    assert run.phases == DRIVER + ["journal:running[kiss=pending]"] + START_LOCKS + [
-        "journal:running[kiss=attempting]", "recheck:preflight", "mutate:feed-floor:433",
+    assert run.phases == DRIVER + ["journal:running[kiss@r1=pending]"] + START_LOCKS + [
+        "journal:running[kiss@r1=attempting]", "recheck:preflight", "mutate:feed-floor:433",
         "mutate:spawn:loraham-kiss-tnc", "verify:endpoints:loraham-kiss-tnc", "verify:post-start",
-        "final:running-band:433", "final:known-working:kiss", "final:clear-restart-marker:kiss",
-        "final:clear-stop-intent:kiss", "journal:running[kiss=succeeded]",
-        "journal:done[kiss=succeeded]"]
+        "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",          # K4b: no band marker
+        "final:clear-stop-intent:kiss@r1", "journal:running[kiss@r1=succeeded]",
+        "journal:done[kiss@r1=succeeded]"]
     state, items, j = _journal(box.root)
-    assert (state, items) == ("done", [("kiss", "433", "succeeded")])
+    assert (state, items) == ("done", [("kiss@r1", "433", "succeeded")])
     assert j["items"][0]["result"] == {"ok": True, "summary": "Run applied for 'kiss'."}
     # the prior boot's record (pid 999999) is gone; the new launch's record has the same shape
     assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
-                                   "state/boot-restore.json", "state/daemon-feed-floor-433-r1",
-                                   "state/running/kiss.band"],
+                                   "state/boot-restore.json", "state/daemon-feed-floor-433-r1"],
                          "removed": [], "changed": [EVIDENCE]}
     assert box.owned() == ["loraham-kiss-tnc"]
 
@@ -86,7 +85,7 @@ def test_restores_on_the_other_releases_web_unit_and_says_so(kiss_box, prior_boo
     assert run.fields == _fields("Boot restore: 1 restored.")
     assert _noted(run.res.details)
     state, items, _j = _journal(box.root)
-    assert (state, items) == ("done", [("kiss", "433", "succeeded")])
+    assert (state, items) == ("done", [("kiss@r1", "433", "succeeded")])
     assert box.owned() == ["loraham-kiss-tnc"]
 
 
@@ -120,14 +119,14 @@ def test_operator_stop_intent_is_honoured(kiss_box, prior_boot, run_op):
     journal) and its evidence pruned; nothing is started."""
     box = kiss_box()
     prior_boot(box.root)
-    box.svc._write_stop_intent(["kiss"])                  # best-effort: it never raises
-    assert (box.root / "state" / "stop-intent" / "kiss.json").is_file(), "seeding: no stop intent"
+    box.svc._write_stop_intent(["kiss@r1"])               # best-effort: it never raises; K5: the instance's, as a stop writes
+    assert (box.root / "state" / "stop-intent" / "kiss@r1.json").is_file(), "seeding: no stop intent"
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: nothing to restore (1 skipped — see the log).")
     assert run.phases == DRIVER + ["journal:no-plan[]"] * 2
     state, items, j = _journal(box.root)
     assert (state, items) == ("no-plan", [])
-    assert [s["stack"] for s in j["skipped"]] == ["kiss"]
+    assert [s["stack"] for s in j["skipped"]] == ["kiss@r1"]
     assert run.files == {"added": ["state/boot-restore.json"], "removed": [EVIDENCE],
                          "changed": []}
 
@@ -142,12 +141,12 @@ def test_refused_before_the_hook_stays_pending(kiss_box, prior_boot, run_op,
     interrupted_install(box.root)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: 0 restored, 1 pending (run truncated — restart "
-                                 "the unit to continue; kiss not attempted — Cannot start 'kiss': "
+                                 "the unit to continue; kiss@r1 not attempted — Cannot start 'kiss': "
                                  "an unresolved source-transaction journal is present — resolve it "
                                  "before starting).", ok=False)
-    assert run.phases == DRIVER + ["journal:running[kiss=pending]", "config-stable",
-                                   "lock:source-txn-index", "journal:failed[kiss=pending]"]
-    assert _journal(box.root)[:2] == ("failed", [("kiss", "433", "pending")])
+    assert run.phases == DRIVER + ["journal:running[kiss@r1=pending]", "config-stable",
+                                   "lock:source-txn-index", "journal:failed[kiss@r1=pending]"]
+    assert _journal(box.root)[:2] == ("failed", [("kiss@r1", "433", "pending")])
     assert run.files == {"added": ["state/boot-restore.json"], "removed": [], "changed": []}
 
 
@@ -163,12 +162,12 @@ def test_failed_after_the_hook_consumes_the_evidence(kiss_box, prior_boot, run_o
     assert run.fields == _fields("Boot restore: 0 restored, 1 failed (evidence consumed — lhpc "
                                  "stack start <id>).", ok=False, heads=())
     assert run.res.details == [
-        "kiss: loraham-kiss-tnc unverified — ready endpoint(s) never came up (127.0.0.1:8001: "
+        "kiss@r1: loraham-kiss-tnc unverified — ready endpoint(s) never came up (127.0.0.1:8001: "
         "absent (family=ipv4)); cleanup: stopped"]
-    assert run.phases[-3:] == ["mutate:signal:loraham-kiss-tnc", "journal:running[kiss=failed]",
-                               "journal:failed[kiss=failed]"]
+    assert run.phases[-3:] == ["mutate:signal:loraham-kiss-tnc", "journal:running[kiss@r1=failed]",
+                               "journal:failed[kiss@r1=failed]"]
     state, items, j = _journal(box.root)
-    assert (state, items) == ("failed", [("kiss", "433", "failed")])
+    assert (state, items) == ("failed", [("kiss@r1", "433", "failed")])
     assert j["items"][0]["result"]["components"] == [
         {"component": "loraham-kiss-tnc", "outcome": "unverified",
          "reason": "ready endpoint(s) never came up (127.0.0.1:8001: absent (family=ipv4)); "

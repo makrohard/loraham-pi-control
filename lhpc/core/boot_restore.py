@@ -52,25 +52,15 @@ def new_item(item_id: str, kind: str, *, target: str = "", band: str = "",
 _RID = re.compile(r"r[1-9][0-9]?")
 
 
-def slot_of(value):
-    """A record's instance slot when it is one (a plain int 0..7, item 7e), else None: the record then reads by the
-    instance list, as a record from before 7e does."""
-    from .commands import SLOTS
-    return value if type(value) is int and value in SLOTS else None
-
-
 def rid_of(value) -> str:
     """A record's radio id when it is one (r1..r99), else "" (the record then reads as pre-0.14.0)."""
     return value if isinstance(value, str) and _RID.fullmatch(value) else ""
 
 
-def instance_key(stack: str, rid: str, listed: dict, slot=None) -> str:
-    """Item 7e: a record's instance key — `<stack>@<rid>` for a listed instance's, `<stack>` for slot 0's. The
-    record's own slot decides; a record without one (before 7e) is a listed instance's when the stack lists one on
-    its radio (the rule 7c2b's plain stop uses)."""
-    if slot is not None:
-        return f"{stack}@{rid}" if slot and rid else stack
-    return f"{stack}@{rid}" if rid and rid in listed.get(stack, ()) else stack
+def instance_key(stack: str, rid: str) -> str:
+    """Item 7e: a record's instance key, `<stack>@<rid>` (K4b: no slots); `<stack>` only for a record without a radio,
+    a band item from before 0.14.0 that radio_filter drops (W12)."""
+    return f"{stack}@{rid}" if rid else stack
 
 
 def resolve_item(svc, item) -> tuple:
@@ -83,18 +73,12 @@ def resolve_item(svc, item) -> tuple:
     return sid, inst, band, why
 
 
-def listed_instances(svc) -> dict:
-    """{stack: frozenset of its copies' rids} (instances.copy_rids: the hardware list's, nothing is listed)."""
-    from . import instances
-    return {s.id: frozenset(instances.copy_rids(s, svc._paths)) for s in svc.stacks()}
-
-
-def radio_filter(plan, rows, listed=None) -> None:
+def radio_filter(plan, rows) -> None:
     """D14/D15 (stage L5): a pre-0.14.0 band item (no `rid`) is not restored, W12 (nothing converted); an item whose
     radio is gone, disabled or no longer its instance's is refused with the reason (radio_daemon.restore_plan). Both
     move to `plan.skipped`, their evidence named."""
     from . import radio_daemon
-    kept, refused = radio_daemon.restore_plan(plan.items, rows, listed)
+    kept, refused = radio_daemon.restore_plan(plan.items, rows)
     why = {id(it): r for it, r in refused}
     for it in plan.items:
         if not any(it is k for k in kept):
@@ -260,7 +244,6 @@ class Evidence:
     band: str                    # the record's own band ("" for band-less)
     launched_at: float
     rid: str = ""                # stage L5: the radio the instance ran on ("" for band-less or pre-0.14.0)
-    slot: int | None = None      # 7e: the instance's slot as recorded (None before 7e)
     start_scope: str = ""        # "stack" / "component" / "" (never widened)
     requested_target: str = ""
 
@@ -326,15 +309,15 @@ def _band_candidates(ev: Evidence, meta: StackMeta, mk: MarkerView) -> tuple[str
 
 
 def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
-                markers: dict[str, MarkerView], daemon_stack_id: str, listed=None) -> Plan:
-    """Deterministic plan from CLASSIFIED evidence. One non-daemon item per instance key (7e: `<stack>` for slot 0,
-    `<stack>@<rid>` for an instance `listed` names, {stack: rids}); conflicts are typed ambiguities. The band markers
-    are slot 0's: a listed instance's band is its record's. Daemon evidence collapses into ONE `daemon-reconcile`
+                markers: dict[str, MarkerView], daemon_stack_id: str) -> Plan:
+    """Deterministic plan from CLASSIFIED evidence. One non-daemon item per instance key (7e, K4b: `<stack>@<rid>`);
+    conflicts are typed ambiguities. An instance's band is its record's (the per-stack band markers are read only
+    for a record without a radio, which radio_filter then drops). Daemon evidence collapses into ONE `daemon-reconcile`
     item, LAST."""
     plan = Plan()
     by_stack: dict[str, list[Evidence]] = {}
     for ev in evidence:
-        by_stack.setdefault(instance_key(ev.stack, ev.rid, listed or {}, ev.slot), []).append(ev)
+        by_stack.setdefault(instance_key(ev.stack, ev.rid), []).append(ev)
 
     daemon_bands: set[str] = set()
     daemon_evidence: list[str] = []
@@ -381,7 +364,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
                                  "evidence_ids": ev_ids})
             continue
         ev0 = scoped[0]
-        mk = markers.get(stack_id, MarkerView()) if key == stack_id else MarkerView()   # slot 0's markers
+        mk = markers.get(stack_id, MarkerView()) if key == stack_id else MarkerView()   # a record without a radio
         band, why = _band_candidates(ev0, meta, mk)
         if why:
             plan.skipped.append({"stack": key, "reason": f"band ambiguity: {why}",

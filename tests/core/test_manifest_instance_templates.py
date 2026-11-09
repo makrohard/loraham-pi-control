@@ -47,12 +47,12 @@ def test_every_listener_that_follows_its_slot_loads_as_todays_value():
     found = _templated()
     assert set(found) == TEMPLATED
     for (_cid, _field, slot0), template in found.items():
-        assert commands.SLOT0.subst(template) == slot0 and "{" not in slot0
+        assert commands.TEMPLATE.subst(template) == slot0 and "{" not in slot0
 
 
 def test_the_templates_render_every_radio():
     # K4ac (DEC-W348): a copy on r3 serves every templated port at base + 133 x 2, graywolf's kiss port the same
-    inst = commands.Instance(1, "r3")
+    inst = commands.Instance("r3")
     rendered = {k: inst.subst(t) for k, t in _templated().items()}
     assert rendered[("loraham-kiss-tnc", "address", "127.0.0.1:8001")] == "127.0.0.1:8267"
     assert rendered[("graywolf", "param", "8001")] == "8267"
@@ -65,7 +65,7 @@ def test_the_templates_render_every_radio():
 def test_the_run_argv_carries_the_listener_tokens_whole():
     webui = next(c for st in load_manifest() for c in st.components if c.id == "meshcore-webui")
     assert webui.process.instance_arg == ("--port", "{port:8788}")
-    assert commands.instance_value("{port:8788}", webui, {}, "/rt", "/src", inst=commands.Instance(1, "r2")) == "8921"
+    assert commands.instance_value("{port:8788}", webui, {}, "/rt", "/src", inst=commands.Instance("r2")) == "8921"
 
 
 def test_a_manifest_without_tokens_keeps_no_template(tmp_path):

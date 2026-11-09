@@ -68,7 +68,7 @@ class StatusProber:
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
                  meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True,
-                 cache=None, owned_running: dict | None = None, copy_pids=None) -> None:
+                 cache=None, owned_running: dict | None = None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
@@ -87,7 +87,6 @@ class StatusProber:
         # before its argv gained an instance token (A §2.3 "across the update", T-R6).
         self._owned_running = owned_running or {}
         # {component_id: pids} the listed copies run (their own token or record): never slot 0's (C7, W286).
-        self._copy_pids_of, self._copy_pids = copy_pids, {}   # a callable of the one cmdline table (C7)
         # ONE /proc/net/tcp read and ONE /proc cmdline table per whole-snapshot assessment (set by
         # `assess_stacks`); None outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None
@@ -139,7 +138,6 @@ class StatusProber:
             self._cmdlines = self._system.procfs.cmdlines()         # once for every process match
         except Exception:
             self._cmdlines = None
-        self._copy_pids = self._copy_pids_of(self._cmdlines or {}) if self._copy_pids_of else {}   # the same table
         try:
             self._prefetch_sources([c for s in stacks for c in s.components])
             for stack in stacks:
@@ -209,7 +207,6 @@ class StatusProber:
             proc_matched = True
             status.pids = list(self._owned_running[comp.id])
             status.evidence["process.owned"] = "verified ownership record"
-        status.copy_pids = sorted(self._copy_pids.get(comp.id, ()))   # the copies' (C7), a spec or not (G1-C48 (3))
 
         endpoints, all_ready, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints
@@ -472,7 +469,7 @@ def summarize(snapshot: Snapshot) -> dict:
     for ss in snapshot.stacks:
         for st in ss.components.values():
             components += 1
-            states[st.own_run_state.value] = states.get(st.own_run_state.value, 0) + 1
+            states[st.run_state.value] = states.get(st.run_state.value, 0) + 1
     stack_states: dict[str, int] = {}
     for value in rollup_states(snapshot).values():
         stack_states[value] = stack_states.get(value, 0) + 1
@@ -515,8 +512,8 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
         for cid, st in ss.components.items():
             if st.run_state is RunState.NOT_INSTALLED and cid in optional_ids:
                 continue
-            if _SEVERITY[st.own_run_state] > _SEVERITY[worst]:      # slot 0's own (C7): a display
-                worst = st.own_run_state
+            if _SEVERITY[st.run_state] > _SEVERITY[worst]:
+                worst = st.run_state
         # A stack whose MAIN component is stopped (or not installed) while another of its components
         # runs has lost its main process (e.g. the node crashed, its GPS bridge and web UI still
         # up): failed — not degraded, which means the main runs but an endpoint is not ready. An
@@ -525,7 +522,7 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
         main_st = ss.components.get(ss.stack.main)
         if (worst in (RunState.RUNNING, RunState.DEGRADED)               # a helper is still live
                 and main is not None and not main.interactive
-                and main_st is not None and main_st.own_run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
+                and main_st is not None and main_st.run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
             worst = RunState.FAILED
         out[ss.stack.id] = worst.value
     return out

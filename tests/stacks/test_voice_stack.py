@@ -150,7 +150,7 @@ def test_interactive_voice_cli_start_creates_its_config_files_symlink(tmp_path, 
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
     _config_written(monkeypatch, svc)
     set_call(svc)
-    link = tmp_path / "config" / "files" / "loraham_voice_cli"
+    link = tmp_path / "config" / "files" / "r1" / "loraham_voice_cli"    # K4b: voice@r1's own path, under r1/
     assert not link.is_symlink()                                   # precondition
     res = svc.start("voice", apply=True)
     cli = next(r for r in res.results if r.component == "loraham-voice-cli")
@@ -351,7 +351,7 @@ def test_interactive_start_blocks_when_its_pre_steps_fail(tmp_path, monkeypatch,
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
     _config_written(monkeypatch, svc)
 
-    def _boom(steps, runtime, source, band=""):
+    def _boom(steps, runtime, source, band="", *, inst=None):     # run_pre_steps's signature (K4b: the instance)
         raise commands.CommandError("pre-step failed: denied")
 
     monkeypatch.setattr(commands, "run_pre_steps", _boom)

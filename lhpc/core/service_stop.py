@@ -137,13 +137,13 @@ class StopOpsMixin:
         _stk0 = self.stack(_sid0) if _sid0 else None
         if _stk0 is not None and _stk0.main == self.DAEMON_ID:
             cascade = True
-        slot0, _whole = (_app := _stk0 is not None and _stk0.main != self.DAEMON_ID) and inst is None, inst is None or (_app and not inst.slot)   # v6; K3: kiss@r1 stops slot 0 whole
+        slot0, _whole = (_app := _stk0 is not None and _stk0.main != self.DAEMON_ID) and inst is None, inst is None or _app   # K5: each <stack>@<rid> its own intent
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
                                    release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
-                inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # slot 0's copy under the lock (G1-C47)
+                inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # a band caller's, under the lock (G1-C47)
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
                                       release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
@@ -346,7 +346,7 @@ class StopOpsMixin:
             active_bands = self._operation_bands(target, "", "", "stop")
         # Clear band/interactive markers after the target's OWN verified cessation — even if the
         # later daemon-release fails, a stopped client must never look running.
-        if sid and own_ok and not getattr(inst, "slot", 0):              # 7c2b: slot 0's markers, never an instance's
+        if sid and own_ok:                    # the band marker is a band caller's (K6); the interactive one any instance's
             # Only the BAND OWNER's cessation retires the band marker: stopping an
             # optional client (sideband, lxmd) must not wipe it while `rns` is still
             # on 868 — that erases the stack's band evidence and the dashboard has
@@ -355,7 +355,7 @@ class StopOpsMixin:
             # Decided from the TYPED STOP RESULTS, not from a snapshot: the snapshot
             # is memoised per operation, so a read taken here still showed the
             # just-stopped owner as running and kept the marker alive forever.
-            if self._band_owners_stopped(sid, own_results):
+            if not getattr(inst, "rid", "") and self._band_owners_stopped(sid, own_results):
                 self._safe_unlink(self._band_marker(sid))
             self.dismiss_interactive(sid)
         # A CLIENT stop also takes down the non-daemon dependency stacks it ALONE was using

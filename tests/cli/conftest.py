@@ -44,8 +44,8 @@ def box(tmp_path, monkeypatch, capsys):
         launches = []
 
         def launch(self, stack, comp, params=None, band="", **kw):
-            inst = kw.get("inst") or commands.SLOT0
-            launches.append((comp.id, band, inst.slot, inst.rid))
+            inst = kw.get("inst") or commands.TEMPLATE
+            launches.append((comp.id, band, inst.rid))
             return StartLaunch(True, "")
         monkeypatch.setattr(Lifecycle, "start", launch)
         system = FakeSystem(unix_replies=radios_fixture.INSTANCE_READY, cmdlines_data=procs or {},

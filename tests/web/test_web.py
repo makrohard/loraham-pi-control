@@ -1804,7 +1804,8 @@ def test_confirm_working_post_records_and_hides_button(tmp_path, web, csrf):
 
 # --- M6: restart-required yellow chip + Restart now action -----------------------------------
 
-def _flag_restart(tmp_path, sid="chat"):
+def _flag_restart(tmp_path, sid="chat@r1"):
+    # K5: a marker is an instance's (`<stack>@<rid>`); an old bare-key file is ignored (no start clears it)
     import json as _json
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True, exist_ok=True)
@@ -1819,7 +1820,7 @@ def test_restart_required_chip_on_stack_page_and_dashboard(tmp_path, web):
     body = c.get("/stacks?open=chat").get_data(as_text=True)   # restart chip + action live in the lazy body
     assert "Restart required" in body and "Restart now" in body
     dash = c.get("/").get_data(as_text=True)
-    assert "Restart required" in dash and "Restart chat now" in dash
+    assert "Restart required" in dash and "Restart chat@r1 now" in dash        # K5: the marked instance's button
 
 
 def test_no_chip_without_flag(web):

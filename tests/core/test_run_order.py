@@ -493,7 +493,7 @@ def test_client_stop_tears_down_unused_dependency_stack(tmp_path, monkeypatch):
     # graywolf's own component ACTUALLY stops (the gate: an entirely already-stopped
     # target never releases anything — see the negative test below).
     monkeypatch.setattr(lcmod.Lifecycle, "stop",
-                        lambda self, comp, band=None: CompResult(
+                        lambda self, comp, band=None, **_scope: CompResult(
                             component=comp.id, stack="", action="stop",
                             outcome=Outcome.STOPPED, summary="stopped"))
     calls = []
@@ -507,7 +507,7 @@ def test_client_stop_tears_down_unused_dependency_stack(tmp_path, monkeypatch):
     assert ("kiss", False) in calls                              # internal release
     assert any("dependency] kiss" in d for d in res.details)
     intents = svc._stop_intent_stacks()
-    assert "graywolf" in intents and "kiss" not in intents and "daemon" not in intents
+    assert "graywolf@r1" in intents and not [k for k in intents if k.split("@")[0] in ("kiss", "daemon")]   # K5: per instance
 
 
 def test_stop_of_not_running_stack_never_releases_dependencies(tmp_path, monkeypatch):
@@ -1100,7 +1100,7 @@ def _spy_life_stops(monkeypatch):
     from lhpc.core.outcomes import CompResult, Outcome
     stopped = []
     monkeypatch.setattr(Lifecycle, "stop",
-                        lambda self, comp, band="": stopped.append(comp.id) or CompResult(
+                        lambda self, comp, band="", **_scope: stopped.append(comp.id) or CompResult(
                             comp.id, "stop", Outcome.STOPPED, "", "stopped (stub)"))
     return stopped
 
@@ -1449,6 +1449,10 @@ def _start_meshtastic_with(tmp_path, monkeypatch, states, *, source="auto", feed
     # Stubs the collaborators: the status prober (the components read the given states), the
     # feed's own readiness marker, and the clock the feed gate polls with.
     monkeypatch.setattr(ControllerService, "build_snapshot", snapshot)
+    from lhpc.core import instances                 # K5: the instance runs by the given states (no process table here)
+    monkeypatch.setattr(instances, "instance_runs",
+                        lambda svc, comp, inst, band: states.get(comp.id) in (RunState.RUNNING, RunState.DEGRADED))
+    monkeypatch.setattr(instances, "endpoint_statuses", lambda svc, cs, inst: list(cs.endpoints or ()))   # as stubbed
     monkeypatch.setattr(ControllerService, "gps_feed_state", lambda self, comp: dict(feed or {}))
     monkeypatch.setattr(service_lifecycle_ops.time, "sleep", lambda s: None)
     fake.calls.clear()

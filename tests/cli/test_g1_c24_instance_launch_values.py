@@ -10,7 +10,7 @@ from lhpc.core.paths import Paths
 
 def _box(box, tmp_path):
     run = box((R1, R2_868, R3), ports=(8001, 8002))
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"kiss_port": "not-a-port"}, inst=Instance(1, "r3"))
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"kiss_port": "not-a-port"}, inst=Instance("r3"))
     return run
 
 

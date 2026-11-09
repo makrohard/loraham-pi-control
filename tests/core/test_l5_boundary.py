@@ -35,8 +35,8 @@ def _socket(kind, rid):
     return f"{SOCKET_DIR}/{name}.sock"
 
 
-def _argv(comp, slot, rid):
-    inst = commands.Instance(slot, rid)
+def _argv(comp, rid):
+    inst = commands.Instance(rid)
     return commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=inst)
 
 
@@ -48,10 +48,10 @@ def test_the_listed_clients_exist_in_the_manifest():
     assert set(PAIRS) <= set(COMPS), set(PAIRS) - set(COMPS)
 
 
-@pytest.mark.parametrize("slot,rid", [(0, "r1"), (0, "r2"), (1, "r2"), (1, "r12")])
+@pytest.mark.parametrize("rid", ["r1", "r2", "r12"])
 @pytest.mark.parametrize("comp_id", sorted(PAIRS))
-def test_t_l5_each_client_carries_its_radios_sockets_under_their_options(comp_id, slot, rid):
-    argv = _argv(COMPS[comp_id], slot, rid)
+def test_t_l5_each_client_carries_its_radios_sockets_under_their_options(comp_id, rid):
+    argv = _argv(COMPS[comp_id], rid)
     for opt, kind in PAIRS[comp_id]:
         assert _has_pair(argv, opt, _socket(kind, rid)), (opt, _socket(kind, rid), argv)
 
@@ -59,7 +59,7 @@ def test_t_l5_each_client_carries_its_radios_sockets_under_their_options(comp_id
 @pytest.mark.parametrize("comp_id", sorted(PAIRS))
 def test_t_l5_a_socket_under_the_wrong_option_is_not_accepted(comp_id):
     """The data option never carries the conf socket, and two radios never share a socket."""
-    a, b = _argv(COMPS[comp_id], 0, "r1"), _argv(COMPS[comp_id], 1, "r2")
+    a, b = _argv(COMPS[comp_id], "r1"), _argv(COMPS[comp_id], "r2")
     assert not _has_pair(a, "--data-socket", _socket("conf", "r1"))
     assert not [t for t in a if t.endswith("-r2.sock")]
     assert not [t for t in b if t.endswith("-r1.sock")]

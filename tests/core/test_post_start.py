@@ -1266,6 +1266,12 @@ def test_poststart_running_component_cancels_then_reruns(tmp_path, monkeypatch, 
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self: snap)
     calls = {"cancel": 0, "rerun": []}
     class _LifeStub:
+        def owned_inventory(self):                 # K5: the instances' records are read
+            return [], [], None
+
+        def owned_records(self, comp_id, band=None, role="", rid=None):
+            return []
+
         def _cancel_post_runners(self, comp, band):
             calls["cancel"] += 1
             return (["post-runner pid 1: cancelled"], False)
@@ -1295,6 +1301,12 @@ def test_poststart_unverified_cancel_refuses_second_sender(tmp_path, monkeypatch
             ss.components["meshcom-qemu"] = types.SimpleNamespace(run_state=RunState.RUNNING)
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self: snap)
     class _LifeStub:
+        def owned_inventory(self):                 # K5: the instances' records are read
+            return [], [], None
+
+        def owned_records(self, comp_id, band=None, role="", rid=None):
+            return []
+
         def _cancel_post_runners(self, comp, band):
             return (["post-runner pid 1: SIGTERM sent but NOT verified stopped"], True)
     monkeypatch.setattr(ControllerService, "_lifecycle", lambda self: _LifeStub())
@@ -1380,6 +1392,12 @@ def _running_meshcom_svc(set_call, tmp_path, monkeypatch):
             ss.components["meshcom-qemu"] = types.SimpleNamespace(run_state=RunState.RUNNING)
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self: snap)
     class _LifeStub:
+        def owned_inventory(self):                 # K5: the instances' records are read
+            return [], [], None
+
+        def owned_records(self, comp_id, band=None, role="", rid=None):
+            return []
+
         def _cancel_post_runners(self, comp, band):
             return ([], False)
     monkeypatch.setattr(ControllerService, "_lifecycle", lambda self: _LifeStub())
@@ -1393,7 +1411,7 @@ def test_poststart_scheduling_failure_is_a_failed_result(tmp_path, monkeypatch, 
     svc = _running_meshcom_svc(set_call, tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False, inst=None:
         (False if strict else None,
          "optional post-start could NOT be scheduled: launcher write failed: disk full"))
     res = svc.poststart("meshcom", apply=True)
@@ -1411,7 +1429,7 @@ def test_poststart_success_says_scheduled_not_applied(tmp_path, monkeypatch, set
     svc = _running_meshcom_svc(set_call, tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False, inst=None:
         (None, "optional post-start scheduled"))
     res = svc.poststart("meshcom", apply=True)
     assert res.ok
@@ -1426,7 +1444,7 @@ def test_poststart_required_steps_report_completion(tmp_path, monkeypatch, set_c
     svc = _running_meshcom_svc(set_call, tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False, inst=None:
         (True, "required post-start completed"))
     res = svc.poststart("meshcom", apply=True)
     assert res.ok
@@ -1624,7 +1642,7 @@ def test_poststart_detached_scheduling_is_started_not_verified(tmp_path, monkeyp
     svc = _running_meshcom_svc(set_call, tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False, inst=None:
         (None, "optional post-start scheduled"))
     res = svc.poststart("meshcom", apply=True)
     row = next(r for r in res.results if r.component == "meshcom-qemu")
@@ -1642,7 +1660,7 @@ def test_poststart_synchronous_required_run_stays_verified(tmp_path, monkeypatch
     svc = _running_meshcom_svc(set_call, tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False, inst=None:
         (True, "required post-start completed"))
     res = svc.poststart("meshcom", apply=True)
     row = next(r for r in res.results if r.component == "meshcom-qemu")
@@ -2019,36 +2037,6 @@ def test_raw_launch_ok_does_not_decide_top_level_success(tmp_path):
     # whatever the raw launch did, the typed results drive ok
     assert res.ok == all(r.ok and r.verified for r in res.results) if res.results else True
     assert not res.ok or all(r.verified for r in res.results)
-
-
-@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
-def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypatch, set_call, real_spawn):
-    # A verified start whose running-band marker cannot persist must report UNVERIFIED,
-    # not VERIFIED — the marker drives multi-band decisions + dashboard state.
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.outcomes import Outcome
-    # voice requires the daemon in DIRECT, so the fixture daemon must already report DIRECT
-    # for the start to clear the TX-mode gate and reach the running-band marker step.
-    DIRECT = b"STATUS RADIO=READY TXMODE=DIRECT\n"
-    radios_fixture.write(tmp_path)                         # stage L5: voice is its band's radio's client
-    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf-r1.sock": DIRECT,
-                                                           "/tmp/loraconf-r2.sock": DIRECT})).system
-    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
-    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
-    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [])
-    monkeypatch.setattr(type(svc), "_lifecycle",
-                        lambda self: Lifecycle(self._paths, self.stacks(), self.config(),
-                                               self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "_set_running_band", lambda self, s, b: False)  # marker fails
-    set_call(svc)
-    res = svc.start("voice", apply=True, band="433")
-    assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
-               and "running-band marker" in (r.summary or "") for r in res.results), \
-        outcomes(res)
 
 
 def _kiss_with_held_required_post_start(svc, monkeypatch, real_spawn):

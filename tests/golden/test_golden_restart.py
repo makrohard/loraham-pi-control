@@ -24,11 +24,11 @@ STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc
             "lock:claim.tcp.port.7000", "lock:claim.tcp.port.8080", "lock:lifecycle.chat",
             "lock:lifecycle.daemon", "lock:lifecycle.graywolf", "lock:lifecycle.meshcom",
             "lock:lifecycle.voice", "mutate:signal:loraham-daemon", "mutate:feed-floor:433",
-            "final:clear-restart-marker:kiss"]
+            "final:clear-restart-marker:kiss@r1"]                         # K5: per instance
 START_LEG = ["recheck:start", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
-             "verify:endpoints:loraham-kiss-tnc", "verify:post-start", "final:running-band:433",
-             "final:known-working:kiss", "final:clear-restart-marker:kiss",
-             "final:clear-stop-intent:kiss"]
+             "verify:endpoints:loraham-kiss-tnc", "verify:post-start",    # K4b: no per-stack band marker
+             "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",
+             "final:clear-stop-intent:kiss@r1"]
 NOTHING = {"added": [], "removed": [], "changed": []}
 
 

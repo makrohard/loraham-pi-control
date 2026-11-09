@@ -31,7 +31,7 @@ def test_two_radios_of_one_band_write_two_start_logs(tmp_path, monkeypatch):
     logs = []
     life = _life(tmp_path, monkeypatch, logs)
     for rid in ("r1", "r2"):
-        assert life.start(Stack(id="s", name="s", main="c"), COMP, band="433", inst=commands.Instance(0, rid)).ok
+        assert life.start(Stack(id="s", name="s", main="c"), COMP, band="433", inst=commands.Instance(rid)).ok
     assert logs == ["start-c-433-r1.log", "start-c-433-r2.log"]
 
 

@@ -101,7 +101,7 @@
           <form method="post" action="{{ url_for('action') }}" class="act">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="op" value="restart">
-            <input type="hidden" name="target" value="{{ g.stack.id }}">
+            <input type="hidden" name="target" value="{{ g.restart_required.stack or g.stack.id }}">
             <button type="submit" class="warnbtn">Restart now</button>
           </form>
         </div>

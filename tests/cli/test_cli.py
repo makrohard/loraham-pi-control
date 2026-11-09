@@ -536,7 +536,7 @@ def test_stack_restart_is_a_command(short_tmp_path, monkeypatch, capsys):
     # before anything runs, with the `lhpc config` remedy — the same truth the web shows.
     assert main(["stack", "restart", "meshcom@r1"]) == 1
     out = capsys.readouterr().out
-    assert "callsign is required" in out and "lhpc config meshcom mc_callsign" in out
+    assert "callsign is required" in out and "lhpc config meshcom@r1 mc_callsign" in out
     assert main(["config", "operator", "--callsign", "DL1ABC"]) == 0
     capsys.readouterr()
     assert main(["stack", "restart", "meshcom@r1"]) == 0        # not argparse rc 2

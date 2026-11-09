@@ -330,7 +330,7 @@ def test_no_entry_for_the_new_daemon_keeps_the_client_named_unproven(tmp_path, m
 
 def _rendered_root(svc) -> str:
     svc.write_config_files("meshtastic", band="868")
-    text = (svc._paths.runtime_root / "config/files/meshtasticd.yaml").read_text()
+    text = (svc._paths.runtime_root / "config/files/r2/meshtasticd.yaml").read_text()     # K4b: meshtastic@r2's own
     return next(ln.split(":", 1)[1].strip() for ln in text.splitlines()
                 if ln.strip().startswith("RootPath:"))
 

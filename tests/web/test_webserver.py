@@ -184,7 +184,7 @@ class _StackRestartFlipsFake(FakeSystem):
 
 def _seed_meshcom_public(paths):
     from lhpc.core import config as cfgmod
-    cfgmod.save_stackweb_config(paths, "meshcom", mode="public", port=8444)
+    cfgmod.save_stackweb_config(paths, "meshcom@r1", mode="public", port=8444)
 
 
 def test_apply_stack_proxy_public_transition_restarts_automatically(tmp_path):
@@ -196,14 +196,14 @@ def test_apply_stack_proxy_public_transition_restarts_automatically(tmp_path):
     paths = svc0._paths                                          # console stays loopback-desired
     _seed_meshcom_public(paths)
     _live_master(paths)
-    _seed_applied(paths, proxies=[("meshcom", "127.0.0.1", 8444)])   # meshcom was local on :8444
+    _seed_applied(paths, proxies=[("meshcom@r1", "127.0.0.1", 8444)])   # meshcom was local on :8444
     fake = _StackRestartFlipsFake(commands=_apply_cmds(paths))
     r = ControllerService(system=fake.system, paths=paths).webserver_apply()
     assert r.ok and "restarted" in r.summary, r.summary
     assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
     assert not _reloaded(fake, paths)          # the held proxy listener: restart only (C07)
     assert r.data["checks"]["stack_listener_matches"] == "ok"
-    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
+    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom@r1"][0]
     assert mesh["listener_scope"] == "exposed" and mesh["listener_matches"] == "ok"
 
 
@@ -300,7 +300,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     _seed_meshcom_public(paths)
     _live_master(paths)
     req = _seed_hatch_units(tmp_path, monkeypatch, paths)
-    _seed_applied(paths, proxies=[("meshcom", "127.0.0.1", 8444)])   # meshcom was local on :8444
+    _seed_applied(paths, proxies=[("meshcom@r1", "127.0.0.1", 8444)])   # meshcom was local on :8444
     monkeypatch.setenv("INVOCATION_ID", "abc123")
     monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 5.0)
     monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
@@ -312,7 +312,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     assert not req.exists()                                       # consumed
     assert not any(c[:1] == ["systemctl"] for c in fake.calls)    # no bus, ever
     assert not _reloaded(fake, paths)                             # the watcher does it (C07)
-    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
+    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom@r1"][0]
     assert mesh["listener_matches"] == "ok"
 
 
@@ -408,7 +408,7 @@ def test_apply_stack_proxy_stuck_listener_fails_closed_naming_stack(tmp_path):
                                  Listener(family="ipv4", ip="127.0.0.1", port=8444, inode=2)])
     r = ControllerService(system=fake.system, paths=paths).webserver_apply()
     assert not r.ok and "did not take effect" in r.summary
-    assert "meshcom" in r.summary                                # the stuck listener is NAMED
+    assert "meshcom@r1" in r.summary                                # the stuck listener is NAMED
     assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
     assert r.data["checks"]["stack_listener_matches"] == "failed"
 
@@ -964,17 +964,17 @@ def test_cli_proxy_confirmation_parity(monkeypatch, tmp_path, capsys):
     # mode without the phrase is refused; the elevated case needs the danger phrase.
     _env(monkeypatch, tmp_path)
     # lan exposure without a phrase -> refused (no write)
-    assert main(["webserver", "proxy", "meshcom", "--mode", "lan", "--port", "8090",
+    assert main(["webserver", "proxy", "meshcom@r1", "--mode", "lan", "--port", "8090",
                  "--cidr", "192.168.0.0/24"]) == 1
     capsys.readouterr()
     # lan with the normal phrase -> saved
-    assert main(["webserver", "proxy", "meshcom", "--mode", "lan", "--port", "8090",
+    assert main(["webserver", "proxy", "meshcom@r1", "--mode", "lan", "--port", "8090",
                  "--cidr", "192.168.0.0/24", "--confirm-phrase", "enable-remote"]) == 0
     # public default route with only the normal phrase -> refused (needs danger)
-    assert main(["webserver", "proxy", "meshcom", "--mode", "public", "--port", "8090",
+    assert main(["webserver", "proxy", "meshcom@r1", "--mode", "public", "--port", "8090",
                  "--cidr", "0.0.0.0/0", "--confirm-phrase", "enable-remote"]) == 1
     # with the danger phrase -> saved
-    assert main(["webserver", "proxy", "meshcom", "--mode", "public", "--port", "8090",
+    assert main(["webserver", "proxy", "meshcom@r1", "--mode", "public", "--port", "8090",
                  "--cidr", "0.0.0.0/0", "--confirm-phrase", "enable-remote-danger"]) == 0
 
 
@@ -983,7 +983,7 @@ def test_cli_proxy_rejects_bad_enum(monkeypatch, tmp_path):
     _env(monkeypatch, tmp_path)
     for bad in (["--mode", "remote"], ["--scheme", "ftp"], ["--access-mode", "nope"]):
         with pytest.raises(SystemExit):                       # argparse choices= -> exit 2
-            main(["webserver", "proxy", "meshcom", *bad])
+            main(["webserver", "proxy", "meshcom@r1", *bad])
 
 
 def _paths(tmp_path: Path) -> Paths:

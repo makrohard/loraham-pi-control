@@ -154,23 +154,23 @@ def _stackweb(tmp_path):
 def test_pages_are_derived_one_per_web_component_first_keeps_the_stack_id(tmp_path):
     svc = _svc(tmp_path)
     pages = svc.stack_web_pages("two")
-    assert [p.page_id for p in pages] == ["two", "two-b"]
+    assert [p.page_id for p in pages] == ["two@r1", "two-b@r1"]
     assert [p.primary for p in pages] == [True, False]
     assert pages[0].component_id == "a" and pages[1].component_id == "b"
     assert pages[1].name == "Dashboard" and pages[1].deny_paths == ("/api/update", "/ws/frame")
     assert svc.stack_web_pages("nope") == ()
-    assert svc.web_page("two-b").address == "127.0.0.1:18200"
+    assert svc.web_page("two-b@r1").address == "127.0.0.1:18200"
     assert svc.web_page("b") is None                     # a component id is NOT a page id
 
 
 def test_eligible_lists_stack_keyed_pages_first_then_component_keyed(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_eligible() == ["solo", "two", "two-b"]      # manifest order
-    assert svc._page_positions() == ["solo", "two", "two-b"]        # first pages, then the rest
-    assert _web_upstream(svc, "two") == ("127.0.0.1:18100", "http")
-    assert _web_upstream(svc, "two-b") == ("127.0.0.1:18200", "https")
-    assert _web_deny(svc, "two-b") == ("/api/update", "/ws/frame")
-    assert _web_deny(svc, "two") == ()
+    assert svc.stack_web_eligible() == ["solo@r1", "two@r1", "two-b@r1"]      # manifest order
+    assert svc._page_positions() == ["solo@r1", "two@r1", "two-b@r1"]        # first pages, then the rest
+    assert _web_upstream(svc, "two@r1") == ("127.0.0.1:18100", "http")
+    assert _web_upstream(svc, "two-b@r1") == ("127.0.0.1:18200", "https")
+    assert _web_deny(svc, "two-b@r1") == ("/api/update", "/ws/frame")
+    assert _web_deny(svc, "two@r1") == ()
 
 
 def _no_web(block: str) -> str:
@@ -228,13 +228,13 @@ def test_proxies_render_in_manifest_order_while_ports_position_by_id(tmp_path):
     (tmp_path / "config").mkdir(exist_ok=True)
     svc = ControllerService(manifest_path=m, system=FakeSystem().system,
                             paths=Paths(runtime_root=tmp_path))
-    assert svc.stack_web_eligible() == ["zeta", "solo", "two", "two-b"]      # manifest order
-    assert svc._page_positions() == ["solo", "two", "zeta", "two-b"]        # id order, firsts first
+    assert svc.stack_web_eligible() == ["zeta@r1", "solo@r1", "two@r1", "two-b@r1"]      # manifest order
+    assert svc._page_positions() == ["solo@r1", "two@r1", "zeta@r1", "two-b@r1"]        # id order, firsts first
     console = svc.config().webserver.port
-    assert svc._default_stack_web_port("zeta", console) == console + 3
-    for pid, port in (("zeta", 9001), ("solo", 9002)):
+    assert svc._default_stack_web_port("zeta@r1", console) == console + 3
+    for pid, port in (("zeta@r1", 9001), ("solo@r1", 9002)):
         assert svc.stack_web_configure(pid, port=port).ok
-    assert [p.swc.stack_id for p in svc._stack_web_proxies()] == ["zeta", "solo"]
+    assert [p.swc.stack_id for p in svc._stack_web_proxies()] == ["zeta@r1", "solo@r1"]
 
 
 # --- ports, config keys, nginx -----------------------------------------------------------------
@@ -242,32 +242,32 @@ def test_proxies_render_in_manifest_order_while_ports_position_by_id(tmp_path):
 def test_second_page_gets_the_next_position_and_never_shifts_the_first_pages(tmp_path):
     svc = _svc(tmp_path)
     console = svc.config().webserver.port
-    assert svc._default_stack_web_port("solo", console) == console + 1
-    assert svc._default_stack_web_port("two", console) == console + 2
-    assert svc._default_stack_web_port("two-b", console) == console + 3
+    assert svc._default_stack_web_port("solo@r1", console) == console + 1
+    assert svc._default_stack_web_port("two@r1", console) == console + 2
+    assert svc._default_stack_web_port("two-b@r1", console) == console + 3
     # saving the first page's port does not move the second page's suggestion
-    assert svc.stack_web_configure("two", port=console + 2).ok
-    assert svc._default_stack_web_port("two-b", console) == console + 3
+    assert svc.stack_web_configure("two@r1", port=console + 2).ok
+    assert svc._default_stack_web_port("two-b@r1", console) == console + 3
     # the bulk candidate walk assigns the same unique ports, in the same order
     assert [(sid, port) for sid, port, _ in svc._stack_webs_candidates()] == [
-        ("solo", console + 1), ("two", console + 2), ("two-b", console + 3)]
+        ("solo@r1", console + 1), ("two@r1", console + 2), ("two-b@r1", console + 3)]
     rows = svc.stack_webs_overview()["stacks"]
     assert [(r["sid"], r["label"]) for r in rows] == [
-        ("solo", "Solo"), ("two", "Two Pages"), ("two-b", "Two Pages · Dashboard")]
+        ("solo@r1", "Solo @r1"), ("two@r1", "Two Pages @r1"), ("two-b@r1", "Two Pages · Dashboard @r1")]
 
 
 def test_each_page_keeps_its_own_policy_key_and_nginx_block(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_configure("two", port=8445).ok
-    assert svc.stack_web_configure("two-b", port=8446).ok
+    assert svc.stack_web_configure("two@r1", port=8445).ok
+    assert svc.stack_web_configure("two-b@r1", port=8446).ok
     sw = _stackweb(tmp_path)
-    assert sw["two"].port == 8445 and sw["two-b"].port == 8446    # flat keys `<page>_<field>`
+    assert sw["two@r1"].port == 8445 and sw["two-b@r1"].port == 8446    # flat keys `<page>_<field>`
     proxies = svc._stack_web_proxies()
     assert [(p.swc.stack_id, p.upstream_address, p.upstream_scheme) for p in proxies] == [
-        ("two", "127.0.0.1:18100", "http"), ("two-b", "127.0.0.1:18200", "https")]
+        ("two@r1", "127.0.0.1:18100", "http"), ("two-b@r1", "127.0.0.1:18200", "https")]
     cfg = webserver.render_nginx_config(Paths(runtime_root=tmp_path), svc.config().webserver,
                                         stack_webs=proxies)
-    assert "upstream lhpc_ui_two {" in cfg and "upstream lhpc_ui_two_b {" in cfg
+    assert "upstream lhpc_ui_two_r1 {" in cfg and "upstream lhpc_ui_two_b_r1 {" in cfg
     assert "listen 127.0.0.1:8445" in cfg and "listen 127.0.0.1:8446" in cfg
     # 404, never 403: a 403 logs the operator out of a single-page dashboard (openHop's interceptor)
     assert f"location ~ {webserver.deny_location_regex('/api/update')} {{ return 404; }}" in cfg
@@ -278,7 +278,7 @@ def test_each_page_keeps_its_own_policy_key_and_nginx_block(tmp_path):
 def test_an_unknown_page_id_is_refused_and_the_valid_ids_are_named(tmp_path):
     r = _svc(tmp_path).stack_web_configure("b", port=8450)      # component id, not a page id
     assert not r.ok and "names no web UI" in r.summary
-    assert any("solo, two, two-b" in d for d in r.details)
+    assert any("solo@r1, two@r1, two-b@r1" in d for d in r.details)
 
 
 # --- views, credentials, client links ------------------------------------------------------------
@@ -286,9 +286,9 @@ def test_an_unknown_page_id_is_refused_and_the_valid_ids_are_named(tmp_path):
 def test_views_carry_the_page_and_credentials_stay_per_component(tmp_path):
     svc = _svc(tmp_path)
     views = svc.stack_web_views("two")
-    assert [v["page_id"] for v in views] == ["two", "two-b"]
+    assert [v["page_id"] for v in views] == ["two@r1", "two-b@r1"]
     assert views[1]["name"] == "Dashboard" and views[1]["stack"] == "two"
-    assert views[1]["label"] == "Two Pages · Dashboard" and views[0]["primary"]
+    assert views[1]["label"] == "Two Pages · Dashboard @r1" and views[0]["primary"]
     assert svc.stack_web_views("nope") == []
     # Password sections are per COMPONENT that declares a file — never a sibling's login
     assert [(c["component_id"], c["user"]) for c in svc.ui_credentials_list("two")] == [("b", "admin")]
@@ -314,7 +314,7 @@ class _Status:
 
 def test_client_links_point_each_web_endpoint_at_its_own_pages_proxy(tmp_path):
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8446, "inode": 1}])
-    assert svc.stack_web_configure("two-b", port=8446).ok        # only the second page is proxied
+    assert svc.stack_web_configure("two-b@r1", port=8446).ok        # only the second page is proxied
     a = svc._client_interfaces(_Status("a", [_Obs(_Spec("127.0.0.1:18100", "http", "Chat"))]), "two")
     b = svc._client_interfaces(_Status("b", [_Obs(_Spec("127.0.0.1:18200", "https", "Dash"))]), "two")
     assert a[0]["proxy_port"] == 0 and a[0]["link"] == "http://127.0.0.1:18100"   # not proxied
@@ -326,9 +326,9 @@ def test_client_links_point_each_web_endpoint_at_its_own_pages_proxy(tmp_path):
 def test_the_stack_panel_renders_one_webserver_subpanel_and_password_block_per_page(tmp_path, web):
     svc = _svc(tmp_path)
     doc = parse(web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True))
-    assert doc.present("stack-webserver-two") and doc.present("stack-webserver-two-b")
+    assert doc.present("stack-webserver-two@r1") and doc.present("stack-webserver-two-b@r1")
     assert "Webserver (web UI proxy) — Dashboard" in doc.text
-    assert doc.within(doc.by_id("stack-webserver-two-b")).field_default("page") == "two-b"
+    assert doc.within(doc.by_id("stack-webserver-two-b@r1")).field_default("page") == "two-b@r1"
     assert doc.present("stack-password-b") and not doc.present("stack-password-a")
 
 
@@ -336,27 +336,26 @@ def test_the_route_saves_the_named_page_and_refuses_a_foreign_one(tmp_path, web,
     svc = _svc(tmp_path)
     client = web(service_factory=lambda: svc)
     tok = csrf(client)
-    r = client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "two-b", "mode": "local",
+    r = client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "two-b@r1", "mode": "local",
                                                    "port": "8446", "scheme": "https",
                                                    "access_mode": "local-open-remote-auth"})
-    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-two-b")
-    assert _stackweb(tmp_path)["two-b"].port == 8446 and "two" not in _stackweb(tmp_path)
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-two-b@r1")
+    assert _stackweb(tmp_path)["two-b@r1"].port == 8446 and "two@r1" not in _stackweb(tmp_path)
     # a page that belongs to another stack, or no page at all, is not this stack's form
-    assert client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "solo"}).status_code == 404
+    assert client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "solo@r1"}).status_code == 404
     assert client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "b"}).status_code == 404
-    # no `page` field = the stack's first page, as before pages existed
-    r = client.post("/stacks/two/webserver", data={"_csrf": tok, "mode": "local", "port": "8445",
-                                                   "scheme": "https",
-                                                   "access_mode": "local-open-remote-auth"})
-    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-two")
-    assert _stackweb(tmp_path)["two"].port == 8445
+    # K4b: no `page` field names no instance (a bare stack id is no page any more): refused, nothing saved
+    assert client.post("/stacks/two/webserver", data={"_csrf": tok, "mode": "local", "port": "8445",
+                                                      "scheme": "https",
+                                                      "access_mode": "local-open-remote-auth"}).status_code == 404
+    assert "two@r1" not in _stackweb(tmp_path)
 
 
 def test_the_bulk_policy_covers_every_page(tmp_path):
     svc = _svc(tmp_path)
     r = svc.stack_webs_configure_apply(mode="local", scheme="https",
                                        access_mode="local-open-remote-auth", cidrs=[])
-    assert set(_stackweb(tmp_path)) == {"solo", "two", "two-b"}, r.summary
+    assert set(_stackweb(tmp_path)) == {"solo@r1", "two@r1", "two-b@r1"}, r.summary
     ports = {sid: c.port for sid, c in _stackweb(tmp_path).items()}
     assert len(set(ports.values())) == 3 and all(p > 0 for p in ports.values())
 
@@ -442,15 +441,15 @@ def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_pat
 # --- the deny answer (issue #5, plan DELTA-3: option 1) -------------------------------------------
 
 def test_deny_notice_is_off_by_default_and_a_flagged_endpoint_carries_it(tmp_path):
-    assert _svc(tmp_path).web_page("two-b").deny_notice is False
+    assert _svc(tmp_path).web_page("two-b@r1").deny_notice is False
     flagged = tmp_path / "flagged"
     flagged.mkdir()
     m = flagged / "pages.toml"
     m.write_text(_TWO_PAGES.replace('proxy_deny_paths = [', 'proxy_deny_notice = true\n  proxy_deny_paths = ['))
     (flagged / "config").mkdir()
     svc = ControllerService(manifest_path=m, system=FakeSystem().system, paths=Paths(runtime_root=flagged))
-    assert svc.web_page("two-b").deny_notice is True
-    assert svc.web_page("two").deny_notice is False
+    assert svc.web_page("two-b@r1").deny_notice is True
+    assert svc.web_page("two@r1").deny_notice is False
 
 
 def test_deny_notice_must_be_a_bool():

@@ -989,7 +989,7 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
         _reap_group(proc)
     journal = json.loads((tmp_path / "state" / "boot-restore.json").read_text())
     assert journal["boot_id"] == supervisor.boot_file(paths).read_text().strip() != boot1
-    item = next(i for i in journal["items"] if i.get("target") == "kiss")
+    item = next(i for i in journal["items"] if i.get("target") == "kiss@r1")       # K4b: the instance's key
     assert item["state"] in ("succeeded", "failed") and item["evidence_ids"] == [launch_id]
 
 

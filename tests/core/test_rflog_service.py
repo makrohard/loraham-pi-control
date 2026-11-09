@@ -173,9 +173,15 @@ def test_the_stack_row_is_the_registry_for_that_band(tmp_path, band):
     assert sw["band"] == band
     assert [(b["band"], b["current"]) for b in sw["bands"]] == [(b, b == band) for b in ControllerService.RADIO_BANDS]
     rid = {"433": "r1", "868": "r2"}[band]              # S2: the baseline list's radio of the band owns the daemon's file
-    expected = [(e.writer, e.radio_job(rid) if e.banded else e.job(), e.surface)
-                for e in rflog.REGISTRY
-                if e.banded or band in _declared(svc, e.surface)]
+    from lhpc.core import instances
+    expected = []
+    for e in rflog.REGISTRY:
+        if e.banded:
+            expected.append((e.writer, e.radio_job(rid), e.surface))
+        elif band in _declared(svc, e.surface):          # the stack's row, then each instance's on the band (K4b)
+            expected.append((e.writer, e.job(), e.surface))
+            expected += [(e.writer, f"{r}/{e.job()}", e.surface) for r in instances.radios_of(svc.stack(e.owner), svc._paths)
+                         if r == rid and rflog.by_job(f"{r}/{e.job()}")]       # a log the instance writes per radio
     assert [(s["target"], s["job"], s["surface"]) for s in sw["stacks"]] == expected
     assert [s["surface"] for s in sw["stacks"] if s["current"]] == ["graywolf"]
     assert [s["label"] for s in sw["stacks"] if s["surface"] == "daemon"] == [f"daemon {band}"]

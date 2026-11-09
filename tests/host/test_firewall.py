@@ -910,7 +910,7 @@ def test_candidate_derivation_deny_endpoints_are_dual_wildcard(tmp_path):
     svc = _svc(tmp_path)
     cand = svc.firewall_candidate()
     denies = [e for e in cand["endpoints"] if e["deny_default"]]
-    assert {e["port"] for e in denies} == {4403, 9443}
+    assert {e["port"] for e in denies} == {4403, 9443, 4536, 9576}     # K4b: meshtastic@r1 and @r2 (+ 133)
     for e in denies:
         assert e["family"] == "dual" and e["addr"] == "*" and not e["selected"]
     fw.intent_hash(cand)               # valid candidate
@@ -963,8 +963,9 @@ def test_selected_endpoint_marks_candidate(tmp_path):
     local.write_text('[firewall]\nallow_endpoints = "meshtastic.tcp-4403"\n')
     svc._invalidate_config()
     cand = svc.firewall_candidate()
-    sel = [e for e in cand["endpoints"] if e["id"] == "meshtastic.tcp-4403"]
-    assert sel and sel[0]["selected"] is True
+    sel = [e for e in cand["endpoints"] if fw.base_id(e["id"]) == "meshtastic.tcp-4403"]
+    assert [e["id"] for e in sel] == ["meshtastic-r1.tcp-4403", "meshtastic-r2.tcp-4403"]   # the base id ticks each
+    assert all(e["selected"] is True for e in sel)
     _ = pathlib
 
 
@@ -1392,6 +1393,11 @@ def test_prospective_ports_exclude_loopback_backends(tmp_path):
 
 # --- FW-R8: stack-start exposure gate --------------------------------------------------------
 
+# K4b: the start passes the instance it resolved (service_lifecycle_ops._start_preflight_refusal); the gate is
+# asked for kiss@r1 as a start asks, never the template's values (no radio, no rows of its own).
+KISS_R1 = __import__("lhpc.core.commands", fromlist=["Instance"]).Instance("r1")
+
+
 def _expose_kiss(svc):
     """Configure the kiss TNC to bind a non-loopback listener (0.0.0.0:9001) via saved config."""
     from lhpc.core import config as _cfg
@@ -1405,7 +1411,7 @@ def test_stack_start_gate_noop_when_firewall_absent(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _expose_kiss(svc)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "absent")
-    allowed, msg, cmds = svc.firewall_gate_stack_start("kiss")
+    allowed, msg, cmds = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)
     assert allowed and msg == "" and cmds == []
 
 
@@ -1417,7 +1423,7 @@ def test_stack_start_gate_refuses_exposed_listener_when_unverified(tmp_path, mon
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": False})
-    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss")
+    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)
     assert not allowed and "Firewall changes pending" in msg and "start 'kiss' again" in msg
 
 
@@ -1427,7 +1433,7 @@ def test_stack_start_gate_allows_exposed_listener_when_verified(tmp_path, monkey
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": True})
-    assert svc.firewall_gate_stack_start("kiss")[0]
+    assert svc.firewall_gate_stack_start("kiss", inst=KISS_R1)[0]
 
 
 def test_stack_start_gate_ignores_loopback_only_stack(tmp_path, monkeypatch):
@@ -1436,7 +1442,7 @@ def test_stack_start_gate_ignores_loopback_only_stack(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": False, "live_ok": False})
-    assert svc.firewall_gate_stack_start("kiss")[0]        # loopback backend -> no gate
+    assert svc.firewall_gate_stack_start("kiss", inst=KISS_R1)[0]        # loopback backend -> no gate
 
 
 def test_stack_start_gate_fails_closed_on_unmapped_nonloopback_listener(tmp_path, monkeypatch):
@@ -1464,7 +1470,7 @@ def test_stack_start_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _expose_kiss(svc)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "partial")
-    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss")
+    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)
     assert not allowed and "partially installed" in msg
 
 
@@ -1586,34 +1592,44 @@ def test_fw_scope_modeled_matches_full_scope(tmp_path):
     assert svc._fw_scope_modeled(sc(allow_cidrs=["10.0.0.0/8"]), cand_drop)
 
 
-def test_candidate_represents_divergent_bands(tmp_path, monkeypatch):
-    # P1-1: when a stack's per-band scopes DIVERGE, the candidate must carry a distinct row per
-    # band (so compat mode drops each real port); identical-across-bands collapses to one
-    # band-agnostic row (band="") so the common case is unchanged.
+def test_an_instance_resolves_its_own_radios_band_only(tmp_path, monkeypatch):
+    # K4b (found in review): an instance has its radio's band, so the candidate resolves kiss@r1 on 433 and kiss@r2 on
+    # 868 alone: per-band config that diverges gives each instance ITS band's port, one band-agnostic row each, and
+    # no instance takes a row from another band's settings.
     import types
     svc = _svc(tmp_path)
     comp = types.SimpleNamespace(id="kc")
-    stk = types.SimpleNamespace(id="kiss", components=())          # K4ac: no bands of its own, so no copies
+    stk = types.SimpleNamespace(id="kiss", components=())          # no bands of its own: an instance on every radio
     ep = object()
     monkeypatch.setattr(svc, "_fw_listener_endpoints", lambda: ([(stk, comp, ep)], []))
     monkeypatch.setattr(svc, "stack_bands", lambda t: ("433", "868"))
+    asked = []
 
     def _scope(_s, _c, _e, overrides=None, band=None, inst=None):
-        port = 9001 if band == "433" else 9002            # diverge per band
-        return {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4",
-                "addr": "0.0.0.0", "port": port, "allow_cidrs": [], "deny": False,
+        asked.append((band, inst.rid))
+        return {"id": f"kiss.kc-{inst.rid}.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "0.0.0.0",
+                "port": 9001 if band == "433" else 9002, "allow_cidrs": [], "deny": False,  # diverge per band
                 "auth": "none", "loopback": False}
     monkeypatch.setattr(svc, "_fw_resolve_scope", _scope)
     eps = svc.firewall_candidate()["endpoints"]
-    bands = sorted(e["band"] for e in eps)
-    assert bands == ["433", "868"] and {e["port"] for e in eps} == {9001, 9002}
-    # identical-across-bands -> single band-agnostic row.
-    monkeypatch.setattr(svc, "_fw_resolve_scope",
-                        lambda *a, band=None, **k: {"id": "kiss.kc.tcp-8001", "proto": "tcp",
-                        "family": "ipv4", "addr": "0.0.0.0", "port": 9001, "allow_cidrs": [],
-                        "deny": False, "auth": "none", "loopback": False})
-    eps2 = svc.firewall_candidate()["endpoints"]
-    assert len(eps2) == 1 and eps2[0]["band"] == ""
+    assert sorted((e["id"], e["port"], e["band"]) for e in eps) == [
+        ("kiss.kc-r1.tcp-8001", 9001, ""), ("kiss.kc-r2.tcp-8001", 9002, "")]
+    assert sorted(set(asked)) == [("433", "r1"), ("868", "r2")]
+
+
+def test_the_template_keeps_a_row_per_diverging_band():
+    # P1-1, for the template's values (no radio, no hardware list): when the per-band scopes DIVERGE, a distinct row
+    # per band (so compat mode drops each real port); identical across bands collapses to one band-agnostic row.
+    import types
+    stk = types.SimpleNamespace(id="kiss", components=())
+
+    def scope(port):
+        return {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "0.0.0.0", "port": port,
+                "allow_cidrs": [], "deny": False, "auth": "none", "loopback": False}
+    rows = fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: scope(9001 if band == "433" else 9002), set())
+    assert sorted((r["band"], r["port"]) for r in rows) == [("433", 9001), ("868", 9002)]
+    rows = fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: scope(9001), set())
+    assert [(r["band"], r["port"]) for r in rows] == [("", 9001)]
 
 
 # --- FW-R10: fail-closed configure (validate-before-save rollback + render surfacing) --------
@@ -2283,7 +2299,7 @@ def test_endpoint_id_stable_across_port_change(tmp_path):
     # P1-2: the checkbox id must NOT contain the configured port (a port change loses it).
     svc = _svc(tmp_path)
     ids = {e["id"] for e in svc.firewall_candidate()["endpoints"]}
-    assert "meshtastic.tcp-4403" in ids                             # static port in id
+    assert "meshtastic-r1.tcp-4403" in ids                          # static port in id (K4b: per instance)
     # kiss id uses its STATIC 8001, not any configured override. Expose kiss (bind 0.0.0.0)
     # and change its port; the checkbox id must stay stable while the resolved port tracks.
     from lhpc.core import config as _cfg
@@ -2293,7 +2309,7 @@ def test_endpoint_id_stable_across_port_change(tmp_path):
     svc._invalidate_config()
     kiss_ids = [e for e in svc.firewall_candidate()["endpoints"]
                 if e["id"].startswith("loraham-kiss-tnc")]
-    assert kiss_ids and kiss_ids[0]["id"] == "loraham-kiss-tnc.tcp-8001"  # stable
+    assert kiss_ids and kiss_ids[0]["id"] == "loraham-kiss-tnc-r1.tcp-8001"  # stable
     assert kiss_ids[0]["port"] == 9001                              # resolved port still tracked
 
 
@@ -2307,7 +2323,7 @@ def test_bind_param_listener_on_all_v6_addresses_is_dual(tmp_path):
     _cfg.save_firewall_config(svc._paths, mode="compatibility")   # unticked = an explicit drop
     svc._invalidate_config()
     cand = svc.firewall_candidate()
-    ep = next(e for e in cand["endpoints"] if e["id"] == "loraham-kiss-tnc.tcp-8001")
+    ep = next(e for e in cand["endpoints"] if e["id"] == "loraham-kiss-tnc-r1.tcp-8001")
     assert (ep["family"], ep["addr"]) == ("dual", "*")
     m = fh.resolve_model(cand, ownership_id="x",
                          ssh_scopes=[{"proto": "tcp", "family": "dual", "addr": "*", "port": 22}])
@@ -2640,7 +2656,9 @@ def test_meshcore_file_param_allow_derives_endpoint(tmp_path):
                              {"meshcore_allow": "192.168.178.0/24"}, band)
     svc._invalidate_config()
     mc = [e for e in svc.firewall_candidate()["endpoints"] if "meshcore" in e["id"]]
-    assert mc and mc[0]["port"] == 5000 and "192.168.178.0/24" in mc[0]["allow_cidrs"]
+    # K4b: meshcore is 868's, meshcore@r2 on the default list: its port is r2's, 5000 + 133
+    assert [(e["id"], e["port"]) for e in mc] == [("meshcore-node-r2.tcp-5000", 5133)]
+    assert "192.168.178.0/24" in mc[0]["allow_cidrs"]
 
 
 @pytest.mark.parametrize("allow, row", [
@@ -2663,7 +2681,7 @@ def test_meshcore_allow_everyone_is_one_unrestricted_row(tmp_path, allow, row):
 def test_endpoints_carry_auth_metadata(tmp_path):
     svc = _svc(tmp_path)
     auths = {e["id"]: e["auth"] for e in svc.firewall_candidate()["endpoints"]}
-    assert auths.get("meshtastic.tcp-4403") == "none"
+    assert auths.get("meshtastic-r1.tcp-4403") == auths.get("meshtastic-r2.tcp-4403") == "none"
 
 
 def test_op_functions_report_busy_when_lock_held(tmp_path):
@@ -3234,9 +3252,9 @@ def test_stack_start_gate_judges_the_saved_scope_only(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": False})
-    assert svc.firewall_gate_stack_start("kiss")[0]        # saved config = loopback -> allowed
+    assert svc.firewall_gate_stack_start("kiss", inst=KISS_R1)[0]        # saved config = loopback -> allowed
     _expose_kiss(svc)                                      # saved 0.0.0.0:9001
-    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss")
+    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)
     assert not allowed and "Firewall changes pending" in msg
 
 
@@ -3249,12 +3267,12 @@ def test_stack_start_gate_verified_refuses_a_saved_scope_the_model_lacks(tmp_pat
     modeled = svc.firewall_candidate()
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": True, "candidate": modeled})
-    assert svc.firewall_gate_stack_start("kiss")[0]        # exact saved scope -> allowed
+    assert svc.firewall_gate_stack_start("kiss", inst=KISS_R1)[0]        # exact saved scope -> allowed
     from lhpc.core import config as _cfg
     _cfg.save_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9002"},
                            svc._config_band("kiss", ""))
     svc._invalidate_config()
-    allowed, msg, _ = svc.firewall_gate_stack_start("kiss")
+    allowed, msg, _ = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)
     assert not allowed
     assert "not covered by the applied firewall" in msg
 

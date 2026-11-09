@@ -38,6 +38,10 @@
         {{ disk_notice.figure }}. <a href="/#sysbox">Dashboard → System</a> (open it) shows the
         filesystems; free space before installing or building.</p>
     {% endif %}
+    {# DEC-W384g: no hardware list, so no stack has an instance; the pages are empty for that reason. #}
+    {% if no_list_notice %}
+      <p class="depnote depnote-warn" id="no-list-notice">{{ no_list_notice }}.</p>
+    {% endif %}
     {# W12 (stage L5): an old [radio] configuration and no hardware list; nothing was converted. #}
     {% if old_radio_notice %}
       <p class="depnote depnote-warn" id="old-radio-notice">{{ old_radio_notice }}. Run

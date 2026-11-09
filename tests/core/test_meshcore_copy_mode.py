@@ -15,10 +15,10 @@ ROWS = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r4
 def _svc(tmp_path):
     radios_fixture.write(tmp_path, ROWS)
     paths = Paths(runtime_root=tmp_path)
-    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "RptR4"}, inst=Instance(1, "r4"))
+    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "repeater", "file_repeater_name": "RptR4"}, inst=Instance("r4"))
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     svc.write_config_files("meshcore-node", "868", inst=instances.copy_of(svc, "meshcore", "r4")[0])   # its launch
-    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "chat"}, inst=Instance(1, "r4"))                     # saved since
+    cfgmod.update_stack_config(paths, "meshcore", {"file_mode": "chat"}, inst=Instance("r4"))                     # saved since
     node = ["/usr/bin/python", "-m", "meshcore_host", str(tmp_path / "config" / "files" / "r4" / "meshcore.toml")]
     return ControllerService(system=FakeSystem(cmdlines_data={51: node}).system, paths=paths)
 

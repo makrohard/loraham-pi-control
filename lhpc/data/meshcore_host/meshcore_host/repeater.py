@@ -27,7 +27,7 @@ from typing import Optional
 
 from . import guards
 from . import openhop_file as ofile
-from .config import BEHAVIOURS, DASHBOARD_PORT, HostConfig, ConfigError
+from .config import BEHAVIOURS, HostConfig, ConfigError
 from .gps_feed import GpsFeed
 from .gps_file import NmeaFile
 from .identity import IdentityError, load_identity_hex
@@ -90,7 +90,7 @@ def lhpc_values(cfg: HostConfig) -> dict:
             "tx_power": cfg.txpower,
             "sync_word": cfg.syncword,
         },
-        "http": {"enabled": True, "host": "127.0.0.1", "port": DASHBOARD_PORT},
+        "http": {"enabled": True, "host": "127.0.0.1", "port": cfg.dashboard_port},
         "storage": {"storage_dir": cfg.repeater_state_dir},
     }
 

@@ -11,11 +11,11 @@ LISTED = 'meshcore = ["r3"]\n'
 
 
 def _save(tmp_path, values, rid=""):
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", values, inst=Instance(1, rid) if rid else None)
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", values, inst=Instance(rid) if rid else None)
 
 
 def _node_started(launches) -> bool:
-    return any(comp == "meshcore-node" and (slot, rid) == (1, "r3") for comp, _band, slot, rid in launches)
+    return any(comp == "meshcore-node" and rid == "r3" for comp, _band, rid in launches)
 
 
 def test_an_instance_starts_on_its_own_node_name_and_mode(box, tmp_path):

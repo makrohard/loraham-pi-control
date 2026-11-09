@@ -149,7 +149,7 @@ def test_prep_healthy_running_meshcore_clears_its_marker_on_the_stop_and_succeed
     monkeypatch.setattr(ControllerService, "build_snapshot",
                         _running_then_clean(svc, {"meshcore-node"}))
 
-    def stop_clears(life, comp, band=""):
+    def stop_clears(life, comp, band="", **_scope):
         if comp.id == "meshcore-node":
             marker.unlink()                                 # the host's rc == 0 path
         return _clean_stop(life, comp, band)
@@ -168,7 +168,7 @@ def test_prep_orphan_marker_refuses_after_the_client_stops_and_before_the_daemon
                         _running_then_clean(svc, daemon_ids | {"loraham-kiss-tnc"}))
     stopped = []
 
-    def rec(life, comp, band=""):
+    def rec(life, comp, band="", **_scope):
         stopped.append(comp.id)
         return _clean_stop(life, comp, band)
     monkeypatch.setattr(Lifecycle, "stop", rec)

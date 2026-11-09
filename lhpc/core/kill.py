@@ -26,9 +26,9 @@ _TERM_BUDGET_S = GRACE_S + 2.5  # one admission holder's termination: the SIGTER
 
 def _parse(svc, target: str, component: str):
     """`<stack>[@<rid>]` and an optional component of that stack → (stack, copy, comps) or an error (W298: a kill is
-    per radio). `<stack>` is slot 0 (copy None; the CLI refuses it first, W323, and the console follows);
-    `<stack>@<rid>` is parse_target's instance: a listed copy, slot 0 on that radio (until K4), or for the daemon
-    that radio's own. A disabled radio's is still addressed."""
+    per radio). `<stack>` is the whole stack (copy None; the CLI refuses it first, W323, and the console follows);
+    `<stack>@<rid>` is parse_target's instance on that radio, for the daemon that radio's own. A disabled radio's is
+    still addressed."""
     sid, at, _rid = target.partition("@")
     stk = svc.stack(sid)
     if stk is None:
@@ -58,7 +58,6 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     table = svc._system.procfs.cmdlines()
     found: dict[int, dict] = {}
     unresolved: list[str] = []
-    others = [f"{svc._paths.runtime_root}/state/{r}/" for r in instances.copy_rids(stk, svc._paths)]
     for comp in comps:
         recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}   # one verified scan
         if comp.id == svc.DAEMON_ID:
@@ -73,7 +72,7 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
             with contextlib.suppress(Exception):       # an unresolvable value: records only
                 # stage L5 (W3): a daemon client's instance value names its radio, as its start renders it (the
                 # one token rule, instances._token)
-                inst = copy or radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.SLOT0
+                inst = copy or radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.TEMPLATE
                 instance = instances._token(svc, comp, inst, cfg_band or comp.band)
             if comp.process.instance_arg and instance is None:
                 # The value cannot be resolved, so the matcher cannot scope this component: a process of
@@ -83,12 +82,9 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
                                for p, a in sorted(table.items()) if matches(comp.process, a, None)]
             else:
                 pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
-            # One ownership decision per pid (G1-C35): another copy's verified process is not this one's; with no
-            # record a token hit is this copy's, and a bare hit (no instance token) is slot 0's (W46), never a
-            # copy's: only the copy's own verified record names it (below), anything else is refused (G2-B2 F4).
+            # One ownership decision per pid (G1-C35): another instance's verified process is not this one's; with no
+            # record a token hit is this instance's; a bare kill of the stack takes every instance's (its promise).
             pids = [p for p in pids if p not in recs or _mine(recs[p], copy)]
-            if comp.id in BAND_BY_RECORD and copy is None:     # an unrecorded hit in another copy's state dir is its
-                pids = [p for p in pids if p in recs or not any(o in t for t in table.get(p, ()) for o in others)]
             if comp.id in BAND_BY_RECORD and copy is not None:
                 unresolved += [f"pid {p} {comp.id}: cannot verify band {band} (no verified ownership record of it)"
                                for p in pids if p not in recs]
@@ -97,7 +93,7 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
         for rec in recs.values():
-            if _mine(rec, copy):                        # a live record is one copy's; slot 0 runs on one band
+            if _mine(rec, copy):                        # a live record is one instance's
                 found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
                                      "pgid": rec["pgid"], "record": rec,
                                      "argv": " ".join(table.get(rec["pid"], []))}
@@ -119,8 +115,8 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
 
 
 def _mine(rec: dict, copy) -> bool:
-    """An ownership record is the selected copy's: its slot, and for a copy (or a radio's daemon) its radio."""
-    return rec.get("slot", 0) == (copy.slot if copy is not None else 0) and (copy is None or rec.get("rid", "") == copy.rid)
+    """An ownership record is the selected instance's: its radio (13.12.5: by component and rid only)."""
+    return copy is None or rec.get("rid", "") == copy.rid
 
 
 def _arg(argv, opt: str) -> str:
@@ -279,8 +275,8 @@ def _signal(svc, targets: list[dict]) -> list[dict]:
 
 @invalidates_snapshot
 def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionResult:
-    """`lhpc kill <stack>[@<rid>] [<component>]`: SIGTERM, 5 s, SIGKILL over the copy's (slot 0's)
-    processes, under the admission flock. A dry run names the processes (the confirm)."""
+    """`lhpc kill <stack>[@<rid>] [<component>]`: SIGTERM, 5 s, SIGKILL over the instance's processes (every
+    instance's for a bare stack), under the admission flock. A dry run names the processes (the confirm)."""
     stk, copy, comps, err = _parse(svc, target, component)
     if err:
         return ActionResult(False, err, next_commands=["lhpc list"])
@@ -322,8 +318,8 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         hint = svc._launch_band_hint(stk.id, copy.band if copy is not None else "")
         for comp in comps:
             _log(svc, life, comp, hint, copy.rid if copy is not None else "")
-        if not component and copy is not None and copy.slot:
-            svc._write_stop_intent([instances.key(stk.id, copy)])       # a listed copy's own intent
+        if not component and copy is not None and copy.rid:
+            svc._write_stop_intent([instances.key(stk.id, copy)])       # the instance's own intent
         elif not component and copy is None:
             svc._safe_unlink(svc._band_marker(stk.id))
             svc.dismiss_interactive(stk.id)

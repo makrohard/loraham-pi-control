@@ -8,6 +8,7 @@ import os
 import time
 from contextlib import contextmanager
 
+from . import instances
 from .daemon_control import ALLOWED_BANDS
 from .model import ResourceMode
 from .service_base import AdmissionRefused, SourceTxnBlocked
@@ -151,8 +152,8 @@ class AdmissionOpsMixin:
         # the default band; unknown is all of them.
         allowed = self.stack_bands(sid) if sid else ()
         if len(allowed) > 1 and not self._effective_band(sid, "") \
-                and self._band_owner_is_up(sid):
-            return set(allowed)
+                and self._band_owner_is_up(sid):            # K5: its running instances' radios' bands when told
+            return (instances.running_bands(self, sid) & set(allowed)) or set(allowed)
         cfg_band = self._config_band(target, band)    # declared/default (start, or stop w/o evidence)
         return {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
 

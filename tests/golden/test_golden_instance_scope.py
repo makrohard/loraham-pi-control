@@ -68,15 +68,16 @@ def test_a_stack_on_433_never_names_its_868_instance(kiss_box, run_op, monkeypat
     _clean(box, start)
     recs = sorted((box.root / "state" / "owned").glob("*.json"))
     assert recs and all(json.loads(r.read_text())["band"] == "433" for r in recs)
-    assert (box.root / "state" / "running" / "kiss.band").read_text().strip() == "433"
+    assert not (box.root / "state" / "running" / "kiss.band").exists()      # K4b: no per-stack band marker
+    assert all(json.loads(r.read_text())["rid"] == "r1" for r in recs)      # the instance: kiss@r1, 433's
     assert "state/last-start/kiss.json" in _touched(start)                  # known-working
     assert _band(box, "state/last-start/kiss.json") == "433"
     save = run_op(box.root, lambda: box.svc.save_config_bundle("kiss", values={"tx_freq": "433.800"},
                                                                band="433"))
     assert save.res.ok, save.res.summary
-    assert "state/restart-required/kiss.json" in _touched(save)            # restart-required
+    assert "state/restart-required/kiss@r1.json" in _touched(save)            # restart-required
     _clean(box, save)
-    marker = json.loads((box.root / "state/restart-required/kiss.json").read_text())
+    marker = json.loads((box.root / "state/restart-required/kiss@r1.json").read_text())
     assert marker["band"] == "433" and set(marker["launched"]) == {"433|loraham-kiss-tnc|tx_freq"}
     stop = run_op(box.root, lambda: box.svc.stop("kiss", apply=True))
     assert stop.res.ok, stop.res.summary

@@ -51,23 +51,26 @@ def test_the_web_ui_keeps_the_stack_id_and_the_dashboard_is_the_second_page():
 
 def test_saved_meshcore_proxy_settings_still_govern_the_web_ui(tmp_path):
     svc = _svc(tmp_path)
-    save_stackweb_config(svc._paths, "meshcore", mode="lan", port=8451,
+    # K4b: meshcore is 868's, so its pages are meshcore@r2's, proxied to r2's ports (base + 133)
+    save_stackweb_config(svc._paths, "meshcore@r2", mode="lan", port=8460,
                          allowed_cidrs=["192.168.178.0/24"])
     svc._invalidate_config()
-    v = svc.stack_web_view("meshcore")
-    assert v["upstream_address"] == "127.0.0.1:8788" and v["cfg"].port == 8451
-    d = svc.stack_web_view("meshcore-meshcore-node")
-    assert d["upstream_address"] == "127.0.0.1:8000" and not d["cfg"].enabled
+    v = svc.stack_web_view("meshcore@r2")
+    assert v["upstream_address"] == "127.0.0.1:8921" and v["cfg"].port == 8460
+    d = svc.stack_web_view("meshcore-meshcore-node@r2")
+    assert d["upstream_address"] == "127.0.0.1:8133" and not d["cfg"].enabled
     # Positions: primary pages first in stack order, then the non-primary ones. The literals are
     # a SNAPSHOT on purpose — deriving them from `_page_positions()` would assert the
     # implementation against itself and stop this catching an accidental reordering, which
     # silently moves an operator's saved [stackweb] policy from one page to another.
-    # reticulum joined as a primary page (MeshChat) and pushed the dashboard from +5 to +6.
+    # reticulum joined as a primary page (MeshChat). K4b: radio by radio, r1's four pages, then r2's, the node's
+    # (non-primary) last: the dashboard sits at +8 on the default list (r1 433, r2 868).
     console = svc.config().webserver.port
-    assert svc._page_positions()[-1] == "meshcore-meshcore-node"
-    assert svc._default_stack_web_port("meshcore-meshcore-node", console) == console + 6
-    assert svc.stack_web_eligible() == ["graywolf", "meshtastic", "meshcom", "meshcore",
-                                        "meshcore-meshcore-node", "reticulum"]
+    assert svc._page_positions() == ["graywolf@r1", "meshcom@r1", "meshtastic@r1", "reticulum@r1", "graywolf@r2",
+                                     "meshcore@r2", "meshtastic@r2", "meshcore-meshcore-node@r2"]
+    assert svc._default_stack_web_port("meshcore-meshcore-node@r2", console) == console + 8
+    assert svc.stack_web_eligible() == ["graywolf@r1", "graywolf@r2", "meshtastic@r1", "meshtastic@r2", "meshcom@r1",
+                                        "meshcore@r2", "meshcore-meshcore-node@r2", "reticulum@r1"]
 
 
 def test_the_dashboard_login_is_lhpcs_minted_password_on_the_node(tmp_path):
@@ -86,18 +89,18 @@ def test_the_dashboard_page_exists_in_every_mode_and_says_when_it_is_served(tmp_
     is never hidden. The panel says when the upstream is not served in the saved mode; the
     Password section says when the admin password is not minted yet."""
     svc = _svc(tmp_path, mode="chat")
-    assert [p.page_id for p in svc.stack_web_pages("meshcore")] == ["meshcore", "meshcore-meshcore-node"]
-    assert "meshcore-meshcore-node" in svc.stack_web_eligible()
-    dash, webui = svc.web_page("meshcore-meshcore-node"), svc.web_page("meshcore")
+    assert [p.page_id for p in svc.stack_web_pages("meshcore")] == ["meshcore@r2", "meshcore-meshcore-node@r2"]
+    assert "meshcore-meshcore-node@r2" in svc.stack_web_eligible()
+    dash, webui = svc.web_page("meshcore-meshcore-node@r2"), svc.web_page("meshcore@r2")
     assert "Not served in the current mode (chat)" in svc.page_mode_note(dash)
     assert "chat+repeater and repeater" in svc.page_mode_note(dash)
     assert svc.page_mode_note(webui) == ""
-    assert svc.page_mode_note(svc.web_page("graywolf")) == ""
+    assert svc.page_mode_note(svc.web_page("graywolf@r1")) == ""
     creds = svc.ui_credentials_list("meshcore")
     assert [c["component_id"] for c in creds] == ["meshcore-node"] and creds[0]["exists"] is False
-    r = svc.stack_web_configure("meshcore-meshcore-node", port=8448)      # configurable in chat
+    r = svc.stack_web_configure("meshcore-meshcore-node@r2", port=8448)   # configurable in chat
     assert r.ok, (r.summary, r.details)
-    assert svc.stack_web_view("meshcore-meshcore-node")["mode_note"]
+    assert svc.stack_web_view("meshcore-meshcore-node@r2")["mode_note"]
     # the Dashboard row (rendered once the main component runs) carries the same note instead
     # of "listener absent — check its logs or restart it"
     from lhpc.core.model import RunState
@@ -106,7 +109,7 @@ def test_the_dashboard_page_exists_in_every_mode_and_says_when_it_is_served(tmp_
         if ss.stack.id == "meshcore":
             ss.components["meshcore-node"].run_state = RunState.RUNNING
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
-    row = next(w for w in svc.dashboard_webservers() if w.get("pid") == "meshcore-meshcore-node")
+    row = next(w for w in svc.dashboard_webservers() if w.get("pid") == "meshcore-meshcore-node@r2")
     assert "Not served in the current mode (chat)" in row["mode_note"]
     assert "Mode switch" in row["mode_note"] and "chat+repeater and repeater" in row["mode_note"]
     # the other way round: in repeater-only the WEB UI's upstream is the one not served
@@ -143,7 +146,7 @@ def test_repeater_dashboard_proxy_denies_only_the_hard_reason_routes(tmp_path):
         "/api/update/check", "/api/update/set_channel", "/api/companion/set_advert_name",
         "/api/companion/set_advert_location",
     }
-    deny = set(_web_deny(svc, "meshcore-meshcore-node"))
+    deny = set(_web_deny(svc, "meshcore-meshcore-node@r2"))
     assert deny == required
     users = {"/api/default_region", "/api/unscoped_flood_policy", "/api/policy", "/api/policy_groups",
              "/api/policy_group_entries", "/api/transport_keys", "/api/transport_key",
@@ -157,22 +160,22 @@ def test_repeater_dashboard_proxy_denies_only_the_hard_reason_routes(tmp_path):
              "/api/sensors_config_update", "/api/plugins/install", "/api/stats", "/auth/login"}
     assert not (users & deny), sorted(users & deny)
     # and the MeshCore Web UI's own list is untouched by the sibling page
-    assert "/api/device/reset" in _web_deny(svc, "meshcore")
-    up = _web_upstream(svc, "meshcore-meshcore-node")
+    assert "/api/device/reset" in _web_deny(svc, "meshcore@r2")
+    up = _web_upstream(svc, "meshcore-meshcore-node@r2")
 
     class _SWC:
-        stack_id = "meshcore-meshcore-node"; enabled = True; remote = False; allowed_cidrs = []
+        stack_id = "meshcore-meshcore-node@r2"; enabled = True; remote = False; allowed_cidrs = []
         scheme = "https"; port = 8448; access_mode = "auth-everywhere"
 
     out = ws.render_nginx_config(
         svc._paths, svc.config().webserver,
-        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node"), True)])
+        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node@r2"), True)])
     for p in required:
         # never 403 (it logs the dashboard user out): 200 with openHop's own error shape
         assert (f"location ~ {ws.deny_location_regex(p)} {{ default_type application/json; "
                 f"return 200 '{ws.DENY_NOTICE_BODY}'; }}") in out, p
     assert not [ln for ln in out.splitlines() if "location ~" in ln and "return 403" in ln]
-    stack_block = out.split("# meshcore-meshcore-node web UI")[1]
+    stack_block = out.split("# meshcore-meshcore-node@r2 web UI")[1]
     # Deny rules must never be exact-match — `location = /api/x` is bypassed by a trailing slash or
     # any suffix, so they are emitted as regexes. Assert that PER DENY PATH rather than banning
     # `location = ` outright: the block legitimately carries exactly one exact-match location, the
@@ -181,7 +184,7 @@ def test_repeater_dashboard_proxy_denies_only_the_hard_reason_routes(tmp_path):
         assert f"location = {p}" not in stack_block, p
     assert [ln.strip() for ln in stack_block.splitlines()
             if ln.strip().startswith("location = ")] == ["location = /_lhpc_updating.html {"]
-    assert "upstream lhpc_ui_meshcore_meshcore_node {" in out
+    assert "upstream lhpc_ui_meshcore_meshcore_node_r2 {" in out
 
 
 def test_the_repeater_password_is_shown_when_minted_and_malformed_is_said(tmp_path):

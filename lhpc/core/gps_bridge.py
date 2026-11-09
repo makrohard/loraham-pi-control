@@ -985,8 +985,13 @@ def run(consumer: str, paths, stop=None, state: str = "") -> int:
     if consumer not in FEED_COMPONENTS:
         _log(f"unknown consumer {consumer!r}")
         return EXIT_CONFIG
-    if state and os.path.normpath(state) != os.path.normpath(bridge_state_dir(paths.runtime_root,
-                                                                               consumer)):
+    # K4b: an instance's token is state/<rid>/gps/<consumer>; it names the consumer's one feed (its files stay in
+    # bridge_state_dir: one bridge per consumer until K7)
+    from .commands import _RID_RE
+    st, base = os.path.normpath(state or "."), bridge_state_dir(paths.runtime_root, consumer)
+    rid = os.path.basename(os.path.dirname(os.path.dirname(st)))
+    own = os.path.join(str(paths.runtime_root), "state", rid, "gps", consumer) if _RID_RE.fullmatch(rid) else base
+    if state and st not in (os.path.normpath(base), os.path.normpath(own)):
         _log(f"--state {state!r} is not {consumer}'s state dir")
         return EXIT_CONFIG
 

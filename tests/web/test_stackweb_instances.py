@@ -1,6 +1,5 @@
-"""L4: nginx pages per instance (A §2.6; PROOF T-N1, T-N5). Until L5 every stack has its one instance at slot 0 and the
-pages are today's (T-N1: the stack-web suite and its fixtures hold). A slot-k instance (injected, as L5 will assign it)
-gets its own page `<page>@<rid>`, proxied to its own port, with the slot-0 page's deny locations and deny answer."""
+"""nginx pages per instance (A §2.6; PROOF T-N1, T-N5). K4b: every page is an instance's, `<page>@<rid>`, proxied to
+its radio's port, with the component's deny locations and deny answer; the template's values (no radio) keep `<page>`."""
 
 from lhpc.core import commands
 from lhpc.core import webserver as ws
@@ -15,8 +14,8 @@ def _svc(tmp_path, monkeypatch, slot_k=True):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     if slot_k:     # raising=False: on a code without instances the pages are slot 0's only (the red-before)
         monkeypatch.setattr(commands, "stack_instances",
-                            lambda stk, paths=None: (commands.SLOT0, commands.Instance(1, "r2"))
-                            if stk.id == "meshcore" else (commands.SLOT0,), raising=False)
+                            lambda stk, paths=None: (commands.TEMPLATE, commands.Instance("r2"))
+                            if stk.id == "meshcore" else (commands.TEMPLATE,), raising=False)
     return svc
 
 
@@ -53,6 +52,8 @@ def test_t_n5_every_instance_page_carries_its_slot0_deny_locations_and_answer(tm
     assert "server 127.0.0.1:8133" in out and "server 127.0.0.1:8000" in out
 
 
-def test_t_n1_until_l5_the_pages_are_slot_0s(tmp_path, monkeypatch):
+def test_t_n1_every_page_is_an_instances_page(tmp_path, monkeypatch):
+    # K4b (no slots): the default hardware list (r1 433, r2 868) gives meshcore its 868 radio, r2; no bare page id.
     pages = _svc(tmp_path, monkeypatch, slot_k=False).stack_web_pages("meshcore")
-    assert [p.page_id for p in pages] == ["meshcore", "meshcore-meshcore-node"]
+    assert [p.page_id for p in pages] == ["meshcore@r2", "meshcore-meshcore-node@r2"]
+    assert [p.address for p in pages] == ["127.0.0.1:8921", "127.0.0.1:8133"]          # r2's ports: + 133

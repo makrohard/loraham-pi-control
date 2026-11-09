@@ -1447,8 +1447,6 @@ def _run(argv: list[str] | None = None) -> int:
                 args.stack = f"{args.stack}@{args.radio}"
             # W323/W326: `<stack>@<rid>`, one parser for every operator entry (instances.parse_target).
             sid, inst, iband, why = instances.parse_target(svc, args.stack, args.stack_action)
-            if inst is not None and inst.slot and args.stack_action == "poststart":
-                why = f"lhpc stack poststart {args.stack}: not for a copy in this build"
             if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1

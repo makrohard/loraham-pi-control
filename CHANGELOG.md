@@ -20,10 +20,10 @@
   identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
 - Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
   guide for a 433 MHz CH341A + RFM98PW stick.
-- Stack instances: kiss, meshcore and chat run as `<stack>@<rid>` on each radio of their bands in the hardware list;
-  `start|stop|restart <stack>@<rid>` act on that one alone; ports base + 133 × (n − 1), r1 keeps today's ports, up to r64.
-- Boot restore per instance: slot 0 and each listed instance come back on their own radio; stopping `kiss@r3` holds
-  back that instance alone, and a removed instance's record starts nothing.
+- Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands, started, stopped and restored alone;
+  ports base + 133 × (n − 1), r1 keeps today's. From 0.13.x: run `lhpc hardware <setup>`, re-enter settings and pages.
+- MeshCore keeps its identity: before the first start, move config/secrets/meshcore_identity.key
+  to config/secrets/<rid>/ (the repeater's own key and password are carried over by the first repeater start).
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

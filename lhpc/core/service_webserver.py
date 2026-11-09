@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 
+from . import commands, instances
 from . import openhop_store as _openhop_store
 from .paths import PathContainmentError
 from .service_base import ActionResult
@@ -591,7 +592,8 @@ class WebserverOpsMixin:
         def served(mode: str) -> bool:
             if page.component_id in _mm.CLIENT_IDS:
                 return _mm.clients_available(mode)              # the Web UI needs the Companion
-            return any(e.address == page.address for e in _mm.expected_endpoints(comp, mode))
+            inst = commands.Instance(page.page_id.partition("@")[2])     # K4b: the page's instance's own addresses
+            return any(e.address == page.address for e in instances.endpoints_for(_mm.expected_endpoints(comp, mode), inst))
 
         mode = self.meshcore_mode_display()
         if not mode or served(mode):
@@ -608,16 +610,17 @@ class WebserverOpsMixin:
         return [p for s in self.stacks() for p in self.stack_web_pages(s.id)]
 
     def _page_positions(self) -> list:
-        """Page ids in port-suggestion order: the stacks' first pages sorted by id, THEN any
-        further pages sorted by id — so a second page appearing in one stack never shifts another
-        stack's suggested port (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447,
-        reticulum 8448)."""
-        pages = self.web_pages()
-        return (sorted(p.page_id for p in pages if p.primary)
-                + sorted(p.page_id for p in pages if not p.primary))
+        """Page ids in port-suggestion order, radio by radio (K4b: every page is `<page>@<rid>`): r1's pages first,
+        each radio's the stacks' first pages sorted by id THEN any further pages sorted by id — so a radio added to
+        the list, or a second page in one stack, never shifts an earlier page's suggested port (the default list's r1:
+        graywolf 8444, meshcom 8445, meshtastic 8446, reticulum 8447; then r2's from 8448)."""
+        def at(p):                               # (radio number, further page, id); the template's pages first
+            rid = p.page_id.partition("@")[2]
+            return int(rid[1:]) if rid else 0, not p.primary, p.page_id
+        return [p.page_id for p in sorted(self.web_pages(), key=at)]
 
     def web_page(self, page_id: str):
-        """The `WebPage` a page id names (a stack id names that stack's first page), or None."""
+        """The `WebPage` a page id names (`<page>@<rid>`, K4b), or None."""
         return next((p for p in self.web_pages() if p.page_id == page_id), None)
 
     def stack_web_eligible(self) -> list:
@@ -663,7 +666,7 @@ class WebserverOpsMixin:
         for c in (st.components if st else ()):
             creds = self.ui_credentials(stack_id, c.id, inst) if c.ui_password_file else {}
             if creds:                                   # {} = no login in the current mode; 7f: an instance's own
-                out.append({"component_id": c.id, "name": c.name, "instance": f"{stack_id}@{inst.rid}" if inst and inst.slot else "", **creds})
+                out.append({"component_id": c.id, "name": c.name, "instance": f"{stack_id}@{inst.rid}" if inst and inst.rid else "", **creds})
         hmac_on = self.hmac_status(stack_id) if hasattr(self, "hmac_status") else None
         if hmac_on is not None:
             comp = self._hmac_component(stack_id)
@@ -748,7 +751,7 @@ class WebserverOpsMixin:
                 return _oh                                  # issue #5: openHop's own file
             normalize = _mci.password_normalizer(c.ui_password_file)
             path, exists, value, reason = self._read_stored_password(
-                tuple(p for p in (inst.subst(c.ui_password_file_template) if inst and inst.slot else c.ui_password_file).split("/") if p), normalize)
+                tuple(p for p in (inst.subst(c.ui_password_file_template) if inst and inst.rid else c.ui_password_file).split("/") if p), normalize)
             return {"user": c.ui_user or "admin",
                     "path": str(path) if path else "",
                     "exists": exists,

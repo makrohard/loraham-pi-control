@@ -112,7 +112,7 @@ def _argv(svc, comp_id, band):
     """The component's real argv on `band` (what its start launches)."""
     comp = next(c for st in svc.stacks() for c in st.components if c.id == comp_id)
     src = str(svc._paths.resolve_source(comp.source.path)) if comp.source else str(svc._paths.runtime_root)
-    inst = radio_start.client_instance(svc, comp, band or comp.band)[0] or commands.SLOT0   # W3: its radio's sockets
+    inst = radio_start.client_instance(svc, comp, band or comp.band)[0] or commands.TEMPLATE   # W3: its radio's sockets
     return commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, band),
                                 Config().operator, str(svc._paths.runtime_root), src, band, inst=inst)
 
@@ -563,21 +563,22 @@ def test_an_exempt_component_with_a_verified_record_of_the_copy_is_taken(tmp_pat
     svc = _copy_svc(tmp_path, {p.pid: _argv(svc, "loraham-kiss-serial", "868")})
     stk = svc.stack("kiss")
     svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-serial"), p.pid, band="868",
-                                   extra={"rid": "r3", "slot": 1})
+                                   extra={"rid": "r3"})
     plan = kill.kill(svc, "kiss@r3", "loraham-kiss-serial")
     assert plan.ok and plan.data["pids"] == [p.pid]
 
 
-def test_slot0s_kill_never_takes_a_copys_recorded_process(tmp_path, procs):
-    # W298: `kiss` is slot 0 alone; a listed copy's verified record (slot 1) is not slot 0's.
+def test_a_bare_kill_takes_every_instances_recorded_process(tmp_path, procs):
+    # K4b: a bare `kill kiss` (the core's; the CLI refuses it first, W323) keeps its promise that no process of the
+    # stack is left, so kiss@r3's verified record is taken too.
     p = procs()
     svc = _copy_svc(tmp_path, {})
     svc = _copy_svc(tmp_path, {p.pid: _copy_argv(svc, "loraham-kiss-serial")})
     stk = svc.stack("kiss")
     svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-serial"), p.pid, band="868",
-                                   extra={"rid": "r3", "slot": 1})
+                                   extra={"rid": "r3"})
     plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
-    assert plan.ok and plan.data["pids"] == []                # G1-C35 (5): the copy's own, not an unresolved candidate
+    assert plan.ok and plan.data["pids"] == [p.pid]
 
 
 def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(tmp_path, procs):
@@ -590,29 +591,29 @@ def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(
     assert plan.ok and plan.data["pids"] == [p.pid]
 
 
-def test_slot0s_kill_never_takes_an_unrecorded_process_in_a_copys_state_dir(tmp_path, procs):
-    # G1-C35-RE B1: a kiss-serial of kiss@r3 started by hand (no record) names r3's state dir in its argv
-    # (state/r3/loraham_kiss): it is the copy's, so `kill kiss` leaves it; slot 0's own is taken (W46, above).
+def test_a_bare_kill_takes_an_unrecorded_process_in_an_instances_state_dir(tmp_path, procs):
+    # G1-C35-RE B1, K4b: a kiss-serial of kiss@r3 started by hand (no record) names r3's state dir in its argv
+    # (state/r3/loraham_kiss); a bare kill of the stack takes it (every instance's).
     p = procs()
     svc = _copy_svc(tmp_path, {})
     svc = _copy_svc(tmp_path, {p.pid: _copy_argv(svc, "loraham-kiss-serial")})
     plan = kill.kill(svc, "kiss", "loraham-kiss-serial")
-    assert plan.ok and plan.data["pids"] == []
+    assert plan.ok and plan.data["pids"] == [p.pid]
 
 
-def test_a_token_hit_recorded_for_another_copy_is_not_slot0s(tmp_path, procs):
-    # G1-C35 (4): slot 0 and kiss@r3 saved the same data socket, so the token cannot tell them apart; the copy's
-    # verified record says whose the process is.
+def test_a_token_hit_recorded_for_another_instance_is_not_this_ones(tmp_path, procs):
+    # G1-C35 (4): kiss@r1 and kiss@r3 saved the same data socket, so the token cannot tell them apart; the verified
+    # record says whose the process is.
     from lhpc.core import config as cfgmod
     p = procs()
     svc = _copy_svc(tmp_path, {})
-    for band, copy in (("", commands.Instance(1, "r3")), (svc._config_band("kiss", ""), None)):
+    for band, copy in (("", commands.Instance("r3")), (svc._config_band("kiss", ""), None)):
         cfgmod.update_stack_config(svc._paths, "kiss", {"data_socket": "/tmp/shared.sock"}, band=band, inst=copy)
     svc = _copy_svc(tmp_path, {p.pid: ["/x/loraham-kiss-tnc", "--data-socket", "/tmp/shared.sock"]})
     stk = svc.stack("kiss")
     svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="868",
-                                   extra={"rid": "r3", "slot": 1})
-    assert p.pid not in kill.kill(svc, "kiss", "loraham-kiss-tnc").data["pids"]
+                                   extra={"rid": "r3"})
+    assert p.pid not in kill.kill(svc, "kiss@r1", "loraham-kiss-tnc").data["pids"]
     assert kill.kill(svc, "kiss@r3", "loraham-kiss-tnc").data["pids"] == [p.pid]
 
 

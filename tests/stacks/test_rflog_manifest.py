@@ -67,7 +67,7 @@ def test_argv_writers_get_the_switch_and_the_registry_file(tmp_path, surface, ba
     comp = svc.stack(e.owner).component(e.writer)
     # The writer's own declared defaults, so a new required run param cannot break this test.
     base = {p.name: p.default for p in comp.run_params}
-    want = f"/rt/logs/{e.job(band)}"
+    want = f"/rt/logs/r1/{e.job(band)}"             # K4b: an instance's file is its radio's, `<rid>/<file>` (rf_rows)
     if band:
         # stage L5 (W7-8, W7-8a): the daemon's file is its radio's, `{runtime}/logs/<rid>/rf-daemon.log`
         base.update(radio=band, id="r1", rflog_path="{runtime}/logs/r1/rf-daemon.log")
@@ -75,7 +75,7 @@ def test_argv_writers_get_the_switch_and_the_registry_file(tmp_path, surface, ba
     for value in ("on", "off"):
         # stage L5 (W3): a daemon client (the KISS TNC, the MeshCom bridge) renders as its radio's instance
         argv = commands.expand_argv(comp.run_argv, comp, {**base, "rf_log": value},
-                                    svc.config().operator, "/rt", "/src", band, inst=commands.Instance(0, "r1"))
+                                    svc.config().operator, "/rt", "/src", band, inst=commands.Instance("r1"))
         assert argv[argv.index("--rflog") + 1] == value
         assert argv[argv.index("--rflog-path") + 1] == want
 
@@ -85,7 +85,7 @@ def test_meshtastic_trace_file_is_derived_from_the_switch(tmp_path):
     comp = svc.stack("meshtastic").component("meshtastic")
     p = next(p for p in comp.config_file.params if p.name == rflog.MESHTASTIC_TRACE_PARAM)
     assert p.hidden and p.omit_if_empty and (p.section, p.key) == ("Logging", "TraceFile")
-    gen = tmp_path / "config" / "files" / "meshtasticd.yaml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml"
 
     def active_trace():
         return [ln.strip() for ln in gen.read_text().splitlines()
@@ -104,9 +104,9 @@ def test_meshtastic_trace_file_is_derived_from_the_switch(tmp_path):
 def test_meshcore_and_reticulum_get_the_switch_and_the_path_in_their_config(tmp_path):
     svc = _svc(tmp_path)
     assert all(w.status == "written" for w in svc.write_config_files("meshcore"))
-    toml = (tmp_path / "config" / "files" / "meshcore.toml").read_text()
+    toml = (tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text()
     assert 'rf_log = "on"' in toml
-    assert f'rf_log_path = "{tmp_path}/logs/rf-meshcore.log"' in toml
+    assert f'rf_log_path = "{tmp_path}/logs/r2/rf-meshcore.log"' in toml       # K4b: meshcore@r2's own (rf_rows)
     assert all(w.status == "written" for w in svc.write_config_files("reticulum"))
     conf = (tmp_path / "state" / "reticulum" / "config").read_text()
     lora = conf[conf.index("[[LoRa]]"):]
@@ -115,5 +115,5 @@ def test_meshcore_and_reticulum_get_the_switch_and_the_path_in_their_config(tmp_
     assert svc.save_config_bundle("reticulum", values={"file_rf_log": "off"}).ok
     svc.write_config_files("meshcore")
     svc.write_config_files("reticulum")
-    assert 'rf_log = "off"' in (tmp_path / "config" / "files" / "meshcore.toml").read_text()
+    assert 'rf_log = "off"' in (tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text()
     assert "rf_log = off" in (tmp_path / "state" / "reticulum" / "config").read_text()

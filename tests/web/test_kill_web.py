@@ -16,7 +16,7 @@ def _kiss_argv(tmp_path):
     return commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, "433"),
                                 Config().operator, str(tmp_path),
                                 str(svc._paths.resolve_source(comp.source.path)), "433",
-                                inst=commands.Instance(0, radios_fixture.RID["433"]))
+                                inst=commands.Instance(radios_fixture.RID["433"]))
 
 
 def test_the_component_kill_sits_beside_each_stop_and_no_stack_kill_shows(web):

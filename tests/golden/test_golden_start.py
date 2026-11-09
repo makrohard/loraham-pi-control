@@ -24,10 +24,10 @@ KISS_LOCKS = [
 ]
 RECHECK = ["recheck:start", "recheck:identity"]
 KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
-            "verify:endpoints:loraham-kiss-tnc", "verify:post-start", "final:running-band:433",
-            "final:known-working:kiss", "final:clear-restart-marker:kiss",
-            "final:clear-stop-intent:kiss"]
-PLAN = {"ok": True, "summary": "Run plan for 'kiss': 2 component(s) in order.",
+            "verify:endpoints:loraham-kiss-tnc", "verify:post-start",        # K4b: no slot-0 running-band marker
+            "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",   # markers per instance
+            "final:clear-stop-intent:kiss@r1"]
+PLAN = {"ok": True, "summary": "Run plan for 'kiss@r1': 2 component(s) in order.",   # K4b: the instance named
         "data_keys": ["blockers", "changes", "commands"],
         "next_commands": ["lhpc stack start kiss@r1 --yes"],
         "heads": ["[daemon] start/ensure", "[start] loraham-kiss-tnc"], "outcomes": []}
@@ -55,8 +55,7 @@ def test_plan_then_apply_happy_path(kiss_box, run_op):
     assert run.kinds == ["admission", "lock", "recheck", "mutate", "verify", "final"]
     assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
                                    "state/daemon-feed-floor-433-r1",
-                                   "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json",
-                                   "state/running/kiss.band"],
+                                   "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json"],
                          "removed": [], "changed": []}
     assert box.owned() == ["loraham-kiss-tnc"]
 
@@ -71,7 +70,7 @@ def test_refused_missing_callsign(kiss_box, run_op):
         "ok": False, "data_keys": ["enforce_fields"], "heads": [], "outcomes": [],
         "summary": "Cannot start 'chat': a callsign is required to start 'chat' — set 'call' "
                    "(or the global operator callsign)",
-        "next_commands": ["lhpc config chat call YOURCALL-10   # YOURCALL-10 = your callsign "
+        "next_commands": ["lhpc config chat@r1 call YOURCALL-10   # YOURCALL-10 = your callsign "
                           "(+optional SSID); or once for every licensed stack: lhpc config "
                           "operator --callsign YOURCALL"]}
     plan = run_op(box.root, lambda: box.svc.start("chat"))
@@ -229,18 +228,18 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
         "outcomes": [("loraham-daemon", "verified"), ("loraham-chat", "manual_required")]}
     assert run.phases[-4:] == ["recheck:identity", "recheck:preflight", "mutate:feed-floor:433",
                                "mutate:config-files:loraham-chat"]
-    assert run.files == {"added": ["config/files/lorachat.conf", "state/daemon-feed-floor-433-r1",
+    assert run.files == {"added": ["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
                                    "state/interactive/chat.show"], "removed": [], "changed": []}
     assert box.owned() == []
 
 
 def test_a_started_client_records_its_radio(kiss_box, run_op):
     """intended: (stage L5, D14/D15) the TNC's ownership record names r1, the 433 radio it ran on, so a boot
-    restore can tell its instance from a pre-0.14.0 band record."""
+    restore can tell its instance from a pre-0.14.0 band record; K4b: no slot in it (a record with one is refused)."""
     import json
     box = kiss_box()
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields["ok"], run.fields
     recs = [json.loads(p.read_text()) for p in (box.root / "state" / "owned").glob("*.json")]
-    assert {r["component"]: (r.get("rid"), r.get("slot")) for r in recs if r.get("role") == ""} == {
-        "loraham-kiss-tnc": ("r1", 0)}                               # 7e: and its instance's slot, 0
+    assert {r["component"]: r.get("rid") for r in recs if r.get("role") == ""} == {"loraham-kiss-tnc": "r1"}
+    assert not any("slot" in r for r in recs)

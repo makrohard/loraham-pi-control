@@ -2392,6 +2392,13 @@ main = "meshcore-node"
       default = ""
       label = "Node name (max 31 bytes) — required; local, never the operator callsign"
       [[stack.component.config_file.param]]
+      name = "companion_port"            # K4b, controller-owned: the instance's companion port (its endpoint's)
+      key = "port"
+      section = "companion"
+      kind = "int"
+      hidden = true
+      default = "{port:5000}"
+      [[stack.component.config_file.param]]
       name = "meshcore_allow"
       validator = "bind"
       key = "allow"
@@ -2533,6 +2540,13 @@ main = "meshcore-node"
       kind = "str"
       hidden = true
       secret_file = "openhop_repeater_jwt.txt"
+      [[stack.component.config_file.param]]
+      name = "repeater_dashboard_port"   # K4b, controller-owned: the instance's dashboard port (its endpoint's)
+      key = "dashboard_port"
+      section = "repeater"
+      kind = "int"
+      hidden = true
+      default = "{port:8000}"
       [[stack.component.config_file.param]]
       name = "repeater_state_dir"
       key = "state_dir"

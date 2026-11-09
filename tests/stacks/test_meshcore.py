@@ -52,13 +52,13 @@ def _svc(tmp_path):
 def _generated_with_key(tmp_path, key: str) -> None:
     """The generated config holding the identity at its `[identity] key` location — the
     adoption case the candidates must keep covering (a secret file not yet minted)."""
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     gen.write_text(f'[identity]\nkey = "{key}"\n')
 
 
 def _generated(tmp_path) -> str:
-    return (tmp_path / "config" / "files" / "meshcore.toml").read_text()
+    return (tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text()
 
 
 def _key_in(text: str) -> str:
@@ -99,7 +99,7 @@ def test_identity_survives_losing_the_generated_config_and_the_source(tmp_path):
     svc = _svc(tmp_path)
     svc.write_config_files("meshcore")
     first = _key_in(_generated(tmp_path))
-    (tmp_path / "config" / "files" / "meshcore.toml").unlink()
+    (tmp_path / "config" / "files" / "r2" / "meshcore.toml").unlink()
     svc.write_config_files("meshcore")
     assert _key_in(_generated(tmp_path)) == first
 
@@ -112,7 +112,7 @@ def test_existing_key_is_adopted_not_rotated(tmp_path):
     _generated_with_key(tmp_path, KEY)
     svc.write_config_files("meshcore")
     assert _key_in(_generated(tmp_path)) == KEY
-    assert mi.secret_path(svc._paths).read_text().strip() == KEY
+    assert mi.secret_path(svc._paths, rid="r2").read_text().strip() == KEY
 
 
 @pytest.mark.contract
@@ -153,7 +153,7 @@ def test_a_malformed_toml_candidate_blocks_instead_of_minting(tmp_path):
     TOML damage; falling through would mint a new key and then regenerate the file over the
     original — losing the identity exactly when we were trying to rescue it."""
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     # Valid key present, but the document is broken further down.
     gen.write_text(f'[identity]\nkey = "{KEY}"\nbroken = [1,\n')
@@ -199,9 +199,9 @@ def test_both_pinned_key_lengths_are_accepted(tmp_path):
 def test_secret_and_generated_config_are_0600(tmp_path):
     svc = _svc(tmp_path)
     svc.write_config_files("meshcore")
-    assert mi.secret_path(svc._paths).stat().st_mode & 0o777 == 0o600
-    assert mi.secret_path(svc._paths).parent.stat().st_mode & 0o777 == 0o700
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    assert mi.secret_path(svc._paths, rid="r2").stat().st_mode & 0o777 == 0o600
+    assert mi.secret_path(svc._paths, rid="r2").parent.stat().st_mode & 0o777 == 0o700
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     assert gen.stat().st_mode & 0o777 == 0o600, "the generated file carries the private key"
 
 
@@ -261,7 +261,7 @@ def test_read_only_operations_create_no_key(tmp_path):
     assert svc.update("meshcore", apply=False).ok
     assert svc.uninstall("meshcore", apply=False).ok
     assert svc.clean("meshcore", apply=False).ok
-    assert not mi.secret_path(svc._paths).exists()
+    assert not mi.secret_path(svc._paths, rid="r2").exists()
 
 
 @pytest.mark.safety("meshcore-identity")
@@ -270,11 +270,11 @@ def test_clean_purge_removes_the_identity_so_a_reinstall_is_a_new_node(tmp_path)
     # generated config, so nothing is left for a reinstall to adopt the old identity from.
     svc = _svc(tmp_path)
     _generated_with_key(tmp_path, KEY)
-    mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
-    assert mi.secret_path(svc._paths).exists()
+    mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates(), rid="r2")     # meshcore@r2's key (868)
+    assert mi.secret_path(svc._paths, rid="r2").exists()
     res = svc.clean("meshcore", apply=True, purge=True)
     assert res.ok, res.details
-    assert not mi.secret_path(svc._paths).exists()
+    assert not mi.secret_path(svc._paths, rid="r2").exists()
     assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == ""
 
 
@@ -283,13 +283,13 @@ def test_uninstall_adopts_the_key_before_removing_the_source(tmp_path):
     svc = _svc(tmp_path)
     _generated_with_key(tmp_path, KEY)
     assert svc.uninstall("meshcore", apply=True).ok
-    assert mi.secret_path(svc._paths).read_text().strip() == KEY
+    assert mi.secret_path(svc._paths, rid="r2").read_text().strip() == KEY
 
 
 @pytest.mark.safety("meshcore-identity")
 def test_a_destructive_op_refuses_on_an_invalid_key_rather_than_destroying_it(tmp_path):
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     gen.write_text('[identity]\nkey = "nope"\n')
     res = svc.uninstall("meshcore", apply=True)
@@ -374,7 +374,7 @@ def test_fixed_position_reaches_the_generated_config(tmp_path):
 def test_use_gps_off_omits_coordinates_and_clears_a_stale_pair(tmp_path):
     svc = _svc(tmp_path)
     # A previous generation left a stale pair in the generated file.
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     assert svc.set_gps(source="fixed", fixed_lat=LAT, fixed_lon=LON).ok
     svc.write_config_files("meshcore", position={"lat": LAT, "lon": LON})
@@ -495,7 +495,7 @@ def test_an_unreadable_candidate_blocks_rather_than_minting_over_it(tmp_path):
     # REVIEW-FOUND: treating an unreadable candidate (symlinked leaf, swapped parent) as
     # "no key" falls through to minting — the exact silent rotation this module prevents.
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen = tmp_path / "config" / "files" / "r2" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     real = tmp_path / "elsewhere.toml"
     real.write_text(f'[identity]\nkey = "{KEY}"\n')

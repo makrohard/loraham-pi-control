@@ -45,6 +45,7 @@ from .model import Component, Stack
 from .outcomes import CompResult, Outcome
 from .paths import PathContainmentError, Paths
 from .probes import System
+from .probes.process import matches as _matches
 from .probes.process import probe_process
 
 # The ONE exact content a completion marker may hold; `is_built()` accepts nothing else. A build stamps
@@ -459,7 +460,7 @@ class Lifecycle:
 
     def start(self, stack: Stack, comp: Component, params: dict | None = None,
               band: str = "", *, requested_target: str = "",
-              start_scope: str = "", inst: commands.Instance = commands.SLOT0) -> StartLaunch:
+              start_scope: str = "", inst: commands.Instance = commands.TEMPLATE) -> StartLaunch:
         """Launch a component detached with NO shell: typed pre-steps run in Python,
         then the target is exec'd directly via Popen(shell=False, cwd, env). The real
         process identity is observed before ownership is recorded (no shell-to-exec
@@ -491,7 +492,7 @@ class Lifecycle:
                 return StartLaunch(False, str(log), why)
         op = self.config.operator
         try:
-            # `inst`: the instance's slot and radio (stage L5: a daemon client's sockets are its radio's, W3)
+            # `inst`: the instance's radio (stage L5: a daemon client's sockets are its radio's, W3)
             commands.run_pre_steps(comp.pre_steps, runtime, src, band, inst=inst)
             argv = commands.expand_argv(comp.run_argv, comp, params, op, runtime, src, band, inst=inst)
             extra = commands.build_env(comp.run_env, runtime, src, band, inst=inst)
@@ -537,7 +538,7 @@ class Lifecycle:
             return StartLaunch(False, str(log), str(exc))
         status = self._observe_and_record(stack, comp, pid, band, argv,
                                           requested_target=requested_target,
-                                          start_scope=start_scope, rid=inst.rid, slot=inst.slot)
+                                          start_scope=start_scope, rid=inst.rid)
         if status == "ok":
             return StartLaunch(True, str(log))
         # Not owned. Distinguish a clean failure (residual verified gone) from an
@@ -552,14 +553,14 @@ class Lifecycle:
 
     def _observe_and_record(self, stack: Stack, comp: Component, pid: int | None,
                             band: str, intended_argv: list[str], *,
-                            requested_target: str = "", start_scope: str = "", rid: str = "", slot: int = 0) -> str:
+                            requested_target: str = "", start_scope: str = "", rid: str = "") -> str:
         """Observe the launched pid's identity then persist ownership. Returns:
           * "ok"         — identity observed AND a durable ownership record persisted;
           * "ceased"     — could not be owned, but the residual process is verified gone;
           * "unverified" — could not be owned AND the residual process could NOT be
                            proven ceased (a leaked process — typed UNVERIFIED upstream).
         With OBSERVE_TIMEOUT_S=0 (tests) it records directly."""
-        extra = {"rid": rid, "slot": slot} if rid else None       # the instance's radio and slot (L5, 7e)
+        extra = {"rid": rid} if rid else None          # the instance's radio (L5; no slot, K4b)
         if self.OBSERVE_TIMEOUT_S <= 0:
             # Capture a COMPLETE identity first and pass it to both record and cleanup,
             # so the zero-observation path follows the SAME no-signal-without-identity
@@ -754,13 +755,10 @@ class Lifecycle:
         return self._proc_ceased(pid)
 
     def _verified_main_record(self, comp_id: str, band: str, inst=None):
-        """The currently VERIFIED main (role="") ownership record of this component+band and copy (its slot, and a
-        listed copy's radio), or None. A detached post-runner is bound to this exact launch so it can never act for
-        a later one, nor for another copy's."""
-        slot = getattr(inst, "slot", 0)
-        for rec in self.owned_records(comp_id, band, role="", rid=inst.rid if slot else None):
-            if rec.get("slot", 0) != slot:
-                continue
+        """The currently VERIFIED main (role="") ownership record of this component+band and instance (its radio),
+        or None. A detached post-runner is bound to this exact launch so it can never act for
+        a later one, nor for another instance's."""
+        for rec in self.owned_records(comp_id, band, role="", rid=getattr(inst, "rid", "") or None):
             ok, _why = self.verify_owned(rec)
             if ok:
                 return rec
@@ -811,7 +809,7 @@ class Lifecycle:
         result = self.paths.under("state", "post", f"{uid}.result.json")
         try:
             script = commands.render_post_launcher(comp.post_steps, comp, params, op, runtime, src, band,
-                                                   binding=binding, gated=True, inst=inst or commands.SLOT0,
+                                                   binding=binding, gated=True, inst=inst or commands.TEMPLATE,
                                                    result_path=str(result),
                                                    gps=self._gps_post_values(getattr(stack, 'id', '')))
         except (commands.CommandError, validators.ValidationError) as exc:
@@ -956,7 +954,7 @@ class Lifecycle:
         result = self.paths.under("state", "post", self.required_result_leaf(binding))
         try:
             script = commands.render_post_launcher(
-                comp.post_steps, comp, params, op, runtime, src, band, binding=binding, inst=inst or commands.SLOT0,
+                comp.post_steps, comp, params, op, runtime, src, band, binding=binding, inst=inst or commands.TEMPLATE,
                 result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', '')),
                 meta={"comp": comp.id, "band": band or "", "role": "required"},
                 require_all=require_all)
@@ -1092,6 +1090,9 @@ class Lifecycle:
         """"" when valid (schema v1), else a short reason. `name` is the filename leaf."""
         if not isinstance(rec, dict):
             return "not a JSON object"
+        if "slot" in rec:                          # 13.8 (K4b): a record from the slot builds is refused, never resolved
+            return (f"a record from before per-radio instances (slot {rec['slot']!r}): stop its process by hand and "
+                    f"start it by name ({rec.get('stack') or '<stack>'}@<rid>)")
         for k in self._OWNED_V0_KEYS:
             if k not in rec:
                 return f"missing field {k!r}"
@@ -1389,7 +1390,7 @@ class Lifecycle:
         return notes, unverified
 
     def stop(self, comp: Component, band: str | None = None, rid: str | None = None,
-             exclude_rids=(), token=None, endpoints=None) -> CompResult:
+             token=None, endpoints=None) -> CompResult:
         """Stop the LHPC-owned launch(es) for this component (optionally one band),
         returning a TYPED outcome.
 
@@ -1414,7 +1415,7 @@ class Lifecycle:
             return CompResult(component=comp.id, action="stop", outcome=outcome,
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
-        recs = [r for r in self.owned_records(comp.id, band, rid=rid) if r.get("rid", "") not in exclude_rids]
+        recs = self.owned_records(comp.id, band, rid=rid)
         # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never slot 0's that still serve.
         ep_comp = comp if endpoints is None else dataclasses.replace(comp, endpoints=tuple(endpoints))
         if not recs:
@@ -1423,10 +1424,16 @@ class Lifecycle:
             # ALREADY_STOPPED while a ready=true endpoint is still present).
             if comp.process is not None:
                 pm = probe_process(self.system, comp.process, instance=token)    # 7c2b: this instance's own
-                if pm.pids and (token is not None or not (rid or exclude_rids)):
+                # K4b fail-safe: a matching process no record claims (any radio's) cannot be told to be another
+                # instance's, so a stop never calls it gone; a token-less spec's other instance is claimed by its record.
+                owned = {r.get("pid") for r in self.owned_records(comp.id, role=None)}
+                opt = comp.process.instance_arg[0] if comp.process.instance_arg else None
+                bare = [p for p, a in self.system.procfs.cmdlines().items()        # no instance token at all
+                        if p not in owned and _matches(comp.process, a, None) and (opt is None or opt not in a)]
+                if foreign := sorted({*(p for p in pm.pids if p not in owned), *bare}):
                     return result(Outcome.MANUAL_REQUIRED,
                                   "a matching process is running but not owned by LHPC — "
-                                  f"stop it yourself: kill {' '.join(map(str, pm.pids))}")
+                                  f"stop it yourself: kill {' '.join(map(str, foreign))}")
             gone, lingering = self._await_ready_endpoints_gone(ep_comp)
             if not gone:
                 return result(Outcome.ENDPOINT_STILL_PRESENT,

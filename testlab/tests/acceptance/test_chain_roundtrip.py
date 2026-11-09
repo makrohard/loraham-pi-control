@@ -18,7 +18,7 @@ from lhpc_testlab.release import (
     wait_http,
     wait_tcp,
 )
-from lhpc_testlab.testing import named, run_lab, run_lhpc
+from lhpc_testlab.testing import named, port_of, run_lab, run_lhpc
 
 
 def _kiss_serving() -> bool:
@@ -133,7 +133,8 @@ def test_meshcore_real_process_over_fake_868(chain):
     r = run_lhpc(chain.env, "stack", "start", named(chain.env, "meshcore"), "--yes", timeout=300)
     try:
         assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
-        assert wait_tcp(MESHCORE_COMPANION, 180), "MeshCore companion never opened TCP 5000"
+        port = port_of(chain.env, "meshcore", MESHCORE_COMPANION)          # meshcore@<rid>'s own (DEC-W348)
+        assert wait_tcp(port, 180), f"MeshCore companion never opened TCP {port}"
         # chat mode runs no repeater and therefore no plugin manager (the repeater roles are
         # proven with it in the release lane)
         assert plugin_manager_pids(chain.root) == [], "a plugin manager beside a chat node"
@@ -187,12 +188,13 @@ def test_simulated_reboot_restores_running_stacks(chain):
     # The PRODUCTION boot restore ran on the new boot and brought kiss back.
     journal = json.loads((chain.root / "state" / "boot-restore.json").read_text())
     assert journal["boot_id"] == after
-    kiss = [i for i in journal["items"] if i.get("target") == "kiss"]
+    key = named(chain.env, "kiss")                            # K4b: journal items and tombstones are per instance
+    kiss = [i for i in journal["items"] if i.get("target") == key]
     assert kiss and kiss[0]["state"] == "succeeded", journal
     # reboot must not OPERATOR-stop kiss — a reboot is not an explicit stop, so it writes
     # no per-stack tombstone for kiss (boot-restore may then bring it back). Check kiss
     # specifically: the stop-intent/ dir may hold other stacks' tombstones (e.g. meshcore,
     # operator-stopped by an earlier test in this shared module).
-    assert not (chain.root / "state" / "stop-intent" / "kiss.json").exists(), \
+    assert not any((chain.root / "state" / "stop-intent" / f"{k}.json").exists() for k in ("kiss", key)), \
         "reboot wrongly left a kiss operator-stop tombstone"
     assert wait_tcp(KISS_TCP, 90), "kiss not serving on 127.0.0.1:8001 after reboot (restore)"

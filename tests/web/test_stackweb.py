@@ -19,6 +19,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener, CommandResult as CR
 from lhpc.core.services import ControllerService
 
+import radios_fixture
 import repo_paths
 from htmlq import parse
 
@@ -439,6 +440,14 @@ def test_full_entry_parses(tmp_path):
     assert sw.enabled and sw.remote
 
 
+def test_an_instance_page_key_round_trips_through_the_parser(tmp_path):
+    # K4b: a page is `<page>@<rid>`; its keys are quoted in local.toml and split on the suffix like any other.
+    _write_local(tmp_path, '[stackweb]\n"meshcom@r1_port" = 8444\n"meshcom@r1_access_mode" = "auth-everywhere"\n')
+    sw = load_config(_paths_stackweb_config(tmp_path)).stackweb
+    assert list(sw) == ["meshcom@r1"] and sw["meshcom@r1"].port == 8444
+    assert sw["meshcom@r1"].access_mode == "auth-everywhere"
+
+
 def test_absent_table_yields_no_entries(tmp_path):
     _write_local(tmp_path, "")
     assert load_config(_paths_stackweb_config(tmp_path)).stackweb == {}
@@ -496,15 +505,15 @@ def test_console_parser_downgrades_http_plus_cert_auth(tmp_path):
 def test_saving_http_with_cert_auth_is_refused(tmp_path):
     p = _paths_stackweb_config(tmp_path)
     with pytest.raises(ConfigError, match="cannot do client-certificate"):
-        save_stackweb_config(p, "meshcom", port=8444, scheme="http", access_mode="auth-everywhere")
+        save_stackweb_config(p, "meshcom@r1", port=8444, scheme="http", access_mode="auth-everywhere")
 
 
 def test_saving_http_alone_is_refused_against_the_stored_cert_mode(tmp_path):
     # Neither half may sneak in alone: the check resolves patch-over-stored.
     p = _paths_stackweb_config(tmp_path)
-    save_stackweb_config(p, "meshcom", port=8444, scheme="https", access_mode="auth-everywhere")
+    save_stackweb_config(p, "meshcom@r1", port=8444, scheme="https", access_mode="auth-everywhere")
     with pytest.raises(ConfigError, match="cannot do client-certificate"):
-        save_stackweb_config(p, "meshcom", scheme="http")
+        save_stackweb_config(p, "meshcom@r1", scheme="http")
 
 
 @pytest.mark.parametrize("target", ["console", "stackweb"])
@@ -521,10 +530,10 @@ def test_http_cert_check_reads_the_config_under_the_lock(tmp_path, monkeypatch, 
         ours = lambda: cfgmod.save_webserver_config(p, scheme="http")                   # noqa: E731
         stored = lambda: load_config(p).webserver                                        # noqa: E731
     else:
-        save_stackweb_config(p, "meshcom", port=8444, scheme="https", access_mode="no-auth")
-        other = lambda: save_stackweb_config(p, "meshcom", access_mode="auth-everywhere")  # noqa: E731
-        ours = lambda: save_stackweb_config(p, "meshcom", scheme="http")                   # noqa: E731
-        stored = lambda: load_config(p).stackweb["meshcom"]                                # noqa: E731
+        save_stackweb_config(p, "meshcom@r1", port=8444, scheme="https", access_mode="no-auth")
+        other = lambda: save_stackweb_config(p, "meshcom@r1", access_mode="auth-everywhere")  # noqa: E731
+        ours = lambda: save_stackweb_config(p, "meshcom@r1", scheme="http")                   # noqa: E731
+        stored = lambda: load_config(p).stackweb["meshcom@r1"]                                # noqa: E731
     real_lock, fired = cfgmod.config_lock, []
 
     @contextlib.contextmanager
@@ -544,8 +553,8 @@ def test_http_cert_check_reads_the_config_under_the_lock(tmp_path, monkeypatch, 
 
 def test_saving_http_with_no_auth_is_allowed(tmp_path):
     p = _paths_stackweb_config(tmp_path)
-    save_stackweb_config(p, "meshcom", port=8444, scheme="http", access_mode="no-auth")
-    sw = load_config(p).stackweb["meshcom"]
+    save_stackweb_config(p, "meshcom@r1", port=8444, scheme="http", access_mode="no-auth")
+    sw = load_config(p).stackweb["meshcom@r1"]
     assert sw.scheme == "http" and sw.access_mode == "no-auth"
 
 
@@ -557,21 +566,21 @@ def test_console_saving_http_with_cert_auth_is_refused(tmp_path):
 
 def test_save_roundtrip_and_partial_update(tmp_path):
     p = _paths_stackweb_config(tmp_path)
-    save_stackweb_config(p, "meshcom", mode="lan", port=8444,
+    save_stackweb_config(p, "meshcom@r1", mode="lan", port=8444,
                          allowed_cidrs=["192.168.178.0/24"])
-    sw = load_config(p).stackweb["meshcom"]
+    sw = load_config(p).stackweb["meshcom@r1"]
     assert (sw.mode, sw.port, sw.allowed_cidrs) == ("lan", 8444, ("192.168.178.0/24",))
-    save_stackweb_config(p, "meshcom", port=8500)          # None = leave unchanged
-    sw = load_config(p).stackweb["meshcom"]
+    save_stackweb_config(p, "meshcom@r1", port=8500)          # None = leave unchanged
+    sw = load_config(p).stackweb["meshcom@r1"]
     assert sw.port == 8500 and sw.mode == "lan" and sw.allowed_cidrs == ("192.168.178.0/24",)
 
 
 def test_two_stacks_do_not_clobber_each_other(tmp_path):
     p = _paths_stackweb_config(tmp_path)
-    save_stackweb_config(p, "meshcom", port=8444)
-    save_stackweb_config(p, "meshtastic", port=8445)
+    save_stackweb_config(p, "meshcom@r1", port=8444)
+    save_stackweb_config(p, "meshtastic@r1", port=8445)
     sw = load_config(p).stackweb
-    assert sw["meshcom"].port == 8444 and sw["meshtastic"].port == 8445
+    assert sw["meshcom@r1"].port == 8444 and sw["meshtastic@r1"].port == 8445
 
 
 @pytest.mark.parametrize("kw", [
@@ -581,15 +590,15 @@ def test_two_stacks_do_not_clobber_each_other(tmp_path):
 def test_save_validates_before_writing(tmp_path, kw):
     p = _paths_stackweb_config(tmp_path)
     with pytest.raises(Exception):
-        save_stackweb_config(p, "meshcom", **kw)
+        save_stackweb_config(p, "meshcom@r1", **kw)
     assert load_config(p).stackweb == {}                   # nothing written
 
 
 def test_port_zero_disables_and_is_savable(tmp_path):
     p = _paths_stackweb_config(tmp_path)
-    save_stackweb_config(p, "meshcom", port=8444)
-    save_stackweb_config(p, "meshcom", port=0)
-    assert not load_config(p).stackweb["meshcom"].enabled
+    save_stackweb_config(p, "meshcom@r1", port=8444)
+    save_stackweb_config(p, "meshcom@r1", port=0)
+    assert not load_config(p).stackweb["meshcom@r1"].enabled
 
 
 def _svc(tmp_path, listeners=()):
@@ -601,14 +610,24 @@ def _svc(tmp_path, listeners=()):
 def test_eligible_stacks_are_derived_from_client_web_endpoints(tmp_path):
     svc = _svc(tmp_path)
     eligible = svc.stack_web_eligible()
-    assert "meshcom" in eligible and "meshtastic" in eligible
+    assert "meshcom@r1" in eligible and "meshtastic@r1" in eligible and "meshtastic@r2" in eligible
     assert "daemon" not in eligible and "chat" not in eligible    # no client http endpoint
+
+
+@pytest.mark.no_default_hardware
+def test_a_box_without_a_hardware_list_has_no_pages_and_configures_none(tmp_path):
+    # K4b: pages are instances' and instances come from the hardware list; without one there is nothing to proxy.
+    svc = _svc(tmp_path)
+    assert svc.web_pages() == [] and svc.stack_web_eligible() == []
+    r = svc.stack_web_configure("meshcom@r1", mode="local", port=8444)
+    assert not r.ok and "names no web UI to proxy" in r.summary
+    assert load_config(Paths(runtime_root=tmp_path)).stackweb == {}
 
 
 def test_upstream_is_read_from_the_manifest_endpoint(tmp_path):
     svc = _svc(tmp_path)
-    assert _web_upstream(svc, "meshcom") == ("127.0.0.1:18083", "http")
-    assert _web_upstream(svc, "meshtastic") == ("127.0.0.1:9443", "https")
+    assert _web_upstream(svc, "meshcom@r1") == ("127.0.0.1:18083", "http")
+    assert _web_upstream(svc, "meshtastic@r1") == ("127.0.0.1:9443", "https")
     assert _web_upstream(svc, "daemon") is None
 
 
@@ -618,9 +637,9 @@ def test_view_is_empty_for_a_stack_without_a_web_ui(tmp_path):
 
 @pytest.mark.parametrize("stack,binds,scope,bypassable", [
     # an exposed upstream (binds all interfaces, no bind knob) means our proxy is NOT the only door
-    pytest.param("meshtastic", [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}],
+    pytest.param("meshtastic@r1", [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}],
                  "exposed", True, id="exposed-upstream-bypassable"),
-    pytest.param("meshcom", [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 2}],
+    pytest.param("meshcom@r1", [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 2}],
                  "loopback", False, id="loopback-upstream-not-bypassable"),
 ])
 def test_upstream_bypassability(tmp_path, stack, binds, scope, bypassable):
@@ -634,14 +653,14 @@ def test_bypass_warning_fires_even_in_local_mode(tmp_path):
     # "local only" is exactly the person most likely to believe they are safe.
     p = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    cfgmod.save_stackweb_config(p, "meshtastic", mode="local", port=8445)
+    cfgmod.save_stackweb_config(p, "meshtastic@r1", mode="local", port=8445)
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    assert svc.stack_web_view("meshtastic")["bypassable"] is True
+    assert svc.stack_web_view("meshtastic@r1")["bypassable"] is True
 
 
 def test_configure_discloses_the_bypass_in_its_details(tmp_path):
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    res = svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    res = svc.stack_web_configure("meshtastic@r1", mode="local", port=8445)
     assert res.ok
     assert any("bypassing this proxy" in d for d in res.details)
     assert any("managed firewall can close" in d for d in res.details)
@@ -649,20 +668,20 @@ def test_configure_discloses_the_bypass_in_its_details(tmp_path):
 
 def test_local_needs_no_confirmation_via_configure(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
 
 
 def test_lan_needs_the_phrase(tmp_path):
     svc = _svc(tmp_path)
-    r = svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"])
+    r = svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["192.168.0.0/24"])
     combined = r.summary + " ".join(r.details)                     # aggregated refusal: reasons in details
     assert not r.ok and "confirmation required" in combined
     assert "--confirm-phrase enable-remote" in combined            # the exact flag is named
-    assert svc.config().stackweb.get("meshcom") is None            # nothing written
+    assert svc.config().stackweb.get("meshcom@r1") is None            # nothing written
 
-    r = svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"],
+    r = svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["192.168.0.0/24"],
                                 confirm=True)
-    assert r.ok and svc.config().stackweb["meshcom"].mode == "lan"
+    assert r.ok and svc.config().stackweb["meshcom@r1"].mode == "lan"
 
 
 @pytest.mark.parametrize("kw", [
@@ -672,37 +691,37 @@ def test_lan_needs_the_phrase(tmp_path):
 ])
 def test_elevated_cases_reject_the_weak_phrase(tmp_path, kw):
     svc = _svc(tmp_path)
-    r = svc.stack_web_configure("meshcom", port=8444, confirm=True, **kw)
+    r = svc.stack_web_configure("meshcom@r1", port=8444, confirm=True, **kw)
     combined = r.summary + " ".join(r.details)                     # aggregated refusal: reasons in details
     assert not r.ok and "elevated confirmation" in combined
     assert "--confirm-phrase enable-remote-danger" in combined     # the exact strong phrase is named
-    assert svc.config().stackweb.get("meshcom") is None
+    assert svc.config().stackweb.get("meshcom@r1") is None
 
-    r = svc.stack_web_configure("meshcom", port=8444, confirm=True, confirm_public=True, **kw)
+    r = svc.stack_web_configure("meshcom@r1", port=8444, confirm=True, confirm_public=True, **kw)
     assert r.ok
 
 
 def test_remote_without_cidr_is_refused(tmp_path):
-    r = _svc(tmp_path).stack_web_configure("meshcom", mode="lan", port=8444, confirm=True)
+    r = _svc(tmp_path).stack_web_configure("meshcom@r1", mode="lan", port=8444, confirm=True)
     assert not r.ok and any("allowed source CIDR" in d for d in r.details)
 
 
 def test_http_with_certificate_auth_is_refused(tmp_path):
-    r = _svc(tmp_path).stack_web_configure("meshcom", mode="local", port=8444,
+    r = _svc(tmp_path).stack_web_configure("meshcom@r1", mode="local", port=8444,
                                            scheme="http", access_mode="auth-everywhere")
     assert not r.ok
     assert any("cannot do client-certificate authentication" in d for d in r.details)
 
 
 def test_port_collision_with_the_console_is_refused(tmp_path):
-    r = _svc(tmp_path).stack_web_configure("meshcom", mode="local", port=8443)
+    r = _svc(tmp_path).stack_web_configure("meshcom@r1", mode="local", port=8443)
     assert not r.ok and any("console's port" in d for d in r.details)
 
 
 def test_port_collision_between_stacks_is_refused(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
-    r = svc.stack_web_configure("meshtastic", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
+    r = svc.stack_web_configure("meshtastic@r1", mode="local", port=8444)
     assert not r.ok and any("another stack" in d for d in r.details)
 
 
@@ -711,23 +730,27 @@ def test_configure_refuses_a_stack_without_a_web_ui(tmp_path):
 
 
 def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
-    # The default is deterministic per stack, NOT "first free above the console" — which handed
+    # The default is deterministic per page, NOT "first free above the console" — which handed
     # every not-yet-enabled stack 8444, so accepting two suggestions collided on 8444.
+    # K4b: console_port + 1 + the page's position RADIO BY RADIO: r1's first pages by id, then r1's further
+    # pages, then r2's, ... (the default list: r1 433, r2 868; meshcore is 868-only, so it is r2's).
     svc = _svc(tmp_path)
-    # console_port + 1 + position among the web-UI stacks sorted BY ID, so "graywolf"
-    # takes the first slot and the mesh* stacks follow it.
-    # web-UI stacks sorted BY ID: graywolf, meshcom, meshcore, meshtastic (meshcore's
-    # browser GUI joined the set with the web-UI migration).
-    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
-    assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
-    assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447   # distinct even when none is enabled
+    want = {"graywolf@r1": 8444, "meshcom@r1": 8445, "meshtastic@r1": 8446, "reticulum@r1": 8447,
+            "graywolf@r2": 8448, "meshcore@r2": 8449, "meshtastic@r2": 8450, "meshcore-meshcore-node@r2": 8451}
+    assert {p: svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()} == want
     # stable after one is enabled
-    assert svc.stack_web_configure("meshcom", mode="local", port=8445).ok
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447
-    assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
-    assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
-    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8445).ok
+    assert {p: svc.stack_web_view(p)["suggested_port"] for p in want} == want
+
+
+def test_an_added_radio_never_shifts_an_earlier_radios_suggestions(tmp_path):
+    before = {p: _svc(tmp_path).stack_web_view(p)["suggested_port"] for p in _svc(tmp_path)._page_positions()}
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS + (radios_fixture.R3,))     # + a stick r3 on 868
+    svc = _svc(tmp_path)
+    after = {p: svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()}
+    assert {p: after[p] for p in before} == before                       # r1's and r2's unchanged
+    assert {p: v for p, v in after.items() if p.endswith("@r3")} == {
+        "graywolf@r3": 8452, "meshcore@r3": 8453, "meshtastic@r3": 8454, "meshcore-meshcore-node@r3": 8455}
 
 
 def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
@@ -736,10 +759,10 @@ def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
     # port another stack has ALREADY saved. A suggestion Apply would refuse ("already used by
     # another stack's web UI") is a dead prefill, so a taken port is skipped.
     svc = _svc(tmp_path)
-    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok      # the pre-upgrade choice
-    assert svc.stack_web_view("graywolf")["suggested_port"] == 8445   # not the taken 8444
-    assert svc.stack_web_view("meshcom")["suggested_port"] == 8444    # its own saved port stands
+    assert svc.stack_web_view("graywolf@r1")["suggested_port"] == 8444
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok      # the pre-upgrade choice
+    assert svc.stack_web_view("graywolf@r1")["suggested_port"] == 8445   # not the taken 8444
+    assert svc.stack_web_view("meshcom@r1")["suggested_port"] == 8444    # its own saved port stands
 
 
 def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path, web):
@@ -747,12 +770,12 @@ def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path, we
     # submitted and the proxy actually listens.
     svc = _svc(tmp_path)
     doc = parse(web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True))
-    assert doc.within(doc.by_id("stack-webserver-meshcom")).field_default("port") == "8445"
+    assert doc.within(doc.by_id("stack-webserver-meshcom@r1")).field_default("port") == "8445"
 
 
 def test_enabled_stack_reaches_the_rendered_nginx_config(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     proxies = svc._stack_web_proxies()
     assert len(proxies) == 1
     assert proxies[0].upstream_address == "127.0.0.1:18083"
@@ -764,7 +787,7 @@ def test_enabled_stack_reaches_the_rendered_nginx_config(tmp_path):
 
 def test_disabled_stack_contributes_no_proxy(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=0).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=0).ok
     assert svc._stack_web_proxies() == []
 
 
@@ -802,7 +825,7 @@ def test_applied_remote_proxy_links_the_reachable_address(tmp_path):
     # remote (proxy_remote), in sync with the saved mode (not pending). The dashboard fills the host
     # from request.host; the CLI/no-request fallback link is loopback.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.178.0/24"],
+    assert svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["192.168.178.0/24"],
                             confirm=True).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["proxy_remote"] and itf["proxy_port"] == 8444 and itf["proxy_scheme"] == "https"
@@ -826,7 +849,7 @@ def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_pat
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     cfgmod.save_hardware_setup(svc._paths, "loraham")
-    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
+    assert svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
                                    confirm=True, confirm_public=True).ok
     assert [s["id"] for r in svc.radio_overview() for s in r["running"]] == ["meshcom"]
     # `localhost` is trusted (so the page renders) and is NOT 127.0.0.1 (so it is distinguishable
@@ -842,7 +865,7 @@ def test_drift_local_mode_but_exposed_listener_is_truthfully_remote(tmp_path):
     # changed to local without an Apply). The link must reflect REALITY — remotely reachable, flagged
     # `pending` — never a misleading "local only".
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["proxy_remote"] and itf["proxy_port"] == 8444
     assert "local only" not in itf["label"] and itf["pending"] is True
@@ -852,7 +875,7 @@ def test_drift_remote_mode_not_yet_applied_is_loopback_and_pending(tmp_path):
     # Saved `public` but Apply not run: the live listener is still 127.0.0.1 -> honestly loopback, and
     # flagged pending so the operator knows to Apply.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 1}])
-    assert svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+    assert svc.stack_web_configure("meshtastic@r1", mode="public", port=8445, cidrs=["0.0.0.0/0"],
                             confirm=True, confirm_public=True).ok
     itf = _ifaces(svc, "meshtastic")[0]
     assert not itf["proxy_remote"] and "local only" in itf["label"] and itf["pending"] is True
@@ -862,7 +885,7 @@ def test_enabled_proxy_with_no_listener_is_marked_not_active(tmp_path):
     # Enabled in config but nothing listening on the port (nginx down / never applied): honest
     # "not active", pending an Apply — not a dead remote link.
     svc = _svc(tmp_path)                                      # no listeners
-    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
+    assert svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
                             confirm=True, confirm_public=True).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert not itf["proxy_remote"] and "Apply" in itf["label"] and itf["pending"] is True
@@ -879,7 +902,7 @@ def test_url_host_helper_is_ipv6_safe():
 def test_applied_local_proxy_is_labelled_local_only(tmp_path):
     # Applied local proxy: nginx is live on 127.0.0.1:8444 -> loopback, honestly labelled, not pending.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8444, "inode": 1}])
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["link"] == "https://127.0.0.1:8444/"
     assert "local only" in itf["label"] and itf["pending"] is False   # honest for a remote reader
@@ -888,21 +911,21 @@ def test_applied_local_proxy_is_labelled_local_only(tmp_path):
 def test_view_reports_live_listen_scope_and_pending_drift(tmp_path):
     # stack_web_view carries the EFFECTIVE listen scope + a pending flag for the stacks-page header.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok   # desired local, live exposed -> drift
-    v = svc.stack_web_view("meshcom")
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok   # desired local, live exposed -> drift
+    v = svc.stack_web_view("meshcom@r1")
     assert v["listen_scope"] == "exposed" and v["pending"] is True
 
 
 def test_view_in_sync_public_is_not_pending(tmp_path):
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8445, "inode": 1}])
-    assert svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+    assert svc.stack_web_configure("meshtastic@r1", mode="public", port=8445, cidrs=["0.0.0.0/0"],
                             confirm=True, confirm_public=True).ok
-    v = svc.stack_web_view("meshtastic")
+    v = svc.stack_web_view("meshtastic@r1")
     assert v["listen_scope"] == "exposed" and v["pending"] is False
 
 
 def test_view_disabled_proxy_is_absent_and_not_pending(tmp_path):
-    v = _svc(tmp_path).stack_web_view("meshcom")             # never configured
+    v = _svc(tmp_path).stack_web_view("meshcom@r1")             # never configured
     assert v["listen_scope"] == "absent" and v["pending"] is False
 
 
@@ -911,9 +934,9 @@ def test_stacks_panel_shows_running_state(tmp_path, web):
     # AND the nginx proxy port (8444) both listening, it reads "proxied" (green).
     c, svc = _app(web, tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
                                {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}])
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # webserver panel is deferred
-    assert 'id="stack-webserver-meshcom"' in body
+    assert 'id="stack-webserver-meshcom@r1"' in body
     assert ">proxied</span>" in body
 
 
@@ -921,16 +944,16 @@ def test_stack_running_pill_offline_localonly_proxied(tmp_path):
     UP = {"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1}   # stack's web-UI upstream
     PROXY = {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}   # nginx proxy port
     # (i) stack not started -> upstream absent -> grey "offline"
-    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
-    p = svc.stack_web_view("meshcom")["posture"]
+    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
+    p = svc.stack_web_view("meshcom@r1")["posture"]
     assert p["run"] == "offline" and p["run_level"] == "off"
     # (ii) stack started, nginx not proxying -> upstream up, proxy port absent -> yellow "local-only"
-    svc = _svc(tmp_path, [UP]); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
-    p = svc.stack_web_view("meshcom")["posture"]
+    svc = _svc(tmp_path, [UP]); assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
+    p = svc.stack_web_view("meshcom@r1")["posture"]
     assert p["run"] == "local-only" and p["run_level"] == "warn"
     # (iii) stack started AND nginx proxying -> both listening -> green "proxied"
-    svc = _svc(tmp_path, [UP, PROXY]); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
-    p = svc.stack_web_view("meshcom")["posture"]
+    svc = _svc(tmp_path, [UP, PROXY]); assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
+    p = svc.stack_web_view("meshcom@r1")["posture"]
     assert p["run"] == "proxied" and p["run_level"] == "ok"
 
 
@@ -965,8 +988,8 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
              "posture": {"auth": "open", "iface": "loopback", "sec_level": "ok", "scheme": "https",
                          "auth_level": "ok", "iface_level": "ok", "scheme_level": "ok",
                          "run": "lhpc-web", "run_level": "ok"}},
-            {"kind": "stack", "name": "MeshCom (QEMU)", "sid": "meshcom", "pid": "meshcom",
-             "anchor": "#stack-webserver-meshcom", "enabled": False,
+            {"kind": "stack", "name": "MeshCom (QEMU)", "sid": "meshcom", "pid": "meshcom@r1",
+             "anchor": "#stack-webserver-meshcom@r1", "enabled": False,
              "posture": None, "port": None, "direct_port": "18083", "direct_scheme": "http",
              "logs_component": None}]
     monkeypatch.setattr(ControllerService, "dashboard_webservers", lambda self, **k: rows)
@@ -976,7 +999,7 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
     text = doc.text
     assert ":18083" in text and "not proxied" in text               # direct address IS shown
     assert text.index(":18083") < text.index("not proxied")         # …BEFORE "not proxied"
-    assert doc.find("a", href="/stacks?open=meshcom#stack-webserver-meshcom")   # stack name -> its ws config
+    assert doc.find("a", href="/stacks?open=meshcom#stack-webserver-meshcom@r1")   # stack name -> its ws config
     assert doc.find("a", href="/stacks#webserver-row")                          # console name -> console ws config
     # A link to the http address, NESTED in the warning-coloured pill. Asserted as nesting, not
     # as adjacent bytes: an added attribute or a Jinja newline between the tags changes nothing.
@@ -987,8 +1010,8 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
 
 def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
     from lhpc.core import webserver as _ws
-    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
-    v = svc.stack_web_view("meshcom")
+    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
+    v = svc.stack_web_view("meshcom@r1")
     # Identical wording/values to the console Monitor — driven by the SINGLE shared source.
     assert v["warnings"] == _ws.exposure_warnings(
         remote=False, access_mode="local-open-remote-auth", allowed_cidrs=(),
@@ -1018,33 +1041,33 @@ def test_route_404s_for_unknown_and_non_web_stacks(tmp_path, web, csrf):
 def test_route_saves_and_redirects_to_the_panel(tmp_path, web, csrf):
     c, svc = _app(web, tmp_path)
     r = c.post("/stacks/meshcom/webserver",
-               data={"_csrf": csrf(c), "mode": "local", "port": "8444"})
-    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-meshcom")
+               data={"page": "meshcom@r1", "_csrf": csrf(c), "mode": "local", "port": "8444"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-meshcom@r1")
     # anchors the webserver panel, NOT ?cfg (which would wrongly open Settings)
     assert "cfg=" not in r.headers["Location"]
-    assert svc.config().stackweb["meshcom"].port == 8444
+    assert svc.config().stackweb["meshcom@r1"].port == 8444
 
 
 def test_route_refuses_a_non_numeric_port_typed(tmp_path, web, csrf):
     c, svc = _app(web, tmp_path)
-    r = c.post("/stacks/meshcom/webserver", data={"_csrf": csrf(c), "mode": "local", "port": "84x3"})
+    r = c.post("/stacks/meshcom/webserver", data={"page": "meshcom@r1", "_csrf": csrf(c), "mode": "local", "port": "84x3"})
     assert r.status_code == 302                                   # a typed refusal, not a 500
-    assert svc.config().stackweb.get("meshcom") is None
+    assert svc.config().stackweb.get("meshcom@r1") is None
 
 
 def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path, web, csrf):
     c, svc = _app(web, tmp_path)
     base = {"_csrf": csrf(c), "mode": "public", "port": "8444", "cidrs": "0.0.0.0/0"}
-    c.post("/stacks/meshcom/webserver", data={**base, "confirm_phrase": "enable-remote"})
-    assert svc.config().stackweb.get("meshcom") is None           # weak phrase: nothing written
-    c.post("/stacks/meshcom/webserver", data={**base, "confirm_phrase": "enable-remote-danger"})
-    assert svc.config().stackweb["meshcom"].mode == "public"
+    c.post("/stacks/meshcom/webserver", data={"page": "meshcom@r1", **base, "confirm_phrase": "enable-remote"})
+    assert svc.config().stackweb.get("meshcom@r1") is None           # weak phrase: nothing written
+    c.post("/stacks/meshcom/webserver", data={"page": "meshcom@r1", **base, "confirm_phrase": "enable-remote-danger"})
+    assert svc.config().stackweb["meshcom@r1"].mode == "public"
 
 
 def test_panel_renders_with_the_bypass_warning(tmp_path, web):
     c, _ = _app(web, tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
     body = c.get("/stacks?open=meshtastic").get_data(as_text=True)   # panel is in the deferred body
-    assert 'id="stack-webserver-meshtastic"' in body
+    assert 'id="stack-webserver-meshtastic@r1"' in body
     assert "listening on all interfaces" in body and "depnote-bad" in body
     assert "bypassing this proxy" in body
 
@@ -1079,7 +1102,7 @@ def _proxy_stackweb_verify(sid, upstream="127.0.0.1:18083", uscheme="http", **kw
 
 def test_verify_validates_the_stack_proxy_blocks_not_a_console_only_config(tmp_path):
     svc = _svc_stackweb_verify(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     res = svc.webserver_verify()
     # The staged config `verify` ran `nginx -t` against must contain the proxy block.
     text = _staged_text(tmp_path)
@@ -1089,9 +1112,9 @@ def test_verify_validates_the_stack_proxy_blocks_not_a_console_only_config(tmp_p
 
 def test_verify_surfaces_the_stack_proxies_as_evidence(tmp_path):
     svc = _svc_stackweb_verify(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     ev = svc.webserver_verify().data
-    assert [p["stack_id"] for p in ev["stack_proxies"]] == ["meshcom"]
+    assert [p["stack_id"] for p in ev["stack_proxies"]] == ["meshcom@r1"]
     assert ev["stack_proxies"][0]["upstream"] == "127.0.0.1:18083"
     assert ev["desired_snapshot"]["scheme"] == "https"
 
@@ -1102,11 +1125,11 @@ def test_verify_reports_a_stack_config_problem_as_a_config_failure(tmp_path):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     # Hand-write a remote proxy with no CIDR (the writer would refuse; the parser keeps it).
     (tmp_path / "config" / "local.toml").write_text(
-        '[stackweb]\nmeshcom_port = 8444\nmeshcom_mode = "lan"\n')
+        '[stackweb]\n"meshcom@r1_port" = 8444\n"meshcom@r1_mode" = "lan"\n')
     svc = _svc_stackweb_verify(tmp_path)
     res = svc.webserver_verify()
     assert not res.ok
-    assert any("meshcom: remote exposure requires at least one allowed source CIDR" in x
+    assert any("meshcom@r1: remote exposure requires at least one allowed source CIDR" in x
                for x in res.data["checks"]["config_problems"])
 
 
@@ -1115,11 +1138,11 @@ def test_verify_warns_about_a_bypassable_upstream_without_failing(tmp_path):
     # (An https console with no PKI on disk fails server_cert here — that is a DIFFERENT, real
     # failure; what must not happen is the bypass itself entering the failed set.)
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
     res = svc.webserver_verify()
     checks = res.data["checks"]
     assert checks["upstream_bypass"] == "warn"
-    assert checks["upstream_bypass_stacks"] == ["meshtastic"]
+    assert checks["upstream_bypass_stacks"] == ["meshtastic@r1"]
     failed = [k for k, v in checks.items() if v == "failed"]
     assert "upstream_bypass" not in failed
     assert any("bypassing this proxy" in d for d in res.details)
@@ -1135,7 +1158,7 @@ def test_a_bypassable_upstream_alone_still_verifies_ok(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1},
                           {"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 2},
                           {"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 3}])
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445,
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445,
                             scheme="http", access_mode="no-auth").ok
     res = svc.webserver_verify()
     assert res.ok and res.data["checks"]["upstream_bypass"] == "warn"
@@ -1143,7 +1166,7 @@ def test_a_bypassable_upstream_alone_still_verifies_ok(tmp_path):
 
 def test_verify_of_a_loopback_upstream_raises_no_warning(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1}])
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     ev = svc.webserver_verify().data
     assert "upstream_bypass" not in ev["checks"]
     assert ev["stack_proxies"][0]["bypassable"] is False
@@ -1205,7 +1228,7 @@ def test_http_console_with_an_https_proxy_still_demands_the_certificate(tmp_path
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
     svc = _svc_stackweb_verify(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444, scheme="https").ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444, scheme="https").ok
     checks = svc.webserver_verify().data["checks"]
     assert checks["tls_required"] == "yes" and checks["server_cert"] == "failed"
 
@@ -1215,7 +1238,7 @@ def test_no_auth_console_with_a_cert_auth_proxy_checks_the_client_ca(tmp_path):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, access_mode="no-auth")
     svc = _svc_stackweb_verify(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444, access_mode="auth-everywhere").ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444, access_mode="auth-everywhere").ok
     checks = svc.webserver_verify().data["checks"]
     assert checks["client_ca"] == "failed" and checks["crl"] == "failed"
 
@@ -1302,9 +1325,9 @@ def test_console_urls_use_the_configured_scheme(monkeypatch):
 
 def test_monitor_surfaces_the_proxies_and_the_bypass_warning(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
     data = svc.webserver_monitor().data
-    assert [p["stack_id"] for p in data["stack_proxies"]] == ["meshtastic"]
+    assert [p["stack_id"] for p in data["stack_proxies"]] == ["meshtastic@r1"]
     # monitor_view warnings are {"level","text"} dicts (the template renders w.level/w.text).
     warns = [w for w in data["warnings"] if isinstance(w, dict)]
     assert warns == data["warnings"]                          # NO plain strings leak in
@@ -1319,7 +1342,7 @@ def test_monitor_lists_no_proxies_by_default(tmp_path):
 def test_monitor_warnings_are_all_dicts_never_plain_strings(tmp_path):
     # a plain string here renders as an empty flash (the template reads w.level/w.text).
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
     for w in svc.webserver_monitor().data["warnings"]:
         assert isinstance(w, dict) and w.get("text") and w.get("level")
 
@@ -1373,16 +1396,16 @@ def _reset_svc(tmp_path, listeners=()):
 
 def test_reset_disables_enabled_stack_proxies(tmp_path):
     svc = _reset_svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="lan", port=8444,
+    assert svc.stack_web_configure("meshcom@r1", mode="lan", port=8444,
                             cidrs=["192.168.0.0/24"], confirm=True).ok
-    assert svc.config().stackweb["meshcom"].enabled
+    assert svc.config().stackweb["meshcom@r1"].enabled
     res = svc.webserver_reset_defaults()
     assert res.ok and "remote exposure ceased" in res.summary
-    assert not svc.config().stackweb["meshcom"].enabled        # port -> 0
+    assert not svc.config().stackweb["meshcom@r1"].enabled        # port -> 0
     assert any("disabled stack web-UI proxy: meshcom" in d for d in res.details)
     # the mode/CIDR are kept for an easy re-enable
-    assert svc.config().stackweb["meshcom"].mode == "lan"
-    assert svc.config().stackweb["meshcom"].allowed_cidrs == ("192.168.0.0/24",)
+    assert svc.config().stackweb["meshcom@r1"].mode == "lan"
+    assert svc.config().stackweb["meshcom@r1"].allowed_cidrs == ("192.168.0.0/24",)
 
 
 def test_reset_evidence_does_not_claim_cessation_while_a_remote_proxy_would_bind(tmp_path, monkeypatch):
@@ -1390,7 +1413,7 @@ def test_reset_evidence_does_not_claim_cessation_while_a_remote_proxy_would_bind
     # a remote listener is gone. Simulate that by making the disable loop a no-op.
     from lhpc.core import config as _config
     svc = _reset_svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="public", port=8444,
+    assert svc.stack_web_configure("meshcom@r1", mode="public", port=8444,
                             cidrs=["0.0.0.0/0"], confirm=True, confirm_public=True).ok
     orig = _config.save_stackweb_config
     monkeypatch.setattr(_config, "save_stackweb_config",
@@ -1463,7 +1486,7 @@ _OLD_PROXY = Listener(family="ipv4", ip="0.0.0.0", port=8444, inode=9)
 
 
 def _with_a_remote_stack_proxy(svc):
-    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"], confirm=True)
+    svc.stack_web_configure("meshcom@r1", mode="lan", port=8444, cidrs=["192.168.0.0/24"], confirm=True)
 
 
 def test_reset_proves_cessation_when_the_restart_removes_the_console_and_a_stack_proxy(tmp_path,
@@ -1491,7 +1514,7 @@ def test_reset_does_not_claim_cessation_while_a_stack_proxy_listener_survives(tm
     assert not res.ok and "stack web-UI proxy" in res.summary
     assert res.data["effective"]["remote_cessation_proven"] is False
     assert res.data["effective"]["listener_scope"] == "loopback"
-    assert any("meshcom" in d and "8444" in d for d in res.details)
+    assert any("meshcom@r1" in d and "8444" in d for d in res.details)
 
 
 def test_reset_inside_the_web_unit_names_apply_as_the_way_out(tmp_path, monkeypatch):
@@ -1528,10 +1551,10 @@ def test_reset_leaves_a_local_only_proxy_alone_is_still_provable(tmp_path):
     # A `local` proxy binds loopback, so it is NOT a remote listener — but reset still disables it,
     # because "reset to defaults" means defaults, and cessation is trivially proven.
     svc = _reset_svc(tmp_path)
-    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     res = svc.webserver_reset_defaults()
     assert res.ok and res.data["effective"]["remote_cessation_proven"] is True
-    assert not svc.config().stackweb["meshcom"].enabled
+    assert not svc.config().stackweb["meshcom@r1"].enabled
 
 
 def test_reset_restores_https_from_a_valid_http_console(tmp_path):
@@ -1543,17 +1566,17 @@ def test_reset_restores_https_from_a_valid_http_console(tmp_path):
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
     svc = _reset_svc(tmp_path)
     # http+lan is a cleartext remote listener -> elevated; needs the strong phrase.
-    assert svc.stack_web_configure("meshcom", mode="lan", port=8444,
+    assert svc.stack_web_configure("meshcom@r1", mode="lan", port=8444,
                                    scheme="http", access_mode="no-auth",
                                    cidrs=["192.168.0.0/24"],
                                    confirm=True, confirm_public=True).ok
     assert svc.config().webserver.scheme == "http"             # precondition
-    assert svc.config().stackweb["meshcom"].enabled
+    assert svc.config().stackweb["meshcom@r1"].enabled
     res = svc.webserver_reset_defaults()
     assert res.ok, res.summary                                 # no ConfigError, no failure
     cfg = svc.config().webserver
     assert cfg.scheme == "https" and cfg.access_mode == "local-open-remote-auth"
-    assert not svc.config().stackweb["meshcom"].enabled        # proxy disabled
+    assert not svc.config().stackweb["meshcom@r1"].enabled        # proxy disabled
     assert res.data["effective"]["remote_cessation_proven"] is True
 
 
@@ -1562,7 +1585,7 @@ def test_webserver_panel_is_the_last_sub_section_and_styled_like_the_others(tmp_
     doc = parse(web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True))
     row = doc.within(doc.by_id("stackrow-meshcom"))
     # same element/class as Install, Info, Settings — not a nested stackrow
-    el = row.by_id("stack-webserver-meshcom")
+    el = row.by_id("stack-webserver-meshcom@r1")
     assert el is not None and el.tag == "details" and el.has_class("advcfg")
     assert [d["id"] for d in row.find("details", class_="stackrow")] == ["stackrow-meshcom"]
     # LAST: after Install and after Settings
@@ -1646,8 +1669,8 @@ def test_a_denied_upstream_is_not_reachable_around_the_proxy(tmp_path, monkeypat
     # authentication" for endpoints the managed firewall drops by default — they bypass nothing.
     fw = _fw(eps=[_sc(9443, selected=False, deny_default=True, allow_cidrs=[])])
     svc = _meshtastic_svc(tmp_path, [_MT_9443], fw, monkeypatch)
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
-    assert svc.stack_web_view("meshtastic")["bypassable"] is False
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
+    assert svc.stack_web_view("meshtastic@r1")["bypassable"] is False
     warnings = svc.webserver_monitor().data.get("warnings", [])
     assert not any("bypassing" in w["text"] for w in warnings)
     assert svc.webserver_verify().data["checks"].get("upstream_bypass_stacks", []) == []
@@ -1661,15 +1684,15 @@ def test_a_denied_upstream_is_not_reachable_around_the_proxy(tmp_path, monkeypat
 def test_anything_short_of_denied_still_bypasses_the_proxy(tmp_path, monkeypatch, verdict,
                                                            eps, bypassable):
     svc = _meshtastic_svc(tmp_path, [_MT_9443], _fw(eps=eps), monkeypatch)
-    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
-    assert svc.stack_web_view("meshtastic")["bypassable"] is bypassable, verdict
+    assert svc.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
+    assert svc.stack_web_view("meshtastic@r1")["bypassable"] is bypassable, verdict
 
 
 def test_a_loopback_or_absent_upstream_bypasses_nothing(tmp_path):
     loopback = _meshtastic_svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1",
                                            "port": 9443, "inode": 1}])
-    assert loopback.stack_web_configure("meshtastic", mode="local", port=8445).ok
-    assert loopback.stack_web_view("meshtastic")["bypassable"] is False
+    assert loopback.stack_web_configure("meshtastic@r1", mode="local", port=8445).ok
+    assert loopback.stack_web_view("meshtastic@r1")["bypassable"] is False
 
 
 def _proxy_applied(tmp_path, monkeypatch=None, fw=None, **cfg):
@@ -1680,7 +1703,7 @@ def _proxy_applied(tmp_path, monkeypatch=None, fw=None, **cfg):
     paths = Paths(runtime_root=tmp_path)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
     boot.webserver_init(dns_sans=["pi.local"])
-    boot.stack_web_configure("meshtastic", **cfg)
+    boot.stack_web_configure("meshtastic@r1", **cfg)
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
     staged = str(paths.under(*webserver.NGINX_CONF_STAGED))
@@ -1704,17 +1727,17 @@ def test_a_saved_proxy_narrowing_cannot_improve_the_live_proxy(tmp_path):
     # listener keeps being coloured by the policy that was actually activated.
     svc = _proxy_applied(tmp_path, mode="lan", port=8445, scheme="https", access_mode="no-auth",
                          cidrs=["192.168.0.0/24"], confirm=True, confirm_public=True)
-    applied = webserver.applied_proxy(webserver.read_applied(svc._paths), "meshtastic")
+    applied = webserver.applied_proxy(webserver.read_applied(svc._paths), "meshtastic@r1")
     assert applied["access_mode"] == "no-auth" and applied["port"] == 8445
-    assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad"
+    assert svc.stack_web_view("meshtastic@r1")["posture"]["sec_level"] == "bad"
     for field in ({"access_mode": "auth-everywhere"}, {"mode": "local"},
                   {"cidrs": ["192.168.0.5/32"]}):
-        assert svc.stack_web_configure("meshtastic", confirm=True, **field).ok
-        assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad", field
+        assert svc.stack_web_configure("meshtastic@r1", confirm=True, **field).ok
+        assert svc.stack_web_view("meshtastic@r1")["posture"]["sec_level"] == "bad", field
     r = svc.webserver_verify()                                # verify never advances it
-    assert not r.ok and r.data["checks"]["stack_listener_mismatch_stacks"] == ["meshtastic"]                                    # verify never advances it
+    assert not r.ok and r.data["checks"]["stack_listener_mismatch_stacks"] == ["meshtastic@r1"]                                    # verify never advances it
     assert webserver.applied_proxy(webserver.read_applied(svc._paths),
-                                   "meshtastic")["access_mode"] == "no-auth"
+                                   "meshtastic@r1")["access_mode"] == "no-auth"
 
 
 def test_a_verified_source_restriction_makes_a_live_no_auth_proxy_yellow(tmp_path, monkeypatch):
@@ -1722,7 +1745,7 @@ def test_a_verified_source_restriction_makes_a_live_no_auth_proxy_yellow(tmp_pat
     svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="https",
                          access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
                          confirm_public=True)
-    p = svc.stack_web_view("meshtastic")["posture"]
+    p = svc.stack_web_view("meshtastic@r1")["posture"]
     assert p["sec_level"] == "warn" and p["warn_reason"] == "restricted_noauth"
 
 
@@ -1739,7 +1762,7 @@ def test_unproven_containment_never_softens_a_live_no_auth_proxy(tmp_path, monke
     svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="https",
                          access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
                          confirm_public=True)
-    assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad", name
+    assert svc.stack_web_view("meshtastic@r1")["posture"]["sec_level"] == "bad", name
 
 
 def test_remote_cleartext_http_proxy_stays_red_under_a_verified_restriction(tmp_path, monkeypatch):
@@ -1747,7 +1770,7 @@ def test_remote_cleartext_http_proxy_stays_red_under_a_verified_restriction(tmp_
     svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="http",
                          access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
                          confirm_public=True)
-    p = svc.stack_web_view("meshtastic")["posture"]
+    p = svc.stack_web_view("meshtastic@r1")["posture"]
     assert p["scheme_level"] == "bad" and p["sec_level"] == "bad"
 
 
@@ -1766,7 +1789,7 @@ def test_the_intended_zero_state_is_constructible(tmp_path, monkeypatch):
     cfgmod.save_webserver_config(paths, bind="0.0.0.0", port=8443, remote_exposed=True,
                                  access_mode="no-auth", allowed_cidrs=LAN, scheme="https")
     boot._invalidate_config()
-    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+    assert boot.stack_web_configure("meshtastic@r1", mode="lan", port=8445, scheme="https",
                              access_mode="no-auth", cidrs=LAN, confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
@@ -1817,7 +1840,7 @@ def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(t
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
     assert boot.webserver_init(dns_sans=["pi.local"]).ok
-    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+    assert boot.stack_web_configure("meshtastic@r1", mode="lan", port=8445, scheme="https",
                              access_mode="no-auth", cidrs=["192.168.0.0/24"],
                              confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
@@ -1836,10 +1859,10 @@ def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(t
     assert svc.webserver_apply().ok                            # 8445 is now the applied policy
 
     # Save the SAME policy on a new port — no Apply. nginx keeps the 8445 socket it holds.
-    assert svc.stack_web_configure("meshtastic", port=8555, confirm=True,
+    assert svc.stack_web_configure("meshtastic@r1", port=8555, confirm=True,
                                    confirm_public=True).ok
 
-    v = svc.stack_web_view("meshtastic")
+    v = svc.stack_web_view("meshtastic@r1")
     assert v["cfg"].port == 8555                               # desired is untouched, for Settings
     assert v["live_port"] == 8445 and v["listen_scope"] == "exposed"
     assert v["pending"] is True                                # an Apply really is outstanding
@@ -1882,11 +1905,11 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
         "/api/device/tuning", "/api/device/position", "/api/device/name",
         "/api/admin/reset",
     }
-    deny = set(_web_deny(svc, "meshcore"))
+    deny = set(_web_deny(svc, "meshcore@r2"))
     missing = required - deny
     assert not missing, f"MeshCore Web UI proxy no longer denies LHPC-owned operations: {missing}"
     # And they actually render as nginx 404s (a 403 logs the operator out of a SPA dashboard).
-    up = _web_upstream(svc, "meshcore")
+    up = _web_upstream(svc, "meshcore@r2")
 
     class _SWC:
         stack_id = "meshcore"; enabled = True; remote = False; allowed_cidrs = []
@@ -1894,7 +1917,7 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
 
     out = ws.render_nginx_config(
         svc._paths, svc.config().webserver,
-        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore"))])
+        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore@r2"))])
     for p in required:
         assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, \
             f"{p} not denied in nginx config"
@@ -2209,7 +2232,7 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path, web)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
     assert boot.webserver_init(dns_sans=["pi.local"]).ok
-    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+    assert boot.stack_web_configure("meshtastic@r1", mode="lan", port=8445, scheme="https",
                              access_mode="no-auth", cidrs=["192.168.0.0/24"],
                              confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
@@ -2228,8 +2251,8 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path, web)
     assert svc.webserver_apply().ok
 
     # Save the Disable — no Apply. The 8445 socket is still served.
-    assert svc.stack_web_configure("meshtastic", port=0, confirm=True).ok
-    v = svc.stack_web_view("meshtastic")
+    assert svc.stack_web_configure("meshtastic@r1", port=0, confirm=True).ok
+    v = svc.stack_web_view("meshtastic@r1")
     assert v["cfg"].enabled is False                           # desired, for the Settings form
     assert v["live_port"] == 8445 and v["listen_scope"] == "exposed"
     assert v["pending"] is True and v["pending_disable"] is True
@@ -2249,7 +2272,7 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path, web)
                              headers={"Host": "127.0.0.1"}).get_data(as_text=True))
     assert "disable pending" in panel.text
     assert "Currently listening on port 8445 on all interfaces" in panel.text
-    header = panel.within(panel.by_id("stack-webserver-meshtastic")).find("summary")[0]
+    header = panel.within(panel.by_id("stack-webserver-meshtastic@r1")).find("summary")[0]
     assert "not proxied" not in header.text
 
 

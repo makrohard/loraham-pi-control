@@ -10,10 +10,10 @@ entry is either a literal token or a single whole placeholder. Placeholders:
                              and it FAILS the launch when the global is unset — stack
                              identities belong in an identity param, not this token)
     {band}            -> one token (the selected band)
-    {port:BASE}       -> a copy's: BASE + 133 x (n - 1) on rN (DEC-W348); slot 0's: BASE, anywhere in a token
+    {port:BASE}       -> BASE + 133 x (n - 1) on rN (DEC-W348; r1: BASE), anywhere in a token
     {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
-    {instance_dir}    -> "" at slot 0 (today's paths), "<rid>/" at slot k: a per-radio path level
-    {instance_suffix} -> "" at slot 0, "-<rid>" at slot k: a per-radio file name in a shared directory
+    {instance_dir}    -> "<rid>/": a per-radio path level ("" for the manifest's TEMPLATE values only)
+    {instance_suffix} -> "-<rid>": a per-radio file name in a shared directory
                           (/dev/shm, where a per-radio directory could be pre-created by another user)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
@@ -43,7 +43,6 @@ class CommandError(Exception):
     """A command template / step could not be built safely."""
 
 
-SLOTS = range(8)                 # eight instances per stack (A §2.4)
 PORT_STEP, PORT_RADIOS = 133, 64     # DEC-W348: rN's port is base + 133 x (n - 1), for r1..r64
 _RID_RE = re.compile(r"r[1-9][0-9]?")
 _PORT_RE = re.compile(r"\{port:(\d{1,5})\}")
@@ -51,45 +50,46 @@ _PORT_OF_RE = re.compile(r"\{port_of:([a-z][a-z0-9_-]*):(\d{1,5})\}")
 
 
 class Instance:
-    """One stack copy: its slot (0, or 1 for a copy: instances.copy_rids), its radio id and its radio's band. A copy's
-    ports are its radio's (DEC-W348: base + 133 x (n - 1) for rN); slot 0 resolves every template to today's value,
-    whatever its radio (its ports and paths move in K4b). `{port_of:STACK:BASE}` follows the same rule. A copy needs a
-    radio id for its names. `instances.copy_of` builds a copy with its band; a template-only value leaves it "". Its
-    key is `instances.key(<stack>, copy)`."""
+    """One stack instance, `<stack>@<rid>` (CLEANUP-DESIGN-v13, DEC-W327: no slots): its radio id and its radio's
+    band. Its ports are its radio's (DEC-W348: base + 133 x (n - 1) for rN, r1 the base) and its paths sit under
+    `<rid>/`; `{port_of:STACK:BASE}` follows the same rule. `Instance()` without a radio is only the manifest's
+    template values (TEMPLATE: the bases, no `<rid>/`), never a running instance. Its key is
+    `instances.key(<stack>, inst)`."""
 
-    __slots__ = ("band", "rid", "slot")
+    __slots__ = ("band", "rid")
 
-    def __init__(self, slot: int = 0, rid: str = "", *, band: str = ""):
-        if isinstance(slot, bool) or not isinstance(slot, int) or slot not in SLOTS:
-            raise CommandError(f"instance slot must be 0..{SLOTS[-1]}, got {slot!r}")
-        if (slot or rid) and not _RID_RE.fullmatch(rid or ""):
+    def __init__(self, rid: str = "", *, band: str = ""):
+        if rid and not _RID_RE.fullmatch(rid):
             raise CommandError(f"instance radio id must match r1..r99, got {rid!r}")
-        self.slot, self.rid, self.band = slot, rid, band
+        self.rid, self.band = rid, band
 
     def port(self, base: int) -> int:
         if not 1024 <= base <= 65535:
             raise CommandError(f"port base {base} is outside 1024..65535")
-        return rid_port(base, self.rid if self.slot else "")
+        return rid_port(base, self.rid)
 
     def subst(self, text: str) -> str:
         text = _PORT_OF_RE.sub(lambda m: str(self.port(int(m.group(2)))), text)
         text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
-        text = text.replace("{instance_suffix}", f"-{self.rid}" if self.slot else "")
+        text = text.replace("{instance_suffix}", f"-{self.rid}" if self.rid else "")
         if self.rid:                                     # stage L5: a daemon client's sockets are its radio's (W3)
             text = text.replace("{rid}", self.rid)
-        return text.replace("{instance_dir}", f"{self.rid}/" if self.slot else "")
+        return text.replace("{instance_dir}", f"{self.rid}/" if self.rid else "")
 
 
-SLOT0 = Instance()
+TEMPLATE = Instance()             # the manifest's template values (the bases, no `<rid>/`): never a running instance
 
 
 def stack_instances(stack, paths=None) -> tuple:
-    """The stack's instances (its firewall rows, its web pages): slot 0, then a copy on each radio the hardware list
-    gives it (instances.copy_rids). Without `paths` (a manifest-level caller), slot 0 only."""
+    """The stack's instances (its firewall rows, its web pages): one on each radio the hardware list gives it
+    (instances.radios_of). Without `paths` (a manifest-level caller), the template values only."""
     if paths is None:
-        return (SLOT0,)
+        return (TEMPLATE,)
     from . import instances
-    return (SLOT0, *(Instance(1, rid) for rid in instances.copy_rids(stack, paths)))
+    rids = instances.radios_of(stack, paths)
+    if rids and instances.fixed_ports_only(stack):       # transitional: per-radio Reticulum (next week), DEC-W384h
+        rids = (instances.recorded_radio(paths, stack.id, rids) or rids[0],)
+    return tuple(Instance(rid) for rid in rids)
 
 
 def _controller_python() -> str:
@@ -115,7 +115,7 @@ def _controller_python() -> str:
     return exe
 
 
-def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance = SLOT0) -> str:
+def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance = TEMPLATE) -> str:
     """Substitute ONLY controller-derived paths and the instance's ports into a literal token/value."""
     out = (inst.subst(text).replace("{runtime}", runtime)
                .replace("{source}", source)
@@ -141,9 +141,8 @@ def rid_port(port: int, rid: str) -> int:
 
 def _param_raw(p, params, inst: Instance) -> str:
     """A run param's raw value for one instance. The default is its template, rendered for the instance. A saved
-    value of a radio-derived port param (its default a whole `{port:B}`) is the base (r1's) port; a copy on rN derives
-    from it, + 133 x (n - 1) (DEC-W348), slot 0 keeps it (until K4b): Instance.port, the rule the firewall rows follow
-    (firewall.instance_port)."""
+    value of a radio-derived port param (its default a whole `{port:B}`) is the base (r1's) port; rN derives from it,
+    + 133 x (n - 1) (DEC-W348): Instance.port, the rule the firewall rows follow (firewall.instance_port)."""
     saved = (params or {}).get(p.name)
     raw = str(p.default_template or p.default) if saved is None else str(saved)
     if saved is not None and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
@@ -158,7 +157,7 @@ _RFLOG = re.compile(r"\{runtime\}/logs/r[1-9][0-9]?/rf-daemon\.log")
 
 
 def expand_argv(tokens, comp, params, op, runtime: str, source: str,
-                band: str = "", *, inst: Instance = SLOT0) -> list[str]:
+                band: str = "", *, inst: Instance = TEMPLATE) -> list[str]:
     """Expand an argv token template to a validated argv list (no shell)."""
     by_name = {p.name: p for p in comp.run_params}
     out: list[str] = []
@@ -219,7 +218,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
 
 
 def instance_value(template: str, comp, params, runtime: str, source: str, band: str = "", *,
-                   inst: Instance = SLOT0) -> str:
+                   inst: Instance = TEMPLATE) -> str:
     """The value of a process spec's `instance_arg` for one instance: `{param:NAME}` is the
     param's validated VALUE (without the option `expand_argv` emits beside it), anything else
     takes the controller paths, as a literal argv token does."""
@@ -233,7 +232,7 @@ def instance_value(template: str, comp, params, runtime: str, source: str, band:
     return _paths_subst(template, runtime, source, band, inst)
 
 
-def build_env(env_items, runtime: str, source: str, band: str = "", *, inst: Instance = SLOT0) -> dict:
+def build_env(env_items, runtime: str, source: str, band: str = "", *, inst: Instance = TEMPLATE) -> dict:
     """Build an environment dict from typed items. A value of `@file:PATH` reads
     that file's first line (used for the MeshCom HMAC password) — no `$(cat)`.
 
@@ -283,7 +282,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "", *, inst: Ins
 
 
 def normalize_pre_steps(steps, runtime: str, source: str, band: str = "", *,
-                        inst: Instance = SLOT0) -> list:
+                        inst: Instance = TEMPLATE) -> list:
     """Resolve typed pre-steps into execution-ready tuples (paths substituted) — the ONE
     form consumed by the shared safe engine (`wrapper_runtime.apply_steps`). This is used
     both for an in-process controller start and for serializing a generated wrapper, so a
@@ -308,7 +307,7 @@ def normalize_pre_steps(steps, runtime: str, source: str, band: str = "", *,
     return out
 
 
-def run_pre_steps(steps, runtime: str, source: str, band: str = "", *, inst: Instance = SLOT0) -> None:
+def run_pre_steps(steps, runtime: str, source: str, band: str = "", *, inst: Instance = TEMPLATE) -> None:
     """Execute typed controller-owned pre-steps through the SAME execution-time-safe
     engine the generated wrappers use (`wrapper_runtime.apply_steps`) — never a shell.
     Raises CommandError on failure (which blocks the launch)."""
@@ -371,7 +370,7 @@ def build_step_argv(step: dict, runner, runtime: str, source: str) -> list[str]:
 
 
 def display_command(comp, op, runtime: str, source: str, band: str = "",
-                    params: dict | None = None, *, inst: Instance = SLOT0) -> str:
+                    params: dict | None = None, *, inst: Instance = TEMPLATE) -> str:
     """Human-readable, shell-quoted rendering of the structured run command — for
     manual wrappers and the dashboard ONLY. Never executed. `params` are the saved
     values a start would use (None = manifest defaults); one a start would refuse
@@ -477,7 +476,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                          band: str = "", binding: dict | None = None, gated: bool = False,
                          result_path: str = "", meta: dict | None = None,
                          gps: dict | None = None, require_all: bool = False,
-                         inst: Instance = SLOT0) -> str:
+                         inst: Instance = TEMPLATE) -> str:
     """Serialize typed post-start steps into a self-contained Python launcher that runs them
     detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
     time + session/group) ties the runner to one exact main launch — it re-checks that main before
@@ -659,7 +658,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                   lambda m: fills[m.group(1)], _POST_RUNNER)
 
 
-def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = SLOT0) -> str:
+def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = TEMPLATE) -> str:
     """Expand a tcp_send data line: literal text with whole {param:…}/{operator:…}
     placeholders replaced by their single validated value."""
     import re

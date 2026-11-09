@@ -167,3 +167,16 @@ def test_w1_11_one_radio_or_none_keeps_the_per_band_stop(tmp_path, rows, band):
     svc = _svc(tmp_path, rows)
     assert svc.band_refusal("daemon", band, "stop") is None
     assert svc.band_refusal("kiss", "868", "stop") is None           # a client's stop is never this rule's
+
+
+@pytest.mark.parametrize("rid,held", [("r1", False), ("r2", True)])
+def test_k4b_a_running_multi_band_stack_holds_only_its_instances_band(tmp_path, rid, held):
+    # K4b writes no per-stack band marker: kiss's band is its running instance's radio's (r1 433, r2 868), so a
+    # MeshCore start on 868 is blocked by kiss@r2 and not by kiss@r1 (no "band unknown, every band").
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
+    svc = _svc(tmp_path, MIXED)
+    opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), Instance(rid), "")
+    svc = _svc(tmp_path, MIXED, cmdlines_data={62: ["/x/loraham-kiss-tnc", opt, val]})
+    assert instances.running_keys(svc, "kiss") == [f"kiss@{rid}"]
+    assert any(b["holder_stack"] == "kiss" for b in svc.run_blockers("meshcore", "868")) is held
