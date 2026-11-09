@@ -285,15 +285,33 @@ def test_a_busy_step_still_ends_at_its_ceiling(tmp_path, controlled):
     assert r.timed_out and r.stop_reason == "budget"
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
-def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled):
-    # Ceiling 1.5 s, sample 1 s: a 1.8 s step ends at the ceiling — each wait is capped by the time
-    # REMAINING to the ceiling, not by the whole ceiling.
+def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled, monkeypatch, fake_clock):
+    # Ceiling 1.5 s, sample 1 s: a step that would end on its own at 1.8 s ends at the ceiling — each wait is
+    # capped by the time REMAINING to the ceiling, not by the whole ceiling. The time is the fake clock's (the
+    # Watch's, through the runner's _watch seam), so the 0.3 s margin cannot be lost to load: a wait slice
+    # advances it by exactly the slice; at 1.8 s the child "ends on its own" (it is killed, as its own exit).
+    import subprocess
+    probe = subprocess.Popen(["true"])                            # the real class (the suite may wrap
+    probe.wait()                                                  # the `Popen` name in a guard)
+    popen, real_wait, end = type(probe), type(probe).wait, fake_clock.monotonic() + 1.8
+
+    def wait(self, timeout=None):
+        if fake_clock.monotonic() + (timeout or 0) < end:
+            fake_clock.advance(timeout)
+            raise subprocess.TimeoutExpired(self.args, timeout)
+        fake_clock.advance(max(0.0, end - fake_clock.monotonic()))
+        if self.poll() is None:
+            self.kill()
+        return real_wait(self)
+    monkeypatch.setattr(popen, "wait", wait)
+    monkeypatch.setattr(RealCommandRunner, "_watch", staticmethod(
+        lambda progress, stall_s, timeout, sample_s, token, out_size:
+            progress.Watch(stall_s, timeout, sample_s, clock=fake_clock.monotonic)))
     kw = {"should_cancel": lambda: False} if controlled else {}
     with open(tmp_path / "step.log", "wb" if controlled else "w") as fh:
-        r = RealCommandRunner().run_streaming(["sleep", "1.8"], timeout=1.5, log_fh=fh,
-                                              sample_s=1.0, **kw)
+        r = RealCommandRunner().run_streaming(["python3", "-c", "import signal; signal.pause()"], timeout=1.5,
+                                              log_fh=fh, sample_s=1.0, **kw)
     assert r.timed_out and r.returncode == 124 and r.stop_reason == "budget"
 
 
