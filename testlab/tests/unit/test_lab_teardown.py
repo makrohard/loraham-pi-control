@@ -78,3 +78,36 @@ def test_a_fake_that_ignores_term_is_killed_with_its_whole_group(tmp_path):
                 os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass
+
+
+def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp_path, monkeypatch):
+    """W389 (2): the daemon's sockets are the host's (/run/loraham or /tmp, LORAHAM_SOCKET_DIR, the clients' paths
+    too), so two lab roots on one host collide on loraconf-r1.sock. A reset (the lab's start) refuses while a live one
+    exists that its own stopped stacks no longer explain, naming it; a stale socket file does not refuse."""
+    import socket
+    import tempfile
+
+    from lhpc_testlab import ops
+    from lhpc_testlab.testing import make_lab_root, stop_lab_fakes
+
+    from lhpc.core.services import ControllerService
+    sockdir = Path(tempfile.mkdtemp(prefix="lab-", dir="/tmp"))     # short: an AF_UNIX path has a limit
+    monkeypatch.setattr(ops, "RADIO_SOCKET_DIRS", (str(sockdir),), raising=False)
+    live = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        live.bind(str(sockdir / "loraconf-r1.sock"))
+        live.listen(1)
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(sockdir / "loraconf-r2.sock"))                 # bound, never listening: refuses a connect
+        stale.close()
+        paths = make_lab_root(tmp_path, monkeypatch)
+        svc = ControllerService(paths=paths)
+        r = ops.reset(svc)
+        assert not r.ok and str(sockdir / "loraconf-r1.sock") in r.summary, r.summary
+        assert "loraconf-r2.sock" not in r.summary                   # a stale file is no foreign daemon
+    finally:
+        live.close()
+        stop_lab_fakes(tmp_path)
+        for f in sockdir.iterdir():
+            f.unlink()
+        sockdir.rmdir()

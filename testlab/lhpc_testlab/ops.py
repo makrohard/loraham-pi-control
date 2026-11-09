@@ -153,6 +153,31 @@ def _seed_node_identities(svc) -> tuple[list[str], ActionResult | None]:
     return seeded, None
 
 
+# W389 (2): the daemon serves its sockets in the HOST's /run/loraham or /tmp (the manifest's LORAHAM_SOCKET_DIR, and its
+# clients' paths too), never per lab root, so two lab roots on one host would share loraconf-<rid>.sock.
+RADIO_SOCKET_DIRS = ("/run/loraham", "/tmp")
+
+
+def _foreign_live_sockets() -> list:
+    """The radio CONF sockets a live daemon serves right now (a connect succeeds): after a reset stopped its own
+    stacks, every one is another lab's or a real daemon's. A stale file (nobody listening) is not."""
+    import glob
+    import socket
+    out = []
+    for d in RADIO_SOCKET_DIRS:
+        for p in sorted(glob.glob(os.path.join(d, "loraconf-r*.sock"))):
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            try:
+                s.connect(p)
+                out.append(p)
+            except OSError:
+                pass
+            finally:
+                s.close()
+    return out
+
+
 def reset(svc) -> ActionResult:
     if not is_active(svc):
         return _refusal(svc)
@@ -178,6 +203,11 @@ def reset(svc) -> ActionResult:
                             details=[*details, f"  stop failed: {', '.join(stop_failed)}"])
     if stopped:
         details.append(f"  stopped {stopped} running stack(s)")
+    foreign = _foreign_live_sockets()              # W389 (2): before anything of this root is cleared
+    if foreign:
+        return ActionResult(False, "Reset refused — another daemon serves " + ", ".join(foreign)
+                            + ": a second lab root (or a real daemon) on this host shares the radio sockets; stop it "
+                            "first.", details=[*details, *(f"  live foreign socket: {p}" for p in foreign)])
     _clear_runtime_state(svc)                      # clean baseline (no surviving state/config)
     boot = svc.bootstrap(apply=True)
     details.append(f"  bootstrap: {'ok' if boot.ok else boot.summary}")
