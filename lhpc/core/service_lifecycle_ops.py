@@ -390,6 +390,23 @@ class LifecycleOpsMixin:
         # not socket reachability.
         served = self._daemon_claimed_bands()
         blockers, seen = [], set()
+        # K6, one app stack per RADIO (W286/W322, triage T9): an instance start is blocked on its radio only. A holder
+        # whose every running instance (or daemon) is told on another radio is no blocker; a radio not told
+        # (a process no instance claims, a daemon without --id) blocks the whole band, as before (fail-safe).
+        target_rid = getattr(inst, "rid", "") or ""
+        held = {}
+        if target_rid:
+            for s_id, r_id, _c, _p in instances.instance_processes(self, self._system.procfs.cmdlines()):
+                held.setdefault(s_id, set()).add(r_id)
+            dprocs = radio_start._daemon_procs(self)
+            if dprocs and all(p.kind == "id" for p in dprocs):
+                held[self.stack_of(self.DAEMON_ID)] = {p.rid for p in dprocs}
+
+        def elsewhere(stack_id, comp):
+            """The running `comp` of `stack_id` is told on radios that are not the target's."""
+            rids = held.get(stack_id, set())
+            told = rids and (comp.id == self.DAEMON_ID or not instances.unclaimed(self, comp))
+            return bool(target_rid and told and target_rid not in rids)
 
         def add(stack_id, holder, resource):
             key = (stack_id, resource)
@@ -410,6 +427,7 @@ class LifecycleOpsMixin:
                     continue
                 if ss.components[c.id].run_state not in (RunState.RUNNING, RunState.DEGRADED):
                     continue
+                on_other_radio = elsewhere(sid, c)
                 # Which radio band(s) is THIS running component actually using?
                 if c.id == self.DAEMON_ID:
                     active = served
@@ -437,7 +455,7 @@ class LifecycleOpsMixin:
                         continue
                     if r.key.startswith("loraham.radio."):
                         rb = resources_mod.radio_band(r.key)
-                        if rb in active and resources_mod.radio_claim(rb) in claims:
+                        if rb in active and resources_mod.radio_claim(rb) in claims and not on_other_radio:
                             add(sid, c.id, resources_mod.radio_claim(rb))
                     else:                              # G1-C7 B5: a running instance's derived key too
                         [add(sid, c.id, k) for k in sorted(instances.running_claim_keys(self, sid, c, r) & claims.keys())]
@@ -450,7 +468,7 @@ class LifecycleOpsMixin:
                               else ({c.band} if c.band else set()))
                 if (not target_is_daemon and sid != target_stack
                         and sid != self.stack_of(self.DAEMON_ID)
-                        and comp_bands & needed_bands):
+                        and comp_bands & needed_bands and not on_other_radio):
                     add(sid, c.id,
                         f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
         return blockers
