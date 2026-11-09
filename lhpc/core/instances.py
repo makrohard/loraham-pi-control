@@ -106,7 +106,8 @@ def recorded_bands(svc, sid: str) -> dict:
     for rec in life.owned_inventory()[0]:
         if rec.get("rid") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
                 and life.verify_owned(rec)[0]:
-            out[rec["rid"]] = out.get(rec["rid"]) or str(rec.get("band") or "")
+            band = str(rec.get("band") or "")
+            out[rec["rid"]] = band if out.setdefault(rec["rid"], band) == band else ""   # G1-K4B-RE 3: disagree -> ""
     return out
 
 
@@ -265,13 +266,18 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
         return commands.Instance(rid0, band=band), ""
     radio = next((r for r in rows if r.id == rid), None)
     bands = stack_bands(stack)
-    if radio is None or (bands and radio.band not in bands):
+    # G1-K4B 3 / -RE 1: a running instance is its verified launch record's: when its radio left the list, or its row
+    # now names another band than the launch's, it is addressed with its LAUNCH band and the why (a stop reaches it,
+    # a start refuses on the why); the current row decides only for an instance that does not run
+    launched = recorded_bands(svc, sid) if run is None or rid in run else {}
+    moved = rid in launched and radio is not None and launched[rid] != radio.band
+    if radio is None or (bands and radio.band not in bands) or moved:
         why = (f"{sid}@{rid}: {rid} is not in the hardware list" if radio is None else
-               f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz")
-        # G1-K4B 3: a running instance whose radio left the list (or changed band) is still addressed by its verified
-        # launch record, with its launch band and the why: a stop reaches it, a start refuses on the why
-        launched = recorded_bands(svc, sid)
-        if rid in launched and (run is None or rid in run):
+               f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
+               if bands and radio.band not in bands else
+               f"{sid}@{rid}: it runs as launched on {launched[rid] or 'an unknown band'} MHz, {rid} is on "
+               f"{radio.band} MHz now: stop it first")
+        if rid in launched:
             return commands.Instance(rid, band=launched[rid]), why
         return None, why
     if band and band != radio.band:

@@ -534,8 +534,10 @@ def test_an_unresolved_instance_value_with_a_candidate_running_is_not_an_empty_p
     def broken(*_a, **_k):
         raise ValueError("no such parameter")
     monkeypatch.setattr(commands, "instance_value", broken)
-    plan = kill.kill(svc, "chat")
-    assert not plan.ok and "loraham-chat" in "\n".join(plan.details)
+    plan = kill.kill(svc, "chat@r1")                          # a named instance needs its value: the gap is named
+    assert not plan.ok and "loraham-chat" in "\n".join(plan.details) and p.pid not in plan.data.get("pids", [])
+    bare = kill.kill(svc, "chat")                             # G1-K4B-RE 2: a bare kill needs no value: it takes it
+    assert bare.ok and bare.data["pids"] == [p.pid]
 
 
 def test_an_exempt_component_of_a_copy_without_its_record_is_refused_not_taken(tmp_path, procs):

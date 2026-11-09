@@ -49,7 +49,6 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     component, W46) plus the processes its verified ownership records name (T-R6, W88), scoped
     to `comps`. Each target carries the identity it was verified by, so nothing reused is signalled.
     → (targets, unresolved): a candidate that cannot be verified is named, never dropped (G2-B2 F3)."""
-    from . import commands
     from .probes.process import matches
     life = svc._lifecycle()
     band = copy.band if copy is not None else ""
@@ -69,14 +68,14 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
             # stack identity, i.e. any instance: sound only while today's one-band rule allows
             # one instance per box, until L5 gives them a socket token (W98).
             # stage L5 (W3): an instance's value names its radio, as its start renders it (the one token rule,
-            # instances._token). G1-K4B 5: a bare kill takes every instance's token, never one radio's.
-            tokens = []
-            for inst in ([copy] if copy is not None else commands.stack_instances(stk, svc._paths) or (commands.TEMPLATE,)):
-                tok = None
+            # instances._token). G1-K4B 5 / -RE 2: a bare KILL keeps its promise that no process of the stack is left,
+            # so it matches the spec without any token (W46: an unrecorded process of the spec is the stack's), a radio
+            # that left the list included. KILL only: stop and restart keep the instance's token (slice 2's safety).
+            tokens = [None]
+            if copy is not None:
                 with contextlib.suppress(Exception):       # an unresolvable value: records only
-                    tok = instances._token(svc, comp, inst, inst.band or cfg_band or comp.band)
-                tokens.append(tok)
-            if comp.process.instance_arg and None in tokens:
+                    tokens = [instances._token(svc, comp, copy, copy.band or cfg_band or comp.band)]
+            if comp.process.instance_arg and copy is not None and None in tokens:
                 # A value cannot be resolved, so the matcher cannot scope this component: a process of
                 # its spec that runs is a gap, not a non-target (G2-B2 F3).
                 pids = []
