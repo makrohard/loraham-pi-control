@@ -6,6 +6,7 @@ import errno
 import json
 import tomllib
 import pytest
+import stores_fixture
 import os
 import threading
 from pathlib import Path
@@ -438,13 +439,13 @@ def test_daemon_override_survives_public_save_stack_config(tmp_path):
 
 
 def test_daemon_override_survives_normal_reset(tmp_path):
-    from lhpc.core.config import load_stack_config, _stack_config_path
+    from lhpc.core.config import load_stack_config
+    from stores_fixture import inst_of, own_file
     svc = _svc(tmp_path)
-    p = _stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = own_file(svc, "daemon")                                   # K6: the reset's instance's own file
     p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\n')
     assert svc.reset_config("daemon").ok
-    stored = load_stack_config(svc._paths, "daemon")
+    stored = load_stack_config(svc._paths, "daemon", inst=inst_of(svc, "daemon"))
     assert "radio" not in stored and stored["dp_433_CADIDLE"] == "40"
 
 
@@ -1278,14 +1279,14 @@ def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import config as cfgmod
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p = stores_fixture.own_file(svc, "reticulum")      # K6: the instance's own switch
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('use_gps = "off"\n')                   # differs from the default (on)
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
                         lambda self, ids, snap=None, require_enabled=False: ["reticulum-node"])
     r = svc.reset_config("reticulum")
     assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", inst=stores_fixture.inst_of(svc, "reticulum"))["use_gps"] == "off"   # untouched
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
                         lambda self, ids, snap=None, require_enabled=False: [])
     assert svc.reset_config("reticulum").ok
@@ -1298,7 +1299,7 @@ def test_reset_config_rechecks_use_gps_under_the_config_lock(tmp_path, monkeypat
     # the reset is refused instead of turning GPS back on under the running consumer.
     from contextlib import contextmanager
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p = stores_fixture.own_file(svc, "reticulum")      # K6: the instance's own switch
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('use_gps = "on"\n')                    # the default: no GPS change yet
     events: list = []
@@ -1329,7 +1330,7 @@ def test_reset_config_rechecks_use_gps_under_the_config_lock(tmp_path, monkeypat
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers", blockers)
     r = svc.reset_config("reticulum")
     assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", inst=stores_fixture.inst_of(svc, "reticulum"))["use_gps"] == "off"   # untouched
     gate = events.index("gate")
     lock = max(i for i, e in enumerate(events[:gate]) if e == "lock")
     assert "unlock" not in events[lock:gate]                       # the gate ran in the lock
@@ -1342,12 +1343,12 @@ def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import config as cfgmod
+    from stores_fixture import inst_of, own_file
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = own_file(svc, "daemon")                                   # K6: the reset's instance's own file
     p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\nmanual = 7\n')   # normal + dp_ + unrelated
     assert svc.reset_config("daemon").ok
-    stored = cfgmod.load_stack_config(svc._paths, "daemon")
+    stored = cfgmod.load_stack_config(svc._paths, "daemon", inst=inst_of(svc, "daemon"))
     assert "radio" not in stored                    # normal run-param reset to default
     assert stored["dp_433_CADIDLE"] == "40"          # daemon-profile override preserved
     assert stored["manual"] == 7                     # unrelated manual scalar preserved

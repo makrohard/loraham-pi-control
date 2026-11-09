@@ -15,7 +15,7 @@ from lhpc.core.model import (Component, ComponentKind, FileConfig, FileParam, Ru
                              SourceSpec, Stack)
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
-from lhpc.core.service_params import _BANDLESS_STACK_PARAMS, _STACK_SWITCHES, _commit_config
+from lhpc.core.service_params import _STACK_SWITCHES, _commit_config
 from lhpc.core.services import ControllerService
 
 FREQ = FileParam("tx_freq", key="freq", kind="float", default="433.775")
@@ -159,10 +159,6 @@ def test_plan_an_instances_save_keeps_autostart_global_and_the_switch_its_own():
     plan = _plan([Change("r", APP, RunParam("rf_log", default="on"), "OFF"),
                   Change("f", APP, FREQ, "434.5")], {"autostart_opt": "on"}, split=True)
     assert plan.stack_set == {"tx_freq": "434.5", "rf_log": "off"} and plan.global_set == {"autostart_opt": "on"}
-
-
-def test_the_switch_table_is_the_bandless_set_the_readers_use():
-    assert _BANDLESS_STACK_PARAMS == ("use_gps", "rf_log")
 
 
 def test_overlay_keeps_other_keys_and_drops_the_cleared_ones():

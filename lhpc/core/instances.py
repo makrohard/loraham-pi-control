@@ -290,13 +290,11 @@ def store_inst(svc, sid: str, band: str = "", inst=None):
 
 
 
-def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
-    """(stored, bandless): the saved settings a component of stack `sid` reads: the instance's own
-    `config/stacks/<sid>@<rid>.toml` for both (K6, DEC-W60; the switches are its own too, DEC-W384k); a band
-    caller's is its band's instance's (store_inst); an instance without its file runs on the defaults. Without a
-    list (no instance), nothing radio-scoped is stored: the global `<sid>.toml` alone."""
-    own = svc._stack_config_cached(sid, "", store_inst(svc, sid, cfg_band, inst))
-    return own, own
+def store(svc, sid: str, cfg_band: str, inst=None) -> dict:
+    """The saved settings a component of stack `sid` reads: the instance's own `config/stacks/<sid>@<rid>.toml`
+    (K6, DEC-W60; the switches too, DEC-W384k); a band caller's, its band's instance's (store_inst); without a list,
+    the global `<sid>.toml`. An instance without its file runs on the defaults."""
+    return svc._stack_config_cached(sid, "", store_inst(svc, sid, cfg_band, inst))
 
 
 

@@ -81,7 +81,6 @@ _STACK_SWITCHES = (
         default=lambda stacks, sid: _rflog.switch_default(stacks, sid) if sid else _rflog.ON,
         key=_rflog.switch_key),
 )
-_BANDLESS_STACK_PARAMS = tuple(sw.name for sw in _STACK_SWITCHES)
 _UNREAD = object()             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
@@ -384,8 +383,7 @@ class ParamsConfigMixin:
         inherited value is never mistaken for — or round-tripped into — a saved local one."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        use_band = "" if (cfg_band and name in _BANDLESS_STACK_PARAMS) else cfg_band
-        stored, _bandless = _instances.stores(self, self._owner_stack_id(target), use_band, inst)   # 7f: its own
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -398,13 +396,7 @@ class ParamsConfigMixin:
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # 7f: its own
-        if cfg_band and name in _BANDLESS_STACK_PARAMS:
-            # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
-            # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
-            # then display, and which the next bundle save writes back as "at default -> remove",
-            # silently clearing the switch while editing something unrelated.
-            stored = bandless
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -634,8 +626,7 @@ class ParamsConfigMixin:
         owner = self._owner_stack(target)
         if owner is None:
             return None
-        stored = _instances.stores(self, self._owner_stack_id(target),        # a listed copy's own file
-                                   self._config_band(target, band), inst)[0]
+        stored = _instances.store(self, self._owner_stack_id(target), self._config_band(target, band), inst)
         run_counts, file_counts = self._owner_param_counts(owner)
         owner_comp_ids = {c.id for c in owner.components}
         for _stack, comp in order:
@@ -665,7 +656,7 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); a listed instance's in its own.
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -675,9 +666,7 @@ class ParamsConfigMixin:
         out = {}
         for c in self._target_components(target):
             for p in c.run_params:
-                val, _amb = self._resolve_stored(
-                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "r", c.id, p.name,
-                    run_counts.get(p.name, 0))
+                val, _amb = self._resolve_stored(stored, "r", c.id, p.name, run_counts.get(p.name, 0))
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
                 elif (po := self._port_of_default(p, _instances.store_inst(self, owner.id, cfg_band, inst))):
@@ -695,7 +684,7 @@ class ParamsConfigMixin:
         if not m or not getattr(inst, "rid", "") or self.stack(m.group(1)) is None:
             return ""
         other, base = self.stack(m.group(1)), int(m.group(2))
-        stored = _instances.stores(self, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))[0]
+        stored = _instances.store(self, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))
         counts = self._owner_param_counts(other)[0]
         for c in other.components:
             for q in c.run_params:
@@ -1205,10 +1194,8 @@ class ParamsConfigMixin:
                 return self._resolved_param_value(
                     tgt, "run" if kind == "r" else "file", c.id, p.name, _band, inst)
             def _key(c, p) -> str:
-                """Which stored value a launch value belongs to: the store's band (none for
-                a band-less param), the component, the param."""
-                b = "" if p.name in _BANDLESS_STACK_PARAMS else (_cfg or "")
-                return f"{b}|{c.id}|{p.name}"
+                """Which stored value a launch value belongs to: the store's band, the component, the param."""
+                return f"{_cfg or ''}|{c.id}|{p.name}"
 
             # F-M1: the marker claims "saved settings differ from the running stack", so a
             # save that brings a value BACK to its recorded launch value takes that param
@@ -1248,14 +1235,7 @@ class ParamsConfigMixin:
             if not live:
                 return _unmarked()                # nobody is reading this configuration
             marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
-            marker_band = _cfg or live_band
-            if _cfg and live_band and _cfg != live_band:
-                # Another band's store — the live instance's own settings are intact. Only a
-                # STACK-LEVEL (band-less) param reaches it from here, so the marker names
-                # those alone, and records the LIVE band: it exists because the running
-                # instance must restart, not the edited one.
-                marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
-                marker_band = live_band
+            marker_band = _cfg or live_band                 # K6: the instance's own band (its consumers, its store)
             if not marked:
                 return _unmarked()
             names = sorted(p.name for _k, _c, p in marked)
@@ -1697,15 +1677,13 @@ class ParamsConfigMixin:
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
                 bd = self._band_default(p, cfg_band or band, inst)
-                val, _amb = self._resolve_stored(
-                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "f", c.id, p.name,
-                    file_counts.get(p.name, 0))
+                val, _amb = self._resolve_stored(stored, "f", c.id, p.name, file_counts.get(p.name, 0))
                 out[p.name] = str(val) if val is not None else bd
         return out
 

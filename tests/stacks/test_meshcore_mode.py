@@ -112,7 +112,7 @@ def test_a_stale_repeater_mode_without_a_name_still_refuses_the_start(tmp_path):
     # Defence in depth for a hand-edited stack file: the start (and every restart path) refuses
     # with the exact remedy instead of launching a host that would exit 2.
     svc = _svc(tmp_path)
-    (tmp_path / "config" / "stacks" / "meshcore.toml").write_text('file_mode = "repeater"\n')
+    (tmp_path / "config" / "stacks" / "meshcore@r2.toml").write_text('file_mode = "repeater"\n')
     svc._invalidate_config()
     r = svc._meshcore_mode_refusal(mm.STACK_ID)
     assert r is not None and r.data.get("reason") == mm.REASON_REPEATER_NAME_REQUIRED
@@ -400,7 +400,7 @@ def test_a_malformed_meshcore_stack_file_breaks_neither_status_nor_stop_verifica
     must not take every stack down with it (the START path fails closed on that file itself)."""
     from lhpc.core.config import ConfigError
     svc = _svc(tmp_path)
-    (tmp_path / "config" / "stacks" / "meshcore.toml").write_text('file_mode = "chat\n')  # unterminated
+    (tmp_path / "config" / "stacks" / "meshcore@r2.toml").write_text('file_mode = "chat\n')  # unterminated
     svc._invalidate_config()
     with pytest.raises(ConfigError):
         svc.meshcore_mode()                                   # the start-side contract: fail closed
