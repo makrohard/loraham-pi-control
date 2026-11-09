@@ -1087,7 +1087,7 @@ class ParamsConfigMixin:
             _ohs_recheck()                  # issue #5: openHop's file appeared/vanished since split_saves
             current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, i))
             merged = config_save.overlay(current, setv, rmv)
-            if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged, _ohs_pending)):
+            if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged, _ohs_pending, inst)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
             if sid == _meshcore_mode.STACK_ID and (_why := _openhop_store.chat_name_refusal(self, current, merged, inst)):
                 raise ConfigError(_why)                                    # issue #5, same rollback
@@ -1456,7 +1456,7 @@ class ParamsConfigMixin:
             return {}, ""                              # not a MeshCore start
         if not self._meshcore_consumes_position(self.gps_owner_stack(target)):
             return {}, ""                              # repeater-only: nothing reads it
-        if not self.gps_enabled_for(target):
+        if not self.gps_enabled_for(target, inst=None):
             return {}, ""                              # use_gps off — omit, never refuse
         plan = plan_from_config(self.config())
         if not plan.valid:

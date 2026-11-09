@@ -102,3 +102,23 @@ def test_the_bands_only_radios_file_sits_under_its_rid_too(box, tmp_path, monkey
     assert mine.is_file(), calls
     assert json.loads(mine.read_text()).get("repeater.node_name") == "Relay 0"
     assert not (tmp_path / "state" / "openhop" / "config.yaml").exists(), calls
+
+
+def test_a_repeater_mode_save_reads_its_own_radios_name_never_another_radios(box, tmp_path, monkeypatch, capsys):
+    # K8 (no inst=None): `lhpc config meshcore@r3 mode repeater` needs r3's OWN repeater name. r2's openHop file holds
+    # one and r3 has none: the save is refused by name and writes nothing (before, the check read the band's first
+    # radio's file and let r3's save through without a name).
+    from lhpc.adapters.cli import main as cli
+    box((R1, R2_868, R3))
+    monkeypatch.setattr(ops, "_helper", _helper([]))
+    r2_file = tmp_path / "state" / "r2" / "openhop" / "config.yaml"
+    r2_file.parent.mkdir(parents=True)
+    r2_file.write_text(json.dumps({"repeater.node_name": "Relay R2"}))
+    r3_store = tmp_path / "config" / "stacks" / "meshcore@r3.toml"
+    before = r3_store.read_bytes() if r3_store.exists() else None
+    capsys.readouterr()
+    rc = cli.main(["config", "meshcore@r3", "mode", "repeater"])
+    out = capsys.readouterr()
+    assert rc != 0, out
+    assert "needs the repeater's own node name" in out.out + out.err, out
+    assert (r3_store.read_bytes() if r3_store.exists() else None) == before

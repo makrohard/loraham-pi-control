@@ -138,7 +138,7 @@ def test_ensure_moves_the_legacy_values_then_removes_them(env):
     under its lock, and every stored copy is gone afterwards; its key and password are its own (DEC-W384p)."""
     svc, helper = env
     _seed_legacy(svc)
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     conf = helper.file()
     minted = {k: conf.pop(k) for k in ("repeater.security.admin_password", "repeater.identity_key")}
     assert conf == {"repeater.node_name": "Relay 1", "repeater.mode": "monitor",
@@ -152,13 +152,13 @@ def test_ensure_mints_what_the_file_lacks_and_never_overwrites(env):
     svc, helper = env
     assert svc.save_config(mm.STACK_ID, {"file_repeater_name": "Relay"}).ok     # stored: the production branch
     svc._invalidate_config()
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     first = helper.file()
     assert len(first["repeater.identity_key"]) == 64
     assert len(first["repeater.security.admin_password"]) == 15
     assert first["repeater.mode"] == "forward"
     assert first["duty_cycle.max_airtime_per_minute"] == 6000
-    ops.ensure(svc, {"repeater_name": "Other", "airtime": "50"}, "10")   # idempotent
+    ops.ensure(svc, {"repeater_name": "Other", "airtime": "50"}, "10", inst=None)   # idempotent
     assert helper.file() == first
     assert helper.calls.count("set") == 1
 
@@ -171,7 +171,7 @@ def test_ensure_without_a_name_refuses_and_writes_nothing(env):
     svc._invalidate_config()
     before = _legacy_sources(svc)
     with pytest.raises(ops.OneStoreError, match="repeater name"):
-        ops.ensure(svc, None, "10")
+        ops.ensure(svc, None, "10", inst=None)
     assert "set" not in helper.calls and not ops.file_path(svc._paths, ops._inst(svc, None)).exists()
     assert _legacy_sources(svc) == before
 
@@ -184,7 +184,7 @@ def test_a_failed_write_or_sync_keeps_every_legacy_copy(env, monkeypatch, verb):
     before = _legacy_sources(svc)
     helper.fail = verb
     with pytest.raises(ops.OneStoreError, match="disk full"):
-        ops.ensure(svc, None, "10")
+        ops.ensure(svc, None, "10", inst=None)
     assert _legacy_sources(svc) == before
     helper.fail = ""                                     # the retry completes and then cleans up
     kept = _legacy_sources(svc)
@@ -195,7 +195,7 @@ def test_a_failed_write_or_sync_keeps_every_legacy_copy(env, monkeypatch, verb):
             seen.append(_legacy_sources(svc) == kept)    # every legacy source still untouched
         return helper(svc_, verb, path, *keys, stdin=stdin)
     ops._helper = watch
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     assert seen == [True]                                # a retry that skipped the sync fails here
     assert helper.calls[-2:] == ["sync", "check"]
     assert _legacy_removed(svc)
@@ -203,25 +203,25 @@ def test_a_failed_write_or_sync_keeps_every_legacy_copy(env, monkeypatch, verb):
 
 def test_writes_are_refused_while_running_or_with_an_unverified_stop(env, monkeypatch):
     svc, helper = env
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     from lhpc.core import instances                      # K6: meshcore@r2 (the file's instance) runs
     monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": getattr(i, "rid", "") == "r2")
-    assert ops.save_rows(svc, {"repeater_name": "New"}).endswith(ops.RUNNING)
+    assert ops.save_rows(svc, {"repeater_name": "New"}, inst=None).endswith(ops.RUNNING)
     with pytest.raises(ops.OneStoreError, match="running"):
-        ops.ensure(svc, {}, "10")
+        ops.ensure(svc, {}, "10", inst=None)
     monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": False)
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
     monkeypatch.setattr(type(svc._lifecycle()), "owned_records",
                         lambda self, cid, rid=None: [{"component": cid, "boot_id": "boot-now"}])
-    assert ops.save_rows(svc, {"repeater_name": "New"}).endswith(ops.UNVERIFIED)
+    assert ops.save_rows(svc, {"repeater_name": "New"}, inst=None).endswith(ops.UNVERIFIED)
     assert helper.file()["repeater.node_name"] == "Relay"
 
 
 def test_save_rows_writes_exactly_the_named_keys(env):
     svc, helper = env
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     before = helper.file()
-    assert ops.save_rows(svc, {"airtime": "20"}) == ""
+    assert ops.save_rows(svc, {"airtime": "20"}, inst=None) == ""
     after = helper.file()
     assert after.pop("duty_cycle.max_airtime_per_minute") == 12000
     before.pop("duty_cycle.max_airtime_per_minute")
@@ -230,14 +230,14 @@ def test_save_rows_writes_exactly_the_named_keys(env):
 
 def test_row_value_reads_the_file_else_the_legacy_store(env):
     svc, helper = env
-    assert ops.row_value(svc, "repeater_name", "Legacy") == "Legacy"      # no file yet (F5)
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
-    assert ops.row_value(svc, "repeater_name", "Legacy") == "Relay"
-    assert ops.row_value(svc, "airtime", "") == "10"
+    assert ops.row_value(svc, "repeater_name", "Legacy", inst=None) == "Legacy"      # no file yet (F5)
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
+    assert ops.row_value(svc, "repeater_name", "Legacy", inst=None) == "Relay"
+    assert ops.row_value(svc, "airtime", "", inst=None) == "10"
     helper.fail = "get"
-    assert ops.row_value(svc, "repeater_name", "Legacy") == "Relay"      # unchanged file: no read
+    assert ops.row_value(svc, "repeater_name", "Legacy", inst=None) == "Relay"      # unchanged file: no read
     ops.file_path(svc._paths, ops._inst(svc, None)).write_text(ops.file_path(svc._paths, ops._inst(svc, None)).read_text() + " ")
-    assert ops.row_value(svc, "repeater_name", "Legacy") == "Legacy"     # changed + unreadable
+    assert ops.row_value(svc, "repeater_name", "Legacy", inst=None) == "Legacy"     # changed + unreadable
 
 
 def test_remove_stack_keys_drops_both_stored_forms_only(env):
@@ -260,7 +260,7 @@ def test_the_password_section_reads_openhops_file_once_it_exists(env):
     svc, helper = env
     _secret(svc, mi.REPEATER_ADMIN_FILENAME, "Legacy-Pass-1234", "r2")      # K6: meshcore@r2's own file
     assert svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)["value"] == "Legacy-Pass-1234"   # before
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     creds = svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)
     assert creds["value"] == "Legacy-Pass-1234" and creds["edit_command"] == ""
     assert creds["path"] == str(ops.file_path(svc._paths, ops._inst(svc, None)))
@@ -273,7 +273,7 @@ def test_settings_saves_go_to_openhops_file_once_it_exists(env, monkeypatch):
     svc, helper = env
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Before"})    # no file: legacy store
     assert r.ok and helper.calls == []
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     svc._invalidate_config()
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "After", "file_airtime": "25"})
     assert r.ok, (r.summary, r.details)
@@ -291,18 +291,18 @@ def test_settings_saves_go_to_openhops_file_once_it_exists(env, monkeypatch):
 
 def test_start_warns_about_upstream_values_lhpc_would_not_accept(env):
     svc, helper = env
-    assert ops.start_warnings(svc, mm.STACK_ID) == []                     # no file yet
+    assert ops.start_warnings(svc, mm.STACK_ID, inst=None) == []                     # no file yet
     r = svc.set_operator_identity("DL1ABC")
     assert r.ok, (r.summary, r.details)
     _set_mode_repeater(svc, "Relay")
-    ops.ensure(svc, None, "10")
-    assert ops.start_warnings(svc, mm.STACK_ID) == []
-    ops._set(svc, {"repeater.node_name": "dl1abc", "repeater.security.admin_password": "short8ch"})
-    lines = ops.start_warnings(svc, mm.NODE_ID)
+    ops.ensure(svc, None, "10", inst=None)
+    assert ops.start_warnings(svc, mm.STACK_ID, inst=None) == []
+    ops._set(svc, {"repeater.node_name": "dl1abc", "repeater.security.admin_password": "short8ch"}, inst=None)
+    lines = ops.start_warnings(svc, mm.NODE_ID, inst=None)
     assert len(lines) == 2 and "callsign" in lines[0] and "15-128" in lines[1]
-    assert ops.start_warnings(svc, "graywolf") == []
+    assert ops.start_warnings(svc, "graywolf", inst=None) == []
     helper.fail = "get"
-    assert ops.start_warnings(svc, mm.STACK_ID) == []
+    assert ops.start_warnings(svc, mm.STACK_ID, inst=None) == []
 
 
 def _set_mode_repeater(svc, name):
@@ -322,9 +322,9 @@ def test_a_chat_name_another_companion_carries_is_refused_at_save(env):
     svc, helper = env
     _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     ops._set(svc, {"identities.companions": [{"name": "Mine", "identity_key": KEY.upper()},
-                                             {"name": "Taken", "identity_key": "cd" * 32}]})
+                                             {"name": "Taken", "identity_key": "cd" * 32}]}, inst=None)
     r = svc.save_config(mm.STACK_ID, {"file_mode": "chat+repeater", "file_node_name": "Taken"})
     assert not r.ok and ops.CHAT_NAME_TAKEN in " ".join([r.summary, *r.details])
     r = svc.save_config(mm.STACK_ID, {"file_mode": "chat+repeater", "file_node_name": "Mine"})
@@ -335,7 +335,7 @@ def test_a_chat_name_another_companion_carries_is_refused_at_save(env):
     assert r.ok, (r.summary, r.details)                    # chat mode: not in openHop's list
     helper.fail = "get"                                    # unreadable: refused, never deferred
     assert "could not be read" in ops.chat_name_refusal(
-        svc, {"file_mode": "chat"}, {"file_mode": "chat+repeater", "file_node_name": "Taken"})
+        svc, {"file_mode": "chat"}, {"file_mode": "chat+repeater", "file_node_name": "Taken"}, inst=None)
 
 
 
@@ -345,8 +345,8 @@ def test_a_refused_mixed_save_leaves_both_stores_byte_identical(env):
     svc, helper = env
     _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
-    ops.ensure(svc, None, "10")
-    ops._set(svc, {"identities.companions": [{"name": "Taken", "identity_key": "cd" * 32}]})
+    ops.ensure(svc, None, "10", inst=None)
+    ops._set(svc, {"identities.companions": [{"name": "Taken", "identity_key": "cd" * 32}]}, inst=None)
     stack_file = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"   # K6: its own file
     before = (stack_file.read_bytes(), ops.file_path(svc._paths, ops._inst(svc, None)).read_bytes())
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Changed", "file_mode": "chat+repeater",
@@ -365,8 +365,8 @@ def test_a_mixed_save_validates_the_name_it_sets(env):
     svc, helper = env
     _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
-    ops.ensure(svc, None, "10")
-    ops._set(svc, {"repeater.node_name": ""})
+    ops.ensure(svc, None, "10", inst=None)
+    ops._set(svc, {"repeater.node_name": ""}, inst=None)
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Fixed", "file_mode": "chat+repeater"})
     assert r.ok, (r.summary, r.details)
     assert helper.file()["repeater.node_name"] == "Fixed"
@@ -415,7 +415,7 @@ def test_a_save_during_a_start_waits_then_refuses_as_running(tmp_path, monkeypat
     try:
         assert entered.wait(30), "the start never reached its readiness wait"
         save = threading.Thread(target=lambda: out.update(
-            why=ops.save_rows(svc, {"repeater_name": "Late"})), daemon=True)
+            why=ops.save_rows(svc, {"repeater_name": "Late"}, inst=None)), daemon=True)
         save.start()
         save.join(2)
         assert save.is_alive() and "render" not in helper.calls, "the save wrote during the start"
@@ -445,7 +445,7 @@ def test_a_start_during_a_save_waits_for_it(tmp_path, monkeypatch):
     monkeypatch.setattr(ops, "_helper", held_render)
     out = {}
     save = threading.Thread(target=lambda: out.update(
-        why=ops.save_rows(svc, {"repeater_name": "Stopped"})), daemon=True)
+        why=ops.save_rows(svc, {"repeater_name": "Stopped"}, inst=None)), daemon=True)
     save.start()
     try:
         assert in_save.wait(30)
@@ -467,13 +467,13 @@ def test_a_start_during_a_save_waits_for_it(tmp_path, monkeypatch):
 def test_the_rows_are_read_in_one_helper_call_until_the_file_changes(env):
     """gate 1 5l N3/N4: a Settings render reads five rows with ONE subprocess; a write re-reads."""
     svc, helper = env
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     helper.calls.clear()
-    assert [ops.row_value(svc, n, "") for n in ("repeater_name", "repeater_mode", "airtime")] == [
+    assert [ops.row_value(svc, n, "", inst=None) for n in ("repeater_name", "repeater_mode", "airtime")] == [
         "Relay", "forward", "10"]
     assert helper.calls.count("get") == 1
-    assert ops.save_rows(svc, {"repeater_name": "Renamed"}) == ""
-    assert ops.row_value(svc, "repeater_name", "") == "Renamed"
+    assert ops.save_rows(svc, {"repeater_name": "Renamed"}, inst=None) == ""
+    assert ops.row_value(svc, "repeater_name", "", inst=None) == "Renamed"
     assert helper.calls.count("get") == 2
 
 
@@ -486,7 +486,7 @@ def test_an_unusable_destination_keeps_every_legacy_copy(env):
     before = _legacy_sources(svc)
     helper.fail = "check"
     with pytest.raises(ops.OneStoreError, match="check"):
-        ops.ensure(svc, None, "10")
+        ops.ensure(svc, None, "10", inst=None)
     assert helper.calls[-3:] == ["set", "sync", "check"]
     assert _legacy_sources(svc) == before                 # TOML keys and both secrets, byte for byte
 
@@ -509,7 +509,7 @@ def test_a_legacy_airtime_of_zero_names_the_lhpc_setting_and_writes_nothing(env)
     svc._invalidate_config()
     before = _legacy_sources(svc)
     with pytest.raises(ops.OneStoreError, match="Duty-cycle limit is 0 %"):
-        ops.ensure(svc, None, "10")                       # the production branch: read under the lock
+        ops.ensure(svc, None, "10", inst=None)                       # the production branch: read under the lock
     assert "set" not in helper.calls and not ops.file_path(svc._paths, ops._inst(svc, None)).exists()
     assert _legacy_sources(svc) == before
 
@@ -521,7 +521,7 @@ def test_the_airtime_row_shows_any_duty_cycle_the_start_accepts(env, monkeypatch
     the stopped Settings row renders each, scaled where it can be, else as the file holds it."""
     svc, _helper = env
     monkeypatch.setattr(ops, "_rows", lambda _svc, _inst=None: {"duty_cycle.max_airtime_per_minute": stored})
-    assert ops.row_value(svc, "airtime", "7") == shown
+    assert ops.row_value(svc, "airtime", "7", inst=None) == shown
 
 
 def test_a_first_start_between_the_decision_and_the_lock_refuses_the_save(env, monkeypatch):
@@ -535,7 +535,7 @@ def test_a_first_start_between_the_decision_and_the_lock_refuses_the_save(env, m
 
     def barrier(*args):
         out = split(*args)
-        ops.ensure(svc, None, "10")                  # the first start wins the race
+        ops.ensure(svc, None, "10", inst=None)                  # the first start wins the race
         svc._invalidate_config()
         return out
     monkeypatch.setattr(ops, "split_saves", barrier)
@@ -557,13 +557,13 @@ def test_a_save_committed_before_the_first_starts_lock_is_migrated_not_lost(env,
     _set_mode_repeater(svc, "Relay")
     run, seen = ops.ensure, []
 
-    def barrier(svc_, legacy, airtime_default, inst=None):
+    def barrier(svc_, legacy, airtime_default, inst):
         seen.append(legacy)                               # the production branch: read under the lock
         r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Newer", "file_airtime": "7"})   # legacy store
         assert r.ok, (r.summary, r.details)
-        return run(svc_, legacy, airtime_default)
+        return run(svc_, legacy, airtime_default, inst)
     monkeypatch.setattr(ops, "ensure", barrier)
-    ops.start_ensure(svc, mm.STACK_ID)
+    ops.start_ensure(svc, mm.STACK_ID, inst=None)
     assert seen == [None]
     assert _rows(helper.file()) == {                      # the committed save AND every other legacy row
         "repeater.node_name": "Newer", "duty_cycle.max_airtime_per_minute": 4200, "repeater.mode": "monitor",
@@ -627,7 +627,7 @@ def test_a_repeater_restart_ends_ok_with_the_real_config_lock(env, monkeypatch, 
     assert r.ok, (r.summary, r.details)
     svc._invalidate_config()
     if migrated:
-        ops.ensure(svc, None, "10")
+        ops.ensure(svc, None, "10", inst=None)
         svc._invalidate_config()
         assert _legacy_removed(svc)                       # migrated before the restart
     calls = _restart_without_processes(monkeypatch, svc)
@@ -695,8 +695,8 @@ def test_a_restart_of_an_unusable_migrated_file_is_refused_before_the_stop(env, 
     _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY)
     assert svc.save_config(mm.STACK_ID, {"file_mode": "repeater", "file_repeater_name": "Relay"}).ok
     svc._invalidate_config()
-    ops.ensure(svc, None, "10")
-    ops._set(svc, {"repeater.mode": "bogus"})                     # unusable, every key present
+    ops.ensure(svc, None, "10", inst=None)
+    ops._set(svc, {"repeater.mode": "bogus"}, inst=None)                     # unusable, every key present
     calls = _restart_without_processes(monkeypatch, svc)
     res = svc.restart(mm.STACK_ID, apply=True)
     assert not res.ok and "repeater.mode" in " ".join([res.summary, *res.details])
@@ -710,7 +710,7 @@ def test_a_nested_repeater_start_without_the_restarts_step_is_refused(env, monke
     _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY)
     assert svc.save_config(mm.STACK_ID, {"file_mode": "repeater", "file_repeater_name": "Relay"}).ok
     svc._invalidate_config()
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     calls = _restart_without_processes(monkeypatch, svc)
     with svc._config_stable():
         res = svc.start(mm.STACK_ID, apply=True)
@@ -729,8 +729,8 @@ def test_a_record_of_an_earlier_boot_does_not_block_the_start(env, monkeypatch):
     repeater-mode node until it was removed by hand."""
     svc, helper = env
     _records(svc, monkeypatch, [{"component": mm.NODE_ID, "boot_id": "boot-before"}])
-    assert ops.blocked(svc) == ""
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    assert ops.blocked(svc, inst=None) == ""
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     assert helper.file()["repeater.node_name"] == "Relay"
 
 
@@ -741,9 +741,9 @@ def test_a_record_of_an_earlier_boot_does_not_block_the_start(env, monkeypatch):
 def test_records_that_may_still_be_live_keep_blocking(env, monkeypatch, rec, boot):
     svc, helper = env
     _records(svc, monkeypatch, [{"component": mm.NODE_ID, **rec}], boot=boot)
-    assert ops.blocked(svc) == ops.UNVERIFIED
+    assert ops.blocked(svc, inst=None) == ops.UNVERIFIED
     with pytest.raises(ops.OneStoreError, match="not verified"):
-        ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+        ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
 
 
 def _repeater_start(svc, monkeypatch, recs):
@@ -781,7 +781,7 @@ def test_w384p_the_shared_legacy_secret_files_are_neither_read_nor_removed(env):
     _seed_legacy(svc)
     legacy = [mi.secret_path(svc._paths, f) for f in (mi.REPEATER_IDENTITY_FILENAME, mi.REPEATER_ADMIN_FILENAME)]
     before = [p.read_bytes() for p in legacy]
-    ops.ensure(svc, None, "10")
+    ops.ensure(svc, None, "10", inst=None)
     conf = helper.file()
     assert conf["repeater.identity_key"] != KEY and conf["repeater.security.admin_password"] != "Legacy-Pass-1234"
     assert len(conf["repeater.identity_key"]) == len(KEY)                 # a key of its own, minted
@@ -795,7 +795,7 @@ def test_w384p_the_changelog_move_keeps_the_repeater_identity(env):
     svc, helper = env
     _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY, "r2")
     _secret(svc, mi.REPEATER_ADMIN_FILENAME, "Moved-Pass-12345", "r2")
-    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10", inst=None)
     conf = helper.file()
     assert (conf["repeater.identity_key"], conf["repeater.security.admin_password"]) == (KEY, "Moved-Pass-12345")
     assert mi.secret_path(svc._paths, mi.REPEATER_IDENTITY_FILENAME, "r2").read_text().strip() == KEY

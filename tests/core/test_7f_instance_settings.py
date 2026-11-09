@@ -122,7 +122,7 @@ def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_sett
     ops.start_ensure(svc, "meshcore", inst=inst)
     own = json.loads(ops.file_path(svc._paths, inst).read_text())
     assert own["repeater.node_name"] == "Relay Four" and len(own["repeater.identity_key"]) == 64
-    assert not ops.file_path(svc._paths, Instance("r2")).exists() and not ops.file_path(svc._paths).exists()
+    assert not ops.file_path(svc._paths, Instance("r2")).exists() and not ops.file_path(svc._paths, inst=None).exists()
     assert svc._stored_param_value("meshcore", "file", "meshcore-node", "repeater_name",
                                    inst=Instance("r2")) == "Slot Zero"                    # r2's own, untouched
 

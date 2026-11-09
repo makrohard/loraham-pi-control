@@ -483,7 +483,7 @@ def test_stack_configs_are_filled_from_the_global_source(tmp_path):
     _enable(svc, 'meshtastic', 'meshcom', 'reticulum')
     save_gps(svc._paths, source="gpsd", host="192.168.1.5", port=2948)
     svc._invalidate_config()
-    v = svc._gps_config_values("sideband")
+    v = svc._gps_config_values("sideband", inst=None)
     assert v["{gps_source}"] == "gpsd"
     assert v["{gps_host}"] == "192.168.1.5" and v["{gps_port}"] == "2948"
     # Sideband speaks gpsd natively, so it needs no device path.
@@ -491,7 +491,7 @@ def test_stack_configs_are_filled_from_the_global_source(tmp_path):
 
     save_gps(svc._paths, source="nmea", device="/dev/null", nmea_baud=4800)
     svc._invalidate_config()
-    v = svc._gps_config_values("meshtastic")
+    v = svc._gps_config_values("meshtastic", inst=None)
     assert v["{gps_device}"] == "/dev/null", "direct NMEA points at the REAL receiver"
     assert v["{gps_baud}"] == "4800"
 
@@ -501,11 +501,11 @@ def test_meshtastic_gets_the_feed_path_only_for_gpsd(tmp_path):
     _enable(svc, 'meshtastic', 'meshcom', 'reticulum')
     save_gps(svc._paths, source="gpsd")
     svc._invalidate_config()
-    assert svc._gps_config_values("meshtastic")["{gps_device}"].endswith("/meshtastic/nmea0")
+    assert svc._gps_config_values("meshtastic", inst=None)["{gps_device}"].endswith("/meshtastic/nmea0")
     for src, kw in (("off", {}), ("fixed", {"fixed_lat": LAT, "fixed_lon": LON})):
         save_gps(svc._paths, source=src, **kw)
         svc._invalidate_config()
-        assert svc._gps_config_values("meshtastic")["{gps_device}"] == "", \
+        assert svc._gps_config_values("meshtastic", inst=None)["{gps_device}"] == "", \
             "with no stream the key must be OMITTED, not written blank"
 
 
@@ -626,7 +626,7 @@ def test_the_per_stack_switch_survives_a_band_change(tmp_path):
     would be a trap — and it is what happened before this was read across bands."""
     svc = _svc(tmp_path)
     assert svc.save_stack_config("meshtastic", {"use_gps": "on"}, band="868").ok
-    assert svc.gps_enabled_for("meshtastic") is True, "set on 868"
+    assert svc.gps_enabled_for("meshtastic", inst=None) is True, "set on 868"
     save_gps(svc._paths, source="gpsd")
     svc._invalidate_config()
     # The feed is admitted regardless of which band the stack is later run on.
@@ -1799,12 +1799,12 @@ def test_the_gps_switch_survives_a_band_change(tmp_path):
     assert "use_gps" not in (glob.read_text() if glob.exists() else ""), "K6: the global file holds autostart only"
     banded = stacks / "meshtastic@868.toml"
     assert not banded.exists(), "a per-band file is never written (13.8): storing per band made it revert"
-    assert svc.gps_enabled_for("meshtastic") is False, "and the read must see it"
+    assert svc.gps_enabled_for("meshtastic", inst=None) is False, "and the read must see it"
 
     # The other band must agree — that is the whole point of storing it band-lessly.
     _cfg.save_hardware_setup(svc._paths, "uputronics-433")
     svc._invalidate_config()
-    assert svc.gps_enabled_for("meshtastic") is False, "the switch must survive a band change"
+    assert svc.gps_enabled_for("meshtastic", inst=None) is False, "the switch must survive a band change"
 
 
 def test_the_gps_switch_write_keeps_the_rest_of_the_bandless_file(tmp_path):
@@ -1838,14 +1838,14 @@ def test_the_gps_switch_cannot_be_flipped_under_a_running_stack_from_any_surface
     svc = _svc(tmp_path)
     _cfg.save_hardware_setup(svc._paths, "uputronics-868")
     svc._invalidate_config()
-    assert svc.gps_enabled_for("meshtastic") is True     # the manifest default
+    assert svc.gps_enabled_for("meshtastic", inst=None) is True     # the manifest default
 
     from lhpc.core.model import RunState
     _snap_with(svc, {"meshtastic": RunState.RUNNING})          # the stack is up
     res = svc.save_config_bundle("meshtastic", values={"use_gps": "off"})
     assert not res.ok, "flipping the switch under a running stack must be refused"
     assert "use_gps" in res.summary and "running" in res.summary
-    assert svc.gps_enabled_for("meshtastic") is True, "and nothing may have been written"
+    assert svc.gps_enabled_for("meshtastic", inst=None) is True, "and nothing may have been written"
 
     # Re-submitting the SAME value — here the DEFAULT, which the form always posts — is
     # not a change and must not be refused. (Hardcoding "off" as the unset reading made
@@ -1872,7 +1872,7 @@ def test_the_saved_switch_is_what_the_console_and_cli_show(tmp_path):
 
     # The consequence that makes this severe: an unrelated edit must not clear it.
     assert svc.save_config_bundle("meshtastic", values={"node_name": "GREENWICH"}).ok
-    assert svc.gps_enabled_for("meshtastic") is True, \
+    assert svc.gps_enabled_for("meshtastic", inst=None) is True, \
         "editing an unrelated parameter must not turn GPS off"
 
 
@@ -1917,12 +1917,12 @@ def test_a_component_target_saves_the_owner_stacks_switch(tmp_path):
     body = _own_file(svc, "meshcom").read_text()
     assert 'use_gps = "off"' in body, f"not stored flat in the owner stack's instance file: {body!r}"
     assert "__use_gps" not in body, "a component-scoped key is invisible to every GPS reader"
-    assert svc.gps_enabled_for("meshcom") is False
-    assert svc.gps_enabled_for("meshcom-qemu") is False, "the component must see it too"
+    assert svc.gps_enabled_for("meshcom", inst=None) is False
+    assert svc.gps_enabled_for("meshcom-qemu", inst=None) is False, "the component must see it too"
     assert svc._resolved_param_value("meshcom-qemu", "run", "meshcom-qemu", "use_gps", "") == "off"
 
     assert svc.save_config_bundle("meshcom-qemu", values={"use_gps": "on"}).ok
-    assert svc.gps_enabled_for("meshcom") is True, "and turning it back on from the component works"
+    assert svc.gps_enabled_for("meshcom", inst=None) is True, "and turning it back on from the component works"
 
 
 def test_a_direct_consumer_start_brings_its_gps_feed(tmp_path):
@@ -2002,7 +2002,7 @@ def test_a_start_that_wins_the_race_still_blocks_the_switch(tmp_path):
     res = svc.save_config_bundle("meshcom", values={"use_gps": "off"})
     assert not res.ok, "the recheck under the lock must refuse"
     assert any("use_gps" in d and "running" in d for d in (res.details or [])), res.details
-    assert svc.gps_enabled_for("meshcom") is True, "and the transaction must roll back"
+    assert svc.gps_enabled_for("meshcom", inst=None) is True, "and the transaction must roll back"
 
 
 def test_a_running_probe_that_cannot_answer_refuses_the_switch(tmp_path):
@@ -2016,7 +2016,7 @@ def test_a_running_probe_that_cannot_answer_refuses_the_switch(tmp_path):
     res = svc.save_config_bundle("meshtastic", values={"use_gps": "off"})   # a real change
     assert not res.ok and "meshtastic" in res.summary, res.summary
     assert "running" in res.summary or "unknown" in res.summary, res.summary
-    assert svc.gps_enabled_for("meshtastic") is True, "nothing may have been written"
+    assert svc.gps_enabled_for("meshtastic", inst=None) is True, "nothing may have been written"
 
 
 @pytest.mark.parametrize("pid, why", [
@@ -2097,7 +2097,7 @@ def test_an_empty_switch_value_cannot_disable_gps_under_a_running_stack(tmp_path
     res = svc.save_config_bundle("meshcom", values={"use_gps": value})
     assert not res.ok, f"{value!r} is a change to OFF and must be refused while running"
     assert "use_gps" in res.summary and "running" in res.summary, res.summary
-    assert svc.gps_enabled_for("meshcom") is True, "and GPS must still be on"
+    assert svc.gps_enabled_for("meshcom", inst=None) is True, "and GPS must still be on"
 
 
 def test_the_switch_is_stored_canonically(tmp_path):
@@ -2116,7 +2116,7 @@ def test_the_switch_is_stored_canonically(tmp_path):
     # An empty value canonicalizes to "off" — a real deviation now, stored in canonical form
     # (never the raw empty string, which no reader treats as either state).
     assert 'use_gps = "off"' in body, body
-    assert svc.gps_enabled_for("meshcom") is False
+    assert svc.gps_enabled_for("meshcom", inst=None) is False
 
 
 def test_an_unreadable_running_state_blocks_a_global_source_change(tmp_path):
@@ -2282,7 +2282,7 @@ def test_a_feed_running_alone_blocks_its_own_switch(tmp_path):
 
     res = svc.save_config_bundle("meshcom", values={"use_gps": "off"})
     assert not res.ok and "meshcom-gps" in res.summary, res.summary
-    assert svc.gps_enabled_for("meshcom") is True, "and the switch must be untouched"
+    assert svc.gps_enabled_for("meshcom", inst=None) is True, "and the switch must be untouched"
 
 
 @pytest.mark.parametrize("cid", ["meshcom-bridge", "meshcom-firmware", "meshcom-gps-relay"])
@@ -2717,9 +2717,9 @@ def test_gps_capable_stacks_are_derived_from_the_manifest(tmp_path):
         assert svc.gps_owner_stack(sid) == sid
         # ... and the saved switch is actually readable for each, in BOTH states.
         assert svc.save_stack_config(sid, {"use_gps": "on"}).ok
-        assert svc.gps_enabled_for(sid) is True
+        assert svc.gps_enabled_for(sid, inst=None) is True
         assert svc.save_stack_config(sid, {"use_gps": "off"}).ok
-        assert svc.gps_enabled_for(sid) is False
+        assert svc.gps_enabled_for(sid, inst=None) is False
 
     # A stack with no such param stays out — the switch is not invented for it.
     assert svc.gps_owner_stack("kiss") == ""
@@ -2755,7 +2755,7 @@ def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
     # The exact broken state from the box: feed ticked, GPS off -> feed stays OUT.
     # (off is explicit now — the switch defaults on since the source gained `auto`.)
     assert svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on", "use_gps": "off"}).ok
-    assert svc.gps_enabled_for("meshcom") is False
+    assert svc.gps_enabled_for("meshcom", inst=None) is False
     assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
 
     # And the plan still admits it when GPS is genuinely on — the checkbox was never what
@@ -2847,7 +2847,7 @@ def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_p
     # Untouched box: source auto, every GPS-capable stack's switch defaults ON.
     assert svc.gps_settings()["source"] == "auto"
     for sid in svc._gps_stacks():
-        assert svc.gps_enabled_for(sid) is True, sid
+        assert svc.gps_enabled_for(sid, inst=None) is True, sid
 
     # No gpsd (the conftest default): resolved off, nothing refused, nothing admitted.
     assert svc.gps_settings()["resolved_source"] == "off"

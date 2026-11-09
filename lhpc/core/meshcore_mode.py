@@ -98,7 +98,7 @@ def _node_live(svc, inst) -> bool:
     return instances.instance_runs(svc, svc.stack(STACK_ID).component(NODE_ID), inst, inst.band)
 
 
-def start_refusal(svc, target: str, inst=None):
+def start_refusal(svc, target: str, inst):
     """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
     (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
     and a repeater mode without the repeater's own node name. One rule set (this module); the
@@ -136,7 +136,7 @@ def start_refusal(svc, target: str, inst=None):
     return None
 
 
-def save_refusal(svc, merged: dict, pending: dict | None = None) -> str:
+def save_refusal(svc, merged: dict, pending: dict | None, inst) -> str:
     """Why a MeshCore config save must be refused ("" = fine): a repeater mode needs the
     repeater's own node name IN THE SAME saved state — a saved repeater mode without a name
     would refuse every later start (boot restore included). Same rule the host applies."""
@@ -146,7 +146,7 @@ def save_refusal(svc, merged: dict, pending: dict | None = None) -> str:
         return ""
     name = (pending or {}).get("repeater_name") or svc._resolve_stored(merged, "f", NODE_ID, "repeater_name", 1)[0]
     if not name:                                       # issue #5: it may live in openHop's file
-        name = openhop_store.row_value(svc, "repeater_name", "")
+        name = openhop_store.row_value(svc, "repeater_name", "", inst)
     try:
         validators.node_name(name or "", field="repeater name")
     except validators.ValidationError as exc:

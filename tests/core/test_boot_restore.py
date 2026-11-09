@@ -1917,7 +1917,7 @@ def _start_after_the_openhop_check(record):
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
              _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
         record.append(target)
-        why = ohs.blocked(self) if target == "meshcore" else ""
+        why = ohs.blocked(self, inst=None) if target == "meshcore" else ""
         if why:
             return ActionResult(False, f"Cannot start {target}: {why}")
         refusal = _before_start_locked() if _before_start_locked is not None else None

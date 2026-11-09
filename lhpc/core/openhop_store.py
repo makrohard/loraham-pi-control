@@ -50,7 +50,7 @@ class OneStoreError(ValueError):
     """A one-store read or write could not be done; nothing legacy was removed."""
 
 
-def file_path(paths, inst=None) -> Path:
+def file_path(paths, inst) -> Path:
     """openHop's file of `inst` (the template's when None): state/openhop/config.yaml, a listed instance's under state/<rid>/ (7d)."""
     from .commands import TEMPLATE
     return Path(paths.runtime_root) / (inst or TEMPLATE).subst("state/{instance_dir}openhop") / "config.yaml"
@@ -81,7 +81,7 @@ def _helper(svc, *args: str, stdin: str = "") -> str:
     return proc.stdout
 
 
-def read(svc, keys, inst=None) -> dict:
+def read(svc, keys, inst) -> dict:
     if not file_path(svc._paths, _inst(svc, inst)).exists():
         return dict.fromkeys(keys)
     return json.loads(_helper(svc, "get", str(file_path(svc._paths, _inst(svc, inst))), *keys))
@@ -105,7 +105,7 @@ def to_file(name: str, text: str):
     return round(float(text) * scale) if scale else text
 
 
-def blocked(svc, inst=None) -> str:
+def blocked(svc, inst) -> str:
     """'' when LHPC may write the file (no node process, no unverified stop), else the reason. A listed instance
     (7d) looks at its own process and records only; without one as before."""
     svc.build_snapshot(fresh=True)
@@ -130,14 +130,14 @@ def blocked(svc, inst=None) -> str:
     return ""
 
 
-def _set(svc, values: dict, inst=None) -> None:
+def _set(svc, values: dict, inst) -> None:
     _helper(svc, "set", str(file_path(svc._paths, _inst(svc, inst))), stdin=json.dumps(values))
 
 
 _ROWS_SEEN: dict = {}          # file path -> ((inode, mtime_ns, size), every row key's value)
 
 
-def _rows(svc, inst=None) -> dict:
+def _rows(svc, inst) -> dict:
     """Every row key's value in ONE helper call, reused while the file is unchanged (a Settings
     render reads five rows: one subprocess, not five). Any write replaces the file (a new inode)
     or changes its mtime, so a changed file is read again."""
@@ -150,7 +150,7 @@ def _rows(svc, inst=None) -> dict:
     return seen[1]
 
 
-def row_value(svc, name: str, legacy: str, inst=None) -> str:
+def row_value(svc, name: str, legacy: str, inst) -> str:
     """The stopped row's value: openHop's file if it holds the key, else the legacy source
     (the pre-first-start migration state)."""
     try:
@@ -160,7 +160,7 @@ def row_value(svc, name: str, legacy: str, inst=None) -> str:
     return to_row(name, value) if value is not None else legacy
 
 
-def chat_name_taken(svc, name: str, inst=None) -> bool:
+def chat_name_taken(svc, name: str, inst) -> bool:
     """Plan §13: a companion in openHop's file other than LHPC's chat node (found by the chat
     node's identity key) already carries `name`. False without a file or a name."""
     if not name or not file_path(svc._paths, _inst(svc, inst)).exists():
@@ -172,7 +172,7 @@ def chat_name_taken(svc, name: str, inst=None) -> bool:
                for c in companions)
 
 
-def rows_target(svc, values: dict, inst=None) -> tuple:
+def rows_target(svc, values: dict, inst) -> tuple:
     """The config-transaction target that writes the named rows (each exactly its own key) into
     openHop's file. Rendered INSIDE the transaction's exclusive lock: refused while the repeater
     runs or its stop is unverified, and committed or rolled back together with every other target
@@ -190,7 +190,7 @@ def rows_target(svc, values: dict, inst=None) -> tuple:
     return ("openhop", file_path(svc._paths, _inst(svc, inst)), render, 0o600)
 
 
-def save_rows(svc, values: dict, inst=None) -> str:
+def save_rows(svc, values: dict, inst) -> str:
     """The rows alone, as their own transaction. '' on success, else the refusal (nothing written)."""
     try:
         cfgmod.apply_config_transaction(svc._paths, [rows_target(svc, values, inst)])
@@ -199,7 +199,7 @@ def save_rows(svc, values: dict, inst=None) -> str:
     return ""
 
 
-def ensure(svc, legacy, airtime_default: str, inst=None) -> None:
+def ensure(svc, legacy, airtime_default: str, inst) -> None:
     """Before a repeater-mode start: every one-store key present in openHop's file. `legacy` maps
     row name -> the pre-issue-5 stored value (or ''); None reads the stored values INSIDE the lock,
     so a save committed before it is migrated, never removed unread. Legacy copies are removed only
@@ -256,13 +256,13 @@ def _mint(name: str, airtime_default: str):
     return ""
 
 
-def for_start(svc, target: str, inst=None) -> bool:
+def for_start(svc, target: str, inst) -> bool:
     """Does a start of `target` run the repeater (the one-store steps apply)?"""
     from .meshcore_mode import repeater_on
     return target in (STACK_ID, NODE_ID) and repeater_on(svc.meshcore_mode(inst))   # 7f: an instance's own mode
 
 
-def start_ensure(svc, target: str, nested: bool = False, inst=None) -> None:
+def start_ensure(svc, target: str, inst, nested: bool = False) -> None:
     """The start's step, after admission and before its shared config guard: `ensure` with the
     legacy stack-config values, read under ensure's lock. Any failure refuses the start as a
     OneStoreError. A repeater start nested under a held guard must come from a restart that ran
@@ -279,7 +279,7 @@ def start_ensure(svc, target: str, nested: bool = False, inst=None) -> None:
         raise OneStoreError(f"openHop's config file: {exc}") from exc
 
 
-def restart_ensure(svc, target: str, inst=None) -> None:
+def restart_ensure(svc, target: str, inst) -> None:
     """A restart's step, after admission and BEFORE its shared config-stability guard: the start
     nested under that guard cannot take the exclusive lock `ensure` needs (a second descriptor would
     wait for the guard), so it skips `start_ensure`. With every one-store key in openHop's file there
@@ -306,7 +306,7 @@ def restart_ensure(svc, target: str, inst=None) -> None:
     start_ensure(svc, target, inst=inst)
 
 
-def split_saves(svc, target: str, params: list, inst=None) -> tuple:
+def split_saves(svc, target: str, params: list, inst) -> tuple:
     """A settings save: once openHop's file exists, the one-store rows go there, as one more
     target of the save's own transaction (never cleared). Returns (refusal ActionResult or None,
     the params left for LHPC's own store, the targets to commit with them, the recheck the save
@@ -335,7 +335,7 @@ def pending_rows(params: list) -> dict:
             if ch.kind == "f" and ch.comp.id == NODE_ID and ch.param.name in ROWS}
 
 
-def rendered(svc, name: str, target: str, inst=None):
+def rendered(svc, name: str, target: str, inst):
     """The host-config value generation renders for a meshcore-node param of this feature, or
     None for any other param: a one-store row is never rendered (the host reads openHop's file);
     `openhop_use_gps` is derived from the stack's `use_gps` switch."""
@@ -357,7 +357,7 @@ def key_id(key_hex: str) -> str:
     return hashlib.sha256(key_hex.strip().lower().encode()).hexdigest()[:16] if key_hex else ""
 
 
-def chat_name_refusal(svc, current: dict, merged: dict, inst=None) -> str:
+def chat_name_refusal(svc, current: dict, merged: dict, inst) -> str:
     """Plan §13 at save: in chat+repeater the chat node is an entry of openHop's companion list,
     so a save that sets its name or turns that mode on is refused when another companion there
     carries the name (the host refuses the same at start). "" = fine; an unreadable file refuses."""
@@ -372,7 +372,7 @@ def chat_name_refusal(svc, current: dict, merged: dict, inst=None) -> str:
         return f"openHop's config file could not be read, so the chat node's name cannot be checked ({exc})"
 
 
-def password_view(svc, comp, inst=None) -> dict | None:
+def password_view(svc, comp, inst) -> dict | None:
     """The Password section once the instance's openHop file exists (it holds the dashboard password), else
     None (before its first repeater-mode start, and for any other component's password)."""
     if not comp.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) or not file_path(svc._paths, _inst(svc, inst)).exists():
@@ -388,7 +388,7 @@ def password_view(svc, comp, inst=None) -> dict | None:
             "note": comp.ui_password_note}
 
 
-def start_warnings(svc, target: str, inst=None) -> list:
+def start_warnings(svc, target: str, inst) -> list:
     """The `[warning]` lines of a repeater-mode start (plan DELTA-2 a): a repeater name equal to the
     operator callsign, or a dashboard password outside LHPC's rule, written the upstream way is neither
     refused nor overwritten, only shown. [] when there is no file yet or it cannot be read (the ensure step reports that)."""

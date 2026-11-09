@@ -18,7 +18,7 @@ from .snapshot_memo import invalidates_snapshot
 
 class GpsOpsMixin:
 
-    def _gps_config_values(self, target: str, inst=None) -> dict:
+    def _gps_config_values(self, target: str, inst) -> dict:
         """Controller-owned `{gps_*}` values for a stack's generated config.
 
         These come from the ONE global plan, which is why the consuming params are `hidden`
@@ -121,7 +121,7 @@ class GpsOpsMixin:
             # A stack running with its switch OFF takes no position from the global setting, so
             # it is not affected by a source change and must not block one. (Its FEED could not
             # be running in that state anyway — a live feed IS the stack using GPS.)
-            wanted = {s for s in wanted if self.gps_enabled_for(s)}
+            wanted = {s for s in wanted if self.gps_enabled_for(s, inst=None)}
         try:
             snap = snap if snap is not None else self.build_snapshot(fresh=True)
         except Exception:
@@ -629,7 +629,7 @@ class GpsOpsMixin:
         """
         from .gps import plan_from_config
         plan = plan_from_config(self.config())
-        if target and plan.enabled and not self.gps_enabled_for(target):
+        if target and plan.enabled and not self.gps_enabled_for(target, inst=None):
             # The stack opted out: it opens nothing, claims nothing, renders no device and
             # pushes "no GPS" to its node. Same shape as a global `off`, scoped to one stack.
             return plan.disabled_for_stack()
@@ -668,7 +668,7 @@ class GpsOpsMixin:
         finally:
             fh.close()
 
-    def gps_enabled_for(self, target: str, inst=None) -> bool:
+    def gps_enabled_for(self, target: str, inst) -> bool:
         """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
 
         Stored and read BANDLESSLY. "Does this box report its position" is a property of the

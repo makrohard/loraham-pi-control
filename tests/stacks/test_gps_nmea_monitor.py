@@ -573,7 +573,7 @@ def test_unknown_enablement_is_a_holder(tmp_path, pty_device, monkeypatch, cid, 
     svc._invalidate_config()
     _snap_with(svc, {cid: state})
     calls = _opens(monkeypatch)
-    assert not svc.gps_enabled_for(cid)                      # the filtered helper says "off"...
+    assert not svc.gps_enabled_for(cid, inst=None)                      # the filtered helper says "off"...
     m = svc.gps_monitor()
     assert m["state"] == "held" and calls == []              # ...the Monitor still holds
 
