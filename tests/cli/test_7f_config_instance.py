@@ -107,3 +107,64 @@ def test_k8e_an_instances_apply_reaches_its_radios_daemon(run, target):
     via = " (via chat@r3)" if target.startswith("chat") else ""
     assert (rc, out.splitlines()[0]) == (1, "ERR   the daemon of r3 is not running — start it first: lhpc stack start "
                                             f"daemon@r3{via}"), out
+
+
+@pytest.mark.parametrize("argv", [("daemon", "--daemon-param", "SF=9"), ("daemon", "--reset-daemon"),
+                                  ("daemon", "--apply-daemon")])
+def test_g1_k8e_1_the_bare_daemon_form_names_the_radios_when_several_run_it(run, tmp_path, argv):
+    # r1 and r3 both on 433: the bare daemon form refuses by name, never the band's store (before: "saved daemon
+    # params for daemon (433)")
+    before = (tmp_path / "config" / "radios.toml").read_text()
+    rc, out = run(*argv)
+    assert (rc, out.splitlines()[0]) == (2, "ERR   daemon runs on r1, r3: name the instance, lhpc config "
+                                            "daemon@<rid> --daemon-param …"), out
+    assert (tmp_path / "config" / "radios.toml").read_text() == before
+    assert not (tmp_path / "config" / "stacks" / "daemon.toml").exists()
+
+
+def test_g1_k8e_1_the_bare_daemon_form_with_one_radio_writes_its_row(run, tmp_path):
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),))
+    rc, out = run("daemon", "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (0, "OK    saved the daemon settings of r1"), out
+    assert _row_dp(tmp_path) == {"r1": {"SF": "9"}}
+
+
+def test_g1_k8e_2_a_radio_the_resolver_refuses_is_refused_by_its_reason(run, tmp_path, monkeypatch):
+    # the one able radio leaves the list between the count and the resolve: its reason, never the band's store
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),))
+    monkeypatch.setattr(instances, "copy_of", lambda svc, sid, rid="", band="", run=None:
+                        (None, f"{sid}@{rid}: {rid} is not in the hardware list"))
+    rc, out = run("chat", "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (1, "ERR   chat@r1: r1 is not in the hardware list"), out
+    assert _row_dp(tmp_path) == {"r1": {}} and not (tmp_path / "config" / "stacks" / "chat.toml").read_text().count("dp_")
+
+
+@pytest.mark.parametrize("target", ["graywolf@r1", "graywolf"])
+def test_g1_k8e_a_stack_without_daemon_parameters_is_refused(run, tmp_path, target):
+    rc, out = run(target, "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (1, "ERR   graywolf has no configurable daemon parameters"), out
+    assert _row_dp(tmp_path) == {"r1": {}, "r3": {}}
+
+
+def test_g1_k8e_3_a_reset_returns_to_the_old_band_value_until_saved_over(run, tmp_path):
+    # W269 (CHANGELOG): a 0.13 per-band value (chat's dp_433_SF) stays the radio's default; a reset returns to it
+    from lhpc.core import radio_start
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"dp_433_SF": "7"})
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert radio_start.row_dp(svc, "433", "r3")["SF"] == "7"
+    assert run("chat@r3", "--daemon-param", "SF=9")[0] == 0 and radio_start.row_dp(svc, "433", "r3")["SF"] == "9"
+    assert run("chat@r3", "--reset-daemon")[0] == 0 and radio_start.row_dp(svc, "433", "r3")["SF"] == "7"
+
+
+def test_g1_k8e_4_an_apply_reaches_r3s_running_daemon_only(tmp_path, monkeypatch, capsys):
+    # r1 and r3 both on 433 and both running: daemon@r3's apply sends its SETs to r3's socket alone
+    ready = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r3")}
+    radios_fixture.write(tmp_path, ROWS)
+    fake = FakeSystem(unix_replies=ready)
+    monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: ControllerService(system=fake.system,
+                                                                                    paths=Paths(runtime_root=tmp_path)))
+    assert cli.main(["config", "daemon@r3", "--daemon-param", "SF=9"]) == 0
+    fake.sent.clear()
+    cli.main(["config", "daemon@r3", "--apply-daemon"])
+    assert {p for p, _b in fake.sent} == {"/tmp/loraconf-r3.sock"} and (("/tmp/loraconf-r3.sock", b"SET SF=9\n") in fake.sent)

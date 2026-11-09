@@ -322,15 +322,22 @@ def _cmd_config(svc, args) -> int:
     band = iband                                  # K8 (W308/W310): the instance's radio's band, never a --band
 
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
-    if daemon_mode and inst is None and not svc._is_daemon_target(stack):
-        # the bare form addresses the one radio able to run the stack, as before K8 (W290); several are named
+    if daemon_mode and not svc._has_daemon_params(stack):      # never another stack's way into a radio's settings
+        print(f"ERR   {stack} has no configurable daemon parameters")
+        return 1
+    if daemon_mode and inst is None:
+        # the bare form (an app stack's or the daemon's) addresses the one radio able to run it, as before K8 (W290);
+        # several are named, and a radio the resolver refuses is refused (G1-K8E 1, 2): never the band's store
         rids = instances.radios_able(svc, stack)
         if len(rids) != 1:
             print(f"ERR   {stack} runs on {', '.join(rids) or 'no radio'}: name the instance, "
                   f"lhpc config {stack}@<rid> --daemon-param …")
             return 2
-        inst, _why = instances.copy_of(svc, stack, rids[0])
-        band = inst.band if inst is not None else band
+        inst, why = instances.copy_of(svc, stack, rids[0])
+        if inst is None or why:
+            print(f"ERR   {why or f'{stack}@{rids[0]} cannot be addressed'}")
+            return 1
+        band = inst.band
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
                               ("<param>", positional)) if on]
@@ -350,11 +357,11 @@ def _cmd_config(svc, args) -> int:
             return 2
         # K8e (DEC-W53, DEC-W384ak): an instance's daemon parameters are its radio's own settings (its row, the daemon's
         # store, as the web's panel), whether named as daemon@<rid> or as <stack>@<rid>; never the band's
-        drid = inst.rid if inst is not None else ""
+        drid = inst.rid                         # every daemon-param form has its instance by now (no rid "": no band)
         def via(res):                            # the summary names the instance it came through
             return (dataclasses.replace(res, summary=f"{res.summary} (via {stack}@{drid})")
                     if drid and not svc._is_daemon_target(stack) else res)
-        dsid = svc.DAEMON_ID if drid else stack
+        dsid = svc.DAEMON_ID
         if args.apply_daemon:
             return _render(via(svc.apply_daemon_params(dsid, band, rid=drid)))
         if args.reset_daemon:

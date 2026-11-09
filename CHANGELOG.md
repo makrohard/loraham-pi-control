@@ -33,6 +33,8 @@
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc config <stack>@<rid> --daemon-param|--apply-daemon|--reset-daemon` (and `daemon@<rid>`) act on radio rN's own
   daemon settings, its row of the hardware list, as the web's panel does; before, they saved per band.
+- Upgrade: a per-band daemon value saved before (`dp_<band>_<PARAM>` in a stack's settings) is not migrated; it stays
+  the radio's default until saved over, and a radio's reset returns to it.
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

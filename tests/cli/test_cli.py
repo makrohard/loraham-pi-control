@@ -470,7 +470,7 @@ def test_config_operator_sets_and_normalizes_callsign(tmp_path, monkeypatch, cap
                  id="test_config_stack_rejects_operator_flags"),
     pytest.param(["config", "meshcom", "--reset", "mc_callsign", "X"], 2, "conflicting options",
                  id="test_config_conflicting_modes_rejected"),
-    pytest.param(["config", "daemon", "--daemon-param", "NOPE=1"], 2, "unknown daemon parameter",
+    pytest.param(["config", "daemon@r1", "--daemon-param", "NOPE=1"], 2, "unknown daemon parameter",
                  id="test_config_daemon_param_unknown_key_rejected"),
 ])
 def test_config_cli_rejected(tmp_path, monkeypatch, capsys, argv, rc, msg):
@@ -481,8 +481,8 @@ def test_config_cli_rejected(tmp_path, monkeypatch, capsys, argv, rc, msg):
 
 def test_config_daemon_param_saves(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "daemon", "--daemon-param", "TXMODE=DIRECT"]) == 0
-    assert "saved daemon params" in capsys.readouterr().out
+    assert main(["config", "daemon@r1", "--daemon-param", "TXMODE=DIRECT"]) == 0       # K8e: radio r1's own row
+    assert "OK    saved the daemon settings of r1" in capsys.readouterr().out
 
 
 def test_config_ambiguous_param_refuses_without_mutating():
