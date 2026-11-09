@@ -90,6 +90,20 @@ jobs:
       - name: Ruff (tests — fatal errors only)
         run: ruff check tests --select F,E9
 
+      - name: House rules (a HARD line fails; WARN lines are the reviewer's)
+        # git only, not the interpreter: one matrix leg is enough
+        if: matrix.python-version == '3.11'
+        env:
+          # the rules hold from this commit on; the history before it fails them and is not rewritten
+          HR_FLOOR: afd0cfeb6b2e025930b502bd1d064a0b12e1e362
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          range=$(bash tools/houserules_ci_range.sh "$HR_FLOOR" "$EVENT" "$BEFORE" "$GITHUB_SHA" "$PR_BASE")
+          echo "house rules range: ${range:-none}"
+          if [ -n "$range" ]; then python tools/check_houserules.py "$range"; fi
+
       - name: Tests (with branch coverage)
         # `-rs` NAMES every skip. A skip is a test that did not run, and the count alone hides
         # which: this runner skips one more than the Pi does, and nothing in the log said which
