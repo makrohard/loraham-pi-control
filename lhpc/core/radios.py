@@ -39,7 +39,7 @@ _SERIAL = re.compile(rf"[\x21-\x7a\x7c\x7e]{{{SERIAL_PREFIX},64}}")   # bytes 0x
 _CANON_INT = re.compile(r"0|-?[1-9][0-9]*")      # a canonical decimal integer: no sign on 0, no leading zero, no "+" (Q12)
 _BASE_KEYS = ("id", "name", "model", "band", "enabled", "ce", "usb_serial", "usb_port")
 _SETTING_KEYS = ("high_power", "high_power_band", "txmode", "cadmon", "cadrssi", "ocp_ma")
-_DP_KEYS = tuple(f"dp_{p}" for p in ALL_PARAMS)
+_DP_KEYS = tuple("dp_" + p for p in ALL_PARAMS)
 _TYPES = {"id": (str,), "name": (str,), "model": (str,), "band": (str,), "enabled": (bool,), "ce": (str,),
           "usb_serial": (str,), "usb_port": (str,), "high_power": (bool,), "high_power_band": (str,), "txmode": (str,),
           "cadmon": (str,),
@@ -264,7 +264,7 @@ def _setting_errors(txmode, cadmon, cadrssi, ocp, dp, chip, high_power) -> list:
     for name, value in sorted(dp.items()):
         why = _dp_error(name, value, chip, high_power)
         if why:
-            out.append(f"dp_{name} {value!r}: {why}")
+            out.append("dp_" + f"{name} {value!r}: {why}")
     return out
 
 
@@ -358,7 +358,7 @@ def render(radios, retired: tuple = ()) -> str:
             if v is None or (k in ("ce", "usb_serial", "usb_port") and v == ""):
                 continue
             out.append(f"{k} = {_toml(v)}")
-        out += [f"dp_{name} = {_toml(v)}" for name, v in r.dp]
+        out += ["dp_" + f"{name} = {_toml(v)}" for name, v in r.dp]
         out.append("")
     return "\n".join(out)
 

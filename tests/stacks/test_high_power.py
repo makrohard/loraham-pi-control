@@ -216,7 +216,7 @@ def test_c59_a_change_while_the_daemon_runs_sets_the_restart_marker(tmp_path, se
 def test_c59_two_radios_on_433_only_the_granted_one_reaches_twenty(tmp_path):
     # W311's safety matrix (G1-C59): r1 and r2 both on 433, both SX127x daemons running and reporting the
     # permission; only r1 is granted. Start: --high-power on r1 only. Reconfigure: POWER=20 saves on r1, is refused on
-    # r2. Live SET: r1's Apply sends POWER=20; r2's sends none; the band form names no one radio and sends nothing.
+    # r2. Live SET: r1's Apply sends POWER=20; r2's sends none; a live POWER=20 SET reaches r1 only.
     from lhpc.core import radio_start
     import radios_fixture
     p = Paths(runtime_root=tmp_path)
@@ -234,7 +234,8 @@ def test_c59_two_radios_on_433_only_the_granted_one_reaches_twenty(tmp_path):
     svc.apply_daemon_params("daemon", rid="r1")
     assert [path for path, payload in fs.sent if b"POWER=20" in payload] == [dc.conf_socket("r1")]
     fs.sent.clear()
-    assert not svc.daemon_set("433", "POWER", "20", apply=True).ok and fs.sent == []
+    assert not svc.daemon_set("r2", "POWER", "20", apply=True).ok and fs.sent == []      # r2: no grant
+    assert svc.daemon_set("r1", "POWER", "20", apply=True).ok and [p for p, _b in fs.sent] == [dc.conf_socket("r1")]
 
 
 def test_set_high_power_saves_and_restarts_nothing(tmp_path):
@@ -266,16 +267,16 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
 
 def test_live_set_twenty_needs_running_permission_and_saved_switch(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "1"))
-    assert not svc.daemon_set("433", "POWER", "20").ok            # saved off
+    assert not svc.daemon_set("r1", "POWER", "20").ok            # saved off
     assert svc.set_high_power("r1", "on").ok
-    assert svc.daemon_set("433", "POWER", "20").ok                # running on + saved on
-    assert not svc.daemon_set("433", "POWER", "18").ok
+    assert svc.daemon_set("r1", "POWER", "20").ok                # running on + saved on
+    assert not svc.daemon_set("r1", "POWER", "18").ok
 
 
 def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "0"))
     assert svc.set_high_power("r1", "on").ok
-    r = svc.daemon_set("433", "POWER", "20")
+    r = svc.daemon_set("r1", "POWER", "20")
     assert not r.ok and "restart" in r.summary
 
 
@@ -290,15 +291,15 @@ def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
 def test_live_set_uses_the_running_family_not_the_saved_board(tmp_path, board, saved, running, value, ok):
     svc, fs = _svc(tmp_path, board, status=_status(running, "0"))
     assert svc.chip_family_for_band("433") == saved
-    assert svc.daemon_set("433", "POWER", value, apply=True).ok is ok
+    assert svc.daemon_set("r1", "POWER", value, apply=True).ok is ok
     assert any(f"POWER={value}".encode() in payload for _p, payload in fs.sent) is ok
 
 
 def test_live_set_against_an_older_daemon_admits_only_the_intersection(tmp_path):
     svc, _ = _svc(tmp_path, status=_OLD_STATUS)
-    assert svc.daemon_set("433", "POWER", "17").ok
-    assert not svc.daemon_set("433", "POWER", "0").ok
-    r = svc.daemon_set("433", "POWER", "20")
+    assert svc.daemon_set("r1", "POWER", "17").ok
+    assert not svc.daemon_set("r1", "POWER", "0").ok
+    r = svc.daemon_set("r1", "POWER", "20")
     assert not r.ok and "chip family" in r.summary
 
 

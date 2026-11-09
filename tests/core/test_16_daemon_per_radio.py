@@ -127,7 +127,6 @@ def test_the_same_stack_on_the_other_radio_keeps_no_settings_from_this_radio(tmp
     # G1-C18 (2): kiss@r1 runs; kiss@r2 starts on its retained r2 daemon: r2's settings are applied.
     svc, _launches = _box(tmp_path, monkeypatch, ready=("r2",))
     monkeypatch.setattr(instances, "instance_runs", lambda svc, c, i, band: (svc.stack_of(c.id), i.rid) == ("kiss", "r1"))
-    monkeypatch.setattr(ControllerService, "_stack_running_on_band", lambda self, sid, band: True)
     sid, inst, band, _why = instances.resolve(svc, "kiss@r2")
     res = svc.start(sid, apply=True, band=band, inst=inst)
     assert {path for path, _payload in svc.fake.sent} == {"/tmp/loraconf-r2.sock"}, res.details

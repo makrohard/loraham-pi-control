@@ -100,14 +100,13 @@ def test_status_without_a_list_has_no_daemon_socket(tmp_path):
 
 
 def test_the_overview_lists_each_radio_of_a_band_with_its_own_daemon(tmp_path):
-    # W6-3: the 868 entry names both radios, each read on its own socket; r2's daemon is not up.
+    # W6-3, DEC-W384bu: one entry per radio, each read on its own socket; r2's daemon is not up; no 433 entry
     svc = _svc(tmp_path, TWO_868, unix_replies={"/tmp/loraconf-r1.sock": READY % b"r1"})
     monkey_bands = {"433", "868"}
     svc.radio_bands = lambda: sorted(monkey_bands)
-    entry = next(e for e in svc.radio_overview() if e["band"] == "868")
-    assert [(r["rid"], r["reachable"], r["ready"]) for r in entry["radios"]] == [("r1", True, True),
-                                                                                    ("r2", False, False)]
-    assert next(e for e in svc.radio_overview() if e["band"] == "433")["radios"] == []
+    got = [(e["rid"], e["band"], e["daemon"]["reachable"], e["daemon"]["ready"], [r["rid"] for r in e["radios"]])
+           for e in svc.radio_overview()]
+    assert got == [("r1", "868", True, True, ["r1"]), ("r2", "868", False, False, ["r2"])]
 
 
 def test_the_overview_leaves_out_a_disabled_radio(tmp_path):

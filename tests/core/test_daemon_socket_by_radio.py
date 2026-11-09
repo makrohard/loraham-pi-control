@@ -116,7 +116,7 @@ def test_the_socket_monitor_line_of_a_band_is_its_radios(tmp_path):
 
 def test_a_live_set_goes_to_the_radios_socket_and_is_confirmed_by_its_read_back(tmp_path):
     svc, fake = _svc(tmp_path)
-    res = svc.daemon_set("433", "TXMODE", "MANAGED", apply=True)
+    res = svc.daemon_set("r1", "TXMODE", "MANAGED", apply=True)
     assert res.ok and res.data.get("confirmed") is True, (res.summary, res.details)
     assert ("/tmp/loraconf-r1.sock", b"SET TXMODE=MANAGED\n") in fake.sent
     assert fake.serve["/tmp/loraconf-r1.sock"]["TXMODE"] == "MANAGED"

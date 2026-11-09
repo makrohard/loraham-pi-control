@@ -328,20 +328,20 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
 
     svc = ControllerService()
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "868")
-    assert svc.runs_on_band("reticulum", "868") is True
-    assert svc.runs_on_band("reticulum", "433") is False
+    assert svc._runs_on_band("reticulum", "868") is True
+    assert svc._runs_on_band("reticulum", "433") is False
 
     # No start marker: fall back to the launch band, then the DECLARED primary —
     # never "true for every supported band".
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
     monkeypatch.setattr(svc, "interactive_shown", lambda sid, inst=None: {})
-    assert svc.runs_on_band("reticulum", "868") is True
-    assert svc.runs_on_band("reticulum", "433") is False
+    assert svc._runs_on_band("reticulum", "868") is True
+    assert svc._runs_on_band("reticulum", "433") is False
 
     # An interactive app launched on 433 is the evidence when no marker exists.
     monkeypatch.setattr(svc, "interactive_shown", lambda sid, inst=None: {"": "433"})
-    assert svc.runs_on_band("reticulum", "433") is True
-    assert svc.runs_on_band("reticulum", "868") is False
+    assert svc._runs_on_band("reticulum", "433") is True
+    assert svc._runs_on_band("reticulum", "868") is False
 
 
 def test_the_advertised_command_restores_the_terminal():
@@ -601,8 +601,8 @@ def test_the_console_falls_back_to_the_launch_band(monkeypatch):
 
     svc = ControllerService()
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "433")
-    assert svc.runs_on_band("reticulum", "433") is True
-    assert svc.runs_on_band("reticulum", "868") is False
+    assert svc._runs_on_band("reticulum", "433") is True
+    assert svc._runs_on_band("reticulum", "868") is False
 
 
 def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch):

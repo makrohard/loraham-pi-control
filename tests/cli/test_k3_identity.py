@@ -166,12 +166,11 @@ def test_transitional_a_radios_daemon_set_and_its_live_view_and_running_list(tmp
     ready = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500\n"
     fs = FakeSystem(unix_replies={dc.conf_socket("r1"): ready, dc.conf_socket("r2"): ready})
     svc = ControllerService(system=fs.system, paths=Paths(runtime_root=tmp_path))
-    assert "SET TXMODE=DIRECT" in svc.daemon_set("433", "TXMODE", "DIRECT", apply=True, rid="r2").summary
+    assert "SET TXMODE=DIRECT" in svc.daemon_set("r2", "TXMODE", "DIRECT", apply=True).summary
     assert [path for path, _p in fs.sent if b"SET TXMODE" in _p] == [dc.conf_socket("r2")]
-    assert not svc.daemon_set("433", "TXMODE", "DIRECT", apply=True, rid="r9").ok
-    assert not svc.daemon_set("433", "TXMODE", "DIRECT", apply=True).ok            # the band names no one radio
+    assert not svc.daemon_set("r9", "TXMODE", "DIRECT", apply=True).ok
     view = svc.config_view("daemon", rid="r2")
     assert [(r["rid"], r["band"], r["reachable"]) for r in view["radios"]] == [("r2", "433", True)]
     assert [r["rid"] for r in svc.config_view("daemon")["radios"]] == ["r1"]         # the band's first radio
     monkeypatch.setattr(instances, "running_keys", lambda svc, sid: ["kiss@r2"] if sid == "kiss" else ["chat@r1"])
-    assert svc.running_lora_stacks("433", "r2") == ["kiss"]
+    assert svc.lora_clients_on("r2") == ["kiss"]

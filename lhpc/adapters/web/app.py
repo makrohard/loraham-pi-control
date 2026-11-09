@@ -452,7 +452,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def dashboard():
         # Radio-centric overview: one card per radio (W285/W286: "r1 · 868"), grouped by band, with its daemon,
         # live monitor, the band's stacks and a start-stack control.
-        radios = service.radio_overview()
+        # DEC-W384bu/bv: one entry per radio, then the §6 stray band daemons in the per-band shape the template reads
+        # until the per-radio switch (W-commit); every element stays (W290)
+        radios = service.radio_overview() + [{**x, "stray": True, "radios": [], "running": [], "startable": [],
+                                              "interactive": [], "conflict": []} for x in service.stray_daemons()]
         # W2 (G1-W2 3): an interactive app shows on the card of each radio its instance's marker names, with that
         # instance's Stop; a running entry without a rid is no instance lhpc can address (a stop reaches none of it).
         from lhpc.core import interactive_markers as _im
@@ -1671,12 +1674,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         key = request.form.get("key", "")
         value = request.form.get("value", "")
         if request.form.get("confirmed") != "yes":
-            plan = service.daemon_set(band, key, value, apply=False, rid=rid)
+            plan = service.daemon_set(rid, key, value, apply=False)
             fsk = key.upper() == "MODE" and value.upper() == "FSK"
             return render_template("confirm_radio.html", version=__version__, rid=rid, band=band,
                                    key=key, value=value, plan=plan, fsk=fsk,
-                                   warn_stacks=service.running_lora_stacks(band, rid=rid) if fsk else [])
-        result = service.daemon_set(band, key, value, apply=True, rid=rid)
+                                   warn_stacks=service.lora_clients_on(rid) if fsk else [])
+        result = service.daemon_set(rid, key, value, apply=True)
         # Truthful flash: the service summary already distinguishes "applied (confirmed)"
         # from "SENT (unconfirmed)". Never claim "Applied" for a setting the daemon does
         # not report back — an unconfirmed SET is flashed as a warning, not success.
@@ -1776,7 +1779,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # radio names (a 0.13.x daemon still up) is stopped by its band, as before (W290: its Stop stays).
             stray = op == "stop" and target == "daemon" and "rid" not in request.form and \
                 request.form.get("band") in set(service.RADIO_BANDS) - set(service.radio_bands()) and \
-                any(r["stray"] and r["band"] == request.form["band"] for r in service.radio_overview())   # the card's rule
+                any(r["band"] == request.form["band"] for r in service.stray_daemons())   # the card's rule
             if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \

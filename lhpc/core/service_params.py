@@ -2129,9 +2129,7 @@ class ParamsConfigMixin:
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
         gps_values = self._gps_config_values(target, inst)            # K7: its instance's feed
 
-        # W3-13: a client's socket keys name the copy's radio, else its band's one; unresolved, it refuses
-        _rids, _sid, _sb = {}, self._owner_stack_id(target), next(iter(_instances.stack_bands(self._owner_stack(target))), "")
-        _rid = lambda b: _rids.setdefault(b, _radio_start.client_rid(self, _sid, b) or getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
+        # W3-13, K8d: a client's socket keys name its instance's radio; without one the token stays and the launch refuses
 
         def subst(text: str) -> str:
             out = (text.replace("{callsign}", call)
@@ -2230,7 +2228,7 @@ class ParamsConfigMixin:
                 default = inst.subst(p.default_template) if inst is not None and inst.rid and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 raw = default if raw == p.default else raw        # 7d: a listed instance's own controller paths
-                raw, default = (v.replace("{rid}", getattr(inst, "rid", "") or _rid(c.band or cfg_band or band or _sb)) if isinstance(v, str) else v for v in (raw, default))   # the default too: the fallback below
+                raw, default = (v.replace("{rid}", getattr(inst, "rid", "") or "{rid}") if isinstance(v, str) else v for v in (raw, default))   # the default too: the fallback below
                 if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
                     raw = _web_client.current_root(raw, runtime, p.default)
                 try:

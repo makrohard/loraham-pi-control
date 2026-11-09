@@ -1066,24 +1066,18 @@ _D433 = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["/x/lora
 _S433 = {"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
 
 
-def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path, set_call, monkeypatch):
-    """One radio serves ONE band. The "already running on the other band" refusal covered only the
-    target's OWN stack, so graywolf — which owns no radio and pulls in the KISS TNC and the daemon
-    — was admitted on 868 while that chain ran on 433: every member read already_healthy, so
-    nothing started, nothing blocked, and graywolf came up on 868 talking to a 433 TNC. Chain
-    members are exempt as conflict HOLDERS (they are in this very run order), so the mismatch has
-    to be caught by the band rule or not at all."""
+def test_k8d_graywolf_on_the_other_radio_brings_its_own_kiss_there(tmp_path, set_call, monkeypatch):
+    """K8d item 3 (13.5: a chain member takes the dependent's radio) replaces the band rule's refusal here: with
+    kiss@r1 live on 433, graywolf@r2 is NOT refused — its plan starts its own TNC on 868 (kiss@r2), its daemon on 868,
+    never "already healthy" on r1's TNC (the 0.13 failure the band rule guarded: graywolf on 868 talking to a 433
+    TNC). The band rule stays for a start without an instance."""
     monkeypatch.setattr("lhpc.core.instances.running_keys", lambda svc, sid: {"kiss": ["kiss@r1"]}.get(sid, []))   # the running instance (no record here)
     svc = _band_svc(set_call, tmp_path, _D433, _S433, {"kiss": "433"})
-    # preconditions: the dependency really is live on the other band
     assert svc.launch_band("kiss", "") == "433" and svc._band_owner_is_up("kiss")
-    assert "loraham-kiss-tnc" in [c.id for _, c in svc._run_order("graywolf")]
-
     res = svc.run_action("start", "graywolf", band="868", apply=False)
-    assert res.ok is False
-    assert "kiss" in res.summary and "433" in res.summary and "868" in res.summary
-    # The offered ways out both work: stop the holder, or join it on its band.
-    assert "lhpc stack stop kiss@r1 --yes" in (res.next_commands or [])
+    assert res.ok is True and res.summary == "Run plan for 'graywolf@r2': 3 component(s) in order.", res.summary
+    assert res.details == ["  [daemon] start/ensure --radio 868, TXMODE=MANAGED", "  [start] loraham-kiss-tnc (band 868)",
+                           "  [start] graywolf (band 868)"], res.details
 
 
 def test_the_dependency_band_rule_does_not_block_the_matching_band(tmp_path, set_call):
@@ -1102,14 +1096,15 @@ def test_a_bandless_start_is_judged_on_the_band_it_will_actually_use(tmp_path, s
     the gate straight into the cross-band state the rule refuses. (The first version of this
     test masked the hole by putting kiss on 433, the one band that cannot mismatch the primary.)
     The rule now judges the RESOLVED band: mismatch refused, match untouched."""
-    # kiss live on 868, graywolf's primary is 433 -> the resolved band mismatches -> DENIED.
+    # kiss live on 868 (r2), graywolf's primary is 433: the bandless start resolves to graywolf@r1 (K8d item 3, 13.5),
+    # whose own TNC is started on 433, r2's chain untouched.
     _D868 = {100: ["loraham_daemon", "--radio", "868", "--id", "r2"],
              200: ["/x/loraham-kiss-tnc", "--config", "c"]}
     _S868 = {"/tmp/loraconf-r2.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
     svc = _band_svc(set_call, tmp_path, _D868, _S868, {"kiss": "868"})
     res = svc.run_action("start", "graywolf", apply=False)
-    assert res.ok is False
-    assert "kiss" in res.summary and "868" in res.summary
+    assert res.ok is True and res.summary == "Run plan for 'graywolf@r1': 3 component(s) in order.", res.summary
+    assert "  [start] loraham-kiss-tnc (band 433)" in res.details, res.details
     # kiss live on the band the bandless start resolves to -> nothing to refuse.
     svc2 = _band_svc(set_call, tmp_path / "match", _D433, _S433, {"kiss": "433"})
     assert svc2.run_action("start", "graywolf", apply=False).ok is True

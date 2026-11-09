@@ -176,19 +176,6 @@ class DaemonParamsMixin:
         return radio_start.set_row_fields(self, rid, lambda row: dict(zip(fields, (on, row.band if on else None), strict=True)),
                                           f"high-power permission for {rid} ({{band}} MHz): {value} — {note}", fields)
 
-    def _effective_daemon_band(self, target: str, band: str = "") -> str:
-        """The band the daemon-params panel/apply uses: the requested one if valid, else a fixed-band stack's own band,
-        served or not (G1-C57 B1: a band the list does not serve is refused downstream, by name), else a switchable
-        stack's served band, else the first served band, else ""."""
-        if band in daemon_control.ALLOWED_BANDS:
-            return band
-        comps = s.components if (s := self._owner_stack(target)) else ()
-        own = sorted({c.band for c in comps if c.band})
-        if own and not any(c.bands for c in comps):
-            return own[0]
-        active = self.radio_bands()                              # the bands the hardware list serves
-        return (sorted(set(own) & set(active)) or list(active) or [""])[0]
-
     def chip_family_for_band(self, band: str, rid: str = "") -> str:
         """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware
         is configured or the preset is unknown; at stage L5 the band's radio row's model (W5-2).
@@ -260,27 +247,26 @@ class DaemonParamsMixin:
         return out[-lines:]
 
     @invalidates_snapshot
-    def daemon_set(self, band: str, key: str, value: str, apply: bool = False, rid: str = "") -> ActionResult:
-        # The band is validated here too: no caller reaches an arbitrary socket path. `rid` (TRANSITIONAL, handler DEC;
-        # by K6 required, the band form gone) names the radio's own daemon: its band, chip and grant.
-        _inst, band, why = radio_start.daemon_radio(self, rid) if rid else (None, band, "")
-        if why or not daemon_control.is_valid_band(band) or (not rid and (why := radio_start.socket_refusal(self._paths, band))):
-            return ActionResult(False, f"Cannot SET {key.upper()} on {rid or f'{band} MHz'}: {why}" if why
-                                else f"Invalid band '{band}' (allowed: {', '.join(daemon_control.ALLOWED_BANDS)}).")
+    def daemon_set(self, rid: str, key: str, value: str, apply: bool = False) -> ActionResult:
+        """A live SET on radio `rid`'s daemon (its band, chip and grant), plan or apply; a rid that is no enabled radio
+        is refused by name, so no caller reaches an arbitrary socket path."""
+        _inst, band, why = radio_start.daemon_radio(self, rid)
+        if why:
+            return ActionResult(False, f"Cannot SET {key.upper()} on {rid}: {why}")
         if key.upper() == "POWER":
             # Live POWER is decided by the RUNNING daemon's family and permission, not by the
             # saved hardware setup (which may have changed since the process started).
             err = daemon_control.validate_set(key, value)              # syntax, union range
             if not err:
-                view = daemon_control.read_view(self._system, rid or radio_start.daemon_key(self, band))
+                view = daemon_control.read_view(self._system, rid)
                 err = (self._live_power_error(band, value, view.status, rid) if view.reachable
-                       else f"POWER={value}: daemon not serving {band} MHz — a live POWER is "
+                       else f"POWER={value}: the daemon of {rid} is not running — a live POWER is "
                             "checked against the running daemon; start it first")
         else:
             err = daemon_control.validate_set(key, value, self.chip_family_for_band(band, rid))
         if err:
             return ActionResult(False, f"Invalid setting: {err}",
-                                next_commands=[f"lhpc daemon {band}"])
+                                next_commands=[f"lhpc daemon {rid}"])
         confirmable = daemon_control.is_confirmable(key)
         if not apply:
             note = ("This changes live daemon behaviour (non-RF tuning)."
@@ -289,11 +275,11 @@ class DaemonParamsMixin:
                     "SENT but NOT confirmed over the socket.")
             return ActionResult(
                 True,
-                f"Will apply SET {key.upper()}={value.upper()} to the {band} daemon (live).",
+                f"Will apply SET {key.upper()}={value.upper()} to the daemon of {rid} ({band} MHz, live).",
                 details=[note, "It does not transmit by itself."],
-                next_commands=[f"lhpc daemon {band} --set {key}={value} --yes"],
+                next_commands=[f"lhpc daemon {rid} --set {key}={value} --yes"],
                 data={"changes": 1, "confirmable": confirmable})
-        ok, confirmed, detail = daemon_control.apply_set(self._system, rid or radio_start.daemon_key(self, band), key, value)
+        ok, confirmed, detail = daemon_control.apply_set(self._system, rid, key, value)
         # Truthful outcome: only a read-back-confirmed SET is "applied"; an unconfirmable
         # radio param that was accepted is "SENT (unconfirmed)", never "applied".
         if not ok:
@@ -303,7 +289,7 @@ class DaemonParamsMixin:
         else:
             verb = "SENT (unconfirmed)"
         return ActionResult(ok, f"SET {key.upper()}={value.upper()}: {verb}.",
-                            details=[detail], next_commands=[f"lhpc daemon {band}"],
+                            details=[detail], next_commands=[f"lhpc daemon {rid}"],
                             data={"confirmed": confirmed})
 
     def _daemon_param_applies(self, stack_id: str, rid: str) -> dict:
@@ -398,14 +384,14 @@ class DaemonParamsMixin:
         if why:
             return ActionResult(False, f"Cannot apply {target}'s daemon parameters: {why}")
         name = target if is_daemon else f"{sid}@{rid}"
-        if not (is_daemon or radio_start.radio_clients(self, b, rid, sid)[1]):
+        if not (is_daemon or radio_start.radio_clients(self, rid, sid)[1]):
             return ActionResult(False, f"Apply live is only available while {name} is running")
         keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, rid)]   # vs start/stop on its radio
         try:
             with self._keys_guard("apply", target, keys):        # re-entrant per thread
                 # Re-checked under the radio's claim, held until the last SET: a start that takes the
                 # radio after the checks above is refused or waits, and never has its radio retuned.
-                others, runs = radio_start.radio_clients(self, b, rid, sid)
+                others, runs = radio_start.radio_clients(self, rid, sid)
                 if not (is_daemon or runs):
                     return ActionResult(False, f"Apply live is only available while {name} is running",
                                         data={"band": b, "rid": rid, "persisted": True})

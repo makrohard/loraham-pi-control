@@ -940,7 +940,7 @@ class LifecycleOpsMixin:
         # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
         # start graywolf` resolves to the declared primary and must not bypass this gate into
         # the cross-band state the rule exists to refuse.
-        _dep_block = self._dep_band_block(target, order, band or cfg_band)
+        _dep_block = self._dep_band_block(target, order, band or cfg_band, inst)
         if _dep_block is not None:
             return _dep_block
         radio, tx = self._daemon_needs(order, op_band)
@@ -1165,7 +1165,7 @@ class LifecycleOpsMixin:
         # SCOPED to the band set the lock bundle covers — a 433 client clears 433 only, an
         # all-active daemon start every arbitrated band, a non-radio start nothing.
         for _b in sorted(self._operation_bands(target, band, radio, "start")):   # G1-C21 note 1: the start's radio
-            self.clear_daemon_feed(_b, radio_start.client_rid(self, self._owner_stack_id(target), _b, prep.inst))
+            self.clear_daemon_feed(_b, getattr(prep.inst, "rid", "") or "")    # its radio's window; none named: the band's radios
 
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]
@@ -1230,7 +1230,7 @@ class LifecycleOpsMixin:
                 dlines, dok, dgate = self._ensure_daemon(life, stack, comp, running, radio,
                                                          start_sid, requested_target=_req_target,
                                                          start_scope=_req_scope,
-                                                         rid=radio_start.client_rid(self, start_sid, radio, prep.inst))
+                                                         rid=getattr(prep.inst, "rid", "") or "")   # its radio; none: each radio of the band
                 daemon_launched |= {r["band"] for r in life.owned_records(comp.id)
                                     if r["launch_id"] not in _known}
                 out.extend(dlines)
@@ -2079,7 +2079,7 @@ class LifecycleOpsMixin:
                 # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
                 # band (its config is whatever that client needs). Freshly-started bands still get
                 # this start's params applied.
-                others, own = radio_start.radio_clients(self, b, u[1], start_sid)    # G1-C18: on this radio
+                others, own = radio_start.radio_clients(self, u[1], start_sid)    # G1-C18: on this radio
                 if others:
                     lines.append(f"  [keep] {b} in use by {', '.join(others)} — daemon "
                                  f"config left unchanged")
@@ -2125,18 +2125,6 @@ class LifecycleOpsMixin:
             eb = self._effective_band(ss.stack.id)
             return {eb} if eb else set()
         return {c.band for c in run_comps if c.band}
-
-    def _stack_running_on_band(self, stack_id: str, band: str) -> bool:
-        """Does `stack_id` ALREADY have a running component on `band`? Read from live run state
-        (the band marker alone can outlive the process it describes)."""
-        up = (RunState.RUNNING, RunState.DEGRADED)
-        for ss in self.build_snapshot().stacks:
-            if ss.stack.id != stack_id:
-                continue
-            run_comps = [c for c in ss.stack.components
-                         if ss.components[c.id].run_state in up]
-            return bool(run_comps) and band in self._active_bands_of(ss, run_comps)
-        return False
 
     def _band_used_by_others(self, target: str, band: str) -> list[str]:
         """Running daemon-client stacks OTHER than `target`'s own on `band` — the rule `_ensure_daemon`
@@ -2401,8 +2389,10 @@ class LifecycleOpsMixin:
             return set(allowed)
         return {declared} if declared else set()
 
-    def _dep_band_block(self, target: str, order, band: str):
-        """ActionResult when a chain member of ANOTHER stack is live on a different band, else None.
+    def _dep_band_block(self, target: str, order, band: str, inst=None):
+        """ActionResult when a chain member of ANOTHER stack is live on a different band, else None. An instance's
+        chain members are that radio's own (13.5: graywolf@r3 starts kiss@r3), so a member running on another radio is
+        no member and never blocks it (K8d: graywolf@r2 was refused while kiss@r1 ran on 433); None for an instance.
 
         graywolf on 868 pulls in the KISS TNC and the daemon; with that chain live on 433 every
         member read already_healthy, so nothing was started, nothing was blocked, and graywolf
@@ -2419,7 +2409,7 @@ class LifecycleOpsMixin:
         `_band_owner_is_up` probe is a full system scan — expensive on a Pi Zero) and built
         only when a marker actually mismatches.
         """
-        if not band:
+        if not band or getattr(inst, "rid", ""):
             return None
         _sid = self.stack_of(target) or target
         snap = None
@@ -2502,21 +2492,18 @@ class LifecycleOpsMixin:
         return sorted(d for d in seen
                       if d in outcome and outcome[d] not in good)
 
-    def runs_on_band(self, stack_id: str, band: str) -> bool:
+    def _runs_on_band(self, stack_id: str, band: str) -> bool:
         """Whether a MULTI-band stack is running on THIS band: one of its instances' launch bands (G1-K6C N2: one per
         radio), else the band an interactive app was launched on, else the DECLARED primary; never "every band it
         could use" (that rendered it running on 433 while it ran on 868)."""
         told = self._launch_bands_of(stack_id)
         return band in told if told else self._effective_band(stack_id, self._config_band(stack_id, "")) == band
 
-    def running_lora_stacks(self, band: str, rid: str = "") -> list:
-        """Daemon-client (LoRa) stacks currently running on `band`, or on radio `rid` (its instances, running_keys;
-        TRANSITIONAL: by K6 the rid is required) — the ones a live switch to MODE=FSK would break."""
+    def lora_clients_on(self, rid: str) -> list:
+        """Daemon-client (LoRa) stacks with an instance running on radio `rid` (running_keys) — the ones a live switch
+        to MODE=FSK would break."""
         from . import daemon_params
-        if rid:
-            return [sid for sid in daemon_params.CLIENT_STACKS if f"{sid}@{rid}" in instances.running_keys(self, sid)]
-        return [sid for sid in daemon_params.CLIENT_STACKS if self.stack_running(sid)
-                and self._effective_daemon_band(sid, self.launch_band(sid)) == band]
+        return [sid for sid in daemon_params.CLIENT_STACKS if f"{sid}@{rid}" in instances.running_keys(self, sid)]
 
     def stack_bands(self, target: str) -> tuple:
         """Bands the operator may choose for `target` (empty = single fixed band), NARROWED to the
@@ -2918,10 +2905,20 @@ class LifecycleOpsMixin:
                                 or self.binary_covers(self.DAEMON_ID) or dstat.run_state in (RunState.RUNNING, RunState.DEGRADED))
 
     def radio_overview(self) -> list[dict]:
-        """Per-band view for the radio dashboard: daemon/radio config (if running),
-        which stack (+ its components) is up on that band, and which stacks can be
-        started on it, and the RF logs of the band (`rflogs`). Live RSSI/CAD/feed are polled
-        separately via /api/daemon."""
+        """DEC-W384bu: the radio dashboard, ONE entry per enabled radio in rid order (radio_start.overview_entry; every
+        entry has its rid). Live RSSI/CAD/feed are polled separately via /api/daemon."""
+        bands = {e["band"]: e for e in self._band_entries()}           # a stray band has no enabled radio to look it up
+        rows = sorted((r for r in radios.load(self._paths).radios if r.enabled), key=lambda r: int(r.id[1:]))
+        return [radio_start.overview_entry(self, row, bands[row.band]) for row in rows if row.band in bands]
+
+    def stray_daemons(self) -> list[dict]:
+        """DEC-W384bv (§6, W290 kept): each band with a live daemon and no enabled radio of the hardware list, in band
+        order: {band, daemon, shared_with, rflogs}; its dashboard card keeps its Stop."""
+        return [{k: e[k] for k in ("band", "daemon", "shared_with", "rflogs")} for e in self._band_entries() if e["stray"]]
+
+    def _band_entries(self) -> list[dict]:
+        """The per-band rows radio_overview and stray_daemons are built from: per band of the list, its stacks
+        (`entries` by id, running, startable, interactive), its RF logs and daemon dict; then the stray bands."""
         snap = self.build_snapshot()
         live = {cid: st for ss in snap.stacks for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
@@ -2943,7 +2940,7 @@ class LifecycleOpsMixin:
         for band in self.radio_bands():                  # only the list's bands get a normal column
             dv = dvs[band]
             other_served = [b for b in usable_bands if b != band]
-            running, startable, interactive = [], [], []
+            running, startable, interactive, entries = [], [], [], {}
             for s in self.stacks():
                 sbands = self._declared_bands(s)
                 if band not in sbands:
@@ -2959,7 +2956,7 @@ class LifecycleOpsMixin:
                 # bands it could use".
                 up_elsewhere = False
                 if running_up and multi:
-                    running_up = self.runs_on_band(s.id, band)
+                    running_up = self._runs_on_band(s.id, band)
                     up_elsewhere = not running_up
                 comps = []
                 for c in s.components:
@@ -2987,6 +2984,7 @@ class LifecycleOpsMixin:
                                          else self._client_interfaces(live.get(c.id), s.id))})
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
+                entries[s.id] = entry
                 main_comp = s.component(s.main)
                 # The command-bearing component: the interactive MAIN (chat, nomadnet), or
                 # — when the main is a non-interactive GUI app that cannot run here — the
@@ -3021,6 +3019,8 @@ class LifecycleOpsMixin:
                     if band not in (cols or {self.launch_band(s.id, min(sbands)) if running_up else min(sbands)}):
                         continue                                   # block lives in its own column
                     entry["running"] = running_up
+                    # the radios it is live on (a live marker's, a running instance's): radio_overview's card(s)
+                    entry["on_rids"] = sorted(set(up_shown) | {k.partition("@")[2] for k in instances.running_keys(self, s.id)})
                     entry["command"] = self.manual_start_command(main_comp)
                     entry["blocker"] = self.install_blocker(main_comp)
                     interactive.append(entry)
@@ -3083,6 +3083,7 @@ class LifecycleOpsMixin:
                 # not its rival (see _radio_competitors).
                 "conflict": self._radio_competitors(
                     running + [e for e in interactive if e.get("running")]),
+                "entries": entries,
             })
         # Strays (§6): a daemon still live on a band the hardware list has no enabled radio on, kept visible
         # and stoppable (lhpc never auto-kills). M-2: the SAME process as an active band's daemon (a dual-band PID):

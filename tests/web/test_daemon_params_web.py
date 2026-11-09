@@ -384,12 +384,12 @@ def _plain_svc(tmp_path):
 def test_daemon_params_view_is_one_radios_and_offers_the_radios_it_can_run_on(tmp_path):
     svc = _plain_svc(tmp_path)
     v = svc.daemon_params_view("meshcom", rid="r1")
-    assert (v["rid"], v["band"], v["bands"], v["all_bands"]) == ("r1", "433", ["433"], ["433", "868"])   # fixed 433
+    assert (v["rid"], v["band"]) == ("r1", "433")                                                        # fixed 433
     assert [r[0] for r in v["radios"]] == ["r1"]
-    assert svc.daemon_params_view("meshcore", rid="r2")["bands"] == ["868"]                              # fixed 868
+    assert [r[0] for r in svc.daemon_params_view("meshcore", rid="r2")["radios"]] == ["r2"]               # fixed 868
     assert [r[0] for r in svc.daemon_params_view("kiss", rid="r2")["radios"]] == ["r1", "r2"]            # switchable
     assert svc.daemon_params_view("kiss", rid="r2")["band"] == "868"
-    assert svc.daemon_params_view("daemon", rid="r1")["bands"] == ["433", "868"]                         # every radio
+    assert [r[0] for r in svc.daemon_params_view("daemon", rid="r1")["radios"]] == ["r1", "r2"]          # every radio
 
 
 def test_a_fixed_band_stack_has_no_panel_on_a_radio_it_cannot_run_on(tmp_path):
@@ -527,7 +527,7 @@ def test_app_apply_refused_on_a_radio_another_stack_uses(tmp_path, monkeypatch):
     assert svc.apply_daemon_params("meshcom", rid="r1").data.get("attempted")    # alone on r1: applies
     real = radio_start.radio_clients
     monkeypatch.setattr(radio_start, "radio_clients",
-                        lambda s, b, rid, sid: (["chat@r1"], real(s, b, rid, sid)[1]) if rid == "r1" else real(s, b, rid, sid))
+                        lambda s, rid, sid: (["chat@r1"], real(s, rid, sid)[1]) if rid == "r1" else real(s, rid, sid))
     r = svc.apply_daemon_params("meshcom", rid="r1")
     assert not r.ok and "that radio serves chat@r1" in r.summary
     assert r.data["rid"] == "r1" and "attempted" not in r.data
@@ -562,9 +562,9 @@ def test_g1_k8d_n2_apply_is_offered_only_while_the_instance_runs_alone_on_its_ra
     # can_apply True, the Apply then refused)
     from lhpc.core import radio_start
     svc = _plain_svc(tmp_path)
-    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, rid, sid: (["chat@r1"], True))
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, rid, sid: (["chat@r1"], True))
     assert svc.daemon_params_view("kiss", rid="r1")["can_apply"] is False
-    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, rid, sid: ([], True))
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, rid, sid: ([], True))
     assert svc.daemon_params_view("kiss", rid="r1")["can_apply"] is True
 
 
@@ -587,8 +587,8 @@ def test_app_apply_holds_the_band_claim_against_a_competing_start(tmp_path, monk
     real = radio_start.radio_clients
     calls = []
 
-    def used(s, b, rid, sid):
-        out = real(s, b, rid, sid)
+    def used(s, rid, sid):
+        out = real(s, rid, sid)
         calls.append(rid)
         if len(calls) == 2:                     # the re-check under the claim
             t = threading.Thread(target=start)

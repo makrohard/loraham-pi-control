@@ -106,8 +106,8 @@ def test_k8_a_shown_instance_is_live_by_its_own_radios_daemon(tmp_path):
     fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply, "/tmp/loraconf-r2.sock": reply})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     assert svc.mark_shown("chat", Instance("r2", band="433"))
-    row = next(r for r in svc.radio_overview() if r["band"] == "433")
-    assert "chat" in [s["id"] for s in row["interactive"]], row["interactive"]
+    rows = {r["rid"]: [s["id"] for s in r["interactive"]] for r in svc.radio_overview()}   # DEC-W384bu: per radio
+    assert "chat" in rows["r2"] and "chat" not in rows["r1"], rows
 
 
 def _two_band_voice(tmp_path, **marked):

@@ -31,6 +31,8 @@
   QEMU guest on its radio's ports and its own bridge (socat per connection, one XR password); rebuild it from source.
 - meshcom-qemu-raspi: 722b5e8e5 -> b9e5be298 (b9e5be2), used by meshcom-gps-relay, meshcom-qemu
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
+- Home: each radio's card has its own daemon state, stacks and conflicts (two radios on one band too); a stack running
+  on one radio can be started on another radio of the band; graywolf@rN brings its own kiss@rN beside another radio's.
 - Daemon parameters per radio and per instance: `daemon@<rid>`'s (CLI `--daemon-param`, its panel) are radio rN's row;
   `<stack>@<rid>`'s are that instance's own, in `<stack>@<rid>.toml`, applied over the row when it starts there.
 - Upgrade: per-band daemon values (`dp_<band>_<PARAM>` in `<stack>.toml` or `daemon.toml`) are no longer read; move each

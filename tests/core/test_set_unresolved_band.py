@@ -1,22 +1,20 @@
 """Ledger L27 (DEC-W27): with a hardware list that does not resolve a band to one enabled radio (two of them, none,
 or an invalid list), no read, no SET and no raw frame for that band reaches any socket: the 0.13.x band socket
 (`loraconf<band>.sock`, `lora<band>.sock`) is never the fall-back there. A SET is refused naming why. Without a
-hardware list (the 0.13.x upgrade case) the band socket stays. Every unix request and send is recorded."""
+hardware list (the 0.13.x upgrade case) the band socket stays for the reads. A SET names its radio (K8d: no band form):
+a rid that is no enabled radio is refused by name and sends nothing. Every unix request and send is recorded."""
 import dataclasses
 
 import pytest
 import radios_fixture
 
-from lhpc.core import radio_daemon, radios
+from lhpc.core import radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 TWO_868 = (radios.Radio("r1", "a", "uputronics", "868", ce="ce0"), radios.Radio("r2", "b", "uputronics", "868", ce="ce1"))
 ONLY_433 = (radios.Radio("r1", "low", "loraham", "433"),)
-SHARED = (f"Cannot SET TXMODE on 868 MHz: the hardware list names no one radio for 868 MHz: 2 radios can run it on "
-          f"868 MHz: r1 (a), r2 (b); {radio_daemon.SHARED_BAND_TEXT}")
-NONE = "Cannot SET TXMODE on 868 MHz: the hardware list names no one radio for 868 MHz: no enabled radio on 868 MHz"
 
 
 @dataclasses.dataclass
@@ -40,20 +38,26 @@ def _svc(tmp_path, rows):
     return ControllerService(system=fs.system, paths=Paths(runtime_root=tmp_path)), fs
 
 
-@pytest.mark.parametrize("rows,why", [(TWO_868, SHARED), (ONLY_433, NONE)], ids=["two-radios", "no-radio"])
 @pytest.mark.parametrize("apply", [True, False])
-def test_a_set_on_a_band_the_list_does_not_resolve_is_refused_and_sends_nothing(tmp_path, rows, why, apply):
-    svc, fs = _svc(tmp_path, rows)
-    res = svc.daemon_set("868", "TXMODE", "DIRECT", apply=apply)
-    assert (res.ok, res.summary) == (False, why)
+def test_a_set_on_a_radio_the_list_does_not_hold_is_refused_and_sends_nothing(tmp_path, apply):
+    svc, fs = _svc(tmp_path, ONLY_433)
+    res = svc.daemon_set("r2", "TXMODE", "DIRECT", apply=apply)
+    assert (res.ok, res.summary) == (False, "Cannot SET TXMODE on r2: r2 is not a radio of the hardware list")
     assert fs.seen == []
+
+
+@pytest.mark.parametrize("rid", ["r1", "r2"])
+def test_two_radios_on_a_band_each_set_reaches_its_own_socket(tmp_path, rid):
+    svc, fs = _svc(tmp_path, TWO_868)
+    svc.daemon_set(rid, "TXMODE", "DIRECT", apply=True)
+    assert {p for p, _ in fs.seen} == {f"/tmp/loraconf-{rid}.sock"}
 
 
 def test_an_invalid_list_sends_nothing_either(tmp_path):
     svc, fs = _svc(tmp_path, None)
     (tmp_path / "config" / "radios.toml").write_text("not toml [")
-    res = svc.daemon_set("868", "TXMODE", "DIRECT", apply=True)
-    assert not res.ok and res.summary.split(":")[0] == "Cannot SET TXMODE on 868 MHz"
+    res = svc.daemon_set("r2", "TXMODE", "DIRECT", apply=True)
+    assert not res.ok and res.summary.split(":")[0] == "Cannot SET TXMODE on r2"
     assert fs.seen == []
 
 
@@ -67,13 +71,13 @@ def test_the_reads_and_the_raw_frame_reach_no_socket_either(tmp_path):
     assert fs.seen == []
 
 
-def test_without_a_list_the_band_socket_stays_for_a_013_daemon(tmp_path):
-    svc, fs = _svc(tmp_path, None)
-    svc.daemon_set("868", "TXMODE", "DIRECT", apply=True)
-    assert [p for p, _ in fs.seen][:1] == ["/tmp/loraconf-r2.sock"]             # the upgrade case, unchanged
+def test_without_a_list_the_baseline_list_names_r2(tmp_path):
+    svc, fs = _svc(tmp_path, None)                                                 # conftest's baseline r1/r2
+    svc.daemon_set("r2", "TXMODE", "DIRECT", apply=True)
+    assert [p for p, _ in fs.seen][:1] == ["/tmp/loraconf-r2.sock"]
 
 
 def test_one_radio_on_the_band_reaches_its_own_socket(tmp_path):
     svc, fs = _svc(tmp_path, radios_fixture.RADIOS)                                # r2 is the one 868 radio
-    svc.daemon_set("868", "TXMODE", "DIRECT", apply=True)
+    svc.daemon_set("r2", "TXMODE", "DIRECT", apply=True)
     assert {p for p, _ in fs.seen} == {"/tmp/loraconf-r2.sock"}

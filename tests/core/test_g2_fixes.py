@@ -187,7 +187,7 @@ def test_c57_a_fixed_band_client_has_no_panel_on_a_disabled_or_other_band_radio(
     _write(tmp_path, [R("r1", "a", "uputronics", "433", ce="ce0", enabled=False), R("r2", "b", "uputronics", "868", ce="ce1")])
     fake = _ConfDaemon(serve={"/tmp/loraconf-r2.sock": _status("r2", "868")})
     svc = ControllerService(system=fake.system, paths=p)
-    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, r, sid: ([], sid == "meshcom"))   # "it runs there"
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, r, sid: ([], sid == "meshcom"))   # "it runs there"
     assert svc.daemon_params_view("meshcom", rid=rid) == {}
     res = svc.apply_daemon_params("meshcom", rid=rid)
     assert not res.ok and res.summary == ("Cannot apply meshcom's daemon parameters: "
@@ -206,7 +206,7 @@ def test_c57_a_switchable_client_applies_on_the_radio_the_list_serves(tmp_path, 
     _write(tmp_path, [_radios().Radio("r1", "b", "uputronics", "868", ce="ce1")])
     fake = _ConfDaemon(serve={"/tmp/loraconf-r1.sock": _status("r1", "868")})
     svc = ControllerService(system=fake.system, paths=p)
-    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, r, sid: ([], sid == "kiss"))
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, r, sid: ([], sid == "kiss"))
     assert svc.daemon_params_view("kiss", rid="r1")["band"] == "868"
     res = svc.apply_daemon_params("kiss", rid="r1")
     assert res.data["band"] == "868" and fake.sent and {path for path, _v in fake.sent} == {"/tmp/loraconf-r1.sock"}

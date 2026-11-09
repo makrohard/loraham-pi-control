@@ -93,12 +93,12 @@ def test_an_fsk_warning_lists_the_stacks_of_that_radio(web, tmp_path, csrf):
     asked = []
 
     def record(svc):
-        def running(band, rid=""):
-            asked.append((band, rid))
+        def running(rid):
+            asked.append(rid)
             return ["kiss@r2"] if rid == "r2" else ["kiss@r1", "kiss@r2"]
-        svc.running_lora_stacks = running
+        svc.lora_clients_on = running
         return svc
     c = web(guard=record)
     body = c.post("/radio/r2/set", data={"_csrf": csrf(c), "key": "MODE", "value": "FSK"}).get_data(as_text=True)
-    assert asked == [("433", "r2")]
+    assert asked == ["r2"]
     assert "affected: <strong>kiss@r2</strong>" in body and "kiss@r1" not in body

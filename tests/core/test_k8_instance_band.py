@@ -89,3 +89,19 @@ def test_k8_the_started_tnc_of_kiss_at_r2_runs_on_r2s_band_and_sockets(tmp_path,
     flags = {f: argv[argv.index(f) + 1] for f in ("--rx-freq", "--data-socket", "--conf-socket")}
     assert (log, flags) == ("start-loraham-kiss-tnc-868-r2.log", {"--rx-freq": "869.525",
                             "--data-socket": "/tmp/loraf-r2.sock", "--conf-socket": "/tmp/loraconf-r2.sock"})
+
+
+def test_k8d_graywolf_on_r2_is_not_refused_by_kiss_running_on_r1(tmp_path, monkeypatch, set_call):
+    # K8d item 3: a chain member takes the dependent's radio (13.5), so kiss@r1 live on 433 is no member of
+    # graywolf@r2; red on 8289f771: "Cannot start 'graywolf' on 868 MHz: it needs 'kiss', which is already running on
+    # 433 MHz". Through the public start (plan).
+    import launch_band_fixture
+    svc = ControllerService(system=FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    launch_band_fixture.set_launch_band(svc, "kiss", "433")
+    monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid, snap=None: sid == "kiss")
+    sid, inst, band, _why = instances.resolve(svc, "graywolf@r2")
+    res = svc.start(sid, apply=False, band=band, inst=inst)
+    text = "\n".join((res.summary, *res.details))
+    assert "already running on 433 MHz" not in text, text

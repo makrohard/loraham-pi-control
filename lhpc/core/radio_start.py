@@ -649,18 +649,6 @@ def band_rid(svc, band: str) -> radio_daemon.Target:
                                        old_config=radio_daemon.old_config_state(svc._paths))
 
 
-def client_rid(svc, sid: str, band: str, inst=None) -> str:
-    """Item 16: the radio whose daemon a start of stack `sid` on `band` needs: its instance's own radio, else (a band
-    caller until K6) the band's first enabled radio. "" for the daemon's own start, and for no single band: then
-    every enabled radio of the needed bands."""
-    from . import instances
-    if sid == (svc.stack_of(svc.DAEMON_ID) or "daemon"):
-        return inst.rid if inst is not None else ""                 # `--radio rN`: that radio's daemon alone
-    if band not in ("433", "868"):
-        return ""
-    return inst.rid if inst is not None and inst.rid else instances.band_radio(svc._paths, band)
-
-
 def daemon_radio(svc, rid: str) -> tuple:
     """`--radio rN` of a daemon start, stop or restart (item 16): (the daemon's Instance on that radio, its band, "")
     or (None, "", why) when rN is not an enabled radio of the hardware list."""
@@ -682,14 +670,14 @@ def daemon_dependents(svc, sid: str, band, inst, stopped_bands) -> list:
     return svc.stop_dependents(sid, bands=stopped_bands)
 
 
-def radio_clients(svc, band: str, rid: str, sid: str) -> tuple:
+def radio_clients(svc, rid: str, sid: str) -> tuple:
     """Item 16 (G1-C18): (the other stacks' running clients, does stack `sid` itself run) on radio `rid`, the radio
-    whose retained daemon a start would set: activity on another radio of the band keeps nothing. By band when no
-    radio is named or the list names none."""
-    on = radio_dependents(svc, band, daemon_inst(rid)) if rid else None
+    whose retained daemon a start would set: activity on another radio of the band keeps nothing. ([], False) for a
+    rid that is no enabled radio of the list (no daemon of it is started or retuned)."""
+    _inst, band, why = daemon_radio(svc, rid)
+    on = None if why else radio_dependents(svc, band, daemon_inst(rid))
     if on is None:
-        daemon_sid = svc.stack_of(svc.DAEMON_ID) or "daemon"
-        return [d for d in svc.stop_dependents(daemon_sid, bands={band}) if d != sid], svc._stack_running_on_band(sid, band)
+        return [], False
     return [d for d in on if d.partition("@")[0] != sid], any(d.partition("@")[0] == sid for d in on)
 
 
@@ -733,7 +721,7 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
         return {}
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
     chip, grant = chip_family(svc, "", rid) or "", effective_high_power(svc, rid)
-    return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
+    return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get("dp_" + name)) not in (None, "")
             and daemon_control.validate_set(name, str(v), chip, grant) is None}
 
 
@@ -759,9 +747,8 @@ def params_view(svc, target: str, rid: str) -> dict:
     ov = {**row_dp(svc, rid), **instance_dp(svc, sid, rid)}
     able = None if is_daemon else set(instances.radios_able(svc, sid))
     choose = [r for r in view_radios(svc._paths) if able is None or r[0] in able]     # the radios this panel can show
-    return {"stack": target, "band": band, "rid": rid, "bands": sorted({r[2] for r in choose}),
-            "all_bands": list(svc.RADIO_BANDS), "is_daemon": is_daemon,
-            "can_apply": is_daemon or _apply_open(radio_clients(svc, band, rid, sid)), "radios": choose,
+    return {"stack": target, "band": band, "rid": rid, "is_daemon": is_daemon,
+            "can_apply": is_daemon or _apply_open(radio_clients(svc, rid, sid)), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
             "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, band, rid) or "", effective_high_power(svc, rid))}
 
@@ -790,7 +777,7 @@ def save_params(svc, target: str, rid: str, values: dict):
     if err:
         return ActionResult(False, err)
     try:
-        cfgmod.update_stack_config(svc._paths, sid, {f"dp_{n}": v for n, v in edits.items()}, inst=commands.Instance(rid))
+        cfgmod.update_stack_config(svc._paths, sid, {"dp_" + n: v for n, v in edits.items()}, inst=commands.Instance(rid))
     except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
         return ActionResult(False, f"could not save the daemon settings of {sid}@{rid}: {exc}")
     svc._invalidate_config()
@@ -1202,3 +1189,30 @@ def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
     if t.outcome != "proceed":
         return None, f"no radio for its daemon sockets: {t.reason}"
     return commands.Instance(t.rid), ""
+
+
+def overview_entry(svc, row, e: dict) -> dict:
+    """DEC-W384bu: radio `row`'s dashboard entry from its band's rows `e` (service._band_entries): its own daemon view,
+    the stacks running on it (and, fail-safe, the band's processes no instance claims: rid ""), the stacks startable
+    on it (also those running only on another radio of the band), its interactive apps, RF logs and conflicts."""
+    from . import daemon_control, instances
+    rid, band, dv = row.id, row.band, daemon_control.read_view(svc._system, row.id)
+    ch = svc.daemon_channel(band, rid) if dv.reachable else {}
+    running = [x for x in e["running"] if x.get("rid") in (rid, "", None)]
+    here = {x.get("sid", x["id"]) for x in running}                       # an instance's entry: id "<sid>@<rid>"
+    elsewhere = [x.get("sid", x["id"]) for x in e["running"] if x.get("rid") and x.get("sid", x["id"]) not in here]
+    startable = [x for x in e["startable"] + [e["entries"][sid] for sid in dict.fromkeys(elsewhere) if sid in e["entries"]]
+                 if rid in instances.radios_able(svc, x["id"])]
+    interactive = [x for x in e["interactive"] if not x.get("on_rids") or rid in x["on_rids"] or "" in x["on_rids"]]
+    up = dv.reachable
+    return {"rid": rid, "name": row.name, "band": band, "model": row.model, "stray": False, "shared_with": [],
+            "radios": [x for x in e["radios"] if x["rid"] == rid],
+            "daemon": {**e["daemon"], "reachable": up, "occupied": up, "ready": dv.ready, "usable": dv.ready,
+                       "radio_state": dv.radio_state or None,
+                       "state_label": "usable" if dv.ready else "occupied" if up else "offline",
+                       **{k: dv.status.get(k.upper()) if up else None for k in ("radio", "txmode", "cadrssi", "cadwait")},
+                       "liverssi": ch.get("LIVERSSI") if up else None,
+                       "high_power": svc.high_power_state(band, dv, rid)},
+            "running": running, "startable": startable, "interactive": interactive,
+            "rflogs": [x for x in e["rflogs"] if not ("/" in (x.get("job") or "") and not x["job"].startswith(rid + "/"))],
+            "conflict": svc._radio_competitors(running + [x for x in interactive if x.get("running")])}

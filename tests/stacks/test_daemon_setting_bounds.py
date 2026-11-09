@@ -49,10 +49,10 @@ def test_apply_set_invalid_band_is_typed_error():
     assert not ok and not confirmed and "invalid band" in detail
 
 
-def test_daemon_set_service_validates_band(tmp_path):
+def test_daemon_set_service_validates_its_radio(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     r = svc.daemon_set("../../etc", "TXMODE", "DIRECT", apply=True)
-    assert not r.ok and "Invalid band" in r.summary
+    assert not r.ok and r.summary == "Cannot SET TXMODE on ../../etc: ../../etc is not a radio of the hardware list"
 
 
 # --- confirmed vs sent-but-unconfirmable ------------------------------------
@@ -60,7 +60,7 @@ def test_daemon_set_service_validates_band(tmp_path):
 def test_confirmable_key_reports_applied(tmp_path):
     sys = FakeSystem(unix_replies={dc.conf_socket("r1"): b"STATUS TXMODE=DIRECT\n"}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    r = svc.daemon_set("433", "TXMODE", "DIRECT", apply=True)
+    r = svc.daemon_set("r1", "TXMODE", "DIRECT", apply=True)
     assert r.ok and r.data.get("confirmed") is True and "applied (confirmed)" in r.summary
 
 
@@ -69,7 +69,7 @@ def test_unconfirmable_radio_param_is_sent_not_applied(tmp_path):
     # (unconfirmed)", never "applied", and the confirmed flag must be False.
     sys = FakeSystem(unix_replies={dc.conf_socket("r1"): b"STATUS TXMODE=MANAGED\n"}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    r = svc.daemon_set("433", "FREQ", "433.775", apply=True)
+    r = svc.daemon_set("r1", "FREQ", "433.775", apply=True)
     assert r.ok and r.data.get("confirmed") is False
     assert "applied" not in r.summary.lower() and "SENT (unconfirmed)" in r.summary
 
@@ -141,14 +141,14 @@ def test_service_refuses_out_of_range_power_for_an_sx127x_board(tmp_path, setup,
     # like 0 (`tests/stacks/test_high_power.py` has the permission rows).
     status = (b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90 RXREADY=1 "
               b"HIGHPOWER=0 CHIPFAMILY=SX127x\n")
-    fs = FakeSystem(unix_replies={dc.conf_socket(band): status})
+    fs = FakeSystem(unix_replies={dc.conf_socket({"433": "r1", "868": "r2"}[band]): status})
     svc = ControllerService(system=fs.system, paths=p)
     assert svc.chip_family_for_band(band) == "sx127x"
-    r = svc.daemon_set(band, "POWER", rejected, apply=True)
+    r = svc.daemon_set({"433": "r1", "868": "r2"}[band], "POWER", rejected, apply=True)
     assert not r.ok and "POWER" in r.summary
     assert fs.sent == []                       # refused before anything reached the socket
     # And an unreachable daemon refuses a live POWER too, naming the key.
-    r2 = ControllerService(system=FakeSystem().system, paths=p).daemon_set(band, "POWER", "17")
+    r2 = ControllerService(system=FakeSystem().system, paths=p).daemon_set({"433": "r1", "868": "r2"}[band], "POWER", "17")
     assert not r2.ok and "POWER" in r2.summary
 
 

@@ -423,9 +423,8 @@ def test_g1_w2_4_a_band_stop_is_only_a_stray_daemons(tmp_path, monkeypatch, web,
     # 433 radios here) AND a daemon running there (the card's own rule, radio_overview's stray entry).
     _two_433(tmp_path)
     if stray:
-        real = ControllerService.radio_overview
-        monkeypatch.setattr(ControllerService, "radio_overview",
-                            lambda self: [*real(self), {"band": "868", "stray": True, "radios": [], "running": []}])
+        monkeypatch.setattr(ControllerService, "stray_daemons",       # DEC-W384bv: the stray card's own list
+                            lambda self: [{"band": "868", "daemon": {}, "shared_with": [], "rflogs": []}])
     seen, c = _spy(monkeypatch), web()
     r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon", "band": band, "confirmed": "yes"})
     assert r.status_code == code

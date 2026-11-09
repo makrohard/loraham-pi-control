@@ -1703,7 +1703,7 @@ def _run(argv: list[str] | None = None) -> int:
             return 2
         if args.set_kv:
             key, _, value = args.set_kv.partition("=")
-            return _apply_flow(lambda a: svc.daemon_set(band, key, value, apply=a, rid=rid), yes=args.yes)
+            return _apply_flow(lambda a: svc.daemon_set(rid, key, value, apply=a), yes=args.yes)
         if args.feed:
             feed = svc.daemon_feed(band, rid=rid)
             print("\n".join(feed) if feed else "(no recent RX/TX activity)")

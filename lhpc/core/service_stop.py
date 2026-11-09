@@ -622,7 +622,7 @@ class StopOpsMixin:
         _pre_order = self._run_order(target)
         if _pre_order:
             _bb = self._dep_band_block(target, _pre_order,
-                                       _rband or self._config_band(target, _rband))
+                                       _rband or self._config_band(target, _rband), inst)
             if _bb is not None:
                 return _bb
             # The firewall gate (no apply-script write on the plan), an ambiguous saved value and
