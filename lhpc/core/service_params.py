@@ -1814,12 +1814,10 @@ class ParamsConfigMixin:
         restart of a stack running on 868 could show the 868 callsign beside 433 radio values, save
         the 868 callsign into the 433 store, and launch the 868 operation with 433 radio
         parameters."""
-        # `_config_band` maps to the per-band CONFIG STORE. The DAEMON has no such store yet
-        # genuinely operates per band, so flattening there would DISCARD an explicit `--band 433`.
-        # Only the daemon keeps the raw hint: a FIXED-band client (chat/meshcom on 433,
-        # meshcore on 868) also has no store, and honouring a raw band for it would ensure, lock
-        # and clear the daemon on a band the node cannot run on — it flattens, as
-        # it always did, and the fixed band its manifest declares is what actually runs.
+        # `_config_band` maps to the per-band CONFIG STORE; the daemon has none and keeps the raw hint (its radio's
+        # band). A FIXED-band client (chat/meshcom on 433, meshcore on 868) has none either and flattens to "": the
+        # band its manifest declares runs, never a daemon on a band the node cannot use. An instance's start and
+        # restart pass its radio's band (K8d, instances.radio_band).
         hint = self._launch_band_hint(target, band)
         cb = self._config_band(target, hint)
         return cb or (hint if self._is_daemon_target(target) else "")

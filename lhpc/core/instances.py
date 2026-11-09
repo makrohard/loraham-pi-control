@@ -222,6 +222,16 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
 
 
 
+def radio_band(svc, target: str, inst, band: str = "") -> str:
+    """K8d: an instance runs on its radio's band. A `<stack>@<rid>` start or restart takes its radio ROW's band, resolved
+    here by the rid (G1-K8D1: never the band the caller put on the instance, never the operation band's running/
+    primary fallback); a radio that left the list keeps the instance's launch band. The daemon's instance (its own
+    band rule) and the template keep the caller's band."""
+    if inst is None or not inst.rid or svc._is_daemon_target(target):
+        return band
+    row = next((r for r in radios.load(svc._paths).radios if r.id == inst.rid), None)
+    return row.band if row is not None else (inst.band or band)
+
 def key(target: str, inst) -> str:
     """The one instance-key formatter: `<target>@<rid>`; `<target>` only without a radio (the manifest's template)."""
     return f"{target}@{inst.rid}" if inst is not None and inst.rid else target

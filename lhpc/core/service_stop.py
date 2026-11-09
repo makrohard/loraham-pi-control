@@ -442,6 +442,7 @@ class StopOpsMixin:
         config stability + the restart lifecycle bundle held, preflight and the GPS position done —
         and BEFORE the stop; returning an ActionResult cancels the restart with ZERO side effects
         (the running stack is never stopped). It is NOT handed to the nested start."""
+        band = instances.radio_band(self, target, inst, band)
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
