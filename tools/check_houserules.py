@@ -60,6 +60,7 @@ WORD_EXEMPT = re.compile(r"user[-_]" + "ag" + "ent" + r'|scope="' + "ses" + 'sio
 HARD_PATTERNS = {"getsource": re.compile(r"inspect\.getsource\("),
                  "assert-True": re.compile(r"^\s*assert True\b")}
 WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"']+\.(py|js|css)["']"""),
+                 "sleep": re.compile(r"time\.sleep\("),           # outside WALLCLOCK_DIRS only: inside, the HARD row
                  "startswith": re.compile(r"assert .*\.startswith\("),
                  "network": re.compile(r"\b(requests\.|urllib\.request|socket\.create_connection)")}
 EXEMPT = "# rule-1 exception"
@@ -71,7 +72,6 @@ EXEMPT = "# rule-1 exception"
 WALLCLOCK_DIRS = ("tests/", "testlab/tests/")
 WALLCLOCK_CALLS = ("time", "monotonic", "sleep")
 SLEEP_TEXT = re.compile(r"\bsleep\s+\d")
-WALLCLOCK_MARK = re.compile(r"""mark\.wallclock\(\s*(?P<q>["'])(?P<reason>[^"']*\S[^"']*)(?P=q)\s*\)""")
 WALLCLOCK_COMMENT = re.compile(r"#\s*wallclock:\s*(?P<reason>\S.*)$")
 RED_BEFORE = re.compile(r"red[- ]before", re.IGNORECASE)
 RAISE_REASON = re.compile(r"#\s*\S+:\s*\S")
@@ -256,16 +256,34 @@ def changelog_bullets(added: list, second: int) -> tuple[list[int], bool]:
     return bullets, below
 
 
-def test_scopes(src: str) -> list[tuple[int, int, str, list[str]]]:
-    """(def line, last line, name, decorator texts) of every test in a source: module-level `test_*` functions and
-    the `test_*` methods of a `Test*` class, as pytest collects them. Raises SyntaxError for a file that does not
-    parse. The one attribution of a line to its test (G1-TR1 B2): it reads the whole file, not the diff."""
+def marks_of(fn) -> dict[str, str | None]:
+    """The pytest marks a function's decorators apply, from their AST (G1-TR1-C B2): `@pytest.mark.<name>` or
+    `@mark.<name>`, bare or called; the value is the first argument when it is a non-blank string, else None.
+    Text that only looks like a mark (a parametrize value) is no mark."""
+    out = {}
+    for d in fn.decorator_list:
+        f = d.func if isinstance(d, ast.Call) else d
+        if not isinstance(f, ast.Attribute):
+            continue
+        v = f.value
+        if (isinstance(v, ast.Attribute) and v.attr == "mark") or (isinstance(v, ast.Name) and v.id == "mark"):
+            a = d.args[0] if isinstance(d, ast.Call) and d.args else None
+            ok = isinstance(a, ast.Constant) and isinstance(a.value, str) and a.value.strip()
+            out[f.attr] = a.value.strip() if ok else None
+    return out
+
+
+def test_scopes(src: str) -> list[tuple[int, int, int, str, dict[str, str | None]]]:
+    """(first line with its decorators, def line, last line, name, marks) of every test in a source: module-level
+    `test_*` functions and the `test_*` methods of a `Test*` class, as pytest collects them. Raises SyntaxError for a
+    file that does not parse. The one attribution of a line to its test (G1-TR1 B2): it reads the whole file, not the
+    diff; a test's decorators are its own lines (G1-TR1-C B3)."""
     out = []
 
     def add(fn, prefix=""):
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test"):
-            out.append((fn.lineno, fn.end_lineno, prefix + fn.name,
-                        [ast.get_source_segment(src, d) or "" for d in fn.decorator_list]))
+            first = min([fn.lineno, *(d.lineno for d in fn.decorator_list)])
+            out.append((first, fn.lineno, fn.end_lineno, prefix + fn.name, marks_of(fn)))
 
     for node in ast.parse(src).body:
         add(node)
@@ -365,10 +383,12 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # patterns
     in_tests = [(p, n, t) for p, n, t in added if is_test_file(p) or layer_of(p)]
     counts = dict.fromkeys((*HARD_PATTERNS, *WARN_PATTERNS), 0)
-    for _, _, text in in_tests:
+    for p, _, text in in_tests:
         if EXEMPT in text:
             continue
         for k, rx in (*HARD_PATTERNS.items(), *WARN_PATTERNS.items()):
+            if k == "sleep" and p.startswith(WALLCLOCK_DIRS):
+                continue                    # the wallclock row judges a sleep there (HARD), not this textual WARN
             counts[k] += bool(rx.search(text))
     v = ("HARD" if any(counts[k] for k in HARD_PATTERNS)
          else "WARN" if any(counts[k] for k in WARN_PATTERNS) else "OK")
@@ -386,12 +406,12 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         except SyntaxError:
             scopes = []                      # the wallclock row reports an unparsable file in its scope
         src_lines = (src or "").splitlines()
-        for first, last, _, decorators in scopes:
-            if first not in lines:           # only a test whose def line is added
+        for _, defline, last, _, marks in scopes:
+            if defline not in lines:         # only a test whose def line is added
                 continue
-            text = "\n".join(src_lines[first:last])
+            text = "\n".join(src_lines[defline:last])
             slow_work = "venv" in text or "pip install" in text or ("while" in text and "monotonic" in text)
-            unmarked += slow_work and not any("mark.slow" in d for d in decorators)
+            unmarked += slow_work and "slow" not in marks
     rows.append(("markers", f"{unmarked} without slow", "WARN" if unmarked else "OK"))
 
     # wallclock
@@ -410,10 +430,9 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
             continue
         src_lines = src.splitlines()
         for n in hits:
-            test = next((t for t in scopes if t[0] <= n <= t[1]), None)
+            test = next((t for t in scopes if t[0] <= n <= t[2]), None)
             if test is not None:
-                reason = next((m["reason"] for d in test[3] if (m := WALLCLOCK_MARK.search(d))), None)
-                where = f"{p}::{test[2]}"
+                reason, where = test[4].get("wallclock"), f"{p}::{test[3]}"
             else:
                 m = WALLCLOCK_COMMENT.search(src_lines[n - 1])
                 reason, where = (m["reason"].strip() if m else None), f"{p}:{n}"

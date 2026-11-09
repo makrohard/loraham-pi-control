@@ -595,3 +595,34 @@ def test_a_renamed_test_file_must_stay_in_a_layer_folder(repo, dest, verdict):
     _git(repo, "commit", "-q", "-m", RED)
     rc, rows = _run(repo)
     assert rows["tests"] == verdict and (rc == 1) == (verdict == "HARD")
+
+
+def test_wallclock_marker_text_in_a_parameter_is_no_marker(repo):
+    # G1-TR1-C B2: only a real wallclock decorator escapes; the same text as parametrize data does not
+    _commit(repo, _test("\n@pytest.mark.parametrize('n', [\"mark.wallclock('not an exemption')\"])\ndef test_two(n):\n"
+                        "    import time\n    " + TSL + "(0)\n"))
+    rc, line = _out(repo)
+    assert rc == 1 and line.split()[-1] == "HARD", line
+
+
+def test_slow_marker_text_in_a_parameter_is_no_marker(repo):
+    # G1-TR1-C B2 (the slow row): a timed loop with "mark.slow" only as parametrize data is still without slow
+    _commit(repo, _test("\n@pytest.mark.wallclock('a timed loop')\n@pytest.mark.parametrize('n', ['mark.slow'])\n"
+                        "def test_two(n):\n    import time\n    " + "wh" + "ile time.monotonic() < 0:\n        pass\n"))
+    _rc, rows = _run(repo)
+    assert rows["markers"] == "WARN"
+
+
+def test_wallclock_a_marked_test_covers_its_decorators(repo):
+    # G1-TR1-C B3: a sleep text in a decorator of a marked test is that test's
+    _commit(repo, _test(f"\n@pytest.mark.wallclock('data only')\n@pytest.mark.parametrize('command', ['{SL} 5'])\n"
+                        "def test_two(command):\n    assert command\n"))
+    rc, line = _out(repo)
+    assert rc == 0 and "test_ok.py::test_two (data only)" in line, line
+
+
+def test_a_sleep_outside_the_wallclock_scope_stays_a_warning(repo):
+    # G1-TR1-C NOTE: the in-package tests keep the textual sleep WARN the wallclock rule does not reach
+    _commit(repo, {"lhpc/data/rfdecode/tests/test_x.py": "import time\n\n\ndef test_x():\n    " + TSL + "(0)\n"})
+    _rc, rows = _run(repo)
+    assert rows["patterns"] == "WARN" and rows["wallclock"] == "OK"

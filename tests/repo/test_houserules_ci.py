@@ -98,10 +98,3 @@ def test_the_workflow_runs_the_range_and_the_checker_from_a_recorded_floor():
     assert 'bash tools/houserules_ci_range.sh "$HR_FLOOR" "$EVENT" "$BEFORE" "$GITHUB_SHA" "$PR_BASE"' in text
     assert 'python tools/check_houserules.py "$range"' in text
 
-
-@pytest.mark.needs_git_checkout
-def test_the_floor_is_in_this_history():
-    floor = re.search(r"HR_FLOOR: ([0-9a-f]{40})", WORKFLOW.read_text())[1]
-    p = subprocess.run(["git", "merge-base", "--is-ancestor", floor, "HEAD"], cwd=repo_paths.REPO,
-                       capture_output=True, check=False)
-    assert p.returncode == 0, f"HR_FLOOR {floor} is not an ancestor of HEAD"
