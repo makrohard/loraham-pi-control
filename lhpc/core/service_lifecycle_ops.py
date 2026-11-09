@@ -390,23 +390,7 @@ class LifecycleOpsMixin:
         # not socket reachability.
         served = self._daemon_claimed_bands()
         blockers, seen = [], set()
-        # K6, one app stack per RADIO (W286/W322, triage T9): an instance start is blocked on its radio only. A holder
-        # whose every running instance (or daemon) is told on another radio is no blocker; a radio not told
-        # (a process no instance claims, a daemon without --id) blocks the whole band, as before (fail-safe).
-        target_rid = getattr(inst, "rid", "") or ""
-        held = {}
-        if target_rid:
-            for s_id, r_id, _c, _p in instances.instance_processes(self, self._system.procfs.cmdlines()):
-                held.setdefault(s_id, set()).add(r_id)
-            dprocs = radio_start._daemon_procs(self)
-            if dprocs and all(p.kind == "id" for p in dprocs):
-                held[self.stack_of(self.DAEMON_ID)] = {p.rid for p in dprocs}
-
-        def elsewhere(stack_id, comp):
-            """The running `comp` of `stack_id` is told on radios that are not the target's."""
-            rids = held.get(stack_id, set())
-            told = rids and (comp.id == self.DAEMON_ID or not instances.unclaimed(self, comp))
-            return bool(target_rid and told and target_rid not in rids)
+        elsewhere = instances.elsewhere(self, getattr(inst, "rid", "") or "")     # K6: one app stack per radio
 
         def add(stack_id, holder, resource):
             key = (stack_id, resource)
@@ -2419,17 +2403,12 @@ class LifecycleOpsMixin:
         sid = validators.path_component(stack_id, field="stack id")
         return self._paths.under("state", "running", f"{sid}.band")
 
-    def _set_running_band(self, stack_id: str, band: str) -> bool:
-        """Persist the running band (drives multi-band decisions + dashboard). Returns
-        False if it could not be written."""
-        return self._safe_marker_write(self._band_marker(stack_id), band)
-
     def running_band(self, stack_id: str, default: str = "") -> str:
-        from . import runtime_fs
-        try:
-            return runtime_fs.read_text(self._paths, self._band_marker(stack_id)).strip() or default
-        except (OSError, ValueError):
-            return default
+        """The band the stack's running instances were launched on, when it is one band (instances.running_bands,
+        their verified records); else `default`. K6 (13.12.5): no per-stack band marker is read; an old one is
+        ignored."""
+        told = self._request_memo(("running-bands", stack_id), lambda: instances.running_bands(self, stack_id))
+        return next(iter(told)) if len(told) == 1 else default
 
     def _live_bands(self, stack_id: str, declared: str) -> set:
         """The band(s) a LIVE multi-band component must be arbitrated against.
@@ -2444,8 +2423,8 @@ class LifecycleOpsMixin:
         if eb in ALLOWED_BANDS:
             return {eb}
         allowed = self.stack_bands(stack_id)
-        if len(allowed) > 1:                                 # K4b: its running instances' radios' bands when told
-            return (instances.running_bands(self, stack_id) & set(allowed)) or set(allowed)
+        if len(allowed) > 1:                  # K6: _effective_band is its running instances' launch band (13.12.5)
+            return set(allowed)
         return {declared} if declared else set()
 
     def _dep_band_block(self, target: str, order, band: str):

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 
+from . import instances, radio_start, runtime_fs, validators
 from . import meshcore_mode as _meshcore_mode
-from . import radio_start, runtime_fs, validators
 from . import rflog as _rflog
 from .model import RunState
 from .paths import PathContainmentError
@@ -186,16 +186,10 @@ class RflogOpsMixin:
                   "job": radio_start.daemon_rf_job(self, e, b) if e.banded else job} for b in self.RADIO_BANDS]
         return {"band": shown, "bands": bands, "stacks": stacks}
 
-    def _rflog_insts(self, owner: str) -> list:
-        """The owner's instances whose switch the stack-wide entries mean (K6, DEC-W384k: each its own); [None]
-        (the stack's global store) without a hardware list."""
-        from .commands import stack_instances
-        return [i for i in stack_instances(self.stack(owner), self._paths) if i.rid] or [None]
-
     def _rflog_switch_value(self, e) -> str:
         """The owner's switch: "on"/"off" when every instance agrees, else "mixed" (K6: one per instance)."""
         values = {_rflog.ON if _rflog.is_on(self._resolved_param_value(
-            e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "", inst=i)) else _rflog.OFF for i in self._rflog_insts(e.owner)}
+            e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "", inst=i)) else _rflog.OFF for i in instances.saved_insts(self, e.owner)}
         return values.pop() if len(values) == 1 else "mixed"
 
     def rflog_switch(self, surface: str) -> dict | None:
@@ -216,7 +210,7 @@ class RflogOpsMixin:
     def _rflog_save(self, owner: str, key: str, v: str) -> ActionResult:
         """The switch on every instance of `owner`, each through the one-key bundle path (its own file and its own
         restart marker); one result."""
-        results = [self.save_config_bundle(owner, values={key: v}, inst=i) for i in self._rflog_insts(owner)]
+        results = [self.save_config_bundle(owner, values={key: v}, inst=i) for i in instances.saved_insts(self, owner)]
         bad = [r for r in results if not r.ok]
         return bad[0] if bad else results[0]
 

@@ -410,18 +410,10 @@ class ParamsConfigMixin:
         return str(val)
 
     def _band_default(self, p, band: str, inst=None) -> str:
-        """model.band_default with the pin preset of the instance's radio row (its model variant; K6, not the old
-        setup's per-band `--hw`); a band caller: its band's first radio (band_radio). The list is read only for a
-        param with pin defaults."""
-        preset = ""
-        if getattr(p, "preset_defaults", ()):
-            from . import radio_models, radios
-            rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band)
-            row = next((r for r in radios.load(self._paths).radios if r.id == rid), None)
-            model = radio_models.load().get(row.model) if row else None
-            v = radios.variant(row, model) if model else None
-            preset = v.preset if v else ""
-        return band_default(p, band, preset)
+        """model.band_default with the pin preset of the instance's radio row (K6; a band caller: its band's first
+        radio); the list is read only for a param with pin defaults."""
+        rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band) if getattr(p, "preset_defaults", ()) else ""
+        return band_default(p, band, _radio_start.row_preset(self._paths, rid) if rid else "")
 
     def _param_default_canon(self, p, cfg_band: str, band: str, inst=None) -> str:
         """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —
@@ -669,29 +661,12 @@ class ParamsConfigMixin:
                 val, _amb = self._resolve_stored(stored, "r", c.id, p.name, run_counts.get(p.name, 0))
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
-                elif (po := self._port_of_default(p, _instances.store_inst(self, owner.id, cfg_band, inst))):
+                elif (po := _instances.port_of_default(self, p, _instances.store_inst(self, owner.id, cfg_band, inst))):
                     out[p.name] = po                          # K6S-2: the other stack's EFFECTIVE port there
                 else:
                     bd = self._band_default(p, cfg_band or band, inst)
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
-
-    def _port_of_default(self, p, inst) -> str:
-        """A `{port_of:STACK:BASE}` default for instance `inst` (K6S-2, G1-K7G): STACK's instance on the same radio
-        listens on its saved base (the param whose default is `{port:BASE}`, in its own store) else BASE, + 133 x
-        (n - 1); "" for any other default or without a radio. A saved value of `p` wins (the caller's)."""
-        m = commands._PORT_OF_RE.fullmatch(getattr(p, "default_template", "") or "")
-        if not m or not getattr(inst, "rid", "") or self.stack(m.group(1)) is None:
-            return ""
-        other, base = self.stack(m.group(1)), int(m.group(2))
-        stored = _instances.store(self, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))
-        counts = self._owner_param_counts(other)[0]
-        for c in other.components:
-            for q in c.run_params:
-                if getattr(q, "default_template", "") == f"{{port:{base}}}":
-                    saved = self._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0]
-                    base = int(saved) if str(saved or "").strip().isdigit() else base
-        return str(inst.port(base))
 
     def gui_unavailable_components(self, stack) -> tuple:
         """Component ids of `stack` that CANNOT work here because a GUI-only dependency of theirs is
@@ -2468,9 +2443,7 @@ class ParamsConfigMixin:
         label = f"'{_instances.key(target, inst)}'" if own else f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
-        # K6: the instance's own file, and the stack's global `<sid>.toml` (its autostart, 13.12.1); without an
-        # instance the global one holds everything
-        files = [inst, None] if own else [None]
+        files = [inst, None] if own else [None]          # K6: its own file + the global <sid>.toml (autostart, 13.12.1)
         cleared: list = []
         _gps_busy: dict = {}
 

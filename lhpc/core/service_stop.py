@@ -344,19 +344,9 @@ class StopOpsMixin:
         active_bands = set()
         if own_ok and _stk is not None and not target_is_daemon:
             active_bands = self._operation_bands(target, "", "", "stop")
-        # Clear band/interactive markers after the target's OWN verified cessation — even if the
-        # later daemon-release fails, a stopped client must never look running.
-        if sid and own_ok:                    # the band marker is a band caller's (K6); the interactive one any instance's
-            # Only the BAND OWNER's cessation retires the band marker: stopping an
-            # optional client (sideband, lxmd) must not wipe it while `rns` is still
-            # on 868 — that erases the stack's band evidence and the dashboard has
-            # nothing to place it by.
-            #
-            # Decided from the TYPED STOP RESULTS, not from a snapshot: the snapshot
-            # is memoised per operation, so a read taken here still showed the
-            # just-stopped owner as running and kept the marker alive forever.
-            if not getattr(inst, "rid", "") and self._band_owners_stopped(sid, own_results):
-                self._safe_unlink(self._band_marker(sid))
+        # Clear the interactive marker after the target's OWN verified cessation — even if the
+        # later daemon-release fails, a stopped client must never look running. (K6, 13.12.5: no band marker.)
+        if sid and own_ok:
             self.dismiss_interactive(sid)
         # A CLIENT stop also takes down the non-daemon dependency stacks it ALONE was using
         # (the KISS TNC under graywolf) — the chain its start pulled up comes down with it.
@@ -770,17 +760,3 @@ class StopOpsMixin:
                 out.append(f"kill {pids[0]} to stop {cid}" if pids
                            else f"{cid} is still running — stop it yourself")
         return out
-
-    def _band_owners_stopped(self, stack_id: str, results) -> bool:
-        """Whether THIS stop ended every band-carrying component of the stack.
-
-        Evidence is the typed result of the stop we just performed — the only
-        thing that is guaranteed post-mutation truth.
-        """
-        stack = self.stack(stack_id)
-        owners = {c.id for c in (stack.components if stack else ()) if c.band or c.bands}
-        if not owners:
-            return True                    # nothing carries a band: nothing to keep
-        ceased = {r.component for r in results
-                  if r.outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED)}
-        return owners <= ceased

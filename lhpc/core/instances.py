@@ -283,6 +283,50 @@ def own_rid(paths, inst) -> str:
     return inst.rid if inst is not None and inst.rid else ""
 
 
+def elsewhere(svc, target_rid: str):
+    """K6, one app stack per RADIO (W286/W322, triage T9) -> predicate(stack_id, comp): the running `comp` of
+    `stack_id` is told on radios that are not `target_rid`'s, so it does not block that instance. A radio not told (a
+    process no instance claims, a daemon without --id) blocks the whole band, as before (fail-safe)."""
+    held = {}
+    if target_rid:
+        from . import radio_start
+        for s_id, r_id, _c, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
+            held.setdefault(s_id, set()).add(r_id)
+        dprocs = radio_start._daemon_procs(svc)
+        if dprocs and all(p.kind == "id" for p in dprocs):
+            held[svc.stack_of(svc.DAEMON_ID)] = {p.rid for p in dprocs}
+
+    def other(stack_id, comp) -> bool:
+        rids = held.get(stack_id, set())
+        told = rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp))
+        return bool(target_rid and told and target_rid not in rids)
+    return other
+
+
+def saved_insts(svc, sid: str) -> list:
+    """The stack's instances whose own settings a stack-wide entry means (each its own, K6); [None] (the global
+    store) without a hardware list."""
+    return [i for i in commands.stack_instances(svc.stack(sid), svc._paths) if i.rid] or [None]
+
+
+def port_of_default(svc, p, inst) -> str:
+    """A `{port_of:STACK:BASE}` default for instance `inst` (K6S-2, G1-K7G): STACK's instance on the same radio
+    listens on its saved base (the param whose default is `{port:BASE}`, in its own store) else BASE, + 133 x
+    (n - 1); "" for any other default or without a radio. A saved value of `p` wins (the caller's)."""
+    m = commands._PORT_OF_RE.fullmatch(getattr(p, "default_template", "") or "")
+    other = svc.stack(m.group(1)) if m and getattr(inst, "rid", "") else None
+    if other is None:
+        return ""
+    base, stored = int(m.group(2)), store(svc, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))
+    counts = svc._owner_param_counts(other)[0]
+    for c in other.components:
+        for q in c.run_params:
+            if getattr(q, "default_template", "") == f"{{port:{base}}}":
+                saved = svc._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0]
+                base = int(saved) if str(saved or "").strip().isdigit() else base
+    return str(inst.port(base))
+
+
 def store_inst(svc, sid: str, band: str = "", inst=None):
     """The instance whose own settings a caller means: its own; a band caller (no radio; the web's ?band= until W5)
     its band's instance (copy_of: the running radio, else the band's first); TEMPLATE-like (no rid) without a list."""
