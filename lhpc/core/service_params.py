@@ -250,7 +250,7 @@ class ParamsConfigMixin:
                                if not getattr(p, "hidden", False)]):
                 idrec = id_rows.get((c.id, kind, p.name))
                 default = ("" if idrec else
-                           self._op_subst(band_default(p, cfg_band or band, self.config().radio)))
+                           self._op_subst(self._band_default(p, cfg_band or band, inst)))
                 value = (self._stored_param_value(target, kind, c.id, p.name, cfg_band, inst)   # 7f: an instance's own
                          if idrec else
                          self._resolved_param_value(target, kind, c.id, p.name, cfg_band, inst))
@@ -403,18 +403,32 @@ class ParamsConfigMixin:
         val, _amb = self._resolve_stored(stored, k, comp_id, name, count)
         if val is None:
             _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
-            bd = band_default(p, cfg_band or band, self.config().radio) if p is not None else ""
+            bd = self._band_default(p, cfg_band or band, inst) if p is not None else ""
             val = self._op_subst(bd)
         if kind == "file" and comp_id == MESHCORE_COMPONENT and name in _openhop_store.ROWS:
             return _openhop_store.row_value(self, name, str(val), inst)    # issue #5: the file wins
         return str(val)
 
-    def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
+    def _band_default(self, p, band: str, inst=None) -> str:
+        """model.band_default with the pin preset of the instance's radio row (its model variant; K6, not the old
+        setup's per-band `--hw`); a band caller: its band's first radio (band_radio). The list is read only for a
+        param with pin defaults."""
+        preset = ""
+        if getattr(p, "preset_defaults", ()):
+            from . import radio_models, radios
+            rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band)
+            row = next((r for r in radios.load(self._paths).radios if r.id == rid), None)
+            model = radio_models.load().get(row.model) if row else None
+            v = radios.variant(row, model) if model else None
+            preset = v.preset if v else ""
+        return band_default(p, band, preset)
+
+    def _param_default_canon(self, p, cfg_band: str, band: str, inst=None) -> str:
         """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —
         used by `save_config_bundle` to store OVERRIDES ONLY (a submitted value equal to this is not
         persisted, so it always follows the current/updated manifest default). Fail-soft: a
         non-validating default is compared as its raw substituted string."""
-        eff = self._op_subst(band_default(p, cfg_band or band, self.config().radio))
+        eff = self._op_subst(self._band_default(p, cfg_band or band, inst))
         if p.kind == "int" and eff.strip() == "":
             return ""                                   # an unset optional int
         try:
@@ -655,7 +669,7 @@ class ParamsConfigMixin:
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
                 else:
-                    bd = band_default(p, cfg_band or band, self.config().radio)
+                    bd = self._band_default(p, cfg_band or band, inst)
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
 
@@ -996,7 +1010,7 @@ class ParamsConfigMixin:
         stack_set, stack_remove, bandless_set, bandless_remove, switched = config_save.plan_store(
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
-                                   else self._param_default_canon(ch.param, cfg_band, band)),
+                                   else self._param_default_canon(ch.param, cfg_band, band, inst)),
             switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band) and not own)
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
@@ -1650,7 +1664,7 @@ class ParamsConfigMixin:
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
-                bd = band_default(p, cfg_band or band, self.config().radio)
+                bd = self._band_default(p, cfg_band or band, inst)
                 val, _amb = self._resolve_stored(
                     bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "f", c.id, p.name,
                     file_counts.get(p.name, 0))
@@ -2470,7 +2484,7 @@ class ParamsConfigMixin:
         # marker renderer compares that with what the stack uses now, so only a param the reset
         # really changes reaches the restart-required marker — written in the same transaction.
         params = [(kind, c, p, "" if getattr(p, "validator", "") in self._IDENTITY_ENFORCE
-                   else self._param_default_canon(p, cfg_band, band))
+                   else self._param_default_canon(p, cfg_band, band, inst))
                   for c in self.stack(target).components
                   for kind, ps in (("r", self._form_run_params(c)),
                                    ("f", c.config_file.params if c.config_file else ()))

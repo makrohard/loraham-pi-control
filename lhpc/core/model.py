@@ -716,11 +716,9 @@ class ResourceConflict:
     advisory: bool = False       # a holder's claim is advisory: show it, but do not block a start
 
 
-def band_default(p, band: str, radio) -> str:
-    """A run/file param's default on `band`: the hardware setup's `--hw` preset for that band first
-    (`preset_defaults`: a pin follows the board, e.g. Uputronics CE0/CE1), then `band_defaults`,
-    then `default`. `radio` is the config's RadioConfig. Only a file param (a pin in an app's config
-    file) has `preset_defaults`; a run param with one fails to load."""
-    pd = getattr(p, "preset_defaults", ())
-    preset = radio.hw_preset(band) if pd else ""
-    return dict(pd).get(preset) or dict(p.band_defaults).get(band, p.default)
+def band_default(p, band: str, preset: str = "") -> str:
+    """A run/file param's default on `band`: its radio's preset first (`preset_defaults`: a pin follows the
+    board, e.g. Uputronics CE0/CE1; K6: the instance's radio row's model variant), then `band_defaults`, then
+    `default`. Only a file param (a pin in an app's config file) has `preset_defaults`; a run param with one
+    fails to load."""
+    return dict(getattr(p, "preset_defaults", ())).get(preset) or dict(p.band_defaults).get(band, p.default)

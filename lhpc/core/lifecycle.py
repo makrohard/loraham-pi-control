@@ -1090,7 +1090,9 @@ class Lifecycle:
         """"" when valid (schema v1), else a short reason. `name` is the filename leaf."""
         if not isinstance(rec, dict):
             return "not a JSON object"
-        if "slot" in rec:                          # 13.8 (K4b): a record from the slot builds is refused, never resolved
+        # 13.8 (K4b): a record from the slot builds is refused, never resolved. W328 grep exemption: the old key is
+        # read here only to refuse it.
+        if "slot" in rec:
             return (f"a record from before per-radio instances (slot {rec['slot']!r}): stop its process by hand and "
                     f"start it by name ({rec.get('stack') or '<stack>'}@<rid>)")
         for k in self._OWNED_V0_KEYS:

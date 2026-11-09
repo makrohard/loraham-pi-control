@@ -395,14 +395,15 @@ def test_web_port_is_fixed_at_9443_and_not_a_parameter(tmp_path):
     ("loraham", "433", "8", "25"),
     ("unset", "868", "7", "16"),             # no board chosen: the band defaults
 ])
+@pytest.mark.no_default_hardware
 def test_meshtastics_pins_follow_the_hardware_setup(tmp_path, setup, band, cs, irq):
-    """The CS/IRQ default is the board's pin for the band (the daemon's --hw preset), not the band's:
-    on Uputronics' crossed setup the band default (868 -> CE1) drove the 433 module."""
-    from lhpc.core.config import save_hardware_setup
+    """The CS/IRQ default is the board's pin for the band's radio (K6: its hardware-list row's model variant, as
+    `lhpc hardware <setup>` writes it), not the band's: on Uputronics' crossed setup the band default (868 -> CE1)
+    drove the 433 module."""
+    from lhpc.core import radio_start
     svc, _ = _svc(tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    if setup != "unset":
-        save_hardware_setup(svc._paths, setup)
+    assert radio_start.setup_radios(svc._paths, setup)[0]
     svc._invalidate_config()
     vals = svc.file_config_values("meshtastic", band)
     assert (vals["cs"], vals["irq"]) == (cs, irq)
