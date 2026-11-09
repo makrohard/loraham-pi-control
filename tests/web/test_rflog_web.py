@@ -241,7 +241,7 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
                                             b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
-        svc.running_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
+        svc.launch_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))
@@ -275,7 +275,7 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
                               unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
-        svc.running_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
+        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
@@ -388,7 +388,7 @@ def test_a_run_log_page_keeps_the_plain_viewer(web):
     assert any(s.endswith("/logs.js") for s in scripts) and not any(s.endswith("/rflog.js") for s in scripts)
 
 
-def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
+def test_a_running_stacks_rf_log_link_carries_its_launch_band(tmp_path, web):
     """Moved from the dashboard's 433 card (W250): Reticulum declares both bands and defaults to 868; running on 433,
     its RF-log link on its Apps row carries 433."""
     def factory():
@@ -396,7 +396,7 @@ def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                                              200: ["loraham-rns-node", "--config", "x"]}).system,
             paths=Paths(runtime_root=tmp_path))
-        svc.running_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
+        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     doc = parse(web(service_factory=factory).get("/stacks/reticulum/body").get_data(as_text=True))
     assert len(_links(doc, "rns", "rf-reticulum.log", "433")) == 1

@@ -11,7 +11,7 @@ from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core import daemon_control
-import running_band_fixture
+import launch_band_fixture
 
 
 def _svc(tmp_path, status: bytes):
@@ -128,7 +128,7 @@ def test_tx_test_refused_on_a_band_another_stack_uses(tmp_path, set_call):
                                    "/tmp/loraconf-r2.sock": ready}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
-    running_band_fixture.set_running_band(svc, "kiss", "868")   # K6: kiss@r2 runs on 868
+    launch_band_fixture.set_launch_band(svc, "kiss", "868")   # K6: kiss@r2 runs on 868
     res = svc.test("kiss", tx=True, apply=False)
     assert not res.ok and "meshcom" in res.summary
     assert svc.test("daemon", tx=True, apply=False).ok
@@ -176,7 +176,7 @@ def test_tx_test_holds_the_band_claim_against_a_competing_start(tmp_path, set_ca
                      unix_replies={"/tmp/loraconf-r2.sock": ready}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
-    running_band_fixture.set_running_band(svc, "kiss", "868")   # K6: kiss@r2 runs on 868
+    launch_band_fixture.set_launch_band(svc, "kiss", "868")   # K6: kiss@r2 runs on 868
     started = _competing_start(svc, monkeypatch, "868")
     res = svc.test("kiss", tx=True, apply=True)
     assert not res.ok and "meshcore" in res.summary

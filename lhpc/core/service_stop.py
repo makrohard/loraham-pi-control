@@ -63,7 +63,7 @@ class StopOpsMixin:
             if not any(d in member_ids for c in ss.stack.components for d in c.depends_on):
                 continue
             if want is not None:
-                dep_bands = self._running_bands_of(ss, run_comps)
+                dep_bands = self._active_bands_of(ss, run_comps)
                 if dep_bands and not (dep_bands & want):
                     continue                               # different band -> not orphaned
             out.append(ss.stack.id)

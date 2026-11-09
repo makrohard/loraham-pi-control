@@ -23,7 +23,7 @@ def _svc(tmp_path, monkeypatch, procs=(), running=()):
     radios_fixture.write(tmp_path, ROWS)
     monkeypatch.setattr(radio_start, "_daemon_procs", lambda svc: list(procs))
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid in running)
-    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, default="": "868")
+    monkeypatch.setattr(ControllerService, "launch_band", lambda self, sid, default="": "868")
     return ControllerService(system=FakeSystem(files={"/proc/uptime": "100.0 200.0\n"}).system,
                              paths=Paths(runtime_root=tmp_path))
 

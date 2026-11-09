@@ -327,13 +327,13 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    monkeypatch.setattr(svc, "running_band", lambda sid, default="": "868")
+    monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "868")
     assert svc.runs_on_band("reticulum", "868") is True
     assert svc.runs_on_band("reticulum", "433") is False
 
     # No start marker: fall back to the launch band, then the DECLARED primary —
     # never "true for every supported band".
-    monkeypatch.setattr(svc, "running_band", lambda sid, default="": "")
+    monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
     monkeypatch.setattr(svc, "interactive_band", lambda sid: None)
     assert svc.runs_on_band("reticulum", "868") is True
     assert svc.runs_on_band("reticulum", "433") is False
@@ -579,7 +579,7 @@ def test_client_access_is_loopback_only_in_this_release():
 
 # ---- band evidence must survive component starts ---------------------------
 
-def test_starting_a_client_does_not_rewrite_the_running_band(monkeypatch):
+def test_starting_a_client_does_not_rewrite_the_launch_band(monkeypatch):
     """Starting an optional client with no explicit band resolved to the stack's
     DECLARED primary and overwrote the running-band marker: a live 433 node became
     "868" in state, so the console showed — and a Save would have written — the wrong
@@ -587,20 +587,20 @@ def test_starting_a_client_does_not_rewrite_the_running_band(monkeypatch):
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    monkeypatch.setattr(svc, "running_band", lambda sid, default="": "433")
+    monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "433")
     # No explicit band: inherit 433, NOT the declared primary (868).
-    assert svc._config_band("reticulum", svc.running_band("reticulum", "")) == "433"
+    assert svc._config_band("reticulum", svc.launch_band("reticulum", "")) == "433"
     # An explicit band still wins.
     assert svc._config_band("reticulum", "868") == "868"
 
 
-def test_the_console_falls_back_to_the_running_band(monkeypatch):
+def test_the_console_falls_back_to_the_launch_band(monkeypatch):
     """Every stop redirect drops band/cfg from the URL. Falling back to the declared
     primary then flipped a running 433 stack to 868 on the page."""
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    monkeypatch.setattr(svc, "running_band", lambda sid, default="": "433")
+    monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "433")
     assert svc.runs_on_band("reticulum", "433") is True
     assert svc.runs_on_band("reticulum", "868") is False
 
@@ -646,7 +646,7 @@ def test_an_unknown_band_claims_every_possible_band(monkeypatch):
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    monkeypatch.setattr(svc, "running_band", lambda sid, default="": "")
+    monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
     monkeypatch.setattr(svc, "interactive_band", lambda sid: None)
 
     # stubbed both ways: the real check is a full system snapshot scan; this test is about

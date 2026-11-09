@@ -793,7 +793,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         from .model import RunState
         live = (RunState.RUNNING, RunState.DEGRADED)
         for ss in snap.stacks:
-            marker = self.running_band(ss.stack.id)
+            marker = self.launch_band(ss.stack.id)
             if not marker:
                 continue
             for comp in ss.stack.components:
@@ -2075,7 +2075,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _effective_band(self, stack_id: str, fallback: str = "") -> str:
         """The band a stack is actually running on (start marker, or for an
         interactive app the band it was launched on)."""
-        return (self.running_band(stack_id, "") or self.interactive_band(stack_id)
+        return (self.launch_band(stack_id, "") or self.interactive_band(stack_id)
                 or fallback)
 
     def _dependents_of(self, target: str, bands=None) -> list[str]:

@@ -19,7 +19,7 @@ def _box(web, tmp_path, monkeypatch, procs=(), running=()):
     radios_fixture.write(tmp_path, ROWS)
     monkeypatch.setattr(radio_start, "_daemon_procs", lambda svc: list(procs))
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid in running)
-    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, default="": "868")
+    monkeypatch.setattr(ControllerService, "launch_band", lambda self, sid, default="": "868")
     return web()
 
 

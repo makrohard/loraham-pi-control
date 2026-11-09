@@ -118,7 +118,7 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
     return f"{target}@{cands[0] if len(cands) == 1 else '<rid>'}"
 
 
-def running_bands(svc, sid: str) -> set:
+def launch_bands(svc, sid: str) -> set:
     """The bands `sid`'s running instances were LAUNCHED on (their verified records' bands; G1-K4B 6: an edited
     hardware row is no evidence). Empty, so the caller holds every band (fail-safe), when one running instance's
     band is not told by its record (a hand-started token-only process, or a record without a band)."""

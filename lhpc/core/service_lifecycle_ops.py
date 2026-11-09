@@ -805,7 +805,7 @@ class LifecycleOpsMixin:
         interactive marker never overrides a usable desktop GTK main: the marker is only
         consulted while `gui_fallback_active` says the fallback is what runs here."""
         sid = self.stack_of(target) or target
-        got = band or self.running_band(sid, "")
+        got = band or self.launch_band(sid, "")
         if got:
             return got
         st = self.stack(sid)
@@ -1724,7 +1724,7 @@ class LifecycleOpsMixin:
         # any runner cancellation or command execution.
         # THE one operation-band rule (explicit -> running -> active Lite marker -> primary),
         # so a post-start judges the identity on the same band the launch used — a hand-rolled
-        # `band or running_band(...)` here missed the Voice-on-Lite case the rest of the feature
+        # `band or launch_band(...)` here missed the Voice-on-Lite case the rest of the feature
         # handles.
         _pid_band = self.operation_band(target, band)
         id_ok, id_fields, id_msg = self.enforce_identity(target, _pid_band)
@@ -1775,7 +1775,7 @@ class LifecycleOpsMixin:
         for stack, comp in order:
             if not comp.post_steps or st_index[comp.id].run_state != RunState.RUNNING:
                 continue
-            cfg_band = self.running_band(stack.id) if self.stack_bands(stack.id) else (band or "")
+            cfg_band = self.launch_band(stack.id) if self.stack_bands(stack.id) else (band or "")
             rows = [r for r in self.identity_resolution(comp.id, cfg_band)
                     if r["comp"] == comp.id]
             _id_stash[comp.id] = rows
@@ -1798,7 +1798,7 @@ class LifecycleOpsMixin:
                        f"not running ({state.value}) — start it first "
                        f"(lhpc stack start {instances.named(self, stack.id)})")
                 continue
-            cfg_band = self.running_band(stack.id) if self.stack_bands(stack.id) else (band or "")
+            cfg_band = self.launch_band(stack.id) if self.stack_bands(stack.id) else (band or "")
             notes, unverified = life._cancel_post_runners(comp, cfg_band or None)
             out.extend(f"    {n}" for n in notes)
             if unverified:
@@ -2111,7 +2111,7 @@ class LifecycleOpsMixin:
                 return True
         return False
 
-    def _running_bands_of(self, ss, run_comps) -> set:
+    def _active_bands_of(self, ss, run_comps) -> set:
         """Radio band(s) the RUNNING components of a snapshot stack actually use: the
         effective band for a band-switchable stack, else the components' declared bands."""
         if self.stack_bands(ss.stack.id):                  # band-switchable -> running band
@@ -2128,7 +2128,7 @@ class LifecycleOpsMixin:
                 continue
             run_comps = [c for c in ss.stack.components
                          if ss.components[c.id].run_state in up]
-            return bool(run_comps) and band in self._running_bands_of(ss, run_comps)
+            return bool(run_comps) and band in self._active_bands_of(ss, run_comps)
         return False
 
     def _band_used_by_others(self, target: str, band: str) -> list[str]:
@@ -2403,11 +2403,11 @@ class LifecycleOpsMixin:
         sid = validators.path_component(stack_id, field="stack id")
         return self._paths.under("state", "running", f"{sid}.band")
 
-    def running_band(self, stack_id: str, default: str = "") -> str:
-        """The band the stack's running instances were launched on, when it is one band (instances.running_bands,
+    def launch_band(self, stack_id: str, default: str = "") -> str:
+        """The band the stack's running instances were launched on, when it is one band (instances.launch_bands,
         their verified records); else `default`. K6 (13.12.5): no per-stack band marker is read; an old one is
         ignored."""
-        told = self._request_memo(("running-bands", stack_id), lambda: instances.running_bands(self, stack_id))
+        told = self._request_memo(("running-bands", stack_id), lambda: instances.launch_bands(self, stack_id))
         return next(iter(told)) if len(told) == 1 else default
 
     def _live_bands(self, stack_id: str, declared: str) -> set:
@@ -2452,7 +2452,7 @@ class LifecycleOpsMixin:
         for _dep in dict.fromkeys(self.stack_of(c.id) for _, c in order):
             if not _dep or _dep == _sid:
                 continue
-            _dlive = self.running_band(_dep, "")
+            _dlive = self.launch_band(_dep, "")
             if not (_dlive and _dlive != band and self.stack_bands(_dep)):
                 continue
             if snap is None:
@@ -2546,7 +2546,7 @@ class LifecycleOpsMixin:
         if rid:
             return [sid for sid in daemon_params.CLIENT_STACKS if f"{sid}@{rid}" in instances.running_keys(self, sid)]
         return [sid for sid in daemon_params.CLIENT_STACKS if self.stack_running(sid)
-                and self._effective_daemon_band(sid, self.running_band(sid)) == band]
+                and self._effective_daemon_band(sid, self.launch_band(sid)) == band]
 
     def stack_bands(self, target: str) -> tuple:
         """Bands the operator may choose for `target` (empty = single fixed band), NARROWED to the
@@ -2877,7 +2877,7 @@ class LifecycleOpsMixin:
         stack_id = self.stack_of(comp_id) or comp_id
         # A multi-band stack persists which band it came up on; a single-band/bandless stack has
         # no marker and correctly resolves to "" (unchanged behaviour for those).
-        band = self.running_band(stack_id) if self.stack_bands(stack_id) else ""
+        band = self.launch_band(stack_id) if self.stack_bands(stack_id) else ""
         binding = life._binding_for(comp_id, band)
         if binding is None:
             return []
@@ -3054,7 +3054,7 @@ class LifecycleOpsMixin:
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue
-                    col = mark_band or (self.running_band(s.id, min(sbands))
+                    col = mark_band or (self.launch_band(s.id, min(sbands))
                                         if running_up else min(sbands))
                     if col != band:
                         continue                                   # block lives in its own column
@@ -3067,7 +3067,7 @@ class LifecycleOpsMixin:
                 # A running multi-band stack belongs to the column of the band it
                 # was actually started on (tracked at start time).
                 if multi and running_up:
-                    if self.running_band(s.id, min(sbands)) != band:
+                    if self.launch_band(s.id, min(sbands)) != band:
                         continue
                     is_up = True
                 elif up_elsewhere:

@@ -975,7 +975,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # to 868 as soon as the URL lost its band/cfg (any stop redirect does that),
             # which also decided which per-band config a Save would write.
             sband = (band if (cfg_sid and stack.id == cfg_sid)
-                     else service.running_band(stack.id, ""))
+                     else service.launch_band(stack.id, ""))
             _inst = _settings_copy(stack.id, request.args.get("radio", "") if stack.id == cfg_sid else "")
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
@@ -1068,7 +1068,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "jobs": _jobs,
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
                 # W250: what Home's band card showed for a running stack: its RF log on its band, its tools' launch lines
-                "rflog": ({"target": _e.writer, "job": _e.job(), "band": service.running_band(stack.id, "") or None}
+                "rflog": ({"target": _e.writer, "job": _e.job(), "band": service.launch_band(stack.id, "") or None}
                           if rollup[stack.id] in _RUNNING and (_e := _rflog.entry(stack.id)) and not _e.banded else None),
                 "tools": [(c.id, c.name, service.manual_start_command(c)) for c in stack.components
                           if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
@@ -1752,7 +1752,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # resolves elsewhere), or the target has MOVED — it is live on another band now (the
             # running-band marker, which an explicit band deliberately outranks in operation_band).
             # Either way the consequences on the page were computed for the old band: refuse.
-            _live = service.running_band(service.stack_of(target) or target, "")
+            _live = service.launch_band(service.stack_of(target) or target, "")
             _moved = band if band != _submitted_band else (_live if _live and _live != band else "")
             if confirmed and _submitted_band and _moved and not rid:     # a radio's band is its own
                 flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "

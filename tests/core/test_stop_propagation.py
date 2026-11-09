@@ -3,7 +3,7 @@ process cessation AND ready-endpoint disappearance; markers clear only on verifi
 stop; restart/owner-stop/cascade propagate failures."""
 
 import pytest
-import running_band_fixture
+import launch_band_fixture
 
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.services import ControllerService
@@ -59,7 +59,7 @@ def _patch_life(monkeypatch, svc, outcome):
 
 def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    running_band_fixture.set_running_band(svc, "daemon", "433")
+    launch_band_fixture.set_launch_band(svc, "daemon", "433")
     svc.mark_interactive("daemon", "433")
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.stop("daemon", apply=True)
@@ -69,7 +69,7 @@ def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
 
 def test_stop_verified_clears_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    running_band_fixture.set_running_band(svc, "daemon", "433")
+    launch_band_fixture.set_launch_band(svc, "daemon", "433")
     svc.mark_interactive("daemon", "433")
     _patch_life(monkeypatch, svc, Outcome.STOPPED)
     res = svc.stop("daemon", apply=True)
@@ -251,7 +251,7 @@ def test_daemon_band_stop_orphans_only_that_bands_dependents(tmp_path, monkeypat
     from types import SimpleNamespace
     from lhpc.core.model import RunState
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    running_band_fixture.set_running_band(svc, "kiss", "433")             # kiss (band-switchable) running on 433
+    launch_band_fixture.set_launch_band(svc, "kiss", "433")             # kiss (band-switchable) running on 433
     smap = {s.id: s for s in svc.stacks()}
 
     def fake_snapshot(_self):

@@ -70,21 +70,7 @@ class BootRestoreOpsMixin:
     # ---- evidence classification ---------------------------------------------------------------
 
     def _boot_marker_view(self, stack_id: str) -> MarkerView:
-        """Tri-state reads of the running-band marker and the last-start candidate."""
-        rb_state, rb = "absent", ""
-        marker = self._paths.under("state", "running", f"{stack_id}.band")
-        try:
-            state = runtime_fs.probe_exists(marker)[0]
-            if state == "unknown":              # cannot prove it absent: evidence unreadable
-                rb_state = "unsafe"
-            elif state == "present":
-                raw = runtime_fs.read_text(self._paths, marker, max_bytes=64).strip()
-                if raw in ALLOWED_BANDS:
-                    rb_state, rb = "valid", raw
-                else:
-                    rb_state = "unsafe"
-        except (OSError, PathContainmentError):
-            rb_state = "unsafe"
+        """Tri-state read of the last-start candidate (K6, 13.12.5: no per-stack band marker is read)."""
         ls_state, ls_band, ls_at = "absent", "", 0.0
         cpath = known_working.candidate_path(self._paths, stack_id)
         try:
@@ -104,9 +90,7 @@ class BootRestoreOpsMixin:
                     ls_at = float(started)
         except (OSError, PathContainmentError):
             ls_state = "unsafe"
-        return MarkerView(running_band_state=rb_state, running_band=rb,
-                          last_start_state=ls_state, last_start_band=ls_band,
-                          last_start_at=ls_at)
+        return MarkerView(last_start_state=ls_state, last_start_band=ls_band, last_start_at=ls_at)
 
     # ---- operator stop intent -------------------------------------------------------------
     #
