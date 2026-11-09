@@ -402,7 +402,7 @@ def test_build_refusal_names_the_stop_when_meshcore_is_healthy_and_running(tmp_p
 
 def test_prep_refuses_on_a_listed_instances_current_boot_marker(tmp_path, monkeypatch):
     # 7d: a meshcore instance on another radio keeps its repeater state under state/<rid>/openhop, so its manager's
-    # marker is there; the installation is shared, so that marker blocks it like slot 0's.
+    # marker is there; the installation is shared, so that marker blocks it like any instance's.
     svc = _svc(tmp_path)
     _boot(monkeypatch, tmp_path, BOOT_A)
     p = tmp_path / "state" / "r3" / "openhop" / mp.MARKER_NAME

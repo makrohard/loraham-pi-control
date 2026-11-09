@@ -893,7 +893,7 @@ def test_uninstall_reload_failure_restore_handles_spaces_in_path(tmp_path):
 
 def test_uninstall_keeps_a_listed_instances_app_data(tmp_path):
     # 7d part 3: an instance's app data lives under state/<rid>/ (meshcore@r3's companion.db); a default uninstall
-    # keeps it like slot 0's state/meshcore. A state/ entry that is no radio id still goes.
+    # keeps it like the bare state/meshcore. A state/ entry that is no radio id still goes.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
     _deployment(root, unit_home=home)

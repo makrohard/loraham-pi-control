@@ -1,5 +1,5 @@
 """Item 16 batch 2: every start that runs on a radio writes its start log under that radio,
-`start-<comp>-<band>-<rid>.log` (radio_start.start_log_name), slot 0 of a single radio too; the readers use the same
+`start-<comp>-<band>-<rid>.log` (radio_start.start_log_name), a band's only radio too; the readers use the same
 name. Two radios of one band no longer share one log. A box upgraded from 0.13.x keeps its old `start-<comp>-<band>.log`
 until the next start: the reader returns it without error, and the new radio's log once it exists."""
 import radios_fixture

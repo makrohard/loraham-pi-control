@@ -1,5 +1,5 @@
 """Item 7f: an interactive component's run command, the line the operator copies into a terminal, is a listed
-instance's own: chat@r2's start plan names r2's daemon sockets, never slot 0's radio r1's."""
+instance's own: chat@r2's start plan names r2's daemon sockets, never the band's first radio r1's."""
 import radios_fixture
 from radios_fixture import R1, R2
 

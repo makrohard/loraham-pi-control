@@ -1,6 +1,6 @@
 """Gate-1 C-24 B1 on 7f: the saved-launch-value check of a listed instance's start and restart judges the
-instance's own saved settings (config/stacks/<stack>@<rid>.toml), never slot 0's: an invalid value of its own
-refuses before anything launches or stops; slot 0's valid value does not let it through."""
+instance's own saved settings (config/stacks/<stack>@<rid>.toml), never the global file's: an invalid value of its own
+refuses before anything launches or stops; the global file's valid value does not let it through."""
 from radios_fixture import R1, R2_868, R3
 
 from lhpc.core.commands import Instance
@@ -23,16 +23,16 @@ def test_an_instances_invalid_saved_value_refuses_its_restart(box, tmp_path):
     rc, out, launches = _box(box, tmp_path)("restart", "kiss@r3")
     assert rc == 1 and "Cannot restart 'kiss': invalid saved configuration" in out and launches == [], out
 
-def test_an_instance_that_inherits_the_callsign_launches_with_the_global_not_slot0s_call(box, tmp_path, monkeypatch):
+def test_an_instance_that_inherits_the_callsign_launches_with_the_operators_not_the_global_files_call(box, tmp_path, monkeypatch):
     # the launch overlay of an inherited licensed identity is judged on the instance's own (blank) call: chat@r3
-    # launches as the operator's callsign, never with slot 0's own call
+    # launches as the operator's callsign, never with the global chat.toml's own call
     from lhpc.adapters.cli import main as cli
     import radios_fixture
     from radios_fixture import R2
     ready = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r2")}
     monkeypatch.setattr(radios_fixture, "INSTANCE_READY", ready)
     run = box((R1, R2), ports=())
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # slot 0's own
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # the global file's own
     assert cli.main(["config", "operator", "--callsign", "DL9OP"]) == 0
     rc, out, _launches = run("start", "chat@r2")
     conf = (tmp_path / "config" / "files" / "r2" / "lorachat.conf").read_text()

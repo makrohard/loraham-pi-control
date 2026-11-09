@@ -1,6 +1,6 @@
 """The stack-copy cleanup, C4: a listed copy refused over its identity names the copy's own `lhpc config
-<stack>@<rid>` remedy (a `lhpc config <stack>` hint would save into slot 0's file and the copy's start would refuse
-again). Slot 0's remedy stays `lhpc config <stack>`."""
+<stack>@<rid>` remedy (a `lhpc config <stack>` hint would save into the global file and the copy's start would refuse
+again). A bare start's remedy stays `lhpc config <stack>`."""
 import radios_fixture
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -26,7 +26,7 @@ def test_a_copys_identity_refusal_names_the_copys_own_config_command(tmp_path):
     assert res.next_commands == [f"lhpc config chat@r3 call {TAIL}"]
 
 
-def test_slot0s_identity_refusal_names_the_stack(tmp_path):
+def test_a_bare_starts_identity_refusal_names_the_stack(tmp_path):
     res = _svc(tmp_path).start("chat", apply=False)
     assert res.ok is False and res.data.get("enforce_fields")
     assert res.next_commands == [f"lhpc config chat@r1 call {TAIL}"]       # K5: the instance's key

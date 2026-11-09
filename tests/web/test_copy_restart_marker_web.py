@@ -30,7 +30,7 @@ def _text(el):
     return re.sub(r"\s+", " ", el.text).strip()
 
 
-def test_a_copys_marker_shows_on_its_settings_with_its_own_restart_button_and_not_on_slot0s_row(tmp_path, web):
+def test_a_copys_marker_shows_on_its_settings_with_its_own_restart_button_and_not_on_the_bare_row(tmp_path, web):
     c = web(service_factory=lambda: _marked(tmp_path))
     doc = parse(c.get("/stacks?cfg=kiss&radio=r3&open=kiss").get_data(as_text=True))
     notes = [e for e in doc.find("div", class_="depnote") if "Restart required" in e.text]
@@ -111,7 +111,7 @@ def test_an_empty_suffix_and_a_second_rid_are_bad_requests(tmp_path, web, monkey
 
 def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monkeypatch):
     # W325: the detached start of a copy (`_stack-start kiss --radio r3`, log web-start-kiss-r3.log) starts kiss as r3's
-    # copy, not slot 0.
+    # copy, not a bare kiss.
     import os
 
     from lhpc.adapters.cli.main import main

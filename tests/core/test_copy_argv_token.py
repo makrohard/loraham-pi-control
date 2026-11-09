@@ -1,6 +1,6 @@
 """Must-fix 3 of the stack-copy cleanup: a listed copy is told running by the argv token of its OWN settings (its
-spec's instance_arg, kiss's `--data-socket`), never slot 0's. A copy whose own saved socket is in a running argv
-runs; slot 0's saved socket never makes the copy look running."""
+spec's instance_arg, kiss's `--data-socket`), never the global file's. A copy whose own saved socket is in a running argv
+runs; the global kiss.toml's saved socket never makes the copy look running."""
 import radios_fixture
 from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
@@ -15,7 +15,7 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 def _svc(tmp_path, socket):
     radios_fixture.write(tmp_path, ROWS)
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"data_socket": "/tmp/own-r3.sock"}, inst=Instance("r3"))
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"data_socket": "/tmp/slot0.sock"}, band="433")
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "kiss", {"data_socket": "/tmp/global.sock"}, band="433")
     table = {41: ["/x/loraham-kiss-tnc", "--data-socket", socket]}
     return ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
 
@@ -30,5 +30,5 @@ def test_a_copy_running_on_its_own_saved_socket_runs(tmp_path):
     assert _copy_runs(_svc(tmp_path, "/tmp/own-r3.sock")) is True
 
 
-def test_slot0s_saved_socket_never_makes_the_copy_run(tmp_path):
-    assert _copy_runs(_svc(tmp_path, "/tmp/slot0.sock")) is False
+def test_the_global_files_saved_socket_never_makes_the_copy_run(tmp_path):
+    assert _copy_runs(_svc(tmp_path, "/tmp/global.sock")) is False

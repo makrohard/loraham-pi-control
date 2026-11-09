@@ -1,6 +1,6 @@
 """Item 7f, DEC-W60: a listed instance `<stack>@<rid>` keeps its own settings in config/stacks/<sid>@<rid>.toml,
-through the same load and update functions; slot 0 keeps <sid>[@<band>].toml, byte-identical. An instance without
-its file runs on the manifest defaults: nothing of slot 0's is shared. Its generated config file (write_config_files
+through the same load and update functions; a caller without an instance keeps the stack's global <sid>.toml, byte-identical.
+An instance without its file runs on the manifest defaults: nothing of the global file is shared. Its generated config file (write_config_files
 with the instance, 7d part 3) is written from its own values."""
 from pathlib import Path
 
@@ -39,7 +39,7 @@ def test_an_instances_own_value_reaches_its_generated_config_file(tmp_path):
 
 
 def test_a_global_files_radio_value_is_no_instances_and_each_runs_on_its_own(tmp_path):
-    # K6 (13.8): a radio value left in the global chat.toml (0.13.x's slot 0 file) is read by no instance: r1 (the
+    # K6 (13.8): a radio value left in the global chat.toml (in 0.13.x the band's first instance's file) is read by no instance: r1 (the
     # band caller's) and r3 run on their own files' values, else the defaults
     svc, inst = _svc(tmp_path)
     cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL2XYZ"})       # the global chat.toml
@@ -51,12 +51,12 @@ def test_a_global_files_radio_value_is_no_instances_and_each_runs_on_its_own(tmp
     assert _conf(tmp_path, "r3/lorachat.conf")["CALL"] not in ("DL2XYZ", "DL3ABC")  # r3's file: its own default
 
 
-def test_an_instances_value_is_never_slot0s(tmp_path):
+def test_an_instances_value_is_never_the_global_files(tmp_path):
     svc, inst = _svc(tmp_path)
     cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "DL1ABC"}, inst=Instance("r3"))
     assert svc.file_config_values("chat", "433", inst)["call"] == "DL1ABC"
     assert svc.file_config_values("chat", "433")["call"] != "DL1ABC"
-    assert not (tmp_path / "config" / "stacks" / "chat.toml").exists()            # slot 0's file untouched
+    assert not (tmp_path / "config" / "stacks" / "chat.toml").exists()            # the global file untouched
 
 
 def test_a_radio_id_key_is_a_radio_id_only(tmp_path):
@@ -69,7 +69,7 @@ def test_a_radio_id_key_is_a_radio_id_only(tmp_path):
             cfgmod.load_stack_config(paths, "chat", inst=SimpleNamespace(rid=bad))
 
 
-def test_a_listed_meshcore_instance_mints_its_own_identity_never_slot0s(tmp_path):
+def test_a_listed_meshcore_instance_mints_its_own_identity_never_r2s(tmp_path):
     # Two MeshCore nodes sharing one identity key are one node on the mesh: each instance's generated key is its own,
     # held at config/secrets/<rid>/; the band caller writes the band's first radio's (r2) and r4's is another.
     import hashlib
@@ -84,20 +84,20 @@ def test_a_listed_meshcore_instance_mints_its_own_identity_never_slot0s(tmp_path
     assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868"))
     assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868", inst=inst))
     files = tmp_path / "config" / "files"
-    slot0 = tomllib.loads((files / "r2" / "meshcore.toml").read_text())["identity"]["key"]
+    r2s = tomllib.loads((files / "r2" / "meshcore.toml").read_text())["identity"]["key"]
     doc = tomllib.loads((files / "r4" / "meshcore.toml").read_text())
     own = doc["identity"]["key"]
-    assert len(slot0) == len(own) == 64 and own != slot0
+    assert len(r2s) == len(own) == 64 and own != r2s
     assert doc["repeater"]["chat_node_id"] == hashlib.sha256(own.encode()).hexdigest()[:16]
     assert (tmp_path / "config" / "secrets" / "r4" / "meshcore_identity.key").read_text().strip() == own
-    assert (tmp_path / "config" / "secrets" / "r4").stat().st_mode & 0o777 == 0o700     # as private as slot 0's
-    assert (tmp_path / "config" / "secrets" / "r2" / "meshcore_identity.key").read_text().strip() == slot0
+    assert (tmp_path / "config" / "secrets" / "r4").stat().st_mode & 0o777 == 0o700     # as private as r2's
+    assert (tmp_path / "config" / "secrets" / "r2" / "meshcore_identity.key").read_text().strip() == r2s
     assert not (tmp_path / "config" / "secrets" / "meshcore_identity.key").exists()
 
 
 def test_a_listed_repeater_instance_fills_its_own_openhop_file_from_its_own_settings(tmp_path, monkeypatch):
-    # The instance's mode and repeater name are its own (DEC-W52, DEC-W60): slot 0 in chat mode with another name
-    # neither stops the instance's repeater step nor lends it a value, and slot 0's file and stored name stay as they were.
+    # The instance's mode and repeater name are its own (DEC-W52, DEC-W60): the global file in chat mode with another name
+    # neither stops the instance's repeater step nor lends it a value, and that file and its stored name stay as they were.
     import json
     from lhpc.core import openhop_store as ops
 

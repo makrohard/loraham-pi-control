@@ -58,8 +58,8 @@ in a file named after when or how a defect was found:
   Its helper `golden/entry_host.py` is the `LHPC_SYSTEM_PROVIDER` that hands every process —
   the console's detached child included, a separate process — the test's box.
   `golden/test_harness.py` checks the harness itself: a write moved outside its lock is reported.
-  `golden/test_golden_argv_slot0.py` holds every component's resolved slot-0 argv to the base
-  recorded in `golden/argv_slot0_0af1d413.json`, except for the tokens its `EXCEPTIONS` names.
+  `golden/test_golden_argv_r1.py` holds every component's resolved r1-instance argv to the base
+  recorded in `golden/argv_r1_0af1d413.json`, except for the tokens its `EXCEPTIONS` names.
 
 `tools/check_houserules.py` refuses (HARD) a new or renamed test file outside these folders and their
 `testlab/tests/` counterparts; which of them a test belongs in is the table above.

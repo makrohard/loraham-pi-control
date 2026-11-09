@@ -99,7 +99,7 @@ def test_slot_0_is_todays_path_and_every_instance_has_its_own(cid, key, text):
 
 
 def test_no_loaded_value_keeps_the_token():
-    # The loader hands consumers slot 0's values (the templates are kept beside them); what runs per instance (run,
+    # The loader hands consumers the template values (the templates are kept beside them); what runs per instance (run,
     # argv, pre-steps, environment) is rendered by commands at its start.
     for st in load_manifest():
         if st.id not in PER_RADIO:

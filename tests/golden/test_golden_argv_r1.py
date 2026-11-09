@@ -1,10 +1,10 @@
-"""T-G1 at L3 (PROOF §1, A §2.3): the resolved argv of every component's slot 0 equals the golden
+"""T-G1 at L3 (PROOF §1, A §2.3): the resolved argv of every component's r1 instance equals the golden
 base, dev after step D (0af1d413), token for token, with the named exceptions and nothing else:
 - each `_gps-bridge` feed gains `--state <state/gps/<stack>>` (L3);
 - a daemon client carries its radio's `--data-socket` / `--conf-socket` (r1's, stage L5);
 - K4b (no slots): an instance's own paths sit under `<rid>/` on r1 too (K4B_PATHS, each base token named).
 
-The fixture `argv_slot0_0af1d413.json` was resolved at 0af1d413 with this module's `_resolve`; the
+The fixture `argv_r1_0af1d413.json` was resolved at 0af1d413 with this module's `_resolve`; the
 package's own directory reads `<lhpc>` and the controller's interpreter `<python>`, so neither the
 checkout location nor the venv matters. The daemon's argv
 is built per radio at spawn (`_ensure_daemon`, stage L5), not from defaults, and is outside this table."""
@@ -18,9 +18,9 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
-GOLDEN = Path(__file__).with_name("argv_slot0_0af1d413.json")
+GOLDEN = Path(__file__).with_name("argv_r1_0af1d413.json")
 RT = Path("/rt")
-# component id -> the tokens L3 appends to its slot-0 argv (the only allowed difference)
+# component id -> the tokens L3 appends to its r1 argv (the only allowed difference)
 EXCEPTIONS = {
     "meshcom-gps": ["--state", "/rt/state/gps/meshcom"],
     "meshcore-gps": ["--state", "/rt/state/gps/meshcore"],
@@ -39,7 +39,7 @@ SOCKETS = {
 }
 
 
-# K4b: the base token -> r1's (its {instance_dir} path is `r1/` now, no slot 0 keeping today's path)
+# K4b: the base token -> r1's (its {instance_dir} path is `r1/` now, no instance keeps the base path)
 K4B_PATHS = {
     "loraham-voice": {"/rt/config/files/loraham_voice": "/rt/config/files/r1/loraham_voice"},
     "loraham-voice-cli": {"/rt/config/files/loraham_voice_cli": "/rt/config/files/r1/loraham_voice_cli"},
@@ -65,7 +65,7 @@ def _pairs(argv):
 
 
 def _resolve() -> dict:
-    """Every component's slot-0 argv with default params on its own band."""
+    """Every component's r1-instance argv with default params on its own band."""
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=RT))
     pkg, python = str(Path(lhpc.__file__).parent), commands._controller_python()
     out = {}
@@ -74,7 +74,7 @@ def _resolve() -> dict:
             if not c.run_argv or c.id == svc.DAEMON_ID:
                 continue
             src = str(svc._paths.resolve_source(c.source.path)) if c.source else str(RT)
-            # stage L5 (W3): a daemon client runs as its radio's instance; slot 0 on r1
+            # stage L5 (W3): a daemon client runs as its radio's instance, here r1's
             inst = commands.Instance("r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.TEMPLATE
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
                                         Config().operator, str(RT), src, c.band, inst=inst)
@@ -82,11 +82,11 @@ def _resolve() -> dict:
     return out
 
 
-def test_slot0_argv_equals_the_base_but_for_the_two_named_exceptions():
-    """intended: slot 0 launches what it launched at the base, plus the two named L3 tokens."""
+def test_r1_argv_equals_the_base_but_for_the_two_named_exceptions():
+    """intended: the r1 instance launches what it launched at the base, plus the two named L3 tokens."""
     base, now = json.loads(GOLDEN.read_text()), _resolve()
     # Stage L5 (W7-8, an I11 difference, A:142): the daemon's argv exists only per radio, with the radio's own
-    # RF-log path `{runtime}/logs/<rid>/rf-daemon.log`; it has no slot-0 form and leaves this table (T-D1 holds it).
+    # RF-log path `{runtime}/logs/<rid>/rf-daemon.log`; it has no template form and leaves this table (T-D1 holds it).
     assert set(now) == set(base) - {"loraham-daemon"}
     for cid, argv in now.items():
         extra = EXCEPTIONS.get(cid, [])

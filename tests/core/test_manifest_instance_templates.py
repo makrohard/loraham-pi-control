@@ -1,13 +1,13 @@
-"""L4: a manifest value with instance tokens loads as its slot-0 value, and keeps its template for the other
-slots (A §2.3, §2.4). Every consumer (firewall, nginx, status, admission) reads the slot-0 value, which is
-today's (the slot-0 goldens hold it); the template renders any slot through `commands.Instance`."""
+"""L4: a manifest value with instance tokens loads as its template value (no radio), and keeps its template for
+the radios (A §2.3, §2.4). Every consumer (firewall, nginx, status, admission) reads the template value, which is
+the base's (the r1 golden holds it); the template renders any radio's value through `commands.Instance`."""
 
 import re
 
 from lhpc.core import commands
 from lhpc.core.manifest import load_manifest
 
-# Every listener of the shipped manifest that follows its instance's slot: (component, field, slot-0 value).
+# Every listener of the shipped manifest that follows its instance's radio: (component, field, template value).
 # Reticulum's 37428/37429/4242 and meshchat's 8790 stay fixed (one node, A §2.4).
 TEMPLATED = {
     ("loraham-kiss-tnc", "param", "8001"), ("loraham-kiss-tnc", "address", "127.0.0.1:8001"),
@@ -46,8 +46,8 @@ def _templated():
 def test_every_listener_that_follows_its_slot_loads_as_todays_value():
     found = _templated()
     assert set(found) == TEMPLATED
-    for (_cid, _field, slot0), template in found.items():
-        assert commands.TEMPLATE.subst(template) == slot0 and "{" not in slot0
+    for (_cid, _field, base), template in found.items():
+        assert commands.TEMPLATE.subst(template) == base and "{" not in base
 
 
 def test_the_templates_render_every_radio():
@@ -57,9 +57,9 @@ def test_the_templates_render_every_radio():
     assert rendered[("loraham-kiss-tnc", "address", "127.0.0.1:8001")] == "127.0.0.1:8267"
     assert rendered[("graywolf", "param", "8001")] == "8267"
     assert rendered[("graywolf", "key", "tcp.port.8001")] == "tcp.port.8267"
-    for (cid, _field, slot0), value in rendered.items():
-        base = int(re.search(r"(\d+)$", slot0).group(1))
-        assert value.endswith(str(base + 266)), (cid, slot0, value)
+    for (cid, _field, tval), value in rendered.items():
+        base = int(re.search(r"(\d+)$", tval).group(1))
+        assert value.endswith(str(base + 266)), (cid, tval, value)
 
 
 def test_the_run_argv_carries_the_listener_tokens_whole():
@@ -69,7 +69,7 @@ def test_the_run_argv_carries_the_listener_tokens_whole():
 
 
 def test_a_manifest_without_tokens_keeps_no_template(tmp_path):
-    # C2a's claim, kept at head: the shipped manifest with every token written as its slot-0 value
+    # C2a's claim, kept at head: the shipped manifest with every token written as its template value
     # (today's manifest) loads with no template on any param, endpoint or claim.
     import repo_paths
     text = (repo_paths.REPO / "lhpc" / "data" / "manifest.example.toml").read_text()

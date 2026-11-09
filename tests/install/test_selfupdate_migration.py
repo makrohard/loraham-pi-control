@@ -158,7 +158,7 @@ def _cand(from_head, *, key="ropt", kind="r", name="ropt", comp="c", band="", ex
             "expected": expected, "from_head": from_head, "rid": rid}
 
 
-def _seed_journal(svc, *, from_head, to_head, pending, slot="completed", branch="main", anchored=True):
+def _seed_journal(svc, *, from_head, to_head, pending, which="completed", branch="main", anchored=True):
     """Write a v3 journal record (default in the `completed` slot) and — unless `anchored=False` —
     create the MATCHING durable git transaction anchor it references. Returns the txid."""
     txid = selfupdate.new_txid()
@@ -167,8 +167,8 @@ def _seed_journal(svc, *, from_head, to_head, pending, slot="completed", branch=
         assert selfupdate.create_anchor(svc._system, txid, payload)
     rec = {**payload, "txid": txid}
     selfupdate.write_migration_journal(svc._paths, {
-        "completed": rec if slot == "completed" else None,
-        "prepared": rec if slot == "prepared" else None})
+        "completed": rec if which == "completed" else None,
+        "prepared": rec if which == "prepared" else None})
     return txid
 
 
@@ -927,9 +927,9 @@ def test_typed_schema_change_preserves_override_under_old_semantics(tmp_path, mo
 
 # --- a recorded transition the checkout is not at blocks apply AND check: no fetch, no mutation -
 
-@pytest.mark.parametrize("slot", ["completed", "prepared"])
+@pytest.mark.parametrize("which", ["completed", "prepared"])
 @pytest.mark.parametrize("action", ["apply", "check"])
-def test_head_matching_neither_transition_state_blocks_without_mutation(tmp_path, monkeypatch, slot, action):
+def test_head_matching_neither_transition_state_blocks_without_mutation(tmp_path, monkeypatch, which, action):
     # An anchored record whose from_head/to_head are both foreign to HEAD is a recovery state:
     # the explicit check (also the exact call the startup freshness thread makes) and the apply
     # both refuse typed, with no fetch, no source, config or journal mutation.
@@ -941,7 +941,7 @@ def test_head_matching_neither_transition_state_blocks_without_mutation(tmp_path
     selfupdate.refresh_cache(svc._system, svc._paths)
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
     before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")))
-    _seed_journal(svc, from_head="a" * 40, to_head="b" * 40, slot=slot, pending=[_cand("a" * 40)])
+    _seed_journal(svc, from_head="a" * 40, to_head="b" * 40, which=which, pending=[_cand("a" * 40)])
     before_journal = selfupdate.read_migration_journal(svc._paths)[0]
     res = svc.self_update_apply() if action == "apply" else svc.self_update_check()
     assert res.ok is False and res.data.get("recovery_required") is True

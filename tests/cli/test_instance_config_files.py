@@ -1,5 +1,5 @@
 """Item 7d part 3 (DEFECTS-0.14.0-v1 (1), C17): a listed instance's start writes ITS config file under its
-{instance_dir} (config/files/<rid>/), with its own controller-owned paths; slot 0's file is not written by it. A
+{instance_dir} (config/files/<rid>/), with its own controller-owned paths; the bare config/files/<stack>.toml is not written by it. A
 purge removes the listed instances' generated config files too, nothing beside them."""
 import json
 
@@ -13,7 +13,7 @@ from lhpc.core.paths import Paths
 
 
 def _node(tmp_path, name="Node3"):
-    # the instance's own node name, config/stacks/meshcore@r3.toml (7f, DEC-W60: slot 0's is never lent)
+    # the instance's own node name, config/stacks/meshcore@r3.toml (7f, DEC-W60: the global file's is never lent)
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"file_node_name": name}, inst=Instance("r3"))
 
 
@@ -28,7 +28,7 @@ def test_a_meshcore_instance_start_writes_its_own_config_file(box, tmp_path, mon
     text = mine.read_text()
     for path in ("state/r3/meshcore/companion.db", "state/r3/openhop", "logs/r3/rf-meshcore.log"):
         assert f"{tmp_path}/{path}" in text, (path, text)
-    assert not (tmp_path / "config" / "files" / "meshcore.toml").exists()          # slot 0's: not this start's
+    assert not (tmp_path / "config" / "files" / "meshcore.toml").exists()          # the bare file: not this start's
 
 
 def test_purge_removes_each_copys_config_files_only(tmp_path):

@@ -1,6 +1,6 @@
 """Item 7f, DEC-W52: a listed instance's Password section on its stack page (`radio=rN`) shows the instance's own
 login, named after the instance: a MeshCore instance's openHop dashboard password from its own openHop file
-(state/<rid>/openhop); slot 0's page keeps slot 0's. (Of the stacks that may run instances, only MeshCore has a
+(state/<rid>/openhop); the page without a radio keeps the band's first radio's (r2). (Of the stacks that may run instances, only MeshCore has a
 login.) Through the console's page; openHop's file helper replaced by one that reads the path it is given."""
 import json
 import os
@@ -34,20 +34,20 @@ def test_a_meshcore_instances_page_shows_its_own_dashboard_password(web, tmp_pat
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
     monkeypatch.setattr(ops, "_helper", _helper)
-    _write(tmp_path / "state" / "r2" / "openhop" / "config.yaml", json.dumps({KEY: "Slot0-Pass-5678"}))   # K6: r2's own
+    _write(tmp_path / "state" / "r2" / "openhop" / "config.yaml", json.dumps({KEY: "R2-Pass-5678"}))   # K6: r2's own
     _write(tmp_path / "state" / "r4" / "openhop" / "config.yaml", json.dumps({KEY: "Inst-Pass-1234"}))
     c = web()
     [own] = _password_sections(c.get("/stacks?cfg=meshcore&radio=r4").get_data(as_text=True))
-    assert "Inst-Pass-1234" in own and "Slot0-Pass-5678" not in own and "— meshcore@r4</summary>" in own
-    [slot0] = _password_sections(c.get("/stacks?cfg=meshcore").get_data(as_text=True))
-    assert "Slot0-Pass-5678" in slot0 and "Inst-Pass-1234" not in slot0 and "meshcore@r4" not in slot0
+    assert "Inst-Pass-1234" in own and "R2-Pass-5678" not in own and "— meshcore@r4</summary>" in own
+    [bare] = _password_sections(c.get("/stacks?cfg=meshcore").get_data(as_text=True))
+    assert "R2-Pass-5678" in bare and "Inst-Pass-1234" not in bare and "meshcore@r4" not in bare
 
 
 
 def test_before_its_first_repeater_start_an_instance_names_its_own_secret_file(web, tmp_path):
     radios_fixture.write(tmp_path, (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),
                                     radios.Radio("r4", "b", "uputronics", "868", ce="ce1")))
-    _write(tmp_path / "config" / "secrets" / "openhop_repeater_admin.txt", "Slot0-Pass-5678\n")
+    _write(tmp_path / "config" / "secrets" / "openhop_repeater_admin.txt", "Shared-Pass-5678\n")
     [own] = _password_sections(web().get("/stacks?cfg=meshcore&radio=r4").get_data(as_text=True))
-    assert "Password not created yet" in own and "Slot0-Pass-5678" not in own                # slot 0's is not lent
+    assert "Password not created yet" in own and "Shared-Pass-5678" not in own                # the shared file's is not lent
     assert "a listed instance&#39;s state/&lt;rid&gt;/openhop/config.yaml" in own

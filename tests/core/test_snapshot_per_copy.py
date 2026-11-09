@@ -38,8 +38,8 @@ def _spawn():
 
 
 def test_a_radio_is_held_by_the_copy_on_it_and_free_beside_it(tmp_path):
-    # G1-C49: a radio's users are judged per radio. kiss@r3 (868) runs, slot 0 does not: r3 is held by kiss@r3; r1
-    # (433) and r2 (868, slot 0's radio there) are free, never refused or freed by the stack's running state.
+    # G1-C49: a radio's users are judged per radio. kiss@r3 (868) runs, no other kiss does: r3 is held by kiss@r3; r1
+    # (433) and r2 (868, the band's first radio) are free, never refused or freed by the stack's running state.
     from lhpc.core import radio_start
     rows = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"),
             radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01"))

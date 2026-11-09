@@ -1,5 +1,5 @@
 """Item 7f, DEC-W60 on the CLI: `lhpc config <stack>@<rid> [<param> [<value>]]` lists, shows, sets and resets the
-listed instance's own settings in config/stacks/<stack>@<rid>.toml, never slot 0's; its daemon parameters are its own
+listed instance's own settings in config/stacks/<stack>@<rid>.toml, never the global <stack>.toml's; its daemon parameters are its own
 set there too (DEC-W384az; daemon@<rid>'s are the radio's row); a target that is no listed instance, or a --band other than its radio's, is
 refused and writes nothing."""
 import tomllib
@@ -20,7 +20,7 @@ ROWS = (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios.Radio("r3
 @pytest.fixture
 def run(tmp_path, monkeypatch, capsys):
     radios_fixture.write(tmp_path, ROWS)
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # slot 0's
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "chat", {"file_call": "DL2XYZ"})          # the global chat.toml's
     real = ControllerService
     monkeypatch.setattr(cli, "ControllerService",
                         lambda *a, **k: real(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
@@ -44,7 +44,7 @@ def test_a_set_writes_the_instances_own_file_and_a_show_reads_it(run, tmp_path):
     rc, out = run("chat@r3", "tx_freq")
     assert rc == 0 and "value   = 433.900" in out and "lhpc config chat@r3 tx_freq <value>" in out, out
     rc, out = run("chat", "tx_freq")
-    assert "value   = 433.900" not in out                                        # slot 0's is not the instance's
+    assert "value   = 433.900" not in out                                        # the global file's is not the instance's
 
 
 def test_a_reset_clears_the_instances_own_file_alone(run, tmp_path):

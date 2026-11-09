@@ -1,6 +1,6 @@
 """Must-fix 2 of the stack-copy cleanup (security): the firewall models and gates a listed copy by its OWN saved
-port, bind and allow (DEC-W60: a copy's own settings file), never slot 0's. A copy that binds 0.0.0.0 while slot 0
-stays on loopback gets its firewall row, and its start is refused until the firewall is verified."""
+port, bind and allow (DEC-W60: a copy's own settings file), never the global file's. A copy that binds 0.0.0.0 while the global settings
+stay on loopback gets its firewall row, and its start is refused until the firewall is verified."""
 import radios_fixture
 from lhpc.core.commands import Instance
 from lhpc.core import config as cfgmod
@@ -26,7 +26,7 @@ def _rows(svc):
 
 def test_a_copy_exposing_its_own_port_gets_its_own_firewall_row(tmp_path):
     rows = _rows(_svc(tmp_path, {"kiss_host": "0.0.0.0", "kiss_port": "8050"}))
-    assert set(rows) == {ROW}                                                  # slot 0 stays on loopback: no row
+    assert set(rows) == {ROW}                                                  # the global settings stay on loopback: no row
     assert (rows[ROW]["addr"], rows[ROW]["port"]) == ("*", 8316)               # its own port, + 133 x 2 on r3
 
 
@@ -35,7 +35,7 @@ def test_the_model_carries_the_copys_own_allow_list(tmp_path):
     assert rows[ROW]["allow_cidrs"] == ["192.168.7.0/24"]
 
 
-def test_a_copys_exposing_start_is_gated_and_slot0s_loopback_start_is_not(tmp_path, monkeypatch):
+def test_a_copys_exposing_start_is_gated_and_a_bare_loopback_start_is_not(tmp_path, monkeypatch):
     svc = _svc(tmp_path, {"kiss_host": "0.0.0.0"})
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status", lambda: {"config_ok": True, "live_ok": False})

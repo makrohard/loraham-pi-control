@@ -1,7 +1,7 @@
 """Item 7f: a listed instance's own RF log `logs/<rid>/rf-<x>.log` (its writer's {instance_dir}) opens through the
 web routes like a radio's daemon log: the page and the records API serve it, the log page's stack row names it,
 its badge is the instance's run state, and its MeshCore records are decoded with the instance's own mode, stores
-and secrets, never slot 0's. Any other path or writer stays refused."""
+and secrets, never the bare stack's. Any other path or writer stays refused."""
 import pytest
 import radios_fixture
 
@@ -75,7 +75,7 @@ def test_an_instances_badge_is_the_instances_run_state(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(instances, "instance_runs", lambda svc, comp, inst, band: inst.rid == "r4" and band == "868")
     assert svc.rflog_running(JOB) is True
-    assert svc.rflog_running("rf-meshcore.log") is False                  # slot 0 does not run
+    assert svc.rflog_running("rf-meshcore.log") is False                  # the bare stack's log does not run
 
 
 @pytest.mark.parametrize("job,surface", [("r4/rf-meshcore.log", "meshcore"), ("r1/rf-kiss.log", "graywolf"),
