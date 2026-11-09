@@ -44,7 +44,7 @@ def normalize_values(values: dict, resolve, *, own_ids, optional_ids, stack_of,
 
     `resolve(kind, key)` → (component, param, err) for kind "run"/"file"; `own_ids` the target's
     own component ids; `optional_ids` the components with an autostart flag; `stack_of(comp_id)`
-    names a dependency's stack; `refused(component, param)` → a refusal text for a run param the
+    names a dependency's stack; `refused(component, param)` → a refusal text for a param the
     generic save may not write ("" = allowed)."""
     errors: list[str] = []
     # Each submitted value carries component identity: a run value key is the API key
@@ -76,7 +76,7 @@ def normalize_values(values: dict, resolve, *, own_ids, optional_ids, stack_of,
             continue
         if not _own(c, key):
             continue
-        if kind == "r" and (why := refused(c, p)):
+        if (why := refused(c, p)):                      # a run param (HMAC) or a derived file row (DEC-W384q)
             errors.append(why)                          # never clearable via generic config
             continue
         v = str(value)

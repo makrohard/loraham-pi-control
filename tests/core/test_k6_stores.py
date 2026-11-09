@@ -94,3 +94,45 @@ def test_a_pending_migration_candidate_clears_the_file_it_was_read_from(tmp_path
     assert (migrated, remaining) == (1, [])
     assert "rx_only" not in cfgmod._load_runtime_toml(svc._paths, stacks / where)
     assert cfgmod._load_runtime_toml(svc._paths, stacks / other)["rx_only"] == "off"          # the other file: kept
+
+
+DERIVED = ("data_socket", "config_socket", "companion_port", "db", "repeater_dashboard_port", "repeater_state_dir",
+           "gps_file", "cli_lock", "restart_cmd", "rf_log_path")
+SECRET = (("meshcore", "privatekey"), ("meshcore", "repeater_key"), ("meshcore", "dashboard_password"),
+          ("reticulum", "ifac_netkey"), ("reticulum", "internet_ifac_netkey"))
+
+
+def test_w384q_the_derived_rows_are_exactly_the_hidden_ones_computed_from_the_instance(tmp_path):
+    from lhpc.core.service_params import _derived
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    got = {p.name for s in svc.stacks() for c in s.components
+           for p in (*c.run_params, *(c.config_file.params if c.config_file else ())) if _derived(p)}
+    assert got == set(DERIVED)
+    assert not got & {n for _s, n in SECRET}
+
+
+@pytest.mark.parametrize("name", DERIVED)
+def test_w384q_a_derived_row_is_refused_at_save_and_a_stored_one_is_never_read(tmp_path, name):
+    import tomllib
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    r2 = Instance("r2", band="868")
+    r = svc.save_config_bundle("meshcore", values={f"file_{name}": "/x/9999"}, inst=r2)
+    assert not r.ok and f"{name}: derived: LHPC computes it" in " ".join(r.details), (r.summary, r.details)
+    want = svc.file_config_values("meshcore", "868", r2)[name]
+    cfgmod.save_stack_config(svc._paths, "meshcore", {f"file_{name}": "/x/9999"}, inst=r2)    # a hand edit
+    svc._invalidate_config()
+    assert svc.file_config_values("meshcore", "868", r2)[name] == want != "/x/9999"
+    if name == "repeater_dashboard_port":                     # the port mismatch the review found: 8133 rendered
+        assert all(w.status == "written" for w in svc.write_config_files("meshcore", "868", inst=r2))
+        doc = tomllib.loads((tmp_path / "config" / "files" / "r2" / "meshcore.toml").read_text())
+        assert doc["repeater"]["dashboard_port"] == 8133
+
+
+@pytest.mark.parametrize("sid,name", SECRET)
+def test_w384q_a_secret_hidden_row_keeps_todays_behaviour(tmp_path, sid, name):
+    # DEC-W384q (2): no change in 0.14.0, OPEN to the maintainer: a saved value is stored and read as before
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    inst = Instance("r2", band="868") if sid == "meshcore" else Instance("r1", band="433")
+    assert svc.save_config_bundle(sid, values={f"file_{name}": "Operator-Set-123"}, inst=inst).ok
+    assert svc.file_config_values(sid, inst.band, inst)[name] == "Operator-Set-123"

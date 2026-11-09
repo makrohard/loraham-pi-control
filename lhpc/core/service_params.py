@@ -81,7 +81,14 @@ _STACK_SWITCHES = (
         default=lambda stacks, sid: _rflog.switch_default(stacks, sid) if sid else _rflog.ON,
         key=_rflog.switch_key),
 )
-_UNREAD = object()             # restart_marker_payload: read the committed marker itself
+_UNREAD = object()
+
+
+def _derived(p) -> bool:
+    """DEC-W384q: a hidden row computed from the instance (its sockets, ports, paths): LHPC sets it; a save refuses it
+    and a stored value is never read. Secret hidden rows (keys, passwords) are not derived."""
+    return bool(getattr(p, "hidden", False) and not getattr(p, "secret_file", "")
+                and (getattr(p, "default_template", "") or "{rid}" in str(p.default)))             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -658,7 +665,7 @@ class ParamsConfigMixin:
         out = {}
         for c in self._target_components(target):
             for p in c.run_params:
-                val, _amb = self._resolve_stored(stored, "r", c.id, p.name, run_counts.get(p.name, 0))
+                val = None if _derived(p) else self._resolve_stored(stored, "r", c.id, p.name, run_counts.get(p.name, 0))[0]
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
                 elif (po := _instances.port_of_default(self, p, _instances.store_inst(self, owner.id, cfg_band, inst))):
@@ -944,7 +951,8 @@ class ParamsConfigMixin:
             stack_of=self.stack_of,
             refused=lambda c, p: (self._HMAC_MANAGED_PARAM_MSG
                                   if self._is_hmac_managed_param(c, p)
-                                  and p.name not in _allow_managed_params else ""))
+                                  and p.name not in _allow_managed_params
+                                  else f"{p.name}: derived: LHPC computes it" if _derived(p) else ""))
         # The global operator callsign is NOT settable through a stack save — the one
         # authoritative mutation path is `set_operator_identity` (atomic restart-marker
         # handling); routing it through here bypassed that. So this save only ever
@@ -1658,7 +1666,7 @@ class ParamsConfigMixin:
         for c in self._file_config_components(target):
             for p in c.config_file.params:
                 bd = self._band_default(p, cfg_band or band, inst)
-                val, _amb = self._resolve_stored(stored, "f", c.id, p.name, file_counts.get(p.name, 0))
+                val = None if _derived(p) else self._resolve_stored(stored, "f", c.id, p.name, file_counts.get(p.name, 0))[0]
                 out[p.name] = str(val) if val is not None else bd
         return out
 
