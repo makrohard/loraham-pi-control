@@ -2141,7 +2141,7 @@ def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch, web
 # ---- the Password section shows the stored password (safely) ----------------------------
 
 def _pw_file(tmp_path, text=b"s3cret-shown-here\n", mode=0o600):
-    f = tmp_path / "state" / "graywolf" / "graywolf-admin.txt"
+    f = tmp_path / "state" / "r1" / "graywolf" / "graywolf-admin.txt"      # K6: graywolf@r1's own (the first radio)
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(text)
     f.chmod(mode)

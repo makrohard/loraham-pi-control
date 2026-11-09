@@ -753,7 +753,8 @@ class WebserverOpsMixin:
                 return _oh                                  # issue #5: openHop's own file
             normalize = _mci.password_normalizer(c.ui_password_file)
             path, exists, value, reason = self._read_stored_password(
-                tuple(p for p in (inst.subst(c.ui_password_file_template) if inst and inst.rid else c.ui_password_file).split("/") if p), normalize)
+                tuple(p for p in (inst.subst(c.ui_password_file_template) if inst and inst.rid and c.ui_password_file_template
+                             else c.ui_password_file).split("/") if p), normalize)
             return {"user": c.ui_user or "admin",
                     "path": str(path) if path else "",
                     "exists": exists,
