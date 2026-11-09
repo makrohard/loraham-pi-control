@@ -287,22 +287,27 @@ def test_a_busy_step_still_ends_at_its_ceiling(tmp_path, controlled):
 
 @pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
 def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled, monkeypatch, fake_clock):
-    # Ceiling 1.5 s, sample 1 s: a step that would end on its own at 1.8 s ends at the ceiling — each wait is
-    # capped by the time REMAINING to the ceiling, not by the whole ceiling. The time is the fake clock's (the
-    # Watch's, through the runner's _watch seam), so the 0.3 s margin cannot be lost to load: a wait slice
-    # advances it by exactly the slice; at 1.8 s the child "ends on its own" (it is killed, as its own exit).
+    # Ceiling 1.55 s (on no slice boundary: the fast path waits 1 s slices, the controlled path 0.1 s), sample 1 s: a
+    # step that would end on its own at 1.8 s ends AT the ceiling, never past it — each wait is capped by the time
+    # REMAINING to the ceiling, not by a whole slice. The time is the fake clock's (the Watch's, through the runner's
+    # _watch seam), so no margin can be lost to load: a wait advances it by exactly its timeout (at least 1 µs, as a
+    # real wait takes); at 1.8 s the child "ends on its own" (it is killed, as its own exit). A wait on a child that has
+    # already ended, or without a timeout, is the real wait and moves no fake time.
     import subprocess
     probe = subprocess.Popen(["true"])                            # the real class (the suite may wrap
     probe.wait()                                                  # the `Popen` name in a guard)
-    popen, real_wait, end = type(probe), type(probe).wait, fake_clock.monotonic() + 1.8
+    popen, real_wait = type(probe), type(probe).wait
+    t0 = fake_clock.monotonic()
+    end, ceiling = t0 + 1.8, 1.55
 
     def wait(self, timeout=None):
-        if fake_clock.monotonic() + (timeout or 0) < end:
-            fake_clock.advance(timeout)
+        if timeout is None or self.poll() is not None:
+            return real_wait(self, timeout)
+        if fake_clock.monotonic() + timeout < end:
+            fake_clock.advance(max(timeout, 1e-6))
             raise subprocess.TimeoutExpired(self.args, timeout)
         fake_clock.advance(max(0.0, end - fake_clock.monotonic()))
-        if self.poll() is None:
-            self.kill()
+        self.kill()
         return real_wait(self)
     monkeypatch.setattr(popen, "wait", wait)
     monkeypatch.setattr(RealCommandRunner, "_watch", staticmethod(
@@ -310,9 +315,10 @@ def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled,
             progress.Watch(stall_s, timeout, sample_s, clock=fake_clock.monotonic)))
     kw = {"should_cancel": lambda: False} if controlled else {}
     with open(tmp_path / "step.log", "wb" if controlled else "w") as fh:
-        r = RealCommandRunner().run_streaming(["python3", "-c", "import signal; signal.pause()"], timeout=1.5,
+        r = RealCommandRunner().run_streaming(["python3", "-c", "import signal; signal.pause()"], timeout=ceiling,
                                               log_fh=fh, sample_s=1.0, **kw)
     assert r.timed_out and r.returncode == 124 and r.stop_reason == "budget"
+    assert ceiling <= fake_clock.monotonic() - t0 <= ceiling + 1e-5    # ended at the ceiling, not a slice past it
 
 
 # A child whose descendant leaves the session (setsid) still holding stdout, prints that
