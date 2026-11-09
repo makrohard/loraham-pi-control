@@ -5,10 +5,13 @@ An instance is told apart by its process spec's instance token (kiss-tnc: `--dat
 by its ownership records' rid, the matcher kill.py uses. The CLI runs on a FakeSystem service over a temporary
 runtime root: the daemon's CONF socket answers READY, the launch is recorded (Lifecycle.start), and a component's
 readiness port is a declared listener."""
-from radios_fixture import R1, R2_868, R2, R3, kiss_on as _kiss_on
+import pytest
+from radios_fixture import R1, R2, R2_868, R3
+from radios_fixture import kiss_on as _kiss_on
 
 from lhpc.adapters.cli import main as cli
 from lhpc.core import commands, radio_start
+
 
 def test_a_listed_instance_starts_on_its_radio_as_its_slot(box):
     rc, out, launches = box((R1, R2_868, R3), ports=(8267,))("start", "kiss@r3")
@@ -112,13 +115,14 @@ def test_a_running_copy_the_start_pass_reaches_is_judged_at_its_own_port(box, mo
 
 # ---- 13.5 (CLEANUP-DESIGN-v13): graywolf is the only stack without its own radio ---------------------------------
 
-def _graywolf_box(box, monkeypatch, procs=None):
+def _graywolf_box(box, monkeypatch, procs=None, ports=(8134, 8213)):
     """The default list's shape (r1 433, r2 868) with a callsign set. Records every launch (component, params,
     instance), every Lifecycle.stop, and graywolf's required post-start launcher as the real renderer builds it from
-    the params and instance the start hands it (the box records no verified launch to bind a real run to)."""
+    the params and instance the start hands it. The provisioning itself does not run (the stub reports success): this
+    covers what the start hands it, not its execution."""
     from lhpc.core.jobs import JobResult, JobState
     from lhpc.core.lifecycle import Lifecycle
-    run = box((R1, R2_868), procs=procs, ports=(8134, 8213))
+    run = box((R1, R2_868), procs=procs, ports=ports)
     assert cli.ControllerService().set_operator_identity(callsign="DL1ABC").ok
     seen, fake = {"launch": [], "stop": [], "post": []}, Lifecycle.start
 
@@ -142,18 +146,28 @@ def _graywolf_box(box, monkeypatch, procs=None):
     return run, seen
 
 
-def test_graywolf_at_r2_runs_on_kiss_at_r2_and_r2s_daemon(box, monkeypatch):
+@pytest.mark.parametrize("saved, want", [(None, "8134"), ("9000", "9133")])
+def test_graywolf_at_r2_runs_on_kiss_at_r2_and_r2s_daemon(box, monkeypatch, saved, want):
     # 13.5: the cross-stack dependency takes the dependent's radio (r2's daemon, kiss@r2, then graywolf@r2); graywolf's
-    # provisioning is handed kiss@r2's KISS port (8001 + 133, K6S-2) and its web UI is r2's (8080 + 133)
-    run, seen = _graywolf_box(box, monkeypatch)
+    # provisioning is handed the port kiss@r2 is launched with (K6S-2: its saved base, else 8001, + 133) and its web UI
+    # is r2's (8080 + 133)
+    # kiss's readiness endpoint and the serial bridge stay at {port:8001} whatever kiss_port is saved (manifest,
+    # pre-existing since 0.13: reported); the box declares that listener too, so the start verifies.
+    run, seen = _graywolf_box(box, monkeypatch, ports=(int(want), 8134, 8213))
+    if saved:
+        assert cli.ControllerService().save_config_bundle("kiss", values={"kiss_port": saved},
+                                                          inst=commands.Instance("r2", band="868")).ok
     rc, out, launches = run("start", "graywolf@r2")
     assert rc == 0, out
     assert launches == [("loraham-daemon", "868", "r2"), ("loraham-kiss-tnc", "868", "r2"),
                         ("graywolf", "868", "r2")], (launches, out)
-    (script,) = seen["post"]
-    assert "'--tnc-port', '8134'" in script, script[:800]
-    comp, params, inst = next(x for x in seen["launch"] if x[0].id == "graywolf")
     op = cli.ControllerService().config().operator
+    kcomp, kparams, kinst = next(x for x in seen["launch"] if x[0].id == "loraham-kiss-tnc")
+    kargv = commands.expand_argv(kcomp.run_argv, kcomp, kparams, op, "/rt", "/src", "868", inst=kinst)
+    assert kargv[kargv.index("--kiss-port") + 1] == want                                 # kiss@r2's launched port
+    (script,) = seen["post"]
+    assert f"'--tnc-host', '127.0.0.1', '--tnc-port', '{want}'" in script, script[:800]
+    comp, params, inst = next(x for x in seen["launch"] if x[0].id == "graywolf")
     assert "127.0.0.1:8213" in commands.expand_argv(comp.run_argv, comp, params, op, "/rt", "/src", "868", inst=inst)
 
 
