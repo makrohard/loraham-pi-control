@@ -2071,15 +2071,14 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 # --- per-stack user configuration (set via the web Config page) -----------
 
 def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -> Path:
-    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml"; an instance with its own store
-    # (instances.own_rid; until K6 not the band's first radio's) "<id>@<rid>.toml" (DEC-W60), never by a band argument.
-    # Defence in depth: the id is a single path component and the band must be a
-    # real radio band, so neither can introduce a separator or "..". The result is
+    # K6 (K6-SCOPE-v2): an instance's settings are its own "<id>@<rid>.toml" (DEC-W60), whatever other radios the
+    # list holds; without an instance, the stack's global "<id>.toml" (autostart, 13.12.1). A "<id>@<band>.toml" is
+    # never read or written (13.8). `band` is ignored (the band callers resolve their instance first).
+    # Defence in depth: the id and the rid are single path components. The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
-    from .instances import own_rid
     sid = validators.path_component(stack_id, field="stack id")
-    key = own_rid(paths, inst) or (validators.band(band, allow_both=True) if band else "")
+    key = validators.path_component(inst.rid, field="radio id") if getattr(inst, "rid", "") else ""
     name = f"{sid}@{key}.toml" if key else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.

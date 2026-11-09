@@ -980,7 +980,9 @@ class ParamsConfigMixin:
                                    {vid: (vurl or None) for vid, vurl in patch.items()})
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file, all of it
+        cfg_band = self._config_band(target, band)
+        inst = _instances.store_inst(self, sid, cfg_band, inst)          # K6: a band caller saves its band's instance's
+        own = _instances.own_rid(self._paths, inst)                      # its own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -1011,7 +1013,7 @@ class ParamsConfigMixin:
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
                                    else self._param_default_canon(ch.param, cfg_band, band, inst)),
-            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band) and not own)
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, split=bool(own))
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
@@ -1019,7 +1021,7 @@ class ParamsConfigMixin:
         # reason the global source is locked while in use. Refused BEFORE anything is written;
         # rechecked authoritatively inside the transaction (`_gps_recheck`), because between here
         # and the write a concurrent start can bring the stack up.
-        if _gps_now and _want != ("on" if self.gps_enabled_for(sid) else "off"):
+        if _gps_now and _want != ("on" if self.gps_enabled_for(sid, inst) else "off"):
             # Same rule as the authoritative recheck below, so the fast refusal and the one under
             # the lock can never disagree about what counts as "in use". Cheap read here — the
             # forced-fresh recompute belongs inside the transaction, not on the fast path.
@@ -1046,7 +1048,7 @@ class ParamsConfigMixin:
                 return
             try:
                 _cur = str(_load_runtime_toml(
-                    self._paths, _stack_config_path(self._paths, sid, "")
+                    self._paths, _stack_config_path(self._paths, sid, "", inst)       # K6: the instance's own switch
                 ).get(USE_GPS_PARAM, "")).strip().lower() or _gps_default
             except (OSError, ValueError, KeyError, ConfigError) as exc:
                 raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc

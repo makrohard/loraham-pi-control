@@ -39,15 +39,6 @@ def recorded_radio(paths, sid: str, rids) -> str:              # transitional: p
     return next((r["rid"] for r in recs if r.get("stack") == sid and r.get("rid") in rids), "")
 
 
-def band_first(paths, inst) -> bool:                                       # transitional: removed in K6
-    """DEC-W384e: the instance's radio is its band's first enabled one (the radio the slot builds called slot 0's): its settings are
-    still the per-band store (<sid>.toml / <sid>@<band>.toml) until K6 moves every store to <sid>@<rid>.toml. The
-    settings-store choice is its ONLY use."""
-    rows = sorted((r for r in radios.load(paths).radios if r.enabled), key=lambda r: int(r.id[1:]))
-    band = next((r.band for r in rows if r.id == getattr(inst, "rid", "")), None)
-    return band is not None and next(r.id for r in rows if r.band == band) == inst.rid
-
-
 def radios_of(stack, paths, disabled: str = "") -> tuple:
     """The radios a stack has an instance on (K4b): every enabled radio of its bands (any radio for a stack without
     bands), in rid order; the hardware list
@@ -287,22 +278,25 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
 
 
 def own_rid(paths, inst) -> str:
-    """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60); "" for the
-    band's first radio's instance, which reads the per-band store until K6 (band_first, DEC-W384e)."""
-    return inst.rid if inst is not None and inst.rid and not band_first(paths, inst) else ""
+    """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60, K6: every
+    instance); "" without one (the stack's global `<sid>.toml`)."""
+    return inst.rid if inst is not None and inst.rid else ""
+
+
+def store_inst(svc, sid: str, band: str = "", inst=None):
+    """The instance whose own settings a caller means: its own; a band caller (no radio; the web's ?band= until W5)
+    its band's instance (copy_of: the running radio, else the band's first); TEMPLATE-like (no rid) without a list."""
+    return inst if getattr(inst, "rid", "") else (copy_of(svc, sid, band=band)[0] or inst)
 
 
 
 def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
-    """(stored, bandless): the saved settings a component of stack `sid` reads. The band's first radio's instance:
-    its band's file and the band-less file (the stack-level params), as before (until K6, band_first); any other
-    instance: its own `config/stacks/<sid>@<rid>.toml` for both (DEC-W60), an instance without its file runs on the
-    defaults."""
-    if own_rid(svc._paths, inst):
-        own = svc._stack_config_cached(sid, "", inst)
-        return own, own
-    stored = svc._stack_config_cached(sid, cfg_band)
-    return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
+    """(stored, bandless): the saved settings a component of stack `sid` reads: the instance's own
+    `config/stacks/<sid>@<rid>.toml` for both (K6, DEC-W60; the switches are its own too, DEC-W384k); a band
+    caller's is its band's instance's (store_inst); an instance without its file runs on the defaults. Without a
+    list (no instance), nothing radio-scoped is stored: the global `<sid>.toml` alone."""
+    own = svc._stack_config_cached(sid, "", store_inst(svc, sid, cfg_band, inst))
+    return own, own
 
 
 

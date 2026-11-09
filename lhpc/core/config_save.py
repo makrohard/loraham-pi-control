@@ -149,11 +149,12 @@ def normalize_remotes(remotes: dict, *, target: str, allowed, stacks,
 
 
 def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks, sid: str,
-               banded: bool) -> tuple[dict, set, dict, set, dict]:
-    """Which stored keys the save sets and clears → (stack_set, stack_remove, bandless_set,
-    bandless_remove, switched): the stack's own (banded) file, the band-less file (empty unless
-    `banded`), and each touched switch name → (wanted, default). `key_of(change)` is the
-    persisted key, `default_of(change)` the canonical default it is compared with."""
+               split: bool) -> tuple[dict, set, dict, set, dict]:
+    """Which stored keys the save sets and clears → (stack_set, stack_remove, global_set,
+    global_remove, switched): the instance's own file, the stack's global `<sid>.toml` (empty unless `split`: the
+    own file is another file), and each touched switch name → (wanted, default). `key_of(change)` is the
+    persisted key, `default_of(change)` the canonical default it is compared with. K6 (K6-SCOPE-v2, DEC-W384k): the
+    switches are the instance's own (its file); autostart is global (13.12.1)."""
     to_set: dict = {}
     to_remove: set = set()
     # Autostart is a STACK-LEVEL flag: it must live in the BAND-LESS stack file —
@@ -188,13 +189,13 @@ def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks
             # the default itself is cleared, so the file never holds a third state.
             key = sw.key(sid)
             if want != default:
-                auto_set[key] = want
-                auto_remove.discard(key)
+                to_set[key] = want
+                to_remove.discard(key)
             else:
-                auto_remove.add(key)
-                auto_set.pop(key, None)
+                to_remove.add(key)
+                to_set.pop(key, None)
             switched[sw.name] = (want, default)
-    if not ((auto_set or auto_remove) and banded):
+    if not ((auto_set or auto_remove) and split):
         to_set.update(auto_set)                         # unbanded: one file holds everything
         to_remove |= auto_remove
         auto_set, auto_remove = {}, set()
