@@ -161,7 +161,8 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
   ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installs `polkitd` and two polkit rules
   for the WebGUI's Reboot/Shut down and Network panel · installs `chrony`, `gpsd` and `fake-hwclock`,
   replacing `systemd-timesyncd` ([Clock](docs/operations.md#clock)) · disables a packaged
-  `meshtasticd.service`.
+  `meshtasticd.service` · writes the USB radios' udev rule and grants `plugdev`
+  ([host access](docs/usb-radios.md#host-access)).
 
 <details><summary><em>Manual — install only what the stacks you'll run need (bootstrap-deps.sh is the source of truth; preview with <code>--dry-run</code>, regenerate with <code>lhpc deps --script</code>)</em></summary>
 
@@ -189,7 +190,8 @@ sudo usermod -aG spi,gpio "$USER"                        # → applied by the re
 
 The polkit rules (Reboot/Shut down, Network panel) and the clock packages are not in this list:
 `lhpc doctor` (or Apps → LoRaHAM Pi Control → System dependencies) prints their commands while
-they are missing.
+they are missing. The USB setup (udev rule, `plugdev`) is not in it either: the console's Hardware
+section gives it as one command.
 </details>
 
 #### 5. Install lhpc

@@ -104,6 +104,8 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine 
   ([running on a Pi](maintenance.md#running-on-a-pi)).
 - `--no-power-controls` · `--no-network-controls` — skip the polkit rule for Reboot/Shut down,
   for the Network panel.
+- `--no-usb-setup` — skip the USB radios' udev rule and the `plugdev` grant; the console's Hardware
+  section then offers the same setup as one command ([host access](usb-radios.md#host-access)).
 
 Root is required for everything but `--dry-run` and `--help`. The package set is identical on a
 Pi Zero 2W and a Pi 5; QEMU and PlatformIO come later with `lhpc build`. The shipped snapshot of
