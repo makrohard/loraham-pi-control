@@ -161,15 +161,15 @@ def test_g1_w3_b1_the_daemons_panel_needs_its_radio_and_a_rid_in_the_url_is_refu
     assert _files(tmp_path) == before
 
 
-def test_g1_w3_b2_a_client_panel_never_posts_a_radio(box):
-    # Pin (DEC-W384bi B2): on ?radio= a client stack has no panel (its radio's settings are the daemon's until K8d);
-    # without one, its panel posts its band, as on ba316d42
+def test_k8d_a_client_panel_posts_its_radio_never_a_band(box):
+    # K8d (DEC-W384az) replaces the W3 pin (DEC-W384bi B2: a client panel posted its band until K8d): a client stack's
+    # panel is its instance's on one radio, the page radio or else its shown instance's, and posts that radio
     c, _post, _tmp = box
-    for url, field in (("/stacks?radio=r2&open=kiss&dp=kiss", None), ("/stacks?open=kiss&dp=kiss", "band")):
+    for url, rid in (("/stacks?radio=r2&open=kiss&dp=kiss", "r2"), ("/stacks?open=kiss&dp=kiss", "r1")):
         doc = parse(c.get(url).get_data(as_text=True))
         forms = [f for f in doc.find("form") if f["action"] == "/stacks/kiss/daemon-params"]
-        names = {i["name"] for f in forms for i in doc.within(f).find("input", type="hidden")}
-        assert ("radio" not in names) and (field in names if field else not forms), url
+        hidden = {i["name"]: i["value"] for f in forms for i in doc.within(f).find("input", type="hidden")}
+        assert hidden.get("radio") == rid and "band" not in hidden, (url, hidden)
 
 
 def test_g1_w3_n3_the_daemons_panel_never_reads_a_page_band(box):

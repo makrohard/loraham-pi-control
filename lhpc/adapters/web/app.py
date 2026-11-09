@@ -2134,7 +2134,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if "band" in request.values:
             abort(make_response(jsonify(error=_BAND_REFUSAL), 400))
         if not rid:
-            abort(make_response(jsonify(error="the daemon radio parameters are per radio: name it (radio=<rid>)"), 400))
+            abort(make_response(jsonify(error="the daemon's radio parameters are per radio: name it (radio=<rid>)"), 400))
         return _api_radio(rid), rid, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
     def _dp_back(stack_id: str, band: str, rid: str = ""):

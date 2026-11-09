@@ -90,10 +90,10 @@ def test_start_sends_no_old_per_band_value(box, holder):
 
 
 def test_web_a_client_panel_save_writes_its_instances_set(web, csrf, tmp_path):
-    # the panel's route as it posts today (band, no radio): kiss's one radio on 433 is r1 (the baseline list), so
-    # kiss@r1's set. red on c08157ed: dp_433_CADIDLE in kiss.toml
+    # the panel's route as it posts (band and the radio it shows, G1-K8D N1): kiss@r1's set (the baseline list).
+    # red on c08157ed: dp_433_CADIDLE in kiss.toml
     c = web()
-    r = c.post("/stacks/kiss/daemon-params", data={"_csrf": csrf(c), "band": "433", "dp_CADIDLE": "40"})
+    r = c.post("/stacks/kiss/daemon-params", data={"_csrf": csrf(c), "radio": "r1", "dp_CADIDLE": "40"})
     assert r.status_code in (302, 303)
     assert _stored(tmp_path, "kiss@r1.toml").get("dp_CADIDLE") == "40"
     assert _stored(tmp_path, "kiss.toml") == {}

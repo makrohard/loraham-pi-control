@@ -761,9 +761,16 @@ def params_view(svc, target: str, rid: str) -> dict:
     choose = [r for r in view_radios(svc._paths) if able is None or r[0] in able]     # the radios this panel can show
     return {"stack": target, "band": band, "rid": rid, "bands": sorted({r[2] for r in choose}),
             "all_bands": list(svc.RADIO_BANDS), "is_daemon": is_daemon,
-            "can_apply": is_daemon or radio_clients(svc, band, rid, sid)[1], "radios": choose,
+            "can_apply": is_daemon or _apply_open(radio_clients(svc, band, rid, sid)), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
             "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, band, rid) or "", effective_high_power(svc, rid))}
+
+
+def _apply_open(clients) -> bool:
+    """G1-K8D N2: an app instance's Apply is open while it runs on its radio and no other stack's instance does — the
+    same two answers of radio_clients the Apply itself checks."""
+    others, runs = clients
+    return runs and not others
 
 
 def save_params(svc, target: str, rid: str, values: dict):

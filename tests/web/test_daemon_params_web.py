@@ -92,7 +92,7 @@ def test_apply_live_saves_then_reports(web, csrf):
     c = web()
     tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params/apply",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "33"})
+               data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "33"})
     assert r.status_code in (302, 303)
     assert 'value="33"' in c.get("/stacks?open=meshcom").get_data(as_text=True)  # saved (lazy body)
 
@@ -101,11 +101,11 @@ def test_save_then_reset_daemon_params(web, csrf):
     c = web()
     tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
+               data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
     assert r.status_code in (302, 303)
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)
     assert 'value="40"' in body                              # override persisted + shown
-    c.post("/stacks/meshcom/daemon-params/reset", data={"_csrf": tok, "band": "433"})
+    c.post("/stacks/meshcom/daemon-params/reset", data={"_csrf": tok, "radio": "r1"})
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)
     assert 'value="28"' in body and 'value="40"' not in body  # back to default
 
@@ -114,7 +114,7 @@ def test_panel_stays_open_after_save(web, csrf):
     c = web()
     tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
+               data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "40"})
     loc = r.headers["Location"]
     assert r.status_code in (302, 303)
     # TARGET-SPECIFIC: reopen only meshcom's row + its panel (no generic dp=1).
@@ -149,7 +149,7 @@ def test_save_rejects_out_of_range(web, csrf):
     c = web()
     tok = csrf(c)
     c.post("/stacks/meshcom/daemon-params",
-           data={"_csrf": tok, "band": "433", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
+           data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # meshcom panel force-opened (lazy body)
     assert 'value="99999"' not in body                       # rejected, not stored
 
@@ -158,7 +158,7 @@ def test_save_rejects_out_of_range(web, csrf):
 def test_save_requires_csrf(web):
     c = web()
     r = c.post("/stacks/meshcom/daemon-params",
-               data={"band": "433", "dp_CADIDLE": "40"})     # no token
+               data={"radio": "r1", "dp_CADIDLE": "40"})     # no token
     assert r.status_code == 400
 
 
@@ -406,25 +406,23 @@ def test_meshtastic_direct_spi_has_no_daemon_params_view(tmp_path):
     assert _plain_svc(tmp_path).daemon_params_view("meshtastic", rid="r1") == {}
 
 
-def test_daemon_params_band_chooser_rendered(web):
+def test_daemon_params_radio_chooser_rendered(web):
+    # K8d (DEC-W384az, W399 "per-band toggle shall be per-radio"): every stack's panel chooses among the radios able to
+    # run it (W3's chooser), never a band
     c = web()
 
     def dp_seg(sid):
         doc = parse(c.get(f"/stacks?open={sid}").get_data(as_text=True))   # panel is in the lazy body
         switch = doc.within(doc.by_id(f"stack-daemon-params-{sid}")).find("span", class_="bandswitch")
-        assert switch, "no band switch"
+        assert switch, "no radio switch"
         return doc.within(switch[0])
 
-    # single-band stack (meshcom): its band is a link, the other band a disabled span.
+    # fixed-band stack (meshcom, 433): its one radio, r1
     ms = dp_seg("meshcom")
-    hrefs = [a["href"] for a in ms.find("a")]
-    assert any("band=433" in h and "dp=meshcom" in h and h.endswith("#stack-daemon-params-meshcom") for h in hrefs)
-    assert [s.text for s in ms.find("span", class_="disabled")] == ["868 MHz"]
-    # dual-band stack (kiss): both bands are links, none disabled.
-    ks = dp_seg("kiss")
-    hrefs = [a["href"] for a in ks.find("a")]
-    assert any("band=433" in h for h in hrefs) and any("band=868" in h for h in hrefs)
-    assert not ks.find("span", class_="disabled")
+    assert [a.text for a in ms.find("a")] == ["r1 · 433"]
+    assert all("radio=r1" in a["href"] and "dp=meshcom" in a["href"] and "band=" not in a["href"] for a in ms.find("a"))
+    # switchable stack (kiss): both radios
+    assert [a.text for a in dp_seg("kiss").find("a")] == ["r1 · 433", "r2 · 868"]
 
 
 def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
@@ -538,6 +536,38 @@ def test_app_apply_refused_on_a_radio_another_stack_uses(tmp_path, monkeypatch):
 
 
 @pytest.mark.safety("radio-band-exclusive")
+def test_g1_k8d_n1_the_panel_posts_the_radio_it_shows_and_a_post_without_one_saves_nothing(web, csrf, tmp_path):
+    # G1-K8D N1: two radios on 433 (r1, r3) able to run kiss: the panel names the radio it shows (hidden radio, W3) and its
+    # save goes there; a post with the band alone is refused and writes nothing (red on 8fcd7efa: no rid field in
+    # the form, the save refused)
+    import radios_fixture
+    from lhpc.core import radios
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
+                                    radios.Radio("r3", "b", "uputronics", "433", ce="ce1")))
+    c = web()
+    doc = parse(c.get("/stacks?open=kiss").get_data(as_text=True))
+    form = doc.within(doc.by_id("stack-daemon-params-kiss"))
+    shown = [i["value"] for i in form.find("input") if i.has_attr("name") and i["name"] == "radio"]
+    assert shown in (["r1"], ["r3"])
+    tok = csrf(c)
+    assert c.post("/stacks/kiss/daemon-params", data={"_csrf": tok, "dp_CADIDLE": "40"}).status_code == 400   # no radio
+    assert not [n for n in ("kiss@r1.toml", "kiss@r3.toml") if (tmp_path / "config" / "stacks" / n).exists()]
+    c.post("/stacks/kiss/daemon-params", data={"_csrf": tok, "radio": shown[0], "dp_CADIDLE": "40"})
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert _dp_of(svc, "kiss", shown[0])["dp_CADIDLE"] == "40"
+
+
+def test_g1_k8d_n2_apply_is_offered_only_while_the_instance_runs_alone_on_its_radio(tmp_path, monkeypatch):
+    # G1-K8D N2: kiss@r1 runs and another stack's instance too: the panel does not offer Apply (red on 8fcd7efa:
+    # can_apply True, the Apply then refused)
+    from lhpc.core import radio_start
+    svc = _plain_svc(tmp_path)
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, rid, sid: (["chat@r1"], True))
+    assert svc.daemon_params_view("kiss", rid="r1")["can_apply"] is False
+    monkeypatch.setattr(radio_start, "radio_clients", lambda s, b, rid, sid: ([], True))
+    assert svc.daemon_params_view("kiss", rid="r1")["can_apply"] is True
+
+
 def test_app_apply_holds_the_band_claim_against_a_competing_start(tmp_path, monkeypatch):
     # The conflict check and every SET run under `claim.loraham.radio.<rid>`: a start that tries to
     # take the radio right after the check is refused while the apply holds it — the apply never

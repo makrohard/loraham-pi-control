@@ -528,14 +528,16 @@ def test_get_daemon_config_is_read_only(tmp_path, web):
     assert _daemon_client(web, tmp_path, guard=True).get("/stacks").status_code == 200
 
 
-def test_multi_band_config_stored_per_band(web, csrf):
+def test_multi_band_config_stored_per_radio(web, csrf):
+    # W3 (13.2): a Settings save names its radio (a band field is refused); kiss@r2's value is its own. Before K8d this
+    # test posted band=868 (refused 400 since W3) and passed on kiss's 868 daemon-panel default 869.525 alone.
     c = web()
     token = csrf(c)     # kiss stays multi-band
-    c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
-                                        "c_tx_freq": "869.525"})
-    assert "869.525" in c.get("/stacks?band=868&open=kiss").get_data(as_text=True)   # kiss body lazy-loaded
-    body_433 = c.get("/stacks?band=433&open=kiss").get_data(as_text=True)
-    assert "433.775" in body_433 and "869.525" not in body_433                      # 433 untouched
+    r = c.post("/stacks/kiss/config", data={"_csrf": token, "radio": "r2", "c_tx_freq": "869.600"})
+    assert r.status_code in (302, 303)
+    assert "869.600" in c.get("/stacks?radio=r2&open=kiss").get_data(as_text=True)   # kiss body lazy-loaded
+    body_r1 = c.get("/stacks?radio=r1&open=kiss").get_data(as_text=True)
+    assert "433.775" in body_r1 and "869.600" not in body_r1                        # kiss@r1 untouched
 
 
 def test_actions_grouped_and_install_state_aware(web):
