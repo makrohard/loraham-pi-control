@@ -977,8 +977,11 @@ def socket_key(paths, band: str) -> str:
     return t.rid if t.outcome == "proceed" else ""
 
 
-def socket_refusal(paths, band: str) -> str:
-    """Why `band` has no daemon socket (socket_key ""), naming the radios; "" when it has one."""
+def socket_refusal(paths, band: str, rid: str = "") -> str:
+    """Why `band` has no daemon socket (socket_key ""), naming the radios; "" when it has one. With `rid` (K8e): that
+    radio's daemon is not running, never the band's radios."""
+    if rid:
+        return f"the daemon of {rid} is not running — start it first: lhpc stack start daemon@{rid}"
     if band not in ("433", "868") or socket_key(paths, band):
         return ""
     state = radios.load(paths)

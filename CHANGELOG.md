@@ -31,6 +31,8 @@
   QEMU guest at a time); meshcom@rN's guest runs on its radio's ports.
 - meshcom-qemu-raspi: 722b5e8e5 -> 3f4425c92 (3f4425c), used by meshcom-gps-relay, meshcom-qemu
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
+- `lhpc config <stack>@<rid> --daemon-param|--apply-daemon|--reset-daemon` (and `daemon@<rid>`) act on radio rN's own
+  daemon settings, its row of the hardware list, as the web's panel does; before, they saved per band.
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

@@ -14,6 +14,7 @@ apply only after confirmation (or --yes).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import sys
 
@@ -321,18 +322,15 @@ def _cmd_config(svc, args) -> int:
     band = iband                                  # K8 (W308/W310): the instance's radio's band, never a --band
 
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
-    if daemon_mode and not svc._is_daemon_target(stack):     # the daemon's own: per radio in K8e
-        # G1-K8A 2: a stack's daemon parameters are still its band's (per radio in K8e), so they are one instance's only
-        # while one radio of that band runs it; the bare form addresses the one radio able to run it, as before
-        rids = instances.radios_able(svc, stack, band if inst is not None else "")
+    if daemon_mode and inst is None and not svc._is_daemon_target(stack):
+        # the bare form addresses the one radio able to run the stack, as before K8 (W290); several are named
+        rids = instances.radios_able(svc, stack)
         if len(rids) != 1:
-            print(f"ERR   {stack}@{inst.rid}: daemon parameters are still per band, and {', '.join(rids)} share {band} MHz"
-                  if inst is not None else f"ERR   {stack} runs on {', '.join(rids) or 'no radio'}: name the instance, "
+            print(f"ERR   {stack} runs on {', '.join(rids) or 'no radio'}: name the instance, "
                   f"lhpc config {stack}@<rid> --daemon-param …")
             return 2
-        if inst is None:
-            inst, _why = instances.copy_of(svc, stack, rids[0])
-            band = inst.band if inst is not None else band
+        inst, _why = instances.copy_of(svc, stack, rids[0])
+        band = inst.band if inst is not None else band
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
                               ("<param>", positional)) if on]
@@ -350,10 +348,17 @@ def _cmd_config(svc, args) -> int:
         if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
             print("ERR   choose one of --daemon-param / --apply-daemon / --reset-daemon")
             return 2
+        # K8e (DEC-W53, DEC-W384ak): an instance's daemon parameters are its radio's own settings (its row, the daemon's
+        # store, as the web's panel), whether named as daemon@<rid> or as <stack>@<rid>; never the band's
+        drid = inst.rid if inst is not None else ""
+        def via(res):                            # the summary names the instance it came through
+            return (dataclasses.replace(res, summary=f"{res.summary} (via {stack}@{drid})")
+                    if drid and not svc._is_daemon_target(stack) else res)
+        dsid = svc.DAEMON_ID if drid else stack
         if args.apply_daemon:
-            return _render(svc.apply_daemon_params(stack, band))
+            return _render(via(svc.apply_daemon_params(dsid, band, rid=drid)))
         if args.reset_daemon:
-            return _render(svc.reset_daemon_params(stack, band))
+            return _render(via(svc.reset_daemon_params(dsid, band, rid=drid)))
         from lhpc.core import daemon_params as _dp
         vals = {}
         for kv in args.daemon_param:
@@ -366,7 +371,7 @@ def _cmd_config(svc, args) -> int:
                 print(f"ERR   unknown daemon parameter {key!r} — valid: {', '.join(_dp.ALL_PARAMS)}")
                 return 2
             vals[key] = val.strip()
-        return _render(svc.save_daemon_params(stack, band, vals))
+        return _render(via(svc.save_daemon_params(dsid, band, vals, rid=drid)))
 
     if args.param is None or args.param == "list":
         return _config_list(svc, stack, band, inst)

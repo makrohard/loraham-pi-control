@@ -153,9 +153,10 @@ lhpc config <stack>                    # list settable params (current value, de
 lhpc config <stack> <param>            # show one parameter
 lhpc config <stack> <param> <value>    # set + validate one parameter
 lhpc config <stack> --reset [--yes]    # reset this stack's settings to defaults
-lhpc config <stack> --daemon-param KEY=VALUE   # persist a band-scoped daemon param (repeatable)
-lhpc config <stack> --apply-daemon     # apply saved daemon params to the running daemon
-lhpc config <stack> --reset-daemon     # reset daemon params
+lhpc config <stack>@<rid> --daemon-param KEY=VALUE   # persist radio rN's daemon param in its row (repeatable)
+lhpc config <stack>@<rid> --apply-daemon     # apply radio rN's saved daemon params to its running daemon
+lhpc config <stack>@<rid> --reset-daemon     # reset radio rN's daemon params
+lhpc config <stack> --daemon-param …   # the same for the one radio able to run <stack>; with several, name one
 lhpc config <stack>@<rid> [<param> [<value>]] | --reset   # a listed instance's own settings (config/stacks/<stack>@<rid>.toml)
 lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identity
 ```

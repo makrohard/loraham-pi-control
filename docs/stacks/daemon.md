@@ -146,7 +146,8 @@ limits in [reticulum](reticulum.md#band-limits). Defaults:
 Set them in the **Daemon radio parameters** panel of each stack's Settings (*Save* persists,
 *Apply* pushes live, *Reset* restores defaults) or with the CLI (`<stack>` may be `daemon`). The daemon's own
 panel is per radio (`?rid=rN`) and saves that radio's `dp_<PARAM>` in its row of `config/radios.toml`
-([the list file](#the-list-file)):
+([the list file](#the-list-file)); `lhpc config chat@r3 --daemon-param …` and `lhpc config daemon@r3 --daemon-param …`
+write that same row of r3:
 
 ```
 lhpc config <stack>@<rid> --daemon-param KEY=VALUE [--daemon-param ...]   # persist

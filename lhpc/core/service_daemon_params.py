@@ -460,7 +460,7 @@ class DaemonParamsMixin:
                                                f"that band serves {', '.join(others)}",
                                         data={"band": b, "in_use_by": others, "persisted": True})
                 if not daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or b)).reachable:
-                    return ActionResult(False, radio_start.socket_refusal(self._paths, b) or f"daemon not serving {b} MHz — start it first",
+                    return ActionResult(False, radio_start.socket_refusal(self._paths, b, rid) or f"daemon not serving {b} MHz — start it first",
                                         data={"band": b, "persisted": True})   # L27: a band the list names no one radio for
                 applies = self._daemon_param_applies(sid, b, rid)
                 applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
