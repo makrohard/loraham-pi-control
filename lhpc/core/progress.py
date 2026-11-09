@@ -115,7 +115,7 @@ class SessionSampler:
                 raise _Unknown from None
             try:
                 rest = data[data.rindex(")") + 2:].split()   # state ppid pgrp session…
-                if procident.pid_dead(pid, data, procident.task_list(pid, self._proc)) or int(rest[3]) != self._sid:
+                if int(rest[3]) != self._sid or procident.pid_dead(pid, data, procident.task_list(pid, self._proc)):
                     continue
                 cpu = sum(int(rest[i]) for i in (11, 12, 13, 14))   # utime stime cutime cstime
                 start = int(rest[19])

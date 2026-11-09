@@ -89,10 +89,8 @@ def session_member_details(sid: int, exclude_pid: int) -> list[tuple[int, int]]:
             with open(f"/proc/{pid}/stat") as fh:
                 data = fh.read()
             rest = data[data.rindex(")") + 2:].split()   # state ppid pgrp session…
-            if procident.pid_dead(pid, data, procident.task_list(pid)):
-                continue                                  # dead (DEC-W384bm: a Z leader with a live thread is a member)
-            if int(rest[3]) == sid:
-                out.append((pid, int(rest[2])))
+            if int(rest[3]) == sid and not procident.pid_dead(pid, data, procident.task_list(pid)):   # sid first (N4)
+                out.append((pid, int(rest[2])))           # a Z leader with a live thread is a member (DEC-W384bm)
         except (OSError, ValueError, IndexError):
             continue
     return out
@@ -132,10 +130,8 @@ def session_members(sid: int, exclude_pid: int) -> list[int]:
             with open(f"/proc/{pid}/stat") as fh:
                 data = fh.read()
             rest = data[data.rindex(")") + 2:].split()   # after comm: state ppid pgrp session…
-            if procident.pid_dead(pid, data, procident.task_list(pid)):
-                continue                                  # dead -> already ceased (procident.pid_dead, DEC-W384bm)
-            if int(rest[3]) == sid:
-                out.append(pid)
+            if int(rest[3]) == sid and not procident.pid_dead(pid, data, procident.task_list(pid)):   # sid first (N4)
+                out.append(pid)                           # dead -> already ceased (procident.pid_dead, DEC-W384bm)
         except (OSError, ValueError, IndexError):
             continue
     return out

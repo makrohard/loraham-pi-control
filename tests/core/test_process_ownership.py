@@ -4,6 +4,7 @@ record AND that is an LHPC-owned session leader, not the controller's own group.
 Uses controlled real subprocesses."""
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -353,7 +354,9 @@ LEADER_Z = (
 def test_g1_zb1_a_zombie_leader_with_a_live_thread_is_not_ceased(tmp_path, reaper):
     life = _life(tmp_path)
     p = subprocess.Popen([sys.executable, "-c", LEADER_Z], stdout=subprocess.PIPE, start_new_session=True)
-    reaper.append(p)
+    reaper.append(p)                                              # killed and reaped at teardown, also on a timeout
+    if not select.select([p.stdout], [], [], 10)[0]:              # G1-DP1 N3: bounded readiness wait
+        pytest.fail("the leader never reached state Z within 10 s")
     assert p.stdout.readline().strip() == b"leader-z"            # the worker saw its leader in state Z
     assert len(os.listdir(f"/proc/{p.pid}/task")) == 2
     assert life._proc_ceased(p.pid) is False                      # alive: a thread still runs

@@ -48,12 +48,16 @@ def proc_identity(pid: int) -> dict | None:
 
 def proc_alive(pid: int) -> bool:
     """True only if the pid exists AND is not dead by pid_dead (a reaped-pending zombie has ceased even though its pid
-    still exists in /proc; a Z leader with a live thread is alive, DEC-W384bm). An unreadable or malformed stat: False."""
+    still exists in /proc; a Z leader with a live thread is alive, DEC-W384bm). An unreadable stat, or one without a
+    state field after the last ")" (truncated, malformed): False (G1-DP1 N2)."""
     try:
         data = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
         return False
-    return ")" in data and not pid_dead(pid, data, task_list(pid))
+    rp = data.rfind(")")
+    if rp == -1 or not data[rp + 2:rp + 3].isalpha():
+        return False
+    return not pid_dead(pid, data, task_list(pid))
 
 
 def signal0_state(pid) -> str:
