@@ -250,3 +250,125 @@ def test_a_second_lab_on_the_host_refuses_at_once_naming_the_holder(tmp_path, mo
     r = subprocess.run([sys.executable, "-c", second, str(lock), str(root_b), "lock"], capture_output=True, text=True,
                        timeout=60, check=False)
     assert r.returncode == 0, r.stderr[-1500:]                        # A's stop released it
+
+
+def test_a_group_member_of_another_root_is_never_signalled(tmp_path):
+    """DEC-W384y (2): no group signal. A member of the fake's group whose environment names ANOTHER root (as a
+    recycled group id would hold) survives the stop; this root's leader is stopped."""
+    from lhpc_testlab import gpsd
+    from lhpc_testlab.testing import stop_lab_fakes
+
+    from lhpc.core.paths import Paths
+    other = tmp_path / "other"
+    prog = ("import os, signal, subprocess, sys; "
+            f"c = subprocess.Popen([sys.executable, '-c', 'import signal; signal.pause()'], env=dict(os.environ, LHPC_RUNTIME_ROOT={str(other)!r})); "
+            "print(c.pid, flush=True); signal.pause()")
+    fake, stranger = _stand_in_fake(tmp_path, tmp_path, prog)
+    paths = Paths(runtime_root=tmp_path)
+    try:
+        gpsd.pid_path(paths).parent.mkdir(parents=True, exist_ok=True)
+        gpsd.pid_path(paths).write_text(f"{fake.pid}\n")
+        assert stop_lab_fakes(tmp_path) == [fake.pid]
+        assert fake.wait(timeout=5) == -signal.SIGTERM
+        os.kill(stranger, 0)                                          # still there: raises if it was signalled dead
+        with open(f"/proc/{stranger}/stat") as fh:
+            assert fh.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+    finally:
+        for pid in (fake.pid, stranger):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+@pytest.mark.wallclock("the grace under test is real time: a member needs 0.3 s on TERM")
+def test_every_member_gets_the_grace_not_only_the_leader(tmp_path):
+    """DEC-W384y (the grace NOTE): the leader leaves on TERM at once; a member needs 0.3 s on TERM to finish (it
+    writes a file, then exits). The KILL waits for it, so its file is written."""
+    from lhpc_testlab import gpsd
+    from lhpc_testlab.testing import stop_lab_fakes
+
+    from lhpc.core.paths import Paths
+    done = tmp_path / "member-finished"
+    member = ("import os, pathlib, signal, sys, time\n"
+              "def bye(*a):\n    time.sleep(0.3); pathlib.Path(sys.argv[1]).touch(); os._exit(0)\n"  # rule-1 exception: the grace under test
+              "signal.signal(signal.SIGTERM, bye); print(1, flush=True); signal.pause()")
+    prog = ("import os, signal, subprocess, sys; "
+            f"c = subprocess.Popen([sys.executable, '-c', {member!r}, {str(done)!r}], stdout=subprocess.PIPE, text=True); "
+            "c.stdout.readline(); signal.signal(signal.SIGTERM, lambda *a: os._exit(0)); print(c.pid, flush=True); "
+            "signal.pause()")
+    fake, mpid = _stand_in_fake(tmp_path, tmp_path, prog)
+    paths = Paths(runtime_root=tmp_path)
+    try:
+        gpsd.pid_path(paths).parent.mkdir(parents=True, exist_ok=True)
+        gpsd.pid_path(paths).write_text(f"{fake.pid}\n")
+        assert stop_lab_fakes(tmp_path) == [fake.pid]
+        assert _gone(mpid)
+        assert done.exists(), "the member was killed before its grace"
+    finally:
+        for pid in (fake.pid, mpid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def test_a_lab_that_does_not_come_up_releases_the_host_lock(tmp_path, monkeypatch):
+    """DEC-W384y: an init or reset that fails leaves the host's lab lock free (it was held until the process ended)."""
+    import fcntl
+
+    from lhpc_testlab import testing
+    lock = tmp_path / "lab.lock"
+    monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(lock), raising=False)
+
+    def failing(env, verb, check=False):
+        raise RuntimeError(f"lhpc-testlab {verb} rc=1")
+    monkeypatch.setattr(testing, "run_lab", failing)
+    server = LabServer(tmp_path / "runtime")
+    try:
+        server.init_and_reset()
+    except RuntimeError:
+        pass
+    fd = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                # BlockingIOError while it is still held
+    finally:
+        os.close(fd)
+        server.stop()
+
+
+def test_the_host_lock_never_follows_a_symlink(tmp_path, monkeypatch):
+    """DEC-W384y: a symlink at the lock's path (another user's, in /tmp) is refused; its target is never written."""
+    from lhpc_testlab import testing
+    target = tmp_path / "someone-elses-file"
+    target.write_text("keep\n")
+    link = tmp_path / "lab.lock"
+    link.symlink_to(target)
+    monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(link), raising=False)
+    server = LabServer(tmp_path / "runtime")
+    try:
+        server.init_and_reset()
+        raise AssertionError("the lab came up over a symlinked lock")
+    except OSError:
+        pass                                                          # ELOOP, before any init
+    finally:
+        server.stop()
+    assert target.read_text() == "keep\n"
+    assert not (tmp_path / "runtime" / "state").exists()
+
+
+def test_the_turn_lock_is_skipped_only_for_a_pytest_its_holder_runs(tmp_path):
+    """DEC-W384y (b): LHPC_LAB_SERIAL_HELD exempts a process only when it names an ancestor (the holding test's own
+    pytest child); another live pid or junk does not."""
+    import subprocess
+    import sys
+    probe = "from lhpc_testlab.testing import serial_held_by_ancestor as f; print(f())"
+    other = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"])
+    try:
+        for held, want in ((str(os.getpid()), "True"), (str(other.pid), "False"), ("x", "False"), ("", "False")):
+            r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=30, check=False,
+                               env=dict(os.environ, LHPC_LAB_SERIAL_HELD=held))
+            assert r.stdout.strip() == want, (held, r.stdout, r.stderr[-500:])
+    finally:
+        other.kill()
+        other.wait(timeout=5)

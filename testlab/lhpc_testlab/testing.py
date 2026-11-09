@@ -131,7 +131,7 @@ _LAB_LOCK: dict = {"fd": None, "holders": 0}
 def _hold_lab_lock(root) -> None:
     import fcntl
     if _LAB_LOCK["fd"] is None:
-        fd = os.open(LAB_LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(LAB_LOCK_PATH, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)    # never a planted symlink
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -143,6 +143,25 @@ def _hold_lab_lock(root) -> None:
         os.write(fd, f"pid {os.getpid()} root {root}\n".encode())
         _LAB_LOCK["fd"] = fd
     _LAB_LOCK["holders"] += 1
+
+
+def serial_held_by_ancestor() -> bool:
+    """The lab_serial turn lock (testlab/tests/conftest.py) is held by an ancestor of this process: a pytest that the
+    holding test runs itself. LHPC_LAB_SERIAL_HELD names the holder's pid; any other value is not honoured."""
+    try:
+        pid = int(os.environ.get("LHPC_LAB_SERIAL_HELD", ""))
+    except ValueError:
+        return False
+    p = os.getppid()
+    while p > 1:
+        if p == pid:
+            return True
+        try:
+            with open(f"/proc/{p}/stat") as fh:
+                p = int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            return False
+    return False
 
 
 def _release_lab_lock() -> None:
@@ -167,14 +186,23 @@ class LabServer:
             _hold_lab_lock(self.root)
             self._locked = True
 
+    def _unlock(self) -> None:
+        if self._locked:
+            self._locked = False
+            _release_lab_lock()
+
     @property
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
     def init_and_reset(self) -> None:
         self._lock()
-        run_lab(self.env, "init", check=True)
-        run_lab(self.env, "reset", check=True)
+        try:
+            run_lab(self.env, "init", check=True)
+            run_lab(self.env, "reset", check=True)
+        except BaseException:
+            self._unlock()                             # a lab that did not come up holds nothing
+            raise
 
     def start(self, timeout: float = 30.0) -> None:
         self._lock()
@@ -209,9 +237,7 @@ class LabServer:
                 self.proc.wait(timeout=5)
             self.proc = None
         stop_lab_fakes(self.root)
-        if self._locked:
-            self._locked = False
-            _release_lab_lock()
+        self._unlock()
 
 
 def stop_lab_fakes(root) -> list:

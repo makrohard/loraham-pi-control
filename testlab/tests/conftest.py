@@ -22,11 +22,13 @@ def _lab_serial(request):
     stop: daemon". A `lab_serial` test waits for this host-wide lock: such tests run one at a time, across xdist workers
     and other runs on this host, in any --dist mode; every other test stays parallel."""
     import os
-    if request.node.get_closest_marker("lab_serial") is None or os.environ.get("LHPC_LAB_SERIAL_HELD"):
+
+    from lhpc_testlab.testing import serial_held_by_ancestor
+    if request.node.get_closest_marker("lab_serial") is None or serial_held_by_ancestor():
         yield                                          # not one of them, or a pytest run by the holder itself
         return
     import fcntl
-    fd = os.open(LAB_SERIAL_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(LAB_SERIAL_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)                 # blocks while another lab_serial test runs
         os.environ["LHPC_LAB_SERIAL_HELD"] = str(os.getpid())

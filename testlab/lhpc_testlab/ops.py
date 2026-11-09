@@ -544,28 +544,51 @@ def _of_root(pid: int, paths) -> bool:
     return any(f"LHPC_RUNTIME_ROOT={r}".encode() in env for r in (paths.runtime_root, os.path.realpath(paths.runtime_root)))
 
 
+def _group_members(pgids, paths) -> list:
+    """The live (not zombie) processes of the process groups `pgids` whose environment names this lab root: a recycled
+    group id, or another root's process in the group, is never one of them."""
+    out = []
+    for p in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{p}/stat") as fh:
+                fields = fh.read().rsplit(")", 1)[1].split()       # state, ppid, pgrp, ...
+        except (OSError, IndexError):
+            continue
+        if fields[0] not in ("Z", "X") and int(fields[2]) in pgids and _of_root(int(p), paths):
+            out.append(int(p))
+    return out
+
+
 def stop_fakes(paths, grace_s: float = 5.0) -> list:
     """Stop the fakes the lab root `paths` spawned (the fake gpsd, the APRS-IS sink), W389: each one its pid file names
     while that pid is still the fake (its argv) AND this root's (its environment, _of_root: a stale pid file never
-    reaches another root's fake), with its whole process group (it was spawned as the leader of a new one): SIGTERM,
-    then after `grace_s` SIGKILL to the group whether or not its leader is still there (a member that ignores TERM
-    outlives a leader that exits). Returns the pids it stopped."""
+    reaches another root's fake), with every member of its process group (it was spawned as the leader of a new one)
+    that is this root's (_group_members, read before each signal: no group signal reaches a recycled group id).
+    SIGTERM, a grace of `grace_s` while any member lives (not only the leader), then SIGKILL to each one left. Returns
+    the pids of the fakes it stopped."""
     import contextlib
 
     from . import gpsd
-    fakes = [(p, needle) for p, needle in ((_fake_pid(paths, gpsd.pid_path(paths), "lhpc_testlab _gpsd"), "lhpc_testlab _gpsd"),
-                                           (_fake_pid(paths, _aprs_sink_pid_path(paths), "aprs_sink.py"), "aprs_sink.py"))
+    pgids = [p for p, needle in ((_fake_pid(paths, gpsd.pid_path(paths), "lhpc_testlab _gpsd"), "lhpc_testlab _gpsd"),
+                                 (_fake_pid(paths, _aprs_sink_pid_path(paths), "aprs_sink.py"), "aprs_sink.py"))
              if p and _of_root(p, paths)]
-    for pid, _needle in fakes:
-        with contextlib.suppress(OSError):
-            os.killpg(pid, signal.SIGTERM)
-    deadline = time.monotonic() + grace_s
-    while any(supervisor.pid_alive(p, n) for p, n in fakes) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    for pid, _needle in fakes:
-        with contextlib.suppress(OSError):             # ESRCH: the whole group is gone
-            os.killpg(pid, signal.SIGKILL)
-    return [p for p, _n in fakes]
+    import select
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        fds = []
+        for pid in _group_members(pgids, paths):
+            with contextlib.suppress(OSError):
+                fds.append(os.pidfd_open(pid))         # names this process, never a pid reused after the scan
+                signal.pidfd_send_signal(fds[-1], sig)
+        deadline = time.monotonic() + grace_s
+        try:
+            while fds and (left := deadline - time.monotonic()) > 0:
+                for fd in select.select(fds, [], [], left)[0]:       # readable once that member has exited
+                    fds.remove(fd)
+                    os.close(fd)
+        finally:
+            for fd in fds:
+                os.close(fd)
+    return pgids
 
 
 def _respawn_gpsd(svc, details: list) -> None:
