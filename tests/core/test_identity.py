@@ -811,7 +811,8 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
     # admission, and carried concretely.
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
+    assert svc.save_config_bundle("voice", values={"file_sf": "7"}, band="433").ok and b433.is_file()   # a real file
     seen = {}
     real_guard = type(svc)._admission_guard
     def guard(self, op, target=""):
@@ -1476,7 +1477,7 @@ def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
                                                    "file_sf": "11"}, band="868").ok
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433",
                                                    "file_sf": "7"}, band="433").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
     before = b433.read_bytes()
     monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
     seen = {}

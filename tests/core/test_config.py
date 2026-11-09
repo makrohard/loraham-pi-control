@@ -427,7 +427,7 @@ def test_daemon_override_survives_save_config_bundle(tmp_path):
 
 
 def test_daemon_override_survives_public_save_stack_config(tmp_path):
-    from lhpc.core.config import load_stack_config, _stack_config_path
+    from lhpc.core.config import load_stack_config
     from stores_fixture import inst_of, own_file
     svc = _svc(tmp_path)
     p = own_file(svc, "daemon")                                    # K6: the save's own file keeps the unrelated key
@@ -467,7 +467,6 @@ def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
 def test_bundle_transaction_failure_preserves_both_files(tmp_path):
     # A stack-file merge that raises (unsupported manual value already in the file) rolls the whole
     # transaction back — local.toml AND the stack file keep their prior bytes.
-    from lhpc.core.config import _stack_config_path
     svc = _svc(tmp_path)
     local = svc._paths.runtime_root / "config" / "local.toml"
     local.parent.mkdir(parents=True, exist_ok=True)

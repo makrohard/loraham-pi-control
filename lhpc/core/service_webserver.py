@@ -740,8 +740,10 @@ class WebserverOpsMixin:
         """
         import shlex
 
+        from . import instances as _inst_mod
         from . import meshcore_identity as _mci
         st = self.stack(stack_id)
+        inst = _inst_mod.store_inst(self, stack_id, "", inst) if st else inst      # K6: a band caller's instance's
         for c in (st.components if st else ()):
             if component_id and c.id != component_id:
                 continue

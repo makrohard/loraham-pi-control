@@ -66,7 +66,7 @@
           {% endfor %}
         </span>
         <span class="muted">— each radio has its own config</span></p>
-      {% if view.radio %}<p class="muted instance-note">{{ stack.id }}@{{ view.radio }} starts from the defaults: slot 0's settings are not shared, and a change applies at its next start.</p>{% endif %}
+      {% if view.radio %}<p class="muted instance-note">{{ stack.id }}@{{ view.radio }} starts from the defaults: each radio's settings are its own, and a change applies at its next start.</p>{% endif %}
       {% if g.copy_restart_required %}
         {# Cleanup C7: the shown copy's own marker; the console cannot restart a copy, so the CLI command is named. #}
         <div class="depnote depnote-warn" id="copy-restart-required">{{ restart_note(g.copy_restart_required) }}
@@ -220,7 +220,7 @@
         </section>
       {% endif %}
 
-      {% if view.sources and not view.radio %}{# 7f: remotes and auto-start are slot 0's #}
+      {% if view.sources %}{# 13.12.1: the remotes and auto-start are global, on every instance's page #}
         <section class="cfgsec">
           <h3>Source remotes (GitHub)</h3>
           <p class="muted">Override per component where install/update clones from.
@@ -235,7 +235,7 @@
         </section>
       {% endif %}
 
-      {% if view.optional and not view.radio %}
+      {% if view.optional %}
         <section class="cfgsec">
           <h3>Optional components</h3>
           <p class="muted">Tick to auto-start with the stack; otherwise run them on demand below.</p>

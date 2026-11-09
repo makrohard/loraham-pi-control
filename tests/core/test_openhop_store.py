@@ -109,6 +109,14 @@ def _legacy_sources(svc):
     return [f.read_bytes() if f.exists() else None for f in files]
 
 
+def _rows(conf):
+    """openHop's file without its key and password, which are the instance's own (DEC-W384p: minted, never the
+    shared legacy ones)."""
+    rest = {k: v for k, v in conf.items() if k not in ("repeater.security.admin_password", "repeater.identity_key")}
+    assert conf["repeater.identity_key"] != KEY and conf["repeater.security.admin_password"] != "Legacy-Pass-1234"
+    return rest
+
+
 def _legacy_removed(svc):
     """Every legacy row of the instance gone from the bytes: none of the three keys left in its own stack config
     (gate 2 r2b, the second reader's F1: a value check cannot see what was never seeded). The shared legacy secret
@@ -535,9 +543,9 @@ def test_a_first_start_between_the_decision_and_the_lock_refuses_the_save(env, m
     assert not r.ok and "created or removed during this save" in " ".join([r.summary, *r.details])
     svc._invalidate_config()
     assert _legacy_removed(svc)                              # no legacy copy openHop never reads, from the bytes
-    assert helper.file() == {                                # the migrated values, the refused save nowhere
+    assert _rows(helper.file()) == {                         # the migrated values, the refused save nowhere
         "repeater.node_name": "Relay", "repeater.mode": "monitor", "duty_cycle.max_airtime_per_minute": 3000,
-        "repeater.security.admin_password": "Legacy-Pass-1234", "repeater.identity_key": KEY}
+}
 
 
 def test_a_save_committed_before_the_first_starts_lock_is_migrated_not_lost(env, monkeypatch):
@@ -557,9 +565,9 @@ def test_a_save_committed_before_the_first_starts_lock_is_migrated_not_lost(env,
     monkeypatch.setattr(ops, "ensure", barrier)
     ops.start_ensure(svc, mm.STACK_ID)
     assert seen == [None]
-    assert helper.file() == {                             # the committed save AND every other legacy value
+    assert _rows(helper.file()) == {                      # the committed save AND every other legacy row
         "repeater.node_name": "Newer", "duty_cycle.max_airtime_per_minute": 4200, "repeater.mode": "monitor",
-        "repeater.security.admin_password": "Legacy-Pass-1234", "repeater.identity_key": KEY}
+}
     assert _legacy_removed(svc)                           # migrated, so gone from the bytes
 
 

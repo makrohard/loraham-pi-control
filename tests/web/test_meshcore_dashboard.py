@@ -192,7 +192,7 @@ def test_the_repeater_password_is_shown_when_minted_and_malformed_is_said(tmp_pa
     svc = _svc(tmp_path)
     creds = svc.ui_credentials("meshcore", "meshcore-node")
     assert creds["exists"] is False and creds["value"] is None      # not minted yet (chat)
-    f = tmp_path / "config" / "secrets" / _mci.REPEATER_ADMIN_FILENAME
+    f = tmp_path / "config" / "secrets" / "r2" / _mci.REPEATER_ADMIN_FILENAME     # K6: meshcore@r2's own
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("short\n"); f.chmod(0o600)
     creds = svc.ui_credentials("meshcore", "meshcore-node")

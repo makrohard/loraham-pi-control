@@ -2055,7 +2055,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 v = request.form.get(f["field"], f["default"])
             values[f"file_{f['key']}" if f["kind"] == "file" else f["key"]] = v
         # Auto-start toggles for the stack's optional components.
-        for opt in [] if inst else view["optional"]:        # 7f: auto-start and remotes are slot 0's
+        for opt in view["optional"]:                         # 13.12.1: auto-start and remotes are global
             if not opt.get("startable", True):
                 continue                       # listed as run-on-demand: no auto-start key
             values[f"autostart_{opt['id']}"] = (
@@ -2064,7 +2064,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # the default). The whole submission is validated and persisted as ONE
         # all-or-recoverable transaction — no per-remote sequential writes.
         remotes = None
-        if view["sources"] and not inst:
+        if view["sources"]:
             remotes = {}
             for src in view["sources"]:
                 field = request.form.get("remote_" + src["id"], src["remote"])

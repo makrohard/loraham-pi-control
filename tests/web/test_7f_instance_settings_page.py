@@ -101,22 +101,30 @@ def test_an_instances_page_shows_its_own_value_of_every_field(box):
     assert 'value="433.900"' not in _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
 
 
-def test_a_band_switchable_instances_save_keeps_slot0s_files_and_takes_no_auto_start(web, tmp_path, csrf):
-    # kiss runs on 433 and 868: its slot 0 keeps rf_log and auto-start in its band-less file; the instance's save
-    # writes its own file alone, and its page offers no auto-start or remotes (those are slot 0's)
+def test_an_instances_save_writes_its_own_file_and_its_auto_start_is_global(web, tmp_path, csrf):
+    # K6 / 13.12.1: the instance's save writes its own settings (rf_log included) to its own file; auto-start and
+    # the remotes are global, offered on its page too, and stored in the stack's kiss.toml
     radios_fixture.write(tmp_path, (*ROWS, radios.Radio("r2", "c", "meshstick-1262", "868", usb_serial="MSTICK01")))
     c = web()
     token = csrf(c, "/stacks?cfg=kiss")
     page = _section(c.get("/stacks?cfg=kiss&radio=r3").get_data(as_text=True), "kiss")
-    assert 'name="c_autostart_' not in page and 'name="remote_' not in page
+    assert 'name="c_autostart_' in page and 'name="remote_' in page
     r = c.post("/stacks/kiss/config", data={"_csrf": token, "radio": "r3", "c_kiss_port": "8003", "c_rf_log": "",
                                            "c_autostart_loraham-kiss-serial": "on"})
     assert r.status_code == 302
     own = _stored(tmp_path, "kiss@r3.toml")
     assert own.get("__r__loraham-kiss-tnc__kiss_port", own.get("kiss_port")) in (8003, "8003")
     assert not any(k[:10] == "autostart_" for k in own)
-    assert not (tmp_path / "config" / "stacks" / "kiss.toml").exists()
+    # 13.12.1: auto-start is global, from every instance's page: the stack's kiss.toml, never a per-band file
+    assert _stored(tmp_path, "kiss.toml") == {"autostart_loraham-kiss-serial": "on"}
     assert not (tmp_path / "config" / "stacks" / "kiss@433.toml").exists()
+
+
+def test_13_12_1_the_global_controls_are_on_every_instances_page(box):
+    c, _post, _tmp = box
+    for url in ("/stacks?cfg=kiss", "/stacks?cfg=kiss&radio=r3"):
+        s = _section(c.get(url).get_data(as_text=True), "kiss")
+        assert "Optional components" in s and "Source remotes (GitHub)" in s, url
 
 
 def test_an_instances_page_shows_its_own_run_command(box):
