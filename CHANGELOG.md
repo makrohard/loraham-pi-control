@@ -27,9 +27,9 @@
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
 - Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`
   names the node. After the update, restart running GPS stacks so their feeds move.
-- Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio) and, for now, MeshCom (one
-  QEMU guest at a time); meshcom@rN's guest runs on its radio's ports.
-- meshcom-qemu-raspi: 722b5e8e5 -> 3f4425c92 (3f4425c), used by meshcom-gps-relay, meshcom-qemu
+- Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio): MeshCom per radio, each
+  QEMU guest on its radio's ports and its own bridge (socat per connection, one XR password); rebuild it from source.
+- meshcom-qemu-raspi: 722b5e8e5 -> b9e5be298 (b9e5be2), used by meshcom-gps-relay, meshcom-qemu
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc config <stack>@<rid> --daemon-param|--apply-daemon|--reset-daemon` (and `daemon@<rid>`) act on radio rN's own
   daemon settings, its row of the hardware list, as the web's panel does; before, they saved per band.

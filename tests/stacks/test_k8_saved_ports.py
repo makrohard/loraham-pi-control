@@ -44,15 +44,16 @@ def test_k8_a_saved_kiss_port_moves_its_endpoint_claim_and_the_serial_target(tmp
     assert instances.stop_scope(svc, "kiss", tnc, r2, "868")["endpoints"][0].address == "127.0.0.1:9133"
 
 
-def test_k8_a_saved_meshcom_bridge_port_moves_its_endpoint_and_claim(tmp_path):
-    # the guest's redirect to it follows with the per-connection bridge (DEC-W384af B)
+def test_k8_a_saved_meshcom_bridge_port_moves_its_endpoint_claim_and_the_guests_redirect(tmp_path):
     svc = _svc(tmp_path, (radios_fixture.R1, radios_fixture.R2))          # r1, r2 on 433
     r2 = Instance("r2", band="433")
     assert svc.save_config_bundle("meshcom", values={"port": "7100"}, inst=r2).ok
     prep = _prep(svc, "meshcom", r2)
-    bridge = svc.stack("meshcom").component("meshcom-bridge")
+    bridge, qemu = svc.stack("meshcom").component("meshcom-bridge"), svc.stack("meshcom").component("meshcom-qemu")
     assert "127.0.0.1:7233" in [e.address for e in instances.endpoints_for(bridge.endpoints, prep.inst)]
     assert {instances.claim_key(r, prep.inst) for r in bridge.resources if r.kind == "tcp-port"} == {"tcp.port.7233"}
+    argv = _argv(svc, qemu, prep.inst, "433")
+    assert argv[argv.index("--xr-redirect") + 1] == "7000:7233"                  # DEC-W384af B: its own bridge
 
 
 def test_k8_an_unsaved_port_keeps_the_radios_default(tmp_path):

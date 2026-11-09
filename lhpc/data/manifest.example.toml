@@ -1937,8 +1937,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "3f4425c9256a83a761776be3b19ffd922347eec9"
-    pin_tag = "3f4425c"
+    pin_commit = "b9e5be2984b367e58dcf868a7dfce147dd8744aa"
+    pin_tag = "b9e5be2"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1979,7 +1979,7 @@ main = "meshcom-qemu"
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
   # is empty and the build fails. 10.0.2.2 = QEMU user-net gateway -> host; 7000 =
   # the meshcom-bridge default port; password (if any) from /tmp/xr_pw.
-  build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat {runtime}/config/secrets/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
+  build = 'env XR_HOST=10.0.2.100 XR_PORT=7000 XR_PASSWORD="$(cat {runtime}/config/secrets/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
   # SELF-SUFFICIENT fresh clone: the workspace (.work/ MeshCom firmware + overlay +
   # OpenETH vendor) is prepared by the repo's own pinned setup scripts before build.sh —
   # a managed clone carries no pre-built .work/.
@@ -2007,7 +2007,7 @@ main = "meshcom-qemu"
     { argv = ["scripts/setup.sh", "--src", "https://github.com/icssw-org/MeshCom-Firmware.git", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
-    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
+    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.100", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
   ]
   readiness = "endpoint"
   # The emulated ESP32 boots slowly — live-measured ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W to
@@ -2018,11 +2018,11 @@ main = "meshcom-qemu"
   # --node-image: QEMU runs on the node's own flash image, kept under state/ (outside the checkout and every
   # publish root), so a binary install/update or a rebuild keeps the node's settings and message counter;
   # run.sh carries them into a new build when its partition table is unchanged (finding R21).
-  # K7 (DEC-W384s/v): meshcom@rN's guest runs as run.sh --instance N - 1 (its .run/<n>/; r1 the single-guest layout) on its
-  # radio's host ports (--ports). No --xr-redirect (DEC-W384af): QEMU's tcp guestfwd connects to the bridge once at QEMU
-  # start, not per firmware connection, so the firmware's link never came up; the firmware's compiled-in 10.0.2.2:7000
-  # reaches the host's 7000 natively, so MeshCom runs one instance at a time until a per-connection redirect lands.
-  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323}"
+  # K7 (DEC-W384s/v/af): meshcom@rN's guest runs as run.sh --instance N - 1 (its .run/<n>/; r1 the single-guest layout)
+  # on its radio's host ports (--ports), and the firmware's external-radio address 10.0.2.100:7000 (built in with
+  # XR_HOST) is forwarded PER CONNECTION to ITS bridge (--xr-redirect: one socat for each connection the firmware
+  # opens; a tcp guestfwd connected once at QEMU start and the link never came up). One shared XR password.
+  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323} --xr-redirect 7000:{port:7000}"
   state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
@@ -2084,6 +2084,11 @@ main = "meshcom-qemu"
     check_file = "/usr/lib/{multiarch}/libslirp.so.0"
     install = "sudo apt install -y libslirp0"
     note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. arm64/aarch64 path (this project's target)."
+
+    [[stack.component.require]]
+    cmd = "socat"
+    install = "sudo apt install -y socat"
+    note = "socat — run.sh --xr-redirect runs one per connection the firmware opens to its bridge (QEMU's guestfwd cmd:)."
     # ---- QEMU-from-source build toolchain (scripts/build-qemu.sh) -----------------------------------
     # The managed emulator is now BUILT FROM SOURCE (headless, no display/audio) instead of fetching a
     # prebuilt tarball, so the build toolchain + the headless QEMU library dependencies are declared
@@ -2183,8 +2188,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "3f4425c9256a83a761776be3b19ffd922347eec9"
-    pin_tag = "3f4425c"
+    pin_commit = "b9e5be2984b367e58dcf868a7dfce147dd8744aa"
+    pin_tag = "b9e5be2"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
