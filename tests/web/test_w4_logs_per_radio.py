@@ -130,3 +130,19 @@ def test_g1_w5_the_stray_band_daemons_log_link_names_its_own_file(box, monkeypat
     card = doc.within(next(d for d in doc.find("div", class_="radio-stray")))
     links = [parse_qs(urlsplit(a["href"]).query) for a in card.find("a") if urlsplit(a["href"]).path == "/logs/loraham-daemon"]
     assert links == [{"job": ["start-loraham-daemon-868.log"]}]                      # no band param, no newest-log pick
+
+
+def test_clear_all_also_empties_every_radios_own_rf_logs(box, csrf):
+    # DEC-W384bo: "Clear all RF logs" said every log was cleared but left each radio's <rid>/<file>; now it empties them
+    # (and removes their previous segment) through the same per-job clear; run logs are never touched
+    c, tmp_path = box
+    logs = tmp_path / "logs"
+    (logs / "r2" / "rf-daemon.log").write_text("2026-11-09T19:00:00.000Z TX rssi=- snr=- len=1 hex=02\n")
+    (logs / "r2" / "rf-kiss.log.1").write_text("older\n")
+    token = csrf(c, "/logs/loraham-kiss-tnc?job=r1/rf-kiss.log&radio=r1")
+    r = c.post("/rflog/clear-all", data={"_csrf": token, "job": "r1/rf-kiss.log", "radio": "r1"})
+    assert r.status_code == 302
+    assert {f: (logs / f).read_text() for f in ("rf-kiss.log", "r1/rf-kiss.log", "r2/rf-kiss.log", "r2/rf-daemon.log")} == \
+        dict.fromkeys(("rf-kiss.log", "r1/rf-kiss.log", "r2/rf-kiss.log", "r2/rf-daemon.log"), "")
+    assert not (logs / "r2" / "rf-kiss.log.1").exists()
+    assert (logs / "start-loraham-kiss-tnc-433-r1.log").read_text() == "process-of-r1\n"           # a run log stays

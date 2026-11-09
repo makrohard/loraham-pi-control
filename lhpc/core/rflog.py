@@ -348,6 +348,16 @@ def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
             "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]
 
 
+def radio_jobs(paths) -> list:
+    """The per-radio RF logs on disk, `<rid>/<file>` (RADIO_JOB, W7-8a, K7: every instance), in name order: what Clear
+    all empties besides the registered band-less jobs (DEC-W384bo). An absent logs/ has none."""
+    try:
+        dirs = sorted(d for d in paths.under("logs").iterdir() if d.is_dir() and not d.is_symlink())
+    except FileNotFoundError:
+        return []
+    return [j for d in dirs for f in sorted(d.iterdir()) if RADIO_JOB.fullmatch(j := f"{d.name}/{f.name}")]
+
+
 def switcher(svc, job: str, rid: str = "") -> dict:
     """W4 (DEC-W384bh): the RF log page's two rows for registered `job`: every enabled radio, and the RF logs of the
     shown radio, its daemon's `<rid>/rf-daemon.log` and every registered stack's `<rid>/<file>` (a stack whose declared

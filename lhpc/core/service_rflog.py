@@ -213,10 +213,11 @@ class RflogOpsMixin:
 
     @invalidates_snapshot
     def rflog_clear_all(self) -> ActionResult:
-        """Clear every registered RF log the manifest installs, one job at a time through
-        `rflog_clear` (the same lock and the same refusals). Run logs are never in the loop."""
-        results = [(job, self.rflog_clear(e.writer, job))
-                   for e in self._rflog_entries() for _band, job in e.jobs]
+        """Clear every registered RF log the manifest installs and every radio's own `<rid>/<file>` on disk (DEC-W384bo),
+        one job at a time through `rflog_clear` (the same lock and the same refusals). Run logs are never in the loop."""
+        jobs = [(e.writer, job) for e in self._rflog_entries() for _band, job in e.jobs]
+        jobs += [(b[0].writer, j) for j in _rflog.radio_jobs(self._paths) if (b := _rflog.by_job(j))]
+        results = [(job, self.rflog_clear(writer, job)) for writer, job in jobs]
         ok = all(r.ok for _j, r in results)
         return ActionResult(ok, "Every RF log cleared." if ok else "Not every RF log was cleared.",
                             [f"{job}: {'cleared' if r.ok else r.summary}" for job, r in results])
