@@ -422,6 +422,7 @@ def test_schedule_rejects_malformed_and_ambiguous():
             _render_steps([{"kind": "tcp_send", "port": 1, "data": "x\n", **bad}])
 
 
+@pytest.mark.wallclock("the schedule's real spacing between sends is what is measured")
 def test_schedule_spacing_measured():
     """The scheduled delays are really HONOURED: four sends arrive, and send k arrives no earlier
     than the sum of the intervals before it, measured from before the launcher started.
