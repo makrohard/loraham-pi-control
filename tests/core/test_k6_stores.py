@@ -71,3 +71,26 @@ def test_k6s2_an_explicit_graywolf_tnc_port_wins(tmp_path):
     assert svc.save_config_bundle("kiss", values={"kiss_port": "9000"}, inst=r2).ok
     assert svc.save_config_bundle("graywolf", values={"tnc_port": "9555"}, inst=r2).ok
     assert _graywolf_tnc(svc, r2)[-1] == "9555"
+
+
+@pytest.mark.parametrize("rid,where", [("", "kiss.toml"), ("r1", "kiss@r1.toml")])
+def test_a_pending_migration_candidate_clears_the_file_it_was_read_from(tmp_path, monkeypatch, rid, where):
+    # K6: a candidate recorded with its instance's rid clears that instance's own file; one without a rid (a journal
+    # written before K6, crossed by the update) means the global <sid>.toml, as it did. The proof is the
+    # transition's (tests/install/test_selfupdate_migration.py); here it is given, to pin the file choice alone.
+    from lhpc.core import config as cfgmod
+    from lhpc.core.services import ControllerService
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    p = next(q for q in tnc.run_params if q.name == "rx_only")
+    other = "kiss@r1.toml" if not rid else "kiss.toml"
+    for name in (where, other):
+        cfgmod.save_stack_config(svc._paths, "kiss", {"rx_only": "off"}, inst=Instance("r1") if "@" in name else None)
+    monkeypatch.setattr(ControllerService, "_prove_candidate", lambda self, cand, head: (p, "off"))
+    cand = {"stack": "kiss", "band": "433", "key": "rx_only", "kind": "r", "comp": tnc.id, "name": "rx_only",
+            "expected": "off", **({"rid": rid} if rid else {})}
+    migrated, remaining = svc._run_migration([cand], "head")
+    stacks = tmp_path / "config" / "stacks"
+    assert (migrated, remaining) == (1, [])
+    assert "rx_only" not in cfgmod._load_runtime_toml(svc._paths, stacks / where)
+    assert cfgmod._load_runtime_toml(svc._paths, stacks / other)["rx_only"] == "off"          # the other file: kept

@@ -22,8 +22,8 @@
   guide for a 433 MHz CH341A + RFM98PW stick.
 - Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands, started, stopped and restored alone;
   ports base + 133 × (n − 1), r1 keeps today's. From 0.13.x: run `lhpc hardware <setup>`, re-enter settings and pages.
-- MeshCore keeps its identity: before the first start, move config/secrets/meshcore_identity.key
-  to config/secrets/<rid>/ (the repeater's own key and password are carried over by the first repeater start).
+- MeshCore keeps its identities: before the first start, move config/secrets/meshcore_identity.key,
+  openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;
