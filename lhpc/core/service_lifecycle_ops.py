@@ -2642,13 +2642,12 @@ class LifecycleOpsMixin:
                 marks.append(stem)
         # dashboard reloads when the yellow flag flips; the route hands in the list it already read
         rr = self.restart_required_stacks() if restart_required is None else list(restart_required)
-        # BOOTING components (post-start runner still applying settings, e.g. MeshCom's
-        # callsign push): the yellow 'booting' state must flip the signature when it
-        # clears, or the dash keeps showing 'booting' after the node is serving.
+        # BOOTING components (the post-start runner still applies settings, e.g. MeshCom's callsign push) flip it as they
+        # clear, or the dash shows 'booting' after the node serves; N: each running instance (W2: a second copy's start).
         booting = sorted(cid for cid in running if self._component_booting(cid))
-        return ("R:" + ",".join(running) + ";D:" + ",".join(usable)
-                + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
-                + ";B:" + ",".join(booting)
+        insts = [k for ss in snap.stacks if set(ss.components) & set(running) for k in instances.running_keys(self, ss.stack.id)]
+        return ("R:" + ",".join(running) + ";D:" + ",".join(usable) + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
+                + ";B:" + ",".join(booting) + ";N:" + ",".join(insts)
                 + ";M:" + "+".join(self.radio_bands()))   # a band added or removed reflows the columns -> force a reload
 
     def manual_start_command(self, comp, inst=None) -> str:

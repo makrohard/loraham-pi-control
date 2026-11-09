@@ -3,7 +3,7 @@
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {# One band on the hardware list: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
 {% block body_class %}{% if radio_bands | length != 2 %}dash-narrow{% endif %}{% endblock %}
-{# A running component's state, name and note: one markup for slot 0's rows and a listed copy's (G1-C49). #}
+{# A running component's state, name and note: one markup for every instance's rows (G1-C49). #}
 {% macro comp_state(c) %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
                       {% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}{% endmacro %}
@@ -63,7 +63,7 @@
       <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
       running stack{{ 's' if restart_required|length > 1 }}:
       {% for sid in restart_required %}
-        {# W325: a listed copy (`<stack>@<rid>`) gets the same button as slot 0; /action restarts exactly it #}
+        {# W325, W2: every instance (`<stack>@<rid>`) gets the same button; /action restarts exactly it #}
         <form method="post" action="{{ url_for('action') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="restart">
@@ -98,6 +98,8 @@
          band, or no valid hardware list). `key` ends the card's element ids; `dv` is the band's daemon view, shown
          only where it is this radio's (the band's one radio) until dash.js polls the radio itself. #}
       {% set key, up = (x.rid, x.reachable) if x else (r.band, r.daemon.reachable) %}
+      {# W2: every start, stop and restart on this card names its instance, `<target>@<rid>` of the card's radio #}
+      {% set at = '@' ~ x.rid if x else '' %}
       {% set dv = r.daemon if not x or r.radios | length == 1 else {} %}
       {# The card's log links, defined once and placed directly under the daemon control in every
          state the daemon is installed in (never when it is not). An absent file still links; the
@@ -141,8 +143,8 @@
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="stop">
-                <input type="hidden" name="target" value="daemon">
-                {% if x %}<input type="hidden" name="rid" value="{{ x.rid }}">{% else %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}
+                <input type="hidden" name="target" value="daemon{{ at }}">
+                {% if not x %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}{# §6: a band daemon no radio names #}
                 <input type="hidden" name="from" value="dash">
                 <button type="submit" class="warnbtn">Stop daemon ({{ key }})</button>
               </form>
@@ -163,8 +165,8 @@
             <form method="post" action="{{ url_for('action') }}" class="act">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="{{ op }}">
-              <input type="hidden" name="target" value="daemon">
-              {% if x %}<input type="hidden" name="rid" value="{{ x.rid }}">{% else %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}
+              <input type="hidden" name="target" value="daemon{{ at }}">
+              {% if not x %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}
               <input type="hidden" name="from" value="dash">
               <button type="submit">{{ op | capitalize }} daemon ({{ key }})</button>
             </form>
@@ -211,12 +213,11 @@
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
             {% else %}
               <p class="muted">Daemon not running on {% if x %}{{ x.rid }}{% else %}{{ r.band }} MHz{% endif %}. Start a stack below
-                (it auto-starts the daemon for this band), or start the daemon alone:</p>
+                (it auto-starts the daemon for this {{ 'radio' if x else 'band' }}), or start the daemon alone:</p>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="start">
-                <input type="hidden" name="target" value="daemon">
-                {% if x %}<input type="hidden" name="rid" value="{{ x.rid }}">{% else %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}
+                <input type="hidden" name="target" value="daemon{{ at }}">
                 <input type="hidden" name="from" value="dash">
                 <button type="submit">Start daemon ({% if x %}{{ x.rid }}{% else %}{{ r.band }} only{% endif %})</button>
               </form>
@@ -224,8 +225,8 @@
             {% endif %}
           {% endif %}
 
-          {# --- running stack(s) on this band --- #}
-          <h3>Running on {{ r.band }}</h3>
+          {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
+          <h3>Running on {{ x.rid if x else r.band }}</h3>
           {# Cleanup C7c: a listed copy's entry (its `rid`) shows on its own radio's card only. #}
           {% set runs = r.running | rejectattr("rid") | list + (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) %}
           {% if runs %}
@@ -238,7 +239,7 @@
                 {% if s.rid %}
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
-                {# G1-C49: the copy's component rows in slot 0's markup; W325: its own Stop and Restart (target `<stack>@<rid>`) #}
+                {# G1-C49: the instance's component rows in one markup; W325: its own Stop and Restart (target `<stack>@<rid>`) #}
                 <ul class="complist">{% for c in s.components %}<li>{{ comp_state(c) }}</li>{% endfor %}</ul>
                 <p class="actrow">{% for op in ("stop", "restart") %}
                   <form method="post" action="{{ url_for('action') }}" class="act">
@@ -298,7 +299,7 @@
                         <form method="post" action="{{ url_for('action') }}" class="act">
                           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                           <input type="hidden" name="op" value="stop">
-                          <input type="hidden" name="target" value="{{ c.id }}">
+                          <input type="hidden" name="target" value="{{ c.id }}{{ at }}">
                           <input type="hidden" name="from" value="dash">
                           <button type="submit">Stop</button>
                         </form>
@@ -316,7 +317,7 @@
                         <form method="post" action="{{ url_for('action') }}" class="act">
                           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                           <input type="hidden" name="op" value="start">
-                          <input type="hidden" name="target" value="{{ c.id }}">
+                          <input type="hidden" name="target" value="{{ c.id }}{{ at }}">
                           <input type="hidden" name="from" value="dash">
                           <button type="submit">Run</button>
                         </form>
@@ -327,7 +328,7 @@
                   <form method="post" action="{{ url_for('action') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                     <input type="hidden" name="op" value="stop">
-                    <input type="hidden" name="target" value="{{ s.id }}">
+                    <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
                     <input type="hidden" name="from" value="dash">
                     <button type="submit">Stop</button>
                   </form>
@@ -350,7 +351,7 @@
                     <form method="post" action="{{ url_for('action') }}" class="act">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                       <input type="hidden" name="op" value="stop">
-                      <input type="hidden" name="target" value="{{ s.id }}">
+                      <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
                       <input type="hidden" name="from" value="dash">
                       <button type="submit">Stop</button>
                     </form></p>
@@ -371,16 +372,15 @@
             {% endfor %}
           {% endif %}
 
-          {# --- start another stack on this band --- #}
+          {# --- start another stack on this radio --- #}
           {% if r.startable %}
-            <h3>Start a stack on {{ r.band }}</h3>
+            <h3>Start a stack on {{ x.rid if x else r.band }}</h3>
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
-              <input type="hidden" name="band" value="{{ r.band }}">
               <input type="hidden" name="from" value="dash">
-              <select name="target" aria-label="Stack to start on {{ r.band }}">
-                {% for s in r.startable %}<option value="{{ s.id }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
+              <select name="target" aria-label="Stack to start on {{ key }}">
+                {% for s in r.startable %}<option value="{{ s.id }}{{ at }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
               </select>
               <button type="submit">Start</button>
             </form>

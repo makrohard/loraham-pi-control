@@ -1087,6 +1087,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "ui_creds_list": service.ui_credentials_list(stack.id, _inst),   # 7f: the shown instance's own
                     "pin_refusal": service.binary_install_refusal(stack.id),
                     "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
+                    # W2: the Run line's ONE radio selector, the union of the runnable and the running instances
+                    "run_on": sorted(set(_instances.can_run_on(service, stack)) | {k.partition("@")[2] for k in
+                                     _instances.running_keys(service, stack.id)}, key=lambda r: int(r[1:])),
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
@@ -1172,6 +1175,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None
 
+    def _page_band() -> str:
+        """W2: the page's radio (`?radio=rN`) decides its band; `?band=` only until W3 drops the band links."""
+        from lhpc.core import radios as _radios
+        rid = request.args.get("radio", "")
+        return next((r.band for r in _radios.load(service._paths).radios if r.id == rid), "") if rid else \
+            request.args.get("band", "")
+
     def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
@@ -1240,7 +1250,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
         # cached-only — no live git/network/identity on a GET.
-        ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
+        ctx, _groups, _snapshot = _stacks_context(_page_band(),
                                                  cfg_sid=request.args.get("cfg", ""))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
@@ -1269,7 +1279,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
         # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
-        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""), only_sid=sid,
+        ctx, groups, _snapshot = _stacks_context(_page_band(), only_sid=sid,
                                                  cfg_sid=request.args.get("cfg", ""))
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
@@ -1557,11 +1567,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return rid
 
     def _view_rid(stack_id: str, band: str) -> str:
-        """The radio the opened daemon panel shows (`dp=<stack>&rid=rN`, item 16); "" (the band's view) for another
-        stack's panel, or a rid that is no enabled radio (of `band` when one is given): the page never fails on it."""
+        """The radio the opened daemon panel shows: W2's one selector, `?radio=rN` (with `cfg=` or `dp=` naming this
+        stack); "" (the band's view) for another stack's panel, or a rid that is no enabled radio (of `band` when one is
+        given): the page never fails on it."""
         from lhpc.core import radio_start
-        rid = request.args.get("rid", "")
-        if not rid or request.args.get("dp") != stack_id:
+        rid = request.args.get("radio", "")
+        if not rid or stack_id not in (request.args.get("cfg"), request.args.get("dp")):
             return ""
         _inst, rband, why = radio_start.daemon_radio(service, rid)
         return "" if why or (band and rband != band) else rid
@@ -1634,15 +1645,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # not report back — an unconfirmed SET is flashed as a warning, not success.
         confirmed = bool(result.data.get("confirmed")) if result.data else False
         flash(result.summary, "ok" if (result.ok and confirmed) else "warn")
-        return redirect(url_for("stacks_overview", dp="daemon", rid=rid, cfg="daemon") + "#stack-settings-daemon")
+        return redirect(url_for("stacks_overview", cfg="daemon", radio=rid) + "#stack-settings-daemon")
 
-    def _redirect_for(target: str):
+    def _redirect_for(target: str, rid: str = ""):
         # Actions launched from the dashboard return to the dashboard; otherwise land on the
-        # target's stack row on the /stacks overview .
+        # target's stack row on the /stacks overview, on its instance's radio (W2: `radio=`, never a band).
         if request.form.get("from") == "dash":
             return redirect(url_for("dashboard"))
         sid = service.stack_of(target)
-        return (redirect(url_for("stacks_overview", open=sid) + "#stackrow-" + sid)
+        return (redirect(url_for("stacks_overview", open=sid, radio=rid or None) + "#stackrow-" + sid)
                 if sid else redirect(url_for("dashboard")))
 
     def _install_back(stack_id: str):
@@ -1652,7 +1663,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open=stack_id, inst=stack_id)
                         + "#stack-install-" + stack_id)
 
-    def _settings_back(target: str, refusal, band: str = ""):
+    def _settings_back(target: str, refusal, rid: str = ""):
         """A start/restart refused over the SAVED identity: flash the refusal and send the operator
         to the stack's Settings with the offending row(s) marked (`?cfg=` force-opens the section,
         `?bad=` names the `c_`/`f_` fields `_stack_settings.html` highlights). Nothing is persisted
@@ -1660,9 +1671,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         sid = service.stack_of(target) or target
         flash(refusal.summary, "warn")
         bad = ",".join(str(f) for f in (refusal.data.get("enforce_fields") or ()))
-        # `band` is the frozen operation band: a band-switchable stack refused on 868 must open
-        # its 868 store, not the declared primary (the saved value the refusal judged lives there).
-        return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, band=band or None)
+        # W2: the refused instance's own settings (`radio=`), where the saved value the refusal judged lives
+        return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, radio=rid or None)
                         + "#stack-settings-" + sid)
 
     def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None, inst=None, rid=""):
@@ -1686,6 +1696,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "confirm.html", version=__version__,
             op=op, target=target, plan=plan, tx=("tx" in op),
             source=source, band=band, rid=rid,
+            plan_hash=(_instances.plan_hash(service, op, target, inst, band) if op in ("start", "restart") else ""),
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
             stop_labels=([lbl for lbl, _ in service.owner_stops(plan.data.get("blockers") or [])]
                          if op in ("start", "restart") else None),
@@ -1720,44 +1731,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         target = request.form.get("target", "")
         if op not in service.WEB_ACTIONS:
             abort(400)
-        band = request.form.get("band", "")    # chosen band for a band-switchable stack
-        _submitted_band, confirmed = band, request.form.get("confirmed") == "yes"
-        rid, inst = request.form.get("rid", ""), None
-        if "@" in target:                       # W325: a listed copy's own forms post `<stack>@<rid>`
-            target, _, suffix = target.partition("@")
-            if not suffix or rid not in ("", suffix):   # G1-C54: never slot 0 for `kiss@`, never a guess between rids
-                abort(400)
-            rid = suffix
-        if rid:                               # W286: one radio's daemon; W325: a listed copy (its card, its marker)
-            from lhpc.core import radio_start
-            if op not in ("start", "stop", "restart"):
-                abort(400)
-            if (service.stack_of(target) or target) == (service.stack_of(service.DAEMON_ID) or "daemon"):
-                (inst, band, why), who = radio_start.daemon_radio(service, rid), "the daemon"
-            else:
-                (inst, why), who = _instances.copy_of(service, target, rid), f"{target}@{rid}"
-                band, why = (inst.band if inst else ""), ("" if inst is not None and op == "stop" else why)   # a disabled copy still stops
-            if why or inst is None:
-                flash(f"Cannot {op} {who}: {why}.", "warn")
-                return _redirect_for(target)
-        # ONE CONCRETE OPERATION BAND, frozen HERE on every POST (the Apps dropdown / the running
-        # band / the marker / the primary — never a confirm control) and carried as the hidden
-        # `band` of a confirmation form. Why it must be frozen: see `operation_band`. A CONFIRMED
-        # form's band is honoured or refused, never reinterpreted: its consequences (the owner to
-        # stop, the dependents) were computed on that band, so if the box moved underneath — radio
-        # mode narrowed, board swapped — the click is refused and the operator plans again.
-        if op in ("start", "restart"):
-            band = service.operation_band(target, band)
-            # Two ways the confirmed band can be stale: the box no longer serves it (operation_band
-            # resolves elsewhere), or the target has MOVED — it is live on another band now (the
-            # running-band marker, which an explicit band deliberately outranks in operation_band).
-            # Either way the consequences on the page were computed for the old band: refuse.
-            _live = service.launch_band(service.stack_of(target) or target, "")
-            _moved = band if band != _submitted_band else (_live if _live and _live != band else "")
-            if confirmed and _submitted_band and _moved and not rid:     # a radio's band is its own
-                flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "
-                      f"{_moved or 'its fixed band'} — check the plan and confirm again.", "warn")
-                return _redirect_for(target)
+        confirmed, rid, inst, band = request.form.get("confirmed") == "yes", "", None, ""
+        if op in ("start", "stop", "restart"):
+            # W2 (CLEANUP-DESIGN-v13 13.2): an instance, `<stack>@<rid>`, through the one parser; a `band` or `rid`
+            # field is a second selector (obsolete, a bad request). A refusal says why and runs nothing; a disabled
+            # radio's running instance still stops (G1-C7 B3). One exception, the §6 stray card: a band daemon no
+            # radio names (a 0.13.x daemon still up) is stopped by its band, as before (W290: its Stop stays).
+            stray = op == "stop" and target == "daemon" and "rid" not in request.form and \
+                request.form.get("band") in service.RADIO_BANDS
+            if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
+                abort(400)                                              # `kiss@` names no radio (G1-C54)
+            sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
+                _instances.parse_target(service, target, op)
+            if why and not (inst is not None and op == "stop"):
+                flash(f"Cannot {op} {target}: {why}.", "warn")
+                return _redirect_for(sid or target)
+            target, rid = sid, (inst.rid if inst is not None else "")
+        elif "rid" in request.form:                 # install, update, build, clean are stack-wide: no radio
+            abort(400)
+        else:
+            band = request.form.get("band", "")
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
         # to the CLI's `default_channel` — binary wherever it is published (a fresh Pi must not
         # silently start a four-hour compile because nobody touched the selector), "pinned"
@@ -1802,11 +1795,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             plan = service.run_action(op, target, apply=False, band=band, inst=inst)
             if not plan.ok:
                 if plan.data.get("enforce_fields"):
-                    return _settings_back(target, plan, band)
+                    return _settings_back(target, plan, rid)
                 flash(f"{plan.summary} {' '.join(plan.details[:6])}", "warn")
-                return _redirect_for(target)
+                return _redirect_for(target, rid)
             if plan.data.get("blockers") or plan.data.get("dependents"):
-                return _render_confirm(op, target, band, source, frm, plan=plan, rid=rid)
+                return _render_confirm(op, target, band, source, frm, plan=plan, inst=inst, rid=rid)
         elif not confirmed:
             # Stage 1: show the dry-run plan, options and a confirmation form.
             return _render_confirm(op, target, band, source, frm, inst=inst, rid=rid)
@@ -1832,11 +1825,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if missing:
                 flash("System dependencies missing — install them first: "
                       + "; ".join(d["install"] for d in missing if d["install"]), "warn")
-                return _redirect_for(target)
+                return _redirect_for(target, rid)
             job, admission, reason = service.spawn_web_job(op, target, source=source)
             if admission == "blocked":
                 flash(reason or f"{op} could not start.", "warn")
-                return _redirect_for(target)
+                return _redirect_for(target, rid)
             if admission == "pending":
                 flash(f"{op} starting — admission not yet confirmed; watch the live output below.", "warn")
             elif reason:                                # admitted, with a note (e.g. build-dep-first)
@@ -1850,7 +1843,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # while the job runs and the page reloads once when it ends. Blocked = typed refusal.
             job, admission, reason = service.spawn_start_job(op, target, band=band,
                                                              stop_owners=stop_owners,
-                                                             cascade=cascade, rid=rid)
+                                                             cascade=cascade, rid=rid,
+                                                             plan_hash=request.form.get("plan_hash", "") if confirmed else None)
             if job is None:                             # blocked, or admission_blocked (typed)
                 flash(reason or f"{op} could not start.", "warn")
             elif admission == "pending":
@@ -1859,7 +1853,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             else:
                 flash(f"{'Restarting' if op == 'restart' else 'Starting'} '{target}' — follow it "
                       "in the banner.", "ok")
-            return _redirect_for(target)
+            return _redirect_for(target, rid)
         result = service.run_action(op, target, apply=True, source=source,
                                     cascade=cascade, band=band, purge=purge, inst=inst)
         if op == "update" and not result.ok and _pin_refusal(result):
@@ -1877,7 +1871,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 res = service.needs_rebuild_result(
                     target, [sid, *rest], f"could not start its build ({reason or 'refused'})")
                 flash(f"{res.summary} {' '.join(res.details[:6])}".strip(), "err")
-                return _redirect_for(target)
+                return _redirect_for(target, rid)
             flash(f"{result.summary} Building '{sid}' — watch the live output below.", "ok")
             if rest:
                 flash(service.needs_rebuild_result(
@@ -1891,7 +1885,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op == "stop" and not result.ok and service.stack(target) is not None:
             # A failed, timed-out or refused stop offers the whole-stack Kill (A §2.12, W44).
             return _render_kill(target, "", failed=result)
-        return _redirect_for(target)
+        return _redirect_for(target, rid)
 
     def _render_kill(sid: str, component: str, failed=None):
         # The kill confirm: one click, with the processes the kill would signal named first.

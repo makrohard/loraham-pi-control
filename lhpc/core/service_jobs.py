@@ -342,7 +342,7 @@ class JobsOpsMixin:
 
     @invalidates_snapshot
     def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
-                        cascade: bool = False, rid: str = ""):
+                        cascade: bool = False, rid: str = "", plan_hash: str | None = None):
         """Spawn a DETACHED web start/restart (the hidden `lhpc _stack-start` verb) and return
         `(job_log_name, admission, reason)` like `spawn_web_job` — except that an admission refusal
         is typed `admission_blocked` (not `blocked`): the web flashes per the admission and returns
@@ -399,8 +399,8 @@ class JobsOpsMixin:
                     argv.append("--stop-owners")
                 if cascade and op == "restart":          # the confirmed "Stop dependents & restart"
                     argv.append("--cascade")
-                if op == "restart":
-                    argv.append("--restart")
+                argv += (["--restart"] if op == "restart" else []) + (   # W2: a confirmed run, only the plan it confirmed
+                    [] if plan_hash is None else ["--plan-hash", plan_hash])
                 ln, pid = life.spawn_job(name, argv, str(self._paths.runtime_root))
                 if not ln or not pid:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")

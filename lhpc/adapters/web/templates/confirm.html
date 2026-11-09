@@ -47,10 +47,11 @@
         <form method="post" action="{{ url_for('action') }}" data-busy-form>
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="{{ op }}">
-          <input type="hidden" name="target" value="{{ target }}">
+          {# W2: an instance's start, stop or restart posts `<stack>@<rid>`, never a band or a second rid #}
+          <input type="hidden" name="target" value="{{ target }}{% if rid %}@{{ rid }}{% endif %}">
           <input type="hidden" name="confirmed" value="yes">
-          {% if band %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
-          {% if rid %}<input type="hidden" name="rid" value="{{ rid }}">{% endif %}
+          {% if plan_hash %}<input type="hidden" name="plan_hash" value="{{ plan_hash }}">{% endif %}
+          {% if band and not rid %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}
             <p class="depnote depnote-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's

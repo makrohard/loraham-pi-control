@@ -28,7 +28,7 @@ def _box(tmp_path):
 def _spy_spawns(monkeypatch):
     spawns = []
 
-    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid=""):
+    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid="", plan_hash=None):
         spawns.append((op, target, band, rid))
         return f"web-{op}-{target}-{rid}.log", "admitted", ""
     monkeypatch.setattr(ControllerService, "spawn_start_job", spy)
@@ -58,7 +58,7 @@ def test_a_radio_cards_start_and_restart_run_that_radios_daemon(tmp_path, monkey
             return _real(self, target, *a, inst=inst, **k)
         monkeypatch.setattr(ControllerService, op, plan)
     for op in ("start", "restart"):
-        r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "daemon", "rid": "r2", "from": "dash"})
+        r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "daemon@r2", "from": "dash"})
         assert r.status_code == 302 and r.headers["Location"].endswith("/")
     assert spawns == [("start", "daemon", "868", "r2"), ("restart", "daemon", "868", "r2")]   # r2's band, by rid
     assert plans == [("start", False, "r2"), ("restart", False, "r2")]
@@ -68,12 +68,12 @@ def test_a_radio_cards_stop_confirms_and_stops_that_radios_daemon(tmp_path, monk
     _box(tmp_path)
     c = web()
     stops = _spy_stops(monkeypatch)
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon", "rid": "r1", "from": "dash"})
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon@r1", "from": "dash"})
     doc = parse(r.get_data(as_text=True))
     form = doc.within(next(f for f in doc.find("form", action="/action") if f.has_attr("data-busy-form")))
-    assert form.field_default("rid") == "r1" and form.field_default("band") == "433"   # the confirm carries the rid
-    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon", "rid": "r1", "band": "433",
-                            "confirmed": "yes", "from": "dash"})
+    # W2: the confirm carries the instance, `daemon@r1`, never a band or a second rid
+    assert (form.field_default("target"), form.field_default("rid"), form.field_default("band")) == ("daemon@r1", None, None)
+    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon@r1", "confirmed": "yes", "from": "dash"})
     assert stops == [("daemon", False, "433", "r1"), ("daemon", True, "433", "r1")]    # the plan and the stop: r1
 
 
@@ -82,9 +82,9 @@ def test_an_unknown_or_disabled_rid_is_refused_and_nothing_runs(tmp_path, monkey
     c = web()
     spawns, stops = _spy_spawns(monkeypatch), _spy_stops(monkeypatch)
     for op in ("start", "stop"):
-        r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "daemon", "rid": "r9", "from": "dash"},
+        r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "daemon@r9", "from": "dash"},
                    follow_redirects=True)
-        assert f"Cannot {op} the daemon: r9 is not a radio of the hardware list." in r.get_data(as_text=True)
+        assert f"Cannot {op} daemon@r9: daemon@r9: r9 is not a radio of the hardware list." in r.get_data(as_text=True)
     assert spawns == [] and stops == []
 
 
@@ -95,10 +95,10 @@ def test_a_rid_on_a_stack_with_no_such_instance_is_refused_and_on_another_operat
     _box(tmp_path)
     c = web()
     spawns, stops = _spy_spawns(monkeypatch), _spy_stops(monkeypatch)
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "meshcom", "rid": "r2"}, follow_redirects=True)
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "meshcom@r2"}, follow_redirects=True)
     assert "Cannot start meshcom@r2: meshcom@r2: meshcom runs on 433 MHz, r2 is on 868 MHz." in r.get_data(as_text=True)
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "kiss", "rid": "r9"}, follow_redirects=True)
-    assert "Cannot start kiss@r9: kiss@r9: r9 is not in the hardware list." in r.get_data(as_text=True)
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "kiss@r9"}, follow_redirects=True)
+    assert "Cannot start kiss@r9: kiss@r9: r9 is not a radio of the hardware list." in r.get_data(as_text=True)
     assert c.post("/action", data={"_csrf": csrf(c), "op": "install", "target": "daemon", "rid": "r1"}).status_code == 400
     assert spawns == [] and stops == []
 
@@ -111,8 +111,8 @@ def test_home_has_one_card_per_enabled_radio_with_its_daemon_controls(tmp_path, 
     assert [(c["data-radio-rid"], c["data-radio-band"]) for c in cards] == [("r1", "433"), ("r2", "868")]
     for card, rid in zip(cards, ("r1", "r2"), strict=True):
         forms = [doc.within(f) for f in doc.within(card).find("form", action="/action")]
-        start = next(f for f in forms if f.field_default("op") == "start" and f.field_default("target") == "daemon")
-        assert start.field_default("rid") == rid and start.field_default("band") is None   # the radio, not its band
+        start = next(f for f in forms if f.field_default("op") == "start" and f.field_default("target") == f"daemon@{rid}")
+        assert start.field_default("rid") is None and start.field_default("band") is None   # W2: the instance alone
         assert doc.within(card).by_id(f"rd-badge-{rid}")
 
 
@@ -140,7 +140,7 @@ def test_the_detached_start_names_its_log_by_the_radio_and_passes_it(tmp_path, m
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     c = web()
     for rid in ("r1", "r2"):                                     # two radios' starts run side by side
-        c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon", "rid": rid, "from": "dash"})
+        c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": f"daemon@{rid}", "from": "dash"})
     assert [(a[a.index("--web-result") + 1], a[a.index("--radio") + 1] if "--radio" in a else None,
              "--band" in a) for a in argvs] == [
         ("web-start-daemon-r1.log", "r1", False), ("web-start-daemon-r2.log", "r2", False)]   # K8: the radio, no band
@@ -191,9 +191,9 @@ _READY = b"STATUS ID=r2 BOUND=- RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CAD
 
 
 def _daemon_forms(doc, card):
-    return {(f.field_default("op"), f.field_default("rid"), f.field_default("band"))
+    return {(f.field_default("op"), f.field_default("target"), f.field_default("band"))
             for f in (doc.within(e) for e in doc.within(card).find("form", action="/action"))
-            if f.field_default("target") == "daemon"}
+            if (f.field_default("target") or "").startswith("daemon")}
 
 
 def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, monkeypatch, web):
@@ -208,7 +208,7 @@ def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, 
     doc = parse(web(system=fs.system).get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
     assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon usable (READY)"
-    assert _daemon_forms(doc, card) == {("stop", "r2", None), ("restart", "r2", None)}     # its own, by rid
+    assert _daemon_forms(doc, card) == {("stop", "daemon@r2", None), ("restart", "daemon@r2", None)}   # its instance
 
 
 def test_add_hardware_sets_up_a_fresh_box_with_a_dual_board_in_one_step(tmp_path, web, csrf):

@@ -657,6 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("--stop-owners", action="store_true", help=argparse.SUPPRESS)
     p_ss.add_argument("--cascade", action="store_true", help=argparse.SUPPRESS)
     p_ss.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
+    p_ss.add_argument("--plan-hash", default=None, help=argparse.SUPPRESS)   # W2: the confirmed plan
 
     # Internal: uninstall.sh's quiescence gate — refuses on active jobs / unresolved auto-install|HMAC
     # / UNKNOWN state, then stops managed stacks (clients before the shared daemon) with verified
@@ -1395,7 +1396,7 @@ def _run(argv: list[str] | None = None) -> int:
         # zero side effects. ONE terminal marker write across all exits.
         import os as _os
 
-        from lhpc.core import jobresult, webjob_gate
+        from lhpc.core import instances, jobresult, webjob_gate
         from lhpc.core.outcomes import manual_required_only
         from lhpc.core.services import ActionResult as _AR
         op = "restart" if args.restart else "start"
@@ -1412,7 +1413,7 @@ def _run(argv: list[str] | None = None) -> int:
 
         inst = None
         if args.radio:
-            from lhpc.core import instances, radio_start
+            from lhpc.core import radio_start
             if (svc.stack_of(args.target) or args.target) == (svc.stack_of(svc.DAEMON_ID) or "daemon"):
                 inst, _band, why = radio_start.daemon_radio(svc, args.radio)
             else:                                   # W325: a listed copy's start/restart from its card or marker
@@ -1422,6 +1423,9 @@ def _run(argv: list[str] | None = None) -> int:
                 return 1
 
         def _admitted():
+            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, args.band):
+                return _AR(False, f"Cannot {op} '{args.target}': the plan changed since it was confirmed — check it "
+                                  "and confirm again (nothing was run).")
             if jobresult.mark_running(svc._paths, web, aid):
                 return None
             return _AR(False, f"Cannot {op} '{args.target}': this web attempt was "

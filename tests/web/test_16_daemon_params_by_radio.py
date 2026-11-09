@@ -105,9 +105,9 @@ def test_a_rid_that_is_no_enabled_radio_of_the_band_is_a_404_and_writes_nothing(
 
 def test_the_overview_never_fails_on_a_rid_it_cannot_use(box):
     c, _post, _fake, _tmp_path = box
-    for q in ("dp=daemon&rid=r9", "dp=daemon&rid=r2&band=868", "dp=kiss&rid=r2"):
+    for q in ("dp=daemon&radio=r9", "dp=daemon&radio=r2&band=868", "dp=kiss&radio=r2"):          # W2: ?radio=
         assert c.get(f"/stacks?{q}").status_code == 200, q
-    assert re.search(r"daemon", c.get("/stacks?dp=daemon&rid=r2").get_data(as_text=True))
+    assert re.search(r"daemon", c.get("/stacks?dp=daemon&radio=r2").get_data(as_text=True))
 
 
 def test_a_direct_save_of_some_params_keeps_the_radios_other_values(box):
@@ -123,7 +123,7 @@ def test_a_direct_save_of_some_params_keeps_the_radios_other_values(box):
 def test_the_overview_shows_the_bands_panel_for_a_rid_it_cannot_use(box):
     c, _post, _fake, _tmp_path = box
     plain = c.get("/stacks?dp=daemon").get_data(as_text=True)
-    bad = c.get("/stacks?dp=daemon&rid=r9").get_data(as_text=True)
+    bad = c.get("/stacks?dp=daemon&radio=r9").get_data(as_text=True)
     marker = 'name="dp_FREQ"'
     assert marker in plain and marker in bad
 

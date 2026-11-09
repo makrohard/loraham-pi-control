@@ -51,7 +51,7 @@ def test_homes_banner_offers_the_copys_own_restart_button(tmp_path, web):
 def _spy_spawns(monkeypatch):
     spawns = []
 
-    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid=""):
+    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid="", plan_hash=None):
         spawns.append((op, target, band, rid))
         return f"web-{op}-{target}-{rid}.log", "admitted", ""
     monkeypatch.setattr(ControllerService, "spawn_start_job", spy)
@@ -82,9 +82,8 @@ def test_the_copys_stop_confirms_and_stops_exactly_that_copy(tmp_path, web, monk
     page = parse(c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r3", "from": "dash"})
                  .get_data(as_text=True))
     form = page.within(next(f for f in page.find("form", action="/action") if f.has_attr("data-busy-form")))
-    assert (form.field_default("target"), form.field_default("rid")) == ("kiss", "r3")
-    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss", "rid": "r3", "band": "433",
-                            "confirmed": "yes", "from": "dash"})
+    assert (form.field_default("target"), form.field_default("rid")) == ("kiss@r3", None)   # W2: the instance alone
+    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r3", "confirmed": "yes", "from": "dash"})
     assert [s for s in stops if s[1]] == [("kiss", True, "r3")]                    # the apply: kiss@r3, only it
 
 
@@ -95,18 +94,19 @@ def test_a_target_on_a_radio_off_the_list_is_refused_and_nothing_runs(tmp_path, 
     spawns = _spy_spawns(monkeypatch)
     r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r9", "from": "dash"},
                follow_redirects=True)
-    assert spawns == [] and "Cannot restart kiss@r9: kiss@r9: r9 is not in the hardware list" in r.get_data(as_text=True)
+    assert spawns == [] and "Cannot restart kiss@r9: kiss@r9: r9 is not a radio of the hardware list" in r.get_data(as_text=True)
 
 
 
-def test_an_empty_or_conflicting_copy_suffix_is_refused_and_nothing_runs(tmp_path, web, monkeypatch, csrf):
-    # G1-C54: `kiss@` (no rid) must not fall to slot 0, and `kiss@r3` with the form's rid r1 must not pick either radio.
+def test_an_empty_suffix_and_a_second_rid_are_bad_requests(tmp_path, web, monkeypatch, csrf):
+    # G1-C54, W2: `kiss@` (no rid) names no radio and never falls to the band's first; a `rid` field beside a target is
+    # a second selector, so `kiss@r3` with rid r1 never picks either radio. Both 400, nothing runs.
     svc = _marked(tmp_path)
     c = web(service_factory=lambda: svc)
     spawns = _spy_spawns(monkeypatch)
-    codes = [c.post("/action", data={"_csrf": csrf(c), "op": "restart", "from": "dash", **extra}).status_code
-             for extra in ({"target": "kiss@"}, {"target": "kiss@r3", "rid": "r1"})]
-    assert (codes, spawns) == ([400, 400], [])
+    assert c.post("/action", data={"_csrf": csrf(c), "op": "restart", "from": "dash", "target": "kiss@"}).status_code == 400
+    assert c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r3", "rid": "r1"}).status_code == 400
+    assert spawns == []
 
 
 def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monkeypatch):
@@ -149,8 +149,7 @@ def test_a_disabled_radios_copy_still_stops_but_never_restarts(tmp_path, web, mo
         stops.append((target, apply, inst.rid if inst is not None else None))
         return ActionResult(True, f"Stopped '{target}'.")
     monkeypatch.setattr(ControllerService, "stop", stop)
-    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss", "rid": "r3", "band": "433",
-                            "confirmed": "yes", "from": "dash"})
+    c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r3", "confirmed": "yes", "from": "dash"})
     r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r3", "from": "dash"},
                follow_redirects=True)
     assert [s for s in stops if s[1]] == [("kiss", True, "r3")] and spawns == []
@@ -175,7 +174,7 @@ def test_g1_b1_re_a_recorded_slot_0_on_a_disabled_radio_is_not_started_from_the_
         c = web(service_factory=lambda: ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
         spawns = _spy_spawns(monkeypatch)
         for op in ("start", "restart"):
-            r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "kiss", "rid": "r3", "from": "dash"},
+            r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "kiss@r3", "from": "dash"},
                        follow_redirects=True)
             assert f"Cannot {op} kiss@r3: kiss@r3: r3 is disabled" in r.get_data(as_text=True), op
         assert spawns == []

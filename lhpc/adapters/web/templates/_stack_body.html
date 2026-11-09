@@ -1,6 +1,6 @@
 {# Per-stack row body on /stacks — the collapsible sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first, restart_note %}
+{% from "_macros.html" import action_btn, instance_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first, restart_note %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -117,7 +117,7 @@
         </div>
       {% endif %}
 
-      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream) }}
+      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on) }}
 
       {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
       {% if g.hmac_enabled is not none %}
@@ -149,7 +149,7 @@
                        inside the summary toggle (a11y). #}
                     <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
                     {% if comp.kind.value == 'service' %}
-                      {{ action_btn('start', comp.id, 'Start') }}{{ action_btn('stop', comp.id, 'Stop') }}
+                      {{ instance_btn('start', comp.id, 'Start', g.run_on) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on) }}
                       {# The operator's hard stop of this component only (A §2.12): a confirm page
                          that names its processes first. #}
                       {% if comp.process and comp.id in g.stack.components|map(attribute='id')|list %}

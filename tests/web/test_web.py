@@ -667,7 +667,7 @@ def test_binary_install_apply_is_not_gated_on_build_dependencies(monkeypatch, we
 
 def test_action_requires_csrf(web):
     c = web()
-    assert c.post("/action", data={"op": "start", "target": "daemon"}).status_code == 400
+    assert c.post("/action", data={"op": "start", "target": "daemon@r1"}).status_code == 400
 
 
 def test_action_unknown_op_rejected(web, csrf):
@@ -683,7 +683,7 @@ def test_start_uninstalled_stack_redirects_to_app_page(web, csrf):
     # open (the daemon's, restored from sessionStorage).
     c = web()
     token = csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "kiss"})
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "kiss@r1"})
     assert r.status_code == 302
     loc = r.headers["Location"]
     assert loc.endswith("#stack-install-kiss")     # anchor + data-force-scroll land on Install
@@ -714,10 +714,10 @@ def test_action_plan_then_confirm(web, csrf):
     c = web()
     token = csrf(c)
     # Stage 1: no ack -> confirm page (200, not applied)
-    r1 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon"})
+    r1 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon@r1"})
     assert r1.status_code == 200 and b"Confirm: stop" in r1.data
     # Stage 2: ack -> applies, redirect
-    r2 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon", "confirmed": "yes"})
+    r2 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon@r1", "confirmed": "yes"})
     assert r2.status_code == 302
 
 
@@ -1475,7 +1475,7 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
     c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
+    forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon@r1"]   # W2: its instance
     # S2: the baseline list's r1 card; a radio's running daemon has Stop and Restart (W286), else one Start
     assert [col.within(f).field_default("op") for f in forms] == (["stop", "restart"] if state != "offline-installed"
                                                                   else ["start"]), "the card's daemon controls"
@@ -2128,7 +2128,7 @@ def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch, we
                                "Stop for 'chat' is NOT fully verified — see details.")
     c = web(service_factory=lambda: svc)
     tok = csrf(c)
-    body = c.post("/action", data={"_csrf": tok, "op": "stop", "target": "chat",
+    body = c.post("/action", data={"_csrf": tok, "op": "stop", "target": "chat@r1",
                                    "confirmed": "yes"}, follow_redirects=True).data.decode()
     assert "kill 16720" in body
     cls = _flash_classes(body, "is NOT fully verified")
@@ -2311,7 +2311,7 @@ def test_dash_originated_action_returns_to_dashboard(web, csrf):
     # Dashboard (root), never to /stacks.
     c = web()
     token = csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss@r1",
                                 "from": "dash", "confirmed": "yes"})
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/")         # dashboard root, not a /stacks anchor
@@ -2322,7 +2322,7 @@ def test_stacks_originated_action_returns_to_its_stack_row(web, csrf):
     # No from=dash -> the action returns to the acting stack's row on /stacks.
     c = web()
     token = csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss@r1",
                                 "confirmed": "yes"})
     assert r.status_code == 302
     loc = r.headers["Location"]
@@ -2641,7 +2641,7 @@ def _spy_spawns(monkeypatch, admission="admitted", reason=""):
     """Record every spawn_start_job(op, target, band, stop_owners) call and stub the spawn."""
     from lhpc.core.services import ControllerService
     spawns = []
-    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid=""):
+    def spy(self, op, target, band="", stop_owners=False, cascade=False, rid="", plan_hash=None):
         spawns.append((op, target, band, stop_owners, cascade) + ((rid,) if rid else ()))   # W286: a radio's rid
         return (f"web-{op}-{target}.log" if admission != "blocked" else None), admission, reason
     monkeypatch.setattr(ControllerService, "spawn_start_job", spy)
@@ -2665,9 +2665,9 @@ def test_routine_start_runs_with_no_page_between(tmp_path, monkeypatch, web, csr
     calls = _spy_actions(monkeypatch)
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
-    assert spawns == [("start", "chat", "", False, False)] and calls == []
+    assert spawns == [("start", "chat", "433", False, False, "r1")] and calls == []       # W2: chat@r1
     page = c.get("/").get_data(as_text=True)
     assert "Starting &#39;chat&#39; — follow it in the banner" in page
 
@@ -2680,9 +2680,9 @@ def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch, web, c
         callsign="XX0XXA").ok
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat"})
+    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat@r1"})
     assert r.status_code == 302                                # no stage-1 page
-    assert spawns == [("restart", "chat", "", False, False)]
+    assert spawns == [("restart", "chat", "433", False, False, "r1")]
     assert "Restarting &#39;chat&#39;" in c.get("/stacks").get_data(as_text=True)
 
 
@@ -2692,7 +2692,7 @@ def test_a_crafted_post_with_the_old_launch_fields_changes_nothing(tmp_path, mon
     c = _chat_ready(web, tmp_path)
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat",
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1",
                                 "confirmed": "yes", "_params": "1", "_save": "all",
                                 "_save_then_start": "1", "p_call": "ZZ9ZZZ-1",
                                 "p_tx_freq": "434.500", "dp_433_SF": "10",
@@ -2708,7 +2708,7 @@ def test_identity_refusal_sends_the_operator_to_the_settings_row(tmp_path, monke
     c = _install_chat(web, tmp_path)
     calls = _spy_actions(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1"})
     assert r.status_code == 302 and calls == []
     loc = r.headers["Location"]
     assert "/stacks?" in loc and "cfg=chat" in loc and "bad=f_call" in loc
@@ -2733,7 +2733,7 @@ def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypat
                             False, "Cannot start 'chat': radio hardware not set",
                             details=["  set it under Settings"]))
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
     page = c.get("/").get_data(as_text=True)
     assert "radio hardware not set" in page and "set it under Settings" in page
@@ -2752,7 +2752,7 @@ def test_the_confirm_page_names_the_daemon_by_radio(tmp_path, monkeypatch, web, 
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")      # installed: no redirect
     c = web()
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon", "band": "868",
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon@r2",
                                 "from": "dash"})
     body = r.get_data(as_text=True)
     line = next(l for l in body.splitlines() if "is required to run this stack" in l)
@@ -2769,7 +2769,7 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     c = web(cmdlines={200: ["meshtasticd"]})
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon@r2",
                                 "from": "dash"})
     body = r.get_data(as_text=True)
     assert r.status_code == 200 and spawns == []
@@ -2778,10 +2778,10 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     assert "Stop owner(s) &amp; start</button>" in body
     assert any(a["href"] == "/" and a.text == "Cancel" for a in parse(body).find("a"))   # back to the Dashboard
     assert 'name="p_' not in body and "Stack parameters" not in body
-    r2 = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+    r2 = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon@r2",
                                  "confirmed": "yes", "stop_owners": "yes"})
     assert r2.status_code == 302
-    assert spawns == [("start", "daemon", "868", True, False)]
+    assert spawns == [("start", "daemon", "868", True, False, "r2")]
 
 
 def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, web, csrf):
@@ -2801,14 +2801,14 @@ def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, 
     c = web(service_factory=factory)
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon", "band": "433"})
+    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon@r1"})
     body = r.get_data(as_text=True)
     assert r.status_code == 200 and spawns == []
     assert "Confirm: restart" in body and "Other running stacks depend on this" in body
     assert "chat" in body and "Stop dependents &amp; restart</button>" in body
-    r2 = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon",
-                                 "band": "433", "confirmed": "yes", "cascade": "yes"})
-    assert r2.status_code == 302 and spawns == [("restart", "daemon", "433", False, True)]   # consent travels
+    r2 = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon@r1", "confirmed": "yes",
+                                 "cascade": "yes"})
+    assert r2.status_code == 302 and spawns == [("restart", "daemon", "433", False, True, "r1")]   # consent travels
 
 
 def test_start_daemon_only_on_a_band(tmp_path, monkeypatch, web, csrf):
@@ -2818,10 +2818,10 @@ def test_start_daemon_only_on_a_band(tmp_path, monkeypatch, web, csrf):
     c = web()
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon@r2",
                                 "from": "dash"})
     assert r.status_code == 302
-    assert spawns == [("start", "daemon", "868", False, False)]
+    assert spawns == [("start", "daemon", "868", False, False, "r2")]
     assert 'name="p_radio"' not in c.get("/").get_data(as_text=True)
 
 
@@ -2883,11 +2883,11 @@ def test_a_blocked_or_pending_spawn_flashes_and_returns(tmp_path, monkeypatch, w
     c = _chat_ready(web, tmp_path)
     tok = csrf(c)
     _spy_spawns(monkeypatch, admission="blocked", reason="a start of 'chat' is already in progress")
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1", "from": "dash"})
     assert r.status_code == 302
     assert "already in progress" in c.get("/").get_data(as_text=True)
     _spy_spawns(monkeypatch, admission="pending")
-    c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1", "from": "dash"})
     assert "admission not yet confirmed" in c.get("/").get_data(as_text=True)
 
 

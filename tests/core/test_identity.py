@@ -1343,7 +1343,7 @@ def test_web_refusal_names_every_missing_field_on_the_settings_row(tmp_path, mon
         return real(self, op, target, apply=apply, **k)
     monkeypatch.setattr(type(svc), "run_action", spy)
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "meshtastic"})
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "meshtastic@r1"})   # W2: an instance
     assert resp.status_code == 302 and started == []            # refused BEFORE any start
     loc = resp.location
     assert "cfg=meshtastic" in loc and "bad=c_node_name,c_node_short" in loc
@@ -1445,18 +1445,16 @@ def test_a_stored_placeholder_identity_is_refused_by_the_plan(tmp_path):
     assert "'node_name' is required" in plan.summary
 
 
-def test_web_start_judges_the_active_band(tmp_path, monkeypatch):
-    # A bandless dashboard POST is judged on the band the operation will run on: voice running on
-    # 868 with a 433-only identity is refused and the Settings row is marked.
+def test_web_start_judges_the_instances_own_store(tmp_path, monkeypatch):
+    # W2: a dashboard POST names its instance and is judged on that radio's store: voice@r2 (868) with a 433-only
+    # identity is refused and the Settings row of that instance is marked.
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "launch_band",
-                        lambda self, sid, default="": "868" if sid == "voice" else default)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
                                   band="433").ok                # 433-only identity
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice"})
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice@r2"})
     assert resp.status_code == 302 and "bad=f_callsign" in resp.location
-    assert "band=868" in resp.location                     # the refused store, not the primary
+    assert "radio=r2" in resp.location                     # the refused store, not the primary
     assert svc.identity_resolution("voice", "433")[0]["source"] == "local"
     assert svc.identity_resolution("voice", "868")[0]["source"] == "missing"
 
@@ -1466,14 +1464,14 @@ def test_web_restart_identity_refusal_happens_before_any_stop(tmp_path, monkeypa
     stops = []
     monkeypatch.setattr(type(svc), "stop", lambda self, *a, **kw: stops.append(1), raising=False)
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf"})
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf@r1"})
     assert resp.status_code == 302 and "bad=c_call" in resp.location
     assert stops == []                                         # refused BEFORE any stop
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
-    # A bandless Web restart of a stack running on 868 runs on 868 — the 433 store is untouched.
+def test_web_instance_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
+    # W2: a Web restart of voice@r2 runs on r2's 868 — the 433 store (voice@r1's) is untouched.
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868",
@@ -1482,7 +1480,6 @@ def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
                                                    "file_sf": "7"}, band="433").ok
     b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
     before = b433.read_bytes()
-    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
     seen = {}
     real_impl = type(svc)._start_impl
     def impl(self, target, **kw):
@@ -1490,42 +1487,31 @@ def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
         return real_impl(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl)
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice"})
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice@r2"})
     assert resp.status_code == 302                                # runs directly
     assert seen.get("launch") == "868", seen
     assert b433.read_bytes() == before                            # 433 byte-identical
 
 
-def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch):
-    # AUDIT RULE (review-found again): a CONFIRMED form's band is honoured or refused, never
-    # silently re-resolved — its consequences (owners to stop) were computed on that band. The box
-    # narrowed to 868 under a form that says 433: nothing runs; the operator plans again.
+def test_a_confirmed_form_names_its_instance_never_a_band(tmp_path, monkeypatch):
+    # W2 supersedes the confirmed-band rule (a confirmed form's band honoured or refused): a confirmed form names
+    # `<stack>@<rid>`; a band beside it is a bad request and nothing runs. A plan that changed under the form (its
+    # radio moved band, its config was edited) is the detached job's "plan changed" (tests/web/test_w2_instances.py).
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     started = []
     monkeypatch.setattr(type(svc), "spawn_start_job",
-                        lambda self, op, target, band="", stop_owners=False, cascade=False, rid="":
-                        started.append(band) or (f"web-{op}-{target}.log", "admitted", ""))
+                        lambda self, op, target, band="", stop_owners=False, cascade=False, rid="", plan_hash=None:
+                        started.append((band, rid, plan_hash)) or (f"web-{op}-{target}-{rid}.log", "admitted", ""))
     client, tok = _web(svc, monkeypatch)
-    monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("868",))
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
-                                        "band": "433", "confirmed": "yes"})
-    assert resp.status_code == 302 and started == []
-    page = client.get("/stacks").get_data(as_text=True)
-    assert "now runs it on 868" in page and "confirm again" in page
-    # the target MOVED while both bands stay served — an explicit band outranks the
-    # running-band marker in operation_band, so the live band is checked on its own here.
-    monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("433", "868"))
-    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
-    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice",
-                                        "band": "433", "confirmed": "yes", "cascade": "yes"})
-    assert resp.status_code == 302 and started == []
-    assert "now runs it on 868" in client.get("/stacks").get_data(as_text=True)
-    # a STOPPED target may still be started on an explicitly chosen non-primary band
-    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": d)
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
-                                        "band": "868", "confirmed": "yes"})
-    assert resp.status_code == 302 and started == ["868"]
+    for op, extra in (("start", {}), ("restart", {"cascade": "yes"})):
+        resp = client.post("/action", data={"_csrf": tok, "op": op, "target": "voice@r1", "band": "433",
+                                            "confirmed": "yes", **extra})
+        assert resp.status_code == 400, op
+    assert started == []
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice@r2", "confirmed": "yes",
+                                        "plan_hash": "h"})
+    assert resp.status_code == 302 and started == [("868", "r2", "h")]      # the radio's band, the confirmed plan
 
 
 def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, monkeypatch):

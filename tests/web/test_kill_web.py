@@ -39,7 +39,7 @@ def test_the_confirm_names_the_processes(web, tmp_path):
 def test_a_failed_stop_offers_the_whole_stack_kill(web, csrf, tmp_path):
     # A matching process LHPC does not own: the stop refuses (MANUAL_REQUIRED).
     c = web(cmdlines={999999: _kiss_argv(tmp_path)})
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss",
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1",
                                 "confirmed": "yes"})
     page = r.get_data(as_text=True)
     assert r.status_code == 200 and 'id="stop-failed"' in page and 'id="kill-form"' in page
@@ -48,7 +48,7 @@ def test_a_failed_stop_offers_the_whole_stack_kill(web, csrf, tmp_path):
 
 def test_a_stop_that_succeeds_offers_no_kill(web, csrf):
     c = web()
-    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss",
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1",
                                 "confirmed": "yes"})
     assert r.status_code in (302, 303) and "kill" not in r.headers["Location"]
 

@@ -220,16 +220,21 @@ def _web_rid(svc, target):
     return getattr(instances.copy_of(svc, sid, band=svc.operation_band(target, ""))[0], "rid", "")
 
 
-def _job_state(svc, op, target):
-    rid = _web_rid(svc, target)
+def _job_state(svc, op, target, rid=None):
+    rid = _web_rid(svc, target) if rid is None else rid
     rec = jobresult.read_one(svc._paths, f"web-{op}-{target}" + (f"-{rid}" if rid else "") + ".log")
     return None if rec is None else (rec["state"], rec["admitted"])
 
 
+def _rid(box, target):
+    """K3 (W323), W2: the CLI and the console name the instance the other entries act on — slot 0's radio (a
+    band-less stack: any)."""
+    from lhpc.core import instances
+    return instances.copy_of(box.svc, target)[0].rid or instances.can_run_on(box.svc, box.svc.stack(target))[0]
+
+
 def _cli(box, op, target, web, csrf, monkeypatch):
-    from lhpc.core import instances                  # K3 (W323): the CLI names the instance the other entries act on
-    rid = instances.copy_of(box.svc, target)[0].rid or instances.can_run_on(box.svc, box.svc.stack(target))[0]
-    rc = cli_main.main(["stack", op, f"{target}@{rid}", "--yes"])       # slot 0's radio (a band-less stack: any)
+    rc = cli_main.main(["stack", op, f"{target}@{_rid(box, target)}", "--yes"])
     return {"rc": rc}, rc == 0
 
 
@@ -260,19 +265,18 @@ def _boot(box, op, target, web, csrf, monkeypatch):
 
 
 def _web(box, op, target, web, csrf, monkeypatch):
-    client = create_app(service_factory=lambda: box.svc).test_client()
-    r = client.post("/action", data={"_csrf": csrf(client, "/"), "op": op, "target": target,
+    client, rid = create_app(service_factory=lambda: box.svc).test_client(), _rid(box, target)
+    r = client.post("/action", data={"_csrf": csrf(client, "/"), "op": op, "target": f"{target}@{rid}",
                                      "from": "dash"})
     if "child" in web:                     # the separate process the parent spawned, to its end
         child = web["child"]
         child.wait(timeout=120)
-        rid = _web_rid(box.svc, target)                    # K8: the web's ?band= runs as its band's instance
-        log = f"web-{op}-{target}" + (f"-{rid}" if rid else "") + ".log"
+        log = f"web-{op}-{target}-{rid}.log"
         marker = tomllib.loads((box.root / "state" / "jobs" / f"{log}.job").read_text())
         assert child.pid != os.getpid() and marker["pid"] == child.pid, (
             f"the parent tracked pid {marker['pid']}, the child is {child.pid}")
         web["decision"] = entry_host.read_decision(web["desc"])
-    state = _job_state(box.svc, op, target)
+    state = _job_state(box.svc, op, target, rid)
     return ({"status": r.status_code, "admission": (web.get("parent") or (0, None))[1],
              "child_rc": web["child"].returncode if "child" in web else None, "job": state},
             bool(state and state[0] == "done"))

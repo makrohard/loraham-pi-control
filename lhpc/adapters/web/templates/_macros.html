@@ -52,6 +52,18 @@
 </form>
 {% endmacro %}
 
+{# W2: a start, stop or restart of `target` names its instance: `<target>@<rid>` of the shown radio (`rid`), else one
+   radio selector over `run_on` (the runnable and the running radios). #}
+{% macro instance_btn(op, target, label, run_on=(), rid="") %}
+<form method="post" action="{{ url_for('action') }}" class="act">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="op" value="{{ op }}">
+  {% if rid %}<input type="hidden" name="target" value="{{ target }}@{{ rid }}">
+  {% else %}<select name="target" aria-label="{{ label }} {{ target }} on radio">{% for r in run_on %}<option value="{{ target }}@{{ r }}">{{ target }}@{{ r }}</option>{% endfor %}</select>{% endif %}
+  <button type="submit"{% if not (rid or run_on) %} disabled{% endif %}>{{ label }}</button>
+</form>
+{% endmacro %}
+
 {# Remote freshness probe (git ls-remote) for a stack or a single component. Its own route, NOT an
    /action op: it mutates nothing but the cached status marker, and needs no confirm stage. #}
 {% macro source_check_btn(target) %}
@@ -83,7 +95,7 @@
 {% endmacro %}
 
 {# Grouped lifecycle actions for a stack — one group per line. #}
-{% macro stack_actions(stack_id, installed, has_source, buildable=False, removable=False, fetched_update=False, upstream=None) %}
+{% macro stack_actions(stack_id, installed, has_source, buildable=False, removable=False, fetched_update=False, upstream=None, run_on=()) %}
 {# A fetched-binary stack (no clone) still has an artifact on disk, and the CLI removes it —
    so it gets its own removal line instead of silently having none. Not labelled "Source":
    there is no source here, and Update/source-check have nothing to act on. #}
@@ -133,8 +145,8 @@
 {% endif %}
 <div class="actline">
   <span class="grouplabel">Run</span>
-  {{ action_btn('start', stack_id, 'Run') }}
-  {{ action_btn('stop', stack_id, 'Stop') }}
+  {# W2: one radio selector per request; every start, stop and restart names its instance, `<stack>@<rid>` #}
+  {% for op, label in (("start", "Run"), ("stop", "Stop"), ("restart", "Restart")) %}{{ instance_btn(op, stack_id, label, run_on) }}{% endfor %}
 </div>
 {% endmacro %}
 

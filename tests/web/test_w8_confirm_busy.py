@@ -11,7 +11,7 @@ import pytest
 from htmlq import parse
 
 # op -> (target whose plan renders the confirmed form, the label's leading word)
-OPS = {"stop": ("kiss", "Stopping"), "update": ("kiss", "Updating"), "uninstall": ("kiss", "Uninstalling"),
+OPS = {"stop": ("kiss@r1", "Stopping"),                  # W2: a stop names its instance "update": ("kiss", "Updating"), "uninstall": ("kiss", "Uninstalling"),
        "clean": ("kiss", "Cleaning"), "build": ("kiss", "Building")}
 
 
@@ -48,7 +48,7 @@ def test_the_confirm_page_loads_the_busy_script(web, csrf, op):
 
 
 def test_control_cancel_stays_a_link_outside_the_busy_form(web, csrf):
-    doc = _confirm_page(web, csrf, "stop", "kiss")
+    doc = _confirm_page(web, csrf, "stop", "kiss@r1")
     form = _confirmed_form(doc)
     cancel = doc.within(form).find("a", class_="cancel")
     assert len(cancel) == 1 and cancel[0]["href"] and not cancel[0].has_attr("data-busy-label")
