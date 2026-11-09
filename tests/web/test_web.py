@@ -13,6 +13,7 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 import repo_paths
+import running_band_fixture
 
 
 _MUTATING = {"start", "stop", "build", "update", "test",
@@ -975,7 +976,7 @@ def _conflict_app(web, tmp_path, cmdlines, socks, mesh_band):
     def factory():
         svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system,
                                 paths=Paths(runtime_root=tmp_path))
-        svc._set_running_band("meshtastic", mesh_band)
+        running_band_fixture.set_running_band(svc, "meshtastic", mesh_band)
         return svc
     return web(service_factory=factory)
 
@@ -2762,9 +2763,8 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     # the ONE consequential choice that still gets a page (Start lower right, Cancel lower left).
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")
-    from lhpc.core.services import ControllerService as _CS
-    _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))._set_running_band(
-        "meshtastic", "868")
+    # K6 (13.12.5): no band marker; a running meshtastic whose launch band no record tells holds every band
+    # (instances.running_bands: the fail-safe), so 868 is held without any setup of its band.
     c = web(cmdlines={200: ["meshtasticd"]})
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
@@ -2907,7 +2907,7 @@ def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, m
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
-    svc._set_running_band("meshtastic", "868")
+    running_band_fixture.set_running_band(svc, "meshtastic", "868")
     cli = svc.stack("meshtastic").component("meshtastic-cli")
     assert svc.optional_role(cli) == "listed"                        # run on demand, no tick
     assert "lhpc meshtastic --help" in svc.manual_start_command(cli)
@@ -2962,7 +2962,7 @@ def _band_column(web, tmp_path, running):
     svc = ControllerService(system=FakeSystem(cmdlines_data={100 + i: procs[s] for i, s in enumerate(running)}).system,
                             paths=paths)
     for sid in running:
-        svc._set_running_band(sid, "433")
+        running_band_fixture.set_running_band(svc, sid, "433")
     assert [s["id"] for r in svc.radio_overview() if r["band"] == "433" for s in r["running"]] == list(running)
     doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
     return doc, doc.within(doc.find("div", **{"data-radio-band": "433"})[0])

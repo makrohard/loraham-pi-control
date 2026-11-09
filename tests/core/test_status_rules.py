@@ -17,6 +17,7 @@ from lhpc.core.model import (
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener
 from lhpc.core.status import StatusProber
+import running_band_fixture
 
 _PROPS = "ActiveState,SubState,LoadState,UnitFileState"
 
@@ -184,7 +185,7 @@ def test_runtime_band_overlay_shows_actual_band_not_manifest_default(tmp_path):
     # AND rewrite the dependency line to the band the dependency ACTUALLY runs on.
     from lhpc.core.services import ControllerService, _render_component
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc._set_running_band("kiss", "868")           # the marker lifecycle writes at start
+    running_band_fixture.set_running_band(svc, "kiss", "868")   # K6: the running instance's launch band
     snap, kiss, ss = _kiss_snapshot(svc, RunState.RUNNING)
     svc._overlay_runtime_bands(snap)
     tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
@@ -200,7 +201,7 @@ def test_runtime_band_overlay_stopped_keeps_manifest_default(tmp_path):
     # gated on run_state, so the single-radio rendering is unchanged.
     from lhpc.core.services import ControllerService, _render_component
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc._set_running_band("kiss", "868")           # stale marker from an earlier run
+    running_band_fixture.set_running_band(svc, "kiss", "868")   # a band source says 868 while it is stopped
     snap, kiss, ss = _kiss_snapshot(svc, RunState.STOPPED)
     svc._overlay_runtime_bands(snap)
     tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import pytest
+import running_band_fixture
 import radios_fixture
 
 from lhpc.core.paths import Paths
@@ -11,6 +12,7 @@ from lhpc.core.services import ActionResult, ControllerService
 
 # The kiss TNC is endpoint-ready: a healthy kiss needs its 127.0.0.1:8001 listener present.
 _KISS_LISTENER = Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)
+
 
 
 def _svc(tmp_path):
@@ -173,7 +175,7 @@ def test_blockers_only_real_band_conflicts(tmp_path):
 
     # meshtastic running on 868 must NOT block a 433 stack, but MUST block 868 ones
     s = make("b", {200: ["meshtasticd"]})
-    s._set_running_band("meshtastic", "868")
+    running_band_fixture.set_running_band(s, "meshtastic", "868")
     assert s.run_blockers("meshcom") == []                       # 433 unaffected
     assert any("r2" in b["resource"] for b in s.run_blockers("meshcore"))  # real 868 conflict
 
@@ -186,7 +188,7 @@ def test_same_frequency_blocks_second_stack(tmp_path):
     fake = FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("kiss", "433")             # kiss is band-switchable: pin it to 433
+    running_band_fixture.set_running_band(svc, "kiss", "433")             # kiss is band-switchable: pin it to 433
     bl = svc.run_blockers("meshcom")
     assert any(b["holder_stack"] == "kiss" and "433" in b["resource"] for b in bl)
     # An 868 stack is unaffected by a 433 occupant.
@@ -336,7 +338,7 @@ def _daemon_svc_owned(tmp_path, replies, owner_band):
     svc = ControllerService(system=FakeSystem(unix_replies=radios_fixture.by_radio(replies),
                             cmdlines_data={200: ["meshtasticd"]}).system,
                             paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("meshtastic", owner_band)
+    running_band_fixture.set_running_band(svc, "meshtastic", owner_band)
     return svc
 
 
@@ -573,7 +575,7 @@ def test_no_false_conflict_daemon_433_meshtastic_868(tmp_path):
                        300: ["meshtasticd"]},
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("meshtastic", "868")
+    running_band_fixture.set_running_band(svc, "meshtastic", "868")
     assert svc._observed_conflicts() == []
 
 
@@ -583,7 +585,7 @@ def test_real_conflict_daemon_both_vs_meshtastic_868(tmp_path):
         cmdlines_data={100: ["loraham_daemon", "--radio", "both"], 300: ["meshtasticd"]},
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6, "/tmp/loraconf-r2.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("meshtastic", "868")
+    running_band_fixture.set_running_band(svc, "meshtastic", "868")
     msgs = [c.message for c in svc._observed_conflicts()]
     assert any("loraham.radio.r2" in m for m in msgs)
     assert not any("loraham.radio.r1" in m for m in msgs)
@@ -600,7 +602,7 @@ def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
         cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham_voice"]},
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("voice", "433")
+    running_band_fixture.set_running_band(svc, "voice", "433")
     for b in ("433", "868"):                              # the SAVED daemon params (Settings)
         assert svc.save_daemon_params("daemon", b, {"MODE": "FSK"}).ok
     res = svc.run_action("start", "daemon", apply=True)
@@ -619,7 +621,7 @@ def test_second_component_start_keeps_the_running_bands_config(tmp_path):
         cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-kiss-tnc"]},
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("kiss", "433")
+    running_band_fixture.set_running_band(svc, "kiss", "433")
     res = svc.run_action("start", "loraham-kiss-serial", apply=True)
     text = "\n".join(res.details)
     assert "[keep] 433 already served for 'kiss'" in text
@@ -672,7 +674,7 @@ def test_daemon_stop_cascade_stops_dependents_before_daemon(tmp_path, monkeypatc
 def test_client_release_actual_band(tmp_path, stack, band, sock, other):
     svc = ControllerService(system=FakeSystem(
         unix_replies={sock: _RDY6}).system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band(stack, band)                       # the band the client actually ran on
+    running_band_fixture.set_running_band(svc, stack, band)                       # the band the client actually ran on
     res = svc.stop(stack, apply=True)
     rel = [r for r in res.results if r.component == svc.DAEMON_ID]
     assert rel and band in rel[0].summary and other not in rel[0].summary
@@ -681,7 +683,7 @@ def test_client_release_actual_band(tmp_path, stack, band, sock, other):
 def test_daemon_release_failure_makes_client_stop_nonsuccess(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
         unix_replies={"/tmp/loraconf-r1.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("voice", "433")
+    running_band_fixture.set_running_band(svc, "voice", "433")
     orig = ControllerService.stop
     def fake(self, target, apply=False, cascade=False, band="", release_daemon=True, **kw):
         if target == "daemon":
@@ -697,9 +699,10 @@ def test_daemon_release_failure_makes_client_stop_nonsuccess(tmp_path, monkeypat
 # --- A3: band-aware daemon locks + blockers -------------------------------------------------
 
 def _msvc(tmp_path, band):
+    tmp_path.mkdir(parents=True, exist_ok=True)      # K6: the runtime root exists (the gone band marker's write made it)
     svc = ControllerService(system=FakeSystem(cmdlines_data={200: ["meshtasticd"]}).system,
                             paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("meshtastic", band)
+    running_band_fixture.set_running_band(svc, "meshtastic", band)
     return svc
 
 
@@ -823,18 +826,18 @@ def test_per_band_daemon_stop_locks_only_dependents_that_can_run_on_that_band(tm
 
 
 def test_voice_868_stop_locks_only_868(tmp_path):
-    svc = _svc(tmp_path); svc._set_running_band("voice", "868")
+    svc = _svc(tmp_path); running_band_fixture.set_running_band(svc, "voice", "868")
     keys = _keys(svc, "stop", "voice")
     assert "claim.loraham.radio.r2" in keys and "claim.loraham.radio.r1" not in keys
 
 
 def test_kiss_868_restart_locks_868(tmp_path):
-    svc = _svc(tmp_path); svc._set_running_band("kiss", "868")
+    svc = _svc(tmp_path); running_band_fixture.set_running_band(svc, "kiss", "868")
     assert "claim.loraham.radio.r2" in _keys(svc, "restart", "kiss", band="868")
 
 
 def test_voice_433_restart_to_868_locks_both(tmp_path):
-    svc = _svc(tmp_path); svc._set_running_band("voice", "433")
+    svc = _svc(tmp_path); running_band_fixture.set_running_band(svc, "voice", "433")
     keys = _keys(svc, "restart", "voice", band="868")
     assert "claim.loraham.radio.r1" in keys and "claim.loraham.radio.r2" in keys
 
@@ -893,7 +896,7 @@ def test_daemon_cascade_both_bands_no_inner_release(tmp_path, monkeypatch):
 def test_standalone_client_releases_daemon_once(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
         unix_replies={"/tmp/loraconf-r2.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("voice", "868")
+    running_band_fixture.set_running_band(svc, "voice", "868")
     calls = _spy_stop(monkeypatch)
     assert svc.stop("voice", apply=True).ok
     assert [c for c in calls if c[0] == "daemon"] == [("daemon", "868", True)]   # released once, on 868
@@ -931,7 +934,7 @@ def test_dead_conf_868_of_both_blocks_868_daemon_and_direct_stack(tmp_path):
         paths=Paths(runtime_root=tmp_path))
     assert "868" in svc._daemon_claimed_bands()
     assert any("r2" in b["resource"] for b in svc.run_blockers("meshtastic"))   # blocks direct-SPI 868
-    svc._set_running_band("meshtastic", "868")
+    running_band_fixture.set_running_band(svc, "meshtastic", "868")
     assert any("loraham.radio.r2" in c.message for c in svc._observed_conflicts())  # true conflict
 
 
@@ -977,7 +980,7 @@ def test_healthy_start_stop_owners_stops_no_owner(tmp_path, monkeypatch, set_cal
 
 
 def test_default_restart_locks_only_running_band(tmp_path):
-    svc = _svc(tmp_path); svc._set_running_band("kiss", "868")
+    svc = _svc(tmp_path); running_band_fixture.set_running_band(svc, "kiss", "868")
     # emulate restart()'s pre-guard band resolution:
     rband = svc._effective_band("kiss", "")
     keys2 = [k for k in svc._lifecycle_lock_keys("restart", "kiss", band=rband) if "radio" in k]
@@ -995,7 +998,7 @@ def _band_svc(set_call, tmp_path, cmdlines, socks, bands):
     svc._invalidate_config()
     set_call(svc)                    # the plan enforces the saved identity
     for sid, b in bands.items():
-        svc._set_running_band(sid, b)
+        running_band_fixture.set_running_band(svc, sid, b)
     return svc
 
 

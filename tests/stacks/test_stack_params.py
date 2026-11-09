@@ -13,6 +13,7 @@ from lhpc.core.services import ControllerService
 
 import repo_paths
 from seams import LifecycleSeam
+import running_band_fixture
 
 
 def _svc(tmp_path):
@@ -806,7 +807,7 @@ def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
     set_call(svc)
-    svc._set_running_band("meshtastic", "433")
+    running_band_fixture.set_running_band(svc, "meshtastic", "433")
     assert [b.get("holder_stack") for b in svc.run_blockers("kiss")], "precondition: an owner"
     _seed_raw(svc, "kiss", {"tx_freq": "banana"})
     stops = _spy_stops(monkeypatch)
