@@ -1423,7 +1423,8 @@ def _run(argv: list[str] | None = None) -> int:
                 return 1
 
         def _admitted():
-            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, args.band):
+            band = getattr(inst, "band", "")                # K8: no --band; the web hashed on its instance's band
+            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, band):
                 return _AR(False, f"Cannot {op} '{args.target}': the plan changed since it was confirmed — check it "
                                   "and confirm again (nothing was run).")
             if jobresult.mark_running(svc._paths, web, aid):

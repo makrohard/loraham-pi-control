@@ -234,7 +234,7 @@
           <h3>Running on {{ x.rid if x else r.band }}</h3>
           {# Cleanup C7c, W2 (G1-W2 3): an instance (its `rid`) shows on its own radio's card only, with its Stop and
              Restart; an entry without a rid names no instance (no launch record or argv token tells its radio): it shows
-             on each card of its band, with no control, since a stop of any instance leaves it running. #}
+             on each card of its band with its state and its Stop (W370), never Run (which could start nothing). #}
           {% set runs = (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) + r.running | rejectattr("rid") | list %}
           {% if runs %}
             {% for s in runs %}
@@ -302,7 +302,15 @@
                         {% endif %}
                         {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}
                       {% endfor %}
-                      {% if c.interactive and c.state not in ('running', 'degraded') %}
+                      {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
+                        <form method="post" action="{{ url_for('action') }}" class="act">
+                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                          <input type="hidden" name="op" value="stop">
+                          <input type="hidden" name="target" value="{{ c.id }}{{ at }}">
+                          <input type="hidden" name="from" value="dash">
+                          <button type="submit">Stop</button>
+                        </form>
+                      {% elif c.interactive %}
                         {# The blocker banner STAYS, but the command is shown UNCONDITIONALLY: an
                            interactive client is run by the operator in their own terminal, so
                            hiding it behind an install/build blocker just removes the one thing
@@ -315,8 +323,17 @@
                       {% endif %}</li>
                   {% endfor %}
                 </ul>
-                <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No instance: no launch record or argv names the radio
-                  {{ s.name }} runs on, so lhpc can neither stop nor restart it from here.</p>
+                <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No launch record or argv names the radio {{ s.name }}
+                  runs on. Stop asks for {{ s.id }}{{ at }}; a process lhpc does not own is refused, with Kill offered.</p>
+                {% if x %}<p class="actrow">{# W370: an orphan keeps its state and its Stop #}
+                  <form method="post" action="{{ url_for('action') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="op" value="stop">
+                    <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
+                    <input type="hidden" name="from" value="dash">
+                    <button type="submit">Stop</button>
+                  </form>
+                </p>{% endif %}
                 {% endif %}
               </div>
             {% endfor %}

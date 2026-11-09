@@ -54,12 +54,13 @@
 
 {# W2: a start, stop or restart of `target` names its instance: `<target>@<rid>` of the shown radio (`rid`), else one
    radio selector over `run_on` (the runnable and the running radios). #}
+{# `pick`: the page radio to preselect; "?" (a ?radio= the list does not have): no radio until the operator picks one #}
 {% macro instance_btn(op, target, label, run_on=(), rid="", pick="") %}
 <form method="post" action="{{ url_for('action') }}" class="act">
   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
   <input type="hidden" name="op" value="{{ op }}">
   {% if rid %}<input type="hidden" name="target" value="{{ target }}@{{ rid }}">
-  {% else %}<select name="target" aria-label="{{ label }} {{ target }} on radio">{% for r in run_on %}<option value="{{ target }}@{{ r }}"{% if r == pick %} selected{% endif %}>{{ target }}@{{ r }}</option>{% endfor %}</select>{% endif %}
+  {% else %}<select name="target" aria-label="{{ label }} {{ target }} on radio" required>{% if pick == "?" %}<option value="" selected disabled>radio?</option>{% endif %}{% for r in run_on %}<option value="{{ target }}@{{ r }}"{% if r == pick %} selected{% endif %}>{{ target }}@{{ r }}</option>{% endfor %}</select>{% endif %}
   <button type="submit"{% if not (rid or run_on) %} disabled{% endif %}>{{ label }}</button>
 </form>
 {% endmacro %}

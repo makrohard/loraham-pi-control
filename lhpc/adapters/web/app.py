@@ -456,9 +456,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # W2 (G1-W2 3): an interactive app shows on the card of each radio its instance's marker names, with that
         # instance's Stop; a running entry without a rid is no instance lhpc can address (a stop reaches none of it).
         from lhpc.core import interactive_markers as _im
+        marked = {e["id"] for r in radios for e in r["interactive"]}
+        marked = {sid: [f.stem.partition("@")[2] for f in _im.markers(service, sid) if "@" in f.stem] for sid in marked}
         for r in radios:
             for e in r["interactive"]:
-                e["rids"] = [f.stem.partition("@")[2] for f in _im.markers(service, e["id"]) if "@" in f.stem]
+                e["rids"] = marked[e["id"]]
         # An interactive app that's been launched (marked) but isn't detected running yet, or a radio's daemon
         # start/restart job still running -> poll faster so the dash shows the outcome quickly.
         tasks, dsid = service.running_tasks(), service.stack_of(service.DAEMON_ID) or "daemon"
@@ -983,7 +985,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # which also decided which per-band config a Save would write.
             sband = (band if (cfg_sid and stack.id == cfg_sid)
                      else service.launch_band(stack.id, ""))
-            _inst = _settings_copy(stack.id, request.args.get("radio", "") if stack.id == cfg_sid else "")
+            _inst = _settings_copy(stack.id, _page_radio()[0])      # G1-W2-RE F2: every stack's view on the page radio
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
                    if not main or c.id != main.id]
@@ -1182,11 +1184,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None
 
-    def _page_band() -> str:
-        """W2: the page's radio (`?radio=rN`) decides its band; `?band=` only until W3 drops the band links."""
-        rid = request.args.get("radio", "")
-        return next((r.band for r in _radios_mod.load(service._paths).radios if r.id == rid), "") if rid else \
-            request.args.get("band", "")
+    def _page_radio() -> tuple:
+        """W2 (G1-W2-RE F2, DEC-W384ad): the page's radio, resolved ONCE per request from its row: (rid, band, why).
+        Every per-stack view keys on that rid; no stack row is hidden. No `?radio=`: ("", `?band=` until W3, ""); an
+        empty one is a 400 by name; a rid the list does not have: ("", "", why), reported on the page."""
+        if "lhpc.page_radio" not in request.environ:
+            rid = request.args.get("radio")
+            if rid == "":
+                abort(make_response("?radio= is empty: name a radio (?radio=rN)", 400))
+            row = next((r for r in _radios_mod.load(service._paths).radios if r.id == rid), None) if rid else None
+            request.environ["lhpc.page_radio"] = ((rid, row.band, "") if row else
+                                                  ("", "", f"{rid} is not a radio of the hardware list") if rid else
+                                                  ("", request.args.get("band", ""), ""))
+        return request.environ["lhpc.page_radio"]
 
     def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
@@ -1212,8 +1222,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _ws = None
         ctx = {
             "version": __version__, "snapshot": snapshot,
-            # W2 (G1-W2 2): the page's radio picks that radio in every instance selector of the page
-            "page_radio": next((r.id for r in _radios_mod.load(service._paths).radios if r.id == request.args.get("radio")), ""),
+            # W2 (G1-W2 2): the page's radio picks that radio in every instance selector; a rid it cannot use is said
+            "page_radio": "?" if _page_radio()[2] else _page_radio()[0], "page_radio_why": _page_radio()[2],
             "summary": summarize(snapshot), "groups": groups, "auto_install_mode": service.auto_install_mode(),
             "observed_conflicts": service.observed_conflicts(snapshot),   # band-aware
             "controller": service.controller_status(),
@@ -1258,7 +1268,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
         # cached-only — no live git/network/identity on a GET.
-        ctx, _groups, _snapshot = _stacks_context(_page_band(),
+        ctx, _groups, _snapshot = _stacks_context(_page_radio()[1],
                                                  cfg_sid=request.args.get("cfg", ""))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
@@ -1287,7 +1297,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
         # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
-        ctx, groups, _snapshot = _stacks_context(_page_band(), only_sid=sid,
+        ctx, groups, _snapshot = _stacks_context(_page_radio()[1], only_sid=sid,
                                                  cfg_sid=request.args.get("cfg", ""))
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
@@ -1296,7 +1306,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/stacks")
     def stacks_overview():
-        if request.args.get("rid") and not request.args.get("radio"):     # W2: W1's `dp=&rid=` link reads `?radio=`
+        _page_radio()                                                      # an empty ?radio= is a 400 (G1-W2-RE)
+        if request.args.get("rid") and "radio" not in request.args:        # W2: W1's `dp=&rid=` link reads `?radio=`
             args = {k: v for k, v in request.args.items() if k != "rid"}
             return redirect(url_for("stacks_overview", **args, radio=request.args["rid"]))
         return _render_stacks()
@@ -1578,12 +1589,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return rid
 
     def _view_rid(stack_id: str, band: str) -> str:
-        """The radio the opened daemon panel shows: W2's one selector, `?radio=rN` (with `cfg=` or `dp=` naming this
-        stack); "" (the band's view) for another stack's panel, or a rid that is no enabled radio (of `band` when one is
+        """The radio a stack's daemon panel shows: the page radio (W2's one selector, `?radio=rN`, every stack's panel:
+        G1-W2-RE F2); "" (the band's view) without one, or for a rid that is no enabled radio (of `band` when one is
         given): the page never fails on it."""
         from lhpc.core import radio_start
-        rid = request.args.get("radio", "")
-        if not rid or stack_id not in (request.args.get("cfg"), request.args.get("dp")):
+        rid = _page_radio()[0]
+        if not rid:
             return ""
         _inst, rband, why = radio_start.daemon_radio(service, rid)
         return "" if why or (band and rband != band) else rid
@@ -1749,13 +1760,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # radio's running instance still stops (G1-C7 B3). One exception, the §6 stray card: a band daemon no
             # radio names (a 0.13.x daemon still up) is stopped by its band, as before (W290: its Stop stays).
             stray = op == "stop" and target == "daemon" and "rid" not in request.form and \
-                request.form.get("band") in set(service.RADIO_BANDS) - set(service.radio_bands())   # G1-W2 4: unlisted
+                request.form.get("band") in set(service.RADIO_BANDS) - set(service.radio_bands()) and \
+                any(r["stray"] and r["band"] == request.form["band"] for r in service.radio_overview())   # the card's rule
             if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
                 _instances.parse_target(service, target, op)
-            # G1-W2 5: the parser hands an instance WITH a why only where a stop reaches it (a disabled radio, a radio
-            # off the list); every other refusal comes without one and is refused for a stop too.
+            # G1-W2 5: the parser hands an instance WITH a why only where a stop must reach it (instances.copy_of: a
+            # disabled radio; a RUNNING instance whose radio left the list, whose row moved band — "stop it first" — or
+            # whose band the stack cannot use); every other refusal comes without one and is refused for a stop too.
             if why and not (inst is not None and op == "stop"):
                 flash(f"Cannot {op} {target}: {why}.", "warn")
                 return _redirect_for(sid or target)

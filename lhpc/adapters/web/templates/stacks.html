@@ -7,6 +7,10 @@
   {# Structural page heading (h1 is the site title in the header) so the heading outline is
      h1 → h2 → h3 with no skipped levels. Visually hidden — the page is self-evidently the stacks list. #}
   <h2 class="visually-hidden">Stacks</h2>
+  {% if page_radio_why %}{# G1-W2-RE: a ?radio= the list does not have picks no radio; the page says so #}
+    <div class="depnote depnote-warn" id="radio-refused"><strong>?radio={{ request.args.get('radio') }}: {{ page_radio_why }}.</strong>
+      No radio is picked on this page: choose one in each selector.</div>
+  {% endif %}
   <section class="tiles">
     <div class="tile"><div class="n">{{ summary.stacks }}</div><div class="l">Stacks</div></div>
     <div class="tile"><div class="n">{{ summary.stack_states.get('running', 0) }}</div><div class="l">Running</div></div>
