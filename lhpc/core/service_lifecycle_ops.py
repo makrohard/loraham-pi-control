@@ -643,9 +643,9 @@ class LifecycleOpsMixin:
         never be routed through ambient/thread-local state (Waitress shares this service across
         threads). Lock order (admission → config → lifecycle) is enforced by
         test_hook_runs_after_every_lock_before_any_mutation (tests/test_boot_restore.py)."""
-        band = instances.radio_band(self, target, inst, band)
-        if (_r := self._controller_refusal(target)) is not None:
-            return _r
+        band, _why = instances.radio_band(self, target, inst, band)
+        if _why or (_r := self._controller_refusal(target)) is not None:
+            return ActionResult(False, f"Refusing to start: {_why}") if _why else _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
         if (_r := self._meshcore_mode_refusal(target, inst)) is not None:

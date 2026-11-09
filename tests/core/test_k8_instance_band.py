@@ -54,3 +54,38 @@ def test_k8_the_daemons_own_instance_keeps_its_band_rule(svc, op):
     from lhpc.core import radio_start
     res = getattr(svc, op)("daemon", inst=radio_start.daemon_inst("r2"))
     assert res.ok and res.details == ["  [daemon] start/ensure --radio all bands"], res.details
+
+
+@pytest.mark.parametrize("op,word", [("start", "start"), ("restart", "restart")])
+@pytest.mark.parametrize("inst", [Instance("r2"), Instance("r2", band="868")])
+def test_k8_an_instance_whose_radio_left_the_list_is_refused_by_name(tmp_path, op, word, inst):
+    # DEC-W384aj: r2 is not in the hardware list: refused by name, never run on the caller's or a stored band
+    radios_fixture.write(tmp_path, (radios_fixture.R1,))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    res = getattr(svc, op)("kiss", band="433", inst=inst)
+    assert (res.ok, res.summary) == (False, f"Refusing to {word}: kiss@r2: r2 is not in the hardware list")
+
+
+def test_k8_the_started_tnc_of_kiss_at_r2_runs_on_r2s_band_and_sockets(tmp_path, monkeypatch):
+    # DEC-W384aj: the launch itself, not only the plan: kiss@r2 (868) beside an ambient 433 spawns its TNC with 868's
+    # frequency, r2's sockets, and r2's 868 start log
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
+    ready = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=- TXMODE=MANAGED\n".encode() for r in ("r1", "r2")}
+    svc = ControllerService(system=FakeSystem(unix_replies=ready).system, paths=Paths(runtime_root=tmp_path))
+    assert svc.bootstrap(apply=True).ok and svc.set_operator_identity(callsign="XX0XXA").ok
+    spawned = []
+
+    def life(s):
+        lc = Lifecycle(s._paths, s.stacks(), s.config(), s._system,
+                       spawn=lambda argv, log, cwd=None, env=None: spawned.append((log.name, list(argv))) or 4321)
+        lc.OBSERVE_TIMEOUT_S = 0.0
+        monkeypatch.setattr(lc, "record_launch", lambda *a, **k: True)
+        return lc
+    monkeypatch.setattr(ControllerService, "_lifecycle", life)
+    svc.start("kiss", apply=True, band="433", inst=Instance("r2"))      # it does not verify here: no listener
+    (log, argv), = [s for s in spawned if s[1][0].endswith("loraham-kiss-tnc")]
+    flags = {f: argv[argv.index(f) + 1] for f in ("--rx-freq", "--data-socket", "--conf-socket")}
+    assert (log, flags) == ("start-loraham-kiss-tnc-868-r2.log", {"--rx-freq": "869.525",
+                            "--data-socket": "/tmp/loraf-r2.sock", "--conf-socket": "/tmp/loraconf-r2.sock"})
