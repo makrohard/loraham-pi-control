@@ -149,9 +149,9 @@ panel is per radio (`?rid=rN`) and saves that radio's `dp_<PARAM>` in its row of
 ([the list file](#the-list-file)):
 
 ```
-lhpc config <stack> --band <433|868> --daemon-param KEY=VALUE [--daemon-param ...]   # persist
-lhpc config <stack> --band <433|868> --apply-daemon                                  # push live (the stack must be running)
-lhpc config <stack> --band <433|868> --reset-daemon
+lhpc config <stack>@<rid> --daemon-param KEY=VALUE [--daemon-param ...]   # persist
+lhpc config <stack>@<rid> --apply-daemon                                  # push live (the stack must be running)
+lhpc config <stack>@<rid> --reset-daemon
 ```
 
 Values are validated server-side (`daemon_control.validate_set`). An apply is `ok` only when every

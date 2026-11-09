@@ -32,7 +32,7 @@ SUCCESS = {
     "uninstall": (["uninstall", "--help"], (0,)),
     "clean": (["clean", "--help"], (0,)),
     "known-working": (["known-working", "--help"], (0,)),
-    "daemon": (["daemon", "433"], (0, 1)),
+    "daemon": (["daemon", "r1"], (0, 1)),                 # K8 (W308/W310): a radio id, never a band
     "logs": (["logs", "daemon"], (0, 1)),
     "web": (["web", "--help"], (0,)),
     "webserver": (["webserver", "status"], (0, 1)),

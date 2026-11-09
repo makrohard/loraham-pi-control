@@ -1418,7 +1418,7 @@ class Lifecycle:
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
         recs = self.owned_records(comp.id, band, rid=rid)
-        # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never slot 0's that still serve.
+        # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never another instance's that still serve.
         ep_comp = comp if endpoints is None else dataclasses.replace(comp, endpoints=tuple(endpoints))
         if not recs:
             # No ownership record. A matching foreign process is MANUAL_REQUIRED; a

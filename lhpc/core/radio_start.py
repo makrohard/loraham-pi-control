@@ -699,7 +699,7 @@ def radio_clients(svc, band: str, rid: str, sid: str) -> tuple:
 
 def start_log_name(comp_id: str, band: str = "", rid: str = "") -> str:
     """The one name of a start's captured log (item 16): `start-<comp>[-<band>][-<rid>].log`. Every start that runs
-    on a radio names it, slot 0 of a single radio too, so a second radio on the band never renames a log."""
+    on a radio names it, a single radio's too, so a second radio on the band never renames a log."""
     return f"start-{comp_id}" + (f"-{band}" if band else "") + (f"-{rid}" if rid else "") + ".log"
 
 
@@ -1154,7 +1154,7 @@ def client_instance(svc, comp, band: str, inst=None, out=None) -> tuple:
     """(instance, refusal) for a component's start (W3, stage L5; item 7c2). The instance `inst` (its radio) is used as
     given. Without one (a band caller until K6), a daemon client (a run param whose value template names `{rid}`)
     runs on the band's first enabled radio; any other component keeps the manifest's template values. `out` is
-    kept for the callers' signature (the DEC-W16 note is gone: every entry names its radio)."""
+    kept for the callers' signature (every entry names its radio)."""
     from . import commands, instances
     if inst is not None and inst.rid:
         return inst, ""

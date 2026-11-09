@@ -515,7 +515,7 @@ def test_config_path_cannot_escape_via_band_or_id(tmp_path):
     from types import SimpleNamespace
     for sid, rid in [("daemon", "../../etc"), ("../../evil", "r1"), ("a/b", ""), ("daemon", "r1/../../x")]:
         with _pytest.raises(ValidationError):
-            _stack_config_path(paths, sid, "", SimpleNamespace(rid=rid))
+            _stack_config_path(paths, sid, SimpleNamespace(rid=rid))
     # A legitimate write stays inside config/stacks/.
     p = save_stack_config(paths, "kiss", {"x": "1"}, "868")
     assert stacks in p.resolve().parents
@@ -960,11 +960,10 @@ def test_interactive_command_block_survives_an_empty_band_marker(tmp_path):
 
 
 def test_interactive_without_a_marker_stays_in_the_dropdown(tmp_path):
-    # The OTHER half of the same gate, and the reason the fix may not be a bare
-    # `mark_band or min(sbands)`: interactive_band() returns None for "no marker" and "" for
-    # "marked but band-less". None is falsy too, so collapsing them would give every
-    # never-started interactive stack a permanent command card and drop it from the dropdown.
-    svc = _overview_433(tmp_path)                    # no mark_interactive call at all
+    # The OTHER half of the same gate: interactive_shown() is {} for "no marker" and {"": ""} for
+    # "marked but band-less"; treating both alike would give every never-started interactive stack
+    # a permanent command card and drop it from the dropdown.
+    svc = _overview_433(tmp_path)                    # no mark_shown call at all
     row = next(r for r in svc.radio_overview() if r["band"] == "433")
     assert "chat" in [s["id"] for s in row["startable"]], \
         "a never-started interactive stack belongs in the dropdown"

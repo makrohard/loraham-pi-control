@@ -61,7 +61,7 @@ class MeshCoreIdentityError(ValueError):
 
 
 def secret_path(paths: Paths, filename: str = IDENTITY_FILENAME, rid: str = "") -> Path:
-    """config/secrets/<filename>, a listed instance's config/secrets/<rid>/<filename> (7f: its own key, never slot 0's;
+    """config/secrets/<filename>, a listed instance's config/secrets/<rid>/<filename> (7f: its own key, never another instance's;
     the layout of the manifest's `config/secrets/{instance_dir}…` paths)."""
     return paths.under("config", "secrets", rid, filename) if rid else paths.under("config", "secrets", filename)
 

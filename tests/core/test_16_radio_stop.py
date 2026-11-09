@@ -83,7 +83,6 @@ def test_the_cli_addresses_one_radios_daemon(cli, action):
 @pytest.mark.parametrize("argv, rc, why", [
     (("stop", "daemon", "--radio", "r9", "--yes"), 1, "ERR   daemon@r9: r9 is not a radio of the hardware list"),
     (("stop", "kiss", "--radio", "r2", "--yes"), 2, "ERR   --radio applies to the daemon only: daemon@RID"),
-    (("stop", "daemon", "--radio", "r2", "--band", "433", "--yes"), 2, "lhpc: error: unrecognized arguments: --band 433"),
 ])
 def test_the_cli_refuses_a_radio_it_cannot_address(cli, argv, rc, why):
     got, out, calls = cli(*argv)
@@ -147,3 +146,9 @@ def test_g1_k4b_4_an_unclaimed_dependent_is_kept_though_another_radio_has_a_clai
     claimed = ControllerService(system=FakeSystem(cmdlines_data={71: ["/x/loraham-kiss-tnc", *tok]}).system,
                                 paths=Paths(runtime_root=tmp_path))
     assert radio_start.radio_dependents(claimed, "433", inst=radio_start.daemon_inst("r2")) == []   # all told: none
+
+
+def test_k8_a_band_option_on_a_radio_stop_is_refused_by_name(cli):
+    # K8 (W308/W310): the stop takes the radio alone; a --band beside it is refused by name, nothing stopped
+    got, out, calls = cli("stop", "daemon", "--radio", "r2", "--band", "433", "--yes")
+    assert (got, calls) == (2, []) and out.out.split(":", 1)[0] == "ERR   --band is gone (W308/W310)"

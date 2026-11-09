@@ -336,7 +336,7 @@ async def test_unrestorable_channel_fails_closed_and_is_preserved(tmp_path, daem
 
 
 async def test_a_first_start_node_gets_the_public_channel(tmp_path, daemon):
-    """A MeshCore device has Public in slot 0 out of the box; openHop's store starts empty and we
+    """A MeshCore device has Public as channel 0 out of the box; openHop's store starts empty and we
     only restore rows that exist, so a fresh node could neither send to Public nor recognise a
     received channel message ("Unknown channel hash"). First start seeds it, and the flush
     persists it — so a later start restores the row instead of seeding again."""

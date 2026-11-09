@@ -156,20 +156,20 @@ def radio_dir_ok(paths, job: str) -> bool:
     return radio_dir_state(paths, job) == PRESENT
 
 
-def resolve_job(surface: str, band: str = "") -> tuple[Entry, str]:
-    """(entry, job) for a CLI surface and band — the daemon needs its band, nobody else takes
-    one. Raises ValueError with the message the CLI prints; used by `rflog_tail` and by
-    `lhpc rflog --clear`, which must never read (and so never roll) before clearing."""
+def resolve_job(surface: str, rid: str = "") -> tuple[Entry, str]:
+    """(entry, job) for a CLI surface and radio (K8, W308/W310: `<stack>@<rid>`, never a band): the daemon's file and an
+    instance's are the radio's `<rid>/<file>`; a one-node stack (Reticulum) has one file. Raises ValueError with the
+    message the CLI prints; used by `rflog_tail` and by `lhpc rflog --clear`, which must never read (and so never roll)
+    before clearing."""
     e = entry(surface)
     if e is None:
         raise ValueError(f"'{surface}' has no RF log")
-    if e.banded and not band:
-        raise ValueError(f"'{surface}' logs per band: add --band 433|868")
-    if not e.banded and band:
-        raise ValueError(f"'{surface}' has one RF log; --band does not apply")
-    job = e.job(band)
-    if job is None:
-        raise ValueError(f"'{surface}' has no RF log for band {band}")
+    job = e.radio_job(rid) if e.per_radio else (f"{rid}/{e.job()}" if rid else e.job())
+    per_instance = e.per_radio or bool(RADIO_JOB.fullmatch(f"r1/{e.job()}"))
+    if not rid and per_instance:
+        raise ValueError(f"'{surface}' logs per radio: name one, lhpc rflog {surface}@<rid>")
+    if job is None or (rid and not per_instance) or (rid and not _RID.fullmatch(rid)):
+        raise ValueError(f"'{surface}@{rid}' has no RF log" if rid else f"'{surface}' has no RF log")
     return e, job
 
 

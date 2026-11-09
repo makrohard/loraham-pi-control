@@ -8,4 +8,4 @@ BASELINE_RID = {"433": "r1", "868": "r2"}
 def mark(svc, sid: str, band: str, stored=None) -> bool:
     """Mark `sid`'s instance on `band`'s baseline radio; `stored` is the band text the start stores (default `band`)."""
     rid = BASELINE_RID[band or "433"]
-    return svc.mark_interactive(sid, band if stored is None else stored, Instance(rid, band=band or "433"))
+    return svc.mark_shown(sid, Instance(rid, band=band or "433"), band if stored is None else stored)

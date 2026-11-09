@@ -361,6 +361,9 @@ class JobsOpsMixin:
             return None, "blocked", f"{op} is not a detached operation"
         if not (self.stack(target) or self.stack_of(target)):
             return None, "blocked", f"unknown stack or component '{target}'"
+        if band and not rid:                     # K8 (W308/W310): the web's ?band= (until W5) is its band's instance
+            from . import instances
+            rid = getattr(instances.copy_of(self, self.stack_of(target) or target, band=band)[0], "rid", "")
         life = self._lifecycle()
         _adm = _contextlib.ExitStack()
         try:
@@ -389,7 +392,7 @@ class JobsOpsMixin:
             with jobresult.settle_on_raise(self._paths, log, aid):
                 argv = [sys.executable, "-m", "lhpc", "_stack-start", target,
                         "--web-result", log, "--attempt-id", aid]
-                argv += (["--band", band] if band else []) + (["--radio", rid] if rid else [])
+                argv += ["--radio", rid] if rid else []
                 if stop_owners:
                     argv.append("--stop-owners")
                 if cascade and op == "restart":          # the confirmed "Stop dependents & restart"

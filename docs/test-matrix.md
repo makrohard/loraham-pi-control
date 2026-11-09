@@ -76,7 +76,7 @@ its own.
 
 | # | stack | channel | build | start | evidence |
 |---|---|---|---|---|---|
-| 1 | `daemon` | binary | refused (no source tree) | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
+| 1 | `daemon` | binary | refused (no source tree) | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon r1` answers |
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed. On a Desktop image it is the reverse: the GTK voice starts verified and the terminal variant is skipped |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |

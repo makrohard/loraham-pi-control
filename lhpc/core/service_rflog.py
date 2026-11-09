@@ -93,14 +93,14 @@ class RflogOpsMixin:
     def rflog_roll_native_all(self) -> None:
         """The console's pass: try the roll on every NATIVE RF log (the Meshtastic trace, whose writer never rolls
         it; non-native ones are rotated by their own writers). A failed roll waits for the next pass. Never raises."""
-        self._rflog_roll_natives(lambda e: True, Exception)
+        self._rflog_roll_natives("", Exception)
 
     def _rflog_roll_at_start(self, comp_id: str) -> None:
-        self._rflog_roll_natives(lambda e: e.writer == comp_id, (OSError, PathContainmentError))
+        self._rflog_roll_natives(comp_id, (OSError, PathContainmentError))
 
-    def _rflog_roll_natives(self, which, errors) -> None:
-        """Roll each native trace `which` takes: the legacy file and every instance's `<rid>/<file>` (K7)."""
-        for e in (e for e in _rflog.REGISTRY if e.native and which(e)):
+    def _rflog_roll_natives(self, comp_id: str, errors) -> None:
+        """Roll each native trace (of `comp_id`'s writer, "" every one): the legacy file and every instance's (K7)."""
+        for e in (e for e in _rflog.REGISTRY if e.native and comp_id in ("", e.writer)):
             for job in [j for _b, j in e.jobs] + [f"{r}/{e.job()}" for r in instances.radios_of(self.stack(e.owner), self._paths)]:
                 try:
                     self._rflog_roll_native(self._rflog_path(job))
@@ -264,7 +264,7 @@ class RflogOpsMixin:
         if rf is None:
             return ActionResult(False, "Not an RF log of this component; nothing cleared.")
         try:
-            name = validators.path_component(str(job), field="job log")
+            name = str(job) if _rflog.RADIO_JOB.fullmatch(str(job)) else validators.path_component(str(job), field="job log")
             if not name.endswith(".log"):
                 raise validators.ValidationError("not a .log")
             p = self._rflog_path(name)
@@ -276,7 +276,7 @@ class RflogOpsMixin:
                 if st is not None:
                     # A symlink/non-regular leaf is refused by the anchored open, never truncated.
                     runtime_fs.open_log_truncate(self._paths, p).close()
-                runtime_fs.unlink(self._paths, p.with_name(_rflog.previous(name)))
+                runtime_fs.unlink(self._paths, p.with_name(_rflog.previous(p.name)))   # a radio's `<rid>/` file too
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"RF log not cleared: {exc}")
         return ActionResult(True, f"RF log cleared: {name}")
@@ -479,8 +479,8 @@ class RflogOpsMixin:
                                 "decoded": str(obj.get("decoded", ""))[:self.RFLOG_DECODED_MAX]}
         return result, ""
 
-    def rflog_tail(self, surface: str, band: str = "", lines: int = 300) -> tuple:
-        """CLI: (path, lines) for a surface's RF log; the daemon needs its band, nobody else
-        takes one. ("", []) with a reason in the second slot is never returned — errors raise."""
-        e, job = _rflog.resolve_job(surface, band)
+    def rflog_tail(self, surface: str, rid: str = "", lines: int = 300) -> tuple:
+        """CLI: (path, lines) for a surface's RF log, a radio's own file (`<stack>@<rid>`, rflog.resolve_job). ("", [])
+        with a reason in the second slot is never returned — errors raise."""
+        e, job = _rflog.resolve_job(surface, rid)
         return self.log_tail(e.writer, lines, job=job)

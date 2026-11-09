@@ -40,7 +40,7 @@ def test_t_p1_the_bases_are_the_manifests():
     # ports exactly the TCP listeners without a template
     from lhpc.core import listeners
     slotted, fixed = _manifest_bases()
-    assert slotted == set(listeners.SLOTTED_BASES) and fixed == set(listeners.FIXED_PORTS)
+    assert slotted == set(listeners.INSTANCE_BASES) and fixed == set(listeners.FIXED_PORTS)
 
 
 def test_t_p3_a_stack_port_param_meeting_another_stacks_listener_is_refused(tmp_path):

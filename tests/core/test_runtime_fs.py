@@ -922,7 +922,7 @@ def test_stack_config_path_rejected_for_a_bad_radio_id(tmp_path):
 
     from lhpc.core.config import _stack_config_path
     with pytest.raises(validators.ValidationError):
-        _stack_config_path(Paths(runtime_root=tmp_path), "kiss", "", SimpleNamespace(rid="../../x"))
+        _stack_config_path(Paths(runtime_root=tmp_path), "kiss", SimpleNamespace(rid="../../x"))
 
 
 def test_under_rejects_symlink_escape(tmp_path):

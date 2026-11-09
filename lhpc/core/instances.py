@@ -1,7 +1,7 @@
 """Stack instances (item 7, CLEANUP-DESIGN-v13 13.2, DEC-W327: no slots): every operator entry names `<stack>@<rid>`,
 and a stack has one instance on each enabled radio of its bands (radios_of), each with its radio's paths and ports.
 A MAY stack's instances run side by side; any other stack runs one at a time until its 13.6 work (K7).
-config/instances.toml and add-instance/remove-instance are gone (DEC-W344): nothing is listed first."""
+config/instances.toml and its two CLI verbs are gone (DEC-W344): nothing is listed first."""
 from __future__ import annotations
 
 import dataclasses
@@ -327,14 +327,32 @@ def port_of_default(svc, p, inst) -> str:
     other = svc.stack(m.group(1)) if m and getattr(inst, "rid", "") else None
     if other is None:
         return ""
-    base, stored = int(m.group(2)), store(svc, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))
-    counts = svc._owner_param_counts(other)[0]
-    for c in other.components:
+    return str(with_bases(svc, other.id, commands.Instance(inst.rid, band=inst.band)).port(int(m.group(2))))
+
+
+def with_bases(svc, sid, inst):
+    """`inst` with `sid`'s saved port bases (DEC-W384ac): each run param whose default is `{port:B}` and that the
+    instance's own store sets (a valid 1024..65535 port) moves base B, so its endpoint, its claim and a sibling's
+    target (kiss-serial's socat, meshcom-qemu's --xr-redirect) follow the saved port; unchanged without one. `sid` may
+    be several stacks (a start's run order: their bases are disjoint, T-P1)."""
+    if inst is None or not inst.rid:
+        return inst
+    bases = dict(inst.bases)
+    for stack in (svc.stack(s) for s in ([sid] if isinstance(sid, str) else sid)):
+        if stack is not None:
+            bases.update(_saved_bases(svc, stack, inst))
+    return commands.Instance(inst.rid, band=inst.band, bases=bases) if bases != inst.bases else inst
+
+
+def _saved_bases(svc, stack, inst) -> dict:
+    stored, counts, bases = store(svc, stack.id, inst.band, inst), svc._owner_param_counts(stack)[0], {}
+    for c in stack.components:
         for q in c.run_params:
-            if getattr(q, "default_template", "") == f"{{port:{base}}}":
-                saved = svc._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0]
-                base = int(saved) if str(saved or "").strip().isdigit() else base
-    return str(inst.port(base))
+            m = commands._PORT_RE.fullmatch(getattr(q, "default_template", "") or str(q.default))
+            saved = str(svc._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0] or "").strip() if m else ""
+            if saved.isdigit() and 1024 <= int(saved) <= 65535:
+                bases[int(m.group(1))] = int(saved)
+    return bases
 
 
 def store_inst(svc, sid: str, band: str = "", inst=None):
@@ -433,6 +451,7 @@ def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> boo
     snapshot check (`_order_already_healthy`)."""
     if inst is None or not inst.rid:
         return svc._order_already_healthy(order, radio)
+    inst = with_bases(svc, {s.id for s, _c in order}, inst)     # DEC-W384ac: its endpoints at its saved ports
     snap = svc.build_snapshot()
     idx = {c.id: ss.components[c.id] for ss in snap.stacks for c in ss.stack.components}
     for _s, comp in order:
@@ -448,7 +467,7 @@ def already_healthy(svc, target: str, order, radio: str, inst, band: str) -> boo
 def running_claim_keys(svc, sid: str, comp, claim) -> set:
     """G1-C7 B5: `claim`'s keys as stack `sid`'s running `comp` holds them: the key of each instance of it that runs
     (claim_key), so two stacks' instances on one derived key conflict; the declared key when it has no instances."""
-    keys = {claim_key(claim, i) for i in commands.stack_instances(svc.stack(sid), svc._paths)
+    keys = {claim_key(claim, with_bases(svc, sid, i)) for i in commands.stack_instances(svc.stack(sid), svc._paths)
             if instance_runs(svc, comp, i, resolve(svc, f"{sid}@{i.rid}")[2])}
     return keys or {claim.key}
 
@@ -481,6 +500,7 @@ def instance_state(svc, comp, inst, band: str, snap_state, cs=None):
     if (comp.id == svc.DAEMON_ID or comp.process is None
             or comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE, ComponentKind.ONESHOT)):
         return snap_state
+    inst = with_bases(svc, svc.stack_of(comp.id), inst)          # DEC-W384ac: its endpoints at its saved ports
     if instance_runs(svc, comp, inst, band):
         if str(getattr(comp, "readiness", "")) == "endpoint":     # its own endpoints judge it, never the template's
             if cs is not None:                                    # the start's one view (endpoint_statuses)
@@ -505,11 +525,17 @@ def _alone(svc, comp, inst) -> bool:
 def unclaimed(svc, comp, table=None, procs=None) -> bool:
     """A process of `comp`'s spec runs that no instance claims (by record or token, instance_processes); `table` and
     `procs` are the caller's one cmdline table and its instance_processes, when it checks many components."""
+    return bool(unclaimed_pids(svc, comp, table, procs))
+
+
+def unclaimed_pids(svc, comp, table=None, procs=None) -> list:
+    """The pids of `unclaimed`: a process of the spec no instance's record or token claims (an older argv too: a
+    0.13 band socket is no instance's token)."""
     from .probes.process import matches
     table = svc._system.procfs.cmdlines() if table is None else table
     procs = instance_processes(svc, table) if procs is None else procs
     claimed = {p for _s, _r, c, p in procs if c == comp.id}
-    return any(p not in claimed and matches(comp.process, a, None) for p, a in table.items())
+    return sorted(p for p, a in table.items() if p not in claimed and matches(comp.process, a, None))
 
 
 
@@ -537,7 +563,8 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     if inst is None or not inst.rid:
         return {}
     rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
-    return {"rid": inst.rid, "token": _token(svc, comp, inst, rband), "endpoints": endpoints_for(comp.endpoints, inst)}
+    return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),
+            "endpoints": endpoints_for(comp.endpoints, with_bases(svc, sid, inst))}          # DEC-W384ac
 
 
 

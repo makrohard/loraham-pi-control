@@ -8,8 +8,8 @@ Three kinds of owner:
 
 A save that would put two owners on one port, or a port outside 1024..65535, is refused at save and
 names both owners: a stack port param (`param_conflicts`) and a stack web page (`webserver.plan_stack_exposure`
-with `stack_listeners`). The exclusive `tcp.port` claims stay the runtime backstop. Until L5 every instance is
-slot 0 (one per stack), so the inventory is today's listeners."""
+with `stack_listeners`). The exclusive `tcp.port` claims stay the runtime backstop. Every instance listens on its
+radio's ports (base + 133 x (n - 1), DEC-W348)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .probes.endpoints import parse_endpoint
 PORT_MIN, PORT_MAX = 1024, 65535
 # The listener bases of A §2.4: ten follow their instance's radio (base + 133 x (n - 1), r1..r64, DEC-W348), four are
 # fixed (Reticulum is one node). T-P1 holds them disjoint over every radio and from the fixed and page ports.
-SLOTTED_BASES = (8001, 8080, 4403, 9443, 7000, 18083, 12323, 5000, 8000, 8788)
+INSTANCE_BASES = (8001, 8080, 4403, 9443, 7000, 18083, 12323, 5000, 8000, 8788)
 FIXED_PORTS = (37428, 37429, 4242, 8790)
 
 

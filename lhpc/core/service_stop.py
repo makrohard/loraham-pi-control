@@ -331,6 +331,11 @@ class StopOpsMixin:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             else:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
+                if (cr.outcome is Outcome.ALREADY_STOPPED and getattr(inst, "rid", "") and comp.process is not None
+                        and (orphans := instances.unclaimed_pids(self, comp))):   # K8: never a silent no-op over one
+                    cr = CompResult(component=comp.id, stack=cr.stack, action="stop", outcome=Outcome.MANUAL_REQUIRED,
+                                    summary="a matching process is running but no instance claims it (no record, an "
+                                            f"older argv) — stop it yourself: kill {' '.join(map(str, orphans))}")
             results.append(cr)
             own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"

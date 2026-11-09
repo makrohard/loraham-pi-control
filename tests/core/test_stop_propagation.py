@@ -60,7 +60,7 @@ def _patch_life(monkeypatch, svc, outcome):
 def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     launch_band_fixture.set_launch_band(svc, "daemon", "433")
-    svc.mark_interactive("daemon", "433")
+    svc.mark_shown("daemon", band="433")
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.stop("daemon", apply=True)
     assert not res.ok
@@ -70,7 +70,7 @@ def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
 def test_stop_verified_clears_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     launch_band_fixture.set_launch_band(svc, "daemon", "433")
-    svc.mark_interactive("daemon", "433")
+    svc.mark_shown("daemon", band="433")
     _patch_life(monkeypatch, svc, Outcome.STOPPED)
     res = svc.stop("daemon", apply=True)
     assert res.ok

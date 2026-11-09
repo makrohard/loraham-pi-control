@@ -143,7 +143,7 @@ def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, 
              daemon.pid: ["/x/loraham_daemon", "--radio", "868", "--id", "r3"]}
     assert table[p0.pid] != table[pk.pid]
     svc = _copy_svc(tmp_path, table)
-    marker = svc._band_marker("kiss")
+    marker = tmp_path / "state" / "running" / "kiss.band"      # the 0.13.x per-stack band marker's path
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("433\n")                                # a 0.13.x band marker (K6, 13.12.5: never read)
     assert kill.kill(svc, "kiss@r3", apply=True).ok

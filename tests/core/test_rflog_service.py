@@ -37,7 +37,7 @@ def _live(monkeypatch, svc, sid, rid):
 
 def _logs(tmp_path, name, text=""):
     d = tmp_path / "logs"
-    d.mkdir(exist_ok=True)
+    (d / name).parent.mkdir(parents=True, exist_ok=True)              # a radio's `<rid>/` file too
     (d / name).write_text(text)
     return d / name
 
@@ -57,8 +57,8 @@ def test_cli_and_rflog_paths_set_every_instance_in_the_same_files(tmp_path):
     assert a.set_rflog("graywolf", "off").ok                                 # lhpc rflog graywolf off (kiss's store)
     assert b.set_rflog("graywolf", "off").ok                                 # the graywolf log page
     for rid in ("r1", "r2"):
-        pa = cfgmod._stack_config_path(a._paths, "kiss", "", Instance(rid))
-        pb = cfgmod._stack_config_path(b._paths, "kiss", "", Instance(rid))
+        pa = cfgmod._stack_config_path(a._paths, "kiss", Instance(rid))
+        pb = cfgmod._stack_config_path(b._paths, "kiss", Instance(rid))
         assert pa.read_text() == pb.read_text() and _store(b, "kiss", rid)["rf_log"] == "off"
     assert all("rf_log" not in _store(b, "graywolf", rid) for rid in ("", "r1", "r2"))   # never the proxy's store
 
@@ -324,19 +324,22 @@ def test_meshtastic_clear_only_empties(tmp_path):
 
 # ---- the CLI's resolver --------------------------------------------------------------------
 
-def test_cli_resolver_requires_the_band_only_for_the_daemon(tmp_path):
+def test_k8_the_cli_resolver_names_a_radio_never_a_band(tmp_path):
+    # K8 (W308/W310): the daemon's and an instance's RF log is the radio's `<rid>/<file>`; a one-node stack has one file
     svc = _svc(tmp_path)
-    _logs(tmp_path, "rf-kiss.log", "k\n")
-    with pytest.raises(ValueError, match="--band"):
+    _logs(tmp_path, "r1/rf-kiss.log", "k\n")
+    with pytest.raises(ValueError, match="logs per radio: name one, lhpc rflog daemon@<rid>"):
         svc.rflog_tail("daemon")
-    with pytest.raises(ValueError, match="--band"):
-        svc.rflog_tail("graywolf", "433")
+    with pytest.raises(ValueError, match="logs per radio: name one, lhpc rflog graywolf@<rid>"):
+        svc.rflog_tail("graywolf")
+    with pytest.raises(ValueError, match="'reticulum@r1' has no RF log"):
+        svc.rflog_tail("reticulum", "r1")
     with pytest.raises(ValueError):
         svc.rflog_tail("chat")
-    assert svc.rflog_tail("graywolf") == (str(tmp_path / "logs" / "rf-kiss.log"), ["k"])
-    assert svc.rflog_tail("daemon", "868") == ("", [])                  # no file yet
-    _logs(tmp_path, "rf-daemon-868.log", "d\n")
-    assert svc.rflog_tail("daemon", "868")[0].endswith("rf-daemon-868.log")
+    assert svc.rflog_tail("graywolf", "r1") == (str(tmp_path / "logs" / "r1" / "rf-kiss.log"), ["k"])
+    assert svc.rflog_tail("daemon", "r2") == ("", [])                     # no file yet
+    _logs(tmp_path, "r2/rf-daemon.log", "d\n")
+    assert svc.rflog_tail("daemon", "r2")[0].endswith("logs/r2/rf-daemon.log")
 
 
 # ---- persistence and the roll lock -----------------------------------------------------------

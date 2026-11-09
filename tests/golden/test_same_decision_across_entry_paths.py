@@ -211,8 +211,18 @@ def entry(kiss_box, prior_boot, monkeypatch, csrf, tmp_path):
             entry_host.kill_group_if_same(pid, start)
 
 
+def _web_rid(svc, target):
+    """K8 (W308/W310): the web job names the band's instance by its radio (`--radio`), never a band."""
+    from lhpc.core import instances
+    sid = svc.stack_of(target) or target
+    if not svc.stack_bands(sid):                       # the web passes a band only for a band-switchable stack
+        return ""
+    return getattr(instances.copy_of(svc, sid, band=svc.operation_band(target, ""))[0], "rid", "")
+
+
 def _job_state(svc, op, target):
-    rec = jobresult.read_one(svc._paths, f"web-{op}-{target}.log")
+    rid = _web_rid(svc, target)
+    rec = jobresult.read_one(svc._paths, f"web-{op}-{target}" + (f"-{rid}" if rid else "") + ".log")
     return None if rec is None else (rec["state"], rec["admitted"])
 
 
@@ -227,13 +237,13 @@ def _job(box, op, target, web, csrf, monkeypatch):
     """The attempt as the web parent leaves it — reserved, its job marker naming the process that
     runs the runner (this one) — then the runner, with the band the parent freezes."""
     svc = box.svc
-    log, aid = f"web-{op}-{target}.log", uuid.uuid4().hex
+    rid = _web_rid(svc, target)
+    log, aid = f"web-{op}-{target}" + (f"-{rid}" if rid else "") + ".log", uuid.uuid4().hex
     assert jobresult.reserve(svc._paths, log, aid, op, target, svc.stack_of(target) or target, [])
     assert jobs.write_job_marker(svc._paths, log, os.getpid(), target, op,
                                  ident=procident.proc_identity(os.getpid()), attempt_id=aid)
     argv = ["_stack-start", target, "--web-result", log, "--attempt-id", aid]
-    band = svc.operation_band(target, "")
-    argv += (["--band", band] if band else []) + (["--restart"] if op == "restart" else [])
+    argv += (["--radio", rid] if rid else []) + (["--restart"] if op == "restart" else [])
     rc = cli_main.main(argv)
     state = _job_state(svc, op, target)
     return {"rc": rc, "job": state}, state[0] == "done"
@@ -256,7 +266,8 @@ def _web(box, op, target, web, csrf, monkeypatch):
     if "child" in web:                     # the separate process the parent spawned, to its end
         child = web["child"]
         child.wait(timeout=120)
-        log = f"web-{op}-{target}.log"
+        rid = _web_rid(box.svc, target)                    # K8: the web's ?band= runs as its band's instance
+        log = f"web-{op}-{target}" + (f"-{rid}" if rid else "") + ".log"
         marker = tomllib.loads((box.root / "state" / "jobs" / f"{log}.job").read_text())
         assert child.pid != os.getpid() and marker["pid"] == child.pid, (
             f"the parent tracked pid {marker['pid']}, the child is {child.pid}")

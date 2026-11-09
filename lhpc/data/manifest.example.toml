@@ -2757,7 +2757,7 @@ main = "meshcore-node"
   # proxy REFUSES the endpoints that would mutate LHPC-owned state (see proxy_deny_paths).
   run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 {port:5000} 127.0.0.1 {port:8788}"
   run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "{port:5000}", "127.0.0.1", "{port:8788}"]
-  run_env = { MESHCORE_INSTANCE_DIR = "{instance_dir}" }   # the instance's state level ("" at slot 0) for its data + CLI lock
+  run_env = { MESHCORE_INSTANCE_DIR = "{instance_dir}" }   # the instance's state level ("" without a radio) for its data + CLI lock
   # The React frontend is PREBUILT and shipped WITH lhpc as package data ({asset}/
   # meshcore-webui-dist): a Pi Zero 2 W cannot run the Node 20+/Vite build, and LHPC never
   # runs npm at runtime. Only the Python backend is built on the target.

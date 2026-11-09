@@ -56,19 +56,20 @@ class Instance:
     band. Its ports are its radio's (DEC-W348: base + 133 x (n - 1) for rN, r1 the base) and its paths sit under
     `<rid>/`; `{port_of:STACK:BASE}` follows the same rule. `Instance()` without a radio is only the manifest's
     template values (TEMPLATE: the bases, no `<rid>/`), never a running instance. Its key is
-    `instances.key(<stack>, inst)`."""
+    `instances.key(<stack>, inst)`. `bases` ({manifest base: saved base}, DEC-W384ac): the stack's saved ports, so
+    every use of a base (its endpoint, claim, a sibling's target) follows the saved value (instances.with_bases)."""
 
-    __slots__ = ("band", "rid")
+    __slots__ = ("band", "bases", "rid")
 
-    def __init__(self, rid: str = "", *, band: str = ""):
+    def __init__(self, rid: str = "", *, band: str = "", bases=None):
         if rid and not _RID_RE.fullmatch(rid):
             raise CommandError(f"instance radio id must match r1..r99, got {rid!r}")
-        self.rid, self.band = rid, band
+        self.rid, self.band, self.bases = rid, band, dict(bases or {})
 
     def port(self, base: int) -> int:
         if not 1024 <= base <= 65535:
             raise CommandError(f"port base {base} is outside 1024..65535")
-        return rid_port(base, self.rid)
+        return rid_port(self.bases.get(base, base), self.rid)
 
     def subst(self, text: str) -> str:
         text = _PORT_OF_RE.sub(lambda m: str(self.port(int(m.group(2)))), text)

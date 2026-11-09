@@ -38,7 +38,7 @@ class PreparedStart:
     optional_ids: frozenset
     gui_optional_ids: frozenset
     nonmain_interactive_ids: frozenset
-    inst: object = None   # item 7c2: the listed instance (commands.Instance, slot k >= 1) being started; None = slot 0
+    inst: object = None   # item 7c2: the instance (commands.Instance) being started; None = the template (no radio)
 
     @property
     def target_is_stack(self) -> bool:

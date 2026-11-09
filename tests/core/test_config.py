@@ -318,7 +318,7 @@ def test_known_working_symlinked_dir_is_empty(tmp_path):
 
 def _seed_stack_toml(paths, stack_id, raw, band=""):
     from lhpc.core.config import _stack_config_path
-    p = _stack_config_path(paths, stack_id, band)
+    p = _stack_config_path(paths, stack_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(raw)
     return p
@@ -452,7 +452,7 @@ def test_daemon_override_survives_normal_reset(tmp_path):
 def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
     from lhpc.core.config import load_stack_config, _stack_config_path
     svc = _svc(tmp_path)
-    p = _stack_config_path(svc._paths, "meshcom", "")
+    p = _stack_config_path(svc._paths, "meshcom")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('autostart_meshcom-gps-relay = "on"\nfile_x = "y"\ndp_868_CADIDLE = "77"\n')
     assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
@@ -507,7 +507,7 @@ def test_update_rejects_control_key_leaves_file_unchanged(tmp_path):
     import pytest
     from lhpc.core.config import update_stack_config, ConfigError, _stack_config_path
     paths = _paths(tmp_path)
-    p = _stack_config_path(paths, "meshcom", "")
+    p = _stack_config_path(paths, "meshcom")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('keep = "x"\n')
     before = p.read_text()
@@ -1095,7 +1095,7 @@ def _write_malformed(paths, stack_id, band=""):
     # K6: the file the service reads for this stack and band: its band's instance's own <sid>@<rid>.toml
     from lhpc.core import instances
     svc = ControllerService(system=FakeSystem().system, paths=paths)
-    p = _stack_config_path(paths, stack_id, band, instances.store_inst(svc, stack_id, band))
+    p = _stack_config_path(paths, stack_id, instances.store_inst(svc, stack_id, band))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("this is not = valid toml [[[\n")
     return p
@@ -1251,7 +1251,7 @@ def test_reset_of_one_band_also_clears_the_band_less_keys(tmp_path):
     from lhpc.core import config as cfgmod
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     for band, text in (("433", 'rx_only = "on"\n'), ("", 'autostart_loraham-kiss-serial = "on"\n')):
-        p = cfgmod._stack_config_path(svc._paths, "kiss", band)
+        p = cfgmod._stack_config_path(svc._paths, "kiss")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
     assert svc.reset_config("kiss", band="433").ok
@@ -1645,8 +1645,7 @@ def test_reset_config_refuses_symlinked_leaf(tmp_path):
     import os
     from lhpc.core.config import _stack_config_path
     svc = _svc_config_typed(tmp_path)
-    cfg_band = svc._config_band("daemon", "")
-    p = _stack_config_path(svc._paths, "daemon", cfg_band)
+    p = _stack_config_path(svc._paths, "daemon")
     p.parent.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "evil.toml"; outside.write_text("x=1")
     os.symlink(outside, p)                        # symlinked config leaf
@@ -1761,7 +1760,7 @@ def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeyp
     assert any(r.component == "loraham-chat" and r.outcome == Outcome.BLOCKED
                and "config could not be generated" in (r.summary or "") for r in res.results), \
         outcomes(res)
-    assert svc.interactive_band("chat") is None                  # interactive marker NOT written
+    assert svc.interactive_shown("chat") == {}                  # interactive marker NOT written
 
 
 def test_config_param_groups_mark_the_fixture_relay_group_optional_with_a_rule(tmp_path):

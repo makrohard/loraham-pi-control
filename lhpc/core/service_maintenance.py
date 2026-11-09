@@ -2640,7 +2640,7 @@ class MaintenanceOpsMixin:
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids}
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
-        markers = [*self._interactive_markers(sid), self._band_marker(sid),           # K7: every instance's marker
+        markers = [*self._interactive_markers(sid),           # K7: every instance's marker
                    known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),   # K5: and each instance's, also a removed radio's
                    *sorted(restart_required.marker_path(self._paths, sid).parent.glob(f"{sid}@r*.json")),

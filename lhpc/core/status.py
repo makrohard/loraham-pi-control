@@ -86,7 +86,7 @@ class StatusProber:
         # running even when the spec no longer matches its argv: one started by an older LHPC,
         # before its argv gained an instance token (A §2.3 "across the update", T-R6).
         self._owned_running = owned_running or {}
-        # {component_id: pids} the listed copies run (their own token or record): never slot 0's (C7, W286).
+        # {component_id: pids} the listed copies run (their own token or record): never another instance's (C7, W286).
         # ONE /proc/net/tcp read and ONE /proc cmdline table per whole-snapshot assessment (set by
         # `assess_stacks`); None outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None

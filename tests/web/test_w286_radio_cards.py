@@ -142,8 +142,8 @@ def test_the_detached_start_names_its_log_by_the_radio_and_passes_it(tmp_path, m
     for rid in ("r1", "r2"):                                     # two radios' starts run side by side
         c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon", "rid": rid, "from": "dash"})
     assert [(a[a.index("--web-result") + 1], a[a.index("--radio") + 1] if "--radio" in a else None,
-             a[a.index("--band") + 1]) for a in argvs] == [
-        ("web-start-daemon-r1.log", "r1", "433"), ("web-start-daemon-r2.log", "r2", "868")]
+             "--band" in a) for a in argvs] == [
+        ("web-start-daemon-r1.log", "r1", False), ("web-start-daemon-r2.log", "r2", False)]   # K8: the radio, no band
 
 
 def _runner(tmp_path, monkeypatch, log):
@@ -172,8 +172,8 @@ def test_the_start_child_starts_the_radios_daemon_and_refuses_another_name(tmp_p
                  "--radio", "r1"]) == 3                                   # the log is bound to the radio too
     assert calls == []
     assert main(["_stack-start", "daemon", "--web-result", "web-start-daemon-r1.log", "--attempt-id", _A,
-                 "--band", "433", "--radio", "r1"]) == 0
-    assert calls == [("daemon", "433", "r1")]
+                 "--radio", "r1"]) == 0
+    assert calls == [("daemon", "", "r1")]
     assert jobresult.read_one(svc._paths, "web-start-daemon-r1.log")["state"] == "done"
 
 

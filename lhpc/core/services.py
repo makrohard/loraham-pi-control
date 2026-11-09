@@ -843,7 +843,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         returned dict is shared for the request; callers must not mutate it. A malformed file
         still raises `ConfigError` on every read (never memoized)."""
         try:
-            st = os.stat(_stack_config_path(self._paths, stack_id, band, inst))
+            st = os.stat(_stack_config_path(self._paths, stack_id, inst))
             sig = (st.st_ino, st.st_size, st.st_mtime_ns)
         except OSError:
             sig = None
@@ -2031,7 +2031,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if (_m is not None and _m.gui_optional
                         and not self.gui_fallback_active(_stack)):
                     continue
-                if self.interactive_band(_stack.id) is not None:
+                if self.interactive_shown(_stack.id):
                     continue
                 return False
             if comp.gui_optional and (
@@ -2075,8 +2075,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _effective_band(self, stack_id: str, fallback: str = "") -> str:
         """The band a stack is actually running on (start marker, or for an
         interactive app the band it was launched on)."""
-        return (self.launch_band(stack_id, "") or self.interactive_band(stack_id)
-                or fallback)
+        from . import interactive_markers
+        return self.launch_band(stack_id, "") or interactive_markers.one_band(self.interactive_shown(stack_id)) or fallback
 
     def _dependents_of(self, target: str, bands=None) -> list[str]:
         """Stack ids of the stacks that depend on `target`, running or not: a cascade locks the

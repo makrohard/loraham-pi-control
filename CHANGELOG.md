@@ -30,6 +30,7 @@
 - Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio) and, for now, MeshCom (one
   QEMU guest at a time); meshcom@rN's guest runs on its radio's ports.
 - meshcom-qemu-raspi: 722b5e8e5 -> 3f4425c92 (3f4425c), used by meshcom-gps-relay, meshcom-qemu
+- `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

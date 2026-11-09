@@ -290,7 +290,7 @@ def _cmd_config(svc, args) -> int:
     # ----- operator (RESERVED — never a stack id) -----
     if stack == "operator":
         stray = [n for n, v in (("<param>", args.param), ("--reset", args.reset),
-                                 ("--band", args.band), ("--daemon-param", args.daemon_param),
+                                 ("--daemon-param", args.daemon_param),
                                  ("--apply-daemon", args.apply_daemon),
                                  ("--reset-daemon", args.reset_daemon)) if v]
         if stray:
@@ -317,15 +317,11 @@ def _cmd_config(svc, args) -> int:
         print(f"ERR   unknown stack '{stack}'")
         print("\nNext:\n  lhpc list")
         return 1
-    if inst is not None and args.band and args.band != iband:
-        print(f"ERR   {target} runs on {iband} MHz (its radio's band), not {args.band}")
-        return 2
-    args.band = iband or args.band
+    band = iband                                  # K8 (W308/W310): the instance's radio's band, never a --band
 
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
-    if daemon_mode and inst is not None:
-        print(f"ERR   {target}'s daemon parameters are its radio's: lhpc stack start|stop daemon --radio {inst.rid} "
-              "addresses that daemon, and its settings are the radio's (the console's daemon card for the radio)")
+    if daemon_mode and inst is None and not svc._is_daemon_target(stack):     # the daemon's own: per radio in K8e
+        print(f"ERR   name the instance whose daemon parameters these are: lhpc config {stack}@<rid> --daemon-param …")
         return 2
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
@@ -338,16 +334,16 @@ def _cmd_config(svc, args) -> int:
         if not args.yes and not _confirm(f"\nReset {target} settings to defaults? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(svc.reset_config(stack, args.band, inst))
+        return _render(svc.reset_config(stack, band, inst))
 
     if daemon_mode:
         if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
             print("ERR   choose one of --daemon-param / --apply-daemon / --reset-daemon")
             return 2
         if args.apply_daemon:
-            return _render(svc.apply_daemon_params(stack, args.band))
+            return _render(svc.apply_daemon_params(stack, band))
         if args.reset_daemon:
-            return _render(svc.reset_daemon_params(stack, args.band))
+            return _render(svc.reset_daemon_params(stack, band))
         from lhpc.core import daemon_params as _dp
         vals = {}
         for kv in args.daemon_param:
@@ -360,13 +356,13 @@ def _cmd_config(svc, args) -> int:
                 print(f"ERR   unknown daemon parameter {key!r} — valid: {', '.join(_dp.ALL_PARAMS)}")
                 return 2
             vals[key] = val.strip()
-        return _render(svc.save_daemon_params(stack, args.band, vals))
+        return _render(svc.save_daemon_params(stack, band, vals))
 
     if args.param is None or args.param == "list":
-        return _config_list(svc, stack, args.band, inst)
+        return _config_list(svc, stack, band, inst)
 
     # show / set a single parameter — resolve the name to its canonical key (NO first-match).
-    fields = svc.config_param_fields(stack, args.band)
+    fields = svc.config_param_fields(stack, band)
     matches = [f for f in fields
                if f["name"] == args.param or f"{f['component']}.{f['name']}" == args.param]
     if not matches:
@@ -384,7 +380,7 @@ def _cmd_config(svc, args) -> int:
             print(f"    lhpc config {target} {form} <value>")
         return 1
     fld = matches[0]
-    row = next((r for r in _config_rows(svc, stack, args.band, inst)
+    row = next((r for r in _config_rows(svc, stack, band, inst)
                 if r["component"] == fld["component"] and r["name"] == fld["name"]), None)
 
     if args.value is None:                                  # show
@@ -401,10 +397,10 @@ def _cmd_config(svc, args) -> int:
     # Plain config editing, the CLI counterpart of the Settings page: clearing an identity is
     # allowed and WARNed about below; `lhpc stack start/restart` is what refuses to launch without
     # one, exactly as the web Start/Restart panel does.
-    res = svc.save_config_bundle(stack, values={key: args.value}, band=args.band, inst=inst)
+    res = svc.save_config_bundle(stack, values={key: args.value}, band=band, inst=inst)
     rc = _render(res)
     if res.ok and row is not None and row["is_identity"]:
-        ok, _fields, msg = svc.enforce_identity(stack, args.band, inst)
+        ok, _fields, msg = svc.enforce_identity(stack, band, inst)
         if not ok:
             print(f"WARN  {msg}")
     return rc
@@ -414,21 +410,22 @@ def _cmd_rflog(svc, args) -> int:
     from lhpc.core import rflog as _rflog
     if args.all or args.clear_all:
         # Every stack at once: the two flags are exclusive and take no stack and no band.
-        if args.surface or args.band or (args.all and args.clear_all):
-            print("usage: lhpc rflog --all on|off | lhpc rflog --clear-all (no stack, no --band)",
+        if args.surface or (args.all and args.clear_all):
+            print("usage: lhpc rflog --all on|off | lhpc rflog --clear-all (no stack)",
                   file=sys.stderr)
             return 2
         return _render(svc.set_rflog_all(args.all) if args.all else svc.rflog_clear_all())
     if not args.surface:
-        print("usage: lhpc rflog <stack> [--band B] [--lines N] [--clear] [--decrypt [--follow]]"
+        print("usage: lhpc rflog <stack>@<rid> [--lines N] [--clear] [--decrypt [--follow]]"
               " | --all on|off | --clear-all", file=sys.stderr)
         return 2
+    args.surface, _, rid = args.surface.partition("@")      # K8 (W308/W310): `<stack>@<rid>`, the radio's own file
     if _rflog.entry(args.surface) is None:
         print(f"ERR   '{args.surface}' has no RF log (one of: "
               f"{', '.join(x.surface for x in _rflog.REGISTRY)})")
         return 2
     try:
-        e, job = _rflog.resolve_job(args.surface, args.band)
+        e, job = _rflog.resolve_job(args.surface, rid)
     except ValueError as exc:
         print(f"ERR   {exc}")                                   # usage: band required/rejected
         return 2
@@ -443,7 +440,7 @@ def _cmd_rflog(svc, args) -> int:
             return 2
         return _rflog_decrypt(svc, e, job, args.lines, args.follow)
     try:
-        path, lines = svc.rflog_tail(args.surface, args.band, args.lines)
+        path, lines = svc.rflog_tail(args.surface, rid, args.lines)
     except ValueError as exc:
         print(f"ERR   {exc}")
         return 2
@@ -634,7 +631,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("target")
     p_ss.add_argument("--web-result", default="", help=argparse.SUPPRESS)
     p_ss.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
-    p_ss.add_argument("--band", default="", help=argparse.SUPPRESS)
     p_ss.add_argument("--radio", default="", help=argparse.SUPPRESS)       # W286: one radio's daemon
     p_ss.add_argument("--stop-owners", action="store_true", help=argparse.SUPPRESS)
     p_ss.add_argument("--cascade", action="store_true", help=argparse.SUPPRESS)
@@ -698,7 +694,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.add_argument("rest", nargs="*", metavar="[param [value]]",
                        help="Parameter name (or 'list'); optionally a new value. Omit to list all. "
                             "Qualify a duplicated name as <component>.<param>.")
-    p_cfg.add_argument("--band", default="", help="Band for band-switchable stacks (e.g. 433 or 868)")
     p_cfg.add_argument("--reset", action="store_true", help="Reset this stack's settings to defaults")
     p_cfg.add_argument("--yes", action="store_true", help="Apply --reset without confirmation")
     p_cfg.add_argument("--daemon-param", metavar="KEY=VALUE", action="append", dest="daemon_param",
@@ -724,10 +719,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_rf.add_argument("surface", nargs="?", default="",
                       help="daemon | graywolf | meshcom | meshtastic | meshcore | reticulum")
     p_rf.add_argument("--all", choices=("on", "off"),
-                      help="Switch every stack's RF log on or off (no stack, no --band)")
+                      help="Switch every stack's RF log on or off (no stack)")
     p_rf.add_argument("--clear-all", action="store_true",
-                      help="Clear every stack's RF log (no stack, no --band)")
-    p_rf.add_argument("--band", default="", help="daemon only: 433 or 868 (one file per band)")
+                      help="Clear every stack's RF log (no stack)")
     p_rf.add_argument("--lines", type=int, default=300, help="Tail length")
     p_rf.add_argument("--clear", action="store_true",
                       help="Empty the log in place and remove its previous segment")
@@ -840,8 +834,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_net.add_argument("--confirm-phrase", default="",
                        help=f"Type '{AP_CIDR_CONFIRM}' to confirm the change")
 
-    p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
-    p_daemon.add_argument("band", help="433 or 868")
+    p_daemon = sub.add_parser("daemon", help="Monitor a radio's daemon, or apply a live setting")
+    p_daemon.add_argument("rid", help="the radio id (r1..r99, the Hardware list's)")
     p_daemon.add_argument("--set", metavar="KEY=VALUE", dest="set_kv",
                           help="Apply a live CONF setting (e.g. TXMODE=DIRECT)")
     p_daemon.add_argument("--feed", action="store_true", help="Show recent RX/TX activity")
@@ -1039,6 +1033,11 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+# K8 (W308/W310): the flag that named a band; refused by name wherever it is given (a W328 grep named exemption:
+# this refusal is its only use)
+GONE_BAND = "--band"
+
+
 def _cmd_meshtastic(target: str, passthrough: list[str]) -> int:
     """`lhpc meshtastic[@rN] <upstream args>` — a thin guarded passthrough to the managed Meshtastic
     CLI, against that instance's node (bare: the one running instance's). Intercepted before the main parser so
@@ -1089,6 +1088,10 @@ def _run(argv: list[str] | None = None) -> int:
         return _cmd_meshtastic(raw[0], raw[1:])
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
+    if any(t == GONE_BAND or t.startswith(GONE_BAND + "=") for t in extra):
+        print(f"ERR   {GONE_BAND} is gone (W308/W310): name the instance, `<stack>@<rid>` "
+              "(e.g. lhpc config kiss@r2 …, lhpc rflog daemon@r1); `lhpc hardware` lists the radios")
+        return 2
     if extra:
         # argparse consumes a command's trailing positional chunk ONCE, so positionals split around an
         # optional (e.g. `config <stack> --reset <param> <value>`) cannot be back-filled into an
@@ -1403,10 +1406,10 @@ def _run(argv: list[str] | None = None) -> int:
                               "superseded — nothing was changed.")
         if op == "start":
             res = svc.start(args.target, apply=True, stop_owners=args.stop_owners,
-                            band=args.band, _before_start_locked=_admitted, inst=inst)
+                            _before_start_locked=_admitted, inst=inst)
         else:
             res = svc.restart(args.target, apply=True, stop_owners=args.stop_owners,
-                              band=args.band, cascade=args.cascade,
+                              cascade=args.cascade,
                               _before_restart_locked=_admitted, inst=inst)
         rc = _render(res)
         ok = res.ok or manual_required_only(res.results)
@@ -1670,20 +1673,24 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "rflog":
         return _cmd_rflog(svc, args)
     if args.command == "daemon":
+        from lhpc.core import radio_start
+        rid = args.rid                          # K8 (W308/W310): a radio's daemon, never a band
+        _inst, band, why = radio_start.daemon_radio(svc, rid)
+        if why:
+            print(f"ERR   {why}" + ("; lhpc daemon takes a radio id now: lhpc daemon <rid> (lhpc hardware lists them)"
+                                    if rid in ("433", "868") else ""))
+            return 2
         if args.set_kv:
             key, _, value = args.set_kv.partition("=")
-            return _apply_flow(lambda a: svc.daemon_set(args.band, key, value, apply=a),
-                               yes=args.yes)
+            return _apply_flow(lambda a: svc.daemon_set(band, key, value, apply=a, rid=rid), yes=args.yes)
         if args.feed:
-            feed = svc.daemon_feed(args.band)
+            feed = svc.daemon_feed(band, rid=rid)
             print("\n".join(feed) if feed else "(no recent RX/TX activity)")
             return 0
-        # An operator ran `lhpc daemon <band>` by hand, ONCE: that is a deliberate request to
+        # An operator ran `lhpc daemon <rid>` by hand, ONCE: that is a deliberate request to
         # measure the channel, so this is the one place that still runs a real CAD scan.
-        _dview = svc.daemon_view(args.band)
-        from lhpc.core import instances
-        return _render_daemon(_dview, svc.daemon_channel_scan(args.band) if _dview.reachable else {},
-                              instances.named(svc, "daemon", band=args.band))
+        _dview = svc.daemon_view(band, rid=rid)
+        return _render_daemon(_dview, svc.daemon_channel_scan(band, rid=rid) if _dview.reachable else {}, f"daemon@{rid}")
     if args.command == "update":
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),

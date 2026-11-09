@@ -2073,10 +2073,10 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 
 # --- per-stack user configuration (set via the web Config page) -----------
 
-def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -> Path:
+def _stack_config_path(paths: Paths, stack_id: str, inst=None) -> Path:
     # K6 (K6-SCOPE-v2): an instance's settings are its own "<id>@<rid>.toml" (DEC-W60), whatever other radios the
     # list holds; without an instance, the stack's global "<id>.toml" (autostart, 13.12.1). A "<id>@<band>.toml" is
-    # never read or written (13.8). `band` is ignored (the band callers resolve their instance first).
+    # never read or written (13.8).
     # Defence in depth: the id and the rid are single path components. The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
@@ -2108,7 +2108,7 @@ def load_stack_config(paths: Paths, stack_id: str, band: str = "", inst=None) ->
     (from `_load_runtime_toml`) rather than silently degrading to defaults — the bad file is left in
     place for diagnosis, and start/restart/reset/status/config-views/web must surface the error and
     refuse to continue with defaults (CLI: typed failure, no side effects; web: 409, no traceback/echo)."""
-    return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, band, inst))
+    return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, inst))
 
 
 # TOML basic-string control-character escapes (TOML v1.0 §String). Other C0 controls + DEL are
@@ -2188,7 +2188,7 @@ def _render_stack_config(stack_id: str, values: dict) -> str:
 def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "", inst=None) -> Path:
     """Persist a stack's configuration (flat key/value, stored as strings): the instance's own file, else the
     global one (K6). Atomic + locked so concurrent web saves cannot corrupt or interleave."""
-    path = _stack_config_path(paths, stack_id, band, inst)
+    path = _stack_config_path(paths, stack_id, inst)
     with config_lock(paths):
         _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
     return path
@@ -2197,7 +2197,7 @@ def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "",
 def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names, inst=None) -> None:
     """Drop params `names` of `comp_id` from the instance's own config (else the global one), in both stored forms
     (component-scoped and flat). MUST be called inside `config_lock` (it does not take it)."""
-    path = _stack_config_path(paths, stack_id, "", inst)
+    path = _stack_config_path(paths, stack_id, inst)
     current = dict(_load_runtime_toml(paths, path))
     keys = {f"file_{n}" for n in names} | {f"__f__{comp_id}__{n}" for n in names}
     if keys & set(current):
@@ -2213,7 +2213,7 @@ def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
     keys (a daemon-profile save keeps normal params; a normal save keeps `dp_*`; a manual scalar
     survives both). When `clear_empty`, a value of ""/None removes that key; otherwise it is
     stored (normal-config semantics keep an explicit empty value). Returns the merged dict."""
-    current = dict(_load_runtime_toml(paths, _stack_config_path(paths, stack_id, band, inst)))
+    current = dict(_load_runtime_toml(paths, _stack_config_path(paths, stack_id, inst)))
     for key, value in updates.items():
         if clear_empty and value in (None, ""):
             current.pop(key, None)
@@ -2231,7 +2231,7 @@ def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expec
     empty override) therefore fails the predicate and survives untouched; there is no stale
     snapshot-to-delete window. Returns the number removed; the write is atomic, so a write failure
     raises (ConfigError/OSError) and removes nothing (the caller keeps the candidates pending)."""
-    path = _stack_config_path(paths, stack_id, band, inst)        # K6: the instance's own file, else the global one
+    path = _stack_config_path(paths, stack_id, inst)        # K6: the instance's own file, else the global one
     with config_lock(paths):
         current = dict(_load_runtime_toml(paths, path))
         to_del = [k for k, exp in expected.items()
@@ -2250,7 +2250,7 @@ def update_stack_config(paths: Paths, stack_id: str, updates: dict, band: str = 
     file values, autostart, `dp_*`, manual scalars …) and any concurrent change committed before
     the lock was taken. The render is type-aware and validates before the write, so a corrupt
     manual entry blocks the save and leaves the file unchanged. Never nests `config_lock`."""
-    path = _stack_config_path(paths, stack_id, band, inst)
+    path = _stack_config_path(paths, stack_id, inst)
     with config_lock(paths):
         merged = merge_stack_values(paths, stack_id, band, updates, clear_empty, inst)
         _atomic_write(paths, path, _render_stack_config(stack_id, merged), mode=0o644)

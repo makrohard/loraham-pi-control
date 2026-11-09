@@ -30,26 +30,26 @@ def test_k7_a_stop_of_one_instance_dismisses_its_own_marker_only(tmp_path):
     _seed(tmp_path, r1="433", r2="433")
     assert svc.stop("chat", apply=True, inst=Instance("r1", band="433")).ok
     assert _markers(tmp_path) == ["chat@r2.show"]
-    assert svc.interactive_band("chat", Instance("r2", band="433")) == "433"
-    assert svc.interactive_band("chat", Instance("r1", band="433")) is None
+    assert svc.interactive_shown("chat", Instance("r2", band="433")) == {"r2": "433"}
+    assert svc.interactive_shown("chat", Instance("r1", band="433")) == {}
 
 
 def test_k7_each_instance_is_marked_in_its_own_file(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.mark_interactive("chat", "433", Instance("r1", band="433"))
-    assert svc.mark_interactive("chat", "433", Instance("r2", band="433"))
+    assert svc.mark_shown("chat", Instance("r1", band="433"))
+    assert svc.mark_shown("chat", Instance("r2", band="433"))
     assert _markers(tmp_path) == ["chat@r1.show", "chat@r2.show"]
     svc.dismiss_interactive("chat", Instance("r1", band="433"))
     assert _markers(tmp_path) == ["chat@r2.show"]
-    assert svc.interactive_band("chat") == "433"                   # without an instance: any instance's
+    assert svc.interactive_shown("chat") == {"r2": "433"}            # without an instance: every shown one
 
 
-def test_k7_without_an_instance_disagreeing_markers_give_no_band(tmp_path):
+def test_k8_an_instances_band_is_its_radios_never_the_stored_one(tmp_path):
     svc = _svc(tmp_path)
-    _seed(tmp_path, r1="433", r2="868")
-    assert svc.interactive_band("chat") == ""                      # marked, band unknown (never a guess)
+    _seed(tmp_path, r1="433", r2="868")                              # r2's row is 433: the stored 868 is not a band
+    assert svc.interactive_shown("chat") == {"r1": "433", "r2": "433"}
     svc.dismiss_interactive("chat")                                 # a bare dismiss: every instance's
-    assert _markers(tmp_path) == [] and svc.interactive_band("chat") is None
+    assert _markers(tmp_path) == [] and svc.interactive_shown("chat") == {}
 
 
 def test_k7_a_running_apps_instance_markers_are_not_stale(tmp_path, monkeypatch):
@@ -92,7 +92,19 @@ def test_g1_k7a_3_a_left_over_bare_marker_is_no_instances(tmp_path):
     d = tmp_path / "state" / "interactive"
     d.mkdir(parents=True)
     (d / "chat.show").write_text("433\n")
-    assert svc.interactive_band("chat", Instance("r1", band="433")) is None
-    assert svc.interactive_band("chat") is None
+    assert svc.interactive_shown("chat", Instance("r1", band="433")) == {}
+    assert svc.interactive_shown("chat") == {}
     svc.dismiss_interactive("chat")                                  # a bare dismiss still removes it
     assert _markers(tmp_path) == []
+
+
+def test_k8_a_shown_instance_is_live_by_its_own_radios_daemon(tmp_path):
+    # r1 and r2 both on 433, both daemons READY; chat@r2 marked, not running: its command block is on Home. Before,
+    # the band's one view (no socket key for two radios on a band) was never ready, so the block never showed.
+    reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply, "/tmp/loraconf-r2.sock": reply})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc.mark_shown("chat", Instance("r2", band="433"))
+    row = next(r for r in svc.radio_overview() if r["band"] == "433")
+    assert "chat" in [s["id"] for s in row["interactive"]], row["interactive"]

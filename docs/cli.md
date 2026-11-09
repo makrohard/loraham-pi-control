@@ -171,7 +171,7 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 - A `<param>` shared by several components must be written `<component>.<param>`.
 - One parameter per call: a setting validated across several parameters is set in the order its
   stack page gives.
-- `--band` — the band, for band-switchable stacks.
+- `<stack>@<rid>` — the instance whose settings these are (its radio's band).
 
 ### hardware
 Show or set the **radio hardware setup**: which band(s) are served and the daemon `--hw` preset
@@ -296,19 +296,15 @@ lhpc firewall --recommended                # safe preset; not combinable with th
 ---
 
 ### stack
-`lhpc stack {start|stop|restart} <stack> [--yes]` — start, stop or restart a stack or component.
-`start --band 433|868` starts a band-switchable stack on that band (default: its saved band); a
-band the hardware or the stack cannot serve is refused before anything starts. When another
+`lhpc stack {start|stop|restart} <stack>@<rid> [--yes]` — start, stop or restart a stack's instance on radio
+rN (its radio's band); a radio the stack cannot run on is refused before anything starts. When another
 running stack holds what the start needs, `start` asks, as the console's confirm page does,
 whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack> --yes` stops the
 holders and starts, also from a script — the apps first, then the daemon on the held band only.
 A single daemon process serving both bands stops on both when the other band has no clients, and
 the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
-stopped. `--band` on a stop is for the daemon only (another stack is refused):
-`lhpc stack stop daemon --band <band>` stops the daemon on that band and its clients there — the
-remedy a held band names; on a band two radios share it stops each radio's daemon and the clients on them.
-`lhpc stack restart <stack> --band <band>` restarts on that band. `lhpc stack {start|stop|restart} daemon
---radio rN` acts on the daemon of radio rN alone (its clients first on a stop); it is not combined with `--band`. A start of a
+stopped. `lhpc stack {start|stop|restart} daemon --radio rN` acts on the daemon of radio rN alone (its clients
+first on a stop) — the remedy a held radio names. A band option is refused by name with the instance form. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.
 
@@ -385,7 +381,7 @@ stacks stay.
 ---
 
 ### daemon
-`lhpc daemon <band> [--set KEY=VALUE] [--feed] [--yes]` — monitor a daemon band (433/868), apply a
+`lhpc daemon <rid> [--set KEY=VALUE] [--feed] [--yes]` — monitor radio rN's daemon (a band is refused), apply a
 live CONF setting (`--set TXMODE=DIRECT`), or show recent RX/TX activity (`--feed`). Persisted
 daemon params: [`config`](#config).
 
@@ -395,15 +391,15 @@ older part of a capped run log: `logs/start-<comp>[-<band>].prev.log`
 ([maintenance](maintenance.md#running-on-a-pi), "Run-log cap").
 
 ### rflog
-`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear] [--decrypt [--follow]]` ·
+`lhpc rflog <stack>@<rid> [--lines N] [--clear] [--decrypt [--follow]]` ·
 `lhpc rflog --all on|off` · `lhpc rflog --clear-all` — a stack's RF log (default 300 lines).
 Model, retention and keys: [maintenance → RF logs](maintenance.md#rf-logs).
 
-- `--band` — `daemon` only (one file per band); required there.
+- `<stack>@<rid>` — the radio's own file (`daemon@r1`, `kiss@r2`); a one-node stack (`reticulum`) has one file.
 - `graywolf` shows the kiss TNC's log. Switch: `lhpc config <stack> rf_log on|off` (graywolf:
   `lhpc config kiss rf_log off`).
 - `--clear` — empty the file in place and remove its previous segment.
-- `--all on|off` / `--clear-all` — every stack's switch / every RF log; no stack, no `--band`, one
+- `--all on|off` / `--clear-all` — every stack's switch / every RF log; no stack, one
   at a time.
 - `--decrypt` (meshtastic, meshcore, reticulum) — print the tail decoded with this box's keys, to
   the terminal only; `--follow` keeps printing new frames every 2 s until Ctrl-C. Exit 2 on a
@@ -507,7 +503,7 @@ the Network panel's detached join helper; outcome in `state/network-outcome.json
 Internal — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>`: the detached HMAC apply runner.
 
 ### _stack-start
-Internal — `lhpc _stack-start <target> --web-result web-<start|restart>-<target>.log --attempt-id <hex> [--band B] [--stop-owners] [--cascade] [--restart]`:
+Internal — `lhpc _stack-start <target> --web-result web-<start|restart>-<target>.log --attempt-id <hex> [--radio rN] [--stop-owners] [--cascade] [--restart]`:
 the detached runner behind a web Start/Restart
 ([operations](operations.md#operating-the-console)).
 

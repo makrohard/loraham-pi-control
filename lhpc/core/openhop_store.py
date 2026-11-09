@@ -51,7 +51,7 @@ class OneStoreError(ValueError):
 
 
 def file_path(paths, inst=None) -> Path:
-    """openHop's file of `inst` (slot 0 when None): state/openhop/config.yaml, a listed instance's under state/<rid>/ (7d)."""
+    """openHop's file of `inst` (the template's when None): state/openhop/config.yaml, a listed instance's under state/<rid>/ (7d)."""
     from .commands import TEMPLATE
     return Path(paths.runtime_root) / (inst or TEMPLATE).subst("state/{instance_dir}openhop") / "config.yaml"
 
@@ -107,7 +107,7 @@ def to_file(name: str, text: str):
 
 def blocked(svc, inst=None) -> str:
     """'' when LHPC may write the file (no node process, no unverified stop), else the reason. A listed instance
-    (7d) looks at its own process and records only; slot 0 as before."""
+    (7d) looks at its own process and records only; without one as before."""
     svc.build_snapshot(fresh=True)
     inst = _inst(svc, inst)                              # K6: the instance whose file it is
     rid = inst.rid if inst is not None and inst.rid else None

@@ -56,7 +56,7 @@ def test_a_reset_clears_the_instances_own_file_alone(run, tmp_path):
 
 
 @pytest.mark.parametrize("argv,rc", [(("chat@r9", "tx_freq", "433.900"), 1), (("chat@r3", "tx_freq", "433.900", "--band", "868"), 2),
-                                     (("chat@r3", "--daemon-param", "SF=9"), 2)])
+                                     (("chat", "--daemon-param", "SF=9"), 2)])    # K8: a bare stack names no instance
 def test_a_target_that_is_no_listed_instance_or_a_daemon_param_is_refused_and_writes_nothing(run, tmp_path, argv, rc):
     before = sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir())
     got, out = run(*argv)

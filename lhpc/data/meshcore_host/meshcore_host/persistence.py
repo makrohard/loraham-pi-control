@@ -47,7 +47,7 @@ FLUSH_INTERVAL_S = 30.0
 # node_name is EXCLUDED for the same ownership reason as the radio and GPS settings above:
 # LHPC configures the node name (meshcore.toml), so a persisted value must never override the
 # configured one after a rename.
-PUBLIC_CHANNEL_NAME = "Public"   # slot 0 on every MeshCore device
+PUBLIC_CHANNEL_NAME = "Public"   # channel 0 on every MeshCore device
 CHANNELS_SEEDED_PREF = "_channels_seeded"   # our own bookkeeping row, never a companion pref
 
 PERSISTED_PREFS = (

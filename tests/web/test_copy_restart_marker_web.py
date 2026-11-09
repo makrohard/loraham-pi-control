@@ -132,8 +132,8 @@ def test_the_start_child_starts_exactly_the_copy_its_radio_names(tmp_path, monke
         calls.append((target, band, inst.rid if inst is not None else None))
         return _before_start_locked() or ActionResult(True, "started (stub)")
     monkeypatch.setattr(ControllerService, "start", start)
-    assert main(["_stack-start", "kiss", "--web-result", log, "--attempt-id", aid, "--band", "433", "--radio", "r3"]) == 0
-    assert calls == [("kiss", "433", "r3")]
+    assert main(["_stack-start", "kiss", "--web-result", log, "--attempt-id", aid, "--radio", "r3"]) == 0
+    assert calls == [("kiss", "", "r3")]
 
 
 def test_a_disabled_radios_copy_still_stops_but_never_restarts(tmp_path, web, monkeypatch, csrf):

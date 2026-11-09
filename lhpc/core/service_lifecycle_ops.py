@@ -129,7 +129,8 @@ class LifecycleOpsMixin:
         tells (no record, no token) keeps its declared key and, against a start of `inst`, holds that one's (fail-safe)."""
         def keys(c, r):
             ks = instances.running_claim_keys(self, self.stack_of(c.id), c, r) if r.key_template else {r.key}
-            return ks | {instances.claim_key(r, inst)} if r.key_template and ks == {r.key} else ks
+            return ks | {instances.claim_key(r, instances.with_bases(self, self.stack_of(c.id), inst))} \
+                if r.key_template and ks == {r.key} else ks
         return [dataclasses.replace(c, resources=tuple(dataclasses.replace(r, key=k) for r in c.resources for k in keys(c, r))) for c in running]
 
     def observed_conflicts(self, snap=None):
@@ -142,7 +143,8 @@ class LifecycleOpsMixin:
         (868 vs a 433-only daemon: none); a templated claim per instance (_keyed), the target's own key."""
         limited, running, running_ids = self._band_limited_running(self.build_snapshot(), conservative=True)  # blocks: every band
         target = limited(comp, {band} if band else set())
-        target = dataclasses.replace(target, resources=tuple(dataclasses.replace(r, key=instances.claim_key(r, inst)) for r in target.resources))
+        based = instances.with_bases(self, self.stack_of(comp.id), inst)          # DEC-W384ac: its saved ports
+        target = dataclasses.replace(target, resources=tuple(dataclasses.replace(r, key=instances.claim_key(r, based)) for r in target.resources))
         conflicts = resources_mod.interpret_conflicts([*self._keyed(running, inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
         # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
@@ -250,7 +252,8 @@ class LifecycleOpsMixin:
         from .probes.unixsock import probe_socket
         # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
         # repeater modes) — the SAME selection ongoing status applies.
-        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode(inst)), inst) if e.ready]
+        ready = [e for e in instances.endpoints_for(_mm.expected_endpoints(comp, self.meshcore_mode(inst)),
+                                                    instances.with_bases(self, self.stack_of(comp.id), inst)) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -375,7 +378,7 @@ class LifecycleOpsMixin:
                     continue
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith("loraham.radio.")):
-                    claims[instances.claim_key(r, inst)] = c.id     # 7a: the target instance's own key
+                    claims[instances.claim_key(r, instances.with_bases(self, self.stack_of(c.id), inst))] = c.id   # 7a
         for b in needed_bands:
             claims.setdefault(resources_mod.radio_claim(b), target)
         # The GPS receiver is a DYNAMIC claim (which device, if any, comes from the resolved
@@ -811,7 +814,7 @@ class LifecycleOpsMixin:
             return got
         st = self.stack(sid)
         if st is not None and self.gui_fallback_active(st):
-            return self.interactive_band(sid) or ""
+            return interactive_markers.one_band(self.interactive_shown(sid))
         return ""
 
     def _gui_fallback_refusal(self, target: str):
@@ -959,7 +962,7 @@ class LifecycleOpsMixin:
             target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
             radio=radio, tx=tx, start_sid=start_sid, target_is_stack=self.stack(target) is not None,
             params=params, file_over=file_over, position=position, position_note=position_note,
-            stop_owners=stop_owners, inst=inst)
+            stop_owners=stop_owners, inst=instances.with_bases(self, {s.id for s, _c in order}, inst))   # DEC-W384ac
         if not apply:
             return prep
         # No-side-effect Start FIRST — BEFORE any owner handling: if EVERY requested component is
@@ -1398,7 +1401,7 @@ class LifecycleOpsMixin:
                         record(comp, stack, Outcome.BLOCKED,
                                f"interactive start blocked — pre-start setup failed: {exc}")
                         continue
-                marked = self.mark_interactive(stack.id, cfg_band, prep.inst)
+                marked = self.mark_shown(stack.id, prep.inst, cfg_band)
                 blocker = self.install_blocker(comp)
                 marker_note = ("" if marked else
                                " (note: interactive marker could not be persisted — the "
@@ -2351,15 +2354,15 @@ class LifecycleOpsMixin:
     def _interactive_markers(self, stack_id: str) -> list:
         return interactive_markers.markers(self, stack_id)
 
-    def mark_interactive(self, stack_id: str, band: str = "", inst=None) -> bool:
-        """Remember that the operator asked to run an interactive app (so the dash
-        shows its terminal-command block); stores the chosen band, in the instance's own
-        marker (K7). Returns False if the marker could not be persisted."""
-        return self._safe_marker_write(self._interactive_marker(stack_id, inst), band)
+    def mark_shown(self, stack_id: str, inst=None, band: str = "") -> bool:
+        """Remember that the operator asked to run an interactive app (so the dash shows its terminal-command block):
+        the instance's own marker (K7; `band` is stored only for a stack without a hardware list). Returns False if
+        the marker could not be persisted."""
+        return self._safe_marker_write(self._interactive_marker(stack_id, inst), "" if getattr(inst, "rid", "") else band)
 
-    def interactive_band(self, stack_id: str, inst=None) -> str | None:
-        """The band an interactive app was started on, or None if not active (interactive_markers.band)."""
-        return interactive_markers.band(self, stack_id, inst)
+    def interactive_shown(self, stack_id: str, inst=None) -> dict:
+        """{rid: band} of the stack's shown instances, {} when none is (interactive_markers.shown)."""
+        return interactive_markers.shown(self, stack_id, inst)
 
     @invalidates_snapshot
     def dismiss_interactive(self, stack_id: str, inst=None) -> None:
@@ -2371,10 +2374,6 @@ class LifecycleOpsMixin:
     def clear_stale_interactive(self, keep: str = "") -> list[str]:
         """Drop the markers of apps that aren't actually running (interactive_markers.clear_stale)."""
         return interactive_markers.clear_stale(self, keep)
-
-    def _band_marker(self, stack_id: str):
-        sid = validators.path_component(stack_id, field="stack id")
-        return self._paths.under("state", "running", f"{sid}.band")
 
     def launch_band(self, stack_id: str, default: str = "") -> str:
         """The one band the stack's running instances were launched on, else `default` (K6, 13.12.5: no band marker)."""
@@ -3008,26 +3007,21 @@ class LifecycleOpsMixin:
                 # "runs" them; after that a dismissable command block is shown in the
                 # band column they were started on.
                 if main_comp is not None and main_comp.interactive:
-                    mark_band = self.interactive_band(s.id)        # None if not active
-                    # The box stays only while the app is actually up, OR its marker's daemon band is
-                    # still USABLE. An interactive app here is daemon-backed (it reaches this code only
-                    # via a band component), so it cannot be running once that daemon is stopped —
-                    # stopping the daemon therefore closes a lingering-marker box instead of leaving it.
-                    # `interactive_band` returns None = NO marker and "" = marked but band-less
-                    # (mark_interactive stores cfg_band, which is "" for a stack that is not
-                    # band-switchable, e.g. chat). That distinction IS the gate, so the
-                    # `is not None` test must stay: collapsing it would pin a permanent command
-                    # card on every never-started interactive stack. Only the band-less case
-                    # falls back to the stack's own band — the same fallback `col` uses below.
-                    marker_live = (mark_band is not None
-                                   and (mark_band or min(sbands)) in usable_bands)
-                    active = running_up or marker_live
+                    # K8: each shown instance's band column ({} = no marker: never a permanent command card on a
+                    # never-started interactive stack); a band-less marker (no hardware list) falls back to the
+                    # stack's own band. The box stays only while the app is actually up, OR a shown instance's daemon
+                    # band is still USABLE: an interactive app here is daemon-backed (it reaches this code only via a
+                    # band component), so a stopped daemon closes a lingering-marker box instead of leaving it.
+                    shown = self.interactive_shown(s.id)
+                    cols = {b or min(sbands) for b in shown.values()}
+                    # a shown instance is live while ITS radio's daemon is ready (two radios on one band have no band
+                    # view); a bare marker (no hardware list) by its band, as before
+                    active = running_up or any(daemon_control.read_view(self._system, r).ready if r else
+                                               (b or min(sbands)) in usable_bands for r, b in shown.items())
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue
-                    col = mark_band or (self.launch_band(s.id, min(sbands))
-                                        if running_up else min(sbands))
-                    if col != band:
+                    if band not in (cols or {self.launch_band(s.id, min(sbands)) if running_up else min(sbands)}):
                         continue                                   # block lives in its own column
                     entry["running"] = running_up
                     entry["command"] = self.manual_start_command(main_comp)

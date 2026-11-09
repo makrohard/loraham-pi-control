@@ -403,8 +403,8 @@ def test_stack_start_runner_admits_under_the_hook_and_records_done(tmp_path, mon
     _stub_start(monkeypatch, calls, summary="Run applied for 'kiss'.")
     monkeypatch.setattr(ControllerService, "start_notes", lambda self, r: ["boots in ~1 min"])
     assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A,
-                 "--band", "433", "--stop-owners"]) == 0
-    assert calls == [("start", "kiss", "433", True)]
+                 "--stop-owners"]) == 0
+    assert calls == [("start", "kiss", "", True)]                     # K8: no band; the instance is the radio's
     rec = jobresult.read_one(svc._paths, _SLOG)
     assert rec["state"] == "done" and rec["admitted"] is True and rec["op"] == "start"
     assert rec["detail"] == "Run applied for 'kiss'. boots in ~1 min"   # summary + start notes
@@ -529,11 +529,12 @@ def test_spawn_start_job_captures_then_releases_admission_before_publishing(tmp_
     monkeypatch.setattr(ControllerService, "_track_or_terminate", publish)
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     log, admission, reason = svc.spawn_start_job("start", "kiss", band="433", stop_owners=True)
-    assert (log, admission) == (_SLOG, "admitted"), reason
+    slog = "web-start-kiss-r1.log"                                     # K8: ?band=433 is its instance kiss@r1
+    assert (log, admission) == (slog, "admitted"), reason
     assert seen["free"] is True                                        # released BEFORE publish
     assert seen["ident"] and procident.identity_complete(seen["ident"])  # captured before release
-    assert (seen["op"], seen["cid"], seen["ln"]) == ("start", "kiss", _SLOG)
-    rec = jobresult.read_one(svc._paths, _SLOG)
+    assert (seen["op"], seen["cid"], seen["ln"]) == ("start", "kiss", slog)
+    rec = jobresult.read_one(svc._paths, slog)
     assert rec["op"] == "start" and rec["stack"] == "kiss" and rec["state"] == "starting"
     assert _second_service_can_take_admission(svc)                     # nothing left held
 

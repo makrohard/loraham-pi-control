@@ -9,6 +9,6 @@ def inst_of(svc, sid: str, band: str = ""):
 
 
 def own_file(svc, sid: str, band: str = ""):
-    p = _stack_config_path(svc._paths, sid, band, inst_of(svc, sid, band))
+    p = _stack_config_path(svc._paths, sid, inst_of(svc, sid, band))
     p.parent.mkdir(parents=True, exist_ok=True)
     return p

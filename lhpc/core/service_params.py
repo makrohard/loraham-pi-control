@@ -1051,7 +1051,7 @@ class ParamsConfigMixin:
                 return
             try:
                 _cur = str(_load_runtime_toml(
-                    self._paths, _stack_config_path(self._paths, sid, "", inst)       # K6: the instance's own switch
+                    self._paths, _stack_config_path(self._paths, sid, inst)       # K6: the instance's own switch
                 ).get(USE_GPS_PARAM, "")).strip().lower() or _gps_default
             except (OSError, ValueError, KeyError, ConfigError) as exc:
                 raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc
@@ -1085,7 +1085,7 @@ class ParamsConfigMixin:
                     raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
             _ohs_recheck()                  # issue #5: openHop's file appeared/vanished since split_saves
-            current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, b, i))
+            current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, i))
             merged = config_save.overlay(current, setv, rmv)
             if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged, _ohs_pending)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
@@ -1095,15 +1095,15 @@ class ParamsConfigMixin:
                     _why := self._reticulum_internet_save_refusal(merged)):
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
-        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band, inst), _render_stack, 0o644))
+        targets.append(("stack", _stack_config_path(self._paths, sid, inst), _render_stack, 0o644))
         if bandless_set or bandless_remove:
             # SECOND transactional target: autostart flags land in the band-less file.
             def _render_auto(pth, tgt=sid, setv=bandless_set, rmv=bandless_remove):
                 _gps_recheck(pth)
                 merged = config_save.overlay(
-                    _load_runtime_toml(pth, _stack_config_path(pth, tgt, "")), setv, rmv)
+                    _load_runtime_toml(pth, _stack_config_path(pth, tgt)), setv, rmv)
                 return render_stack_config(tgt, merged)
-            targets.append(("stack", _stack_config_path(self._paths, sid, ""),
+            targets.append(("stack", _stack_config_path(self._paths, sid),
                             _render_auto, 0o644))
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
         # journal kind "state", pre-image journaled): a restart/build-mode param changed while
@@ -1589,11 +1589,9 @@ class ParamsConfigMixin:
         # (Chat fell through this gap — its presented command kept the old callsign
         # while the store said something else, with no warning). Voice's GUI fallback is the same
         # situation reached by another route.
-        if st is not None and (getattr(main, "interactive", False)
-                               or self.gui_fallback_active(st)):
-            ib = self.interactive_band(stack_id, inst)          # K7: the instance's own marker
-            if ib is not None and (not rid or not ib or ib == inst.band):
-                return True, ib
+        if st is not None and (getattr(main, "interactive", False) or self.gui_fallback_active(st)) \
+                and (ib := self.interactive_shown(stack_id, inst)):    # K7: the instance's own marker
+            return True, next(iter(ib.values()))
         return False, ""
 
     def restart_marker_payload(self, sid: str, params, band: str,
@@ -1761,7 +1759,7 @@ class ParamsConfigMixin:
                 pass                       # unreadable/absent generated file: unknown
         return None
 
-    def meshcore_running_mode(self) -> str:      # status and logic: slot 0's running role, else its saved mode
+    def meshcore_running_mode(self) -> str:      # status and logic: the running role, else the saved mode
         return self._meshcore_running_role() or self.meshcore_mode_display() or _meshcore_mode.DEFAULT_MODE
 
     def meshcore_mode_display(self) -> str:
@@ -1794,14 +1792,14 @@ class ParamsConfigMixin:
 
     def _identity_cmd(self, target: str, rec: dict, value: str, band: str = "", inst=None) -> str:
         """THE copyable `lhpc config` command for one identity field — key derived from the
-        param model, `--band` appended for a band-switchable stack when a band was judged.
+        param model, addressed to the instance (K8, W308/W310: a band caller's band names its band's instance).
         Every displayed remedy (hints AND resolution problem text) renders through here, so
-        a correction always targets the exact field and band that was refused."""
+        a correction always targets the exact field and instance that was refused."""
         kind = "run" if rec["kind"] == "run" else "file"
         key = self._param_key(target, kind, rec["comp"], rec["name"])
-        suffix = (f" --band {band}"
-                  if band and self.stack_bands(self.stack_of(target) or target) else "")
-        return f"lhpc config {_instances.key(target, inst)} {key} {value}{suffix}"
+        if band and not getattr(inst, "rid", "") and self.stack_bands(self.stack_of(target) or target):
+            inst = _instances.store_inst(self, self.stack_of(target) or target, band, inst)
+        return f"lhpc config {_instances.key(target, inst)} {key} {value}"
 
     def operation_band(self, target: str, band: str = "") -> str:
         """THE ONE CONCRETE BAND of a start/restart, for every consumer outside the locked launch
@@ -2150,7 +2148,7 @@ class ParamsConfigMixin:
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
         gps_values = self._gps_config_values(target, inst)            # K7: its instance's feed
 
-        # W3-13: a client's socket keys name the copy's radio (slot 0's: DEC-W16's), else its band's one; unresolved, it refuses
+        # W3-13: a client's socket keys name the copy's radio, else its band's one; unresolved, it refuses
         _rids, _sid, _sb = {}, self._owner_stack_id(target), next(iter(_instances.stack_bands(self._owner_stack(target))), "")
         _rid = lambda b: _rids.setdefault(b, _radio_start.client_rid(self, _sid, b) or getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
 
@@ -2492,7 +2490,7 @@ class ParamsConfigMixin:
         try:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
-                ("stack", _stack_config_path(self._paths, target, "", i),
+                ("stack", _stack_config_path(self._paths, target, i),
                  lambda pth, i=i: _render_reset(pth, i), 0o644) for i in files] + [
                 self._restart_marker_target(target, target, band, cfg_band, params, set(), {}, inst)])
             if cleared:

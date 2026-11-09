@@ -461,7 +461,7 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
     res = svc.start("voice", apply=True)
     assert not res.ok and res.data.get("enforce_fields")
     assert [c.split("   #", 1)[0] for c in res.next_commands] == [
-        "lhpc config voice@r2 callsign YOURCALL --band 868"], res.next_commands   # the instance's key (K5)
+        "lhpc config voice@r2 callsign YOURCALL"], res.next_commands   # the instance's key (K5; K8: no --band)
     # a bandless stack's hint stays without --band
     assert not any("--band" in c for c in svc._identity_config_hints("meshtastic"))
 
@@ -489,7 +489,8 @@ def test_lite_interactive_marker_keeps_a_bandless_start_on_its_band(tmp_path, mo
                         lambda self, b, *a, **kw: cleared.append(b) or 0, raising=False)
     res = svc.start("voice", apply=True)
     assert not res.ok and res.data.get("enforce_fields")        # refused ON 868
-    assert any("--band 868" in c for c in res.next_commands), res.next_commands
+    assert [c.split()[2] for c in res.next_commands if c.split()[:2] == ["lhpc", "config"]] == ["voice@r2"], \
+        res.next_commands                                                                       # 868's instance
     assert cleared == []                                        # refusal before feed work
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/M"},
                                   band="868").ok
@@ -625,8 +626,8 @@ def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tm
                         lambda self, sid, default="": "868" if sid == "voice" else default)
     ok, _f, msg = svc.enforce_identity("voice", svc._launch_band_hint("voice", ""))
     assert ok is False
-    m = re.search(r"\((lhpc config voice \S+ \S+ --band 868)\)", msg)
-    assert m, msg                                               # band-aware remedy IN the text
+    m = re.search(r"\((lhpc config voice@r2 \S+ \S+)\)", msg)
+    assert m, msg                                               # the refusing band's instance IN the text (K8)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     assert main(m.group(1).split()[1:]) == 0                    # executed through the real CLI
     svc._invalidate_config()
@@ -776,7 +777,7 @@ def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_pat
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868"},
                                   band="868").ok        # deliberate local identity on 868
-    monkeypatch.setattr(type(svc), "interactive_band", lambda self, sid, inst=None: "868")   # STALE marker
+    monkeypatch.setattr(type(svc), "interactive_shown", lambda self, sid, inst=None: {"": "868"})   # STALE marker
     monkeypatch.setattr(type(svc), "gui_fallback_active", lambda self, sid: False)  # GTK is back
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: False)
     seen = []
@@ -892,7 +893,7 @@ def test_local_identity_tracks_an_active_lite_fallback(tmp_path, monkeypatch):
     # old callsign while the store said something else, with no warning.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "gui_fallback_active", lambda self, st: True)
-    monkeypatch.setattr(type(svc), "interactive_band", lambda self, sid, inst=None: "868")
+    monkeypatch.setattr(type(svc), "interactive_shown", lambda self, sid, inst=None: {"": "868"})
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: False)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"}, band="868").ok
     marker = svc.restart_required("voice")
@@ -1108,7 +1109,7 @@ def test_a_presented_interactive_command_is_a_live_identity_consumer(tmp_path, m
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: False)
-    monkeypatch.setattr(type(svc), "interactive_band", lambda self, sid, inst=None: "")
+    monkeypatch.setattr(type(svc), "interactive_shown", lambda self, sid, inst=None: {"": ""})
     live, _band = svc.active_config_consumer("chat")
     assert live is True, "a presented interactive command is a live consumer"
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
@@ -1204,7 +1205,7 @@ def test_the_apply_hint_agrees_with_the_restart_marker(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: False)
-    monkeypatch.setattr(type(svc), "interactive_band", lambda self, sid, inst=None: "")
+    monkeypatch.setattr(type(svc), "interactive_shown", lambda self, sid, inst=None: {"": ""})
     assert svc.active_config_consumer("chat")[0] is True      # presented interactive command
     r = svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"})
     assert r.ok

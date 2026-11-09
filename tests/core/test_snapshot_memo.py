@@ -319,7 +319,7 @@ _RECEIVER = "termios:gps-receiver"
 _READ_PATH_WRITERS = frozenset({
     "active_jobs", "build_snapshot", "clear_daemon_feed", "clear_stale_interactive",
     "daemon_channel_scan", "firewall_gate_activation", "firewall_gate_stack_start",
-    "invalidate_snapshot", "mark_interactive", "network_view", "prune_logs", "refresh_gps_auto",
+    "invalidate_snapshot", "mark_shown", "network_view", "prune_logs", "refresh_gps_auto",
     "rflog_decode", "web_session_secret",
 })
 _TMP = __import__("re").compile(r"\..+\.tmp-\d+-[0-9a-f]+")     # runtime_fs's atomic temp names
@@ -375,8 +375,9 @@ def _live(tmp_path, dev, monkeypatch):
     from lhpc.core.commands import Instance                 # K6 / DEC-W384k: the switch is meshtastic@r2's own
     cfgmod.save_stack_config(paths, "meshtastic", {"use_gps": "off"}, inst=Instance("r2"))
     cfgmod.save_gps(paths, source="nmea", device=dev, nmea_baud=9600)
-    (root / "logs").mkdir()
+    (root / "logs" / "r1").mkdir(parents=True)
     (root / "logs" / "rf-meshtastic.log").write_bytes(b'{"x":1}\n' * 1024)       # 8 KiB > cap
+    (root / "logs" / "r1" / "rf-meshtastic.log").write_bytes(b'{"x":1}\n' * 1024)   # meshtastic@r1's own (K7)
     fake = FakeSystem(cmdlines_data={4242: [str(binary), "-c", f"{root}/config/files/meshtasticd.yaml",
                                             "-d", f"{root}/state/meshtasticd"]})
     svc = ControllerService(system=fake.system, paths=paths)
@@ -555,7 +556,7 @@ def _drive_args(svc):
 
 # The neutral writers' own calls: the arguments that reach the write (the native RF job).
 _DRIVE_KW = {"log_tail": {"job": "rf-meshtastic.log"}, "rflog_records": {"lines": 50},
-             "rflog_tail": {"lines": 50}}
+             "rflog_tail": {"rid": "r1", "lines": 50}}                     # K8: the instance's own file
 
 
 def _drive(svc, name):
@@ -741,7 +742,7 @@ _WRITER_CALLS = {
     "gps_monitor": lambda svc: svc.gps_monitor(),
     "log_tail": lambda svc: svc.log_tail("meshtastic", 50, job="rf-meshtastic.log"),
     "rflog_records": lambda svc: svc.rflog_records("meshtastic", "rf-meshtastic.log", 50),
-    "rflog_tail": lambda svc: svc.rflog_tail("meshtastic", "", 50),
+    "rflog_tail": lambda svc: svc.rflog_tail("meshtastic", "r1", 50),
 }
 
 

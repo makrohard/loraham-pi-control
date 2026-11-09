@@ -63,7 +63,7 @@ class FirewallOpsMixin:
         cidrs = _split_cidrs(allow)
         # STABLE id: the STATIC manifest port never changes even when the configured port does,
         # so a ticked direct-access checkbox survives a port change (fragile-id fix).
-        eid = _safe_id(_fw.instance_eid(comp.id, static_port, inst))   # slot k: A §2.5
+        eid = _safe_id(_fw.instance_eid(comp.id, static_port, inst))   # an instance's: A §2.5
         if meta.deny:
             # meshtasticd 4403/9443: binds 0.0.0.0 unconditionally, no knob — drop the port on
             # EVERY non-loopback address of BOTH families, regardless of the probe address.

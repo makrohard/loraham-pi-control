@@ -1,7 +1,7 @@
 """An interactive app's "run" marker (K7: one per instance): state/interactive/<sid>@<rid>.show holds the band the
 operator ran it on, so the dashboard shows its terminal-command block; <sid>.show is a stack without a hardware list.
-The service's public entries (mark_interactive, interactive_band, dismiss_interactive, clear_stale_interactive) keep
-their names and delegate here."""
+The service's public entries (mark_shown, interactive_shown, dismiss_interactive, clear_stale_interactive) delegate
+here."""
 from __future__ import annotations
 
 from . import instances, runtime_fs, validators
@@ -21,24 +21,29 @@ def markers(svc, stack_id: str) -> list:
     return ([bare] if bare.exists() else []) + (sorted(idir.glob(f"{bare.stem}@r*.show")) if idir.exists() else [])
 
 
-def band(svc, stack_id: str, inst=None) -> str | None:
-    """The band an interactive app was started on, or None if not active: an instance's own marker; without an
-    instance, any instance's (their band when they agree, else "" = marked, band unknown). A bare marker is read only
-    without a hardware list (G1-K7A 3: with one it is a pre-K7 leftover, never an instance's); dismiss and purge still
-    remove it."""
+def shown(svc, stack_id: str, inst=None) -> dict:
+    """{rid: band} of the stack's shown instances (K8: a marker is presence; an instance's band is its radio's row's).
+    With `inst`: its own marker only. A bare marker (no hardware list: the band it stores, under "") counts only
+    without a list (G1-K7A 3: with one it is a pre-K7 leftover); dismiss and purge still remove it. {} = none shown."""
     from . import radios
-    own = getattr(inst, "rid", "")
-    listed = radios.load(svc._paths).kind != radios.ABSENT
-    files = [marker(svc, stack_id, inst)] if own else [f for f in markers(svc, stack_id) if not listed or "@" in f.stem]
-    bands = []
-    for f in files:
+    state = radios.load(svc._paths)
+    rows, listed = {r.id: r.band for r in state.radios}, state.kind != radios.ABSENT
+    rid = getattr(inst, "rid", "")
+    out = {}
+    for f in ([marker(svc, stack_id, inst)] if rid else [f for f in markers(svc, stack_id) if not listed or "@" in f.stem]):
         try:
-            bands.append(runtime_fs.read_text(svc._paths, f).strip())
-        except (OSError, ValueError):       # missing/unreadable/symlinked -> not active
+            stored = runtime_fs.read_text(svc._paths, f).strip()
+        except (OSError, ValueError):       # missing/unreadable/symlinked -> not shown
             continue
-    if own:
-        return bands[0] if bands else None
-    return None if not bands else (bands[0] if len(set(bands)) == 1 else "")
+        own = f.stem.partition("@")[2]
+        out[own] = rows.get(own, stored) if own else stored
+    return out
+
+
+def one_band(shown_map: dict) -> str:
+    """The band the shown instances agree on, else "" (none, or several)."""
+    bands = set(shown_map.values())
+    return bands.pop() if len(bands) == 1 else ""
 
 
 def clear_stale(svc, keep: str = "") -> list[str]:

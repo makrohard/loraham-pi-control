@@ -378,11 +378,11 @@ Settings, Start/Stop, logs, Password. The console: [operations](docs/operations.
 lhpc status                        # what's running (read-only)
 lhpc config <stack>                # list the stack's options and current values
 lhpc config chat call YOURCALL-10 # set one option (YOURCALL-10 = your callsign+SSID)
-lhpc config <stack> --band 868 <param> <value>    # per-band value on a band-switchable stack
-lhpc stack start|stop|restart <stack>             # plans + confirms; --yes to skip the prompt
-lhpc stack stop daemon --band 433                 # stop the daemon on one band only (daemon only)
+lhpc config <stack>@<rid> <param> <value>         # one instance's value (its radio's)
+lhpc stack start|stop|restart <stack>@<rid>       # plans + confirms; --yes to skip the prompt
+lhpc stack stop daemon --radio r1                 # stop one radio's daemon only
 lhpc logs <target>                 # tail a component log
-lhpc rflog <stack> [--band B]      # tail a stack's RF log (what the radio heard and sent); --band: daemon
+lhpc rflog <stack>@<rid>          # tail an instance's RF log (what the radio heard and sent)
 lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)
 lhpc doctor                        # environment / dependency checks
 lhpc test <stack> [--tx] --yes     # host tests; --tx transmits

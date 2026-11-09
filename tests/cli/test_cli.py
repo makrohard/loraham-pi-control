@@ -566,12 +566,12 @@ def test_stack_start_passes_its_radios_band(monkeypatch, capsys):
 
 @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
 def test_k3_the_band_form_is_gone(monkeypatch, capsys, verb):
-    # DoD test 2 (CLEANUP-DESIGN-v13 13.12.3): `--band` is no option of a stack verb any more: a usage error (exit 2),
-    # nothing run. RED before K3: it was accepted.
+    # DoD test 2 (CLEANUP-DESIGN-v13 13.12.3): `--band` is no option of a stack verb any more: refused by name with the
+    # instance form (K8, W308/W310), exit 2, nothing run. RED before K3: it was accepted.
     calls = []
     monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: calls.append(op))
     assert main(["stack", verb, "kiss@r1", "--band", "433", "--yes"]) == 2
-    assert calls == [] and "unrecognized arguments: --band 433" in capsys.readouterr().err
+    assert calls == [] and "--band is gone (W308/W310): name the instance, `<stack>@<rid>`" in capsys.readouterr().out
 
 
 @pytest.mark.contract
@@ -1128,8 +1128,8 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
 
 # ---- rflog: the registry, not the generic log command ------------------------------------------
 
-@pytest.mark.parametrize("argv", [["rflog", "daemon"],                     # two files: band required
-                                  ["rflog", "graywolf", "--band", "433"],  # one file: band rejected
+@pytest.mark.parametrize("argv", [["rflog", "daemon"],                     # per radio: a radio required
+                                  ["rflog", "reticulum@r1"],               # one node: no instance file
                                   ["rflog", "chat"]])                      # no RF log
 def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
@@ -1139,13 +1139,22 @@ def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
 
 @pytest.mark.parametrize("argv", [["rflog"],                                    # a stack, --all or --clear-all
                                   ["rflog", "graywolf", "--all", "on"],         # every stack: no stack
-                                  ["rflog", "--band", "433", "--all", "off"],   # ...and no band
                                   ["rflog", "meshcom", "--clear-all"],
                                   ["rflog", "--all", "on", "--clear-all"]])     # one of the two
 def test_rflog_bulk_flags_take_no_stack_and_exclude_each_other(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(argv) == 2
     assert capsys.readouterr().err.startswith("usage:")
+    assert not (tmp_path / "rt" / "config" / "stacks").exists()
+
+
+@pytest.mark.parametrize("argv", [["rflog", "daemon", "--band", "868"], ["config", "kiss", "--band=868", "tx_freq", "1"],
+                                  ["_stack-start", "kiss", "--band", "433"]])
+def test_k8_a_band_option_anywhere_is_refused_by_name(tmp_path, monkeypatch, capsys, argv):
+    # K8 (W308/W310, DEC-W384ab): every command refuses `--band` by name and shows the instance form; nothing runs
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    assert main(argv) == 2
+    assert "--band is gone (W308/W310): name the instance, `<stack>@<rid>`" in capsys.readouterr().out
     assert not (tmp_path / "rt" / "config" / "stacks").exists()
 
 
@@ -1177,18 +1186,18 @@ def test_rflog_all_and_clear_all_reach_every_registered_log(tmp_path, monkeypatc
 def test_rflog_graywolf_reads_the_kiss_file_and_clears_it(tmp_path, monkeypatch, capsys):
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
-    assert main(["rflog", "graywolf"]) == 0
+    assert main(["rflog", "graywolf@r1"]) == 0
     assert "(no log file yet)" in capsys.readouterr().out
-    (rt / "logs").mkdir(parents=True)
-    (rt / "logs" / "rf-kiss.log").write_text("frame 1\nframe 2\n")
-    (rt / "logs" / "rf-kiss.log.1").write_text("older\n")
-    assert main(["rflog", "graywolf", "--lines", "2"]) == 0
+    (rt / "logs" / "r1").mkdir(parents=True)                         # K8: kiss@r1's own file
+    (rt / "logs" / "r1" / "rf-kiss.log").write_text("frame 1\nframe 2\n")
+    (rt / "logs" / "r1" / "rf-kiss.log.1").write_text("older\n")
+    assert main(["rflog", "graywolf@r1", "--lines", "2"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].endswith("/logs/rf-kiss.log") and out[1:] == ["frame 1", "frame 2"]
-    assert main(["rflog", "daemon", "--band", "868"]) == 0
-    assert "rf-daemon-868" not in (rt / "logs" / "rf-kiss.log").read_text()
-    assert main(["rflog", "graywolf", "--clear"]) == 0
-    assert (rt / "logs" / "rf-kiss.log").read_text() == "" and not (rt / "logs" / "rf-kiss.log.1").exists()
+    assert out[0].endswith("/logs/r1/rf-kiss.log") and out[1:] == ["frame 1", "frame 2"]
+    assert main(["rflog", "daemon@r2"]) == 0
+    assert "rf-daemon" not in (rt / "logs" / "r1" / "rf-kiss.log").read_text()
+    assert main(["rflog", "graywolf@r1", "--clear"]) == 0
+    assert (rt / "logs" / "r1" / "rf-kiss.log").read_text() == "" and not (rt / "logs" / "r1" / "rf-kiss.log.1").exists()
 
 
 def test_rflog_clear_never_reads_first(tmp_path, monkeypatch):
@@ -1199,18 +1208,18 @@ def test_rflog_clear_never_reads_first(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
-    (rt / "logs").mkdir(parents=True)
-    trace = rt / "logs" / "rf-meshtastic.log"
+    (rt / "logs" / "r2").mkdir(parents=True)                         # K7: meshtastic@r2's own trace
+    trace = rt / "logs" / "r2" / "rf-meshtastic.log"
     trace.write_bytes(b"{}\n" * (rflog.MAX_BYTES // 3 + 10))          # over the cap
     calls = []
     monkeypatch.setattr(ControllerService, "rflog_tail",
                         lambda self, *a, **k: calls.append(("tail", a)) or ("", []))
     monkeypatch.setattr(ControllerService, "_rflog_roll_native",
                         lambda self, p: calls.append(("roll", p)))
-    assert main(["rflog", "meshtastic", "--clear"]) == 0
+    assert main(["rflog", "meshtastic@r2", "--clear"]) == 0
     assert calls == []                                              # neither read nor rolled
     assert trace.stat().st_size == 0
-    assert not (rt / "logs" / "rf-meshtastic.log.1").exists()
+    assert not (rt / "logs" / "r2" / "rf-meshtastic.log.1").exists()
     # The usage rules still apply on the --clear path.
     assert main(["rflog", "daemon", "--clear"]) == 2
     assert main(["rflog", "meshtastic", "--band", "868", "--clear"]) == 2
@@ -1225,7 +1234,7 @@ def _decoded(records, error=""):
 
 def test_rflog_decrypt_is_refused_on_plaintext_logs(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
-    for surface in ("graywolf", "meshcom"):
+    for surface in ("graywolf@r1", "meshcom@r1"):
         assert main(["rflog", surface, "--decrypt"]) == 2
         out = capsys.readouterr().out
         assert out.startswith("ERR") and "plaintext already" in out   # the CLI has no typed field; the sentence is the contract
@@ -1236,17 +1245,17 @@ def test_rflog_decrypt_prints_decoded_frames_with_control_characters_escaped(tmp
     from lhpc.core.services import ControllerService
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
-    (rt / "logs").mkdir(parents=True)
+    (rt / "logs" / "r2").mkdir(parents=True)                         # meshcore@r2's own file
     line = '2026-09-12T18:36:49.968Z RX rssi=-67.00 snr=11.25 len=4 hex=01020304 ascii="...."'
-    (rt / "logs" / "rf-meshcore.log").write_text(line + "\nnot a frame \x07\n")
+    (rt / "logs" / "r2" / "rf-meshcore.log").write_text(line + "\nnot a frame \x07\n")
     monkeypatch.setattr(ControllerService, "rflog_decode", lambda self, t, j, recs: _decoded(recs))
-    assert main(["rflog", "meshcore", "--decrypt"]) == 0
+    assert main(["rflog", "meshcore@r2", "--decrypt"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].endswith("/logs/rf-meshcore.log")
+    assert out[0].endswith("/logs/r2/rf-meshcore.log")
     assert out[1] == "2026-09-12T18:36:49.968Z RX rssi=-67.00 snr=11.25 len=4 text !433f648c: hi \\x1b[31mred\\x1b[0m"
     assert out[2] == "not a frame \\x07"                                   # an unparsed line stays raw
     assert "\x1b" not in "\n".join(out) and "\x07" not in "\n".join(out)
-    assert sorted(os.listdir(rt / "logs")) == ["rf-meshcore.log"]           # nothing written
+    assert sorted(os.listdir(rt / "logs" / "r2")) == ["rf-meshcore.log"]    # nothing written
 
 
 def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypatch, capsys):
@@ -1265,8 +1274,8 @@ def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, 
     from lhpc.core.services import ControllerService
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
-    (rt / "logs").mkdir(parents=True)
-    log = rt / "logs" / "rf-meshtastic.log"
+    (rt / "logs" / "r2").mkdir(parents=True)
+    log = rt / "logs" / "r2" / "rf-meshtastic.log"
     log.write_text('{"timestamp":1,"rssi":-60,"snr":5,"from":1,"to":2,"size":1,"bytes":"01"}\n')
     monkeypatch.setattr(ControllerService, "rflog_decode", lambda self, t, j, recs: _decoded(recs))
     polls = []
@@ -1281,7 +1290,7 @@ def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, 
             raise KeyboardInterrupt
     import time as _time
     monkeypatch.setattr(_time, "sleep", sleep)      # the follow loop imports `time` locally: this IS the seam
-    assert main(["rflog", "meshtastic", "--decrypt", "--follow", "--lines", "1"]) == 0
+    assert main(["rflog", "meshtastic@r2", "--decrypt", "--follow", "--lines", "1"]) == 0
     out = [ln for ln in capsys.readouterr().out.splitlines() if " text " in ln]
     assert [ln[:20] for ln in out] == [f"1970-01-01T00:00:0{i}Z" for i in (1, 2, 3, 4)]   # none lost, none twice
 

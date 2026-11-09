@@ -1498,15 +1498,21 @@ def test_start_plan_refuses_what_the_apply_firewall_gate_refuses(tmp_path, monke
 
 
 def _running_kiss(tmp_path):
-    """kiss healthy on 433 (daemon READY, the TNC's listener up) with an exposing saved config."""
+    """kiss@r1 healthy on 433 (daemon READY, the TNC's listener up) with an exposing saved config: its own process
+    (its instance token) listening on the saved kiss_port 9001 (DEC-W384ac: the endpoint follows the saved port;
+    before, a TNC on the manifest's 8001 counted as healthy although kiss@r1 was set to 9001)."""
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem, Listener
     from lhpc.core.services import ControllerService
     (tmp_path / "config").mkdir(exist_ok=True)
+    plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    token = instances._token(plain, plain.stack("kiss").component("loraham-kiss-tnc"), Instance("r1", band="433"), "433")
     svc = ControllerService(system=FakeSystem(
         cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
-                       200: ["loraham-kiss-tnc", "--config", "X"]},
-        listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
+                       200: ["loraham-kiss-tnc", "--config", "X", *token]},
+        listeners=[Listener(family="ipv4", ip="127.0.0.1", port=9001, inode=1)],
         owners={1: 200},
         unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
         paths=Paths(runtime_root=tmp_path))
@@ -1521,8 +1527,10 @@ def test_start_plan_of_a_running_stack_is_not_refused_by_the_gate(tmp_path, monk
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": False})
-    assert svc.start("kiss", apply=False).ok is True
-    applied = svc.start("kiss", apply=True)
+    from lhpc.core.commands import Instance
+    r1 = Instance("r1", band="433")                         # K8: the instance that runs (its saved port's listener)
+    assert svc.start("kiss", apply=False, inst=r1).ok is True
+    applied = svc.start("kiss", apply=True, inst=r1)
     assert applied.ok is True
     assert applied.results and {r.outcome.value for r in applied.results} == {"already_healthy"}
 
@@ -1553,8 +1561,12 @@ def test_restart_with_a_pending_firewall_gate_leaves_the_running_stack_up(tmp_pa
     assert "NOT started" not in res.summary
     assert not res.results and stops == []
     svc._invalidate_config()
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
     kiss = svc.build_snapshot().stack("kiss").components["loraham-kiss-tnc"]
-    assert kiss.run_state == RunState.RUNNING
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    assert instances.start_state(svc, "kiss", tnc, Instance("r1", band="433"), "433", kiss.run_state, kiss) \
+        == RunState.RUNNING                                  # kiss@r1, still up on its saved port
 
 
 def test_restart_plan_refuses_a_pending_firewall_gate(tmp_path, monkeypatch):

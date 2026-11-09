@@ -10,7 +10,7 @@ set -eu
 src="$1"; runtime="$2"; static="$3"; mc_host="$4"; mc_port="$5"; bind="$6"; port="$7"
 venv="$src/backend/.venv"
 secrets="$runtime/config/secrets"
-# The instance's level under state/ (LHPC passes MESHCORE_INSTANCE_DIR: "" at slot 0, "<rid>/" at slot k), so each
+# The instance's level under state/ (LHPC passes MESHCORE_INSTANCE_DIR: "" without a radio, "<rid>/" for an instance), so each
 # instance keeps its own data and pairs with its own meshcore-cli lock.
 inst="${MESHCORE_INSTANCE_DIR:-}"
 data="$runtime/state/${inst}meshcore-webui"

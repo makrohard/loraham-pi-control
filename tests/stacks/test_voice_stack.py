@@ -178,7 +178,7 @@ def test_direct_terminal_variant_start_is_refused_and_names_the_stack(tmp_path, 
     assert res.results == (), outcomes(res)
     assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
     assert not (tmp_path / "config" / "files" / "loraham_voice.conf").exists()
-    assert svc.interactive_band("voice") is None
+    assert svc.interactive_shown("voice") == {}
 
 
 def test_direct_start_refusal_is_a_preflight_even_with_marker_and_ready_daemon(tmp_path, monkeypatch, set_call, real_spawn):
@@ -268,7 +268,7 @@ def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkey
     assert "lhpc stack start voice@<rid>" in res.summary, res.summary
     assert res.results == ()
     assert touched == []                      # no stop, no feed clearing
-    assert svc.interactive_band("voice") == "433"   # marker survives
+    assert set(svc.interactive_shown("voice").values()) == {"433"}   # marker survives
 
 
 def _cli_holds_audio_conflict(monkeypatch, svc):
@@ -304,7 +304,7 @@ def test_second_start_noop_does_not_fabricate_already_healthy_for_the_fallback(t
     set_call(svc)
     first = svc.start("voice", apply=True)
     assert first.ok is True, outcomes(first)
-    assert svc.interactive_band("voice") is not None      # command presented
+    assert svc.interactive_shown("voice") != {}      # command presented
     second = svc.start("voice", apply=True)
     assert second.ok is True, outcomes(second)
     assert "already healthy" in second.summary
@@ -329,7 +329,7 @@ def test_terminal_variant_not_presented_when_shared_config_fails(tmp_path, monke
     assert "did not complete" in (cli.summary or ""), cli.summary
     assert "run it yourself" not in (cli.summary or "")
     assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
-    assert svc.interactive_band("voice") is None
+    assert svc.interactive_shown("voice") == {}
 
 
 def test_terminal_variant_blocked_while_a_sibling_holds_the_audio_device(tmp_path, monkeypatch, set_call, real_spawn):
@@ -345,7 +345,7 @@ def test_terminal_variant_blocked_while_a_sibling_holds_the_audio_device(tmp_pat
     assert cli.outcome == Outcome.BLOCKED, outcomes(res)
     assert "resource conflict" in (cli.summary or ""), cli.summary
     assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
-    assert svc.interactive_band("voice") is None
+    assert svc.interactive_shown("voice") == {}
 
 
 def test_interactive_start_blocks_when_its_pre_steps_fail(tmp_path, monkeypatch, set_call, real_spawn):

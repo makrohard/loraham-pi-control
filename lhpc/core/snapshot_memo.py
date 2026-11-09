@@ -55,7 +55,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "firewall_gate_activation": "gate inside decorated ops; renders only via firewall_render (decorated)",
     "firewall_gate_stack_start": "gate inside decorated ops; renders only via firewall_render (decorated)",
     "invalidate_snapshot": "the invalidation itself; decorating it would recurse",
-    "mark_interactive": "UI marker inside start (decorated); not a snapshot input",
+    "mark_shown": "UI marker inside start (decorated); not a snapshot input",
     "network_view": "GET: WLAN panel cache; drops an expired pending marker only",
     "prune_logs": "log housekeeping inside build/spawn; logs are no snapshot input",
     "refresh_gps_auto": "per-request hook; drops only the cached config itself",
@@ -181,7 +181,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "inheritable_global": "read-only",
     "install_blocker": "read-only",
     "install_dep_gate": "read-only",
-    "interactive_band": "read-only",
+    "interactive_shown": "read-only",
     "is_built": "read-only",
     "is_installed": "read-only",
     "known_working_offer": "read-only",
@@ -287,6 +287,9 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
 # entry is decorated instead).
 _RF_NATIVE_TRACE = ("state/locks/", "state/locks/rflog-rf-meshtastic.log.lock",
                     "logs/rf-meshtastic.log", "logs/rf-meshtastic.log.1")
+# K7/K8: an instance's own trace, `lhpc rflog meshtastic@<rid>` (the roll lock is named by the file's leaf)
+_RF_INSTANCE_TRACE = ("state/locks/", "state/locks/rflog-rf-meshtastic.log.lock",
+                      "logs/r*/rf-meshtastic.log", "logs/r*/rf-meshtastic.log.1")
 SNAPSHOT_NEUTRAL_WRITERS: dict[str, tuple[str, ...]] = {
     # `_gps_direct_sample`: reslock.operation_lock on `claim.gps.<device>` (service_params.py:2274;
     # the lock file stays, the owner record is removed on release), and `_gps_read_device`
@@ -301,5 +304,5 @@ SNAPSHOT_NEUTRAL_WRITERS: dict[str, tuple[str, ...]] = {
     # trace is native (rflog.REGISTRY).
     "log_tail": _RF_NATIVE_TRACE,
     "rflog_records": _RF_NATIVE_TRACE,
-    "rflog_tail": _RF_NATIVE_TRACE,
+    "rflog_tail": _RF_INSTANCE_TRACE,
 }
