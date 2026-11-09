@@ -142,9 +142,9 @@ def test_the_page_has_a_radio_row_and_the_stack_row_of_that_radio(tmp_path, rid,
 
 
 @pytest.mark.no_default_hardware   # the 0.13.x band files of a box without a list (per-radio files: below)
-def test_without_a_list_the_page_shows_the_file_with_no_radio_row_and_band_is_no_filter(web):
+def test_without_a_list_the_page_shows_the_file_with_no_radio_row(web):
     c = web()
-    doc = parse(c.get("/logs/loraham-daemon?job=rf-daemon-868.log&band=433").get_data(as_text=True))
+    doc = parse(c.get("/logs/loraham-daemon?job=rf-daemon-868.log").get_data(as_text=True))
     assert not _row(doc, "RF log radios").find("a")
     assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-daemon-868.log"
     assert not doc.find("input", name="band") and not doc.find("input", name="radio")

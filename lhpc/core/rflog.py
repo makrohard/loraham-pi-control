@@ -369,6 +369,11 @@ def switcher(svc, job: str, rid: str = "") -> dict:
             continue
         stacks += [{"target": x.writer, "job": j, "surface": x.surface, "label": label, "current": j == job}
                    for j, label in jobs if j and by_job(j)]
-    radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer,
-               "job": (e.radio_job(r) or e.job(b)) if e.banded else job} for r, _n, b in rows]
+
+    def pill_job(r, b):                       # G1-W5 B1: a radio's pill opens that radio's own file, never the shown one's
+        if e.banded:
+            return e.radio_job(r) or e.job(b)
+        own = f"{r}/{job.partition('/')[2]}"
+        return (own if by_job(own) else e.job()) if key in rids else job
+    radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]
     return {"radio": shown, "radios": radios, "stacks": stacks}

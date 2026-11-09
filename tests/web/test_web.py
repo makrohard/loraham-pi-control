@@ -732,7 +732,8 @@ def test_logs_view_keeps_the_radio_for_the_live_poll(web):
     # polling the same radio's log, not swap to another log two seconds later (W4).
     body = web().get("/logs/loraham-daemon?radio=r1").get_data(as_text=True)
     assert 'data-radio="r1"' in body and "data-band" not in body
-    assert 'data-radio=""' in web().get("/logs/loraham-daemon?band=433").get_data(as_text=True)    # band: no filter
+    assert 'data-radio=""' in web().get("/logs/loraham-daemon").get_data(as_text=True)
+    assert web().get("/logs/loraham-daemon?band=433").status_code == 400                # G1-W5: a band, by name
     assert web().get("/logs/bogus").status_code == 404
 
 
@@ -2041,7 +2042,7 @@ def test_logs_view_radio_selects_the_instances_process_log(tmp_path, web):
     (d / "start-loraham-daemon-868-r2.log").write_text("eight-six-eight\n")
     assert "four-three-three" in c.get("/logs/loraham-daemon?radio=r1").get_data(as_text=True)
     assert "eight-six-eight" in c.get("/logs/loraham-daemon?radio=r2").get_data(as_text=True)
-    assert "four-three-three" not in c.get("/logs/loraham-daemon?radio=r2&band=433").get_data(as_text=True)
+    assert c.get("/logs/loraham-daemon?radio=r2&band=433").status_code == 400          # G1-W5: a band, by name
     # A radio of no list row never reaches a filename: a 404 by name, not a 500/traversal.
     r = c.get("/logs/loraham-daemon?radio=../../etc/passwd")
     assert r.status_code == 404 and "root:" not in r.get_data(as_text=True)
