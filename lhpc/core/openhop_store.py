@@ -109,13 +109,15 @@ def blocked(svc, inst=None) -> str:
     """'' when LHPC may write the file (no node process, no unverified stop), else the reason. A listed instance
     (7d) looks at its own process and records only; slot 0 as before."""
     svc.build_snapshot(fresh=True)
+    inst = _inst(svc, inst)                              # K6: the instance whose file it is
     rid = inst.rid if inst is not None and inst.rid else None
     if rid is None and svc.stack_running(STACK_ID):
         return RUNNING
     if rid is not None:
         from . import instances
-        if instances.instance_runs(svc, svc.stack(STACK_ID).component(NODE_ID), inst, instances.resolve(
-                svc, f"{STACK_ID}@{rid}")[2]):
+        node = svc.stack(STACK_ID).component(NODE_ID)
+        if instances.instance_runs(svc, node, inst, instances.resolve(svc, f"{STACK_ID}@{rid}")[2]) or (
+                svc.stack_running(STACK_ID) and instances.unclaimed(svc, node)):    # fail-safe: maybe this one
             return RUNNING
     # A record stamped with an EARLIER boot has no live process: it is a reboot's leftover (the very
     # evidence boot restore claims), not an unverified stop. Unstamped records, an unreadable boot id

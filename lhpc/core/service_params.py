@@ -500,7 +500,8 @@ class ParamsConfigMixin:
             # K6: every instance's own file (its radio's band), the global one without a list
             for inst in ([_instances.copy_of(self, stack.id, i.rid)[0] or i
                           for i in commands.stack_instances(stack, self._paths) if i.rid] or [None]):
-                band = inst.band if inst is not None else ""
+                # the radio's band only for a stack with bands (its band-specific defaults); "" for one without
+                band = inst.band if inst is not None and self.stack_bands(stack.id) else ""
                 cfg_band = band if inst is not None else self._config_band(stack.id, band)
                 stored = load_stack_config(self._paths, stack.id, cfg_band, inst=inst)
                 if not stored:

@@ -74,8 +74,8 @@ def env(tmp_path, monkeypatch):
     return svc, helper
 
 
-def _secret(svc, filename, value):
-    p = mi.secret_path(svc._paths, filename)
+def _secret(svc, filename, value, rid=""):
+    p = mi.secret_path(svc._paths, filename, rid)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
@@ -103,7 +103,7 @@ def _seed_legacy(svc):
 
 def _legacy_sources(svc):
     """The bytes of every legacy source (absent = None), for a byte-for-byte kept/removed check."""
-    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"
+    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"
     files = [stack] + [mi.secret_path(svc._paths, f) for f in (mi.REPEATER_IDENTITY_FILENAME,
                                                                 mi.REPEATER_ADMIN_FILENAME)]
     return [f.read_bytes() if f.exists() else None for f in files]
@@ -113,7 +113,7 @@ def _legacy_removed(svc):
     """Every legacy source gone from the bytes: both secret files absent and none of the three keys left in the
     stack config (gate 2 r2b, the second reader's F1: a value check cannot see what was never seeded)."""
     import tomllib
-    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"
+    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"
     keys = list(tomllib.loads(stack.read_text())) if stack.exists() else []
     return (not any(re.search(r"(^|_)(repeater_name|repeater_mode|airtime)$", k) for k in keys)
             and not any(mi.secret_path(svc._paths, f).exists()
@@ -196,11 +196,12 @@ def test_a_failed_write_or_sync_keeps_every_legacy_copy(env, monkeypatch, verb):
 def test_writes_are_refused_while_running_or_with_an_unverified_stop(env, monkeypatch):
     svc, helper = env
     ops.ensure(svc, {"repeater_name": "Relay"}, "10")
-    monkeypatch.setattr(svc, "stack_running", lambda sid: sid == mm.STACK_ID)
+    from lhpc.core import instances                      # K6: meshcore@r2 (the file's instance) runs
+    monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": getattr(i, "rid", "") == "r2")
     assert ops.save_rows(svc, {"repeater_name": "New"}).endswith(ops.RUNNING)
     with pytest.raises(ops.OneStoreError, match="running"):
         ops.ensure(svc, {}, "10")
-    monkeypatch.setattr(svc, "stack_running", lambda sid: False)
+    monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": False)
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
     monkeypatch.setattr(type(svc._lifecycle()), "owned_records",
                         lambda self, cid, rid=None: [{"component": cid, "boot_id": "boot-now"}])
@@ -237,12 +238,13 @@ def test_remove_stack_keys_drops_both_stored_forms_only(env):
     comparison: the removal re-renders the file, so its bytes are not the claim)."""
     import tomllib
     svc, _helper = env
-    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"
+    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"
     c = mm.NODE_ID
     stack.write_text(f'file_repeater_name = "Relay"\n"__f__{c}__repeater_name" = "Relay"\nfile_airtime = "5"\n'
                      f'"__f__{c}__airtime" = "5"\nfile_mode = "repeater"\nfile_repeater_mode = "monitor"\n')
     with cfgmod.config_lock(svc._paths):
-        cfgmod.remove_stack_keys(svc._paths, mm.STACK_ID, mm.NODE_ID, ["repeater_name", "airtime"])
+        cfgmod.remove_stack_keys(svc._paths, mm.STACK_ID, mm.NODE_ID, ["repeater_name", "airtime"],
+                                 inst=ops._inst(svc, None))                    # K6: the instance's own file
     assert tomllib.loads(stack.read_text()) == {"file_mode": "repeater", "file_repeater_mode": "monitor"}
 
 
@@ -272,7 +274,8 @@ def test_settings_saves_go_to_openhops_file_once_it_exists(env, monkeypatch):
     assert _stored(svc)["repeater_name"] == ""                            # never the legacy store
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": " "})
     assert not r.ok and "cannot be cleared" in r.details[0]
-    monkeypatch.setattr(svc, "stack_running", lambda sid: True)
+    from lhpc.core import instances                      # K6: meshcore@r2 (the file's instance) runs
+    monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": getattr(i, "rid", "") == "r2")
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Live"})
     assert not r.ok and r.details[0].endswith(ops.RUNNING)
     assert helper.file()["repeater.node_name"] == "After"
@@ -309,7 +312,7 @@ def test_openhop_warnings_reach_the_start_note(env):
 
 def test_a_chat_name_another_companion_carries_is_refused_at_save(env):
     svc, helper = env
-    _secret(svc, mi.IDENTITY_FILENAME, KEY)
+    _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
     ops.ensure(svc, None, "10")
     ops._set(svc, {"identities.companions": [{"name": "Mine", "identity_key": KEY.upper()},
@@ -332,11 +335,11 @@ def test_a_refused_mixed_save_leaves_both_stores_byte_identical(env):
     """gate 1 5l F1: a changed one-store row commits in the SAME transaction as the stack config,
     so a refusal anywhere in the save (here the chat-name collision) writes neither store."""
     svc, helper = env
-    _secret(svc, mi.IDENTITY_FILENAME, KEY)
+    _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
     ops.ensure(svc, None, "10")
     ops._set(svc, {"identities.companions": [{"name": "Taken", "identity_key": "cd" * 32}]})
-    stack_file = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"
+    stack_file = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"   # K6: its own file
     before = (stack_file.read_bytes(), ops.file_path(svc._paths, ops._inst(svc, None)).read_bytes())
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Changed", "file_mode": "chat+repeater",
                                       "file_node_name": "Taken"})
@@ -352,7 +355,7 @@ def test_a_mixed_save_validates_the_name_it_sets(env):
     a repeater mode is judged on that name, not on the file's old (here empty) one: the recovery
     the start refusal names (set the name in LHPC Settings) works."""
     svc, helper = env
-    _secret(svc, mi.IDENTITY_FILENAME, KEY)
+    _secret(svc, mi.IDENTITY_FILENAME, KEY, "r2")              # K6: meshcore@r2's own chat identity
     _set_mode_repeater(svc, "Relay")
     ops.ensure(svc, None, "10")
     ops._set(svc, {"repeater.node_name": ""})
@@ -493,7 +496,7 @@ def test_a_legacy_airtime_of_zero_names_the_lhpc_setting_and_writes_nothing(env)
     naming LHPC's own setting (not openHop's key); it never mints the 10 % default over a stored 0."""
     svc, helper = env
     _seed_legacy(svc)                                     # gate 2 r2b: a STORED 0 (Settings refuse 0 now,
-    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"   # so it is written as 0.12.x did)
+    stack = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}@r2.toml"   # so it is written as 0.12.x did)
     stack.write_text(stack.read_text().replace('file_airtime = "5"', 'file_airtime = "0"'))
     svc._invalidate_config()
     before = _legacy_sources(svc)
@@ -634,6 +637,8 @@ def test_a_restart_that_would_migrate_under_a_running_node_is_refused_before_the
     svc._invalidate_config()
     calls = _restart_without_processes(monkeypatch, svc)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    from lhpc.core import instances                      # K6: meshcore@r2 (the file's instance) runs
+    monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, b="": getattr(i, "rid", "") == "r2")
     before = _legacy_sources(svc)
     res = svc.restart(mm.STACK_ID, apply=True)
     assert not res.ok and "stop the stack, then start it" in " ".join([res.summary, *res.details])
