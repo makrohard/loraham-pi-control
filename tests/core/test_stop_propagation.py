@@ -64,17 +64,17 @@ def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.stop("daemon", apply=True)
     assert not res.ok
-    assert svc._band_marker("daemon").exists()                # marker NOT cleared
-    assert svc._interactive_marker("daemon").exists()
+    assert svc._interactive_marker("daemon").exists()         # NOT cleared (K6: no band marker, 13.12.5)
 
 
 def test_stop_verified_clears_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     running_band_fixture.set_running_band(svc, "daemon", "433")
+    svc.mark_interactive("daemon", "433")
     _patch_life(monkeypatch, svc, Outcome.STOPPED)
     res = svc.stop("daemon", apply=True)
     assert res.ok
-    assert not svc._band_marker("daemon").exists()            # cleared after verified stop
+    assert not svc._interactive_marker("daemon").exists()     # cleared after verified stop
 
 
 def test_endpoint_still_present_is_non_success(tmp_path, monkeypatch):

@@ -344,34 +344,6 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
     assert svc.runs_on_band("reticulum", "868") is False
 
 
-def test_stopping_a_client_keeps_the_bands_evidence():
-    """Stopping an optional client (sideband/lxmd) must NOT retire the stack's
-    running-band marker while `rns` still holds the radio. It did, so the stack
-    lost its band evidence and dropped out of its own band column on the
-    dashboard while remaining offered on the other one.
-
-    Decided from the TYPED STOP RESULTS: the operation-scoped snapshot is
-    memoised, so reading it here still showed the just-stopped owner running.
-    """
-    from lhpc.core.outcomes import Outcome
-    from lhpc.core.services import ControllerService
-
-    svc = ControllerService()
-    res = lambda cid, oc: type("R", (), {"component": cid, "outcome": oc})()
-
-    # A client stopped, the band owner untouched -> the band is still occupied.
-    assert svc._band_owners_stopped(
-        "reticulum", [res("lxmd", Outcome.STOPPED)]) is False
-    # The band owner stopped -> the marker may retire.
-    assert svc._band_owners_stopped(
-        "reticulum", [res("rns", Outcome.STOPPED)]) is True
-    assert svc._band_owners_stopped(
-        "reticulum", [res("rns", Outcome.ALREADY_STOPPED)]) is True
-    # A FAILED stop is not a cessation — the radio may still be held.
-    assert svc._band_owners_stopped(
-        "reticulum", [res("rns", Outcome.FAILED)]) is False
-
-
 def test_the_advertised_command_restores_the_terminal():
     """NomadNet is a full-screen TUI: interrupted with Ctrl+C it exits without
     leaving raw mode, so ECHO/ICANON stay off and the shell stops echoing. The
