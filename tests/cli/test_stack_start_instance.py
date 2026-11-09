@@ -113,41 +113,54 @@ def test_a_running_copy_the_start_pass_reaches_is_judged_at_its_own_port(box, mo
 # ---- 13.5 (CLEANUP-DESIGN-v13): graywolf is the only stack without its own radio ---------------------------------
 
 def _graywolf_box(box, monkeypatch, procs=None):
-    """The default list's shape (r1 433, r2 868) with a callsign set; every launch's component, instance and params."""
+    """The default list's shape (r1 433, r2 868) with a callsign set. Records every launch (component, params,
+    instance), every Lifecycle.stop, and graywolf's required post-start launcher as the real renderer builds it from
+    the params and instance the start hands it (the box records no verified launch to bind a real run to)."""
+    from lhpc.core.jobs import JobResult, JobState
     from lhpc.core.lifecycle import Lifecycle
     run = box((R1, R2_868), procs=procs, ports=(8134, 8213))
     assert cli.ControllerService().set_operator_identity(callsign="DL1ABC").ok
-    seen, fake = [], Lifecycle.start
+    seen, fake = {"launch": [], "stop": [], "post": []}, Lifecycle.start
 
     def start(self, stack, comp, params=None, band="", **kw):
-        seen.append((comp, params, kw.get("inst")))
+        seen["launch"].append((comp, params, kw.get("inst")))
         return fake(self, stack, comp, params, band, **kw)
+
+    def stop(self, comp, band=None, **kw):
+        seen["stop"].append((comp.id, kw.get("rid")))
+        from lhpc.core.outcomes import CompResult, Outcome
+        return CompResult(component=comp.id, action="stop", outcome=Outcome.ALREADY_STOPPED, summary="")
+
+    def post(self, stack, comp, comp_cfg, band="", inst=None, **kw):
+        seen["post"].append(commands.render_post_launcher(
+            comp.post_steps, comp, comp_cfg, self.config.operator, str(self.paths.runtime_root),
+            str(self.source_dir(comp)), band, inst=inst, gps=self._gps_post_values(stack.id, inst)))
+        return JobResult(name=f"post-{comp.id}", state=JobState.SUCCEEDED, returncode=0, log_path="")
     monkeypatch.setattr(Lifecycle, "start", start)
+    monkeypatch.setattr(Lifecycle, "stop", stop)
+    monkeypatch.setattr(Lifecycle, "run_required_post_start", post)
     return run, seen
 
 
-def test_graywolf_at_r2_starts_kiss_at_r2_and_r2s_daemon(box, monkeypatch):
-    # The cross-stack dependency takes the dependent's radio: graywolf@r2 starts r2's daemon and kiss@r2, then itself.
-    run, _seen = _graywolf_box(box, monkeypatch)
-    _rc, out, launches = run("start", "graywolf@r2")
+def test_graywolf_at_r2_runs_on_kiss_at_r2_and_r2s_daemon(box, monkeypatch):
+    # 13.5: the cross-stack dependency takes the dependent's radio (r2's daemon, kiss@r2, then graywolf@r2); graywolf's
+    # provisioning is handed kiss@r2's KISS port (8001 + 133, K6S-2) and its web UI is r2's (8080 + 133)
+    run, seen = _graywolf_box(box, monkeypatch)
+    rc, out, launches = run("start", "graywolf@r2")
+    assert rc == 0, out
     assert launches == [("loraham-daemon", "868", "r2"), ("loraham-kiss-tnc", "868", "r2"),
                         ("graywolf", "868", "r2")], (launches, out)
-
-
-def test_graywolfs_kiss_port_is_kiss_at_its_own_radios(box, monkeypatch):
-    # {port_of:kiss:8001} is kiss@r2's port (8001 + 133), and graywolf@r2's web UI is r2's (8080 + 133): no picking.
-    run, seen = _graywolf_box(box, monkeypatch)
-    run("start", "graywolf@r2")
-    comp, params, inst = next(s for s in seen if s[0].id == "graywolf")
+    (script,) = seen["post"]
+    assert "'--tnc-port', '8134'" in script, script[:800]
+    comp, params, inst = next(x for x in seen["launch"] if x[0].id == "graywolf")
     op = cli.ControllerService().config().operator
-    step = next(st["argv"] for st in comp.post_steps if st.get("kind") == "exec")       # the provisioning: graywolf's TNC
-    tnc = commands.expand_argv([t for t in step if t in ("{param:tnc_host}", "{param:tnc_port}")], comp, params, op,
-                               "/rt", "/src", "868", inst=inst)
-    assert (inst.rid, tnc) == ("r2", ["--tnc-host", "127.0.0.1", "--tnc-port", "8134"]), tnc
     assert "127.0.0.1:8213" in commands.expand_argv(comp.run_argv, comp, params, op, "/rt", "/src", "868", inst=inst)
 
 
 def test_graywolf_at_r2_leaves_a_running_kiss_at_r1_alone(box, monkeypatch):
-    run, _seen = _graywolf_box(box, monkeypatch, procs={4100: _kiss_on("r1")})
-    _rc, out, launches = run("start", "graywolf@r2")
+    run, seen = _graywolf_box(box, monkeypatch, procs={4100: _kiss_on("r1")})
+    rc, out, launches = run("start", "graywolf@r2")
+    assert rc == 0, out
     assert [x for x in launches if x[0] == "loraham-kiss-tnc"] == [("loraham-kiss-tnc", "868", "r2")], (launches, out)
+    assert [s for s in seen["stop"] if s[0] == "loraham-kiss-tnc"] == [], seen["stop"]     # never stopped nor replaced
+    assert cli.ControllerService()._system.procfs.cmdlines()[4100] == _kiss_on("r1")       # its process untouched
