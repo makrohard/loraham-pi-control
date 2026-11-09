@@ -69,7 +69,7 @@
           while (tmp.firstChild) parent.insertBefore(tmp.firstChild, ph);
           parent.removeChild(ph);
         });
-        // Tell the per-body enhancers (copy/bandfilter/dparams/daemoncfg) to wire the
+        // Tell the per-body enhancers (copy/dparams/daemoncfg) to wire the
         // freshly-injected subtree. `details` is the root that now holds the new body.
         document.dispatchEvent(new CustomEvent("lhpc:bodyloaded", { detail: { root: details } }));
       })

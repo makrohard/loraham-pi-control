@@ -635,11 +635,11 @@ def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     return {"radio": shown, "radio_choices": out if len(out) > 1 else []}
 
 
-def plan_hash(svc, op: str, target: str, inst=None, band: str = "") -> str:
-    """W2: a confirm page's freshness token, the sha256 of the core's start/restart plan (no choice taken), the target's
-    saved run config and its radio's row (the daemon starts with the row's settings and grant). The detached job
-    recomputes it under every lock; another value refuses the run."""
+def plan_hash(svc, op: str, target: str, inst=None, band: str = "", plan=None) -> str:
+    """W2: a confirm page's freshness token, the sha256 of the core's start/restart plan (no choice taken; `plan`: the
+    one the page shows, G1-W2 1), the target's saved run config and its radio's row (the daemon starts with the row's
+    settings and grant). The detached job recomputes it under every lock; another value refuses the run."""
     row = [dataclasses.asdict(r) for r in radios.load(svc._paths).radios if inst is not None and r.id == inst.rid]
-    plan = dataclasses.asdict(svc.run_action(op, target, apply=False, band=band, inst=inst))
+    plan = dataclasses.asdict(plan or svc.run_action(op, target, apply=False, band=band, inst=inst))
     blob = json.dumps([plan, svc.stack_config(target, band, inst), row], sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()

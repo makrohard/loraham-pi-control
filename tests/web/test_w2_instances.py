@@ -203,7 +203,7 @@ def test_every_home_form_posts_its_instance(tmp_path, monkeypatch, web):
         assert not names & {"band", "rid"}, names
         options = [o["value"] for o in w.find("option")] if w.find("select", name="target") else []
         targets += options or [w.field_default("target")]
-    assert {"daemon@r1", "daemon@r2", "kiss@r1", "chat@r1", "voice@r2"} <= set(targets), targets
+    assert {"daemon@r1", "daemon@r2", "chat@r1", "voice@r2"} <= set(targets), targets   # kiss: no instance (G1-W2 3)
     assert all(re.fullmatch(r"[\w-]+@r[12]", t) for t in targets), targets
     heads = [h.text.strip() for h in doc.find("h3")]
     assert {"Running on r1", "Start a stack on r1", "Start a stack on r2"} <= set(heads), heads   # a radio, not a band
@@ -286,3 +286,162 @@ def test_the_confirmed_hash_reaches_the_jobs_argv(tmp_path, monkeypatch, web, cs
                             "plan_hash": "f" * 64})
     c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "kiss@r2"})
     assert [a[a.index("--plan-hash") + 1] if "--plan-hash" in a else None for a in argvs] == ["f" * 64, None], argvs
+
+
+# ---- G1-W2 dd81a2de fixes ----
+
+
+def test_g1_w2_1_the_confirm_hashes_the_plan_it_shows(tmp_path, monkeypatch, web, csrf):
+    # A second planner call that would answer differently (an owner changed between the two) never decides the hash:
+    # the page's hash is the hash of the plan the page shows.
+    from htmlq import parse
+
+    from lhpc.core import instances
+    _box(tmp_path, monkeypatch)
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\n")
+    real, plans = ControllerService.run_action, []
+
+    def run_action(self, op, target, apply=False, **k):
+        res = real(self, op, target, apply=apply, **k)
+        if not apply:
+            if plans:
+                res.data = {**res.data, "blockers": []}                  # the box moved: no owner any more
+            plans.append((self, res))
+        return res
+    monkeypatch.setattr(ControllerService, "run_action", run_action)
+    c = web(cmdlines={200: ["meshtasticd"]})
+    page = parse(c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon@r2"}).get_data(as_text=True))
+    form = page.within(next(f for f in page.find("form", action="/action") if f.has_attr("data-busy-form")))
+    svc, shown = plans[0]
+    assert shown.data["blockers"]                                           # the page shows the owner
+    inst = instances.parse_target(svc, "daemon@r2", "start")[1]
+    assert form.field_default("plan_hash") == instances.plan_hash(svc, "start", "daemon", inst, "868", shown)
+
+
+def _two_433_web(tmp_path, web, cmdlines=None):
+    _two_433(tmp_path)
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    return web(service_factory=lambda: ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
+                                                         paths=Paths(runtime_root=tmp_path)))
+
+
+@pytest.mark.parametrize("rid", ["r1", "r3"])
+def test_g1_w2_2_the_pages_radio_is_picked_in_every_instance_selector(tmp_path, web, rid):
+    # Two radios on 433: ?radio=r3 is not ?radio=r1. Every instance selector of the page picks that radio, and the lazy
+    # bodies are fetched for it.
+    from htmlq import parse
+    c = _two_433_web(tmp_path, web)
+    doc = parse(c.get(f"/stacks?radio={rid}&open=kiss").get_data(as_text=True))
+    selects = [doc.within(s) for s in doc.find("select", name="target")]
+    assert selects
+    for s in selects:
+        picked = [o["value"] for o in s.find("option") if o.has_attr("selected")]
+        assert picked and all(v.endswith(f"@{rid}") for v in picked), picked
+    urls = [e["data-body-url"] for e in doc.find("div", class_="lazy-body")]
+    assert urls and all(f"radio={rid}" in u for u in urls)
+
+
+def test_g1_w2_2_w1s_daemon_panel_link_opens_the_same_radio(tmp_path, web):
+    # W290: the W1 link `/stacks?dp=daemon&rid=r2` keeps working: it opens `?radio=r2`, the one selector.
+    from urllib.parse import parse_qs, urlsplit
+    _two_433(tmp_path)
+    c = web()
+    r = c.get("/stacks?dp=daemon&rid=r3&open=daemon")
+    assert r.status_code == 302
+    q = parse_qs(urlsplit(r.headers["Location"]).query)
+    assert q == {"dp": ["daemon"], "open": ["daemon"], "radio": ["r3"]}
+    assert c.get(r.headers["Location"]).status_code == 200
+
+
+def _card_forms(doc, card_id):
+    card = doc.within(doc.by_id(card_id))
+    return sorted((card.within(f).field_default("op"), card.within(f).field_default("target"))
+                  for f in card.find("form", action="/action") if card.within(f).field_default("op") in ("stop", "restart"))
+
+
+def test_g1_w2_3_an_entry_without_an_instance_has_no_control_on_any_card(tmp_path, web):
+    # A kiss process no launch record and no argv names a radio for: a stop of kiss@r1 or kiss@r3 leaves it running, so
+    # neither card offers one; each says why.
+    from htmlq import parse
+    c = _two_433_web(tmp_path, web, {200: ["/x/loraham-kiss-tnc"]})
+    doc = parse(c.get("/").get_data(as_text=True))
+    for card in ("radio-r1", "radio-r3"):
+        assert [f for f in _card_forms(doc, card) if f[1].partition("@")[0] == "kiss"] == [], card
+        assert doc.present(f"noinst-{card[6:]}-kiss"), card
+
+
+def test_g1_w2_3_an_instance_shows_on_its_own_radios_card_only(tmp_path, web):
+    import subprocess
+    import sys
+
+    from htmlq import parse
+    _two_433(tmp_path)
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        svc = _svc(tmp_path)
+        stk = svc.stack("kiss")
+        assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433", extra={"rid": "r1"})
+        doc = parse(web(service_factory=lambda: _svc(tmp_path)).get("/").get_data(as_text=True))
+        assert [f for f in _card_forms(doc, "radio-r1") if f[1].partition("@")[0] == "kiss"] == [("restart", "kiss@r1"),
+                                                                                       ("stop", "kiss@r1")]
+        assert [f for f in _card_forms(doc, "radio-r3") if f[1].partition("@")[0] == "kiss"] == []
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_g1_w2_3_an_interactive_app_shows_on_its_instances_card(tmp_path, web):
+    from htmlq import parse
+
+    from lhpc.core import instances
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    _two_433(tmp_path)
+    ready = {f"/tmp/loraconf-{r}.sock": f"STATUS ID={r} RADIO=READY TX=0 TXMODE=MANAGED\n".encode() for r in ("r1", "r3")}
+
+    def svc():          # chat runs (two radios on a band have no band daemon view, so a marker alone shows nothing)
+        return ControllerService(system=FakeSystem(unix_replies=ready, cmdlines_data={300: ["loraham_chat"]}).system,
+                                 paths=Paths(runtime_root=tmp_path))
+    assert svc().mark_interactive("chat", "433", inst=instances.copy_of(svc(), "chat", "r3")[0])
+    doc = parse(web(service_factory=svc).get("/").get_data(as_text=True))
+    heads = {card: [h.text.strip() for h in doc.within(doc.by_id(card)).find("h3")] for card in ("radio-r1", "radio-r3")}
+    assert "Interactive apps" in heads["radio-r3"] and "Interactive apps" not in heads["radio-r1"], heads
+    stops = {card: [f[1] for f in _card_forms(doc, card) if f[1].partition("@")[0] == "chat"] for card in ("radio-r1", "radio-r3")}
+    assert stops == {"radio-r1": [], "radio-r3": ["chat@r3"]}, stops
+
+
+@pytest.mark.parametrize("band, code", [("433", 400), ("868", 302)])
+def test_g1_w2_4_a_band_stop_is_only_a_stray_daemons(tmp_path, monkeypatch, web, csrf, band, code):
+    # The §6 exception holds only for a band the hardware list has no enabled radio on (two 433 radios here).
+    _two_433(tmp_path)
+    seen, c = _spy(monkeypatch), web()
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon", "band": band, "confirmed": "yes"})
+    assert r.status_code == code
+    assert [s[:2] for s in seen["stops"] if s[1]] == ([("daemon", True)] if code == 302 else [])
+
+
+@pytest.mark.parametrize("target", ["kiss@r9", "kiss", "nosuch@r1"])
+def test_g1_w2_5_a_stop_waives_no_refusal_but_the_reachable_ones(tmp_path, monkeypatch, web, csrf, target):
+    # Only a disabled radio's or an off-list running instance comes back from the parser with an instance (and still
+    # stops, test_copy_restart_marker_web); a radio off the list with nothing running, a bare stack, an unknown stack:
+    # refused, nothing stopped.
+    _box(tmp_path, monkeypatch)
+    seen, c = _spy(monkeypatch), web()
+    page = _post(c, csrf, op="stop", target=target, confirmed="yes").get_data(as_text=True)
+    assert f"Cannot stop {target}:" in page and seen["stops"] == []
+
+
+def test_g1_w2_6_a_card_without_a_radio_offers_no_start_that_names_none(tmp_path, monkeypatch, web):
+    # A band card with no radio (the template's `x` absent; the core builds none today: no list gives no card, a stray
+    # card is one per live radio): no start control, which could name no radio; the card names the Hardware page.
+    from htmlq import parse
+    real = ControllerService.radio_overview
+    monkeypatch.setattr(ControllerService, "radio_overview", lambda self: [
+        dict(r, radios=[], daemon=dict(r["daemon"], installed=True)) for r in real(self)])
+    doc = parse(_two_433_web(tmp_path, web).get("/").get_data(as_text=True))
+    card = doc.within(doc.by_id("radio-433"))
+    assert [card.within(f).field_default("op") for f in card.find("form", action="/action")] == []
+    assert "Hardware" in doc.by_id("noradio-433").text

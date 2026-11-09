@@ -117,7 +117,7 @@
         </div>
       {% endif %}
 
-      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on) }}
+      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on, page_radio) }}
 
       {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
       {% if g.hmac_enabled is not none %}
@@ -149,7 +149,7 @@
                        inside the summary toggle (a11y). #}
                     <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
                     {% if comp.kind.value == 'service' %}
-                      {{ instance_btn('start', comp.id, 'Start', g.run_on) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on) }}
+                      {{ instance_btn('start', comp.id, 'Start', g.run_on, "", page_radio) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on, "", page_radio) }}
                       {# The operator's hard stop of this component only (A §2.12): a confirm page
                          that names its processes first. #}
                       {% if comp.process and comp.id in g.stack.components|map(attribute='id')|list %}

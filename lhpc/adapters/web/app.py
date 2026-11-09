@@ -47,6 +47,7 @@ from lhpc.core import hotplug as _hotplug
 from lhpc.core import instances as _instances
 from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
+from lhpc.core import radios as _radios_mod
 from lhpc.core import rflog as _rflog
 from lhpc.core.ap_network import AP_CIDR_CONFIRM as _AP_CIDR_CONFIRM
 from lhpc.core.services import ControllerService
@@ -452,6 +453,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Radio-centric overview: one card per radio (W285/W286: "r1 · 868"), grouped by band, with its daemon,
         # live monitor, the band's stacks and a start-stack control.
         radios = service.radio_overview()
+        # W2 (G1-W2 3): an interactive app shows on the card of each radio its instance's marker names, with that
+        # instance's Stop; a running entry without a rid is no instance lhpc can address (a stop reaches none of it).
+        from lhpc.core import interactive_markers as _im
+        for r in radios:
+            for e in r["interactive"]:
+                e["rids"] = [f.stem.partition("@")[2] for f in _im.markers(service, e["id"]) if "@" in f.stem]
         # An interactive app that's been launched (marked) but isn't detected running yet, or a radio's daemon
         # start/restart job still running -> poll faster so the dash shows the outcome quickly.
         tasks, dsid = service.running_tasks(), service.stack_of(service.DAEMON_ID) or "daemon"
@@ -1177,9 +1184,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     def _page_band() -> str:
         """W2: the page's radio (`?radio=rN`) decides its band; `?band=` only until W3 drops the band links."""
-        from lhpc.core import radios as _radios
         rid = request.args.get("radio", "")
-        return next((r.band for r in _radios.load(service._paths).radios if r.id == rid), "") if rid else \
+        return next((r.band for r in _radios_mod.load(service._paths).radios if r.id == rid), "") if rid else \
             request.args.get("band", "")
 
     def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
@@ -1206,6 +1212,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _ws = None
         ctx = {
             "version": __version__, "snapshot": snapshot,
+            # W2 (G1-W2 2): the page's radio picks that radio in every instance selector of the page
+            "page_radio": next((r.id for r in _radios_mod.load(service._paths).radios if r.id == request.args.get("radio")), ""),
             "summary": summarize(snapshot), "groups": groups, "auto_install_mode": service.auto_install_mode(),
             "observed_conflicts": service.observed_conflicts(snapshot),   # band-aware
             "controller": service.controller_status(),
@@ -1288,6 +1296,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/stacks")
     def stacks_overview():
+        if request.args.get("rid") and not request.args.get("radio"):     # W2: W1's `dp=&rid=` link reads `?radio=`
+            args = {k: v for k, v in request.args.items() if k != "rid"}
+            return redirect(url_for("stacks_overview", **args, radio=request.args["rid"]))
         return _render_stacks()
 
     @app.get("/dependencies")
@@ -1696,7 +1707,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "confirm.html", version=__version__,
             op=op, target=target, plan=plan, tx=("tx" in op),
             source=source, band=band, rid=rid,
-            plan_hash=(_instances.plan_hash(service, op, target, inst, band) if op in ("start", "restart") else ""),
+            plan_hash=(_instances.plan_hash(service, op, target, inst, band, plan) if op in ("start", "restart") else ""),
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
             stop_labels=([lbl for lbl, _ in service.owner_stops(plan.data.get("blockers") or [])]
                          if op in ("start", "restart") else None),
@@ -1738,11 +1749,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # radio's running instance still stops (G1-C7 B3). One exception, the §6 stray card: a band daemon no
             # radio names (a 0.13.x daemon still up) is stopped by its band, as before (W290: its Stop stays).
             stray = op == "stop" and target == "daemon" and "rid" not in request.form and \
-                request.form.get("band") in service.RADIO_BANDS
+                request.form.get("band") in set(service.RADIO_BANDS) - set(service.radio_bands())   # G1-W2 4: unlisted
             if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
                 _instances.parse_target(service, target, op)
+            # G1-W2 5: the parser hands an instance WITH a why only where a stop reaches it (a disabled radio, a radio
+            # off the list); every other refusal comes without one and is refused for a stop too.
             if why and not (inst is not None and op == "stop"):
                 flash(f"Cannot {op} {target}: {why}.", "warn")
                 return _redirect_for(sid or target)
@@ -2092,7 +2105,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
         # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
         # `open=<stack_id>` forces the row and the anchor scrolls to it.
-        return redirect(url_for("stacks_overview", band=band or None, rid=rid or None,      # item 16: its radio
+        return redirect(url_for("stacks_overview", band=band or None, radio=rid or None,    # item 16, W2: its radio
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 

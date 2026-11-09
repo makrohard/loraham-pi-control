@@ -42,7 +42,7 @@ def test_a_save_for_one_radio_writes_its_row_alone_and_keeps_the_reserved_ids(bo
     assert r.status_code == 302
     assert dict(_row(tmp_path, "r2").dp) == {"FREQ": "433.600"} and _row(tmp_path, "r1").dp == ()
     assert radios.load(Paths(runtime_root=tmp_path)).retired == ("r9",)
-    assert "rid=r2" in r.headers["Location"]                                  # back to that radio's panel
+    assert "radio=r2" in r.headers["Location"]                                # back to that radio's panel (W2)
 
 
 def test_a_blank_value_clears_the_radios_own_value_and_reset_clears_them_all(box):

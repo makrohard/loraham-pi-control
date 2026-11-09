@@ -2832,8 +2832,7 @@ def test_daemon_stop_confirm_shows_band(tmp_path, web, csrf):
     (bind / "loraham_daemon").write_text("#!bin")
     client = web()
     token = csrf(client)
-    r = client.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon",
-                                     "band": "433"})
+    r = client.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon@r1"})   # G1-W2 4: an instance
     body = r.get_data(as_text=True)
     assert r.status_code == 200 and "Confirm: stop" in body and "daemon 433" in body
     assert "Cancel</a>" in body and "Apply stop</button>" in body

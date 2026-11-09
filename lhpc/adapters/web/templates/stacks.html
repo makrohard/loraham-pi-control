@@ -193,7 +193,7 @@
             {% if _forced %}
               {% include "_stack_body.html" %}
             {% else %}
-              <div class="lazy-body" data-body-url="{{ url_for('stack_body', sid=g.stack.id) }}{% if request.args.get('band') %}?band={{ request.args.get('band') }}{% endif %}">
+              <div class="lazy-body" data-body-url="{{ url_for('stack_body', sid=g.stack.id, radio=request.args.get('radio') or None, band=request.args.get('band') or None) }}">
                 <noscript><p class="muted"><a href="{{ url_for('stacks_overview', open=g.stack.id) }}#stackrow-{{ g.stack.id }}">Open {{ g.stack.name }}</a></p></noscript>
               </div>
             {% endif %}

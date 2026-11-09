@@ -212,23 +212,30 @@
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
             {% else %}
-              <p class="muted">Daemon not running on {% if x %}{{ x.rid }}{% else %}{{ r.band }} MHz{% endif %}. Start a stack below
-                (it auto-starts the daemon for this {{ 'radio' if x else 'band' }}), or start the daemon alone:</p>
+              {% if x %}
+              <p class="muted">Daemon not running on {{ x.rid }}. Start a stack below (it auto-starts the daemon for this
+                radio), or start the daemon alone:</p>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="start">
                 <input type="hidden" name="target" value="daemon{{ at }}">
                 <input type="hidden" name="from" value="dash">
-                <button type="submit">Start daemon ({% if x %}{{ x.rid }}{% else %}{{ r.band }} only{% endif %})</button>
+                <button type="submit">Start daemon ({{ x.rid }})</button>
               </form>
+              {% else %}{# W2 (G1-W2 6): a start names a radio; a card without one names where to get it #}
+              <p class="muted" id="noradio-{{ key }}">Daemon not running on {{ r.band }} MHz. A start names a radio: add or
+                enable one for {{ r.band }} MHz on the <a href="{{ url_for('hardware_add_page') }}">Hardware</a> page.</p>
+              {% endif %}
               {{ links }}
             {% endif %}
           {% endif %}
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
           <h3>Running on {{ x.rid if x else r.band }}</h3>
-          {# Cleanup C7c: a listed copy's entry (its `rid`) shows on its own radio's card only. #}
-          {% set runs = r.running | rejectattr("rid") | list + (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) %}
+          {# Cleanup C7c, W2 (G1-W2 3): an instance (its `rid`) shows on its own radio's card only, with its Stop and
+             Restart; an entry without a rid names no instance (no launch record or argv token tells its radio): it shows
+             on each card of its band, with no control, since a stop of any instance leaves it running. #}
+          {% set runs = (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) + r.running | rejectattr("rid") | list %}
           {% if runs %}
             {% for s in runs %}
               {# A rule BETWEEN the running stacks of this radio. `loop.first` keeps it out of the
@@ -295,15 +302,7 @@
                         {% endif %}
                         {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}
                       {% endfor %}
-                      {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
-                        <form method="post" action="{{ url_for('action') }}" class="act">
-                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                          <input type="hidden" name="op" value="stop">
-                          <input type="hidden" name="target" value="{{ c.id }}{{ at }}">
-                          <input type="hidden" name="from" value="dash">
-                          <button type="submit">Stop</button>
-                        </form>
-                      {% elif c.interactive %}
+                      {% if c.interactive and c.state not in ('running', 'degraded') %}
                         {# The blocker banner STAYS, but the command is shown UNCONDITIONALLY: an
                            interactive client is run by the operator in their own terminal, so
                            hiding it behind an install/build blocker just removes the one thing
@@ -313,26 +312,11 @@
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
                         {{ cmdbox('runc-' ~ c.id, c.command) }}
-                      {% elif c.optional and c.runnable %}
-                        <form method="post" action="{{ url_for('action') }}" class="act">
-                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                          <input type="hidden" name="op" value="start">
-                          <input type="hidden" name="target" value="{{ c.id }}{{ at }}">
-                          <input type="hidden" name="from" value="dash">
-                          <button type="submit">Run</button>
-                        </form>
                       {% endif %}</li>
                   {% endfor %}
                 </ul>
-                <p class="actrow">
-                  <form method="post" action="{{ url_for('action') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                    <input type="hidden" name="op" value="stop">
-                    <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
-                    <input type="hidden" name="from" value="dash">
-                    <button type="submit">Stop</button>
-                  </form>
-                </p>
+                <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No instance: no launch record or argv names the radio
+                  {{ s.name }} runs on, so lhpc can neither stop nor restart it from here.</p>
                 {% endif %}
               </div>
             {% endfor %}
@@ -341,20 +325,23 @@
           {% endif %}
 
           {# --- interactive apps: tracked, but the operator starts them in a terminal --- #}
-          {% if r.interactive %}
+          {# W2 (G1-W2 3): an app on the card of each radio its instance's marker names; with no instance marker on
+             each card of its band, without a Stop (it names no instance). #}
+          {% set inter = [] %}{% for s in r.interactive if (x and x.rid in s.rids) or not s.rids %}{% set _ = inter.append(s) %}{% endfor %}
+          {% if inter %}
             <h3>Interactive apps</h3>
-            {% for s in r.interactive %}
+            {% for s in inter %}
               <div class="runstack">
                 {% if s.running %}
                   <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-running">&#10003; running</span>
-                    <form method="post" action="{{ url_for('action') }}" class="act">
+                    {% if x and x.rid in s.rids %}<form method="post" action="{{ url_for('action') }}" class="act">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                       <input type="hidden" name="op" value="stop">
                       <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
                       <input type="hidden" name="from" value="dash">
                       <button type="submit">Stop</button>
-                    </form></p>
+                    </form>{% endif %}</p>
                 {% else %}
                   <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-stopped">not running</span>
@@ -373,8 +360,8 @@
           {% endif %}
 
           {# --- start another stack on this radio --- #}
-          {% if r.startable %}
-            <h3>Start a stack on {{ x.rid if x else r.band }}</h3>
+          {% if r.startable and x %}{# W2 (G1-W2 6): a card without a radio says so above; its start would name none #}
+            <h3>Start a stack on {{ x.rid }}</h3>
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
