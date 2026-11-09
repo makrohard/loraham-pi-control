@@ -27,10 +27,16 @@ def box(web, tmp_path, csrf):
     c = web(system=fake.system)
     token = csrf(c, "/stacks?dp=daemon")
 
-    def post(**form):
-        band = {} if "radio" in form else {"band": "433"}               # W3: a radio's save names the radio alone
-        return c.post("/stacks/daemon/daemon-params", data={"_csrf": token, **band, **form})
+    def post(**form):                                                   # W3: a radio's save names the radio alone
+        return c.post("/stacks/daemon/daemon-params", data={"_csrf": token, **form})
     return post, tmp_path
+
+
+def _band_save(tmp_path, values):
+    # The band's saved values (0.13.x dp_433_*, read until K8d): the service's band save; the console posts a radio (W3)
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.save_daemon_params("daemon", "433", values).ok
 
 
 def _dp(tmp_path, rid):
@@ -55,7 +61,7 @@ def test_a_save_is_judged_on_the_list_its_lock_reads(box, monkeypatch):
 def test_a_radio_keeps_its_source_default_over_the_bands_value(box):
     # B2: the band saves SF 9; r2 set to the source default (12) keeps 12, never the band's 9
     post, tmp_path = box
-    post(dp_SF="9")
+    _band_save(tmp_path, {"SF": "9"})
     post(radio="r2", dp_SF="12")
     assert _dp(tmp_path, "r2") == {"SF": "12"}
 
@@ -64,6 +70,6 @@ def test_a_value_posted_as_shown_stays_inherited(box):
     # note 2: r2 shows the band's FREQ and the operator changes only SF; FREQ stays the band's, so a later band
     # change reaches r2
     post, tmp_path = box
-    post(dp_FREQ="433.600")
+    _band_save(tmp_path, {"FREQ": "433.600"})
     post(radio="r2", dp_FREQ="433.600", dp_SF="10")
     assert _dp(tmp_path, "r2") == {"SF": "10"}

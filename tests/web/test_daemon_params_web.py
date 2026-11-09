@@ -222,7 +222,7 @@ def test_apply_live_failure_flashes_warning(web, csrf):
     c = web()
     tok = csrf(c)
     r = c.post("/stacks/daemon/daemon-params/apply",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
+               data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "40"})              # W3: the radio's apply
     body = c.get(r.headers["Location"]).get_data(as_text=True)
     assert "flash-warn" in body and "flash-ok" not in body
 

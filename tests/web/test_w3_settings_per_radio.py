@@ -126,3 +126,54 @@ def test_the_daemons_live_block_chooses_a_radio_not_a_band(box):
     assert [h.split("?")[1].split("&")[0] for h in hrefs] == ["radio=r1", "radio=r2", "radio=r3"]
     assert [a for a in sec.find("a", class_="sel") if "radio=r3" in a["href"]]
     assert not [h for h in hrefs if "band=" in h]
+
+
+
+@pytest.mark.parametrize("path, form", [
+    ("/stacks/daemon/daemon-params", {"band": "433", "dp_FREQ": "433.650"}),
+    ("/stacks/daemon/daemon-params/apply", {"band": "433", "dp_FREQ": "433.650"}),
+    ("/stacks/daemon/daemon-params/reset", {"band": "433"}),
+    ("/stacks/daemon/daemon-params?band=433", {"radio": "r2", "dp_FREQ": "433.650"}),
+    ("/stacks/chat/config?band=433", {"radio": "r2", "f_call": "DL1ABC"}),
+    ("/stacks/chat/config/reset?band=433", {"radio": "r2"}),
+    ("/stacks/kiss/daemon-params?band=433", {"band": "433", "dp_FREQ": "433.650"}),
+])
+def test_g1_w3_b1_a_band_for_the_daemon_or_in_the_query_is_refused_by_name_and_writes_nothing(box, path, form):
+    # G1-W3 B1/N3 (DEC-W384bi): the daemon's band-only POST no longer reaches its band keys; a query band never counts
+    _c, post, tmp_path = box
+    before = _files(tmp_path)
+    r = post(path, **form)
+    assert r.status_code == 400 and "band is a radio's attribute: use radio=<rid>" in r.get_data(as_text=True)
+    assert _files(tmp_path) == before
+
+
+@pytest.mark.parametrize("path, form, says", [
+    ("/stacks/daemon/daemon-params", {"dp_FREQ": "433.650"}, "the daemon's radio parameters are per radio"),
+    ("/stacks/daemon/daemon-params?rid=r2", {"band": "433", "dp_FREQ": "433.650"}, "rid is no field here"),
+    ("/stacks/daemon/daemon-params?rid=r2", {"radio": "r2", "dp_FREQ": "433.650"}, "rid is no field here"),
+    ("/stacks/daemon/daemon-params/reset?rid=r2", {}, "rid is no field here"),
+])
+def test_g1_w3_b1_the_daemons_panel_needs_its_radio_and_a_rid_in_the_url_is_refused(box, path, form, says):
+    _c, post, tmp_path = box
+    before = _files(tmp_path)
+    r = post(path, **form)
+    assert r.status_code == 400 and says in r.get_data(as_text=True)
+    assert _files(tmp_path) == before
+
+
+def test_g1_w3_b2_a_client_panel_never_posts_a_radio(box):
+    # Pin (DEC-W384bi B2): on ?radio= a client stack has no panel (its radio's settings are the daemon's until K8d);
+    # without one, its panel posts its band, as on ba316d42
+    c, _post, _tmp = box
+    for url, field in (("/stacks?radio=r2&open=kiss&dp=kiss", None), ("/stacks?open=kiss&dp=kiss", "band")):
+        doc = parse(c.get(url).get_data(as_text=True))
+        forms = [f for f in doc.find("form") if f["action"] == "/stacks/kiss/daemon-params"]
+        names = {i["name"] for f in forms for i in doc.within(f).find("input", type="hidden")}
+        assert ("radio" not in names) and (field in names if field else not forms), url
+
+
+def test_g1_w3_n3_the_daemons_panel_never_reads_a_page_band(box):
+    c, _post, _tmp = box
+    form = _hidden(c, "/stacks?band=868&open=daemon&dp=daemon", "stack-daemon-params-daemon",
+                   "/stacks/daemon/daemon-params")
+    assert form.get("radio") == "r1" and "band" not in form          # its first enabled radio, never a band's
