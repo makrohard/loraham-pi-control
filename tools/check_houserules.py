@@ -3,7 +3,7 @@
 
     check_houserules.py <base>..<head> [--fact LITERAL]...
 
-One line per rule (changelog, docs, tests, patterns, markers, attribution, modules), each ending in
+One line per rule (changelog, docs, tests, patterns, markers, wallclock, attribution, modules), each ending in
 OK, WARN or HARD, then `VERDICT PASS|FAIL`. Exit 1 when a line is HARD, 2 on a usage or git error.
 The exact conditions: tests/README.md rule 13 and the plan of this tool. WARN lines are judged by
 the reviewer; HARD lines block.
@@ -60,10 +60,19 @@ WORD_EXEMPT = re.compile(r"user[-_]" + "ag" + "ent" + r'|scope="' + "ses" + 'sio
 HARD_PATTERNS = {"getsource": re.compile(r"inspect\.getsource\("),
                  "assert-True": re.compile(r"^\s*assert True\b")}
 WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"']+\.(py|js|css)["']"""),
-                 "sleep": re.compile(r"time\.sleep\("),
                  "startswith": re.compile(r"assert .*\.startswith\("),
                  "network": re.compile(r"\b(requests\.|urllib\.request|socket\.create_connection)")}
 EXEMPT = "# rule-1 exception"
+# The wall-clock rule (HARD, the same for every repository): a real clock in a test, judged on the HEAD file's AST
+# for the added lines only. A call of time.time/monotonic/sleep (also through an alias of the module or of the
+# function), a string with "sleep N" (an executed shell text or a fake-script body alike) and an argv list or tuple
+# whose first element is "sleep". The escape: @pytest.mark.wallclock("reason") on the test, or `# wallclock: reason`
+# on a line outside any test. A node is judged whole when any of its lines is an added line.
+WALLCLOCK_DIRS = ("tests/", "testlab/tests/")
+WALLCLOCK_CALLS = ("time", "monotonic", "sleep")
+SLEEP_TEXT = re.compile(r"\bsleep\s+\d")
+WALLCLOCK_MARK = re.compile(r"""mark\.wallclock\(\s*(?P<q>["'])(?P<reason>[^"']*\S[^"']*)(?P=q)\s*\)""")
+WALLCLOCK_COMMENT = re.compile(r"#\s*wallclock:\s*(?P<reason>\S.*)$")
 RED_BEFORE = re.compile(r"red[- ]before", re.IGNORECASE)
 RAISE_REASON = re.compile(r"#\s*\S+:\s*\S")
 # A new family file whose budget row says `# <item>: split from <file> [and <file>...]`: the moved code cancels
@@ -247,11 +256,58 @@ def changelog_bullets(added: list, second: int) -> tuple[list[int], bool]:
     return bullets, below
 
 
+def test_scopes(src: str) -> list[tuple[int, int, str, list[str]]]:
+    """(def line, last line, name, decorator texts) of every test in a source: module-level `test_*` functions and
+    the `test_*` methods of a `Test*` class, as pytest collects them. Raises SyntaxError for a file that does not
+    parse. The one attribution of a line to its test (G1-TR1 B2): it reads the whole file, not the diff."""
+    out = []
+
+    def add(fn, prefix=""):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test"):
+            out.append((fn.lineno, fn.end_lineno, prefix + fn.name,
+                        [ast.get_source_segment(src, d) or "" for d in fn.decorator_list]))
+
+    for node in ast.parse(src).body:
+        add(node)
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            for item in node.body:
+                add(item, node.name + "::")
+    return out
+
+
+def wallclock_lines(src: str, added: set[int]) -> list[int]:
+    """The added lines of a source that use a real clock (WALLCLOCK_CALLS, SLEEP_TEXT, a "sleep" argv). Raises
+    SyntaxError for a file that does not parse."""
+    tree = ast.parse(src)
+    modules, funcs = {"time"}, set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {a.asname or a.name for a in node.names if a.name == "time"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "time":
+            funcs |= {a.asname or a.name for a in node.names if a.name in WALLCLOCK_CALLS}
+    lines = src.splitlines()
+    hits = set()
+    for node in ast.walk(tree):
+        span = [n for n in range(node.lineno, node.end_lineno + 1) if n in added] if hasattr(node, "lineno") else []
+        if not span:
+            continue
+        f = node.func if isinstance(node, ast.Call) else None
+        clock = (isinstance(f, ast.Attribute) and f.attr in WALLCLOCK_CALLS and isinstance(f.value, ast.Name)
+                 and f.value.id in modules) or (isinstance(f, ast.Name) and f.id in funcs)
+        argv = (isinstance(node, (ast.List, ast.Tuple)) and bool(node.elts)
+                and isinstance(node.elts[0], ast.Constant) and node.elts[0].value == "sleep")
+        if clock or argv:
+            hits.add(span[0])
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            hits |= {n for n in span if SLEEP_TEXT.search(lines[n - 1])}
+    return sorted(hits)
+
+
 def check(base: str, head: str, facts: list[str], correction: bool = False) -> list[tuple[str, str, str]]:
     rng = f"{base}..{head}"
     added = added_lines(git("diff", "--unified=0", rng))
-    status = [line.split("\t") for line in git("diff", "--name-status", rng).splitlines()]
-    new_files = {p[-1] for p in status if p[0].startswith("A")}
+    status = [line.split("\t") for line in git("diff", "--name-status", "-M", rng).splitlines()]
+    new_files = {p[-1] for p in status if p[0][0] in "ARC"}     # a renamed or copied test file is placed anew
     changed = {p[-1] for p in status}
     commits = [c.strip("\n").split("\x00", 2)
                for c in git("log", "--format=%H%x00%an%x00%B%x1e", rng).split("\x1e") if c.strip()]
@@ -320,27 +376,54 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
 
     # markers
     unmarked = 0
-    by_file: dict[str, list[tuple[int, str]]] = {}
-    for p, n, t in in_tests:
-        by_file.setdefault(p, []).append((n, t))
-    for lines in by_file.values():
-        for i, (_, t) in enumerate(lines):
-            if not TEST_DEF.match(t):
+    by_file: dict[str, set[int]] = {}
+    for p, n, _ in in_tests:
+        by_file.setdefault(p, set()).add(n)
+    for p, lines in by_file.items():
+        src = show(head, p)
+        try:
+            scopes = test_scopes(src) if src is not None else []
+        except SyntaxError:
+            scopes = []                      # the wallclock row reports an unparsable file in its scope
+        src_lines = (src or "").splitlines()
+        for first, last, _, decorators in scopes:
+            if first not in lines:           # only a test whose def line is added
                 continue
-            body = []
-            for _, b in lines[i + 1:]:
-                if b.strip() and not b[0].isspace():     # the next top-level statement ends it
-                    break
-                body.append(b)
-            text = "\n".join(body)
+            text = "\n".join(src_lines[first:last])
             slow_work = "venv" in text or "pip install" in text or ("while" in text and "monotonic" in text)
-            above = []
-            for _, a in reversed(lines[:i]):
-                if not a.strip().startswith("@"):
-                    break
-                above.append(a)
-            unmarked += slow_work and not any("mark.slow" in a for a in above)
+            unmarked += slow_work and not any("mark.slow" in d for d in decorators)
     rows.append(("markers", f"{unmarked} without slow", "WARN" if unmarked else "OK"))
+
+    # wallclock
+    bad, escapes = [], []
+    for p, lines in sorted(by_file.items()):
+        if not p.startswith(WALLCLOCK_DIRS) or not p.endswith(".py"):
+            continue
+        src = show(head, p)
+        if src is None:
+            continue
+        try:
+            hits = wallclock_lines(src, lines)
+            scopes = test_scopes(src)
+        except SyntaxError:
+            bad.append(f"{p} does not parse")
+            continue
+        src_lines = src.splitlines()
+        for n in hits:
+            test = next((t for t in scopes if t[0] <= n <= t[1]), None)
+            if test is not None:
+                reason = next((m["reason"] for d in test[3] if (m := WALLCLOCK_MARK.search(d))), None)
+                where = f"{p}::{test[2]}"
+            else:
+                m = WALLCLOCK_COMMENT.search(src_lines[n - 1])
+                reason, where = (m["reason"].strip() if m else None), f"{p}:{n}"
+            if reason is None:
+                bad.append(f"{p}:{n}")
+            elif f"{where} ({reason})" not in escapes:
+                escapes.append(f"{where} ({reason})")
+    rows.append(("wallclock", f"{len(bad)} unmarked{': ' + ' '.join(bad) if bad else ''}; "
+                              f"{len(escapes)} escaped{': ' + '; '.join(escapes) if escapes else ''}",
+                 "HARD" if bad else "OK"))
 
     # attribution
     authors = sorted({a for sha, a, _ in commits if sha not in ALLOWED_COMMITS})

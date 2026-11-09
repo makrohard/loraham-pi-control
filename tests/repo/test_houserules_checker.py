@@ -25,6 +25,8 @@ BASE = {
     "tests/core/test_ok.py": "def test_one():\n    assert 1\n",
 }
 RED = "item\n\nred-before: AssertionError on the parent\n"
+SL = "sle" + "ep"     # assembled, so that this file's own data does not hit the wall-clock rule
+TSL = "time." + SL    # nor the base program's textual sleep pattern
 
 
 def _git(repo, *args, author="makrohard"):
@@ -70,7 +72,7 @@ def _run(repo, *extra):
     return p.returncode, rows
 
 
-LINES = ("changelog", "docs", "tests", "patterns", "markers", "attribution", "modules")
+LINES = ("changelog", "docs", "tests", "patterns", "markers", "wallclock", "attribution", "modules")
 
 
 def _others(line):
@@ -93,6 +95,7 @@ HARD = {
                               "    def run(self): pass\n    def more(self): pass\n"},
                              RED, "modules"),
     "test-outside-layers": ({"tests/misc/test_x.py": "def test_x():\n    assert 1\n"}, RED, "tests"),
+    "wallclock-sleep": (_test("\ndef test_two():\n    import time\n    " + TSL + "(0)\n    assert 2\n"), RED, "wallclock"),
     "assert-true": (_test("\ndef test_two():\n    assert True\n"), RED, "patterns"),
     # The patterns are assembled so that this file does not itself match them.
     "getsource": (_test("\ndef test_two():\n    import inspect\n    assert inspect." + "getsource(len)\n"),
@@ -168,9 +171,7 @@ WARN = {
     "docs-without-fact": ({"docs/a.md": "Alpha fact.\nMore.\n"}, RED, (), "docs"),
     "fact-in-two-files": ({"docs/b.md": "Beta.\nAlpha fact.\n"}, RED, ("--fact", "Alpha fact."), "docs"),
     "test-without-red-before-wording": (_test("\ndef test_two():\n    assert 2\n"), "item\n", (), "tests"),
-    "sleep": (_test("\ndef test_two():\n    import time\n    time." + "sleep(0)\n    assert 2\n"),
-              RED, (), "patterns"),
-    "timed-loop-without-slow": (_test("\ndef test_two():\n    import time\n"
+    "timed-loop-without-slow": (_test("\n@pytest.mark.wallclock('a timed loop')\ndef test_two():\n    import time\n"
                                       "    while time.monotonic() < 0:\n        pass\n    assert 2\n"),
                                 RED, (), "markers"),
     "attribution-word": ({"docs/a.md": "Alpha fact.\n" + "Clau" + "de wrote this.\n"}, RED,
@@ -348,7 +349,7 @@ def test_a_profile_without_a_changelog_or_budget_turns_those_rules_off(repo):
 def test_a_profile_replaces_the_warn_patterns(repo):
     """The profile's own warn pattern applies in the test layers; red before: the default set, OK."""
     _profiled(repo, 'warn_patterns = { shell-sleep = "sleep [0-9]" }\n')
-    _commit(repo, _test("\ndef test_two():\n    run('sleep 5')\n"))
+    _commit(repo, _test(f"\n@pytest.mark.wallclock('data only')\ndef test_two():\n    run('{SL} 5')\n"))
     rc, rows = _run(repo)
     assert rc == 0 and rows["patterns"] == "WARN"
 
@@ -468,3 +469,129 @@ def test_an_excepted_commit_is_not_judged_by_its_author(repo, monkeypatch, capsy
     hr.main(["base..HEAD", "--fact", "More."])
     rows = {line.split()[0]: line.split()[-1] for line in capsys.readouterr().out.splitlines()[1:] if line.strip()}
     assert rows["attribution"] == "OK"
+
+
+# --- the wall-clock rule (HARD): a real clock in tests/ or testlab/tests/ needs @pytest.mark.wallclock("reason") ---
+# or, outside any test, `# wallclock: reason` on its line. Red-before: on the parent the row did not exist and
+# time.sleep was a WARN pattern, so every unmarked case below passed the range.
+
+def _out(repo):
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False)
+    return p.returncode, next((ln for ln in p.stdout.splitlines() if ln.startswith("wallclock")), "")
+
+
+UNMARKED = {
+    "time.sleep": "    import time\n    " + TSL + "(0)\n",
+    "time.time": "    import time\n    assert time.time()\n",
+    "time.monotonic": "    import time\n    assert time.monotonic()\n",
+    "module alias": "    import time as _t\n    assert _t.monotonic()\n",
+    "function alias": "    from time import sleep as nap\n    nap(0)\n",
+    "argv": f"    import subprocess\n    subprocess.run(['{SL}', '5'])\n",
+    "shell text": f"    run('sh -c \"{SL} 5\"')\n",
+    "fake-script body": f"    body = '''#!/bin/sh\n{SL} 30\n'''\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNMARKED))
+def test_wallclock_each_real_clock_in_a_test_is_hard(repo, case):
+    _commit(repo, _test("\ndef test_two():\n" + UNMARKED[case]))
+    rc, line = _out(repo)
+    assert rc == 1 and line.split()[-1] == "HARD" and "tests/core/test_ok.py:" in line, line
+
+
+@pytest.mark.parametrize("case", sorted(UNMARKED))
+def test_wallclock_a_marked_test_passes_and_is_listed(repo, case):
+    _commit(repo, _test("\n@pytest.mark.wallclock('real waiting')\ndef test_two():\n" + UNMARKED[case]))
+    rc, line = _out(repo)
+    assert rc == 0 and line.split()[-1] == "OK", line
+    assert "1 escaped: tests/core/test_ok.py::test_two (real waiting)" in line
+
+
+@pytest.mark.parametrize("mark", ["@pytest.mark.wallclock('')", "@pytest.mark.wallclock(' ')",
+                                  "@pytest.mark.wallclock", "@pytest.mark.slow"])
+def test_wallclock_a_marker_without_a_reason_is_hard(repo, mark):
+    _commit(repo, _test(f"\n{mark}\ndef test_two():\n" + UNMARKED["time.sleep"]))
+    rc, line = _out(repo)
+    assert rc == 1 and line.split()[-1] == "HARD", line
+
+
+def test_wallclock_a_clock_added_to_an_existing_marked_test_passes(repo):
+    # G1-TR1 B2: neither the def line nor the decorator is in the diff; the HEAD file decides
+    _commit(repo, _test("\n@pytest.mark.wallclock('real waiting')\ndef test_two():\n    import time\n    assert 2\n"))
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"tests/core/test_ok.py": (repo / "tests/core/test_ok.py").read_text().replace(
+        "    assert 2\n", "    " + TSL + "(0)\n    assert 2\n")})
+    rc, line = _out(repo)
+    assert rc == 0 and "1 escaped: tests/core/test_ok.py::test_two (real waiting)" in line, line
+
+
+@pytest.mark.parametrize("mark, verdict", [("", "HARD"), ("    @pytest.mark.wallclock('real waiting')\n", "OK")])
+def test_wallclock_a_class_method_is_attributed_to_its_test(repo, mark, verdict):
+    _commit(repo, _test(f"\nclass TestTwo:\n{mark}    def test_two(self):\n        import time\n"
+                        "        " + TSL + "(0)\n"))
+    _rc, line = _out(repo)
+    assert line.split()[-1] == verdict, line
+    assert ("TestTwo::test_two (real waiting)" in line) == (verdict == "OK")
+
+
+@pytest.mark.parametrize("comment, verdict", [("", "HARD"), ("  # wallclock: the fake daemon's hang", "OK")])
+def test_wallclock_a_line_outside_a_test_needs_its_comment(repo, comment, verdict):
+    _commit(repo, {"tests/core/test_fake.py": f"import time\n\nFAKE = '''#!/bin/sh\nhang) {SL} 30 ;;{comment}\n'''\n\n"
+                   "def helper():\n    return time.monotonic()" + comment + "\n\n\ndef test_x():\n    assert FAKE\n"})
+    _rc, line = _out(repo)
+    assert line.split()[-1] == verdict, line
+    if verdict == "OK":
+        assert "tests/core/test_fake.py:4 (the fake daemon's hang)" in line and "test_fake.py:8 (" in line
+
+
+def test_wallclock_text_that_names_a_call_is_not_a_call(repo):
+    # G1-TR1 NOTE: a string or comment that names the sleep call sleeps nowhere
+    _commit(repo, _test("\ndef test_two():\n    example = '" + TSL + "(5)'  # time.monotonic()\n    assert example\n"))
+    rc, line = _out(repo)
+    assert rc == 0 and line.split()[-1] == "OK", line
+
+
+def test_wallclock_a_multiline_argv_is_judged_whole(repo):
+    # G1-TR1-RE (2): only the argument lines change; the list starts on an unchanged line
+    _commit(repo, _test("\ndef test_two():\n    import subprocess\n    subprocess.run([\n        'echo',\n"
+                        "        'hello',\n    ])\n"))
+    _git(repo, "tag", "-f", "base")
+    body = (repo / "tests/core/test_ok.py").read_text()
+    _commit(repo, {"tests/core/test_ok.py": body.replace("'echo'", f"'{SL}'").replace("'hello'", "'5'")})
+    rc, line = _out(repo)
+    assert rc == 1 and line.split()[-1] == "HARD", line
+
+
+def test_wallclock_a_removed_clock_is_not_counted(repo):
+    _commit(repo, _test("\ndef test_two():\n    import time\n    " + TSL + "(0)\n"))
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"tests/core/test_ok.py": BASE["tests/core/test_ok.py"]})
+    rc, line = _out(repo)
+    assert rc == 0 and line.split()[-1] == "OK", line
+
+
+def test_wallclock_a_test_file_that_does_not_parse_is_hard(repo):
+    _commit(repo, _test("\ndef test_two(:\n"))
+    rc, line = _out(repo)
+    assert rc == 1 and "tests/core/test_ok.py does not parse" in line, line
+
+
+@pytest.mark.parametrize("path, verdict", [("testlab/tests/unit/test_x.py", "HARD"),
+                                           ("lhpc/data/rfdecode/tests/test_x.py", "OK")])
+def test_wallclock_reaches_tests_and_testlab_tests_only(repo, path, verdict):
+    _commit(repo, {path: "import time\n\n\ndef test_x():\n    " + TSL + "(0)\n"})
+    _rc, line = _out(repo)
+    assert line.split()[-1] == verdict, line
+
+
+# --- placement: a new or renamed test file sits in a layer folder (tests/README.md "Where a new test goes") ------
+
+@pytest.mark.parametrize("dest, verdict", [("tests/test_ok.py", "HARD"), ("tests/repo/test_ok.py", "OK")])
+def test_a_renamed_test_file_must_stay_in_a_layer_folder(repo, dest, verdict):
+    # red-before: on the parent a rename was never a new file, so the move out of the layers passed (OK)
+    (repo / dest).parent.mkdir(parents=True, exist_ok=True)
+    _git(repo, "mv", "tests/core/test_ok.py", dest)
+    _git(repo, "commit", "-q", "-m", RED)
+    rc, rows = _run(repo)
+    assert rows["tests"] == verdict and (rc == 1) == (verdict == "HARD")

@@ -61,6 +61,9 @@ in a file named after when or how a defect was found:
   `golden/test_golden_argv_slot0.py` holds every component's resolved slot-0 argv to the base
   recorded in `golden/argv_slot0_0af1d413.json`, except for the tokens its `EXCEPTIONS` names.
 
+`tools/check_houserules.py` refuses (HARD) a new or renamed test file outside these folders and their
+`testlab/tests/` counterparts; which of them a test belongs in is the table above.
+
 A transaction whose state another run must recover (a journal, receipt or marker) is also driven
 through `interrupts.py`: its module pins the operation's durable writes and fails each one in turn
 (disk full, I/O error, Ctrl-C), then proves recovery and a retry (`core/test_config_interruption.py`).
@@ -132,6 +135,9 @@ All markers are declared in `pyproject.toml`; `--strict-markers` rejects a typo.
   boundary.
 - `-m safety` is every case guarding a named invariant of the
   [safety model](../docs/architecture.md). The two lanes overlap; neither is a subset of the other.
+- `wallclock("reason")` marks a test that uses a real clock on purpose (`time.time`, `time.monotonic`,
+  `time.sleep`, a `sleep N` child or fake-script body); everything else takes the `fake_clock` fixture of
+  `conftest.py`. The checker refuses an unmarked one; a line outside any test carries `# wallclock: <reason>`.
 - `slow` marks the real-venv builds, the timed loops and the timed waits (a test that spends less than half its
   wall time on CPU).
 - `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
