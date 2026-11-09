@@ -27,6 +27,9 @@
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
 - Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`
   names the node. After the update, restart running GPS stacks so their feeds move.
+- Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio): MeshCom per radio, each
+  QEMU guest on its radio's ports and its own bridge (one shared XR password).
+- meshcom-qemu-raspi: 722b5e8e5 -> 3f4425c92 (3f4425c), used by meshcom-gps-relay, meshcom-qemu
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

@@ -88,9 +88,14 @@ def test_every_instance_owned_path_follows_its_instance():
 
 @pytest.mark.parametrize("cid, key, text", list(_owned_paths()), ids=lambda v: str(v)[:40])
 def test_slot_0_is_todays_path_and_every_instance_has_its_own(cid, key, text):
-    rendered = [inst.subst(text) for inst in INSTANCES]
-    assert rendered[0] == text.replace("{instance_dir}", "").replace("{instance_suffix}", "")
-    assert len(set(rendered)) == len(INSTANCES), (cid, key, text)
+    # K7: a string with port tokens (meshcom-qemu's run line: its guest's --ports and --xr-redirect) renders only on
+    # r1..r64, the radios with ports; the template's ports are the bases and its helper instance 0
+    ports = re.search(r"\{port:\d+\}", text) is not None
+    insts = [i for i in INSTANCES if not (ports and i.rid == "r99")]
+    rendered = [inst.subst(text) for inst in insts]
+    template = re.sub(r"\{port:(\d+)\}", r"\1", text.replace("{instance_index_dir}", "").replace("{instance_index}", "0"))
+    assert rendered[0] == template.replace("{instance_dir}", "").replace("{instance_suffix}", "")
+    assert len(set(rendered)) == len(insts), (cid, key, text)
 
 
 def test_no_loaded_value_keeps_the_token():

@@ -926,11 +926,11 @@ class LifecycleOpsMixin:
         # the case this separation exists for.
         op_band = self.operation_band(target, band)
         _sid = self.stack_of(target) or target    # K5: an instance runs on its radio's band (the one-band rule is gone)
-        # TRANSITIONAL until K7 (W330): a stack outside instances.MAY runs ONE instance at a time, judged by the
-        # running instances (records and tokens), so a named start and a band caller's are refused alike.
-        if (not self._is_daemon_target(_sid) and _sid not in instances.MAY
+        # K7 (W330, DEC-W384h by property): a stack with fixed ports only (Reticulum's one node, W391) runs one instance
+        # at a time, judged by the running instances (records and tokens); a named start and a band caller's alike.
+        if (not self._is_daemon_target(_sid) and instances.fixed_ports_only(self.stack(_sid))
                 and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst)])):
-            return ActionResult(False, f"'{_sid}' runs one instance at a time until its per-radio work: {_run[0]} runs",
+            return ActionResult(False, f"'{_sid}' runs one instance at a time (one node, fixed ports): {_run[0]} runs",
                                 next_commands=[f"lhpc stack stop {_run[0]} --yes"])
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
         # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only

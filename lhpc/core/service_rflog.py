@@ -91,25 +91,21 @@ class RflogOpsMixin:
 
     @invalidates_snapshot
     def rflog_roll_native_all(self) -> None:
-        """The console's pass: try the roll on every NATIVE RF log (the Meshtastic trace, whose
-        writer never rolls it). Non-native RF logs are rotated by their own writers and never touched
-        here. A roll that fails is left for the next pass. Never raises."""
-        for e in _rflog.REGISTRY:
-            if e.native:
-                for _band, job in e.jobs:
-                    try:
-                        self._rflog_roll_native(self._rflog_path(job))
-                    except Exception:
-                        pass
+        """The console's pass: try the roll on every NATIVE RF log (the Meshtastic trace, whose writer never rolls
+        it; non-native ones are rotated by their own writers). A failed roll waits for the next pass. Never raises."""
+        self._rflog_roll_natives(lambda e: True, Exception)
 
     def _rflog_roll_at_start(self, comp_id: str) -> None:
-        for e in _rflog.REGISTRY:
-            if e.native and e.writer == comp_id:
-                for _band, job in e.jobs:
-                    try:
-                        self._rflog_roll_native(self._rflog_path(job))
-                    except (OSError, PathContainmentError):
-                        pass
+        self._rflog_roll_natives(lambda e: e.writer == comp_id, (OSError, PathContainmentError))
+
+    def _rflog_roll_natives(self, which, errors) -> None:
+        """Roll each native trace `which` takes: the legacy file and every instance's `<rid>/<file>` (K7)."""
+        for e in (e for e in _rflog.REGISTRY if e.native and which(e)):
+            for job in [j for _b, j in e.jobs] + [f"{r}/{e.job()}" for r in instances.radios_of(self.stack(e.owner), self._paths)]:
+                try:
+                    self._rflog_roll_native(self._rflog_path(job))
+                except errors:
+                    pass
 
     def rflog_job(self, target: str, job) -> dict | None:
         """The registry entry behind `/logs/<target>?job=<job>` — None unless `job` is a

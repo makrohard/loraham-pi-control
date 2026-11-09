@@ -42,7 +42,7 @@ def test_the_log_page_shows_the_instances_file_and_names_it_in_its_stack_row(web
     assert 'href="/logs/meshcore-node?job=rf-meshcore.log&amp;band=868">meshcore</a>' in row   # slot 0's row stays
 
 
-@pytest.mark.parametrize("target,job", [("loraham-kiss-tnc", JOB), ("meshcom-bridge", "r4/rf-meshcom.log"),
+@pytest.mark.parametrize("target,job", [("loraham-kiss-tnc", JOB), ("meshcom-bridge", "r4/rf-meshcore.log"),
                                         ("meshcore-node", "r4/rf-made-up.log"), ("meshcore-node", "r4/../rf-meshcore.log")])
 def test_another_writer_or_file_is_refused(web, tmp_path, target, job):
     _seed(tmp_path)

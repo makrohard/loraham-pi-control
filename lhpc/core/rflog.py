@@ -31,7 +31,7 @@ RADIO_FILE = "rf-daemon.log"
 _RID = re.compile(r"r[1-9][0-9]?")
 # a radio's own RF log one level under logs/: the daemon's per radio, and a listed instance's of a stack that may run
 # instances (7f: kiss and meshcore write logs/{instance_dir}rf-<x>.log; chat writes none)
-RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/(rf-daemon|rf-kiss|rf-meshcore)\.log")
+RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/(rf-daemon|rf-kiss|rf-meshcore|rf-meshcom|rf-meshtastic)\.log")   # K7: every instance
 GROUP = "RF-Logs"
 ON, OFF = "on", "off"
 MAX_BYTES = 5 * 1024 * 1024         # the writers' cap; LHPC applies it to meshtastic itself
@@ -212,12 +212,12 @@ def is_on(value) -> bool:
     return str(value or "").strip().lower() != OFF
 
 
-def meshtastic_trace_file(runtime: str, on: bool) -> str:
-    """meshtasticd's `Logging.TraceFile`: the absolute registry path when the switch is on,
-    empty (the key is omitted) when off. One stack-specific rule, applied where the config is
-    generated — not a generic transform framework."""
+def meshtastic_trace_file(runtime: str, on: bool, rid: str = "") -> str:
+    """meshtasticd's `Logging.TraceFile`: the absolute registry path when the switch is on (meshtastic@rN's own,
+    logs/<rid>/rf-meshtastic.log, K7: two instances never share a trace), empty (the key is omitted) when off. One
+    stack-specific rule, applied where the config is generated — not a generic transform framework."""
     e = entry("meshtastic")
-    return f"{runtime}/logs/{e.job()}" if (on and e is not None) else ""
+    return f"{runtime}/logs/{rid + '/' if rid else ''}{e.job()}" if (on and e is not None) else ""
 
 
 # --- records: the line contract parsed once, server-side ------------------------------------

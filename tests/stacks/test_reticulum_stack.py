@@ -606,7 +606,7 @@ def test_the_console_falls_back_to_the_launch_band(monkeypatch):
 
 
 def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch):
-    """A stack that runs once (reticulum, outside instances.MAY until its per-radio work, K7) runs ONE instance.
+    """A stack that runs once (reticulum: one node with fixed ports, W391; by property since K7) runs ONE instance.
     Asking for the other band while it runs was a silent no-op once (every component read already_healthy, the
     console said "Run applied", the radio stayed where it was). K4b: the band caller resolves 868's instance,
     reticulum@r2, and the start refuses it, naming the instance that runs and how to stop it; nothing moves.
@@ -625,7 +625,7 @@ def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch)
 
     res = svc.run_action("start", "reticulum", band="868", apply=False)
     assert res.ok is False, res.summary
-    assert res.summary == "'reticulum' runs one instance at a time until its per-radio work: reticulum@r1 runs"
+    assert res.summary == "'reticulum' runs one instance at a time (one node, fixed ports): reticulum@r1 runs"
     assert res.next_commands == ["lhpc stack stop reticulum@r1 --yes"]
 
 

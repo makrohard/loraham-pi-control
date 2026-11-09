@@ -1937,8 +1937,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
-    pin_tag = "722b5e8"
+    pin_commit = "3f4425c9256a83a761776be3b19ffd922347eec9"
+    pin_tag = "3f4425c"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2018,7 +2018,11 @@ main = "meshcom-qemu"
   # --node-image: QEMU runs on the node's own flash image, kept under state/ (outside the checkout and every
   # publish root), so a binary install/update or a rebuild keeps the node's settings and message counter;
   # run.sh carries them into a new build when its partition table is unchanged (finding R21).
-  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin"
+  # K7 (DEC-W384s/v): meshcom@rN is its own guest: run.sh --instance N - 1 (its .run/<n>/; r1 the single-guest layout),
+  # its radio's host ports (--ports), and the firmware's compiled-in bridge address 10.0.2.2:7000 redirected to ITS
+  # bridge at its radio's default port (--xr-redirect; the bridge port stays "= firmware XR_PORT" as before); the XR
+  # password is the one shared secret (DEC-W384v).
+  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323} --xr-redirect 7000:{port:7000}"
   state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
@@ -2179,8 +2183,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
-    pin_tag = "722b5e8"
+    pin_commit = "3f4425c9256a83a761776be3b19ffd922347eec9"
+    pin_tag = "3f4425c"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 

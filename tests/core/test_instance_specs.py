@@ -68,8 +68,8 @@ def test_the_gps_bridge_takes_only_its_own_state_dir(tmp_path, capsys):
     assert "state dir" not in capsys.readouterr().err        # its own dir passes the check
 
 
-def test_a_stack_outside_may_runs_one_instance_at_a_time(tmp_path):
-    # TRANSITIONAL until K7 (W330): reticulum@r1 runs (a real process and its verified record); a start of
+def test_a_fixed_ports_stack_runs_one_instance_at_a_time(tmp_path):
+    # K7 (W330, DEC-W384h by property; W391: one node): reticulum@r1 runs (a real process and its verified record); a start of
     # reticulum@r2, named or by its band, is refused naming the running one (the W98 voice rule is gone: voice runs
     # per radio, DEC-W384d/W351).
     import subprocess
@@ -85,7 +85,7 @@ def test_a_stack_outside_may_runs_one_instance_at_a_time(tmp_path):
     p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
     try:
         assert svc._lifecycle().record_launch(stk, stk.component(stk.main), p.pid, band="433", extra={"rid": "r1"})
-        want = "'reticulum' runs one instance at a time until its per-radio work: reticulum@r1 runs"
+        want = "'reticulum' runs one instance at a time (one node, fixed ports): reticulum@r1 runs"
         for res in (svc.start("reticulum", apply=True, inst=instances.copy_of(svc, "reticulum", "r2")[0]),
                     svc.start("reticulum", apply=True, band="868")):
             assert not res.ok and res.summary == want, res.summary

@@ -91,7 +91,7 @@ def test_meshtastic_trace_file_is_derived_from_the_switch(tmp_path):
         return [ln.strip() for ln in gen.read_text().splitlines()
                 if ln.strip().startswith("TraceFile:")]
     assert [w.status for w in svc.write_config_files("meshtastic")] == ["written"]
-    assert active_trace() == [f"TraceFile: {tmp_path}/logs/rf-meshtastic.log"]
+    assert active_trace() == [f"TraceFile: {tmp_path}/logs/r2/rf-meshtastic.log"]          # K7: meshtastic@r2's own
     assert svc.save_config_bundle("meshtastic", values={"rf_log": "off"}).ok
     svc.write_config_files("meshtastic")
     assert active_trace() == []                       # omitted, never blank

@@ -2244,9 +2244,9 @@ class ParamsConfigMixin:
                     # DERIVED, controller-owned: the public band-less `rf_log` switch decides
                     # whether meshtasticd gets a `Logging.TraceFile` path (off -> the key is
                     # omitted). Never `over`, never `stored`: the switch is the only input.
-                    values[p.name] = _rflog.meshtastic_trace_file(
+                    values[p.name] = _rflog.meshtastic_trace_file(          # K7: the instance's own switch and file
                         runtime, _rflog.is_on(self._resolved_param_value(
-                            target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
+                            target, "run", c.id, _rflog.RF_LOG_PARAM, band, inst=inst)), getattr(inst, "rid", ""))
                     continue
                 default = inst.subst(p.default_template) if inst is not None and inst.rid and p.default_template else p.default
                 raw = over.get(p.name, stored.get(p.name, p.default))
