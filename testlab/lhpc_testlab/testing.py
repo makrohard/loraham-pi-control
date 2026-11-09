@@ -121,6 +121,37 @@ def run_lhpc(env: dict, *args: str, timeout: float = 300.0,
     return r
 
 
+# W389: the radio daemons' sockets are the host's (/tmp, /run/loraham), not a lab root's, so one lab per HOST may run
+# them. A LabServer holds this lock from its init/reset or start until its stop; several LabServers of one process (one
+# test run: the run-wide lab fixture, a case's own root) share it, a lab of another process refuses at once, naming the holder.
+LAB_LOCK_PATH = "/tmp/lhpc-testlab-radio.lock"
+_LAB_LOCK: dict = {"fd": None, "holders": 0}
+
+
+def _hold_lab_lock(root) -> None:
+    import fcntl
+    if _LAB_LOCK["fd"] is None:
+        fd = os.open(LAB_LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.read(fd, 512).decode("utf-8", "replace").strip()
+            os.close(fd)
+            raise RuntimeError(f"another lab holds this host's radio sockets ({holder or 'holder unknown'}, lock "
+                               f"{LAB_LOCK_PATH}): one lab per host, stop it first") from None
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid {os.getpid()} root {root}\n".encode())
+        _LAB_LOCK["fd"] = fd
+    _LAB_LOCK["holders"] += 1
+
+
+def _release_lab_lock() -> None:
+    _LAB_LOCK["holders"] -= 1
+    if _LAB_LOCK["holders"] == 0:
+        os.close(_LAB_LOCK["fd"])
+        _LAB_LOCK["fd"] = None
+
+
 class LabServer:
     """A real `lhpc web` process on a free loopback port over a lab root."""
 
@@ -129,16 +160,24 @@ class LabServer:
         self.env = lab_env(root)
         self.port = 0
         self.proc: subprocess.Popen | None = None
+        self._locked = False
+
+    def _lock(self) -> None:
+        if not self._locked:
+            _hold_lab_lock(self.root)
+            self._locked = True
 
     @property
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
     def init_and_reset(self) -> None:
+        self._lock()
         run_lab(self.env, "init", check=True)
         run_lab(self.env, "reset", check=True)
 
     def start(self, timeout: float = 30.0) -> None:
+        self._lock()
         self.port = free_port()
         log = open(self.root / "weblog.txt", "ab")  # noqa: SIM115 (held by Popen)
         self.proc = subprocess.Popen(
@@ -170,14 +209,15 @@ class LabServer:
                 self.proc.wait(timeout=5)
             self.proc = None
         stop_lab_fakes(self.root)
+        if self._locked:
+            self._locked = False
+            _release_lab_lock()
 
 
 def stop_lab_fakes(root) -> list:
     """The fakes of the lab root `root` stopped (ops.stop_fakes): for a lab brought up with `run_lab` alone."""
-    from types import SimpleNamespace
-
     from . import ops
-    return ops.stop_fakes(SimpleNamespace(_paths=Paths(runtime_root=Path(root))))
+    return ops.stop_fakes(Paths(runtime_root=Path(root)))
 
 
 def make_lab_root(tmp_path, monkeypatch) -> Paths:

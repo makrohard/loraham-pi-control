@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.lab_serial         # runs the fake daemon (testlab/tests/conftest.py)
+
 
 def _fake(tmp_path, *args):
     from lhpc_testlab import data_path

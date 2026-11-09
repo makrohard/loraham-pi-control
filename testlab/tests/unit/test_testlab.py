@@ -24,6 +24,8 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, RealCommandRunner
 from lhpc.core.services import ControllerService
 
+pytestmark = pytest.mark.lab_serial         # resets and fake daemons (testlab/tests/conftest.py)
+
 # --- activation latch -------------------------------------------------------------------
 
 

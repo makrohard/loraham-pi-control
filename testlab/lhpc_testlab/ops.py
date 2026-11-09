@@ -159,8 +159,10 @@ RADIO_SOCKET_DIRS = ("/run/loraham", "/tmp")
 
 
 def _foreign_live_sockets() -> list:
-    """The radio CONF sockets a live daemon serves right now (a connect succeeds): after a reset stopped its own
-    stacks, every one is another lab's or a real daemon's. A stale file (nobody listening) is not."""
+    """The radio CONF sockets a daemon may serve right now: after a reset stopped its own stacks, every one is another
+    lab's or a real daemon's. Only a socket proven stale is left out: the file is gone, or nobody listens (the connect is
+    refused). Any other answer (no permission, a full backlog's timeout) cannot rule out a live daemon: it is named, with
+    the error."""
     import glob
     import socket
     out = []
@@ -171,8 +173,10 @@ def _foreign_live_sockets() -> list:
             try:
                 s.connect(p)
                 out.append(p)
-            except OSError:
-                pass
+            except (FileNotFoundError, ConnectionRefusedError):
+                pass                                   # proven stale
+            except OSError as exc:
+                out.append(f"{p} (unprobed: {type(exc).__name__})")
             finally:
                 s.close()
     return out
@@ -205,6 +209,10 @@ def reset(svc) -> ActionResult:
     # W389 (2), before anything of this root is cleared. Checked on a failed stop too: a foreign daemon on the shared
     # sockets reads as this root's running stack, which this root then cannot stop.
     foreign = _foreign_live_sockets()
+    if foreign and stop_failed:
+        return ActionResult(False, f"Reset refused — could not stop: {', '.join(stop_failed)}, and a daemon still serves "
+                            + ", ".join(foreign) + " (this lab's own or another lab's on this host); stop it first.",
+                            details=[*details, *(f"  live socket: {p}" for p in foreign)])
     if foreign:
         return ActionResult(False, "Reset refused — another daemon serves " + ", ".join(foreign)
                             + ": a second lab root (or a real daemon) on this host shares the radio sockets; stop it "
@@ -498,11 +506,11 @@ def _testlab_entry() -> list:
     return [sys.executable, "-m", "lhpc_testlab"]
 
 
-def _fake_pid(svc, path, needle: str) -> int:
+def _fake_pid(paths, path, needle: str) -> int:
     """The pid a fake's pid file names, if that process is alive AND is the fake (`needle`: a
     part of its spawn argv), else 0."""
     try:
-        pid = int(runtime_fs.read_text_regular(svc._paths, path, max_bytes=32).strip())
+        pid = int(runtime_fs.read_text_regular(paths, path, max_bytes=32).strip())
     except (OSError, ValueError):
         return 0
     return pid if supervisor.pid_alive(pid, needle) else 0
@@ -510,33 +518,53 @@ def _fake_pid(svc, path, needle: str) -> int:
 
 def _gpsd_pid(svc) -> int:
     from . import gpsd
-    return _fake_pid(svc, gpsd.pid_path(svc._paths), "lhpc_testlab _gpsd")
+    return _fake_pid(svc._paths, gpsd.pid_path(svc._paths), "lhpc_testlab _gpsd")
 
 
 def _aprs_sink_pid(svc) -> int:
-    return _fake_pid(svc, _aprs_sink_pid_path(svc), "aprs_sink.py")
+    return _fake_pid(svc._paths, _aprs_sink_pid_path(svc._paths), "aprs_sink.py")
 
 
-def _aprs_sink_pid_path(svc):
-    return svc._paths.under("state", "testlab", "aprs-sink.pid")
+def _aprs_sink_pid_path(paths):
+    return paths.under("state", "testlab", "aprs-sink.pid")
 
 
-def stop_fakes(svc, grace_s: float = 5.0) -> list:
-    """Stop the fakes this lab root's init/reset spawned (the fake gpsd, the APRS-IS sink), W389: each one its pid
-    file names while that pid is still the fake (its argv), with its whole process group (it was spawned as the leader
-    of a new one): SIGTERM, then SIGKILL after `grace_s`. Returns the pids it stopped."""
+def _fake_env(paths) -> dict:
+    """A fake's environment: this lab root named in it, so a stop can tell this root's fake from another root's."""
+    return {**os.environ, "LHPC_RUNTIME_ROOT": str(paths.runtime_root)}
+
+
+def _of_root(pid: int, paths) -> bool:
+    """`pid` was spawned for this lab root (its environment names the root, _fake_env)."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            env = fh.read().split(b"\0")
+    except OSError:
+        return False
+    return any(f"LHPC_RUNTIME_ROOT={r}".encode() in env for r in (paths.runtime_root, os.path.realpath(paths.runtime_root)))
+
+
+def stop_fakes(paths, grace_s: float = 5.0) -> list:
+    """Stop the fakes the lab root `paths` spawned (the fake gpsd, the APRS-IS sink), W389: each one its pid file names
+    while that pid is still the fake (its argv) AND this root's (its environment, _of_root: a stale pid file never
+    reaches another root's fake), with its whole process group (it was spawned as the leader of a new one): SIGTERM,
+    then after `grace_s` SIGKILL to the group whether or not its leader is still there (a member that ignores TERM
+    outlives a leader that exits). Returns the pids it stopped."""
     import contextlib
-    fakes = [(p, needle) for p, needle in ((_gpsd_pid(svc), "lhpc_testlab _gpsd"), (_aprs_sink_pid(svc), "aprs_sink.py")) if p]
+
+    from . import gpsd
+    fakes = [(p, needle) for p, needle in ((_fake_pid(paths, gpsd.pid_path(paths), "lhpc_testlab _gpsd"), "lhpc_testlab _gpsd"),
+                                           (_fake_pid(paths, _aprs_sink_pid_path(paths), "aprs_sink.py"), "aprs_sink.py"))
+             if p and _of_root(p, paths)]
     for pid, _needle in fakes:
         with contextlib.suppress(OSError):
             os.killpg(pid, signal.SIGTERM)
     deadline = time.monotonic() + grace_s
     while any(supervisor.pid_alive(p, n) for p, n in fakes) and time.monotonic() < deadline:
         time.sleep(0.1)
-    for pid, needle in fakes:
-        if supervisor.pid_alive(pid, needle):
-            with contextlib.suppress(OSError):
-                os.killpg(pid, signal.SIGKILL)
+    for pid, _needle in fakes:
+        with contextlib.suppress(OSError):             # ESRCH: the whole group is gone
+            os.killpg(pid, signal.SIGKILL)
     return [p for p, _n in fakes]
 
 
@@ -549,7 +577,7 @@ def _respawn_gpsd(svc, details: list) -> None:
         except OSError:
             pass
     pid = svc._lifecycle()._spawn([*_testlab_entry(), "_gpsd"],
-                                  svc._paths.under("logs", "testlab-gpsd.log"))
+                                  svc._paths.under("logs", "testlab-gpsd.log"), env=_fake_env(svc._paths))
     try:
         runtime_fs.atomic_write(svc._paths, gpsd.pid_path(svc._paths),
                                 f"{pid or 0}\n", 0o600)
@@ -581,8 +609,8 @@ def _prepare_aprs_sink(svc, details: list) -> None:
     """Start the local APRS-IS sink on 127.0.0.1:14580 — Graywolf's iGate is forced to it by
     the manifest overlay, so the lab never reaches the live APRS network."""
     pid = svc._lifecycle()._spawn(
-        [sys.executable, str(data_path("aprs_sink.py")), str(_aprs_sink_pid_path(svc))],
-        svc._paths.under("logs", "testlab-aprs-sink.log"))
+        [sys.executable, str(data_path("aprs_sink.py")), str(_aprs_sink_pid_path(svc._paths))],
+        svc._paths.under("logs", "testlab-aprs-sink.log"), env=_fake_env(svc._paths))
     details.append(f"  aprs-is sink: {'up' if pid else 'SPAWN FAILED'} "
                    "(graywolf stays off the live network)")
 

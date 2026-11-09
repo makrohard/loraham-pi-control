@@ -7,7 +7,10 @@ import os
 import signal
 from pathlib import Path
 
+import pytest
 from lhpc_testlab.testing import LabServer
+
+pytestmark = pytest.mark.lab_serial         # resets labs (testlab/tests/conftest.py)
 
 
 def _fakes_of(root: Path) -> list:
@@ -28,7 +31,9 @@ def _fakes_of(root: Path) -> list:
     return out
 
 
-def test_a_stopped_lab_leaves_no_fake_of_its_root(tmp_path):
+def test_a_stopped_lab_leaves_no_fake_of_its_root(tmp_path, monkeypatch):
+    from lhpc_testlab import testing
+    monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(tmp_path / "lab.lock"), raising=False)  # the host's lab lock is not the case
     root = tmp_path / "runtime"
     server = LabServer(root)
     try:
@@ -49,7 +54,6 @@ def test_a_fake_that_ignores_term_is_killed_with_its_whole_group(tmp_path):
     SIGTERM after the grace: a stand-in fake that ignores TERM, with a child in its group, both gone."""
     import subprocess
     import sys
-    from types import SimpleNamespace
 
     from lhpc_testlab import gpsd, ops
 
@@ -58,14 +62,14 @@ def test_a_fake_that_ignores_term_is_killed_with_its_whole_group(tmp_path):
             "c = subprocess.Popen([sys.executable, '-c', 'import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             "signal.pause()']); print(c.pid, flush=True); signal.pause()")
     fake = subprocess.Popen([sys.executable, "-c", prog, "lhpc_testlab", "_gpsd"], stdout=subprocess.PIPE,
-                            start_new_session=True, text=True)
+                            start_new_session=True, text=True, env=dict(os.environ, LHPC_RUNTIME_ROOT=str(tmp_path)))
     child = int(fake.stdout.readline())
     paths = Paths(runtime_root=tmp_path)
     try:
         pid_file = gpsd.pid_path(paths)
         pid_file.parent.mkdir(parents=True, exist_ok=True)
         pid_file.write_text(f"{fake.pid}\n")
-        assert ops.stop_fakes(SimpleNamespace(_paths=paths), grace_s=0.5) == [fake.pid]
+        assert ops.stop_fakes(paths, grace_s=0.5) == [fake.pid]
         assert fake.wait(timeout=5) == -signal.SIGKILL               # it ignored TERM: killed after the grace
         state = ""
         if os.path.exists(f"/proc/{child}"):
@@ -100,11 +104,19 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(str(sockdir / "loraconf-r2.sock"))                 # bound, never listening: refuses a connect
         stale.close()
+        closed = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        closed.bind(str(sockdir / "loraconf-r3.sock"))
+        closed.listen(1)
+        os.chmod(sockdir / "loraconf-r3.sock", 0)                     # a connect is refused by permission: unprobed
         paths = make_lab_root(tmp_path, monkeypatch)
         svc = ControllerService(paths=paths)
         r = ops.reset(svc)
         assert not r.ok and str(sockdir / "loraconf-r1.sock") in r.summary, r.summary
         assert "loraconf-r2.sock" not in r.summary                   # a stale file is no foreign daemon
+        unprobed = str(sockdir / "loraconf-r3.sock")
+        if os.geteuid() != 0:                                         # root connects regardless: then it is live
+            unprobed += " (unprobed: PermissionError)"
+        assert unprobed in r.summary, r.summary                       # a socket it cannot rule out is named too
         # The foreign daemon reads as this root's running stack, which this root cannot stop: still named.
         from types import SimpleNamespace
         first = svc.stacks()[0].id
@@ -112,9 +124,12 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         monkeypatch.setattr(svc, "stop", lambda *a, **k: SimpleNamespace(ok=False))
         r = ops.reset(svc)
         assert not r.ok and str(sockdir / "loraconf-r1.sock") in r.summary, r.summary
+        assert f"could not stop: {first}" in r.summary and "this lab's own or another lab's" in r.summary, r.summary
+        assert "another daemon serves" not in r.summary               # it may be this lab's own that did not stop
         assert f"stop failed: {first}" in "\n".join(r.details)
     finally:
         live.close()
+        closed.close()
         stop_lab_fakes(tmp_path)
         for f in sockdir.iterdir():
             f.unlink()
@@ -140,3 +155,98 @@ def test_a_lab_test_that_reboots_leaves_no_fake_behind(tmp_path):
                 os.killpg(pid, signal.SIGKILL)
             except OSError:
                 pass
+
+
+def _stand_in_fake(tmp_path, root, prog):
+    """A stand-in fake gpsd (its argv carries the fake's), leader of its own group, its environment naming `root`;
+    it prints a pid when ready. Returns (the Popen, the printed pid)."""
+    import subprocess
+    import sys
+    fake = subprocess.Popen([sys.executable, "-c", prog, "lhpc_testlab", "_gpsd"], stdout=subprocess.PIPE,
+                            start_new_session=True, text=True, env=dict(os.environ, LHPC_RUNTIME_ROOT=str(root)))
+    return fake, int(fake.stdout.readline())
+
+
+def _gone(pid: int) -> bool:
+    """`pid` has exited (a zombie too), awaited on its pidfd for 5 s at most: a SIGKILL lands asynchronously."""
+    import select
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    try:
+        return bool(select.select([fd], [], [], 5.0)[0])
+    finally:
+        os.close(fd)
+
+
+def test_a_member_that_ignores_term_dies_after_its_leader_exits(tmp_path):
+    """G1-LF1 (1): the leader exits on TERM, a member of its group ignores TERM; the SIGKILL after the grace still
+    reaches the group, so the member is gone (the stop no longer keys the KILL on the leader being alive)."""
+    from lhpc_testlab import gpsd
+    from lhpc_testlab.testing import stop_lab_fakes
+
+    from lhpc.core.paths import Paths
+    prog = ("import os, signal, subprocess, sys; "
+            "c = subprocess.Popen([sys.executable, '-c', 'import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "print(1, flush=True); signal.pause()'], stdout=subprocess.PIPE, text=True); c.stdout.readline(); "
+            "signal.signal(signal.SIGTERM, lambda *a: os._exit(0)); print(c.pid, flush=True); signal.pause()")
+    fake, member = _stand_in_fake(tmp_path, tmp_path, prog)
+    paths = Paths(runtime_root=tmp_path)
+    try:
+        gpsd.pid_path(paths).parent.mkdir(parents=True, exist_ok=True)
+        gpsd.pid_path(paths).write_text(f"{fake.pid}\n")
+        assert stop_lab_fakes(tmp_path) == [fake.pid]
+        assert fake.wait(timeout=5) == 0                              # the leader left on TERM
+        assert _gone(member), "a TERM-ignoring member outlived its exited leader"
+    finally:
+        for pid in (fake.pid, member):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def test_a_stale_pid_file_never_reaches_another_roots_fake(tmp_path):
+    """G1-LF1 (2): lab A's stale pid file names a pid that is now lab B's fake (the same argv): A's stop leaves it."""
+    from lhpc_testlab import gpsd
+    from lhpc_testlab.testing import stop_lab_fakes
+
+    from lhpc.core.paths import Paths
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    fake, _ = _stand_in_fake(tmp_path, root_b, "import signal; print(0, flush=True); signal.pause()")
+    paths_a = Paths(runtime_root=root_a)
+    try:
+        gpsd.pid_path(paths_a).parent.mkdir(parents=True, exist_ok=True)
+        gpsd.pid_path(paths_a).write_text(f"{fake.pid}\n")
+        assert stop_lab_fakes(root_a) == []
+        assert fake.poll() is None, "lab A's stop reached lab B's fake"
+    finally:
+        fake.kill()
+        fake.wait(timeout=5)
+
+
+def test_a_second_lab_on_the_host_refuses_at_once_naming_the_holder(tmp_path, monkeypatch):
+    """G1-LF1 (4), DEC-W384u: two lab roots, two processes. While lab A's LabServer holds the host's lab lock, lab B's
+    LabServer refuses before any init or reset, naming A's pid and root; after A's stop the lock is free."""
+    import subprocess
+    import sys
+
+    from lhpc_testlab import testing
+    lock = tmp_path / "lab.lock"
+    monkeypatch.setattr(testing, "LAB_LOCK_PATH", str(lock), raising=False)
+    root_a, root_b = tmp_path / "a" / "runtime", tmp_path / "b" / "runtime"
+    second = ("import sys; from pathlib import Path; import lhpc_testlab.testing as t; t.LAB_LOCK_PATH = sys.argv[1]; "
+              "t.LabServer(Path(sys.argv[2])).init_and_reset() if sys.argv[3] == 'lab' else t._hold_lab_lock(sys.argv[2])")
+    a = LabServer(root_a)
+    try:
+        a.init_and_reset()
+        r = subprocess.run([sys.executable, "-c", second, str(lock), str(root_b), "lab"], capture_output=True,
+                           text=True, timeout=60, check=False)
+        assert r.returncode != 0 and f"pid {os.getpid()} root {root_a}" in r.stderr, r.stderr[-1500:]
+        assert not (root_b / "state").exists()                       # refused before its init touched the root
+    finally:
+        a.stop()
+    r = subprocess.run([sys.executable, "-c", second, str(lock), str(root_b), "lock"], capture_output=True, text=True,
+                       timeout=60, check=False)
+    assert r.returncode == 0, r.stderr[-1500:]                        # A's stop released it
