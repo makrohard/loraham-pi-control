@@ -870,6 +870,14 @@ def test_helper_source_starts_with_shebang():
 
 # --- FW-5: manifest metadata (fail-closed) + derivation --------------------------------------
 
+def _save_inst(svc, sid, values, band=""):
+    """K6: a stack's settings are its instance's own `config/stacks/<sid>@<rid>.toml`; the band's instance is the
+    one the product resolves (instances.store_inst), so the saved scope is the one the gate and the plan read."""
+    import stores_fixture
+    from lhpc.core import config as cfgmod
+    cfgmod.update_stack_config(svc._paths, sid, values, inst=stores_fixture.inst_of(svc, sid, band))
+
+
 def _svc(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
@@ -1400,9 +1408,8 @@ KISS_R1 = __import__("lhpc.core.commands", fromlist=["Instance"]).Instance("r1")
 
 def _expose_kiss(svc):
     """Configure the kiss TNC to bind a non-loopback listener (0.0.0.0:9001) via saved config."""
-    from lhpc.core import config as _cfg
     band = svc._config_band("kiss", "")
-    _cfg.save_stack_config(svc._paths, "kiss",
+    _save_inst(svc, "kiss",
                            {"kiss_host": "0.0.0.0", "kiss_port": "9001"}, band)
     svc._invalidate_config()
 
@@ -2302,9 +2309,8 @@ def test_endpoint_id_stable_across_port_change(tmp_path):
     assert "meshtastic-r1.tcp-4403" in ids                          # static port in id (K4b: per instance)
     # kiss id uses its STATIC 8001, not any configured override. Expose kiss (bind 0.0.0.0)
     # and change its port; the checkbox id must stay stable while the resolved port tracks.
-    from lhpc.core import config as _cfg
     band = svc._config_band("kiss", "")
-    _cfg.save_stack_config(svc._paths, "kiss",
+    _save_inst(svc, "kiss",
                            {"kiss_host": "0.0.0.0", "kiss_port": "9001"}, band)
     svc._invalidate_config()
     kiss_ids = [e for e in svc.firewall_candidate()["endpoints"]
@@ -2318,7 +2324,7 @@ def test_bind_param_listener_on_all_v6_addresses_is_dual(tmp_path):
     # dropped for BOTH families, not by an IPv6-only rule that leaves its IPv4 side open.
     from lhpc.core import config as _cfg, firewall_helper as fh
     svc = _svc(tmp_path)
-    _cfg.save_stack_config(svc._paths, "kiss", {"kiss_host": "::", "kiss_port": "9001"},
+    _save_inst(svc, "kiss", {"kiss_host": "::", "kiss_port": "9001"},
                            svc._config_band("kiss", ""))
     _cfg.save_firewall_config(svc._paths, mode="compatibility")   # unticked = an explicit drop
     svc._invalidate_config()
@@ -2649,10 +2655,9 @@ def test_concrete_console_bind_keeps_its_address(tmp_path):
 
 
 def test_meshcore_file_param_allow_derives_endpoint(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
     band = svc._config_band("meshcore", "")
-    cfgmod.save_stack_config(svc._paths, "meshcore",
+    _save_inst(svc, "meshcore",
                              {"meshcore_allow": "192.168.178.0/24"}, band)
     svc._invalidate_config()
     mc = [e for e in svc.firewall_candidate()["endpoints"] if "meshcore" in e["id"]]
@@ -2667,10 +2672,9 @@ def test_meshcore_file_param_allow_derives_endpoint(tmp_path):
     ("127.0.0.1", None),                  # loopback only: no row
 ])
 def test_meshcore_allow_everyone_is_one_unrestricted_row(tmp_path, allow, row):
-    from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
     band = svc._config_band("meshcore", "")
-    cfgmod.save_stack_config(svc._paths, "meshcore", {"meshcore_allow": allow}, band)
+    _save_inst(svc, "meshcore", {"meshcore_allow": allow}, band)
     svc._invalidate_config()
     mc = [e for e in svc.firewall_candidate()["endpoints"] if "meshcore" in e["id"]]
     assert ([e["allow_cidrs"] for e in mc] or [None]) == [row]
@@ -3268,8 +3272,7 @@ def test_stack_start_gate_verified_refuses_a_saved_scope_the_model_lacks(tmp_pat
     monkeypatch.setattr(svc, "firewall_status",
                         lambda: {"config_ok": True, "live_ok": True, "candidate": modeled})
     assert svc.firewall_gate_stack_start("kiss", inst=KISS_R1)[0]        # exact saved scope -> allowed
-    from lhpc.core import config as _cfg
-    _cfg.save_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9002"},
+    _save_inst(svc, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9002"},
                            svc._config_band("kiss", ""))
     svc._invalidate_config()
     allowed, msg, _ = svc.firewall_gate_stack_start("kiss", inst=KISS_R1)

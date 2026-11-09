@@ -904,6 +904,7 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     import json, time
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     path = restart_required.marker_path(svc._paths, "chat@r1")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -926,6 +927,7 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     import json, time
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     path = restart_required.marker_path(svc._paths, "chat@r1")
     # another writer commits a marker; the payload is built AFTERWARDS, inside the transaction
@@ -967,6 +969,7 @@ def test_marker_is_written_when_the_stack_goes_live_while_the_save_waits(tmp_pat
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     live = {"v": False}
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: live["v"])   # K6: an instance is live by its own process
     real_txn = _sp.apply_config_transaction
     def go_live_then_commit(paths, targets):
         live["v"] = True
@@ -983,6 +986,7 @@ def test_a_change_on_another_band_does_not_mark_the_live_band(tmp_path, monkeypa
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868"}, band="868").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "voice")
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: inst.band == "868")   # K6: an instance is live by its own process
     monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433"}, band="433").ok
     assert svc.restart_required("voice") is None, "the live 868 config did not change"
@@ -1000,6 +1004,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     # A: already inheriting, save blank
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     assert svc.restart_required("chat") is None
@@ -1297,7 +1302,8 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     cfgmod.save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
     # a value an old version accepted that the current APRS rule rejects, persisted directly
-    cfgmod.save_stack_config(svc._paths, "chat", {"file_call": "XX0XXA-99"}, "")
+    from lhpc.core import instances                              # K6: the instance's own file holds it
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "XX0XXA-99"}, inst=instances.store_inst(svc, "chat", "433"))
     svc._invalidate_config()
     assert svc.effective_identity("chat", "433") == ""          # invalid -> no effective value
     assert not svc.test("chat", tx=True, apply=False).ok
@@ -1527,6 +1533,7 @@ def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, mon
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     live = {"v": False}
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: live["v"])   # K6: an instance is live by its own process
     real_impl = type(svc)._start_impl
     seen = {}
     def spy(self, t, **kw):

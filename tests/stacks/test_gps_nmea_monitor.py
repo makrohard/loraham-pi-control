@@ -565,7 +565,9 @@ def test_unknown_enablement_is_a_holder(tmp_path, pty_device, monkeypatch, cid, 
     _master, dev = pty_device
     svc = _svc_nmea(tmp_path, dev, monkeypatch)
     from lhpc.core import config as cfgmod
-    path = cfgmod._stack_config_path(svc._paths, svc._owner_stack_id(cid))
+    from lhpc.core import instances                          # K6: the switch is read from the instance's own file
+    sid = svc._owner_stack_id(cid)
+    path = cfgmod._stack_config_path(svc._paths, sid, inst=instances.store_inst(svc, sid))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("this = is = not = toml\n")
     svc._invalidate_config()
@@ -580,7 +582,8 @@ def test_positively_disabled_consumer_is_not_a_holder(tmp_path, pty_device, monk
     master, dev = pty_device
     svc = _svc_nmea(tmp_path, dev, monkeypatch)
     from lhpc.core import config as cfgmod
-    cfgmod.update_stack_config(svc._paths, "graywolf", {"use_gps": "off"})
+    from lhpc.core import instances                          # K6 / DEC-W384k: the instance's own switch
+    cfgmod.update_stack_config(svc._paths, "graywolf", {"use_gps": "off"}, inst=instances.store_inst(svc, "graywolf"))
     svc._invalidate_config()
     _snap_with(svc, {"graywolf": RunState.RUNNING})
     svc._MONITOR_SAMPLE_S = 0.3

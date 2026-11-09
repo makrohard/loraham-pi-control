@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import stores_fixture
 
 from lhpc.core import binary_install as bi
 from lhpc.core import web_client as wc
@@ -344,14 +345,14 @@ def test_a_saved_old_root_serves_from_the_new_default(tmp_path, monkeypatch, sav
     svc = _svc(tmp_path, monkeypatch)
     if saved is not None:
         value = str(tmp_path / wc.OLD_ROOT_REL) if saved == "RENDERED" else saved
-        save_stack_config(svc._paths, "meshtastic", {"file_web_root": value}, "868")
+        save_stack_config(svc._paths, "meshtastic", {"file_web_root": value}, inst=stores_fixture.inst_of(svc, "meshtastic", "868"))
     assert _rendered_root(svc) == str(tmp_path / wc.ROOT_REL / "web")
 
 
 def test_an_operators_own_root_is_kept(tmp_path, monkeypatch):
     from lhpc.core.config import save_stack_config
     svc = _svc(tmp_path, monkeypatch)
-    save_stack_config(svc._paths, "meshtastic", {"file_web_root": "/srv/my-client"}, "868")
+    save_stack_config(svc._paths, "meshtastic", {"file_web_root": "/srv/my-client"}, inst=stores_fixture.inst_of(svc, "meshtastic", "868"))
     assert _rendered_root(svc) == "/srv/my-client"
 
 
@@ -362,11 +363,11 @@ def test_status_says_not_served_when_an_operator_root_selects_another_directory(
     _daemon(svc, binary_receipt, DAEMON_A)
     _binary_client(svc, wc.pin(wc.component(svc))[0])
     assert "not served" not in wc.status(svc)
-    save_stack_config(svc._paths, "meshtastic", {"file_web_root": "/srv/my-client"}, "868")
+    save_stack_config(svc._paths, "meshtastic", {"file_web_root": "/srv/my-client"}, inst=stores_fixture.inst_of(svc, "meshtastic", "868"))
     svc.invalidate_snapshot()
     assert _rendered_root(svc) == "/srv/my-client"
     assert "not served: meshtasticd's RootPath is /srv/my-client" in wc.status(svc)
-    save_stack_config(svc._paths, "meshtastic", {"file_web_root": str(tmp_path / wc.OLD_ROOT_REL)}, "868")
+    save_stack_config(svc._paths, "meshtastic", {"file_web_root": str(tmp_path / wc.OLD_ROOT_REL)}, inst=stores_fixture.inst_of(svc, "meshtastic", "868"))
     svc.invalidate_snapshot()
     assert "not served" not in wc.status(svc)            # the old managed root follows the move
 
