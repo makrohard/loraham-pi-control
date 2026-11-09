@@ -146,22 +146,18 @@ class StopOpsMixin:
                 inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # a band caller's, under the lock (G1-C47)
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
                                       release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
-                # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
-                # `_operator` is False on every internal route (cascade dependents, the daemon
-                # band release, owner stops for a start, restart's stop leg, uninstall/clean,
-                # auto-install): those tombstoned the shared daemon and whole
-                # stacks the operator never named, and boot-restore then pruned evidence for
-                # things legitimately running at shutdown. Band- and component-scoped stops
-                # never tombstone — a band-scoped stop only for the daemon. Written when the stop
-                # stopped something (verified or
-                # UNVERIFIED — the key case) or there was nothing to stop; a REFUSED stop that
-                # left the stack running writes nothing, so a still-running stack is never
-                # silently dropped from restore.
-                # The UNVERIFIED escape hatch counts ONLY the target stack's OWN components
-                # (a dependent's UNVERIFIED row satisfied it while the daemon's
-                # own stop was BLOCKED and the daemon kept running — tombstoning a live stack).
-                # Only the DAEMON's per-band stop is exempt: a client the console stops with its
-                # band is still the operator's stop (finding 143), or boot restore restarts it.
+                # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop. `_operator` is False on every
+                # internal route (cascade dependents, the daemon band release, owner stops for a start, restart's stop
+                # leg, uninstall/clean, auto-install): those tombstoned the shared daemon and whole stacks the operator
+                # never named, and boot-restore then pruned evidence for things legitimately running at shutdown. Band-
+                # and component-scoped stops never tombstone — a band-scoped stop only for the daemon. Written when the
+                # stop stopped something (verified or UNVERIFIED — the key case) or there was nothing to stop; a REFUSED
+                # stop that left the stack running writes nothing, so a still-running stack is never silently dropped
+                # from restore.
+                # The UNVERIFIED escape hatch counts ONLY the target stack's OWN components (a dependent's UNVERIFIED
+                # row satisfied it while the daemon's own stop was BLOCKED and the daemon kept running — tombstoning a
+                # live stack). Only the DAEMON's per-band stop is exempt: a client the console stops with its band is
+                # still the operator's stop (finding 143), or boot restore restarts it.
                 if (_operator and not (band and self._is_daemon_target(target))
                         and self.stack(target) is not None
                         and (res.ok
@@ -331,11 +327,13 @@ class StopOpsMixin:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             else:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
-                if (cr.outcome is Outcome.ALREADY_STOPPED and getattr(inst, "rid", "") and comp.process is not None
-                        and (orphans := instances.unclaimed_pids(self, comp))):   # K8: never a silent no-op over one
+                if (cr.outcome in (Outcome.ALREADY_STOPPED, Outcome.STOPPED) and getattr(inst, "rid", "")
+                        and comp.process is not None       # K8, G1-K8A 5: after its own stop too, never a silent stop
+                        and (orphans := [p for p in instances.unclaimed_pids(self, comp, band=inst.band) if p != cr.pid])):
                     cr = CompResult(component=comp.id, stack=cr.stack, action="stop", outcome=Outcome.MANUAL_REQUIRED,
-                                    summary="a matching process is running but no instance claims it (no record, an "
-                                            f"older argv) — stop it yourself: kill {' '.join(map(str, orphans))}")
+                                    summary=("stopped; " if cr.outcome is Outcome.STOPPED else "") + "a matching process "
+                                            "is running but no instance claims it (no record, an older argv) — stop it "
+                                            f"yourself: kill {' '.join(map(str, orphans))}")
             results.append(cr)
             own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"

@@ -108,3 +108,38 @@ def test_k8_a_shown_instance_is_live_by_its_own_radios_daemon(tmp_path):
     assert svc.mark_shown("chat", Instance("r2", band="433"))
     row = next(r for r in svc.radio_overview() if r["band"] == "433")
     assert "chat" in [s["id"] for s in row["interactive"]], row["interactive"]
+
+
+def _two_band_voice(tmp_path, **marked):
+    # r1 on 433 with its daemon READY, r2 on 868 with none; voice runs its terminal fallback (no display here)
+    reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+    d = tmp_path / "state" / "interactive"
+    d.mkdir(parents=True, exist_ok=True)
+    for rid, band in marked.items():
+        (d / f"voice@{rid}.show").write_text(f"{band}\n")
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
+    return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_g1_k8a_3_a_stale_marker_of_another_radio_adds_no_column(tmp_path):
+    # voice@r1 shown and live (433), voice@r2's marker left while r2's daemon (868) is stopped: the block is in 433's
+    # column only; before, the live r1 made the stack active and every marker's band became a column
+    svc = _two_band_voice(tmp_path, r1="433", r2="868")
+    cols = {r["band"]: [s["id"] for s in r["interactive"]] for r in svc.radio_overview()}
+    assert "voice" in cols["433"] and "voice" not in cols["868"], cols
+
+
+def test_g1_k8a_4_a_marker_of_a_radio_off_the_list_is_no_presence(tmp_path):
+    # chat@r3.show is left while the hardware list has r1 and r2 only: no instance shown
+    svc = _svc(tmp_path)
+    _seed(tmp_path, r1="433", r3="868")
+    assert svc.interactive_shown("chat") == {"r1": "433"}
+
+
+def test_g1_k8a_8_a_consumer_shown_on_two_bands_names_none(tmp_path, monkeypatch):
+    # voice shown on r1 (433) and r2 (868), not running, its fallback active: a live consumer, of no one band (before:
+    # whichever marker came first)
+    svc = _two_band_voice(tmp_path, r1="433", r2="868")
+    monkeypatch.setattr(type(svc), "gui_fallback_active", lambda self, st: True)
+    assert svc.active_config_consumer("voice") == (True, "")

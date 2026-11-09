@@ -36,6 +36,8 @@ def shown(svc, stack_id: str, inst=None) -> dict:
         except (OSError, ValueError):       # missing/unreadable/symlinked -> not shown
             continue
         own = f.stem.partition("@")[2]
+        if own and listed and own not in rows:     # G1-K8A 4: its radio left the hardware list: a leftover, no presence
+            continue
         out[own] = rows.get(own, stored) if own else stored
     return out
 

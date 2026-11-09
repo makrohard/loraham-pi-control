@@ -3007,17 +3007,15 @@ class LifecycleOpsMixin:
                 # "runs" them; after that a dismissable command block is shown in the
                 # band column they were started on.
                 if main_comp is not None and main_comp.interactive:
-                    # K8: each shown instance's band column ({} = no marker: never a permanent command card on a
-                    # never-started interactive stack); a band-less marker (no hardware list) falls back to the
-                    # stack's own band. The box stays only while the app is actually up, OR a shown instance's daemon
-                    # band is still USABLE: an interactive app here is daemon-backed (it reaches this code only via a
-                    # band component), so a stopped daemon closes a lingering-marker box instead of leaving it.
+                    # K8: the box stays while the app is up, or while a shown instance is live: ITS radio's daemon
+                    # is ready (two radios on one band have no band view; a bare marker without a hardware list: its
+                    # band usable). Only live instances place it, in their bands' columns (G1-K8A 3: a stale marker of
+                    # another radio adds no column); no marker = the dropdown, never a permanent card.
                     shown = self.interactive_shown(s.id)
-                    cols = {b or min(sbands) for b in shown.values()}
-                    # a shown instance is live while ITS radio's daemon is ready (two radios on one band have no band
-                    # view); a bare marker (no hardware list) by its band, as before
-                    active = running_up or any(daemon_control.read_view(self._system, r).ready if r else
-                                               (b or min(sbands)) in usable_bands for r, b in shown.items())
+                    up_shown = {r: b for r, b in shown.items() if (daemon_control.read_view(self._system, r).ready if r
+                                                                   else (b or min(sbands)) in usable_bands)}
+                    active = running_up or bool(up_shown)
+                    cols = {b or min(sbands) for b in (up_shown or (shown if running_up else {})).values()}
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue

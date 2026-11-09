@@ -361,9 +361,11 @@ class JobsOpsMixin:
             return None, "blocked", f"{op} is not a detached operation"
         if not (self.stack(target) or self.stack_of(target)):
             return None, "blocked", f"unknown stack or component '{target}'"
-        if band and not rid:                     # K8 (W308/W310): the web's ?band= (until W5) is its band's instance
+        if band and not rid:                     # K8 (W308/W310): the web's ?band= (until W5) is its band's ONE radio
             from . import instances
-            rid = getattr(instances.copy_of(self, self.stack_of(target) or target, band=band)[0], "rid", "")
+            rid, why = instances.one_radio(self, self.stack_of(target) or target, band)    # G1-K8A 1: or refused
+            if why:
+                return None, "blocked", why
         life = self._lifecycle()
         _adm = _contextlib.ExitStack()
         try:

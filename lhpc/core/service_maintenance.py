@@ -2641,6 +2641,7 @@ class MaintenanceOpsMixin:
                              "start", "post") for cid in comp_ids}
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
         markers = [*self._interactive_markers(sid),           # K7: every instance's marker
+                   self._paths.under("state", "running", f"{sid}.band"),     # a 0.13 band marker: delete-only (G1-K8A 9)
                    known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),   # K5: and each instance's, also a removed radio's
                    *sorted(restart_required.marker_path(self._paths, sid).parent.glob(f"{sid}@r*.json")),

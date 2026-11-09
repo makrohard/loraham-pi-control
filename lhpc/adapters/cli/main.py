@@ -224,7 +224,8 @@ def _render_daemon(view, channel: dict[str, str] | None = None, start: str = "da
           f"CADIDLE {s.get('CADIDLE','?')}ms")
     print(f"Stats: RX {st.get('RX','?')}  TXOK {st.get('TXOK','?')}  TXERR {st.get('TXERR','?')}  "
           f"uptime {st.get('UPTIME','?')}s")
-    print(f"\nNext:\n  lhpc daemon {view.band} --feed\n  lhpc daemon {view.band} --set TXMODE=DIRECT")
+    rid = start.partition("@")[2] or "<rid>"                  # K8: the radio's daemon, never a band
+    print(f"\nNext:\n  lhpc daemon {rid} --feed\n  lhpc daemon {rid} --set TXMODE=DIRECT")
     return 0
 
 
@@ -320,9 +321,18 @@ def _cmd_config(svc, args) -> int:
     band = iband                                  # K8 (W308/W310): the instance's radio's band, never a --band
 
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
-    if daemon_mode and inst is None and not svc._is_daemon_target(stack):     # the daemon's own: per radio in K8e
-        print(f"ERR   name the instance whose daemon parameters these are: lhpc config {stack}@<rid> --daemon-param …")
-        return 2
+    if daemon_mode and not svc._is_daemon_target(stack):     # the daemon's own: per radio in K8e
+        # G1-K8A 2: a stack's daemon parameters are still its band's (per radio in K8e), so they are one instance's only
+        # while one radio of that band runs it; the bare form addresses the one radio able to run it, as before
+        rids = instances.radios_able(svc, stack, band if inst is not None else "")
+        if len(rids) != 1:
+            print(f"ERR   {stack}@{inst.rid}: daemon parameters are still per band, and {', '.join(rids)} share {band} MHz"
+                  if inst is not None else f"ERR   {stack} runs on {', '.join(rids) or 'no radio'}: name the instance, "
+                  f"lhpc config {stack}@<rid> --daemon-param …")
+            return 2
+        if inst is None:
+            inst, _why = instances.copy_of(svc, stack, rids[0])
+            band = inst.band if inst is not None else band
     positional = args.param is not None and args.param != "list"
     active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
                               ("<param>", positional)) if on]
@@ -1086,12 +1096,12 @@ def _run(argv: list[str] | None = None) -> int:
     raw = sys.argv[1:] if argv is None else list(argv)
     if raw and raw[0].partition("@")[0] == "meshtastic":
         return _cmd_meshtastic(raw[0], raw[1:])
-    parser = build_parser()
-    args, extra = parser.parse_known_args(argv)
-    if any(t == GONE_BAND or t.startswith(GONE_BAND + "=") for t in extra):
+    if any(t == GONE_BAND or t.startswith(GONE_BAND + "=") for t in raw):     # G1-K8A 7: in any position
         print(f"ERR   {GONE_BAND} is gone (W308/W310): name the instance, `<stack>@<rid>` "
               "(e.g. lhpc config kiss@r2 …, lhpc rflog daemon@r1); `lhpc hardware` lists the radios")
         return 2
+    parser = build_parser()
+    args, extra = parser.parse_known_args(argv)
     if extra:
         # argparse consumes a command's trailing positional chunk ONCE, so positionals split around an
         # optional (e.g. `config <stack> --reset <param> <value>`) cannot be back-filled into an
@@ -1677,8 +1687,8 @@ def _run(argv: list[str] | None = None) -> int:
         rid = args.rid                          # K8 (W308/W310): a radio's daemon, never a band
         _inst, band, why = radio_start.daemon_radio(svc, rid)
         if why:
-            print(f"ERR   {why}" + ("; lhpc daemon takes a radio id now: lhpc daemon <rid> (lhpc hardware lists them)"
-                                    if rid in ("433", "868") else ""))
+            print("ERR   a band is gone (W308/W310): lhpc daemon takes a radio, lhpc daemon <rid> (lhpc hardware lists "
+                  "them)" if rid in ("433", "868") else f"ERR   {why}")
             return 2
         if args.set_kv:
             key, _, value = args.set_kv.partition("=")

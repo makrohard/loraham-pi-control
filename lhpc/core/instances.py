@@ -72,6 +72,23 @@ def resolve(svc, target: str):
 
 
 
+def radios_able(svc, sid: str, band: str = "") -> list:
+    """The enabled radios able to run `sid` (on `band` when given), by rid order: a form without an instance (the web's
+    ?band= until W5, a bare `lhpc config <stack> --daemon-param`) addresses exactly ONE of them (G1-K8A 1, 2)."""
+    rows = {r.id: r.band for r in radios.load(svc._paths).radios}
+    return [r for r in radios_of(svc.stack(sid), svc._paths) if not band or rows.get(r) == band]
+
+
+def one_radio(svc, sid: str, band: str) -> tuple:
+    """(rid, "") of the ONE radio of `band` able to run `sid`, else ("", why): none or several is refused by name, never
+    one picked (G1-K8A 1: the web's ?band= start until W5)."""
+    rids = radios_able(svc, sid, band)
+    if len(rids) == 1:
+        return rids[0], ""
+    return "", (f"no radio on {band} MHz runs '{sid}'" if not rids else
+                f"'{sid}' runs on {', '.join(rids)} ({band} MHz): name the radio, {sid}@<rid>")
+
+
 def can_run_on(svc, stack) -> list:
     """The enabled radios `stack` can run on, by rid order: those of its bands (any band for a stack without one)."""
     bands = stack_bands(stack)
@@ -350,7 +367,7 @@ def _saved_bases(svc, stack, inst) -> dict:
         for q in c.run_params:
             m = commands._PORT_RE.fullmatch(getattr(q, "default_template", "") or str(q.default))
             saved = str(svc._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0] or "").strip() if m else ""
-            if saved.isdigit() and 1024 <= int(saved) <= 65535:
+            if saved.isascii() and saved.isdigit() and 1024 <= int(saved) <= 65535:     # G1-K8A 10: not '²'
                 bases[int(m.group(1))] = int(saved)
     return bases
 
@@ -528,14 +545,19 @@ def unclaimed(svc, comp, table=None, procs=None) -> bool:
     return bool(unclaimed_pids(svc, comp, table, procs))
 
 
-def unclaimed_pids(svc, comp, table=None, procs=None) -> list:
+_BAND_SOCKET = re.compile(r"/tmp/lora[a-z]*(433|868)\.sock")    # a 0.13 per-band socket in an argv
+
+def unclaimed_pids(svc, comp, table=None, procs=None, band: str = "") -> list:
     """The pids of `unclaimed`: a process of the spec no instance's record or token claims (an older argv too: a
-    0.13 band socket is no instance's token)."""
+    0.13 band socket is no instance's token). `band`: one whose argv names ANOTHER band's 0.13 socket is not counted
+    (G1-K8A 6: a stop of an instance on 433 never names a leftover of 868)."""
     from .probes.process import matches
     table = svc._system.procfs.cmdlines() if table is None else table
     procs = instance_processes(svc, table) if procs is None else procs
     claimed = {p for _s, _r, c, p in procs if c == comp.id}
-    return sorted(p for p, a in table.items() if p not in claimed and matches(comp.process, a, None))
+    other = [b for b in ("433", "868") if band and b != band]
+    return sorted(p for p, a in table.items() if p not in claimed and matches(comp.process, a, None)
+                  and not any((m := _BAND_SOCKET.search(t)) and m.group(1) in other for t in a))
 
 
 

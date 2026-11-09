@@ -1591,7 +1591,7 @@ class ParamsConfigMixin:
         # situation reached by another route.
         if st is not None and (getattr(main, "interactive", False) or self.gui_fallback_active(st)) \
                 and (ib := self.interactive_shown(stack_id, inst)):    # K7: the instance's own marker
-            return True, next(iter(ib.values()))
+            return True, (ib.popitem()[1] if len(set(ib.values())) == 1 else "")   # G1-K8A 8: several bands -> ""
         return False, ""
 
     def restart_marker_payload(self, sid: str, params, band: str,

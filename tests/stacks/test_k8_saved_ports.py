@@ -60,3 +60,52 @@ def test_k8_an_unsaved_port_keeps_the_radios_default(tmp_path):
     prep = _prep(svc, "kiss", Instance("r2", band="868"))
     tnc = svc.stack("kiss").component("loraham-kiss-tnc")
     assert [e.address for e in instances.endpoints_for(tnc.endpoints, prep.inst) if e.kind == "tcp"] == ["127.0.0.1:8134"]
+
+
+def test_g1_k8a_10_a_non_ascii_digit_in_a_saved_port_is_no_base(tmp_path):
+    # a hand-edited "²" (str.isdigit() is True for it, int() raises): the radio's default, never a crash in status,
+    # claims or the stop scope
+    svc = _svc(tmp_path)
+    r2 = Instance("r2", band="868")
+    assert svc.save_config_bundle("kiss", values={"kiss_port": "9000"}, inst=r2).ok
+    f = next((tmp_path / "config" / "stacks").glob("kiss@r2.toml"))
+    f.write_text(f.read_text().replace('"9000"', '"²"'))
+    assert "²" in f.read_text()
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    assert instances.stop_scope(svc, "kiss", tnc, r2, "868")["endpoints"][0].address == "127.0.0.1:8134"
+
+
+def test_dec_w384ac_a_saved_port_moves_its_firewall_row(tmp_path):
+    # handler (G1-K8A, W290 5): proven, not inferred. kiss@r2 and meshcom@r2 exposed (bind 0.0.0.0) on saved ports:
+    # their direct-access rows open the moved port (base + 133 for r2), never the manifest's
+    svc = _svc(tmp_path, (radios_fixture.R1, radios_fixture.R2))          # r1, r2 on 433
+    r2 = Instance("r2", band="433")
+    assert svc.save_config_bundle("kiss", values={"kiss_port": "9000", "kiss_host": "0.0.0.0"}, inst=r2).ok
+    assert svc.save_config_bundle("meshcom", values={"port": "7100", "bind": "0.0.0.0"}, inst=r2).ok
+    rows = {e["id"]: e["port"] for e in svc.firewall_candidate()["endpoints"]}
+    assert rows["loraham-kiss-tnc-r2.tcp-8001"] == 9133 and rows["meshcom-bridge-r2.tcp-7000"] == 7233, rows
+
+
+def test_dec_w384ac_no_web_page_is_proxied_from_a_saveable_port(tmp_path):
+    # a web row's upstream is its endpoint's instance port; no proxied page sits on a port an operator can save (the
+    # saveable bases are kiss 8001, the MeshCom bridge 7000 and the MeshCore companion 5000), so a saved port never
+    # leaves a web row on the old port
+    from lhpc.core import model
+    svc = _svc(tmp_path)
+    saveable = {int(m.group(1)) for st in svc.stacks() for c in st.components for q in c.run_params
+                if (m := commands._PORT_RE.fullmatch(getattr(q, "default_template", "") or str(q.default)))}
+    assert saveable == {8001, 7000, 5000}
+    pages = [p for st in svc.stacks() for p in model.web_pages(st, [commands.TEMPLATE])]
+    assert pages and not {int(p.address.rsplit(":", 1)[1]) for p in pages} & saveable, [p.address for p in pages]
+
+
+def test_dec_w384ac_a_saved_meshcore_companion_port_moves_every_use(tmp_path):
+    # meshcore@r3 (868) with port 5100: the node's companion listener, the web UI's and the CLI's target follow it
+    svc = _svc(tmp_path, (radios_fixture.R1, radios_fixture.R2, radios_fixture.R3))
+    r3 = Instance("r3", band="868")
+    assert svc.save_config_bundle("meshcore", values={"port": "5100"}, inst=r3).ok
+    prep = _prep(svc, "meshcore", r3)
+    st = svc.stack("meshcore")
+    node, webui, cli = (st.component(c) for c in ("meshcore-node", "meshcore-webui", "meshcore-cli"))
+    assert "127.0.0.1:5366" in [e.address for e in instances.endpoints_for(node.endpoints, prep.inst)]
+    assert "5366" in _argv(svc, webui, prep.inst, "868") and "5366" in _argv(svc, cli, prep.inst, "868")

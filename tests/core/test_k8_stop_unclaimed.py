@@ -39,3 +39,25 @@ def test_k8_another_instances_own_process_is_no_orphan(tmp_path):
     r2 = _tnc_argv(plain, instances._token(plain, tnc, Instance("r2", band="868"), "868"))
     svc = _svc(tmp_path, {301: r2})                                        # kiss@r2 runs, claimed by its token
     assert _stop_outcome(svc).outcome is Outcome.ALREADY_STOPPED
+
+
+def test_k8_an_own_stop_beside_an_unclaimed_old_argv_is_manual_required(tmp_path, monkeypatch):
+    # G1-K8A 5: kiss@r1's own process stops (the lifecycle's verified STOPPED), and a 0.13 kiss of the same band runs
+    # unclaimed beside it: the stop names it, never a plain "stopped"
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.outcomes import CompResult
+    plain = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {300: _tnc_argv(plain, ["--data-socket", "/tmp/loradata433.sock"])})
+    monkeypatch.setattr(Lifecycle, "stop", lambda self, comp, **kw: CompResult(
+        component=comp.id, action="stop", outcome=Outcome.STOPPED, summary="stopped", pid=200))
+    cr = _stop_outcome(svc)
+    assert cr.outcome is Outcome.MANUAL_REQUIRED, cr.summary
+    assert cr.summary == ("stopped; a matching process is running but no instance claims it (no record, an older argv) "
+                          "— stop it yourself: kill 300"), cr.summary
+
+
+def test_k8_an_unclaimed_old_argv_of_another_band_is_not_this_instances(tmp_path):
+    # G1-K8A 6: kiss@r1 is on 433; a leftover 0.13 kiss on 868's socket is not named by its stop
+    plain = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {300: _tnc_argv(plain, ["--data-socket", "/tmp/loradata868.sock"])})
+    assert _stop_outcome(svc).outcome is Outcome.ALREADY_STOPPED

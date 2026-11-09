@@ -62,3 +62,19 @@ def test_a_target_that_is_no_listed_instance_or_a_daemon_param_is_refused_and_wr
     got, out = run(*argv)
     assert got == rc and out[:3] == "ERR", out
     assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before
+
+
+def test_g1_k8a_2_an_instances_daemon_params_are_refused_while_its_band_has_two_radios(run, tmp_path):
+    # chat's daemon parameters are still its band's (per radio in K8e): chat@r3 would change chat@r1's too
+    before = sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir())
+    rc, out = run("chat@r3", "--daemon-param", "SF=9")
+    assert rc == 2 and "ERR   chat@r3: daemon parameters are still per band, and r1, r3 share 433 MHz" in out, out
+    assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before
+
+
+@pytest.mark.parametrize("target", ["chat", "chat@r1"])
+def test_g1_k8a_2_with_one_radio_able_to_run_it_the_daemon_params_save_as_before(run, tmp_path, target):
+    # W290 (handler): one radio of chat's band, the bare form addresses it, as before K8; so does its instance
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios_fixture.R3))
+    rc, out = run(target, "--daemon-param", "SF=9")
+    assert rc == 0 and out.splitlines()[0] == "OK    saved daemon params for chat (433)", out

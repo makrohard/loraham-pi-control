@@ -263,3 +263,13 @@ def test_clean_leaves_a_non_regular_leaf_with_a_post_start_name(tmp_path):
     assert res.ok, res.details
     assert sorted(p.name for p in post.iterdir()) == ["loraham-kiss-tnc-4242-123456789.py"]
     assert "[removed] 1 post-start file(s) in state/post" in "\n".join(res.details)
+
+
+def test_g1_k8a_9_clean_purge_removes_a_013_band_marker(tmp_path):
+    # the 0.13 per-stack band marker (state/running/<sid>.band) is never read since K6, but a purge still deletes it
+    marker = tmp_path / "state" / "running" / "kiss.band"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("433\n")
+    svc = _svc(tmp_path)
+    assert svc.clean("kiss", apply=True, purge=True).ok
+    assert not marker.exists()

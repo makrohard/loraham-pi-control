@@ -650,3 +650,14 @@ def test_spawn_start_job_refuses_an_unknown_target_before_spawning(tmp_path, mon
     log, admission, reason = svc.spawn_start_job("start", "bogus")
     assert log is None and admission == "blocked" and "unknown stack or component" in reason
     assert spawned == [] and jobresult.read_one(svc._paths, "web-start-bogus.log") is None
+
+
+@pytest.mark.parametrize("band,why", [
+    ("433", "'kiss' runs on r1, r2 (433 MHz): name the radio, kiss@<rid>"),    # two radios: none picked
+    ("868", "no radio on 868 MHz runs 'kiss'")])                               # none: refused, never an empty --radio
+def test_g1_k8a_1_a_band_start_names_exactly_one_radio(tmp_path, band, why):
+    import radios_fixture
+    svc = _svc(tmp_path)
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))     # r1 and r2, both on 433
+    assert svc.spawn_start_job("start", "kiss", band=band) == (None, "blocked", why)
+    assert jobresult.read_one(svc._paths, "web-start-kiss.log") is None        # nothing reserved

@@ -1149,7 +1149,8 @@ def test_rflog_bulk_flags_take_no_stack_and_exclude_each_other(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("argv", [["rflog", "daemon", "--band", "868"], ["config", "kiss", "--band=868", "tx_freq", "1"],
-                                  ["_stack-start", "kiss", "--band", "433"]])
+                                  ["_stack-start", "kiss", "--band", "433"],
+                                  ["--band", "433", "stack", "start", "kiss"]])       # G1-K8A 7: before the command too
 def test_k8_a_band_option_anywhere_is_refused_by_name(tmp_path, monkeypatch, capsys, argv):
     # K8 (W308/W310, DEC-W384ab): every command refuses `--band` by name and shows the instance form; nothing runs
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
@@ -1402,3 +1403,21 @@ def test_hardware_high_power_and_ocp_together_are_refused_not_half_applied(tmp_p
     from lhpc.core.paths import Paths
     row = radios.load(Paths(runtime_root=tmp_path / "rt")).radios[0]
     assert (row.high_power, row.ocp_ma) == (None, None)                 # neither half applied
+
+
+@pytest.mark.parametrize("band", ["433", "868"])
+def test_g1_k8a_lhpc_daemon_of_a_band_is_refused_by_name(tmp_path, monkeypatch, capsys, band):
+    # handler W290 (4): `lhpc daemon <band>` is gone with --band (W308/W310): the same named refusal, the radio form
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    assert main(["daemon", band]) == 2
+    assert "ERR   a band is gone (W308/W310): lhpc daemon takes a radio, lhpc daemon <rid>" in capsys.readouterr().out
+
+
+def test_g1_k8a_the_daemon_monitors_next_names_its_radio(capsys):
+    # K8 (W308/W310): the monitor of radio r2's daemon offers `lhpc daemon r2 …`, never the refused band form
+    from lhpc.adapters.cli.main import _render_daemon
+    from lhpc.core.daemon_control import DaemonView
+    view = DaemonView(band="868", reachable=True, status={"RADIO": "READY"})
+    assert _render_daemon(view, start="daemon@r2") == 0
+    out = capsys.readouterr().out
+    assert "lhpc daemon r2 --feed" in out and "lhpc daemon r2 --set TXMODE=DIRECT" in out and "lhpc daemon 868" not in out
