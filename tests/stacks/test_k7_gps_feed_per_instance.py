@@ -6,6 +6,7 @@ import json
 import os
 import time
 
+import pytest
 import radios_fixture
 
 from lhpc.core import gps
@@ -105,6 +106,7 @@ def test_g1_k7a_1_a_running_feed_without_a_marker_is_unhealthy(tmp_path):
     assert prober._gps_feed_ready(comp) == (True, "source live (7 sentences)")
 
 
+@pytest.mark.wallclock("an expired marker's timestamp, data the product ages against its clock")
 def test_g1_k7a_4_a_left_over_marker_no_running_feed_names_does_not_count(tmp_path):
     # a pre-K7 state/gps/meshtastic marker, expired, beside meshtastic@r2's live feed: r2 alone decides (healthy)
     from lhpc.core import instances
