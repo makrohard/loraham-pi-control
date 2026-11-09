@@ -31,6 +31,34 @@ def _kiss_serving() -> bool:
         return False
 
 
+def _foreign_daemons(root) -> list:
+    """The loraham_daemon processes on this host that are not this lab's (DEC-W384ap): the product reads every
+    loraham_daemon host-wide as the radio's holder, so another lab's daemon makes boot restore refuse ours. A
+    process is this lab's when its group is one of the lab's owned records (state/owned)."""
+    import os
+    import posixpath
+    own = set()
+    for f in (root / "state" / "owned").glob("*.json"):
+        try:
+            rec = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        own |= {rec.get("pgid"), rec.get("pid")}
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/cmdline", "rb") as fh:
+                argv = fh.read().split(b"\0")
+            if posixpath.basename(argv[0].decode(errors="replace")) == "loraham_daemon" \
+                    and os.getpgid(int(d)) not in own:
+                out.append(int(d))
+        except (OSError, IndexError):
+            continue                                       # gone meanwhile, or a zombie
+    return out
+
+
 @pytest.fixture(scope="module")
 def chain(lab):
     """Install+build+start kiss over the fake daemon; stop everything afterwards."""
@@ -185,6 +213,9 @@ def test_simulated_reboot_restores_running_stacks(chain):
         run_lhpc(chain.env, "stack", "start", named(chain.env, "kiss"), "--yes", timeout=300)
     assert wait_tcp(KISS_TCP, 120), "kiss not serving on 127.0.0.1:8001 before reboot"
     before = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
+    foreign = _foreign_daemons(chain.root)
+    assert not foreign, (f"foreign loraham_daemon pid {foreign} present (another lab on this host): boot restore "
+                         "would refuse this lab's daemon")
     run_lab(chain.env, "_power", "--kind", "reboot", check=True, timeout=300)
     after = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
     assert after != before                                   # boot advanced
@@ -193,7 +224,7 @@ def test_simulated_reboot_restores_running_stacks(chain):
     assert journal["boot_id"] == after
     key = named(chain.env, "kiss")                            # K4b: journal items and tombstones are per instance
     kiss = [i for i in journal["items"] if i.get("target") == key]
-    assert kiss and kiss[0]["state"] == "succeeded", journal
+    assert kiss and kiss[0]["state"] == "succeeded", (kiss[0].get("result") if kiss else journal)
     # reboot must not OPERATOR-stop kiss — a reboot is not an explicit stop, so it writes
     # no per-stack tombstone for kiss (boot-restore may then bring it back). Check kiss
     # specifically: the stop-intent/ dir may hold other stacks' tombstones (e.g. meshcore,
