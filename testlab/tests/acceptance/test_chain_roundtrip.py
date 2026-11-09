@@ -43,7 +43,7 @@ def _foreign_daemons(root) -> list:
             rec = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        own |= {rec.get("pgid"), rec.get("pid")}
+        own.add(rec.get("pgid") or rec.get("pid"))          # the recorded group (G1-CR1 N1: never a reused pid)
     out = []
     for d in os.listdir("/proc"):
         if not d.isdigit():
@@ -230,7 +230,7 @@ def test_simulated_reboot_restores_running_stacks(chain):
     assert journal["boot_id"] == after
     key = named(chain.env, "kiss")                            # K4b: journal items and tombstones are per instance
     kiss = [i for i in journal["items"] if i.get("target") == key]
-    assert kiss and kiss[0]["state"] == "succeeded", (kiss[0].get("result") if kiss else journal)
+    assert kiss and kiss[0]["state"] == "succeeded", (kiss[0].get("result", kiss[0]) if kiss else journal)
     # reboot must not OPERATOR-stop kiss — a reboot is not an explicit stop, so it writes
     # no per-stack tombstone for kiss (boot-restore may then bring it back). Check kiss
     # specifically: the stop-intent/ dir may hold other stacks' tombstones (e.g. meshcore,
