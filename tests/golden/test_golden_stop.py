@@ -18,9 +18,9 @@ pytestmark = pytest.mark.needs_session
 STOP_LOCKS = ["lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
               "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"]
 SIGNAL = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc"]
-RELEASE_DAEMON = ["lock:claim.audio.default", "lock:claim.tcp.port.12323",
-                  "lock:claim.tcp.port.18083", "lock:claim.tcp.port.7000",
-                  "lock:claim.tcp.port.8080", "lock:lifecycle.chat", "lock:lifecycle.daemon",
+RELEASE_DAEMON = ["lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083", "lock:claim.tcp.port.7000",
+                  "lock:claim.tcp.port.8080", "lock:claim.voice.ui",                       # DEC-W351: voice's UI claim
+                  "lock:lifecycle.chat", "lock:lifecycle.daemon",
                   "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.voice",
                   "mutate:signal:loraham-daemon", "mutate:feed-floor:433"]
 FINAL = ["final:clear-restart-marker:kiss@r1", "final:stop-intent:['kiss@r1']"]      # K5: per instance

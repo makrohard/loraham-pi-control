@@ -506,10 +506,10 @@ main = "loraham-voice"
     exec_name = "loraham_voice"
 
     [[stack.component.resource]]
-    key = "audio.default"
-    kind = "audio"
+    key = "voice.ui{instance_suffix}"
+    kind = "interactive-ui"
     mode = "exclusive"
-    note = "Audio capture/playback device."
+    note = "This instance's voice UI: its GTK app or its terminal variant, never both (a busy sound device is the app's own error)."
 
     # Seeded into {runtime}/config/files/{instance_dir}loraham_voice.conf (KEY=VALUE, split on '=').
     # The app keeps both bands' params in one file; active_band selects which is used
@@ -640,9 +640,9 @@ main = "loraham-voice"
   # CLI with zero GTK/X11 linkage, so a headless/Lite box gets Voice without
   # pulling any graphical environment. Interactive like chat/nomadnet: lhpc
   # builds and configures it, the operator starts it in a real terminal with
-  # the command lhpc shows. Shares loraham_voice.conf (fixed name resolved
-  # from dirname(argv0)) and the audio device with the GTK app, so both can
-  # never run at once (audio.default is exclusive).
+  # the command lhpc shows. Per instance: GUI and CLI of one instance share its
+  # loraham_voice.conf (fixed name resolved from dirname(argv0)) and never run
+  # at once (voice.ui{instance_suffix} is exclusive); other instances are apart.
   # ---------------------------------------------------------------
   [[stack.component]]
   id = "loraham-voice-cli"
@@ -711,10 +711,10 @@ main = "loraham-voice"
     exec_name = "loraham_voice_cli"
 
     [[stack.component.resource]]
-    key = "audio.default"
-    kind = "audio"
+    key = "voice.ui{instance_suffix}"
+    kind = "interactive-ui"
     mode = "exclusive"
-    note = "Audio capture/playback device (shared exclusively with the GTK app)."
+    note = "This instance's voice UI, exclusive with the instance's GTK app (DEC-W351)."
 
 # =====================================================================
 # Stack: kiss — KISS/TCP TNC (+ optional serial PTY)

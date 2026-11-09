@@ -11,8 +11,8 @@ import re as _re
 import time
 from pathlib import Path
 
-from . import config as _config
 from . import (
+    commands,
     daemon_control,
     gps,
     instances,
@@ -22,6 +22,7 @@ from . import (
     runtime_fs,
     validators,
 )
+from . import config as _config
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _ohs
 from . import resources as resources_mod
@@ -118,31 +119,32 @@ class LifecycleOpsMixin:
         return limited, running, running_ids
 
     def _observed_conflicts(self, snap=None):
-        """Band-aware observed resource conflicts (both claimants running, radio claims limited to
-        the band each actually uses). Replaces the raw, band-blind `snap.conflicts` for display."""
+        """Band-aware observed resource conflicts (both claimants running, radio claims limited to each one's band)."""
         snap = snap if snap is not None else self.build_snapshot()
         _, running, running_ids = self._band_limited_running(snap)
         return [c for c in resources_mod.interpret_conflicts(running, running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed]
 
     def observed_conflicts(self, snap=None):
-        """PUBLIC read-only band-aware observed resource conflicts — the single source of truth for
-        every UI (CLI status, doctor, /stacks, /stacks/<id>). Never renders a false 433/868 conflict
-        (a daemon serving only 433 does not conflict with a direct-radio owner on 868)."""
+        """PUBLIC read-only band-aware observed conflicts, every UI's one source (CLI status, doctor, /stacks, /stacks/<id>):
+        never a false 433/868 conflict (a daemon serving only 433 vs a direct-radio owner on 868)."""
         return self._observed_conflicts(snap)
 
-    def _running_conflicts(self, comp, band: str = "") -> list[str]:
-        """Observed conflicts that would block starting `comp` right now. Radio
-        claims are matched by the band each side actually uses, so a multi-band app
-        on 868 does not conflict with a daemon serving only 433 (and vice-versa)."""
-        snap = self.build_snapshot()
-        # conservative=True: this decides whether a start is BLOCKED. An unmarked
-        # multi-band owner must be treated as occupying every band it could be on.
-        limited, running, running_ids = self._band_limited_running(snap, conservative=True)
-        target = limited(comp, {band} if band else set())
+    def _running_conflicts(self, comp, band: str = "", inst=None) -> list[str]:
+        """Observed conflicts that would block starting `comp` (as `inst`) now: radio claims by the band each side uses
+        (868 vs a 433-only daemon: none); a templated claim per instance (DEC-W351), the target's own key."""
+        def keyed(c, keys_of):
+            return dataclasses.replace(c, resources=tuple(dataclasses.replace(r, key=k) for r in c.resources
+                                                          for k in (keys_of(r) if r.key_template else (r.key,))))
+
+        def held(c, r):                     # its running instances' keys; a process no instance tells: every instance's
+            st, ks = self.stack(self.stack_of(c.id)), instances.running_claim_keys(self, self.stack_of(c.id), c, r)
+            return ks if ks != {r.key} else ks | {instances.claim_key(r, i) for i in commands.stack_instances(st, self._paths)}
+        limited, running, running_ids = self._band_limited_running(self.build_snapshot(), conservative=True)  # blocks: every band
+        target = keyed(limited(comp, {band} if band else set()), lambda r: (instances.claim_key(r, inst),))
+        running = [keyed(c, lambda r, c=c: held(c, r)) for c in running]
         conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
-        # Advisory conflicts (e.g. the Companion client slot) are shown but never block a start —
-        # arbitration is at runtime (the WebUI yields to a running CLI via a lock), so admission
-        # must let the start through. observed_conflicts() still reports them for the UI banner.
+        # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
+        # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
         return [c.message for c in conflicts
                 if comp.id in c.holders and c.observed and not c.advisory]
 
@@ -1339,13 +1341,11 @@ class LifecycleOpsMixin:
                     miss = self.start_blocking_requirements(comp)
                     if miss:
                         from .lifecycle import req_remediation
-                        record(comp, stack, Outcome.BLOCKED,
-                               "; ".join(req_remediation(r, bool(r.groups)
-                                                         and life.group_grant_pending(r))
-                                         for r in miss))
+                        record(comp, stack, Outcome.BLOCKED, "; ".join(
+                            req_remediation(r, bool(r.groups) and life.group_grant_pending(r)) for r in miss))
                         continue
-                    # The exclusive audio claim is REAL for a terminal variant too.
-                    if self._running_conflicts(comp, cfg_band):
+                    # The exclusive UI claim is REAL for a terminal variant too (its instance's, DEC-W351).
+                    if self._running_conflicts(comp, cfg_band, prep.inst):
                         record(comp, stack, Outcome.BLOCKED, "resource conflict")
                         continue
                     if not self.is_built(comp):
@@ -1427,7 +1427,7 @@ class LifecycleOpsMixin:
                        "; ".join(req_remediation(r, bool(r.groups) and life.group_grant_pending(r))
                                  for r in miss))
                 continue
-            if self._running_conflicts(comp, cfg_band):
+            if self._running_conflicts(comp, cfg_band, prep.inst):
                 record(comp, stack, Outcome.BLOCKED, "resource conflict")
                 continue
             if not self.is_built(comp):

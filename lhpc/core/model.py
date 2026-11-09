@@ -75,14 +75,14 @@ class ResourceKind(str, Enum):
     TCP_PORT = "tcp-port"                # tcp.port.<n>
     UNIX_SOCKET = "unix-socket"
     SERIAL = "serial"                    # serial.<device>
-    AUDIO = "audio"                      # audio.<device>
+    INTERACTIVE_UI = "interactive-ui"    # voice.ui-<rid>: one instance's GTK app or terminal variant (DEC-W351)
+    AUDIO = "audio"                      # a released (pre-0.14.0) manifest's, parsed by the self-update migration only
     GPSD = "gpsd"                        # gpsd.local
     SPI_BUS = "spi-bus"                  # /dev/spidev0.0 + <runtime>/state/loraham/spi0.lock
     GPIO = "gpio"                        # /dev/gpiochip0
-    # The single Companion client slot a MeshCore node serves at a time: the frame server
-    # evicts an existing client when a new one connects, so two clients (webui + the operator's
-    # meshcore-cli) fight over it. An EXCLUSIVE claim on the same key makes that an observed
-    # conflict when both run.
+    # The single Companion client slot a MeshCore node serves at a time: the frame server evicts an existing client
+    # when a new one connects, so two clients (webui + the operator's meshcore-cli) fight over it. An EXCLUSIVE claim
+    # on the same key makes that an observed conflict when both run.
     COMPANION_CLIENT = "companion-client"
 
 

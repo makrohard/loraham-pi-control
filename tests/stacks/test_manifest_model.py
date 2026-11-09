@@ -413,8 +413,9 @@ def test_voice_terminal_variant_shape():
     assert gtk.source.path == cli.source.path
     assert gtk.source.pin_commit == cli.source.pin_commit
 
-    # Both grab the same exclusive audio device, so they can never run at once.
-    assert {r.key for r in cli.resources} == {"audio.default"}
+    # DEC-W351: one instance's GTK app and terminal variant claim the instance's UI exclusively, never both at once.
+    assert {(r.key, r.key_template, r.kind.value, r.mode.value) for r in (*cli.resources, *gtk.resources)} == {
+        ("voice.ui", "voice.ui{instance_suffix}", "interactive-ui", "exclusive")}
 
 
 def test_the_meshtastic_cli_is_an_on_demand_component_not_a_start_hint():

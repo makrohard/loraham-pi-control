@@ -20,8 +20,8 @@ LOCKS = ["admission", "lock:controller-task-admission", "config-stable", "rechec
          "lock:claim.loraham.radio.r1", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
          "lock:source.src/loraham-daemon", "lock:source.src/loraham-kiss-tnc"]
 STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc",
-            "lock:claim.audio.default", "lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083",
-            "lock:claim.tcp.port.7000", "lock:claim.tcp.port.8080", "lock:lifecycle.chat",
+            "lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083", "lock:claim.tcp.port.7000",
+            "lock:claim.tcp.port.8080", "lock:claim.voice.ui", "lock:lifecycle.chat",          # DEC-W351
             "lock:lifecycle.daemon", "lock:lifecycle.graywolf", "lock:lifecycle.meshcom",
             "lock:lifecycle.voice", "mutate:signal:loraham-daemon", "mutate:feed-floor:433",
             "final:clear-restart-marker:kiss@r1"]                         # K5: per instance

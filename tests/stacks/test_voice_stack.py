@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 import radios_fixture
 
+from lhpc.core import instances
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
@@ -269,11 +270,11 @@ def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkey
 
 
 def _cli_holds_audio_conflict(monkeypatch, svc):
-    # the resource verdict is stubbed for the CLI alone: reproducing an exclusive audio.default
-    # claim through the FakeSystem process table would also make a Voice component RUNNING in the
-    # snapshot, which is a different case from "a sibling holds the device"
+    # the resource verdict is stubbed for the CLI alone: reproducing the exclusive voice.ui claim through the FakeSystem
+    # process table would also make a Voice component RUNNING in the snapshot, which is a different case from "a sibling
+    # holds the instance's UI" (the real per-instance verdict: tests/stacks/test_voice_ui_per_instance.py)
     monkeypatch.setattr(type(svc), "_running_conflicts",
-                        lambda self, c, b: c.id == "loraham-voice-cli")
+                        lambda self, c, b, inst=None: c.id == "loraham-voice-cli")
 
 
 def test_desktop_daemon_recovery_is_ok_despite_a_running_gtk_app(tmp_path, monkeypatch, set_call, real_spawn):
@@ -330,7 +331,7 @@ def test_terminal_variant_not_presented_when_shared_config_fails(tmp_path, monke
 
 
 def test_terminal_variant_blocked_while_a_sibling_holds_the_audio_device(tmp_path, monkeypatch, set_call, real_spawn):
-    # Both voice components claim audio.default EXCLUSIVELY. The interactive branch used to
+    # Both voice components claim their instance's voice.ui EXCLUSIVELY (DEC-W351). The interactive branch used to
     # return before the resource gate, so the documented "can never run at once" guarantee was
     # not enforced for the terminal variant.
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
@@ -506,3 +507,78 @@ def test_a_start_that_keeps_a_running_daemon_warns_while_config_txt_waits_for_a_
     assert [d for d in res.details if "[warning]" in d] == [
         "  [warning] loraham-daemon: running, but its next start is refused: reboot required: config.txt asks for "
         "soft SPI chip selects, but the running kernel booted with kernel"], res.details
+
+
+# ---- DEC-W351 (CLEANUP-DESIGN-v13 13.17): the voice UI is exclusive per instance ----------------------------------
+# DEC-W351 (CLEANUP-DESIGN-v13 13.17): Voice's GTK app and its terminal variant are exclusive PER INSTANCE. Both claim
+# `voice.ui{instance_suffix}` exclusively (kind interactive-ui, no sound-device lock: a busy sound device is the voice
+# program's own error), so voice@r1's running GTK app refuses voice@r1's terminal variant and leaves voice@r2's alone.
+# Through `lhpc stack start`'s path, on a Lite box (the terminal variant on offer) with voice@r1's GTK process in the process table.
+
+def _gtk_running_on(svc, rid, band, monkeypatch):
+    """voice@<rid>'s GTK app running: its process in the table and its verified launch record naming <rid> (its spec
+    has no instance token, so an instance is told by that record, as every launch writes it)."""
+    from lhpc.core.lifecycle import Lifecycle
+    table = {4711: ["/x/LoRaHAM_Voice/loraham_voice"]}
+    rec = {"stack": "voice", "component": "loraham-voice", "role": "", "band": band, "rid": rid, "pid": 4711}
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: dict(table))
+    monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: ([dict(rec)], [], "ok"))
+    monkeypatch.setattr(Lifecycle, "verify_owned", lambda self, r: (r.get("pid") == 4711, ""))
+
+
+def _start(svc, target):
+    """`lhpc stack start <target>`'s own path: one parser for every operator entry, then the start."""
+    sid, inst, band, why = instances.parse_target(svc, target, "start")
+    assert not why, why
+    return svc.run_action("start", sid, apply=True, band=band, inst=inst)
+
+
+def _cli(res):
+    return next(r for r in res.results if r.component == "loraham-voice-cli")
+
+
+def test_voice_r1s_running_gtk_app_refuses_voice_r1s_terminal_variant(tmp_path, monkeypatch, set_call, real_spawn):
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    _gtk_running_on(svc, "r1", "433", monkeypatch)
+    cli = _cli(_start(svc, "voice@r1"))
+    assert (cli.outcome, cli.summary) == (Outcome.BLOCKED, "resource conflict"), (cli.outcome, cli.summary)
+
+
+def test_voice_r2s_terminal_variant_is_allowed_while_voice_r1s_gtk_app_runs(tmp_path, monkeypatch, set_call,
+                                                                             real_spawn):
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    _gtk_running_on(svc, "r1", "433", monkeypatch)
+    res = _start(svc, "voice@r2")
+    assert _cli(res).outcome == Outcome.MANUAL_REQUIRED, outcomes(res)     # its command is presented, not refused
+
+
+def test_each_instances_conf_selects_its_own_radios_band(tmp_path, monkeypatch, set_call, real_spawn):
+    # VOICE-PER-RADIO-v1 (c): voice@r1 (433) and voice@r2 (868) each seed their own loraham_voice.conf under <rid>/, and
+    # its active_band is its radio's (0 = 433, 1 = 868), never the other instance's.
+    from lhpc.core.commands import Instance
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    set_call(svc)
+    for rid, band in (("r1", "433"), ("r2", "868")):
+        rows = svc.write_config_files("voice", band, inst=Instance(rid, band=band))
+        assert [w.status for w in rows if w.component == "loraham-voice"] == ["written"], rows
+    got = {}
+    for rid in ("r1", "r2"):
+        text = (tmp_path / "config" / "files" / rid / "loraham_voice.conf").read_text()
+        got[rid] = [ln.split("=", 1)[1].strip() for ln in text.splitlines() if ln.startswith("active_band=")]
+    assert got == {"r1": ["0"], "r2": ["1"]}, got
+
+
+def test_a_terminal_variant_no_instance_tells_holds_every_instances_ui(tmp_path, monkeypatch, set_call, real_spawn):
+    # Fail-safe: the operator runs the terminal variant by hand (no launch record, no instance token), so it cannot be
+    # told apart; it holds every instance's voice.ui, and voice@r1's GTK app is refused beside it, as before DEC-W351.
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {4712: ["/x/LoRaHAM_Voice/loraham_voice_cli"]})
+    res = _start(svc, "voice@r1")
+    gtk = next(r for r in res.results if r.component == "loraham-voice")
+    assert (gtk.outcome, gtk.summary) == (Outcome.BLOCKED, "resource conflict"), outcomes(res)
