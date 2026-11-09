@@ -497,9 +497,12 @@ class ParamsConfigMixin:
         out: list = []
         for stack in self.stacks():
             run_counts, file_counts = self._owner_param_counts(stack)
-            for band in (self.stack_bands(stack.id) or ("",)):
-                cfg_band = self._config_band(stack.id, band)
-                stored = load_stack_config(self._paths, stack.id, cfg_band)
+            # K6: every instance's own file (its radio's band), the global one without a list
+            for inst in ([_instances.copy_of(self, stack.id, i.rid)[0] or i
+                          for i in commands.stack_instances(stack, self._paths) if i.rid] or [None]):
+                band = inst.band if inst is not None else ""
+                cfg_band = band if inst is not None else self._config_band(stack.id, band)
+                stored = load_stack_config(self._paths, stack.id, cfg_band, inst=inst)
                 if not stored:
                     continue
                 for c in stack.components:
@@ -513,7 +516,7 @@ class ParamsConfigMixin:
                         # would silently revert the stack to inherit at the next self-update
                         if getattr(p, "validator", "") in self._IDENTITY_ENFORCE:
                             continue
-                        default = self._param_default_canon(p, cfg_band, band)
+                        default = self._param_default_canon(p, cfg_band, band, inst)
                         keys = [self._scoped_key(kind, c.id, p.name)]     # scoped: valid for any comp
                         counts = run_counts if kind == "r" else file_counts
                         if counts.get(p.name, 0) <= 1:                    # unique -> flat too
@@ -522,7 +525,7 @@ class ParamsConfigMixin:
                             if key in stored and self._canon_value(p, str(stored[key])) == default:
                                 out.append({"stack": stack.id, "band": cfg_band, "key": key,
                                             "kind": kind, "comp": c.id, "name": p.name,
-                                            "expected": default})
+                                            "expected": default, "rid": getattr(inst, "rid", "")})
         return out
 
     @staticmethod

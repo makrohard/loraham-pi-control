@@ -33,7 +33,7 @@ class _Helper:
         self.svc, self.calls, self.fail = svc, [], ""
 
     def _load(self, path=None):                       # K4b: the path the controller names (an instance's own)
-        p = Path(path) if path else ops.file_path(self.svc._paths)
+        p = Path(path) if path else ops.file_path(self.svc._paths, ops._inst(self.svc, None))
         return json.loads(p.read_text()) if p.exists() else {}
 
     def __call__(self, svc, verb, path, *keys, stdin=""):
@@ -55,7 +55,7 @@ class _Helper:
             conf.update(json.loads(stdin))
             if verb == "render":                     # the text; the controller's transaction writes it
                 return json.dumps(conf)
-            p = Path(path) if path else ops.file_path(self.svc._paths)
+            p = Path(path) if path else ops.file_path(self.svc._paths, ops._inst(self.svc, None))
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(conf))
         return ""
@@ -164,7 +164,7 @@ def test_ensure_without_a_name_refuses_and_writes_nothing(env):
     before = _legacy_sources(svc)
     with pytest.raises(ops.OneStoreError, match="repeater name"):
         ops.ensure(svc, None, "10")
-    assert "set" not in helper.calls and not ops.file_path(svc._paths).exists()
+    assert "set" not in helper.calls and not ops.file_path(svc._paths, ops._inst(svc, None)).exists()
     assert _legacy_sources(svc) == before
 
 
@@ -227,7 +227,7 @@ def test_row_value_reads_the_file_else_the_legacy_store(env):
     assert ops.row_value(svc, "airtime", "") == "10"
     helper.fail = "get"
     assert ops.row_value(svc, "repeater_name", "Legacy") == "Relay"      # unchanged file: no read
-    ops.file_path(svc._paths).write_text(ops.file_path(svc._paths).read_text() + " ")
+    ops.file_path(svc._paths, ops._inst(svc, None)).write_text(ops.file_path(svc._paths, ops._inst(svc, None)).read_text() + " ")
     assert ops.row_value(svc, "repeater_name", "Legacy") == "Legacy"     # changed + unreadable
 
 
@@ -253,7 +253,7 @@ def test_the_password_section_reads_openhops_file_once_it_exists(env):
     ops.ensure(svc, {"repeater_name": "Relay"}, "10")
     creds = svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)
     assert creds["value"] == "Legacy-Pass-1234" and creds["edit_command"] == ""
-    assert creds["path"] == str(ops.file_path(svc._paths))
+    assert creds["path"] == str(ops.file_path(svc._paths, ops._inst(svc, None)))
     helper.fail = "get"
     creds = svc.ui_credentials(mm.STACK_ID, mm.NODE_ID)
     assert creds["value"] is None and "unreadable" in creds["reason"]
@@ -337,11 +337,11 @@ def test_a_refused_mixed_save_leaves_both_stores_byte_identical(env):
     ops.ensure(svc, None, "10")
     ops._set(svc, {"identities.companions": [{"name": "Taken", "identity_key": "cd" * 32}]})
     stack_file = svc._paths.runtime_root / "config" / "stacks" / f"{mm.STACK_ID}.toml"
-    before = (stack_file.read_bytes(), ops.file_path(svc._paths).read_bytes())
+    before = (stack_file.read_bytes(), ops.file_path(svc._paths, ops._inst(svc, None)).read_bytes())
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Changed", "file_mode": "chat+repeater",
                                       "file_node_name": "Taken"})
     assert not r.ok and ops.CHAT_NAME_TAKEN in " ".join(r.details)
-    assert (stack_file.read_bytes(), ops.file_path(svc._paths).read_bytes()) == before
+    assert (stack_file.read_bytes(), ops.file_path(svc._paths, ops._inst(svc, None)).read_bytes()) == before
     r = svc.save_config(mm.STACK_ID, {"file_repeater_name": "Changed", "file_mode": "chat+repeater",
                                       "file_node_name": "Free"})
     assert r.ok, (r.summary, r.details)                    # the same bundle without the collision
@@ -499,7 +499,7 @@ def test_a_legacy_airtime_of_zero_names_the_lhpc_setting_and_writes_nothing(env)
     before = _legacy_sources(svc)
     with pytest.raises(ops.OneStoreError, match="Duty-cycle limit is 0 %"):
         ops.ensure(svc, None, "10")                       # the production branch: read under the lock
-    assert "set" not in helper.calls and not ops.file_path(svc._paths).exists()
+    assert "set" not in helper.calls and not ops.file_path(svc._paths, ops._inst(svc, None)).exists()
     assert _legacy_sources(svc) == before
 
 
@@ -637,7 +637,7 @@ def test_a_restart_that_would_migrate_under_a_running_node_is_refused_before_the
     before = _legacy_sources(svc)
     res = svc.restart(mm.STACK_ID, apply=True)
     assert not res.ok and "stop the stack, then start it" in " ".join([res.summary, *res.details])
-    assert calls == [] and not ops.file_path(svc._paths).exists()
+    assert calls == [] and not ops.file_path(svc._paths, ops._inst(svc, None)).exists()
     assert _legacy_sources(svc) == before                 # gate 2 r2b sweep S5: nothing legacy moved
 
 
