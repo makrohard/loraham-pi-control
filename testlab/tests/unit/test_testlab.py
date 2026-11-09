@@ -548,6 +548,21 @@ def _frame(sock):
     return head + body
 
 
+def _queue_rx(root, band, name, rec, paused=None):
+    """Queue one RX record for the fake daemon, whole or not at all. The fake polls rx-queue/<band> while a data
+    client is connected and unlinks a *.json it cannot parse (exactly once, even a malformed one), so an in-place
+    write_text, which creates the leaf empty and fills it after, can be read empty and its frame is lost (the 60 s
+    hang guard of 2026-11-09). The record goes to a dot-tmp leaf the fake ignores (not *.json) and is renamed.
+    `paused()` runs while the leaf exists and its content is not yet written: the deterministic test's hook."""
+    qdir = root / "state" / "testlab" / "rx-queue" / band
+    tmp = qdir / f".{name}.tmp"
+    with open(tmp, "w") as fh:
+        if paused:
+            paused()
+        fh.write(json.dumps(rec))
+    os.replace(tmp, qdir / name)
+
+
 @pytest.mark.slow
 def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     """Framed 0x02 TX -> TX_RESULT 0x04 (status/flags/seq, only after SET TXRESULT=1),
@@ -566,8 +581,7 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     status, flags, seq = _st.unpack("<BBH", resp[3:7])
     assert status == 0 and flags & 0x01 and seq == 1
     assert "TXOK=1" in _conf(sockdir, "433", b"GET STATS")
-    (root / "state" / "testlab" / "rx-queue" / "433" / "0001.json").write_text(
-        json.dumps({"preset": "aprs-position"}))
+    _queue_rx(root, "433", "0001.json", {"preset": "aprs-position"})
     rx = _frame_of(f, "RX frame for the queued file")
     assert rx[0] == 0x01
     ln = _st.unpack("<H", rx[1:3])[0]
@@ -578,6 +592,31 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     assert not list((root / "state" / "testlab" / "rx-queue" / "433").glob("*"))
     tx = (root / "state" / "testlab" / "tx.jsonl").read_text()
     assert '"result": "OK"' in tx and '"band": "433"' in tx
+
+
+@pytest.mark.slow
+def test_a_queued_rx_record_is_never_read_half_written(fake_daemon, tmp_path):
+    """The writer's unsafe moment, forced: while 0001's write is paused after its leaf exists, a sentinel 0000 is
+    queued and its frame read, so the fake has listed the directory with the paused write in it. 0001's frame must
+    still arrive, before the frame of 0002 queued after it (in name order, nothing waits on time). An in-place write
+    leaves an empty 0001.json at that moment, which the fake unlinks: the next frame is then 0002's."""
+    import socket as _s
+    sockdir, root = fake_daemon()
+    f = _s.socket(_s.AF_UNIX)
+    f.settimeout(FAKE_HANG_S)
+    f.connect(str(sockdir / "lora433f.sock"))
+    f.sendall(b"\x09" + b"\x00\x00")              # its 0x03 reply proves the data client is accepted
+    assert _frame_of(f, "0x03 reply")[0] == 0x03
+    seen = []
+
+    def paused():
+        _queue_rx(root, "433", "0000.json", {"tnc2": "DL0LAB>APRS:sentinel-0000"})
+        seen.append(_frame_of(f, "RX frame of the sentinel"))
+
+    _queue_rx(root, "433", "0001.json", {"tnc2": "DL0LAB>APRS:record-0001"}, paused=paused)
+    _queue_rx(root, "433", "0002.json", {"tnc2": "DL0LAB>APRS:record-0002"})
+    seen.append(_frame_of(f, "the next RX frame"))
+    assert [fr[10:] for fr in seen] == [b"DL0LAB>APRS:sentinel-0000", b"DL0LAB>APRS:record-0001"]
 
 
 @pytest.mark.slow
