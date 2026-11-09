@@ -109,3 +109,32 @@ def test_dec_w384ac_a_saved_meshcore_companion_port_moves_every_use(tmp_path):
     node, webui, cli = (st.component(c) for c in ("meshcore-node", "meshcore-webui", "meshcore-cli"))
     assert "127.0.0.1:5366" in [e.address for e in instances.endpoints_for(node.endpoints, prep.inst)]
     assert "5366" in _argv(svc, webui, prep.inst, "868") and "5366" in _argv(svc, cli, prep.inst, "868")
+
+
+def _kiss_r2_on(tmp_path, monkeypatch, port):
+    # kiss@r2 (868) runs with kiss_port 9000 saved; its TNC listens on `port`; r2's daemon is READY
+    from lhpc.core.probes.backends import Listener
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS)
+    ready = b"STATUS RADIO=READY ID=r2 BOUND=- TXMODE=MANAGED\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r2.sock": ready},
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=port, inode=1)])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_operator_identity(callsign="XX0XXA").ok
+    r2 = Instance("r2", band="868")
+    assert svc.save_config_bundle("kiss", values={"kiss_port": "9000"}, inst=r2).ok
+    monkeypatch.setattr(instances, "instance_runs", lambda s, c, i, band: i.rid == "r2" and c.id == "loraham-kiss-tnc")
+    return svc, r2, svc.stack("kiss").component("loraham-kiss-tnc")
+
+
+def test_dec_w384ac_a_saved_kiss_port_judges_status_health_and_claims(tmp_path, monkeypatch):
+    # handler DEC-W384ai: end to end for kiss@r2's saved 9000 (r2: 9133): its status is RUNNING on 9133 and DEGRADED on
+    # the default 8134; the start's already-healthy check holds on 9133; its running claim is 9133's
+    from lhpc.core.model import RunState
+    svc, r2, tnc = _kiss_r2_on(tmp_path, monkeypatch, 9133)
+    assert instances.instance_state(svc, tnc, r2, "868", RunState.RUNNING) is RunState.RUNNING
+    assert instances.already_healthy(svc, "kiss", svc._run_order("kiss"), "868", r2, "868")
+    claim = next(r for r in tnc.resources if r.kind == "tcp-port")
+    assert instances.running_claim_keys(svc, "kiss", tnc, claim) == {"tcp.port.9133"}
+    svc, r2, tnc = _kiss_r2_on(tmp_path / "default", monkeypatch, 8134)
+    assert instances.instance_state(svc, tnc, r2, "868", RunState.RUNNING) is RunState.DEGRADED
+    assert not instances.already_healthy(svc, "kiss", svc._run_order("kiss"), "868", r2, "868")

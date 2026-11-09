@@ -3016,7 +3016,7 @@ class LifecycleOpsMixin:
                     up_shown = {r: b for r, b in shown.items() if (daemon_control.read_view(self._system, r).ready if r
                                                                    else (b or min(sbands)) in usable_bands)}
                     active = running_up or bool(up_shown)
-                    cols = {b or min(sbands) for b in (up_shown or (shown if running_up else {})).values()}
+                    cols = {b or min(sbands) for b in up_shown.values()}     # G1-K8A-RE: else the running band's
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue

@@ -61,3 +61,23 @@ def test_k8_an_unclaimed_old_argv_of_another_band_is_not_this_instances(tmp_path
     plain = _svc(tmp_path, {})
     svc = _svc(tmp_path, {300: _tnc_argv(plain, ["--data-socket", "/tmp/loradata868.sock"])})
     assert _stop_outcome(svc).outcome is Outcome.ALREADY_STOPPED
+
+
+def test_g1_k8a_re_an_orphan_of_a_shared_band_is_named_for_checking_never_killed(tmp_path):
+    # r1 and r2 both on 433: a 0.13 kiss on 433's socket may be either radio's; kiss@r1's stop names it to check
+    plain = _svc(tmp_path, {})
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = ControllerService(system=FakeSystem(cmdlines_data={300: _tnc_argv(plain, ["--data-socket", "/tmp/loradata433.sock"])}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    cr = _stop_outcome(svc)
+    assert cr.outcome is Outcome.MANUAL_REQUIRED and "kill" not in cr.summary, cr.summary
+    assert cr.summary.endswith("its radio is unknown (433 MHz has r1, r2): check pid 300 and stop it yourself if it is "
+                               "r1's"), cr.summary
+
+
+def test_g1_k8a_re_an_orphan_naming_its_own_band_beside_another_is_counted(tmp_path):
+    # a 0.13 argv naming 433's data socket AND 868's conf socket is still a 433 process for kiss@r1's stop
+    plain = _svc(tmp_path, {})
+    argv = _tnc_argv(plain, ["--data-socket", "/tmp/loradata433.sock", "--conf-socket", "/tmp/loraconf868.sock"])
+    cr = _stop_outcome(_svc(tmp_path, {300: argv}))
+    assert cr.outcome is Outcome.MANUAL_REQUIRED and cr.summary.endswith("stop it yourself: kill 300"), cr.summary

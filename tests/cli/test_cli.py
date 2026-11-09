@@ -1421,3 +1421,11 @@ def test_g1_k8a_the_daemon_monitors_next_names_its_radio(capsys):
     assert _render_daemon(view, start="daemon@r2") == 0
     out = capsys.readouterr().out
     assert "lhpc daemon r2 --feed" in out and "lhpc daemon r2 --set TXMODE=DIRECT" in out and "lhpc daemon 868" not in out
+
+
+def test_g1_k8a_re_c_the_daemon_monitor_needs_its_radio():
+    # its Next commands name the radio: a caller without one is a programming error, never a literal `<rid>`
+    from lhpc.adapters.cli.main import _render_daemon
+    from lhpc.core.daemon_control import DaemonView
+    with pytest.raises(TypeError):
+        _render_daemon(DaemonView(band="868", reachable=True, status={"RADIO": "READY"}))

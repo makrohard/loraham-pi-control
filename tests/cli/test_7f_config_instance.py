@@ -78,3 +78,13 @@ def test_g1_k8a_2_with_one_radio_able_to_run_it_the_daemon_params_save_as_before
     radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"), radios_fixture.R3))
     rc, out = run(target, "--daemon-param", "SF=9")
     assert rc == 0 and out.splitlines()[0] == "OK    saved daemon params for chat (433)", out
+
+
+def test_g1_k8a_re_b_a_disabled_radios_instance_never_reaches_the_daemon_params(run, tmp_path):
+    # measured: the resolver refuses chat@r2 on a disabled r2 first, so the band's daemon parameters stay unchanged
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
+                                    radios.Radio("r2", "b", "uputronics", "433", ce="ce1", enabled=False)))
+    before = sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir())
+    rc, out = run("chat@r2", "--daemon-param", "SF=9")
+    assert (rc, out.splitlines()[0]) == (1, "ERR   chat@r2: r2 is disabled"), out
+    assert sorted(p.name for p in (tmp_path / "config" / "stacks").iterdir()) == before

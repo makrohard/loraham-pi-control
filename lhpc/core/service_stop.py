@@ -329,11 +329,9 @@ class StopOpsMixin:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
                 if (cr.outcome in (Outcome.ALREADY_STOPPED, Outcome.STOPPED) and getattr(inst, "rid", "")
                         and comp.process is not None       # K8, G1-K8A 5: after its own stop too, never a silent stop
-                        and (orphans := [p for p in instances.unclaimed_pids(self, comp, band=inst.band) if p != cr.pid])):
+                        and (note := instances.orphan_note(self, comp, inst, cr.pid))):
                     cr = CompResult(component=comp.id, stack=cr.stack, action="stop", outcome=Outcome.MANUAL_REQUIRED,
-                                    summary=("stopped; " if cr.outcome is Outcome.STOPPED else "") + "a matching process "
-                                            "is running but no instance claims it (no record, an older argv) — stop it "
-                                            f"yourself: kill {' '.join(map(str, orphans))}")
+                                    summary=("stopped; " if cr.outcome is Outcome.STOPPED else "") + note)
             results.append(cr)
             own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"

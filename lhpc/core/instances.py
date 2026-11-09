@@ -557,6 +557,11 @@ def unclaimed(svc, comp, table=None, procs=None) -> bool:
 
 _BAND_SOCKET = re.compile(r"/tmp/lora[a-z]*(433|868)\.sock")    # a 0.13 per-band socket in an argv
 
+
+def _socket_bands(argv) -> set:
+    """The bands of the 0.13 per-band sockets an argv names."""
+    return {m.group(1) for t in argv if (m := _BAND_SOCKET.search(t))}
+
 def unclaimed_pids(svc, comp, table=None, procs=None, band: str = "") -> list:
     """The pids of `unclaimed`: a process of the spec no instance's record or token claims (an older argv too: a
     0.13 band socket is no instance's token). `band`: one whose argv names ANOTHER band's 0.13 socket is not counted
@@ -565,9 +570,23 @@ def unclaimed_pids(svc, comp, table=None, procs=None, band: str = "") -> list:
     table = svc._system.procfs.cmdlines() if table is None else table
     procs = instance_processes(svc, table) if procs is None else procs
     claimed = {p for _s, _r, c, p in procs if c == comp.id}
-    other = [b for b in ("433", "868") if band and b != band]
     return sorted(p for p, a in table.items() if p not in claimed and matches(comp.process, a, None)
-                  and not any((m := _BAND_SOCKET.search(t)) and m.group(1) in other for t in a))
+                  and not (band and _socket_bands(a) and band not in _socket_bands(a)))   # G1-K8A-RE A: another band's ONLY
+
+
+def orphan_note(svc, comp, inst, own_pid=None) -> str:
+    """K8 (G1-K8A 5/6, -RE 6): what a named stop of `inst` reports about unclaimed processes of `comp`'s spec on its
+    band, "" when there are none. Another radio able to run the stack on that band makes such a process's radio
+    unknown: it is named for checking, never with a kill instruction."""
+    pids = [p for p in unclaimed_pids(svc, comp, band=inst.band) if p != own_pid]
+    if not pids:
+        return ""
+    head, rids = "a matching process is running but no instance claims it (no record, an older argv) — ", \
+        radios_able(svc, svc.stack_of(comp.id) or comp.id, inst.band)
+    if len(rids) > 1:
+        return head + (f"its radio is unknown ({inst.band} MHz has {', '.join(rids)}): check pid "
+                       f"{' '.join(map(str, pids))} and stop it yourself if it is {inst.rid}'s")
+    return head + f"stop it yourself: kill {' '.join(map(str, pids))}"
 
 
 

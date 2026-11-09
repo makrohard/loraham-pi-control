@@ -143,3 +143,18 @@ def test_g1_k8a_8_a_consumer_shown_on_two_bands_names_none(tmp_path, monkeypatch
     svc = _two_band_voice(tmp_path, r1="433", r2="868")
     monkeypatch.setattr(type(svc), "gui_fallback_active", lambda self, st: True)
     assert svc.active_config_consumer("voice") == (True, "")
+
+
+def test_g1_k8a_re_a_running_app_without_a_live_marker_shows_on_its_running_band(tmp_path, monkeypatch):
+    # voice runs on 433 (its launch band) with no live marker, and a stale voice@r2.show (868, r2's daemon down) is
+    # left: the block is in 433's column, never in the dead radio's (before: the unfiltered markers placed it)
+    import launch_band_fixture
+    from lhpc.core.model import RunState
+    svc = _two_band_voice(tmp_path, r2="868")
+    snap = svc.build_snapshot()
+    for cid in snap.stack("voice").components:
+        snap.stack("voice").components[cid].run_state = RunState.RUNNING
+    monkeypatch.setattr(svc, "build_snapshot", lambda *a, **k: snap)
+    launch_band_fixture.set_launch_band(svc, "voice", "433")
+    cols = {r["band"]: [s["id"] for s in r["interactive"]] for r in svc.radio_overview()}
+    assert "voice" in cols["433"] and "voice" not in cols["868"], cols

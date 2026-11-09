@@ -195,7 +195,7 @@ def _render_gps_monitor(m: dict, sats: bool) -> int:
     return 0 if ok else 1
 
 
-def _render_daemon(view, channel: dict[str, str] | None = None, start: str = "daemon@<rid>") -> int:
+def _render_daemon(view, channel: dict[str, str] | None = None, *, start: str) -> int:   # start: `daemon@<rid>`
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
         print(f"\nNext:\n  lhpc stack start {start}")
@@ -224,7 +224,7 @@ def _render_daemon(view, channel: dict[str, str] | None = None, start: str = "da
           f"CADIDLE {s.get('CADIDLE','?')}ms")
     print(f"Stats: RX {st.get('RX','?')}  TXOK {st.get('TXOK','?')}  TXERR {st.get('TXERR','?')}  "
           f"uptime {st.get('UPTIME','?')}s")
-    rid = start.partition("@")[2] or "<rid>"                  # K8: the radio's daemon, never a band
+    rid = start.partition("@")[2]                              # K8: the radio's daemon, never a band
     print(f"\nNext:\n  lhpc daemon {rid} --feed\n  lhpc daemon {rid} --set TXMODE=DIRECT")
     return 0
 
@@ -1700,7 +1700,7 @@ def _run(argv: list[str] | None = None) -> int:
         # An operator ran `lhpc daemon <rid>` by hand, ONCE: that is a deliberate request to
         # measure the channel, so this is the one place that still runs a real CAD scan.
         _dview = svc.daemon_view(band, rid=rid)
-        return _render_daemon(_dview, svc.daemon_channel_scan(band, rid=rid) if _dview.reachable else {}, f"daemon@{rid}")
+        return _render_daemon(_dview, svc.daemon_channel_scan(band, rid=rid) if _dview.reachable else {}, start=f"daemon@{rid}")
     if args.command == "update":
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
