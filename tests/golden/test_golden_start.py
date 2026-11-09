@@ -24,7 +24,7 @@ KISS_LOCKS = [
 ]
 RECHECK = ["recheck:start", "recheck:identity"]
 KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
-            "verify:endpoints:loraham-kiss-tnc", "verify:post-start",        # K4b: no slot-0 running-band marker
+            "verify:endpoints:loraham-kiss-tnc", "verify:post-start",        # K4b: no running-band marker
             "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",   # markers per instance
             "final:clear-stop-intent:kiss@r1"]
 PLAN = {"ok": True, "summary": "Run plan for 'kiss@r1': 2 component(s) in order.",   # K4b: the instance named

@@ -227,8 +227,8 @@ def _job_state(svc, op, target, rid=None):
 
 
 def _rid(box, target):
-    """K3 (W323), W2: the CLI and the console name the instance the other entries act on — slot 0's radio (a
-    band-less stack: any)."""
+    """K3 (W323), W2: the CLI and the console name the instance the other entries act on — the band caller's
+    radio (a band-less stack: any)."""
     from lhpc.core import instances
     return instances.copy_of(box.svc, target)[0].rid or instances.can_run_on(box.svc, box.svc.stack(target))[0]
 

@@ -136,7 +136,7 @@ def test_k1_a_process_ignoring_sigterm_is_gone_after_the_5s_grace(tmp_path, cloc
 
 
 def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, clock, procs):
-    # W298: a kill is per radio. `kiss@r3` is the listed copy alone; `kiss` is slot 0 alone.
+    # W298: a kill is per radio. `kiss@r3` is the listed copy alone; `kiss` is the bare stack alone.
     p0, pk, daemon = procs(), procs(), procs()
     svc = _copy_svc(tmp_path, {})
     table = {p0.pid: _argv(svc, "loraham-kiss-tnc", svc._config_band("kiss", "")), pk.pid: _copy_argv(svc, "loraham-kiss-tnc"),
@@ -148,7 +148,7 @@ def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, 
     marker.write_text("433\n")                                # a 0.13.x band marker (K6, 13.12.5: never read)
     assert kill.kill(svc, "kiss@r3", apply=True).ok
     assert _gone(pk)
-    assert p0.poll() is None and daemon.poll() is None       # slot 0 and the daemon live
+    assert p0.poll() is None and daemon.poll() is None       # the bare stack and the daemon live
     assert marker.is_file() and svc._stop_intent_stacks() == {"kiss@r3"}   # the copy's own intent alone
     del table[pk.pid]                                         # /proc no longer lists it (the static table would)
     svc = _copy_svc(tmp_path, table)
@@ -164,7 +164,7 @@ def test_the_daemon_goes_per_radio_by_its_id(tmp_path, clock, procs):
              d3.pid: ["/x/loraham_daemon", "--radio=868", "--id=r3"]}
     svc = _copy_svc(tmp_path, table)
     sid = svc.stack_of(svc.DAEMON_ID)
-    stk = svc.stack(sid)                                      # r2's verified record (slot 0, like every daemon's)
+    stk = svc.stack(sid)                                      # r2's verified record (slot field 0, like every daemon's)
     svc._lifecycle().record_launch(stk, stk.component(svc.DAEMON_ID), d2.pid, band="868", extra={"rid": "r2", "slot": 0})
     assert kill.kill(svc, f"{sid}@r3", apply=True).ok
     assert _gone(d3) and d2.poll() is None
@@ -604,8 +604,8 @@ def test_g1_k4b_5_a_bare_kill_takes_every_radios_unrecorded_daemon_client(tmp_pa
     assert one.ok and one.data["pids"] == [p3.pid], (one.summary, one.details)
 
 
-def test_slot0s_kill_takes_a_user_started_unrecorded_process_with_copies_listed(tmp_path, procs):
-    # W46 (G1-C35 (6)): a process of slot 0's spec that no record names is slot 0's (a copy runs only as LHPC
+def test_the_bare_stacks_kill_takes_a_user_started_unrecorded_process_with_copies_listed(tmp_path, procs):
+    # W46 (G1-C35 (6)): a process of the bare stack's spec that no record names is the bare stack's (a copy runs only as LHPC
     # starts it, with its record), copies listed or not.
     p = procs()
     svc = _copy_svc(tmp_path, {})

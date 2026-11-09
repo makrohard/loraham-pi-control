@@ -1,7 +1,7 @@
 """Gate 1 C7 (VERDICT-G1-C7, W267) on stack instances, through the public paths: the CLI on the FakeSystem box and
-the start's run blockers. B2 an instance start keeps slot 0's stop intent; B3 a disabled radio's instance can still
-be stopped (K4ac: B1 and B3's removal went with add-instance/remove-instance, DEC-W344); B4 an instance is
-"already healthy" only by slot 0's own health rule (readiness endpoints, DEGRADED kept); B5 another stack's
+the start's run blockers. B2 an instance start keeps the bare stack's stop intent; B3 a disabled radio's instance can
+still be stopped (K4ac: B1 and B3's removal went with the instance-adding commands, DEC-W344); B4 an instance is
+"already healthy" only by the bare stack's own health rule (readiness endpoints, DEGRADED kept); B5 another stack's
 running instance holds its derived claim; the preview's next command names the instance."""
 import dataclasses
 
@@ -11,15 +11,15 @@ from lhpc.adapters.cli import main as cli
 from lhpc.core import manifest as manifest_mod
 from lhpc.core.model import ResourceClaim, ResourceKind, ResourceMode, RunState
 
-def test_b2_an_instance_start_keeps_slot_0s_stop_intent(box, tmp_path):
+def test_b2_an_instance_start_keeps_the_bare_stacks_stop_intent(box, tmp_path):
     run = box((R1, R2_868, R3), ports=(8267,))
     svc = cli.ControllerService()
-    svc._write_stop_intent(["kiss"])                                    # the operator stopped slot 0
+    svc._write_stop_intent(["kiss"])                                    # the operator stopped the bare stack
     intent = svc._stop_intent_path("kiss")
     assert intent.is_file()
     rc, out, launches = run("start", "kiss@r3")
     assert ("loraham-kiss-tnc", "868", "r3") in launches, (launches, out)
-    assert intent.is_file()                                             # slot 0's intent survives
+    assert intent.is_file()                                             # the bare stack's intent survives
 
 
 def _disable_r3(tmp_path):
@@ -42,7 +42,7 @@ def test_b4_a_running_instance_without_its_readiness_port_is_not_already_healthy
     assert "already healthy" not in out, out
 
 
-def test_b4_slot_0s_degraded_state_is_kept(box):
+def test_b4_the_bare_stacks_degraded_state_is_kept(box):
     from lhpc.core import instances
     box((R1, R2_868, R3), procs={4100: kiss_on("r1")})
     svc = cli.ControllerService()

@@ -48,7 +48,7 @@ def test_every_spec_carries_an_instance_arg_or_is_named_exempt():
 
 
 @pytest.mark.parametrize("comp", [c for c in SPECS if c.process.instance_arg], ids=lambda c: c.id)
-def test_the_instance_token_matches_its_own_slot0_argv_only(comp):
+def test_the_instance_token_matches_its_own_bare_argv_only(comp):
     opt, tpl = comp.process.instance_arg
     value = commands.instance_value(tpl, comp, {}, RT, SRC, comp.band, inst=_inst0(comp))
     argv = _argv(comp)

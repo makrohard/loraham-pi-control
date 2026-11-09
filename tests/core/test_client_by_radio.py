@@ -53,7 +53,7 @@ def test_a_client_runs_as_its_bands_one_radio_or_is_refused_by_name(tmp_path, ro
 
 @_ABSENT
 def test_an_unresolved_radio_template_never_renders(tmp_path):
-    # W3-1: slot 0 without a radio has no daemon socket to name; every render of a `{rid}` param refuses it.
+    # W3-1: a band caller without a radio has no daemon socket to name; every render of a `{rid}` param refuses it.
     svc = _svc(tmp_path, NO_LIST)
     comp = svc.stack("kiss").component("loraham-kiss-tnc")
     src = str(svc._paths.resolve_source(comp.source.path))
@@ -74,7 +74,7 @@ def test_an_unresolved_radio_template_never_renders(tmp_path):
 
 @pytest.mark.parametrize("rows,band", [
     # S2: no list or an empty one serves no band, so the stack's own preflight refuses before any component.
-    # (DEC-W16: two radios never refuse slot 0, it runs on r1; K4ac: the band's further radios are its copies.)
+    # (Two radios never refuse a band caller, it runs on r1; K4ac: the band's further radios are its copies.)
     pytest.param(NO_LIST, "433", marks=_ABSENT),
     ((), "433")])
 def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path, monkeypatch, rows, band):

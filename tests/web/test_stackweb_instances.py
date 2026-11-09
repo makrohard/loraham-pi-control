@@ -12,7 +12,7 @@ from lhpc.core.webserver import StackWebProxy
 def _svc(tmp_path, monkeypatch, slot_k=True):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    if slot_k:     # raising=False: on a code without instances the pages are slot 0's only (the red-before)
+    if slot_k:     # raising=False: on a code without instances the pages are the bare stack's only (the red-before)
         monkeypatch.setattr(commands, "stack_instances",
                             lambda stk, paths=None: (commands.TEMPLATE, commands.Instance("r2"))
                             if stk.id == "meshcore" else (commands.TEMPLATE,), raising=False)
@@ -27,12 +27,12 @@ def test_a_slot_k_instance_has_its_own_pages_proxied_to_its_own_ports(tmp_path, 
     assert pages["meshcore@r2"].label == pages["meshcore"].label + " @r2"
 
 
-def test_t_n5_every_instance_page_carries_its_slot0_deny_locations_and_answer(tmp_path, monkeypatch):
+def test_t_n5_every_instance_page_carries_the_bare_pages_deny_locations_and_answer(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     pages = {p.page_id: p for p in svc.stack_web_pages("meshcore")}
     for base in ("meshcore", "meshcore-meshcore-node"):
-        slot0, slotk = pages[base], pages[f"{base}@r2"]
-        assert (slotk.deny_paths, slotk.deny_notice) == (slot0.deny_paths, slot0.deny_notice) and slot0.deny_paths
+        bare, mine = pages[base], pages[f"{base}@r2"]
+        assert (mine.deny_paths, mine.deny_notice) == (bare.deny_paths, bare.deny_notice) and bare.deny_paths
 
     def proxy(page, port):
         class _SWC:

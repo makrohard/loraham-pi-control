@@ -1,5 +1,5 @@
 """The one stack-copy factory `instances.copy_of` (CLEANUP-DESIGN-v2 sections 1 and 2): a copy's band is its radio
-row's and a contradicting band is refused; slot 0 is a copy too, on DEC-W16's radio of its operation band. K4ac: the
+row's and a contradicting band is refused; a band caller's copy (no radio given, until K8) is on its band's first radio. K4ac: the
 hardware list gives the copies (a band's further radios, instances.copy_rids). `instances.resolve` answers through it."""
 
 import pytest
@@ -47,14 +47,14 @@ def test_a_disabled_radios_copy_comes_back_with_its_why(tmp_path):
     assert instances.key("kiss", copy) == "kiss@r3" and why == "kiss@r3: r3 is disabled"
 
 
-def test_slot0_is_a_copy_on_dec_w16s_radio_of_its_band(tmp_path):
+def test_a_band_callers_copy_is_on_its_bands_first_radio(tmp_path):
     copy, why = instances.copy_of(_svc(tmp_path), "kiss", band="433")
     assert why == ""
     assert (copy.rid, copy.band) == ("r1", "433")                 # a band caller means the band's first radio
     assert instances.key("kiss", copy) == "kiss@r1"
 
 
-def test_slot0s_band_is_the_operation_band(tmp_path, monkeypatch):
+def test_a_bare_callers_band_comes_from_operation_band(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     asked = []
     monkeypatch.setattr(svc, "operation_band", lambda sid, band="": asked.append((sid, band)) or "433")
@@ -75,27 +75,27 @@ def test_a_template_only_instance_keeps_todays_values():
     assert commands.TEMPLATE.rid == "" and commands.TEMPLATE.subst("{instance_dir}x") == "x"
 
 
-def test_a_fixed_band_stacks_slot0_runs_on_its_one_band(tmp_path):
+def test_a_fixed_band_stacks_bare_copy_runs_on_its_one_band(tmp_path):
     rows = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"),)
     copy, why = instances.copy_of(_svc(tmp_path, rows=rows), "meshcore")
     assert (copy.rid, copy.band, why) == ("r2", "868", "")
 
 
-def test_a_switchable_stacks_slot0_without_served_bands_has_no_band(tmp_path):
+def test_a_switchable_stacks_bare_copy_without_served_bands_has_no_band(tmp_path):
     copy, why = instances.copy_of(_svc(tmp_path, rows=()), "kiss")    # S2: a list without radios serves none
     assert (copy.rid, copy.band, why) == ("", "", "")
 
 
-def test_slot0_with_its_radio_renders_a_peer_port_as_today():
-    # CLEANUP-DESIGN-v5 section 12 (C6): slot 0 is a real copy with its DEC-W16 radio; `{port_of:}` then names the
-    # peer stack's slot 0, as without a radio. K4ac (DEC-W348): a copy's is its radio's, base + 133 x (n - 1).
+def test_r1s_copy_renders_a_peer_port_at_its_base():
+    # `{port_of:}` names the peer stack's port on the same radio: r1's is the base port, as without a radio. K4ac
+    # (DEC-W348): rN's is base + 133 x (n - 1).
     assert commands.Instance("r1").subst("{port_of:kiss:8001}") == "8001"
     assert commands.Instance("r2").subst("{port_of:kiss:8001}") == "8134"
 
 
-def test_an_applied_slot0_start_resolves_its_copy_under_the_locks(tmp_path, monkeypatch):
-    # G1-C45: r1 is disabled while the start waits for admission; the admitted start acts on slot 0's radio as the
-    # locks see it (r3, DEC-W16's first enabled), never on the r1 resolved before them.
+def test_an_applied_band_callers_start_resolves_its_copy_under_the_locks(tmp_path, monkeypatch):
+    # G1-C45: r1 is disabled while the start waits for admission; the admitted start acts on the band's first enabled
+    # radio as the locks see it (r3), never on the r1 resolved before them.
     import contextlib
     from lhpc.core.service_base import ActionResult
     svc = _svc(tmp_path)
@@ -112,9 +112,9 @@ def test_an_applied_slot0_start_resolves_its_copy_under_the_locks(tmp_path, monk
     assert [c.rid for c in seen] == ["r3"]
 
 
-def test_an_applied_slot0_stop_resolves_its_copy_under_the_lock(tmp_path, monkeypatch):
+def test_an_applied_band_callers_stop_resolves_its_copy_under_the_lock(tmp_path, monkeypatch):
     # G1-C47: as for the start (G1-C45), r1 is disabled while the stop waits for its lock; the locked stop acts on
-    # slot 0's radio as the lock sees it (r3), never on the r1 resolved before.
+    # the band's first enabled radio as the lock sees it (r3), never on the r1 resolved before.
     import contextlib
     from lhpc.core.service_base import ActionResult
     svc = _svc(tmp_path)

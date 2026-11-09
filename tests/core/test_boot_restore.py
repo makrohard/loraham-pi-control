@@ -2022,7 +2022,7 @@ def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
 def test_an_item_whose_radio_moved_band_is_refused_naming_both_bands(tmp_path, monkeypatch):
     # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but it is on another band now; starting it there would
     # launch the client on another band, so the item is refused, naming why (K4b: an item starts its own radio's
-    # instance, `<stack>@<rid>`; the slot-0 rule, the band's first radio, is gone).
+    # instance, `<stack>@<rid>`; the band caller's rule, the band's first radio, is gone).
     rows, rid, reason = ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")),
                          "r1", "radio r1 is on 868 MHz now, not 433 MHz")
     radios_fixture.write(tmp_path, rows)
@@ -2050,7 +2050,7 @@ def test_a_disabled_second_radio_of_the_band_does_not_block_the_restore(tmp_path
     assert calls == [{"target": "kiss", "band": "433"}]
 
 
-def test_k6_an_old_running_band_marker_is_never_read_by_boot_restore(tmp_path):
+def test_k6_an_old_band_marker_file_is_never_read_by_boot_restore(tmp_path):
     # 13.12.5: a 0.13.x state/running/<sid>.band (valid or garbled) is no band source: the view has none, and it
     # never makes a restore ambiguous or unsafe
     from lhpc.core.paths import Paths

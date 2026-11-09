@@ -1,6 +1,6 @@
 """Item 16 S1 (DESIGN-16 f3a881f9, DEC-W53): every enabled radio of the hardware list runs its own daemon, also two
 on one band. A daemon start with a band ensures each of that band's enabled radios; a client start ensures its
-instance's radio only (slot 0: the band's first radio, DEC-W16, r2 being kiss@r2's; `<stack>@<rid>`: that radio). The launches
+instance's radio only (a band caller: the band's first radio, r2 being kiss@r2's; `<stack>@<rid>`: that radio). The launches
 are captured at Lifecycle.start (each one's `id` parameter names its radio); a READY daemon is a CONF socket that
 answers READY."""
 from __future__ import annotations
@@ -57,7 +57,7 @@ def test_a_daemon_start_on_a_shared_band_launches_each_radios_daemon(tmp_path, m
     assert svc.recorded == ["r1", "r2"]                  # each record names its radio: one radio's daemon stops alone
 
 
-def test_slot0s_start_ensures_its_own_radios_daemon_only(tmp_path, monkeypatch):
+def test_a_band_callers_start_ensures_its_own_radios_daemon_only(tmp_path, monkeypatch):
     svc, launches = _box(tmp_path, monkeypatch)
     svc.start("kiss", apply=True, band="433")
     assert [x for x in launches if x[0] == DAEMON] == [(DAEMON, "r1", "433")]

@@ -1,5 +1,5 @@
-"""Item 7c2a (DEC-W15/W16/W31, K4ac): `lhpc stack start <stack>@<rid>` starts a copy on its radio's band, and slot 0
-runs on the first enabled radio of its band; the band's further radios are the copies (the hardware list's).
+"""Item 7c2a (DEC-W15/W16/W31, K4ac): `lhpc stack start <stack>@<rid>` starts a copy on its radio's band, and a band
+caller runs on the first enabled radio of its band; the band's further radios are the copies (the hardware list's).
 
 An instance is told apart by its process spec's instance token (kiss-tnc: `--data-socket` = its radio's socket) and
 by its ownership records' rid, the matcher kill.py uses. The CLI runs on a FakeSystem service over a temporary
@@ -25,18 +25,18 @@ def test_an_instance_that_runs_is_already_healthy_and_nothing_launches(box):
     assert rc == 0 and "already healthy" in out and launches == [], (out, launches)
 
 
-def test_slot_0_is_not_healthy_because_another_instance_runs(box):
-    # Only kiss@r3 runs; kiss@r1 is slot 0 on r1 (433) and launches, never reads r3's process as its own.
+def test_kiss_at_r1_is_not_healthy_because_kiss_at_r3_runs(box):
+    # Only kiss@r3 runs; kiss@r1 is on r1 (433) and launches, never reads r3's process as its own.
     run = box((R1, R2_868, R3), procs={4100: _kiss_on("r3")}, ports=(8001,))
-    rc, out, launches = run("start", "kiss@r1")                     # K3: slot 0 named on its radio
+    rc, out, launches = run("start", "kiss@r1")                     # K3: named on its radio
     assert ("loraham-kiss-tnc", "433", "r1") in launches, (launches, out)
 
 
-def test_slot_0_that_runs_beside_a_listed_copy_is_already_healthy(box):
-    # Slot 0 runs on r1 (its DEC-W16 radio) while kiss@r3 is listed: its start is the no-op, judged on slot 0's own
-    # copy from copy_of (CLEANUP-DESIGN-v6: slot 0 is a real copy), never a re-derived radio.
+def test_kiss_at_r1_that_runs_beside_kiss_at_r3_is_already_healthy(box):
+    # kiss@r1 runs while kiss@r3 is listed: its start is the no-op, judged on its own copy from copy_of, never a
+    # re-derived radio.
     run = box((R1, R2_868, R3), procs={4100: _kiss_on("r1")}, ports=(8001,))
-    rc, out, launches = run("start", "kiss@r1")                     # K3: slot 0 named on its radio
+    rc, out, launches = run("start", "kiss@r1")                     # K3: named on its radio
     assert rc == 0 and "already healthy" in out and launches == [], (out, launches)
 
 
@@ -70,9 +70,9 @@ def test_the_plan_names_the_instance(box):
     assert "Run plan for 'kiss@r3': 2 component(s) in order." in out, out
 
 
-def test_an_instances_claims_are_its_own_and_slot_0_keeps_its_keys(box):
+def test_an_instances_claims_are_its_own_and_the_template_keeps_its_keys(box):
     # Item 7a: the start's conflict check keys the target's claims by its instance (r3: BASE + 266, the kiss-serial
-    # key with its radio's suffix); slot 0's keys are the manifest's, unchanged.
+    # key with its radio's suffix); the template's keys are the manifest's, unchanged.
     from lhpc.core import instances
     box((R1, R2_868, R3))
     stack = cli.ControllerService().stack("kiss")
@@ -103,7 +103,7 @@ def test_an_instance_on_another_band_starts_while_kiss_at_r1_runs(box):
 
 def test_a_running_copy_the_start_pass_reaches_is_judged_at_its_own_port(box, monkeypatch):
     # K4ac: when the start pass runs (here: the no-op check says no, as when another component of the order still
-    # needs starting), a running kiss@r3 is judged by its own listener (8267), never slot 0's 8001: it is "already
+    # needs starting), a running kiss@r3 is judged by its own listener (8267), never kiss@r1's 8001: it is "already
     # running", not "foreign or half-started", and nothing launches it twice.
     from lhpc.core import instances
     monkeypatch.setattr(instances, "already_healthy", lambda *a, **k: False)

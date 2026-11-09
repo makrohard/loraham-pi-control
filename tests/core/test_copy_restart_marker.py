@@ -39,11 +39,11 @@ def test_an_instances_stop_clears_its_own_marker_and_never_the_other_instances(t
     assert idle.restart_required("kiss@r3") is None and idle.restart_required("kiss@r1") is not None
 
 
-def test_a_stopped_copys_save_writes_no_marker_while_slot0_runs(tmp_path):
+def test_a_stopped_copys_save_writes_no_marker_while_the_bare_copy_runs(tmp_path):
     svc = _svc(tmp_path)
-    slot0 = instances.copy_of(svc, "kiss", band="433")[0]
-    opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), slot0, "433")
+    bare = instances.copy_of(svc, "kiss", band="433")[0]
+    opt, val = instances._token(svc, svc.stack("kiss").component("loraham-kiss-tnc"), bare, "433")
     svc = ControllerService(system=FakeSystem(cmdlines_data={62: ["/x/loraham-kiss-tnc", opt, val]}).system,
-                            paths=Paths(runtime_root=tmp_path))                            # slot 0 runs, kiss@r3 not
+                            paths=Paths(runtime_root=tmp_path))                            # the bare copy runs, kiss@r3 not
     assert svc.save_config_bundle("kiss", values={"kiss_port": "8050"}, inst=instances.copy_of(svc, "kiss", "r3")[0]).ok
     assert svc.restart_required("kiss@r3") is None and svc.restart_required("kiss") is None
