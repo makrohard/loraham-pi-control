@@ -13,6 +13,64 @@ from lhpc.core import jobs as jobs_mod
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ActionResult, ControllerService
 
+
+_STAND_IN = ("src", "loraham-daemon", "loraham_daemon", "loraham_daemon")     # the tests' `#!/bin/sh` daemon
+
+
+@pytest.fixture(autouse=True)
+def _stand_ins(tmp_path, monkeypatch):
+    """The stand-in daemons THIS test spawns: the Popen objects of the product's own launch (lifecycle Popen,
+    start_new_session) whose program (cwd + argv[0]) is this test's stand-in, recorded through the Popen entry the
+    suite already guards; the teardown waits for each (_reap). W3-LAB-FLAKES-DIAG a8c40e57: the product launches
+    detached and never waits, so the stand-in stayed <defunct> under the xdist worker and read as a foreign daemon to
+    a concurrent lab."""
+    import subprocess
+    path, spawned, current = str(tmp_path.joinpath(*_STAND_IN)), [], subprocess.Popen   # conftest's shell guard
+
+    def recording(args, *a, **k):
+        import os
+        proc = current(args, *a, **k)
+        if isinstance(args, (list, tuple)) and args and os.path.join(str(k.get("cwd") or ""), str(args[0])) == path:
+            spawned.append(proc)                         # the launch runs `loraham_daemon/loraham_daemon` in its source
+        return proc
+    monkeypatch.setattr(subprocess, "Popen", recording)
+    yield spawned
+    _reap(spawned)
+
+
+def _reap(spawned) -> None:
+    """Wait for each stand-in this test launched, bounded: it ends by itself (a sub-second script), so no signal is sent at
+    all (none can reach a reused pid or a foreign group); one that does not exit within 5 s fails the test
+    (subprocess.TimeoutExpired), it is never left behind silently."""
+    for proc in spawned:
+        proc.wait(timeout=5)
+
+
+@pytest.mark.needs_session
+def test_the_reaper_waits_for_each_stand_in_and_leaves_no_zombie(tmp_path, _stand_ins):
+    # G1-ZR N5: its own target, launched as the product launches one (relative argv in its source dir, setsid)
+    import os
+    import subprocess
+    binp = tmp_path.joinpath(*_STAND_IN)
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\nsleep 0.1\n")             # wallclock: the stand-in's own 0.1 s end is what is waited for
+    os.chmod(binp, 0o755)
+    proc = subprocess.Popen(["loraham_daemon/loraham_daemon"], cwd=str(binp.parent.parent), start_new_session=True)
+    assert _stand_ins == [proc]
+    _reap(_stand_ins)
+    assert proc.returncode == 0                                           # it ended by itself and was waited for
+
+
+@pytest.mark.needs_session
+def test_a_daemon_start_here_leaves_no_stand_in_after_the_reaper(tmp_path, _stand_ins):
+    # red-before on cc8dabbf: a <defunct> loraham_daemon child stayed after test_run_order.py (measured: one Z)
+    svc = _daemon_svc(tmp_path, {})
+    svc.start("daemon", apply=True)
+    assert _stand_ins, "the start spawned no stand-in through the product's launch: this test proves nothing"
+    _reap(_stand_ins)
+    assert all(p.returncode is not None for p in _stand_ins)              # each one waited for: no <defunct>
+
+
 # The kiss TNC is endpoint-ready: a healthy kiss needs its 127.0.0.1:8001 listener present.
 _KISS_LISTENER = Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)
 
