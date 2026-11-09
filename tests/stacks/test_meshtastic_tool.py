@@ -602,3 +602,17 @@ def test_k7_a_named_instance_that_does_not_run_is_not_reached(cli_box, captured_
 def test_k7_a_bad_radio_id_is_refused(cli_box, captured_exec, capsys):
     assert cli_box["run"](["meshtastic@x9", "--nodes"]) == 2 and "argv" not in captured_exec
     assert "r1..r99" in capsys.readouterr().err
+
+
+def test_g1_k7a_5_help_needs_no_node_whatever_runs(cli_box, captured_exec):
+    # `lhpc meshtastic --help` with meshtastic@r1 and @r2 running: the upstream help (before: refused with 2)
+    cli_box["running"] = ["meshtastic@r1", "meshtastic@r2"]
+    assert cli_box["run"](["meshtastic", "--help"]) is None
+    assert captured_exec["argv"][1:] == ["--help"]
+
+
+def test_k7_one_running_instance_on_r1_is_exactly_the_old_command(cli_box, captured_exec):
+    # no removal (W290): one instance running, the bare form reaches it with the very --host it always used
+    cli_box["running"] = ["meshtastic@r1"]
+    assert cli_box["run"](["meshtastic", "--info"]) is None
+    assert captured_exec["argv"][1:] == ["--host", mt.LOCAL_API, "--info"]

@@ -217,7 +217,7 @@ class StatusProber:
         # ready/not-ready channel the endpoint machinery uses gives DEGRADED on loss and a
         # clean return to RUNNING on recovery, with no restart.
         if comp.readiness == "gps-feed":
-            feed_ready, feed_note, feed_state = self._gps_feed_verdict(comp)
+            feed_ready, feed_note, feed_state = self._gps_feed_verdict(comp, status.pids)
             has_expected = True
             all_ready = feed_ready
             status.evidence["gps.feed"] = feed_note
@@ -316,11 +316,11 @@ class StatusProber:
             return ProfileState.CONFIRMED_WORKING
         return _profile_from_source(src.state)
 
-    def _gps_feed_ready(self, comp) -> tuple[bool, str]:
+    def _gps_feed_ready(self, comp, pids=None) -> tuple[bool, str]:
         """(healthy, note) of `_gps_feed_verdict`."""
-        return self._gps_feed_verdict(comp)[:2]
+        return self._gps_feed_verdict(comp, pids)[:2]
 
-    def _gps_feed_verdict(self, comp) -> tuple[bool, str, str]:
+    def _gps_feed_verdict(self, comp, pids=None) -> tuple[bool, str, str]:
         """(healthy, note, the marker's state or "") for a GPS feed, from the marker it writes about its UPSTREAM.
 
         `ready` (sentences flowing) and `connected` (source reachable, no fix yet — a cold
@@ -334,16 +334,38 @@ class StatusProber:
         consumer = consumer_for_component(comp.id)
         if not consumer:
             return True, "not a GPS feed", ""
-        # K7: one feed per instance (state/<rid>/gps/<consumer>); the component is healthy when every instance's feed
-        # that left a marker is, and an unhealthy one is named. No marker at all: as before.
+        # K7 (G1-K7A 1/4): one feed per instance. The feeds that RUN are the expected ones (each process's --state
+        # token, state/<rid>/gps/<consumer>; none: the bare one): the component is healthy when every one of them is,
+        # a running feed without a marker included, and an unhealthy one is named. With no feed running, the markers
+        # that exist (the hardware list's instances') speak, as before.
         from .commands import _RID_RE
-        got = [(d, self._gps_marker_verdict(d / "readiness.json"))
-               for d in gps.feed_state_dirs(self._paths, consumer) if (d / "readiness.json").exists()]
-        if not got:
+        dirs = self._gps_feed_dirs(comp, consumer, pids) or [d for d in gps.feed_state_dirs(self._paths, consumer)
+                                                             if (d / "readiness.json").exists()]
+        if not dirs:
             return False, "no readiness marker", ""
+        got = [(d, self._gps_marker_verdict(d / "readiness.json")) for d in dirs]
         d, v = next(((d, v) for d, v in got if not v[0]), got[0])
         name = d.parent.parent.name
         return v[0], (f"{name}: " if not v[0] and _RID_RE.fullmatch(name) and len(got) > 1 else "") + v[1], v[2]
+
+    def _gps_feed_dirs(self, comp, consumer: str, pids) -> list:
+        """The state dirs of the feed's running processes (`pids`, else its own process match): each one's --state
+        token when it names this consumer's instance dir, else the bare one; in rid order, no repeats."""
+        from pathlib import Path as _Path
+
+        from .commands import _RID_RE
+        if pids is None:
+            pids = probe_process(self._system, comp.process, self._cmdlines).pids if comp.process else []
+        table = self._cmdlines if self._cmdlines is not None else self._system.procfs.cmdlines()
+        found = {}
+        for pid in pids or ():
+            argv = list(table.get(pid) or ())
+            state = argv[argv.index("--state") + 1] if "--state" in argv[:-1] else ""
+            rid = _Path(state).parent.parent.name if state else ""
+            rid = rid if _RID_RE.fullmatch(rid) and _Path(state) == _Path(gps.bridge_state_dir(
+                self._paths.runtime_root, consumer, rid)) else ""
+            found[rid] = _Path(gps.bridge_state_dir(self._paths.runtime_root, consumer, rid))
+        return [found[r] for r in sorted(found, key=lambda r: int(r[1:]) if r else 0)]
 
     def _gps_marker_verdict(self, marker) -> tuple[bool, str, str]:
         """`_gps_feed_verdict` for one feed's readiness marker."""

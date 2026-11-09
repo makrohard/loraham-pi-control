@@ -1543,7 +1543,7 @@ class LifecycleOpsMixin:
             if post_summary:
                 summary += f"; {post_summary}"
             record(comp, stack, Outcome.VERIFIED, summary)          # K5: no per-stack band marker (13.12.5)
-        self.clear_stale_interactive(keep=self.stack_of(target) or target)
+        self.clear_stale_interactive(keep=instances.key(self.stack_of(target) or target, prep.inst))   # its own marker
         run.pre_marker = _pre_marker
         return run
 

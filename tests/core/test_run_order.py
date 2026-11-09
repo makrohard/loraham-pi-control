@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import marker_fixture
+
 import pytest
 import launch_band_fixture
 import radios_fixture
@@ -100,7 +102,7 @@ def test_interactive_run_shows_block_then_dismiss(tmp_path):
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
     fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": reply})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    svc.mark_interactive("chat", "433")                  # chat is 433-only
+    marker_fixture.mark(svc, "chat", "433")                  # chat is 433-only
     ro = {r["band"]: r for r in svc.radio_overview()}
     block = [s["id"] for s in ro["433"]["interactive"]]
     assert "chat" in block                               # block in its band column
@@ -115,7 +117,7 @@ def test_interactive_box_closes_when_daemon_not_usable(tmp_path):
     # the dashboard box must CLOSE — chat returns to the startable dropdown, not the interactive column.
     # (Reproduces "start chat, then stop the daemon" — the daemon is no longer usable on 433.)
     svc = _svc(tmp_path)                                  # no daemon reachable/usable
-    svc.mark_interactive("chat", "433")
+    marker_fixture.mark(svc, "chat", "433")
     ro = {r["band"]: r for r in svc.radio_overview()}
     assert ro["433"]["interactive"] == []                                # box closed
     assert "chat" in {s["id"] for s in ro["433"]["startable"]}           # back in the dropdown

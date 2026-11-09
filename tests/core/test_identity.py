@@ -6,6 +6,8 @@ resolution path (`identity_resolution`) that every consumer uses."""
 
 from __future__ import annotations
 
+import marker_fixture
+
 import pytest
 import radios_fixture
 
@@ -467,7 +469,7 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
 # ===== external CLOSURE-audit regressions (@ad9e6a8 findings) =====
 
 def _lite_voice_marker(svc, band="868"):
-    svc.mark_interactive("voice", band)
+    marker_fixture.mark(svc, "voice", band)
     return svc
 
 

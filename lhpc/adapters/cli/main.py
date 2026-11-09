@@ -1049,7 +1049,7 @@ def _cmd_meshtastic(target: str, passthrough: list[str]) -> int:
     svc = ControllerService()
     running = instances.running_keys(svc, "meshtastic")
     try:
-        key, api = meshtastic_tool.instance_api(target, running)
+        key, api = meshtastic_tool.instance_api(target, running, passthrough)
     except (ValueError, CommandError) as exc:
         sys.stderr.write(f"ERR  {exc}\n")
         return 2

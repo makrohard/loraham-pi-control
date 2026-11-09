@@ -5,6 +5,8 @@ and the start/plan/status surfaces agree about which of the two is real here."""
 
 from __future__ import annotations
 
+import marker_fixture
+
 import pytest
 import radios_fixture
 
@@ -185,7 +187,7 @@ def test_direct_start_refusal_is_a_preflight_even_with_marker_and_ready_daemon(t
     # before the refusal. The refusal must come before any of that: no feed clearing, no daemon
     # work, no shortcut.
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    svc.mark_interactive("voice", "433")
+    marker_fixture.mark(svc, "voice", "433")
     fed = []
     monkeypatch.setattr(type(svc), "clear_daemon_feed",
                         lambda self, *a, **kw: fed.append(a) or 0, raising=False)
@@ -254,7 +256,7 @@ def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkey
     # restart entries must refuse first — marker, daemon, feed and owner state untouched — and the
     # dry-run must show the real reason, not a plan suggesting the impossible apply.
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    svc.mark_interactive("voice", "433")
+    marker_fixture.mark(svc, "voice", "433")
     touched = []
     for m in ("stop", "clear_daemon_feed"):
         monkeypatch.setattr(type(svc), m,
@@ -427,7 +429,7 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, rea
     # start.
     from lhpc.core.model import RunState
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    assert svc.mark_interactive("voice", "868")
+    assert marker_fixture.mark(svc, "voice", "868")
 
     class _St:                       # snapshot stub: the sidecar TUI is process-detected
         def __init__(self, rs): self.run_state = rs
@@ -436,10 +438,10 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, rea
                                       "loraham-voice-cli": _St(RunState.RUNNING)}})()]})()
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self: snap)
     cleared = svc.clear_stale_interactive(keep="kiss")
-    assert "voice" not in cleared, "a RUNNING terminal sidecar must keep its marker"
+    assert "voice@r2" not in cleared, "a RUNNING terminal sidecar must keep its marker"
     # ...and with the TUI gone, the marker is reaped exactly like chat's.
     snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
-    assert "voice" in svc.clear_stale_interactive(keep="kiss")
+    assert "voice@r2" in svc.clear_stale_interactive(keep="kiss")   # K7: the instance's marker
 
 
 def test_the_868_voice_profile_is_fast_enough_for_real_time_speech():

@@ -68,3 +68,31 @@ def test_k7_a_stale_instance_marker_is_cleared_by_its_file(tmp_path):
     _seed(tmp_path, r1="433", r2="433")
     assert sorted(svc.clear_stale_interactive()) == ["chat@r1", "chat@r2"]     # chat is not running
     assert _markers(tmp_path) == []
+
+
+def test_g1_k7a_2_the_sweep_judges_each_instance_by_its_own_run(tmp_path, monkeypatch):
+    # chat@r2 runs, chat@r1 stopped: r1's stale marker goes, r2's stays; before, both were judged by chat's one
+    # component state (both kept); and a start of chat@r2 keeps only its own marker, not every chat marker
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path)
+    _seed(tmp_path, r1="433", r2="433")
+    snap = svc.build_snapshot()
+    snap.stack("chat").components[svc.stack("chat").main].run_state = RunState.RUNNING
+    monkeypatch.setattr(svc, "build_snapshot", lambda *a, **k: snap)
+    monkeypatch.setattr(instances, "running_keys", lambda _s, sid: ["chat@r2"] if sid == "chat" else [])
+    assert svc.clear_stale_interactive(keep="kiss@r1") == ["chat@r1"] and _markers(tmp_path) == ["chat@r2.show"]
+    _seed(tmp_path, r1="433")
+    assert svc.clear_stale_interactive(keep="chat@r2") == ["chat@r1"]
+
+
+def test_g1_k7a_3_a_left_over_bare_marker_is_no_instances(tmp_path):
+    # a pre-K7 state/interactive/chat.show with a hardware list: chat@r1 stopped is not shown, nor is the stack
+    svc = _svc(tmp_path)
+    d = tmp_path / "state" / "interactive"
+    d.mkdir(parents=True)
+    (d / "chat.show").write_text("433\n")
+    assert svc.interactive_band("chat", Instance("r1", band="433")) is None
+    assert svc.interactive_band("chat") is None
+    svc.dismiss_interactive("chat")                                  # a bare dismiss still removes it
+    assert _markers(tmp_path) == []

@@ -34,11 +34,14 @@ MANAGED_CLI_REL = ("build", "tools", "meshtastic-cli", ".venv", "bin", "meshtast
 LOCAL_API = "127.0.0.1:4403"
 
 
-def instance_api(target: str, running: list) -> tuple[str, str]:
+def instance_api(target: str, running: list, argv=()) -> tuple[str, str]:
     """`meshtastic@rN` -> (its key, its node's API host:port, 4403 + 133 x (N - 1), DEC-W348); a bare `meshtastic`: the
-    one running instance's ("", LOCAL_API when none runs). ValueError when two run and none is named (never a guess).
+    one running instance's ("", LOCAL_API when none runs). ValueError when two run and none is named (never a guess),
+    but only for a command that needs a node (`argv` the forwarded args; help/version need none, G1-K7A 5).
     """
     from .commands import Instance, rid_port
+    if "@" not in target and not _needs_node(split_wrapper_args(list(argv))[1]):
+        return "", LOCAL_API
     if "@" not in target and len(running) > 1:
         raise ValueError(f"{len(running)} Meshtastic instances run ({', '.join(running)}): name one, "
                          f"e.g. `lhpc {running[0]} --info`")

@@ -22,11 +22,14 @@ def markers(svc, stack_id: str) -> list:
 
 
 def band(svc, stack_id: str, inst=None) -> str | None:
-    """The band an interactive app was started on, or None if not active: an instance's own marker (or a bare one: it
-    may be this instance's); without an instance, any instance's (their band when they agree, else "" = marked, band
-    unknown)."""
+    """The band an interactive app was started on, or None if not active: an instance's own marker; without an
+    instance, any instance's (their band when they agree, else "" = marked, band unknown). A bare marker is read only
+    without a hardware list (G1-K7A 3: with one it is a pre-K7 leftover, never an instance's); dismiss and purge still
+    remove it."""
+    from . import radios
     own = getattr(inst, "rid", "")
-    files = [marker(svc, stack_id, inst), marker(svc, stack_id)] if own else markers(svc, stack_id)   # (fail-safe)
+    listed = radios.load(svc._paths).kind != radios.ABSENT
+    files = [marker(svc, stack_id, inst)] if own else [f for f in markers(svc, stack_id) if not listed or "@" in f.stem]
     bands = []
     for f in files:
         try:
@@ -41,7 +44,9 @@ def band(svc, stack_id: str, inst=None) -> str | None:
 def clear_stale(svc, keep: str = "") -> list[str]:
     """Drop the markers of apps that aren't actually running — launched/marked but never run (or since stopped).
     Called when another stack starts so the dash doesn't keep showing a prior interactive app's command block. `keep`
-    is the stack just started (its markers are preserved). Returns the cleared markers' names (`<sid>@<rid>`)."""
+    is the instance just started (`<sid>@<rid>`: its marker; a bare `<sid>`: all of its). Liveness is the instance's
+    (G1-K7A 2): an instance marker stays while its instance runs, or while the component is up with no instance told
+    (an untold process: fail-safe). Returns the cleared markers' names (`<sid>@<rid>`)."""
     idir = svc._paths.runtime_root / "state" / "interactive"
     if not idir.exists():
         return []
@@ -49,8 +54,8 @@ def clear_stale(svc, keep: str = "") -> list[str]:
     live = {cid: st.run_state for ss in svc.build_snapshot().stacks for cid, st in ss.components.items()}
     cleared = []
     for f in idir.glob("*.show"):
-        sid = f.stem.partition("@")[0]                     # K7: <sid>@<rid>.show is the instance's
-        if sid == keep:
+        sid, _, rid = f.stem.partition("@")               # K7: <sid>@<rid>.show is the instance's
+        if f.stem == keep or sid == keep:
             continue
         s = svc.stack(sid)
         # Judge the marker by the COMMAND-BEARING component: the interactive main (chat), or the stack's interactive
@@ -60,7 +65,8 @@ def clear_stale(svc, keep: str = "") -> list[str]:
         if s is not None:
             main = s.main_component
             comp = main if (main and main.interactive) else next((c for c in s.components if c.interactive), None)
-        if not (comp and live.get(comp.id) in up):
+        running = set(instances.running_keys(svc, sid)) if rid else set()
+        if not (comp and live.get(comp.id) in up and (not rid or f.stem in running or not running)):
             svc._safe_unlink(f)
             cleared.append(f.stem)
     return cleared

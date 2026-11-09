@@ -3,6 +3,8 @@ headers, loopback binding, and proof that page loads are read-only."""
 
 from __future__ import annotations
 
+import marker_fixture
+
 
 import pytest
 
@@ -923,7 +925,7 @@ def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch)
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    svc.mark_interactive("chat", "433")             # a stale interactive marker exists
+    marker_fixture.mark(svc, "chat", "433")             # a stale interactive marker exists
     def boom(self, path):
         raise PermissionError("EACCES")
     monkeypatch.setattr(Paths, "safe_unlink", boom)
@@ -949,7 +951,7 @@ def test_interactive_command_block_survives_an_empty_band_marker(tmp_path):
     # so chat silently fell back into the plain start dropdown with no copy-paste block.
     # Every pre-existing test wrote an explicit "433", which is why none of them caught it.
     svc = _overview_433(tmp_path)
-    svc.mark_interactive("chat", "")                 # exactly what the start path writes
+    marker_fixture.mark(svc, "chat", "433", stored="")   # exactly what the start path writes
     row = next(r for r in svc.radio_overview() if r["band"] == "433")
     assert "chat" in [s["id"] for s in row["interactive"]], \
         "an interactive app with a marker must render its command block, not vanish"
