@@ -2,6 +2,7 @@
 row's and a contradicting band is refused; slot 0 is a copy too, on DEC-W16's radio of its operation band. K4ac: the
 hardware list gives the copies (a band's further radios, instances.copy_rids). `instances.resolve` answers through it."""
 
+import pytest
 import radios_fixture
 from lhpc.core import commands, instances, radios
 from lhpc.core.paths import Paths
@@ -174,3 +175,10 @@ def test_g1_b1_re_the_parse_carries_one_record_snapshot_into_its_copy(tmp_path, 
     sid, copy, band, why = instances.parse_target(svc, "kiss@r3", "stop")
     assert why == "" and copy is not None, why
     assert (sid, copy.rid, band) == ("kiss", "r3", "433")
+
+
+@pytest.mark.parametrize("verb", ["start", "restart", "stop"])
+def test_k7_an_empty_radio_id_is_refused_never_the_band_callers_instance(tmp_path, verb):
+    # `kiss@` (G1-C54): before, copy_of(rid="") took the band-caller path and `restart kiss@` ran on r1
+    svc = _svc(tmp_path)
+    assert instances.parse_target(svc, "kiss@", verb) == ("kiss", None, "", "kiss@: name a radio (kiss@<rid>)")

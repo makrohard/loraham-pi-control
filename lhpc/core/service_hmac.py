@@ -12,7 +12,7 @@ import secrets as _secrets
 import sys
 import uuid
 
-from . import jobs
+from . import instances, jobs
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, admission_refusal
@@ -983,6 +983,8 @@ class HmacOpsMixin:
         # 3 + 4. restart the live link (only if it is actually up — else the rebuilt firmware +
         # secret take effect on the next start). Captured ONCE before touching either process.
         was_running = self.stack_running(stack_id)
+        # K7: every running instance (one shared secret, DEC-W384v); none told by its record: the band caller's
+        insts = [instances.resolve(self, k)[1] for k in instances.running_keys(self, stack_id)] or [None]
         for key, target, what in (("bridge", c.id, "bridge"), ("node", node.id, "node")):
             if not was_running:
                 if not _set(key, "skipped"):
@@ -994,12 +996,13 @@ class HmacOpsMixin:
             if not _set(key, "running"):
                 return _persist_failed(f"{key}=running")    # abort BEFORE the restart
             emit(f"Restarting the {what} ({target})…")
-            rr = self.restart(target, apply=True)
+            rrs = [self.restart(target, apply=True, inst=i) for i in insts]
+            rr = next((r for r in rrs if not r.ok), rrs[-1])
             # Detailed restart output goes to the second (task-log) window, framed with a header — the
             # narration keeps only the high-level line + summary (mirrors the firmware step + auto-install).
             _register_step_log(f"Restart the {what} ({target})",
                                f"hmac-apply-{run_id}-{key}.log",
-                               "\n".join(rr.details) or rr.summary)
+                               "\n".join(d for r in rrs for d in (r.details or [r.summary])))
             if not rr.ok:
                 return _fail(key, rr.summary)
             if not _set(key, "done"):

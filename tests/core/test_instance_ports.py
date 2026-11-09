@@ -138,3 +138,36 @@ def test_an_rn_firewall_port_that_leaves_the_range_is_refused():
     with pytest.raises(CommandError, match="65530 on r2 gives 65663"):
         firewall.instance_port(65530, Instance("r2"))
     assert firewall.instance_port(65530, commands.TEMPLATE) == 65530
+
+
+@pytest.mark.parametrize("rid,port", [("r1", "4403"), ("r2", "4536")])
+def test_k7_meshtastics_post_steps_reach_their_own_instances_node(tmp_path, rid, port):
+    # DEC-W384s: region, owner, position and gps mode go to meshtastic@rN's node (its {port:4403}); before, every
+    # step said `--host 127.0.0.1` (the CLI's default 4403), so meshtastic@r2's settings reached r1's node
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    comp = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack("meshtastic") \
+        .component("meshtastic")
+    hosts = [s["argv"][s["argv"].index("--host") + 1] for s in comp.post_steps
+             if s.get("kind") == "exec" and "--host" in s["argv"]]
+    assert len(hosts) == 4
+    assert {commands.expand_argv([h], _C(), {}, _Op(), "/rt", "/src", inst=Instance(rid))[0] for h in hosts} == \
+        {f"127.0.0.1:{port}"}
+
+
+@pytest.mark.parametrize("rid,want", [("r1", ".run/gps-uart1.sock 0"), ("r2", ".run/1/gps-uart1.sock 1"),
+                                      ("r12", ".run/11/gps-uart1.sock 11")])
+def test_k7_a_helpers_instance_number_and_run_dir_follow_the_radio(rid, want):
+    # meshcom@rN's guest is run.sh --instance N - 1, its files in .run/<N - 1>/ (r1: the single-guest .run/)
+    assert Instance(rid).subst(".run/{instance_index_dir}gps-uart1.sock {instance_index}") == want
+    assert commands.TEMPLATE.subst(".run/{instance_index_dir}x {instance_index}") == ".run/x 0"
+
+
+def test_k7_meshcoms_fixture_relay_names_its_own_guests_uart(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    stack = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack("meshcom")
+    relay = next(c for c in stack.components if c.process and "gps-relay.py" in c.process.all_args)
+    assert [Instance("r2").subst(t) for t in relay.process.instance_arg] == ["--uart", ".run/1/gps-uart1.sock"]

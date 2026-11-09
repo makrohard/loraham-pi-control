@@ -347,7 +347,7 @@ class StopOpsMixin:
         # Clear the interactive marker after the target's OWN verified cessation — even if the
         # later daemon-release fails, a stopped client must never look running. (K6, 13.12.5: no band marker.)
         if sid and own_ok:
-            self.dismiss_interactive(sid)
+            self.dismiss_interactive(sid, inst)             # K7: the stopped instance's own marker (a band caller's: its band's)
         # A CLIENT stop also takes down the non-daemon dependency stacks it ALONE was using
         # (the KISS TNC under graywolf) — the chain its start pulled up comes down with it.
         # Internal (_operator=False), so released stacks are never tombstoned; each release
@@ -362,7 +362,8 @@ class StopOpsMixin:
         if own_ok and not target_is_daemon and release_daemon and _own_stopped and _target_is_stack:
             for dep_sid in self._dep_stacks_to_release(_stk, sid):
                 dep_stk = self.stack(dep_sid)
-                rres = self.stop(dep_sid, apply=True, _operator=False)
+                rres = self.stop(dep_sid, apply=True, _operator=False,     # K7: the dependency on the same radio
+                                 inst=instances.resolve(self, f"{dep_sid}@{inst.rid}")[1] if getattr(inst, "rid", "") else None)
                 results.append(CompResult(
                     component=(dep_stk.main if dep_stk else dep_sid), stack=dep_sid,
                     action="stop",

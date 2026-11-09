@@ -1039,22 +1039,32 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
-def _cmd_meshtastic(passthrough: list[str]) -> int:
-    """`lhpc meshtastic <upstream args>` — a thin guarded passthrough to the managed Meshtastic
-    CLI. Intercepted before the main parser so upstream flags (incl. --help) reach it verbatim."""
-    from lhpc.core import meshtastic_tool
+def _cmd_meshtastic(target: str, passthrough: list[str]) -> int:
+    """`lhpc meshtastic[@rN] <upstream args>` — a thin guarded passthrough to the managed Meshtastic
+    CLI, against that instance's node (bare: the one running instance's). Intercepted before the main parser so
+    upstream flags (incl. --help) reach it verbatim."""
+    from lhpc.core import instances, meshtastic_tool
+    from lhpc.core.commands import CommandError, Instance
     from lhpc.core.paths import resolve_paths
     svc = ControllerService()
+    running = instances.running_keys(svc, "meshtastic")
+    try:
+        key, api = meshtastic_tool.instance_api(target, running)
+    except (ValueError, CommandError) as exc:
+        sys.stderr.write(f"ERR  {exc}\n")
+        return 2
+    inst = Instance(key.partition("@")[2]) if key else None
     return meshtastic_tool.run(
         passthrough,
         runtime_root=resolve_paths().runtime_root,
-        stack_running=svc.stack_running,
+        stack_running=lambda _sid: bool(key) and key in running,
+        local_api=api,
         confirm=_confirm,
         # Reassert LHPC-owned region/name/GPS after a broad local mutator by re-running the stack's
         # post-start steps in place (no restart). require_all=True escalates the normally-optional
         # node-identity step to gating, so `.ok` PROVES name/short were reasserted too — the wrapper
         # must never report a false success.
-        reconverge=lambda: svc.poststart("meshtastic", apply=True, require_all=True).ok,
+        reconverge=lambda: svc.poststart("meshtastic", apply=True, require_all=True, inst=inst).ok,
     )
 
 
@@ -1075,8 +1085,8 @@ def _run(argv: list[str] | None = None) -> int:
     # so it is intercepted BEFORE the main parser — which would otherwise claim --help or reject
     # unknown upstream options. Everything after `meshtastic` is passed through untouched.
     raw = sys.argv[1:] if argv is None else list(argv)
-    if raw and raw[0] == "meshtastic":
-        return _cmd_meshtastic(raw[1:])
+    if raw and raw[0].partition("@")[0] == "meshtastic":
+        return _cmd_meshtastic(raw[0], raw[1:])
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
     if extra:

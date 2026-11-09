@@ -1281,8 +1281,8 @@ main = "meshtastic"
     # guard should the expansion ever be empty). It comes FIRST: its save
     # does not re-arm meshtasticd's 7 s reboot, so after every save that does, the next step
     # follows at once.
-    { kind = "exec", label = "fixed position", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "{gps_fixed_args}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"], skip_if_empty = "{gps_fixed_args}" },
-    { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    { kind = "exec", label = "fixed position", required = true, argv = ["meshtastic", "--host", "127.0.0.1:{port:4403}", "{gps_fixed_args}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"], skip_if_empty = "{gps_fixed_args}" },
+    { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1:{port:4403}", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
     # GPS mode is a DEVICE setting in the node database, NOT the YAML: `GPS: SerialPath:` alone
     # does nothing, because portduino defaults `position.gps_mode` to NOT_PRESENT and the YAML
     # `Config:` section cannot set it (verified on hardware — before this step meshtasticd
@@ -1292,8 +1292,8 @@ main = "meshtastic"
     # start reported as successful while the node kept the OPPOSITE GPS state: a node that
     # silently beacons no position, or one that keeps beaconing after GPS was turned off.
     # `{gps_mode}` is controller-owned, resolved from the ONE global `[gps]` plan.
-    { kind = "exec", label = "gps mode", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "position.gps_mode", "{gps_mode}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
-    { kind = "exec", label = "node identity", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    { kind = "exec", label = "gps mode", required = true, argv = ["meshtastic", "--host", "127.0.0.1:{port:4403}", "--set", "position.gps_mode", "{gps_mode}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    { kind = "exec", label = "node identity", required = true, argv = ["meshtastic", "--host", "127.0.0.1:{port:4403}", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). lhpc runs/stops it WITHOUT root ONLY WHEN you are in the spi+gpio groups — see System dependencies below; grant with the shown command (then log out/in or reboot) if missing. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
@@ -1916,7 +1916,7 @@ main = "meshcom-qemu"
   start_order = 2
   # FIXTURE ONLY. Its gpsd mode is deliberately unused: it is loopback-only and therefore
   # cannot express three of the four global sources. Production GPS comes from `meshcom-gps`.
-  run = "python3 scripts/gps-relay.py --mode fixture --fixture fixtures/gps/valid_fix.nmea --uart .run/gps-uart1.sock {rate} {loop}"
+  run = "python3 scripts/gps-relay.py --mode fixture --fixture fixtures/gps/valid_fix.nmea --uart .run/{instance_index_dir}gps-uart1.sock {rate} {loop}"
   # MUST precede the [[…param]] sub-tables (TOML binds trailing bare keys to the LAST table).
   note = "TEST facility — replays a synthetic fixture, NOT your real position. Start before the node: GPS init is one-shot. For real position use `lhpc gps`."
 
@@ -1943,7 +1943,7 @@ main = "meshcom-qemu"
     branch = "main"
 
     [stack.component.process]
-    instance_arg = ["--uart", ".run/gps-uart1.sock"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--uart", ".run/{instance_index_dir}gps-uart1.sock"]   # A §2.3: this instance's exact argv token pair (K7: its own guest's UART, run.sh .run/<n>/)
     exec_name = "python3"
     all_args = ["gps-relay.py"]
 

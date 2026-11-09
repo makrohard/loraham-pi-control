@@ -1456,7 +1456,7 @@ def _start_meshtastic_with(tmp_path, monkeypatch, states, *, source="auto", feed
     monkeypatch.setattr(instances, "instance_runs",
                         lambda svc, comp, inst, band: states.get(comp.id) in (RunState.RUNNING, RunState.DEGRADED))
     monkeypatch.setattr(instances, "endpoint_statuses", lambda svc, cs, inst: list(cs.endpoints or ()))   # as stubbed
-    monkeypatch.setattr(ControllerService, "gps_feed_state", lambda self, comp: dict(feed or {}))
+    monkeypatch.setattr(ControllerService, "gps_feed_state", lambda self, comp, inst=None: dict(feed or {}))
     monkeypatch.setattr(service_lifecycle_ops.time, "sleep", lambda s: None)
     fake.calls.clear()
     res = svc.start("meshtastic", apply=True)

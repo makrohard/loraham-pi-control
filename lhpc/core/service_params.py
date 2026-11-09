@@ -1591,7 +1591,7 @@ class ParamsConfigMixin:
         # situation reached by another route.
         if st is not None and (getattr(main, "interactive", False)
                                or self.gui_fallback_active(st)):
-            ib = self.interactive_band(stack_id)
+            ib = self.interactive_band(stack_id, inst)          # K7: the instance's own marker
             if ib is not None and (not rid or not ib or ib == inst.band):
                 return True, ib
         return False, ""
@@ -2148,7 +2148,7 @@ class ParamsConfigMixin:
         # describe a source the lifecycle did not plan for. Empty when GPS is off or when the
         # consumer needs no device (`fixed` uses the app's own fixed-position support), and the
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
-        gps_values = self._gps_config_values(target)
+        gps_values = self._gps_config_values(target, inst)            # K7: its instance's feed
 
         # W3-13: a client's socket keys name the copy's radio (slot 0's: DEC-W16's), else its band's one; unresolved, it refuses
         _rids, _sid, _sb = {}, self._owner_stack_id(target), next(iter(_instances.stack_bands(self._owner_stack(target))), "")

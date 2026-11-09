@@ -191,6 +191,8 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
+    if not rid:                                  # `kiss@`: never the band caller's instance (G1-C54)
+        return sid, None, "", f"{name}@: name a radio ({name}@<rid>)"
     run = recorded(svc, sid)                     # ONE verified snapshot for the parse and its instance (G1-B1-RE)
     inst, why = copy_of(svc, sid, rid, run=run)
     if inst is None and why.endswith("is not in the hardware list"):
@@ -306,10 +308,11 @@ def elsewhere(svc, target_rid: str):
 def saved_insts(svc, sid: str) -> list:
     """The instances whose own settings a stack-wide entry means (each its own, K6): every radio of the stack's bands,
     a disabled one too (G1-K6C N3: its file is what it reads when it returns); [None] (the global store) without a
-    hardware list."""
-    bands = stack_bands(svc.stack(sid))
-    return [commands.Instance(r.id, band=r.band) for r in sorted(radios.load(svc._paths).radios, key=lambda r: int(r.id[1:]))
-            if not bands or r.band in bands] or [None]
+    hardware list; [] for a list without a radio of its bands (G1-K6C-RE 3: the caller refuses, never the global file)."""
+    state, bands = radios.load(svc._paths), stack_bands(svc.stack(sid))
+    return [None] if state.kind == radios.ABSENT else [
+        commands.Instance(r.id, band=r.band) for r in sorted(state.radios, key=lambda r: int(r.id[1:]))
+        if not bands or r.band in bands]
 
 
 def port_of_default(svc, p, inst) -> str:

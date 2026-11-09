@@ -466,7 +466,7 @@ def test_a_live_source_writes_the_bridge_position_socket(tmp_path, fake_gpsd):
     svc.write_config_files("meshcore", position={})
     text = _generated(tmp_path)
     assert "socket" in text
-    assert "state/gps/meshcore" in text
+    assert "state/r2/gps/meshcore/position.sock" in text            # K7: meshcore@r2's own feed (was the shared one)
     assert "position.sock" in text
 
 

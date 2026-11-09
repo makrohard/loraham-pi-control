@@ -18,7 +18,7 @@ from .snapshot_memo import invalidates_snapshot
 
 class GpsOpsMixin:
 
-    def _gps_config_values(self, target: str) -> dict:
+    def _gps_config_values(self, target: str, inst=None) -> dict:
         """Controller-owned `{gps_*}` values for a stack's generated config.
 
         These come from the ONE global plan, which is why the consuming params are `hidden`
@@ -45,12 +45,12 @@ class GpsOpsMixin:
                 # continuously, so pointing it at the hardware would put two readers on one
                 # receiver. The bridge owns the device (and holds the exclusive claim) and
                 # republishes it. Empty for `fixed`, which needs no feed at all.
-                device = (bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHCORE)
+                device = (bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHCORE, getattr(inst, "rid", ""))
                           if plan.needs_bridge(CONSUMER_MESHCORE) else "")
             elif plan.source == "nmea":
                 device = plan.device
             elif owner == CONSUMER_MESHTASTIC and plan.needs_bridge(CONSUMER_MESHTASTIC):
-                device = bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHTASTIC)
+                device = bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHTASTIC, getattr(inst, "rid", ""))  # K7
         return {
             "{gps_source}": plan.source,
             "{gps_host}": plan.host or "127.0.0.1",
@@ -364,9 +364,9 @@ class GpsOpsMixin:
         except Exception:
             return None
 
-    def _gps_feed_monitor(self, consumer: str) -> dict | None:
-        """The owning feed's monitor snapshot, or None when its evidence cannot be trusted
-        (stale marker, dead pid, missing or broken socket)."""
+    def _gps_feed_monitor(self, consumer: str, state_dir: str = "") -> dict | None:
+        """The owning feed's monitor snapshot (the feed in `state_dir`, K7: one per instance), or None when its evidence
+        cannot be trusted (stale marker, dead pid, missing or broken socket)."""
         import json
         import os as _os
         import socket as _socket
@@ -374,7 +374,7 @@ class GpsOpsMixin:
 
         from . import runtime_fs
         from .gps import bridge_state_dir, marker_is_fresh, marker_owner_pid
-        state_dir = bridge_state_dir(self._paths.runtime_root, consumer)
+        state_dir = state_dir or bridge_state_dir(self._paths.runtime_root, consumer)
         try:
             marker = json.loads(runtime_fs.read_text(self._paths, Path(state_dir) / "readiness.json"))
         except Exception:
@@ -418,7 +418,8 @@ class GpsOpsMixin:
         natives = [h for h in holders if h["kind"] == "native"]
         if feeds:
             h = feeds[0]
-            got = None if h["unknown"] else self._gps_feed_monitor(h["consumer"])
+            got = None if h["unknown"] else next((g for d in _gps.feed_state_dirs(self._paths, h["consumer"])
+                                                  if (g := self._gps_feed_monitor(h["consumer"], str(d))) is not None), None)
             if got is None:
                 held["note"] = f"feed running ({h['cid']}); monitor unavailable"
                 return held

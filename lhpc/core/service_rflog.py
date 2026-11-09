@@ -187,10 +187,11 @@ class RflogOpsMixin:
         return {"band": shown, "bands": bands, "stacks": stacks}
 
     def _rflog_switch_value(self, e) -> str:
-        """The owner's switch: "on"/"off" when every instance agrees, else "mixed" (K6: one per instance)."""
+        """The owner's switch: "on"/"off" when every instance agrees, else "mixed" (K6: one per instance); "" without
+        a radio for it (G1-K6C-RE 3)."""
         values = {_rflog.ON if _rflog.is_on(self._resolved_param_value(
             e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "", inst=i)) else _rflog.OFF for i in instances.saved_insts(self, e.owner)}
-        return values.pop() if len(values) == 1 else "mixed"
+        return values.pop() if len(values) == 1 else "mixed" if values else ""
 
     def rflog_switch(self, surface: str) -> dict | None:
         """The shown stack's switch as the log page's bottom form renders it: the owner, its
@@ -203,13 +204,17 @@ class RflogOpsMixin:
                 "restart_required": _rflog.RF_LOG_PARAM in (marker.get("params") or [])}
 
     def rflog_logging_state(self) -> str:
-        """Every installed stack's switch at once: "on" or "off" when they agree, else "mixed"."""
-        values = {self._rflog_switch_value(e) for e in self._rflog_entries()}
-        return values.pop() if len(values) == 1 else "mixed"
+        """Every installed stack's switch at once: "on" or "off" when they agree, else "mixed" (a stack without a radio
+        is left out)."""
+        values = {self._rflog_switch_value(e) for e in self._rflog_entries()} - {""}
+        return values.pop() if len(values) == 1 else "mixed" if values else ""
 
     def _rflog_save(self, owner: str, key: str, v: str) -> ActionResult:
         """The switch on every instance of `owner` through the one-key bundle path (its own file and restart marker)."""
         results = [(i, self.save_config_bundle(owner, values={key: v}, inst=i)) for i in instances.saved_insts(self, owner)]
+        if not results:                       # G1-K6C-RE 3: never the global file, which no instance reads
+            return ActionResult(False, f"RF log not saved: no radio for '{owner}' in the hardware list",
+                                data={"reason": "no-radio"})
         if all(r.ok for _i, r in results):
             return results[0][1]
         names = {ok: ", ".join(instances.key(owner, i) for i, r in results if r.ok == ok) or "none" for ok in (True, False)}
@@ -227,7 +232,7 @@ class RflogOpsMixin:
                                 data={"reason": "invalid-choice"})
         owners = dict.fromkeys((e.owner, e.key) for e in self._rflog_entries())
         results = [(owner, self._rflog_save(owner, key, v)) for owner, key in owners]
-        ok = all(r.ok for _o, r in results)
+        ok = all(r.ok or r.data.get("reason") == "no-radio" for _o, r in results)     # a stack without a radio: skipped
         return ActionResult(ok, f"RF logging {v} on every stack." if ok
                             else "RF logging: not every stack was saved.",
                             [f"{owner}: {'saved' if r.ok else r.summary}" for owner, r in results])

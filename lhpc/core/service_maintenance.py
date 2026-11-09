@@ -1021,7 +1021,9 @@ class MaintenanceOpsMixin:
             notes.append("  [restart] skipped — the stack was stopped during the fetch "
                          "(operator stop preserved)")
         elif was_running:
-            res = self.restart(target, apply=True)
+            rs = [self.restart(target, apply=True, inst=instances.resolve(self, k)[1])     # K7: every running instance
+                  for k in instances.running_keys(self, target)] or [self.restart(target, apply=True)]
+            res = next((r for r in rs if not r.ok), rs[-1])
             restart_ok = res.ok
             notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
         # A failed restart leaves the station OFFLINE: not ok (non-zero exit, a console warning).
@@ -2265,9 +2267,9 @@ class MaintenanceOpsMixin:
                    and any(cs.run_state in LIVE for cs in ss.components.values())]
         daemons = [ss.stack.id for ss in snap.stacks if ss.stack.main == self.DAEMON_ID
                    and any(cs.run_state in LIVE for cs in ss.components.values())]
-        for sid in clients:
-            res = self.stop(sid, apply=True, _operator=False)
-            details.append(f"  stop {sid}: {res.summary}")
+        for sid, key in [(s, k) for s in clients for k in instances.stop_keys(self, s) or [s]]:   # K7: each instance
+            res = self.stop(sid, apply=True, _operator=False, inst=instances.resolve(self, key)[1] if "@" in key else None)
+            details.append(f"  stop {key}: {res.summary}")
             if not res.ok:
                 return ActionResult(False, f"Client stack '{sid}' did not stop cleanly — NOT stopping "
                                     "the shared daemon, and refusing to remove controller state.",
@@ -2638,7 +2640,7 @@ class MaintenanceOpsMixin:
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids}
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
-        markers = [self._interactive_marker(sid), self._band_marker(sid),
+        markers = [*self._interactive_markers(sid), self._band_marker(sid),           # K7: every instance's marker
                    known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),   # K5: and each instance's, also a removed radio's
                    *sorted(restart_required.marker_path(self._paths, sid).parent.glob(f"{sid}@r*.json")),

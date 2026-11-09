@@ -334,12 +334,12 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
     # No start marker: fall back to the launch band, then the DECLARED primary —
     # never "true for every supported band".
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
-    monkeypatch.setattr(svc, "interactive_band", lambda sid: None)
+    monkeypatch.setattr(svc, "interactive_band", lambda sid, inst=None: None)
     assert svc.runs_on_band("reticulum", "868") is True
     assert svc.runs_on_band("reticulum", "433") is False
 
     # An interactive app launched on 433 is the evidence when no marker exists.
-    monkeypatch.setattr(svc, "interactive_band", lambda sid: "433")
+    monkeypatch.setattr(svc, "interactive_band", lambda sid, inst=None: "433")
     assert svc.runs_on_band("reticulum", "433") is True
     assert svc.runs_on_band("reticulum", "868") is False
 
@@ -647,7 +647,7 @@ def test_an_unknown_band_claims_every_possible_band(monkeypatch):
 
     svc = ControllerService()
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
-    monkeypatch.setattr(svc, "interactive_band", lambda sid: None)
+    monkeypatch.setattr(svc, "interactive_band", lambda sid, inst=None: None)
 
     # stubbed both ways: the real check is a full system snapshot scan; this test is about
     # band arbitration, not process discovery.

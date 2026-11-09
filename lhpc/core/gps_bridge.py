@@ -530,11 +530,11 @@ class MonitorServer:
     socket is created under the umask — and the socket is 0600.
     """
 
-    def __init__(self, consumer: str, paths=None):
+    def __init__(self, consumer: str, paths=None, rid: str = ""):
         self.consumer = consumer
         self.paths = paths
         self.snapshot = NmeaSnapshot()
-        self.path = os.path.join(bridge_state_dir(paths.runtime_root, consumer), "monitor.sock") \
+        self.path = os.path.join(bridge_state_dir(paths.runtime_root, consumer, rid), "monitor.sock") \
             if paths is not None else ""
         self._tmp = os.path.join(os.path.dirname(self.path), ".monitor.new") if self.path else ""
         self._server: socket.socket | None = None
@@ -985,13 +985,13 @@ def run(consumer: str, paths, stop=None, state: str = "") -> int:
     if consumer not in FEED_COMPONENTS:
         _log(f"unknown consumer {consumer!r}")
         return EXIT_CONFIG
-    # K4b: an instance's token is state/<rid>/gps/<consumer>; it names the consumer's one feed (its files stay in
-    # bridge_state_dir: one bridge per consumer until K7)
+    # K7: an instance's token is state/<rid>/gps/<consumer>, and its files live there (one feed per instance);
+    # the bare state/gps/<consumer> is a feed without a radio
     from .commands import _RID_RE
-    st, base = os.path.normpath(state or "."), bridge_state_dir(paths.runtime_root, consumer)
+    st = os.path.normpath(state or ".")
     rid = os.path.basename(os.path.dirname(os.path.dirname(st)))
-    own = os.path.join(str(paths.runtime_root), "state", rid, "gps", consumer) if _RID_RE.fullmatch(rid) else base
-    if state and st not in (os.path.normpath(base), os.path.normpath(own)):
+    rid = rid if state and _RID_RE.fullmatch(rid) else ""
+    if state and st != os.path.normpath(bridge_state_dir(paths.runtime_root, consumer, rid)):
         _log(f"--state {state!r} is not {consumer}'s state dir")
         return EXIT_CONFIG
 
@@ -1006,10 +1006,10 @@ def run(consumer: str, paths, stop=None, state: str = "") -> int:
         _log(f"GPS source is off ({plan.reason or 'not configured'}) — nothing to serve")
         return EXIT_CONFIG
 
-    link = bridge_endpoint_path(paths.runtime_root, consumer)
+    link = bridge_endpoint_path(paths.runtime_root, consumer, rid)
     # Readiness always lives in OUR state dir, never beside the endpoint: for MeshCom the
     # endpoint belongs to QEMU's source tree, which is not ours to write into.
-    ready = Readiness(os.path.join(bridge_state_dir(paths.runtime_root, consumer),
+    ready = Readiness(os.path.join(bridge_state_dir(paths.runtime_root, consumer, rid),
                                    "readiness.json"), paths)
     kind = plan.output_kind(consumer)
     if kind == OUT_PTY:
@@ -1042,7 +1042,7 @@ def run(consumer: str, paths, stop=None, state: str = "") -> int:
             # Only this branch gets the monitor: the feed owns a serial receiver the console
             # cannot safely read itself. gpsd and fixed feeds are untouched (the console is its
             # own gpsd client; fixed values come from config). Best effort, never gating.
-            monitor = MonitorServer(consumer, paths)
+            monitor = MonitorServer(consumer, paths, rid)
             monitor.publish()
             try:
                 _pump(sig, _pump_nmea, plan.device, plan.nmea_baud, out, ready, stop,

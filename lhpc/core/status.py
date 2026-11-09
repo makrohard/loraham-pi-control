@@ -329,16 +329,27 @@ class StatusProber:
 
         Read-only and failure-tolerant: this runs on every status GET.
         """
-        import time
-        from pathlib import Path as _Path
-
-        from . import runtime_fs
-        from .gps import bridge_state_dir, consumer_for_component
+        from .gps import consumer_for_component
         # DERIVED from the ONE feed mapping — see gps.FEED_COMPONENTS.
         consumer = consumer_for_component(comp.id)
         if not consumer:
             return True, "not a GPS feed", ""
-        marker = _Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
+        # K7: one feed per instance (state/<rid>/gps/<consumer>); the component is healthy when every instance's feed
+        # that left a marker is, and an unhealthy one is named. No marker at all: as before.
+        from .commands import _RID_RE
+        got = [(d, self._gps_marker_verdict(d / "readiness.json"))
+               for d in gps.feed_state_dirs(self._paths, consumer) if (d / "readiness.json").exists()]
+        if not got:
+            return False, "no readiness marker", ""
+        d, v = next(((d, v) for d, v in got if not v[0]), got[0])
+        name = d.parent.parent.name
+        return v[0], (f"{name}: " if not v[0] and _RID_RE.fullmatch(name) and len(got) > 1 else "") + v[1], v[2]
+
+    def _gps_marker_verdict(self, marker) -> tuple[bool, str, str]:
+        """`_gps_feed_verdict` for one feed's readiness marker."""
+        import time
+
+        from . import runtime_fs
         try:
             got = runtime_fs.loads_json(runtime_fs.read_text_regular(self._paths, marker,
                                                                     max_bytes=4096))

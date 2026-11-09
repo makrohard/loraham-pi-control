@@ -76,7 +76,8 @@ Position comes from the global setting ([GPS](../gps.md)); `use_gps` only opts t
 ## Command line (`lhpc meshtastic`)
 
 `lhpc meshtastic <args>` runs the managed Meshtastic CLI against this box's node — a guarded
-passthrough (`lhpc meshtastic --help` shows the upstream reference). The Dashboard lists it as the
+passthrough (`lhpc meshtastic --help` shows the upstream reference). With two instances running, name one:
+`lhpc meshtastic@r2 --info` talks to meshtastic@r2's node (its port, 4403 + 133 × (n − 1)). The Dashboard lists it as the
 on-demand component *Meshtastic CLI*; it is never auto-started.
 
 ```text

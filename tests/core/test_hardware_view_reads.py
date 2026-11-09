@@ -12,7 +12,8 @@ from lhpc.core.services import ControllerService
 
 ROWS = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"))
 RUNNING = (("kiss", "loraham-kiss-tnc", "r1"), ("meshcore", "meshcore-node", "r2"), ("chat", "loraham-chat", "r1"))
-BOUND = 150         # measured: 87 here; 3119 on 97d39408 (the defect); the old order of a whole overlap test: 151
+BOUND = 160         # measured: 149 on 15849daf, 152 with K7 (one read per GPS feed's verdict, 3 feeds: each
+                    # instance's feed, gps.feed_state_dirs); 3119 on 97d39408 (the defect); was 87 at the bound's start
 
 
 def test_one_hardware_view_reads_the_list_a_bounded_number_of_times(tmp_path, monkeypatch):

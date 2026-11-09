@@ -16,6 +16,7 @@ from . import (
     daemon_control,
     gps,
     instances,
+    interactive_markers,
     procident,
     radio_start,
     radios,
@@ -148,7 +149,7 @@ class LifecycleOpsMixin:
         return [c.message for c in conflicts
                 if comp.id in c.holders and c.observed and not c.advisory]
 
-    def gps_feed_state(self, comp) -> dict:
+    def gps_feed_state(self, comp, inst=None) -> dict:
         """The feed's own readiness marker, or {} when absent/unreadable.
 
         Read from the marker rather than probed: whether a POSITION is flowing is something
@@ -159,7 +160,7 @@ class LifecycleOpsMixin:
         consumer = consumer_for_component(comp.id)
         if not consumer:
             return {}
-        marker = Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
+        marker = Path(bridge_state_dir(self._paths.runtime_root, consumer, getattr(inst, "rid", ""))) / "readiness.json"   # K7
         try:
             raw = runtime_fs.read_text_regular(self._paths, marker, max_bytes=4096)
             got = runtime_fs.loads_json(raw)
@@ -182,7 +183,7 @@ class LifecycleOpsMixin:
         pid = gps.marker_owner_pid(got)
         return pid is not None and procident.pid_exists_signal0(pid)
 
-    def _gps_feed_admission(self, comp) -> tuple[bool, str]:
+    def _gps_feed_admission(self, comp, inst=None) -> tuple[bool, str]:
         """The START gate's verdict on a GPS feed: `_gps_feed_ready`, softened for `auto`.
 
         Freezing the auto verdict was not enough — a gpsd that disappeared (or
@@ -196,23 +197,23 @@ class LifecycleOpsMixin:
         dead feed process or unpublished marker still fails normally — only the two
         upstream-missing states are soft.
         """
-        ready_ok, ev = self._gps_feed_ready(comp)
+        ready_ok, ev = self._gps_feed_ready(comp, inst)
         if ready_ok:
             return True, ev
         if getattr(getattr(self.config(), "gps", None), "source", "") == "auto":
-            st = self.gps_feed_state(comp) or {}
+            st = self.gps_feed_state(comp, inst) or {}
             if str(st.get("state", "")) in ("starting", "source-lost"):
                 return True, ("running WITHOUT position (auto: "
                               f"{st.get('detail') or st.get('state')}; the feed stays up "
                               "and reconnects if gpsd delivers later)")
         return False, ev
 
-    def _gps_feed_ready(self, comp) -> tuple[bool, str]:
+    def _gps_feed_ready(self, comp, inst=None) -> tuple[bool, str]:
         """(ok, evidence) for a GPS feed at START time, polled within the readiness budget."""
         budget = getattr(comp, "readiness_timeout", 0.0) or self.ENDPOINT_VERIFY_TIMEOUT_S
         waited, last = 0.0, "no readiness marker"
         while True:
-            st = self.gps_feed_state(comp)
+            st = self.gps_feed_state(comp, inst)
             state = str(st.get("state", "")) if st else ""
             if state == "ready":
                 return True, f"position source live ({st.get('sentences', 0)} sentences)"
@@ -1099,8 +1100,11 @@ class LifecycleOpsMixin:
             prelude = []
             unstopped = []
 
-            def stop_owner(o, b=""):
-                ores = self.stop(o, apply=True, _operator=False, band=b)
+            def stop_owner(o, b=""):                  # K7: a holder instance `<sid>@<rid>` is stopped as itself
+                sid_o, _, rid_o = o.partition("@")
+                o = sid_o if rid_o == "<rid>" else o   # a holder no record tells: its stack, as before
+                ores = self.stop(sid_o, apply=True, _operator=False, band=b,
+                                 inst=instances.resolve(self, o)[1] if "@" in o else None)
                 name = f"'{o}'" + (f" on {b}" if b else "")
                 if ores.ok:
                     prelude.append(f"  [stopped] conflicting stack {name}")
@@ -1113,7 +1117,7 @@ class LifecycleOpsMixin:
             # on every band (finding 140). Then the daemon only on the radio bands still held —
             # stopping an app that ran on the daemon often releases its band already.
             daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
-            for o in sorted({bl["holder_stack"] for bl in blockers} - {daemon_sid}):
+            for o in instances.holder_stops(self, [bl for bl in blockers if bl["holder_stack"] != daemon_sid], daemon_sid):
                 stop_owner(o)
             if not unstopped and any(bl["holder_stack"] == daemon_sid for bl in blockers):
                 left = [bl for bl in self.run_blockers(target, band, radio, prep.inst)
@@ -1209,7 +1213,7 @@ class LifecycleOpsMixin:
             # source is missing runs without position, so it is already running, left as it is.
             if state == RunState.DEGRADED and comp.id != self.DAEMON_ID:
                 if str(getattr(comp, "readiness", "")) == "gps-feed":
-                    feed_ok, ev = self._gps_feed_admission(comp)
+                    feed_ok, ev = self._gps_feed_admission(comp, prep.inst)
                     if feed_ok:
                         record(comp, stack, Outcome.ALREADY_HEALTHY, f"already running ({ev})")
                         continue
@@ -1394,7 +1398,7 @@ class LifecycleOpsMixin:
                         record(comp, stack, Outcome.BLOCKED,
                                f"interactive start blocked — pre-start setup failed: {exc}")
                         continue
-                marked = self.mark_interactive(stack.id, cfg_band)
+                marked = self.mark_interactive(stack.id, cfg_band, prep.inst)
                 blocker = self.install_blocker(comp)
                 marker_note = ("" if marked else
                                " (note: interactive marker could not be persisted — the "
@@ -1501,7 +1505,7 @@ class LifecycleOpsMixin:
                 # report no position with no indication why. Verified against the marker the
                 # feed writes from its upstream, never against the endpoint path existing.
                 # (`auto` softens exactly the upstream-missing states — see _gps_feed_admission.)
-                ready_ok, ev = self._gps_feed_admission(comp)
+                ready_ok, ev = self._gps_feed_admission(comp, prep.inst)
                 if not ready_ok:
                     cleanup = life.stop(comp, band=cfg_band, rid=inst.rid or None)
                     record(comp, stack, Outcome.UNVERIFIED,
@@ -2341,59 +2345,32 @@ class LifecycleOpsMixin:
         except (OSError, _PCE):
             return False
 
-    def _interactive_marker(self, stack_id: str):
-        sid = validators.path_component(stack_id, field="stack id")
-        return self._paths.under("state", "interactive", f"{sid}.show")
+    def _interactive_marker(self, stack_id: str, inst=None):
+        return interactive_markers.marker(self, stack_id, inst)
 
-    def mark_interactive(self, stack_id: str, band: str = "") -> bool:
+    def _interactive_markers(self, stack_id: str) -> list:
+        return interactive_markers.markers(self, stack_id)
+
+    def mark_interactive(self, stack_id: str, band: str = "", inst=None) -> bool:
         """Remember that the operator asked to run an interactive app (so the dash
-        shows its terminal-command block); stores the chosen band. Returns False if the
-        marker could not be persisted."""
-        return self._safe_marker_write(self._interactive_marker(stack_id), band)
+        shows its terminal-command block); stores the chosen band, in the instance's own
+        marker (K7). Returns False if the marker could not be persisted."""
+        return self._safe_marker_write(self._interactive_marker(stack_id, inst), band)
 
-    def interactive_band(self, stack_id: str) -> str | None:
-        """The band an interactive app was started on, or None if not active."""
-        from . import runtime_fs
-        try:
-            return runtime_fs.read_text(self._paths, self._interactive_marker(stack_id)).strip()
-        except (OSError, ValueError):       # missing/unreadable/symlinked -> not active
-            return None
+    def interactive_band(self, stack_id: str, inst=None) -> str | None:
+        """The band an interactive app was started on, or None if not active (interactive_markers.band)."""
+        return interactive_markers.band(self, stack_id, inst)
 
     @invalidates_snapshot
-    def dismiss_interactive(self, stack_id: str) -> None:
-        self._safe_unlink(self._interactive_marker(stack_id))
+    def dismiss_interactive(self, stack_id: str, inst=None) -> None:
+        """An instance's own marker; without one, every marker of the stack (K7)."""
+        for f in ([self._interactive_marker(stack_id, inst)] if getattr(inst, "rid", "")
+                  else self._interactive_markers(stack_id)):
+            self._safe_unlink(f)
 
     def clear_stale_interactive(self, keep: str = "") -> list[str]:
-        """Drop interactive markers for apps that aren't actually running — they
-        were launched/marked but never run (or since stopped). Called when another
-        stack starts so the dash doesn't keep showing a prior interactive app's
-        command block. `keep` is the stack just started (its marker is preserved)."""
-        idir = self._paths.runtime_root / "state" / "interactive"
-        if not idir.exists():
-            return []
-        up = (RunState.RUNNING, RunState.DEGRADED)
-        live = {cid: st.run_state for ss in self.build_snapshot().stacks
-                for cid, st in ss.components.items()}
-        cleared = []
-        for f in idir.glob("*.show"):
-            sid = f.stem
-            if sid == keep:
-                continue
-            s = self.stack(sid)
-            # Judge the marker by the COMMAND-BEARING component: the interactive main
-            # (chat), or the stack's interactive sidecar when the main is not interactive
-            # (voice's terminal variant — its GTK main is never RUNNING on a Lite box, and
-            # judging by it dismissed a freshly presented command whenever any other stack
-            # started).
-            comp = None
-            if s is not None:
-                main = s.main_component
-                comp = main if (main and main.interactive) else next(
-                    (c for c in s.components if c.interactive), None)
-            if not (comp and live.get(comp.id) in up):
-                self.dismiss_interactive(sid)
-                cleared.append(sid)
-        return cleared
+        """Drop the markers of apps that aren't actually running (interactive_markers.clear_stale)."""
+        return interactive_markers.clear_stale(self, keep)
 
     def _band_marker(self, stack_id: str):
         sid = validators.path_component(stack_id, field="stack id")

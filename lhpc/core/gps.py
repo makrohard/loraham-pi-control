@@ -396,17 +396,28 @@ def gpsd_owns_device(device: str, host: str, port: int,
 MESHCOM_SOURCE_REL = ("src", "meshcom-qemu-raspi", ".run", "gps-uart1.sock")
 
 
-def bridge_state_dir(runtime_root, consumer: str) -> str:
+def bridge_state_dir(runtime_root, consumer: str, rid: str = "") -> str:
     """Where the feed keeps its OWN state (readiness, and the PTY link when it publishes one).
 
     Always under the runtime root: the managed systemd units are byte-frozen
     (docs/backlog.md), so anything new that must be writable belongs here rather than in a
     unit's ReadWritePaths.
     """
-    return str(os.path.join(str(runtime_root), "state", "gps", consumer))
+    return str(os.path.join(str(runtime_root), "state", *([rid] if rid else []), "gps", consumer))   # K7: its instance's
 
 
-def bridge_endpoint_path(runtime_root, consumer: str) -> str:
+def feed_state_dirs(paths, consumer: str) -> list:
+    """Every feed state dir of `consumer` that exists: the bare one (no hardware list), then each listed radio's
+    instance's state/<rid>/gps/<consumer> in rid order (K7: one feed per instance). From the hardware list, never a
+    listing of state/ (a snapshot input must not list the neutral writers' directories)."""
+    from pathlib import Path
+
+    from . import radios
+    rids = sorted((r.id for r in radios.load(paths).radios), key=lambda r: int(r[1:]))
+    return [d for d in (Path(bridge_state_dir(paths.runtime_root, consumer, rid)) for rid in ("", *rids)) if d.is_dir()]
+
+
+def bridge_endpoint_path(runtime_root, consumer: str, rid: str = "") -> str:
     """The endpoint the feed uses for `consumer` — note the two are NOT symmetrical.
 
     * Meshtastic: a PTY we CREATE and publish, because meshtasticd opens a serial device.
@@ -416,11 +427,13 @@ def bridge_endpoint_path(runtime_root, consumer: str) -> str:
     """
     kind = _OUTPUT_FOR.get(consumer, OUT_PTY)
     if kind == OUT_UNIX:
-        return str(os.path.join(str(runtime_root), *MESHCOM_SOURCE_REL))
+        from .commands import instance_index
+        n = instance_index(rid)                   # meshcom@rN's guest: run.sh's .run/<N - 1>/ (r1: .run/)
+        return str(os.path.join(str(runtime_root), *MESHCOM_SOURCE_REL[:-1], *([str(n)] if n else []), MESHCOM_SOURCE_REL[-1]))
     if kind == OUT_POSJSON:
         # A server socket WE publish in our own state dir; the consumer connects.
-        return str(os.path.join(bridge_state_dir(runtime_root, consumer), "position.sock"))
-    return str(os.path.join(bridge_state_dir(runtime_root, consumer), "nmea0"))
+        return str(os.path.join(bridge_state_dir(runtime_root, consumer, rid), "position.sock"))
+    return str(os.path.join(bridge_state_dir(runtime_root, consumer, rid), "nmea0"))
 
 
 # A GPS feed refreshes its readiness marker every ~10 s; anything older is not this run.

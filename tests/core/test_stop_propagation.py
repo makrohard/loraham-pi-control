@@ -295,3 +295,46 @@ def test_blocked_daemon_stop_names_the_interactive_dependent_and_its_pid(tmp_pat
                 st.pids = []
     hints = svc._still_running_hints(["chat"])
     assert hints and "kill" not in hints[0] and "loraham-chat" in hints[0]
+
+
+# ---- K7: an internal stop names the instance it means ---------------------------------------------------------
+
+def _spy_stop(monkeypatch, outer=""):
+    """Record (target, rid) of every stop; the `outer` target runs the real stop, every other one is refused."""
+    from lhpc.core.service_base import ActionResult
+    real, calls = ControllerService.stop, []
+
+    def stop(self, target, *a, **kw):
+        calls.append((target, getattr(kw.get("inst"), "rid", "")))
+        return real(self, target, *a, **kw) if target == outer else ActionResult(False, "spied")
+    monkeypatch.setattr(ControllerService, "stop", stop)
+    return calls
+
+
+def test_k7_stop_owners_stops_the_holder_instance_on_the_starts_radio(tmp_path, monkeypatch):
+    # before: the bare holder stack, a band caller, which may reach the holder's instance on another radio
+    import radios_fixture
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS)
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "run_blockers", lambda self, t, b="", radio="", inst=None: [
+        {"resource": "loraham.radio.r2", "holder_stack": "meshtastic", "holder": "meshtastic", "band": "868"}])
+    calls = _spy_stop(monkeypatch)
+    res = svc.start("kiss", apply=True, stop_owners=True, inst=_inst("r2", "868"))
+    assert not res.ok and calls == [("meshtastic", "r2")], (res.summary, calls)
+
+
+def test_k7_a_stopped_instance_releases_its_dependency_on_the_same_radio(tmp_path, monkeypatch):
+    # graywolf@r2 stopped -> kiss@r2 (its TNC) is released; before: a bare kiss stop (the band caller's instance)
+    import radios_fixture
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS)
+    svc = _svc(tmp_path)
+    _patch_life(monkeypatch, svc, Outcome.STOPPED)
+    monkeypatch.setattr(type(svc), "_dep_stacks_to_release", lambda self, stk, sid: ["kiss"])
+    calls = _spy_stop(monkeypatch, outer="graywolf")
+    svc.stop("graywolf", apply=True, inst=_inst("r2", "868"))
+    assert ("kiss", "r2") in calls and ("kiss", "") not in calls, calls
+
+
+def _inst(rid, band):
+    from lhpc.core.commands import Instance
+    return Instance(rid, band=band)

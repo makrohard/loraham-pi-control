@@ -550,3 +550,55 @@ def test_main_run_bare_meshtastic_passes_empty_tail(monkeypatch):
                         lambda passthrough, **kw: seen.setdefault("p", passthrough) or 0)
     assert cli_main._run(["meshtastic"]) == 0
     assert seen["p"] == []
+
+
+# ---- K7 (DEC-W384s): the wrapper talks to an instance's own node ----------------------------------------------------
+
+@pytest.fixture
+def cli_box(tmp_path, monkeypatch, captured_exec):
+    """`lhpc meshtastic...` through the CLI entry, with the given running instances and a fake managed CLI."""
+    from lhpc.adapters.cli import main as cli
+    from lhpc.core import instances
+    from lhpc.core.paths import ENV_RUNTIME_ROOT
+    _make_fake_cli(tmp_path)
+    monkeypatch.setenv(ENV_RUNTIME_ROOT, str(tmp_path))
+    box = {"running": [], "poststart": []}
+    monkeypatch.setattr(instances, "running_keys", lambda _svc, sid: list(box["running"]) if sid == "meshtastic" else [])
+
+    def run(argv):
+        try:
+            return cli.main(argv)
+        except _Captured:
+            return None
+    box["run"] = run
+    return box
+
+
+def test_k7_a_bare_wrapper_talks_to_the_one_running_instances_node(cli_box, captured_exec):
+    # before, `--host 127.0.0.1:4403` always: meshtastic@r2 alone running, the CLI reached no node or r1's
+    cli_box["running"] = ["meshtastic@r2"]
+    assert cli_box["run"](["meshtastic", "--nodes"]) is None
+    assert captured_exec["argv"][1:] == ["--host", "127.0.0.1:4536", "--nodes"]
+
+
+def test_k7_a_named_instance_is_the_wrapper_target(cli_box, captured_exec):
+    cli_box["running"] = ["meshtastic@r1", "meshtastic@r2"]
+    assert cli_box["run"](["meshtastic@r1", "--nodes"]) is None
+    assert captured_exec["argv"][1:] == ["--host", "127.0.0.1:4403", "--nodes"]
+
+
+def test_k7_two_running_instances_and_none_named_are_refused_by_name(cli_box, captured_exec, capsys):
+    cli_box["running"] = ["meshtastic@r1", "meshtastic@r2"]
+    assert cli_box["run"](["meshtastic", "--nodes"]) == 2 and "argv" not in captured_exec
+    assert "2 Meshtastic instances run (meshtastic@r1, meshtastic@r2): name one" in capsys.readouterr().err
+
+
+def test_k7_a_named_instance_that_does_not_run_is_not_reached(cli_box, captured_exec, capsys):
+    cli_box["running"] = ["meshtastic@r1"]
+    assert cli_box["run"](["meshtastic@r2", "--nodes"]) == 1 and "argv" not in captured_exec
+    assert "Meshtastic is not running" in capsys.readouterr().err
+
+
+def test_k7_a_bad_radio_id_is_refused(cli_box, captured_exec, capsys):
+    assert cli_box["run"](["meshtastic@x9", "--nodes"]) == 2 and "argv" not in captured_exec
+    assert "r1..r99" in capsys.readouterr().err

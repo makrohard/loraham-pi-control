@@ -412,8 +412,9 @@ Model, retention and keys: [maintenance → RF logs](maintenance.md#rf-logs).
 ---
 
 ### meshtastic
-`lhpc meshtastic <upstream args>` — guarded passthrough to the managed Meshtastic CLI against this
-box's node; `--yes` skips the factory-reset confirmation. What is refused and re-asserted:
+`lhpc meshtastic[@rN] <upstream args>` — guarded passthrough to the managed Meshtastic CLI against
+instance `meshtastic@rN`'s node (bare: the one running instance; two running: name one); `--yes` skips the
+factory-reset confirmation. What is refused and re-asserted:
 [Meshtastic → Command line](stacks/meshtastic.md#command-line-lhpc-meshtastic).
 
 ---

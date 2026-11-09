@@ -14,6 +14,8 @@ entry is either a literal token or a single whole placeholder. Placeholders:
     {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
     {instance_dir}    -> "<rid>/": a per-radio path level ("" for the manifest's TEMPLATE values only)
     {instance_suffix} -> "-<rid>": a per-radio file name in a shared directory
+    {instance_index}  -> N - 1 on rN ("0" for r1 and the TEMPLATE): a helper's own instance number (meshcom's run.sh
+                         --instance, K7); {instance_index_dir} -> "<N - 1>/" ("" for 0): that helper's run directory
                           (/dev/shm, where a per-radio directory could be pre-created by another user)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
@@ -72,9 +74,16 @@ class Instance:
         text = _PORT_OF_RE.sub(lambda m: str(self.port(int(m.group(2)))), text)
         text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
         text = text.replace("{instance_suffix}", f"-{self.rid}" if self.rid else "")
+        n = instance_index(self.rid)
+        text = text.replace("{instance_index_dir}", f"{n}/" if n else "").replace("{instance_index}", str(n))
         if self.rid:                                     # stage L5: a daemon client's sockets are its radio's (W3)
             text = text.replace("{rid}", self.rid)
         return text.replace("{instance_dir}", f"{self.rid}/" if self.rid else "")
+
+
+def instance_index(rid: str) -> int:
+    """rN's helper instance number, N - 1 (r1 and no radio: 0, a helper's single-instance layout; K7)."""
+    return int(rid[1:]) - 1 if rid else 0
 
 
 TEMPLATE = Instance()             # the manifest's template values (the bases, no `<rid>/`): never a running instance

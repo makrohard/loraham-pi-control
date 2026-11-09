@@ -244,3 +244,26 @@ def test_uninstall_guard_claim_refuses_symlink(tmp_path):
     os.symlink(Path(tmp_path) / "elsewhere", Path(tmp_path) / updater_units.UNINSTALL_GUARD)
     assert not svc.controller_uninstall_guard_claim("1", "N", "1").ok        # never follows/overwrites
     assert (Path(tmp_path) / "elsewhere").read_text() == "x"                 # target untouched
+
+
+def test_k7_prep_stops_every_instance_of_a_client_stack(tmp_path, monkeypatch):
+    # kiss@r1 and kiss@r2 run: both are stopped before the daemon; before, the bare stop (a band caller) reached one
+    import radios_fixture
+
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, radios_fixture.RADIOS)
+    svc = _svc(tmp_path)
+    run_ids = {cid for ss in svc.build_snapshot(fresh=True).stacks if ss.stack.id in ("kiss", "daemon")
+               for cid in ss.components}
+    monkeypatch.setattr(ControllerService, "build_snapshot", _running_then_clean(svc, run_ids))
+    monkeypatch.setattr(instances, "running_keys", lambda _s, sid: ["kiss@r1", "kiss@r2"] if sid == "kiss" else [])
+    stopped = []
+
+    def _rec_stop(_life, comp, band="", _svc=svc, **scope):
+        stopped.append((_svc.stack_of(comp.id), scope.get("rid") or ""))
+        return CompResult(component=comp.id, stack=comp.id, action="stop", outcome=Outcome.STOPPED, summary="stopped")
+    monkeypatch.setattr(Lifecycle, "stop", _rec_stop)
+    r = svc.controller_uninstall_prep()
+    assert r.ok, r.summary
+    assert {rid for sid, rid in stopped if sid == "kiss"} == {"r1", "r2"}, stopped
+    assert [d.partition(":")[0] for d in r.details if "kiss" in d] == ["  stop kiss@r1", "  stop kiss@r2"], r.details

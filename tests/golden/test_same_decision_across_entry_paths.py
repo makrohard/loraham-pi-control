@@ -439,7 +439,7 @@ def test_band_owner(entry):
     res = _all(entry, "start", "kiss", _band_owner)
     refusal = "Cannot run 'kiss': meshtastic@r1 must be stopped first."
     assert _decisions(res) == {
-        "cli": {"refusal": "Cannot run 'kiss': conflicting stack(s) meshtastic could not be "
+        "cli": {"refusal": "Cannot run 'kiss': conflicting stack(s) meshtastic@r1 could not be "
                            "verified stopped.", **REFUSED_NOTHING},
         "web": {"refusal": "blockers", **REFUSED_NOTHING},
         "job": {"refusal": refusal, **REFUSED_NOTHING},
@@ -531,7 +531,7 @@ def test_interactive_launch(entry):
                evidence=("chat", "loraham-daemon", "433"))
     _same(res, started=True, refusal="manual_required", live=[],
           files=["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
-                 "state/interactive/chat.show"])
+                 "state/interactive/chat@r1.show"])
     assert _renders(res) == SUCCEEDED
 
 
@@ -555,7 +555,7 @@ def test_restart_of_an_interactive_stack(entry):
     res = _all(entry, "restart", "chat", _chat_installed)
     _same(res, started=True, refusal="manual_required", live=[],
           files=["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
-                 "state/interactive/chat.show"])
+                 "state/interactive/chat@r1.show"])
     assert _renders(res) == {
         "cli": {"rc": 0},
         "web": {"status": 302, "admission": "admitted", "child_rc": 0, "job": ("done", True)},

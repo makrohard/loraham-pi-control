@@ -147,7 +147,7 @@ def test_refused_when_the_band_owner_does_not_stop(kiss_box, run_op):
     box.fake.cmdlines_data[300] = ["meshtasticd"]
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True, stop_owners=True))
     assert (run.fields["ok"], run.fields["summary"]) == (
-        False, "Cannot run 'kiss': conflicting stack(s) meshtastic could not be verified stopped.")
+        False, "Cannot run 'kiss': conflicting stack(s) meshtastic@r1 could not be verified stopped.")   # K7: the holder instance
     assert "mutate:feed-floor:433" not in run.phases
     assert run.files == NOTHING
 
@@ -229,7 +229,7 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
     assert run.phases[-4:] == ["recheck:identity", "recheck:preflight", "mutate:feed-floor:433",
                                "mutate:config-files:loraham-chat"]
     assert run.files == {"added": ["config/files/r1/lorachat.conf", "state/daemon-feed-floor-433-r1",
-                                   "state/interactive/chat.show"], "removed": [], "changed": []}
+                                   "state/interactive/chat@r1.show"], "removed": [], "changed": []}
     assert box.owned() == []
 
 

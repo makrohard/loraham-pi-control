@@ -33,6 +33,19 @@ MESHTASTIC_CLI_VERSION = "2.7.11"
 MANAGED_CLI_REL = ("build", "tools", "meshtastic-cli", ".venv", "bin", "meshtastic")
 LOCAL_API = "127.0.0.1:4403"
 
+
+def instance_api(target: str, running: list) -> tuple[str, str]:
+    """`meshtastic@rN` -> (its key, its node's API host:port, 4403 + 133 x (N - 1), DEC-W348); a bare `meshtastic`: the
+    one running instance's ("", LOCAL_API when none runs). ValueError when two run and none is named (never a guess).
+    """
+    from .commands import Instance, rid_port
+    if "@" not in target and len(running) > 1:
+        raise ValueError(f"{len(running)} Meshtastic instances run ({', '.join(running)}): name one, "
+                         f"e.g. `lhpc {running[0]} --info`")
+    key = target if "@" in target else (running[0] if running else "")
+    rid = Instance(key.partition("@")[2]).rid if key else ""      # CommandError for a bad radio id
+    return key, (f"127.0.0.1:{rid_port(4403, rid)}" if rid else LOCAL_API)
+
 # Connection selectors (meshtastic 2.7.11 connection group). Every long flag takes an OPTIONAL
 # value (nargs="?"), so `--host`, `--host foo`, `--host=foo` and the `-t`/`-s`/`-b` short aliases
 # (optionally with an attached value, e.g. `-tfoo`) all select a transport. A token that is a
@@ -338,7 +351,7 @@ def _needs_node(forwarded: list[str]) -> bool:
 
 def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
         confirm: Callable[[str], bool], reconverge: Callable[[], bool] | None = None,
-        out=None, err=None) -> int:
+        out=None, err=None, local_api: str = LOCAL_API) -> int:
     """Guarded foreground passthrough. Returns the upstream CLI's exit code, or an LHPC code.
 
     `reconverge` re-asserts LHPC-owned settings (region/name/GPS) via the stack's post-start path;
@@ -375,7 +388,7 @@ def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
     # Force the local node. PREPEND the transport so a user `--` end-of-options marker in `forwarded`
     # cannot demote it to a positional; upstream `--host host:port` splits the port itself. User
     # transport flags were already refused by classify(), so there is never a competing --host.
-    final = ["--host", LOCAL_API, *forwarded]
+    final = ["--host", local_api, *forwarded]                   # K7: the named (or one running) instance's node
     if decision.bulk_config:
         # We do not parse Meshtastic's config/URL formats. Run the mutator normally, then reuse
         # LHPC's post-start convergence to reassert ONLY what LHPC owns (region/name/GPS). Run via

@@ -25,6 +25,8 @@
 - MeshCore keeps its identities: before the first start, move config/secrets/meshcore_identity.key,
   openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
+- Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`
+  names the node. After the update, restart running GPS stacks so their feeds move.
 - Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
   in its row of config/radios.toml.
 - Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;

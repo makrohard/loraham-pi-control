@@ -1168,3 +1168,22 @@ def test_the_meshcom_password_row_says_when_the_secret_file_is_missing(tmp_path,
     assert row["enabled"] is True and row["value"] is None and row["exists"] is False
     body = web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True)
     assert "HMAC password file not found" in body and "Renew it" in body
+
+
+def test_k7_apply_restarts_every_running_instances_bridge_and_node(tmp_path, monkeypatch):
+    # K7 (DEC-W384v: one shared xr_pw): meshcom@r1 and meshcom@r2 both run, both get the new firmware and secret;
+    # before, the bare restart reached one instance (the band caller's), the other kept the old secret
+    import radios_fixture
+
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))          # r1 and r2, both 433
+    svc = _svc(tmp_path)
+    _fake_build_restart(svc, monkeypatch)
+    calls = []
+    monkeypatch.setattr(type(svc), "restart", lambda self, target, **k: calls.append(
+        (target, getattr(k.get("inst"), "rid", ""))) or ActionResult(True, f"restarted {target}"))
+    monkeypatch.setattr(instances, "running_keys",
+                        lambda _svc, sid: ["meshcom@r1", "meshcom@r2"] if sid == "meshcom" else [])
+    assert svc._hmac_run_steps("meshcom", "enable", _RID, emit=lambda _s: None) == 0
+    bridge, node = svc._hmac_component("meshcom").id, svc.stack("meshcom").main_component.id
+    assert calls == [(bridge, "r1"), (bridge, "r2"), (node, "r1"), (node, "r2")]

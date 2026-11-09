@@ -550,3 +550,26 @@ def test_g1_k6c_n4_a_partly_saved_switch_names_the_saved_and_the_failed_instance
     r = svc.set_rflog("graywolf", "off")
     assert not r.ok and r.summary == "RF log not saved on every instance: saved kiss@r1; not saved kiss@r2"
     assert "disk full" in r.details
+
+
+def _only_868(tmp_path):
+    import radios_fixture
+    radios_fixture.write(tmp_path, (radios_fixture.R3,))          # one 868 radio: meshcom (433 only) has none
+    return _svc(tmp_path)
+
+
+def test_g1_k6c_re_3_a_stack_without_a_radio_refuses_the_switch_by_name(tmp_path):
+    # before, saved_insts fell back to [None]: the switch landed in meshcom.toml, which no meshcom@rN reads
+    svc = _only_868(tmp_path)
+    r = svc.set_rflog("meshcom", "on")
+    assert not r.ok and r.summary == "RF log not saved: no radio for 'meshcom' in the hardware list"
+    assert "rf_log" not in _store(svc, "meshcom")
+    assert svc.rflog_switch("meshcom")["value"] == ""
+
+
+def test_g1_k6c_re_3_the_stack_wide_switch_skips_a_stack_without_a_radio(tmp_path):
+    svc = _only_868(tmp_path)
+    r = svc.set_rflog_all("off")
+    assert r.ok and "meshcom: RF log not saved: no radio for 'meshcom' in the hardware list" in r.details
+    assert _store(svc, "kiss", "r3")["rf_log"] == "off" and "rf_log" not in _store(svc, "meshcom")
+    assert svc.rflog_logging_state() == "off"                        # meshcom is left out, not "mixed"

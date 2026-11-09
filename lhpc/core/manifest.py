@@ -218,7 +218,7 @@ def _require_module(value, cid: str) -> str:
 def _check_token(cid: str, tok: str, names: set) -> None:
     """Validate one argv token's grammar: a whole placeholder must reference a known
     param/operator/controller name; a literal may embed only {runtime}/{source}/{band} and the
-    instance tokens ({port:…}, {port_of:…}, {instance_dir}), and must contain no other stray braces."""
+    instance tokens ({port:…}, {port_of:…}, {instance_dir}, {instance_index}…), and must contain no other stray braces."""
     instance_free = commands.TEMPLATE.subst(tok)     # the instance tokens resolve; a bad base raises
     if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1 and instance_free == tok:
         inner = tok[1:-1]
