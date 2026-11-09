@@ -3,6 +3,7 @@ process cessation AND ready-endpoint disappearance; markers clear only on verifi
 stop; restart/owner-stop/cascade propagate failures."""
 
 import pytest
+import launch_band_fixture
 
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.services import ControllerService
@@ -58,22 +59,22 @@ def _patch_life(monkeypatch, svc, outcome):
 
 def test_stop_unverified_keeps_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    svc._set_running_band("daemon", "433")
+    launch_band_fixture.set_launch_band(svc, "daemon", "433")
     svc.mark_interactive("daemon", "433")
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.stop("daemon", apply=True)
     assert not res.ok
-    assert svc._band_marker("daemon").exists()                # marker NOT cleared
-    assert svc._interactive_marker("daemon").exists()
+    assert svc._interactive_marker("daemon").exists()         # NOT cleared (K6: no band marker, 13.12.5)
 
 
 def test_stop_verified_clears_markers(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    svc._set_running_band("daemon", "433")
+    launch_band_fixture.set_launch_band(svc, "daemon", "433")
+    svc.mark_interactive("daemon", "433")
     _patch_life(monkeypatch, svc, Outcome.STOPPED)
     res = svc.stop("daemon", apply=True)
     assert res.ok
-    assert not svc._band_marker("daemon").exists()            # cleared after verified stop
+    assert not svc._interactive_marker("daemon").exists()     # cleared after verified stop
 
 
 def test_endpoint_still_present_is_non_success(tmp_path, monkeypatch):
@@ -250,7 +251,7 @@ def test_daemon_band_stop_orphans_only_that_bands_dependents(tmp_path, monkeypat
     from types import SimpleNamespace
     from lhpc.core.model import RunState
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("kiss", "433")             # kiss (band-switchable) running on 433
+    launch_band_fixture.set_launch_band(svc, "kiss", "433")             # kiss (band-switchable) running on 433
     smap = {s.id: s for s in svc.stacks()}
 
     def fake_snapshot(_self):

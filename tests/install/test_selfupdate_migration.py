@@ -12,6 +12,7 @@ import fcntl
 import json as _json
 
 import pytest
+import stores_fixture
 
 import gitrepo
 from lhpc.core import runtime_fs as _rfs
@@ -61,10 +62,11 @@ def test_legacy_default_migrates_overrides_preserved(tmp_path, monkeypatch):
     gitrepo.upstream_commit(up)                                           # a real update is available
     # LEGACY seed (bypasses the overrides-only save path — writes every value verbatim):
     #   opt == old default (migrate), keep = genuine override, empt = intentional EMPTY override.
-    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD", "keep": "MINE", "empt": ""})
+    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD", "keep": "MINE", "empt": ""},
+                          inst=stores_fixture.inst_of(svc, "s"))   # K6: the instance's own store
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") >= 1
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "opt" not in stored                                    # default-equal removed
     assert stored.get("keep") == "MINE" and stored.get("empt") == ""   # overrides (incl. empty) kept
     # Post-update manifest (default OLD -> NEW): the migrated value now resolves to the NEW default.
@@ -79,11 +81,11 @@ def test_refused_update_does_not_migrate_config(tmp_path, monkeypatch):
     _origin, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_with_manifest(tmp_path, work, monkeypatch, opt_default="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD", "keep": "MINE"})
+    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD", "keep": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))
     (work / "dirty.txt").write_text("uncommitted")                # dirty -> apply refused (no force)
     res = svc.self_update_apply()
     assert res.ok is False
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert stored.get("opt") == "OLD" and stored.get("keep") == "MINE"   # config UNCHANGED
 
 
@@ -91,10 +93,10 @@ def test_already_up_to_date_does_not_migrate(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     _origin, work, up = gitrepo.repos(tmp_path)                          # no upstream commit -> already current
     svc, man, rt = _svc_with_manifest(tmp_path, work, monkeypatch, opt_default="OLD")
-    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"opt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     res = svc.self_update_apply()
     assert res.ok and res.data.get("already") is True
-    assert cfgmod.load_stack_config(svc._paths, "s").get("opt") == "OLD"   # nothing migrated
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("opt") == "OLD"   # nothing migrated
 
 
 def test_migration_honors_operator_token_and_canonical_form(tmp_path, monkeypatch):
@@ -112,9 +114,9 @@ def test_migration_honors_operator_token_and_canonical_form(tmp_path, monkeypatc
     svc, man, rt = _svc(tmp_path, work)
     cfgmod.save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
     # legacy: who == operator-substituted default; num == default (int, plain form)
-    cfgmod.save_stack_config(svc._paths, "s", {"who": "XX0XXA", "num": "10"})
+    cfgmod.save_stack_config(svc._paths, "s", {"who": "XX0XXA", "num": "10"}, inst=stores_fixture.inst_of(svc, "s"))
     assert svc.self_update_apply().ok
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "who" not in stored and "num" not in stored          # both recognised as at-default -> migrated
 
 
@@ -150,9 +152,10 @@ def _bump_default_text(work, up, text) -> str:
     return _seed_manifest(work, up, text)
 
 
-def _cand(from_head, *, key="ropt", kind="r", name="ropt", comp="c", band="", expected="OLD"):
+def _cand(from_head, *, key="ropt", kind="r", name="ropt", comp="c", band="", expected="OLD", rid="r1"):
+    # K6: a candidate names its instance's radio (the value sits in config/stacks/s@<rid>.toml); "s" has no bands
     return {"stack": "s", "band": band, "key": key, "kind": kind, "comp": comp, "name": name,
-            "expected": expected, "from_head": from_head}
+            "expected": expected, "from_head": from_head, "rid": rid}
 
 
 def _seed_journal(svc, *, from_head, to_head, pending, slot="completed", branch="main", anchored=True):
@@ -174,9 +177,9 @@ def test_scoped_run_param_legacy_form_migrates(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"__r__c__ropt": "OLD"})   # scoped legacy form only
+    cfgmod.save_stack_config(svc._paths, "s", {"__r__c__ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))   # scoped legacy form only
     assert svc.self_update_apply().ok
-    assert "__r__c__ropt" not in cfgmod.load_stack_config(svc._paths, "s")   # migrated
+    assert "__r__c__ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))   # migrated
 
 
 def test_scoped_file_param_legacy_form_migrates(tmp_path, monkeypatch):
@@ -184,9 +187,9 @@ def test_scoped_file_param_legacy_form_migrates(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, fopt="FOLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"__f__c__fopt": "FOLD"})   # scoped file legacy form
+    cfgmod.save_stack_config(svc._paths, "s", {"__f__c__fopt": "FOLD"}, inst=stores_fixture.inst_of(svc, "s"))   # scoped file legacy form
     assert svc.self_update_apply().ok
-    assert "__f__c__fopt" not in cfgmod.load_stack_config(svc._paths, "s")
+    assert "__f__c__fopt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
 
 
 def test_flat_and_scoped_precedence_both_forms(tmp_path, monkeypatch):
@@ -196,9 +199,9 @@ def test_flat_and_scoped_precedence_both_forms(tmp_path, monkeypatch):
     gitrepo.upstream_commit(up)
     # both forms present: scoped is a genuine override, flat is the old default. Precedence: scoped
     # wins. Migration must remove the flat DEFAULT and keep the scoped OVERRIDE (precedence intact).
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "__r__c__ropt": "MINE"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "__r__c__ropt": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))
     assert svc.self_update_apply().ok
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "ropt" not in stored and stored.get("__r__c__ropt") == "MINE"
     assert svc.stack_config("s")["ropt"] == "MINE"                  # scoped override still wins
 
@@ -208,9 +211,9 @@ def test_both_forms_at_default_both_migrate(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "__r__c__ropt": "OLD"})  # both == default
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "__r__c__ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))  # both == default
     assert svc.self_update_apply().ok
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "ropt" not in stored and "__r__c__ropt" not in stored    # every valid form migrated
 
 
@@ -219,16 +222,16 @@ def test_race_change_to_nonempty_override_survives(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     real = selfupdate.apply_update
     def racing(system, paths, **kw):                               # concurrent writer AFTER the snapshot
         r = real(system, paths, **kw)
-        cfgmod.update_stack_config(svc._paths, "s", {"ropt": "RACED"})
+        cfgmod.update_stack_config(svc._paths, "s", {"ropt": "RACED"}, inst=stores_fixture.inst_of(svc, "s"))
         return r
     monkeypatch.setattr(selfupdate, "apply_update", racing)
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") == 0               # value changed under us -> not removed
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "RACED"   # override survives
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "RACED"   # override survives
 
 
 def test_race_change_to_empty_override_survives(tmp_path, monkeypatch):
@@ -236,16 +239,16 @@ def test_race_change_to_empty_override_survives(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     real = selfupdate.apply_update
     def racing(system, paths, **kw):
         r = real(system, paths, **kw)
-        cfgmod.update_stack_config(svc._paths, "s", {"ropt": ""}, clear_empty=False)  # intentional empty
+        cfgmod.update_stack_config(svc._paths, "s", {"ropt": ""}, clear_empty=False, inst=stores_fixture.inst_of(svc, "s"))  # intentional empty
         return r
     monkeypatch.setattr(selfupdate, "apply_update", racing)
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") == 0
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == ""   # empty override survives
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == ""   # empty override survives
 
 
 def test_migration_write_failure_is_durable_and_retried(tmp_path, monkeypatch):
@@ -254,7 +257,7 @@ def test_migration_write_failure_is_durable_and_retried(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     real_clear = services_mod.conditional_clear_stack_config
     calls = {"n": 0}
     def flaky(*a, **k):
@@ -267,14 +270,14 @@ def test_migration_write_failure_is_durable_and_retried(tmp_path, monkeypatch):
     #            intent persisted durably.
     res1 = svc.self_update_apply()
     assert res1.ok and res1.data.get("migrated") == 0 and res1.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # nothing discarded
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"   # nothing discarded
     env, bad = selfupdate.read_migration_journal(svc._paths)
     assert not bad and env and env["completed"]["pending"]                  # durable intent kept
     # 2nd apply (now already-up-to-date): journal proves the transition -> recovery retries + succeeds.
     res2 = svc.self_update_apply()
     assert res2.ok and res2.data.get("already") is True
     assert res2.data.get("migrated") >= 1 and res2.data.get("pending_migrations") == 0
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")          # finally migrated
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))          # finally migrated
     assert selfupdate.read_migration_journal(svc._paths)[0] is None          # journal cleared
 
 
@@ -470,11 +473,11 @@ def test_interrupted_migration_recovered_by_fresh_service(tmp_path, monkeypatch)
     a = _head(work)
     b = _bump_default(work, up, ropt="NEW")                             # real transition -> NEW, HEAD=B
     svc, man, rt = _svc(tmp_path, work)                                 # FRESH post-update service (NEW default)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})          # value still at OLD default
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))          # value still at OLD default
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])   # anchored completed A->B
     res = svc.self_update_apply()
     assert res.ok and res.data.get("already") is True and res.data.get("migrated") >= 1
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")       # original migration completed
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))       # original migration completed
     assert svc.stack_config("s")["ropt"] == "NEW"                        # now follows the new default
     assert selfupdate.read_migration_journal(svc._paths)[0] is None      # journal cleared
 
@@ -484,13 +487,13 @@ def test_journal_persist_failure_refuses_before_mutation(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     before = _head(work)
     monkeypatch.setattr(selfupdate, "write_migration_journal", lambda *a, **k: False)   # cannot persist
     res = svc.self_update_apply()
     assert res.ok is False and res.data.get("journal_write_failed") is True
     assert _head(work) == before                                         # source NOT advanced
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"  # config untouched
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"  # config untouched
 
 
 def test_migration_failure_recovered_after_fresh_service(tmp_path, monkeypatch):
@@ -500,7 +503,7 @@ def test_migration_failure_recovered_after_fresh_service(tmp_path, monkeypatch):
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     fail = {"on": True}
     real = services_mod.conditional_clear_stack_config
     def clr(*a, **k):
@@ -510,13 +513,13 @@ def test_migration_failure_recovered_after_fresh_service(tmp_path, monkeypatch):
     monkeypatch.setattr(services_mod, "conditional_clear_stack_config", clr)
     res1 = svc.self_update_apply()                                       # advances, migration write FAILS
     assert res1.ok and res1.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"
     # a FRESH service (restart boundary) recovers the durable journal and completes it
     fail["on"] = False
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
     res2 = svc2.self_update_apply()
     assert res2.ok and res2.data.get("already") is True and res2.data.get("migrated") >= 1
-    assert "ropt" not in cfgmod.load_stack_config(svc2._paths, "s")
+    assert "ropt" not in cfgmod.load_stack_config(svc2._paths, "s", inst=stores_fixture.inst_of(svc2, "s"))
     assert selfupdate.read_migration_journal(svc2._paths)[0] is None
 
 
@@ -554,13 +557,13 @@ def test_malformed_journal_blocks_without_mutation_or_deletion(tmp_path, monkeyp
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)                # a REAL update is available
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "dp_433_X": "keep"})   # protect a dp_* key
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "dp_433_X": "keep"}, inst=stores_fixture.inst_of(svc, "s"))   # protect a dp_* key
     before = _head(work)
     _rfs.write_marker(svc._paths, svc._paths.under("state", "selfupdate-migrate.json"), bad, 0o600)
     res = svc.self_update_apply()                                        # must not crash
     assert res.ok is False and res.data.get("journal_corrupt") is True   # typed recovery-blocked
     assert _head(work) == before                                         # NO source update
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert stored.get("ropt") == "OLD" and stored.get("dp_433_X") == "keep"   # NO deletion
 
 
@@ -569,7 +572,7 @@ def test_concurrent_apply_returns_busy_without_git_or_migration(tmp_path, monkey
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     before = _head(work)
     held = _rfs.open_lock(svc._paths, svc._paths.under("state", "locks", "selfupdate.lock"))
     fcntl.flock(held.fileno(), fcntl.LOCK_EX)                            # another process owns the op
@@ -577,7 +580,7 @@ def test_concurrent_apply_returns_busy_without_git_or_migration(tmp_path, monkey
         res = svc.self_update_apply()
         assert res.ok is False and res.data.get("busy") is True
         assert _head(work) == before                                    # no git ran
-        assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"  # no migration ran
+        assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"  # no migration ran
     finally:
         fcntl.flock(held.fileno(), fcntl.LOCK_UN); held.close()
 
@@ -611,9 +614,9 @@ def test_unreadable_journal_blocks_without_any_mutation(tmp_path, monkeypatch, k
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)                # a REAL update is available
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     before_head = _head(work)
-    before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s"))
+    before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")))
     selfupdate.refresh_cache(svc._system, svc._paths)                    # a pre-existing cache
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
     _write_bad_journal(_journal_path(svc), kind)                        # the fifo must NOT hang the reader
@@ -622,7 +625,7 @@ def test_unreadable_journal_blocks_without_any_mutation(tmp_path, monkeypatch, k
     res = svc.self_update_apply()
     assert res.ok is False and res.data.get("journal_corrupt") is True
     assert _head(work) == before_head                                   # no fetch/git mutation reached
-    assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg      # no config mutation
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")) == before_cfg      # no config mutation
     assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # no cache mutation
 
 
@@ -661,7 +664,7 @@ def test_prior_pending_migration_write_failure_defers_and_recovers(tmp_path, mon
     from lhpc.core import config as cfgmod
     from lhpc.core.services import ControllerService
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_completed(svc, a, b)
     fail = {"on": True}
     real_clear = services_mod.conditional_clear_stack_config
@@ -674,11 +677,11 @@ def test_prior_pending_migration_write_failure_defers_and_recovers(tmp_path, mon
     assert res1.ok and res1.data.get("deferred_recovery") is True and res1.data.get("pending_migrations") >= 1
     env, bad = selfupdate.read_migration_journal(svc._paths)
     assert not bad and env["completed"]["pending"]                       # prior pending PRESERVED
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"  # nothing deleted
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"  # nothing deleted
     fail["on"] = False
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
     res2 = svc2.self_update_apply()
-    assert res2.data.get("migrated") >= 1 and "ropt" not in cfgmod.load_stack_config(svc2._paths, "s")
+    assert res2.data.get("migrated") >= 1 and "ropt" not in cfgmod.load_stack_config(svc2._paths, "s", inst=stores_fixture.inst_of(svc2, "s"))
     assert svc2.stack_config("s")["ropt"] == "NEW"
 
 
@@ -688,7 +691,7 @@ def test_finalization_clear_failure_self_heals(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     from lhpc.core.services import ControllerService
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_completed(svc, a, b)
     real_clear = selfupdate.clear_migration_journal
     calls = {"n": 0}
@@ -699,7 +702,7 @@ def test_finalization_clear_failure_self_heals(tmp_path, monkeypatch):
         return real_clear(paths)
     monkeypatch.setattr(selfupdate, "clear_migration_journal", clr)
     assert svc.self_update_apply().ok
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")       # migration applied
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))       # migration applied
     assert selfupdate.read_migration_journal(svc._paths)[0] is not None   # stale journal lingered
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
     assert svc2.self_update_apply().ok
@@ -714,44 +717,44 @@ def test_forged_expected_run_param_does_not_delete_override(tmp_path, monkeypatc
     operator's current MINE override when the real pre-update default (proven from source) differs."""
     from lhpc.core import config as cfgmod
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)   # real old default = OLD
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "MINE"})              # a genuine override
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))              # a genuine override
     _seed_journal(svc, from_head=a, to_head=b,                               # ANCHORED, but `expected` FORGED
                   pending=[_cand(a, key="ropt", name="ropt", expected="MINE")])
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") == 0                          # forged expected ignored
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "MINE"   # override PRESERVED
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "MINE"   # override PRESERVED
 
 
 def test_forged_expected_file_param_does_not_delete_override(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)   # real fopt default = FOLD
-    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "MINE"})
+    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=a, to_head=b,
                   pending=[_cand(a, key="file_fopt", kind="f", name="fopt", expected="MINE")])
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") == 0
-    assert cfgmod.load_stack_config(svc._paths, "s").get("file_fopt") == "MINE"
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("file_fopt") == "MINE"
 
 
 def test_candidate_with_non_owned_band_is_not_deleted(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})               # band "" value
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))               # band "" value
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, band="999")])   # band not owned by stack s
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") == 0 and res.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"    # nothing deleted
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"    # nothing deleted
 
 
 def test_genuine_transition_migrates_default_and_preserves_overrides(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
     cfgmod.save_stack_config(svc._paths, "s",
-                             {"ropt": "OLD", "keep": "MINE", "file_fopt": ""})   # default / override / empty override
+                             {"ropt": "OLD", "keep": "MINE", "file_fopt": ""}, inst=stores_fixture.inst_of(svc, "s"))   # default / override / empty override
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") >= 1
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "ropt" not in stored                                              # old-default value migrated
     assert stored.get("keep") == "MINE" and stored.get("file_fopt") == ""    # true + empty overrides kept
     assert svc.stack_config("s")["ropt"] == "NEW"                            # now follows the new default
@@ -781,17 +784,17 @@ def test_check_blocks_on_unsafe_journal_without_fetch(tmp_path, monkeypatch, kin
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)                                                     # a REAL update is available
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     selfupdate.refresh_cache(svc._system, svc._paths)                        # a pre-existing cache
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
-    before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s"))
+    before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")))
     _write_bad_journal(_journal_path(svc), kind)
     before_jbytes = _journal_path(svc).read_bytes() if kind in ("malformed", "symlink") else None
     res = svc.self_update_check()                                            # explicit check path
     assert res.ok is False and res.data.get("journal_corrupt") is True       # typed blocked, no 500
     assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # NO fetch / cache write
     assert _head(work) == before_head                                        # no git mutation
-    assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg           # no config mutation
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")) == before_cfg           # no config mutation
     if before_jbytes is not None:
         assert _journal_path(svc).read_bytes() == before_jbytes              # journal unchanged
 
@@ -816,12 +819,12 @@ def test_forged_candidate_from_head_does_not_select_manifest_run(tmp_path, monke
     _seed_manifest(work, up, _rf_manifest(ropt="OLD"))                   # commit A: default OLD
     b = _seed_manifest(work, up, _rf_manifest(ropt="NEW"))               # commit B (HEAD): default NEW
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "MINE"})          # a genuine override
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))          # a genuine override
     # forged journal: from_head = X (a MINE manifest), to_head = current HEAD, but NO matching anchor
     _seed_journal(svc, from_head=x, to_head=b, pending=[_cand(x, expected="MINE")], anchored=False)
     res = svc.self_update_apply()
     assert res.ok is False and res.data.get("recovery_required") is True     # typed recovery block
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "MINE"   # override PRESERVED
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "MINE"   # override PRESERVED
 
 
 def test_forged_candidate_from_head_does_not_select_manifest_file(tmp_path, monkeypatch):
@@ -832,12 +835,12 @@ def test_forged_candidate_from_head_does_not_select_manifest_file(tmp_path, monk
     _seed_manifest(work, up, _rf_manifest(fopt="FOLD"))
     b = _seed_manifest(work, up, _rf_manifest(fopt="FNEW"))
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "MINE"})
+    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "MINE"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=x, to_head=b, anchored=False,
                   pending=[_cand(x, key="file_fopt", kind="f", name="fopt", expected="MINE")])
     res = svc.self_update_apply()
     assert res.ok is False and res.data.get("recovery_required") is True
-    assert cfgmod.load_stack_config(svc._paths, "s").get("file_fopt") == "MINE"
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("file_fopt") == "MINE"
 
 
 def test_real_apply_created_journal_migrates_genuine_old_default(tmp_path, monkeypatch):
@@ -846,10 +849,10 @@ def test_real_apply_created_journal_migrates_genuine_old_default(tmp_path, monke
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")      # work + origin at A (manifest OLD)
     (up / "manifest.toml").write_text(_rf_manifest("NEW"))               # upstream advances to B (manifest NEW)
     gitrepo.git(up, "add", "manifest.toml"); gitrepo.git(up, "commit", "-m", "NEW"); gitrepo.git(up, "push", "-q", "origin", "main")
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})           # at the (old) default
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))           # at the (old) default
     res = svc.self_update_apply()                                        # REAL A->B; journal created by apply
     assert res.ok and not res.data.get("already") and res.data.get("migrated") >= 1
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")       # genuine old-default migrated
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))       # genuine old-default migrated
     svc2, _m, _r = _svc(tmp_path, work)
     assert svc2.stack_config("s")["ropt"] == "NEW"
 
@@ -868,7 +871,7 @@ def test_failed_apply_with_head_at_to_head_keeps_the_prepared_record(tmp_path, m
     gitrepo.git(up, "add", "manifest.toml")
     gitrepo.git(up, "commit", "-m", "NEW")
     gitrepo.git(up, "push", "-q", "origin", "main")
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     runner = svc._system.runner
     real_run = runner.run
     failed = []
@@ -900,7 +903,7 @@ def test_failed_apply_with_head_at_to_head_keeps_the_prepared_record(tmp_path, m
         monkeypatch.setattr(selfupdate, "local_state", real_local_state)
     res = svc.self_update_apply()
     assert res.data.get("migrated", 0) >= 1                              # migrated on the next run
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
 
 
 # --- both sides of the comparison use the OLD (pre-update) parameter semantics ----------------
@@ -915,11 +918,11 @@ def test_typed_schema_change_preserves_override_under_old_semantics(tmp_path, mo
     a = _seed_manifest(work, up, _typed_manifest("str", "10"))           # OLD: str default "10"
     b = _seed_manifest(work, up, _typed_manifest("int", "10"))           # NEW: int (normalises " 10")
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": " 10"})           # override (leading space) under str
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": " 10"}, inst=stores_fixture.inst_of(svc, "s"))           # override (leading space) under str
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="10")])   # anchored
     res = svc.self_update_apply()
     assert res.data.get("migrated") == 0                                 # NOT normalised into old default
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == " 10"   # override survives
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == " 10"   # override survives
 
 
 # --- a recorded transition the checkout is not at blocks apply AND check: no fetch, no mutation -
@@ -934,17 +937,17 @@ def test_head_matching_neither_transition_state_blocks_without_mutation(tmp_path
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)                                                 # a real update: a fetch would act
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     selfupdate.refresh_cache(svc._system, svc._paths)
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
-    before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s"))
+    before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")))
     _seed_journal(svc, from_head="a" * 40, to_head="b" * 40, slot=slot, pending=[_cand("a" * 40)])
     before_journal = selfupdate.read_migration_journal(svc._paths)[0]
     res = svc.self_update_apply() if action == "apply" else svc.self_update_check()
     assert res.ok is False and res.data.get("recovery_required") is True
     assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # NO fetch / cache write
     assert _head(work) == before_head                                            # no source mutation
-    assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg               # no config mutation
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")) == before_cfg               # no config mutation
     assert selfupdate.read_migration_journal(svc._paths)[0] == before_journal    # journal preserved (evidence)
 
 
@@ -970,12 +973,12 @@ def test_duplicate_run_param_forged_flat_key_not_deleted(tmp_path, monkeypatch):
     a = _seed_manifest(work, up, _dup_manifest("run"))
     b = _bump_default_text(work, up, _dup_manifest("run", default="D2"))
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"dup": "D"})              # a FLAT value == old default
+    cfgmod.save_stack_config(svc._paths, "s", {"dup": "D"}, inst=stores_fixture.inst_of(svc, "s"))              # a FLAT value == old default
     _seed_journal(svc, from_head=a, to_head=b,
                   pending=[_cand(a, key="dup", name="dup", comp="c1")])  # forged flat key for an AMBIGUOUS name
     res = svc.self_update_apply()
     assert res.data.get("migrated") == 0 and res.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("dup") == "D"   # ambiguous flat -> NOT deleted
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("dup") == "D"   # ambiguous flat -> NOT deleted
 
 
 def test_duplicate_file_param_forged_flat_key_not_deleted(tmp_path, monkeypatch):
@@ -985,12 +988,12 @@ def test_duplicate_file_param_forged_flat_key_not_deleted(tmp_path, monkeypatch)
     a = _seed_manifest(work, up, _dup_manifest("file"))
     b = _bump_default_text(work, up, _dup_manifest("file", default="D2"))
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"file_dup": "D"})
+    cfgmod.save_stack_config(svc._paths, "s", {"file_dup": "D"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=a, to_head=b,
                   pending=[_cand(a, key="file_dup", kind="f", name="dup", comp="c1")])
     res = svc.self_update_apply()
     assert res.data.get("migrated") == 0 and res.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("file_dup") == "D"
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("file_dup") == "D"
 
 
 def test_unique_flat_run_and_file_candidates_migrate(tmp_path, monkeypatch):
@@ -1000,13 +1003,13 @@ def test_unique_flat_run_and_file_candidates_migrate(tmp_path, monkeypatch):
     a = _seed_manifest(work, up, _rf_manifest(ropt="OLD", fopt="FOLD"))
     b = _bump_default(work, up, ropt="NEW", fopt="FOLD")                 # ropt default changes; fopt unchanged
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "file_fopt": "FOLD"})   # unique FLAT keys at old default
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "file_fopt": "FOLD"}, inst=stores_fixture.inst_of(svc, "s"))   # unique FLAT keys at old default
     _seed_journal(svc, from_head=a, to_head=b, pending=[
         _cand(a, key="ropt", name="ropt", expected="OLD"),
         _cand(a, key="file_fopt", kind="f", name="fopt", expected="FOLD")])
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") >= 2
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "ropt" not in stored and "file_fopt" not in stored           # both unique flat keys migrated
 
 
@@ -1016,7 +1019,7 @@ def test_bad_anchor_blocks_apply_and_check_without_mutation(tmp_path, monkeypatc
     from lhpc.core import config as cfgmod
     svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
     gitrepo.upstream_commit(up)                                                 # a real update -> a fetch would act
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     selfupdate.refresh_cache(svc._system, svc._paths)
     if state == "missing":
         _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a)], anchored=False)
@@ -1030,13 +1033,13 @@ def test_bad_anchor_blocks_apply_and_check_without_mutation(tmp_path, monkeypatc
                           "pending": [_cand(a)]}, "prepared": None})
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
     before_head = _head(work)
-    before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s"))
+    before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")))
     before_journal = selfupdate.read_migration_journal(svc._paths)[0]
     res = svc.self_update_apply() if action == "apply" else svc.self_update_check()
     assert res.ok is False and res.data.get("recovery_required") is True
     assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # no fetch / cache write
     assert _head(work) == before_head                                            # no source mutation
-    assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg               # no config deletion
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")) == before_cfg               # no config deletion
     assert selfupdate.read_migration_journal(svc._paths)[0] == before_journal    # no journal mutation
 
 
@@ -1105,11 +1108,11 @@ def test_run_param_removed_in_new_manifest_is_preserved_pending(tmp_path, monkey
     a = _seed_manifest(work, up, _rf_manifest(ropt="OLD"))              # OLD: ropt exists
     b = _bump_default_text(work, up, _rf_manifest_no_ropt())            # NEW: ropt REMOVED, HEAD=B
     svc, man, rt = _svc(tmp_path, work)                                 # SAME service, current manifest = NEW
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})          # value at old default
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))          # value at old default
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
     res = svc.self_update_apply()
     assert res.data.get("deferred_recovery") is True and res.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # removed param -> NOT deleted
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"   # removed param -> NOT deleted
 
 
 def test_file_param_removed_in_new_manifest_is_preserved_pending(tmp_path, monkeypatch):
@@ -1119,12 +1122,12 @@ def test_file_param_removed_in_new_manifest_is_preserved_pending(tmp_path, monke
     a = _seed_manifest(work, up, _rf_manifest(fopt="FOLD"))
     b = _bump_default_text(work, up, _rf_manifest_no_fopt())            # fopt REMOVED
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "FOLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"file_fopt": "FOLD"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=a, to_head=b,
                   pending=[_cand(a, key="file_fopt", kind="f", name="fopt", expected="FOLD")])
     res = svc.self_update_apply()
     assert res.data.get("deferred_recovery") is True and res.data.get("pending_migrations") >= 1
-    assert cfgmod.load_stack_config(svc._paths, "s").get("file_fopt") == "FOLD"
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("file_fopt") == "FOLD"
 
 
 def test_fresh_service_retry_of_removed_param_is_non_destructive(tmp_path, monkeypatch):
@@ -1135,14 +1138,14 @@ def test_fresh_service_retry_of_removed_param_is_non_destructive(tmp_path, monke
     a = _seed_manifest(work, up, _rf_manifest(ropt="OLD"))
     b = _bump_default_text(work, up, _rf_manifest_no_ropt())
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
     assert svc.self_update_apply().ok                                             # deferred (ropt removed)
     # a FRESH post-update service retries the pending candidate: still unprovable -> non-destructive
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
     res2 = svc2.self_update_apply()
     assert res2.data.get("deferred_recovery") is True and res2.data.get("recovery_required") is None
-    assert cfgmod.load_stack_config(svc2._paths, "s").get("ropt") == "OLD"   # still preserved
+    assert cfgmod.load_stack_config(svc2._paths, "s", inst=stores_fixture.inst_of(svc2, "s")).get("ropt") == "OLD"   # still preserved
 
 
 def test_retained_param_migrates_with_stale_incumbent_service_cache(tmp_path, monkeypatch):
@@ -1154,10 +1157,10 @@ def test_retained_param_migrates_with_stale_incumbent_service_cache(tmp_path, mo
     svc.stacks()                                                        # populate _stacks from the OLD tree
     (up / "manifest.toml").write_text(_rf_manifest("NEW"))              # upstream -> B (ropt retained, default NEW)
     gitrepo.git(up, "add", "manifest.toml"); gitrepo.git(up, "commit", "-m", "NEW"); gitrepo.git(up, "push", "-q", "origin", "main")
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "keep": "MINE", "file_fopt": ""})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "keep": "MINE", "file_fopt": ""}, inst=stores_fixture.inst_of(svc, "s"))
     res = svc.self_update_apply()                                       # REAL A->B; migration in-process
     assert res.ok and res.data.get("migrated") >= 1
-    stored = cfgmod.load_stack_config(svc._paths, "s")
+    stored = cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert "ropt" not in stored                                        # retained param migrated
     assert stored.get("keep") == "MINE" and stored.get("file_fopt") == ""   # overrides preserved
 
@@ -1172,10 +1175,10 @@ def test_removed_param_preserved_despite_stale_service_cache(tmp_path, monkeypat
     svc.stacks()                                                        # populate _stacks from OLD (HAS ropt)
     (up / "manifest.toml").write_text(_rf_manifest_no_ropt())           # upstream -> B: ropt REMOVED
     gitrepo.git(up, "add", "manifest.toml"); gitrepo.git(up, "commit", "-m", "rm ropt"); gitrepo.git(up, "push", "-q", "origin", "main")
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})          # at old default -> a candidate at A
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))          # at old default -> a candidate at A
     res = svc.self_update_apply()                                       # REAL A->B in the SAME (stale) service
     assert res.ok and res.data.get("pending_migrations", 0) >= 1        # ropt unprovable in NEW -> pending
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # stale cache must NOT delete it
+    assert cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s")).get("ropt") == "OLD"   # stale cache must NOT delete it
 
 
 # --- a manifest from an EARLIER release still proves an old default --------------------------
@@ -1207,9 +1210,9 @@ def test_a_pre_token_manifest_still_migrates_its_old_default(tmp_path, monkeypat
     a = _seed_manifest(work, up, _rf_manifest_legacy_build_inputs(ropt="OLD"))
     b = _seed_manifest(work, up, _rf_manifest(ropt="NEW"))
     svc, _man, _rt = _svc(tmp_path, work)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"}, inst=stores_fixture.inst_of(svc, "s"))
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
     res = svc.self_update_apply()
     assert res.ok and res.data.get("migrated") >= 1
-    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s", inst=stores_fixture.inst_of(svc, "s"))
     assert svc.stack_config("s")["ropt"] == "NEW"

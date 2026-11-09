@@ -811,7 +811,7 @@ class Lifecycle:
             script = commands.render_post_launcher(comp.post_steps, comp, params, op, runtime, src, band,
                                                    binding=binding, gated=True, inst=inst or commands.TEMPLATE,
                                                    result_path=str(result),
-                                                   gps=self._gps_post_values(getattr(stack, 'id', '')))
+                                                   gps=self._gps_post_values(getattr(stack, 'id', ''), inst))
         except (commands.CommandError, validators.ValidationError) as exc:
             return PostStartSchedule(False, f"launcher render failed: {exc}")
         try:
@@ -871,13 +871,13 @@ class Lifecycle:
     def has_required_post_start(self, comp: Component) -> bool:
         return any(s.get("required") for s in (comp.post_steps or ()))
 
-    def _gps_enabled_for(self, stack_id: str) -> bool:
-        """The stack's saved, BANDLESS `use_gps` switch. Duplicated here (rather than reaching
+    def _gps_enabled_for(self, stack_id: str, inst=None) -> bool:
+        """The instance's saved `use_gps` switch (K6, DEC-W384k: its own file). Duplicated here (rather than reaching
         for the controller) because Lifecycle owns no service reference — same file, same key,
         one line."""
         try:
             from .config import load_stack_config
-            cfg = load_stack_config(self.paths, stack_id)
+            cfg = load_stack_config(self.paths, stack_id, inst=inst)
         except (OSError, ValueError, KeyError, AttributeError):
             return False                                   # advisory read; never blocks a start
         raw = str(cfg.get("use_gps", "")).strip().lower()
@@ -887,7 +887,7 @@ class Lifecycle:
         from .gps import use_gps_default
         return use_gps_default(self.stacks, stack_id) == "on"
 
-    def _gps_post_values(self, stack_id: str = "") -> dict:
+    def _gps_post_values(self, stack_id: str = "", inst=None) -> dict:
         """Controller-owned GPS values for post-start steps, from the ONE resolver.
 
         Read here rather than threaded in from the caller so the launcher can never be
@@ -904,7 +904,7 @@ class Lifecycle:
             plan = plan_from_config(load_config(self.paths))
             # The stack's own switch decides whether THIS node reports a position. Pushing
             # ENABLED from the bare global plan set gps_mode on a node whose GPS was off.
-            if stack_id and plan.enabled and not self._gps_enabled_for(stack_id):
+            if stack_id and plan.enabled and not self._gps_enabled_for(stack_id, inst):
                 plan = plan.disabled_for_stack()
             # Both consumers' token sets from the SAME plan (disjoint keys) — one resolver, so
             # two stacks can never be rendered against different decisions.
@@ -955,7 +955,7 @@ class Lifecycle:
         try:
             script = commands.render_post_launcher(
                 comp.post_steps, comp, params, op, runtime, src, band, binding=binding, inst=inst or commands.TEMPLATE,
-                result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', '')),
+                result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', ''), inst),
                 meta={"comp": comp.id, "band": band or "", "role": "required"},
                 require_all=require_all)
         except (commands.CommandError, validators.ValidationError) as exc:
@@ -1090,7 +1090,9 @@ class Lifecycle:
         """"" when valid (schema v1), else a short reason. `name` is the filename leaf."""
         if not isinstance(rec, dict):
             return "not a JSON object"
-        if "slot" in rec:                          # 13.8 (K4b): a record from the slot builds is refused, never resolved
+        # 13.8 (K4b): a record from the slot builds is refused, never resolved. W328 grep exemption: the old key is
+        # read here only to refuse it.
+        if "slot" in rec:
             return (f"a record from before per-radio instances (slot {rec['slot']!r}): stop its process by hand and "
                     f"start it by name ({rec.get('stack') or '<stack>'}@<rid>)")
         for k in self._OWNED_V0_KEYS:

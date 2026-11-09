@@ -6,6 +6,7 @@ import errno
 import json
 import tomllib
 import pytest
+import stores_fixture
 import os
 import threading
 from pathlib import Path
@@ -46,8 +47,9 @@ def test_deeply_nested_config_journal_blocks(tmp_path):
 def test_non_utf8_pre_image_is_a_typed_refusal(tmp_path):
     # the config transaction journals each target's pre-image; a non-UTF-8 one escaped as
     # UnicodeDecodeError instead of a typed, nothing-written refusal
+    from stores_fixture import own_file
     svc = ControllerService(paths=_paths(tmp_path))
-    p = tmp_path / "config" / "stacks" / "chat.toml"; p.parent.mkdir(parents=True)
+    p = own_file(svc, "chat")                                      # K6: chat@r1's own file
     p.write_bytes(b"# \xff\n")
     res = svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"})
     assert res.ok is False and p.read_bytes() == b"# \xff\n"
@@ -265,7 +267,8 @@ def test_run_param_default_uses_operator_callsign(tmp_path):
     save_operator_config(svc._paths, "XX0XXB"); svc._config = None
     assert svc.stack_config("graywolf")["call"] == "XX0XXB"      # default substituted, not '{callsign}'
     # an explicitly saved value is NOT re-substituted
-    save_stack_config(svc._paths, "graywolf", {"call": "DK0XYZ"}, svc._config_band("graywolf", ""))
+    from stores_fixture import inst_of
+    save_stack_config(svc._paths, "graywolf", {"call": "DK0XYZ"}, inst=inst_of(svc, "graywolf"))   # K6: its own file
     assert svc.stack_config("graywolf")["call"] == "DK0XYZ"
 
 
@@ -425,24 +428,24 @@ def test_daemon_override_survives_save_config_bundle(tmp_path):
 
 
 def test_daemon_override_survives_public_save_stack_config(tmp_path):
-    from lhpc.core.config import load_stack_config, _stack_config_path
+    from lhpc.core.config import load_stack_config
+    from stores_fixture import inst_of, own_file
     svc = _svc(tmp_path)
-    p = _stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = own_file(svc, "daemon")                                    # K6: the save's own file keeps the unrelated key
     p.write_text('dp_433_CADIDLE = "40"\n')
     assert svc.save_stack_config("daemon", {"radio": "868"}).ok       # a normal run param
-    stored = load_stack_config(svc._paths, "daemon")
+    stored = load_stack_config(svc._paths, "daemon", inst=inst_of(svc, "daemon"))
     assert stored["radio"] == "868" and stored["dp_433_CADIDLE"] == "40"
 
 
 def test_daemon_override_survives_normal_reset(tmp_path):
-    from lhpc.core.config import load_stack_config, _stack_config_path
+    from lhpc.core.config import load_stack_config
+    from stores_fixture import inst_of, own_file
     svc = _svc(tmp_path)
-    p = _stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = own_file(svc, "daemon")                                   # K6: the reset's instance's own file
     p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\n')
     assert svc.reset_config("daemon").ok
-    stored = load_stack_config(svc._paths, "daemon")
+    stored = load_stack_config(svc._paths, "daemon", inst=inst_of(svc, "daemon"))
     assert "radio" not in stored and stored["dp_433_CADIDLE"] == "40"
 
 
@@ -465,13 +468,12 @@ def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
 def test_bundle_transaction_failure_preserves_both_files(tmp_path):
     # A stack-file merge that raises (unsupported manual value already in the file) rolls the whole
     # transaction back — local.toml AND the stack file keep their prior bytes.
-    from lhpc.core.config import _stack_config_path
     svc = _svc(tmp_path)
     local = svc._paths.runtime_root / "config" / "local.toml"
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text('[operator]\ncallsign = "N0AAA"\n')
-    sp = _stack_config_path(svc._paths, "meshcom", "")
-    sp.parent.mkdir(parents=True, exist_ok=True)
+    from stores_fixture import own_file
+    sp = own_file(svc, "meshcom")                                     # K6: meshcom@r1's own file
     sp.write_text('bad = [1, 2]\n')                                   # unsupported -> render raises
     local_before, stack_before = local.read_text(), sp.read_text()
     res = svc.save_config_bundle("meshcom", values={}, remotes={"meshcom-bridge": "https://x/y.git"})
@@ -585,14 +587,15 @@ def test_failure_after_first_replacement_restores_all(tmp_path, monkeypatch):
 def test_pending_journal_is_recovered_before_next_save(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     _seed(svc, tmp_path)
-    stack_file = tmp_path / "config" / "stacks" / "daemon.toml"
+    from stores_fixture import own_file
+    stack_file = own_file(svc, "daemon")                  # K6: the daemon's instance's own file
     # Simulate a crash: tamper a file and leave a journal with its pre-image.
     pre = stack_file.read_text()
     stack_file.write_text("# CORRUPT partial write\n")
     journal = tmp_path / "state" / "config-txn.json"
     journal.parent.mkdir(parents=True, exist_ok=True)
     journal.write_text(json.dumps({"version": 1, "targets": [
-        {"kind": "stack", "rel": "config/stacks/daemon.toml", "pre": pre,
+        {"kind": "stack", "rel": f"config/stacks/{stack_file.name}", "pre": pre,
          "existed": True, "mode": 0o644}]}))
     # The next bundle must recover (restore pre-image) before applying.
     r = svc.save_config_bundle("daemon", values={"radio": "868"})
@@ -645,7 +648,8 @@ def test_rollback_failure_retains_journal_and_blocks_later(tmp_path, monkeypatch
     svc = _svc_config_bundle(tmp_path)
     _seed(svc, tmp_path)
     real = cfgmod._atomic_write
-    stack_file = str(tmp_path / "config" / "stacks" / "daemon.toml")
+    from stores_fixture import own_file
+    stack_file = str(own_file(svc, "daemon"))             # K6: the daemon's instance's own file
     def fail_stack(paths, path, text, mode=0o644):
         if str(path) == stack_file:        # both the write AND its rollback fail
             raise OSError("simulated disk failure on stack file")
@@ -1088,7 +1092,10 @@ def test_stack_config_path_escaping_stacks_dir_raises_validationerror(tmp_path):
 
 
 def _write_malformed(paths, stack_id, band=""):
-    p = _stack_config_path(paths, stack_id, band)
+    # K6: the file the service reads for this stack and band: its band's instance's own <sid>@<rid>.toml
+    from lhpc.core import instances
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    p = _stack_config_path(paths, stack_id, band, instances.store_inst(svc, stack_id, band))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("this is not = valid toml [[[\n")
     return p
@@ -1104,9 +1111,11 @@ def test_absent_stack_config_is_defaults(tmp_path):
 
 def test_malformed_stack_config_raises_and_is_preserved(tmp_path):
     paths = Paths(runtime_root=tmp_path)
+    from stores_fixture import inst_of
     bad = _write_malformed(paths, "daemon")
     with pytest.raises(ConfigError):
-        load_stack_config(paths, "daemon")
+        load_stack_config(paths, "daemon", inst=inst_of(ControllerService(system=FakeSystem().system, paths=paths),
+                                                         "daemon"))
     assert bad.read_text() == "this is not = valid toml [[[\n"     # left untouched for diagnosis
 
 
@@ -1254,13 +1263,14 @@ def test_reset_of_one_band_is_refused_whole_on_a_malformed_band_less_file(tmp_pa
     # The band's file and the band-less file are one reset: a broken band-less file refuses it
     # whole, and "not modified" is true — the band's settings are still there.
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    for band, text in (("433", 'rx_only = "on"\n'), ("", "rx_only = \n")):   # band-less: invalid TOML
-        p = cfgmod._stack_config_path(svc._paths, "kiss", band)
+    from stores_fixture import inst_of, own_file           # K6: the instance's own file + the global one
+    for p, text in ((own_file(svc, "kiss", "433"), 'rx_only = "on"\n'),
+                    (cfgmod._stack_config_path(svc._paths, "kiss"), "rx_only = \n")):   # global: invalid TOML
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
     r = svc.reset_config("kiss", band="433")
     assert not r.ok and "not modified" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "kiss", "433")["rx_only"] == "on"
+    assert cfgmod.load_stack_config(svc._paths, "kiss", inst=inst_of(svc, "kiss", "433"))["rx_only"] == "on"
 
 
 def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
@@ -1269,14 +1279,14 @@ def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import config as cfgmod
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p = stores_fixture.own_file(svc, "reticulum")      # K6: the instance's own switch
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('use_gps = "off"\n')                   # differs from the default (on)
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
                         lambda self, ids, snap=None, require_enabled=False: ["reticulum-node"])
     r = svc.reset_config("reticulum")
     assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", inst=stores_fixture.inst_of(svc, "reticulum"))["use_gps"] == "off"   # untouched
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
                         lambda self, ids, snap=None, require_enabled=False: [])
     assert svc.reset_config("reticulum").ok
@@ -1289,7 +1299,7 @@ def test_reset_config_rechecks_use_gps_under_the_config_lock(tmp_path, monkeypat
     # the reset is refused instead of turning GPS back on under the running consumer.
     from contextlib import contextmanager
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p = stores_fixture.own_file(svc, "reticulum")      # K6: the instance's own switch
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('use_gps = "on"\n')                    # the default: no GPS change yet
     events: list = []
@@ -1320,7 +1330,7 @@ def test_reset_config_rechecks_use_gps_under_the_config_lock(tmp_path, monkeypat
     monkeypatch.setattr(ControllerService, "gps_liveness_blockers", blockers)
     r = svc.reset_config("reticulum")
     assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", inst=stores_fixture.inst_of(svc, "reticulum"))["use_gps"] == "off"   # untouched
     gate = events.index("gate")
     lock = max(i for i, e in enumerate(events[:gate]) if e == "lock")
     assert "unlock" not in events[lock:gate]                       # the gate ran in the lock
@@ -1333,12 +1343,12 @@ def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import config as cfgmod
+    from stores_fixture import inst_of, own_file
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    p = cfgmod._stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = own_file(svc, "daemon")                                   # K6: the reset's instance's own file
     p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\nmanual = 7\n')   # normal + dp_ + unrelated
     assert svc.reset_config("daemon").ok
-    stored = cfgmod.load_stack_config(svc._paths, "daemon")
+    stored = cfgmod.load_stack_config(svc._paths, "daemon", inst=inst_of(svc, "daemon"))
     assert "radio" not in stored                    # normal run-param reset to default
     assert stored["dp_433_CADIDLE"] == "40"          # daemon-profile override preserved
     assert stored["manual"] == 7                     # unrelated manual scalar preserved

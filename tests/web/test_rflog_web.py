@@ -34,7 +34,12 @@ def _row(doc, label):
 
 
 def _owner_values(paths):
-    return {e.owner: cfgmod.load_stack_config(paths, e.owner, "").get(e.key) for e in rflog.REGISTRY}
+    # K6 (DEC-W384k): each instance's own switch, (owner, rid) -> value
+    from lhpc.core.commands import stack_instances
+    from lhpc.core.manifest import load_manifest
+    stacks = {s.id: s for s in load_manifest()}
+    return {(e.owner, i.rid): cfgmod.load_stack_config(paths, e.owner, inst=i).get(e.key)
+            for e in rflog.REGISTRY for i in stack_instances(stacks[e.owner], paths)}
 
 
 def _scripts(doc):
@@ -47,14 +52,17 @@ def test_the_stack_switch_saves_one_key_on_the_owner_and_returns_to_the_page(tmp
     c = web()
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
+    from lhpc.core.commands import Instance          # K6: kiss@r1's own file (the default list's 433 radio)
+    r1 = Instance("r1")
     assert svc.save_config_bundle("kiss", values={"rx_only": "on"}).ok
-    before = cfgmod.load_stack_config(paths, "kiss", "")
+    before = cfgmod.load_stack_config(paths, "kiss", inst=r1)
     r = c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "off", "from": "logs",
                                                "job": "rf-kiss.log"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/logs/loraham-kiss-tnc?job=rf-kiss.log")
-    after = cfgmod.load_stack_config(paths, "kiss", "")
+    after = cfgmod.load_stack_config(paths, "kiss", inst=r1)
     assert after["rf_log"] == "off" and {k: v for k, v in after.items() if k != "rf_log"} == before
-    assert "rf_log" not in cfgmod.load_stack_config(paths, "graywolf", "")
+    assert cfgmod.load_stack_config(paths, "kiss", inst=Instance("r2"))["rf_log"] == "off"   # every instance
+    assert all("rf_log" not in cfgmod.load_stack_config(paths, "graywolf", inst=i) for i in (None, r1))
     doc = parse(c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log").get_data(as_text=True))
     form = doc.within(doc.by_id("rflog-switch"))
     assert form.field_default("value") == "off" and form.field_default("from") == "logs"
@@ -74,8 +82,9 @@ def test_switch_requires_csrf_and_a_known_stack(tmp_path, web, csrf):
 
 
 def test_the_page_says_restart_required_after_a_live_change(monkeypatch, web, csrf):
-    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
-    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, d="": "433")
+    from lhpc.core import instances                      # K6: kiss@r1 runs (its own process)
+    monkeypatch.setattr(instances, "instance_runs",
+                        lambda svc, c, i, b="": getattr(i, "rid", "") == "r1" and svc.stack_of(c.id) == "kiss")
     c = web()
     url = "/logs/loraham-kiss-tnc?job=rf-kiss.log"
     assert not parse(c.get(url).get_data(as_text=True)).present("rflog-restart")
@@ -103,7 +112,7 @@ def test_logging_sets_every_owner_at_once_and_shows_mixed(tmp_path, web, csrf):
     assert c.post("/rflog/all", data={"_csrf": csrf(c), "value": "maybe", "job": "rf-kiss.log"}).status_code == 302
     assert c.post("/rflog/all", data={"value": "on", "job": "rf-kiss.log"}).status_code == 400
     doc = parse(c.get(url).get_data(as_text=True))
-    assert doc.by_id("rflog-all-state")["data-state"] == "mixed" and _owner_values(paths)["daemon"] == "off"
+    assert doc.by_id("rflog-all-state")["data-state"] == "mixed" and _owner_values(paths)[("daemon", "r1")] == "off"
 
 
 # ---- the page ----------------------------------------------------------------------------------
@@ -231,9 +240,8 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
                               unix_replies={"/tmp/loraconf-r1.sock":
                                             b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
-        # The band marker a start records — seeded through the product's own recorder, since no
-        # public setter exists and a real start needs a radio.
-        svc._set_running_band("meshtastic", "868")
+        # The band a running instance gives (K6: no band marker; a real start needs a radio)
+        svc.launch_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))
@@ -266,9 +274,8 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-rns-node", "--config", "x"]},
                               unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
-        # The band marker a start records — seeded through the product's own recorder, since no
-        # public setter exists and a real start needs a radio.
-        svc._set_running_band("reticulum", "433")
+        # The band a running instance gives (K6: no band marker; a real start needs a radio)
+        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
@@ -381,7 +388,7 @@ def test_a_run_log_page_keeps_the_plain_viewer(web):
     assert any(s.endswith("/logs.js") for s in scripts) and not any(s.endswith("/rflog.js") for s in scripts)
 
 
-def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
+def test_a_running_stacks_rf_log_link_carries_its_launch_band(tmp_path, web):
     """Moved from the dashboard's 433 card (W250): Reticulum declares both bands and defaults to 868; running on 433,
     its RF-log link on its Apps row carries 433."""
     def factory():
@@ -389,7 +396,7 @@ def test_a_running_stacks_rf_log_link_carries_its_running_band(tmp_path, web):
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"],
                                              200: ["loraham-rns-node", "--config", "x"]}).system,
             paths=Paths(runtime_root=tmp_path))
-        svc._set_running_band("reticulum", "433")
+        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     doc = parse(web(service_factory=factory).get("/stacks/reticulum/body").get_data(as_text=True))
     assert len(_links(doc, "rns", "rf-reticulum.log", "433")) == 1

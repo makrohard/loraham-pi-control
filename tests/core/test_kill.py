@@ -145,7 +145,7 @@ def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, 
     svc = _copy_svc(tmp_path, table)
     marker = svc._band_marker("kiss")
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("433\n")                                # slot 0's running band
+    marker.write_text("433\n")                                # a 0.13.x band marker (K6, 13.12.5: never read)
     assert kill.kill(svc, "kiss@r3", apply=True).ok
     assert _gone(pk)
     assert p0.poll() is None and daemon.poll() is None       # slot 0 and the daemon live
@@ -154,7 +154,7 @@ def test_k3_a_kill_of_one_copy_never_touches_the_other_nor_the_daemon(tmp_path, 
     svc = _copy_svc(tmp_path, table)
     assert kill.kill(svc, "kiss", apply=True).ok
     assert _gone(p0) and daemon.poll() is None
-    assert not marker.exists() and svc._stop_intent_stacks() == {"kiss@r3", "kiss"}
+    assert marker.read_text() == "433\n" and svc._stop_intent_stacks() == {"kiss@r3", "kiss"}   # the old file: left alone
 
 
 def test_the_daemon_goes_per_radio_by_its_id(tmp_path, clock, procs):

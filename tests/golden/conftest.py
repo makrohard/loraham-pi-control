@@ -88,7 +88,6 @@ ORDER_SEAMS = (
     (ControllerService, "_verify_band_up", "verify:conf:{0}"),
     (ControllerService, "_ready_endpoints_present", "verify:endpoints:{0}"),
     (ControllerService, "_run_post_start", "verify:post-start"),
-    (ControllerService, "_set_running_band", "final:running-band:{1}"),
     (ControllerService, "_capture_start_composition", "final:known-working:{0}"),
     (restart_required, "clear_marker", "final:clear-restart-marker:{1}"),
     (ControllerService, "_clear_stop_intent", "final:clear-stop-intent:{0}"),

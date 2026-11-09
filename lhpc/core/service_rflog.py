@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 
+from . import instances, radio_start, runtime_fs, validators
 from . import meshcore_mode as _meshcore_mode
-from . import radio_start, runtime_fs, validators
 from . import rflog as _rflog
 from .model import RunState
 from .paths import PathContainmentError
@@ -169,7 +169,7 @@ class RflogOpsMixin:
         e, jband = _rflog.by_job(job)
         stack_band = next((c.band for c in self.stack(e.surface).components if c.band), "")
         shown = (band if band in self.RADIO_BANDS else "") or radio_start.rf_band(self, jband) \
-            or self.running_band(e.surface, stack_band) or (self.radio_bands() or self.RADIO_BANDS)[0]
+            or self.launch_band(e.surface, stack_band) or (self.radio_bands() or self.RADIO_BANDS)[0]
         stacks = []
         for x in self._rflog_entries():
             if x.banded:
@@ -187,8 +187,10 @@ class RflogOpsMixin:
         return {"band": shown, "bands": bands, "stacks": stacks}
 
     def _rflog_switch_value(self, e) -> str:
-        return (_rflog.ON if _rflog.is_on(self._resolved_param_value(
-            e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "")) else _rflog.OFF)
+        """The owner's switch: "on"/"off" when every instance agrees, else "mixed" (K6: one per instance)."""
+        values = {_rflog.ON if _rflog.is_on(self._resolved_param_value(
+            e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "", inst=i)) else _rflog.OFF for i in instances.saved_insts(self, e.owner)}
+        return values.pop() if len(values) == 1 else "mixed"
 
     def rflog_switch(self, surface: str) -> dict | None:
         """The shown stack's switch as the log page's bottom form renders it: the owner, its
@@ -205,6 +207,13 @@ class RflogOpsMixin:
         values = {self._rflog_switch_value(e) for e in self._rflog_entries()}
         return values.pop() if len(values) == 1 else "mixed"
 
+    def _rflog_save(self, owner: str, key: str, v: str) -> ActionResult:
+        """The switch on every instance of `owner`, each through the one-key bundle path (its own file and its own
+        restart marker); one result."""
+        results = [self.save_config_bundle(owner, values={key: v}, inst=i) for i in instances.saved_insts(self, owner)]
+        bad = [r for r in results if not r.ok]
+        return bad[0] if bad else results[0]
+
     @invalidates_snapshot
     def set_rflog_all(self, value) -> ActionResult:
         """Save the switch on every config owner the manifest installs, one owner at a time
@@ -215,7 +224,7 @@ class RflogOpsMixin:
             return ActionResult(False, "RF log: the switch is 'on' or 'off'.",
                                 data={"reason": "invalid-choice"})
         owners = dict.fromkeys((e.owner, e.key) for e in self._rflog_entries())
-        results = [(owner, self.save_config_bundle(owner, values={key: v})) for owner, key in owners]
+        results = [(owner, self._rflog_save(owner, key, v)) for owner, key in owners]
         ok = all(r.ok for _o, r in results)
         return ActionResult(ok, f"RF logging {v} on every stack." if ok
                             else "RF logging: not every stack was saved.",
@@ -233,15 +242,15 @@ class RflogOpsMixin:
 
     @invalidates_snapshot
     def set_rflog(self, stack_id: str, value) -> ActionResult:
-        """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge; no
-        band — the param is band-less). Graywolf's page deliberately writes the kiss store."""
+        """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge), on every instance
+        of it (K6, DEC-W384k: each its own). Graywolf's page deliberately writes the kiss store."""
         e = _rflog.entry(stack_id)
         if e is None or self.stack(e.owner) is None:
             return ActionResult(False, f"'{stack_id}' has no RF log.")
         v = str(value or "").strip().lower()
         if v not in (_rflog.ON, _rflog.OFF):
             return ActionResult(False, "RF log: the switch is 'on' or 'off'.")
-        return self.save_config_bundle(e.owner, values={e.key: v})
+        return self._rflog_save(e.owner, e.key, v)
 
     @invalidates_snapshot
     def rflog_clear(self, target: str, job) -> ActionResult:

@@ -448,15 +448,6 @@ class RadioConfig:
 
     hardware: str = HW_DEFAULT
 
-    @property
-    def _preset_map(self) -> dict:
-        # {band: --hw preset} for the selected setup (empty when unset/unknown).
-        return HW_SETUPS.get(self.hardware, HW_SETUPS[HW_DEFAULT])[1]
-
-    def hw_preset(self, band: str) -> str:
-        # Daemon `--hw` wire preset for a served band, or "" if this setup does not serve it.
-        return self._preset_map.get(band, "")
-
 
 
 # Webserver access modes (browser client-certificate authentication policy). There are
@@ -1860,9 +1851,12 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
         # The ONLY state marker written through the config transaction: the durable
         # restart-required flag, atomic WITH the config change that caused it.
         raise ConfigError("state journal target must be state/restart-required/<name>.json")
-    if kind == "openhop" and parts != ["state", "openhop", "config.yaml"]:
-        # openHop's own settings file (issue #5): its one-store rows commit WITH the stack config.
-        raise ConfigError("openhop journal target must be state/openhop/config.yaml")
+    from .commands import _RID_RE
+    if kind == "openhop" and parts != ["state", "openhop", "config.yaml"] and not (
+            len(parts) == 4 and parts[0] == "state" and _RID_RE.fullmatch(parts[1]) and parts[2:] == ["openhop", "config.yaml"]):
+        # openHop's own settings file (issue #5): its one-store rows commit WITH the stack config; an instance's is
+        # state/<rid>/openhop/config.yaml (K6: every instance's own)
+        raise ConfigError("openhop journal target must be state/[<rid>/]openhop/config.yaml")
     try:
         p = paths.under(*parts)        # lexical + symlink-parent containment
     except PathContainmentError as exc:
@@ -2080,15 +2074,17 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 # --- per-stack user configuration (set via the web Config page) -----------
 
 def _stack_config_path(paths: Paths, stack_id: str, band: str = "", inst=None) -> Path:
-    # Band-switchable stacks keep a separate config per band: "<id>@<band>.toml"; an instance with its own store
-    # (instances.own_rid; until K6 not the band's first radio's) "<id>@<rid>.toml" (DEC-W60), never by a band argument.
-    # Defence in depth: the id is a single path component and the band must be a
-    # real radio band, so neither can introduce a separator or "..". The result is
+    # K6 (K6-SCOPE-v2): an instance's settings are its own "<id>@<rid>.toml" (DEC-W60), whatever other radios the
+    # list holds; without an instance, the stack's global "<id>.toml" (autostart, 13.12.1). A "<id>@<band>.toml" is
+    # never read or written (13.8). `band` is ignored (the band callers resolve their instance first).
+    # Defence in depth: the id and the rid are single path components. The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).
     from . import validators
-    from .instances import own_rid
     sid = validators.path_component(stack_id, field="stack id")
-    key = own_rid(paths, inst) or (validators.band(band, allow_both=True) if band else "")
+    key = str(getattr(inst, "rid", "") or "")
+    from .commands import _RID_RE
+    if key and not _RID_RE.fullmatch(key):
+        raise validators.ValidationError(f"radio id must be r1..r99, got {key!r}")
     name = f"{sid}@{key}.toml" if key else f"{sid}.toml"
     # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
     # every other runtime write path; present the ValidationError callers already handle.
@@ -2189,19 +2185,19 @@ def _render_stack_config(stack_id: str, values: dict) -> str:
     return rendered
 
 
-def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "") -> Path:
-    """Persist a stack/band's configuration (flat key/value, stored as strings).
-    Atomic + locked so concurrent web saves cannot corrupt or interleave."""
-    path = _stack_config_path(paths, stack_id, band)
+def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "", inst=None) -> Path:
+    """Persist a stack's configuration (flat key/value, stored as strings): the instance's own file, else the
+    global one (K6). Atomic + locked so concurrent web saves cannot corrupt or interleave."""
+    path = _stack_config_path(paths, stack_id, band, inst)
     with config_lock(paths):
         _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
     return path
 
 
-def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names) -> None:
-    """Drop params `names` of `comp_id` from the stack's band-less config, in both stored forms
+def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names, inst=None) -> None:
+    """Drop params `names` of `comp_id` from the instance's own config (else the global one), in both stored forms
     (component-scoped and flat). MUST be called inside `config_lock` (it does not take it)."""
-    path = _stack_config_path(paths, stack_id)
+    path = _stack_config_path(paths, stack_id, "", inst)
     current = dict(_load_runtime_toml(paths, path))
     keys = {f"file_{n}" for n in names} | {f"__f__{comp_id}__{n}" for n in names}
     if keys & set(current):
@@ -2227,7 +2223,7 @@ def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
 
 
 def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expected: dict,
-                                   matches) -> int:
+                                   matches, inst=None) -> int:
     """Race-safe removal of default-equal keys under ONE config lock. Re-reads the LATEST
     config, and for each key in `expected` removes it ONLY if `matches(key, str(current[key]),
     expected[key])` is True — i.e. the stored value is STILL semantically the pre-update default
@@ -2235,7 +2231,7 @@ def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expec
     empty override) therefore fails the predicate and survives untouched; there is no stale
     snapshot-to-delete window. Returns the number removed; the write is atomic, so a write failure
     raises (ConfigError/OSError) and removes nothing (the caller keeps the candidates pending)."""
-    path = _stack_config_path(paths, stack_id, band)
+    path = _stack_config_path(paths, stack_id, band, inst)        # K6: the instance's own file, else the global one
     with config_lock(paths):
         current = dict(_load_runtime_toml(paths, path))
         to_del = [k for k, exp in expected.items()

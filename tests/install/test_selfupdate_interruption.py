@@ -49,7 +49,7 @@ POINTS = [
     ("git.advance", "merge"),                                # the checkout moves
     ("write_marker", "state/selfupdate.json"),               # status cache
     ("write_marker", "state/selfupdate-migrate.json"),       # completed
-    ("atomic_write", "config/stacks/s.toml"),                # the migration
+    ("atomic_write", "config/stacks/s@r1.toml"),             # the migration (K6: s@r1's own file)
     ("unlink", "state/selfupdate-migrate.json"),
     ("selfupdate.delete_anchor", "*"),
     ("unlink", "state/locks/controller-task-admission.owner"),
@@ -82,7 +82,8 @@ def box(tmp_path, monkeypatch):
     def svc():          # a fresh service: what the next process sees
         return ControllerService(manifest_path=work / "manifest.toml", system=RealSystem(),
                                  paths=Paths(runtime_root=rt))
-    cfgmod.save_stack_config(svc()._paths, "s", {"ropt": "OLD"})
+    from stores_fixture import inst_of                      # K6: the instance's own file (the baseline list's r1)
+    cfgmod.save_stack_config(svc()._paths, "s", {"ropt": "OLD"}, inst=inst_of(svc(), "s"))
     return svc, work, rt
 
 

@@ -1156,8 +1156,13 @@ def test_rflog_all_and_clear_all_reach_every_registered_log(tmp_path, monkeypatc
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
     assert main(["rflog", "--all", "off"]) == 0
     assert capsys.readouterr().out.startswith("OK")
+    from lhpc.core.commands import stack_instances      # K6 (DEC-W384k): every instance's own switch
+    from lhpc.core.manifest import load_manifest
+    stacks = {s.id: s for s in load_manifest()}
     for e in rflog.REGISTRY:
-        assert cfgmod.load_stack_config(Paths(runtime_root=rt), e.owner, "")[e.key] == "off"
+        insts = stack_instances(stacks[e.owner], Paths(runtime_root=rt))
+        assert insts and all(cfgmod.load_stack_config(Paths(runtime_root=rt), e.owner, inst=i)[e.key] == "off"
+                             for i in insts), e.owner
     (rt / "logs").mkdir(parents=True, exist_ok=True)
     jobs = [j for e in rflog.REGISTRY for _b, j in e.jobs]
     for j in jobs:

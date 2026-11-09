@@ -47,8 +47,8 @@ def test_save_while_running_writes_the_restart_marker(tmp_path, run_op):
                          "changed": []}
     marker = json.loads((tmp_path / "state/restart-required/chat@r1.json").read_text())
     marker.pop("created_at")
-    assert marker == {"version": 1, "stack": "chat@r1", "mode": "restart", "params": ["tx_freq"],
-                      "band": "", "launched": {"|loraham-chat|tx_freq": "433.775"}}
+    assert marker == {"version": 1, "stack": "chat@r1", "mode": "restart", "params": ["tx_freq"],   # K6: the band is
+                      "band": "433", "launched": {"|loraham-chat|tx_freq": "433.775"}}       # its instance's
 
 
 def test_refused_by_validation(tmp_path, run_op):
@@ -125,7 +125,7 @@ def test_malformed_stack_file_is_preserved(tmp_path, run_op):
     run = run_op(tmp_path, lambda: svc.save_config_bundle("chat", values={"file_tx_freq": "434.5"}))
     assert run.fields == {**REFUSED, "data_keys": []}
     assert len(run.res.details) == 1 and re.fullmatch(
-        r"config transaction failed and was rolled back: /\S+/config/stacks/chat\.toml: "
+        r"config transaction failed and was rolled back: /\S+/config/stacks/chat@r1\.toml: "
         r"Expected '=' after a key in a key/value pair \(at line 1, column 6\)",
         run.res.details[0])
     assert run.phases == WRITES

@@ -372,7 +372,8 @@ def _live(tmp_path, dev, monkeypatch):
     binary.chmod(0o755)
     (root / "state" / "meshtasticd" / "ssl").mkdir(parents=True)   # the running node's own state
     paths = Paths(runtime_root=root)
-    cfgmod.save_stack_config(paths, "meshtastic", {"use_gps": "off"})
+    from lhpc.core.commands import Instance                 # K6 / DEC-W384k: the switch is meshtastic@r2's own
+    cfgmod.save_stack_config(paths, "meshtastic", {"use_gps": "off"}, inst=Instance("r2"))
     cfgmod.save_gps(paths, source="nmea", device=dev, nmea_baud=9600)
     (root / "logs").mkdir()
     (root / "logs" / "rf-meshtastic.log").write_bytes(b'{"x":1}\n' * 1024)       # 8 KiB > cap

@@ -493,23 +493,14 @@ def test_planner_conflicting_bands_on_two_records_skip():
 
 
 @pytest.mark.parametrize("ev_band,mk,expect_band,why_part", [
-    # ownership authoritative, markers agree
-    ("433", MarkerView(running_band_state="valid", running_band="433",
-                       last_start_state="valid", last_start_band="433", last_start_at=5.0),
-     "433", ""),
-    # valid running marker DISAGREES with ownership -> ambiguity
-    ("433", MarkerView(running_band_state="valid", running_band="868"), "", "disagree"),
+    # ownership authoritative, the last-start marker agrees (K6, 13.12.5: no running-band marker is read)
+    ("433", MarkerView(last_start_state="valid", last_start_band="433", last_start_at=5.0), "433", ""),
     # valid last-start DISAGREES -> ambiguity
     ("433", MarkerView(last_start_state="valid", last_start_band="868", last_start_at=5.0),
      "", "disagree"),
-    # empty record band: ONE agreeing marker supplies the candidate
-    ("", MarkerView(running_band_state="valid", running_band="868"), "868", ""),
-    # empty record band, two disagreeing markers -> ambiguity
-    ("", MarkerView(running_band_state="valid", running_band="433",
-                    last_start_state="valid", last_start_band="868", last_start_at=5.0),
-     "", "disagree"),
-    # any unsafe source blocks
-    ("433", MarkerView(running_band_state="unsafe"), "", "unsafe band marker"),
+    # empty record band: the one valid marker supplies the candidate
+    ("", MarkerView(last_start_state="valid", last_start_band="868", last_start_at=5.0), "868", ""),
+    # an unsafe source blocks
     ("433", MarkerView(last_start_state="unsafe"), "", "unsafe band marker"),
     # switchable with NO band source: never guess
     ("", MarkerView(), "", "no valid band source"),
@@ -2057,3 +2048,19 @@ def test_a_disabled_second_radio_of_the_band_does_not_block_the_restore(tmp_path
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     assert svc.boot_restore_run().ok
     assert calls == [{"target": "kiss", "band": "433"}]
+
+
+def test_k6_an_old_running_band_marker_is_never_read_by_boot_restore(tmp_path):
+    # 13.12.5: a 0.13.x state/running/<sid>.band (valid or garbled) is no band source: the view has none, and it
+    # never makes a restore ambiguous or unsafe
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for text in ("868", "garbled\x00"):
+        leaf = tmp_path / "state" / "running" / "kiss.band"
+        leaf.parent.mkdir(parents=True, exist_ok=True)
+        leaf.write_text(text)
+        view = svc._boot_marker_view("kiss")
+        assert not hasattr(view, "running_band_state") and view.last_start_state == "absent"
+        assert br._band_candidates(_ev(band="433"), _SWITCH, view) == ("433", "")

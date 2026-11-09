@@ -71,8 +71,7 @@ def test_config_setup_bands_and_presets(tmp_path, setup, bands, presets):
     config.save_hardware_setup(p, setup)
     c = config.load_config(p)
     assert c.radio.hardware == setup and c.diagnostics == []
-    for b in ("433", "868"):
-        assert c.radio.hw_preset(b) == presets.get(b, "")
+    assert config.HW_SETUPS[setup][1] == presets          # K6: the rows `lhpc hardware <setup>` writes carry the preset
 
 
 def test_config_bad_value_is_diagnostic_and_falls_open_to_unset(tmp_path):

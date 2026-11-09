@@ -3,6 +3,7 @@
 
 import pathlib
 import pytest
+import launch_band_fixture
 import radios_fixture
 import time
 from lhpc.core.lifecycle import Lifecycle
@@ -1712,7 +1713,7 @@ def _mesh(svc):
 
 @pytest.mark.needs_session
 @pytest.mark.parametrize("band", ["433", "868"])
-def test_required_outcome_is_rendered_for_the_running_band(tmp_path, band, set_call):
+def test_required_outcome_is_rendered_for_the_launch_band(tmp_path, band, set_call):
     # REGRESSION: the lookup used to be band-less, so it could never match meshtastic's real
     # band-scoped ownership record and the required region outcome silently never rendered.
     svc = _band_svc(set_call, tmp_path)
@@ -1720,7 +1721,7 @@ def test_required_outcome_is_rendered_for_the_running_band(tmp_path, band, set_c
     stack, comp = _mesh(svc)
     p = _record_main_on_band(life, stack, comp, band)
     try:
-        svc._set_running_band(stack.id, band)
+        launch_band_fixture.set_launch_band(svc, stack.id, band)
         binding = life._binding_for(comp.id, band)
         assert binding is not None, "the band-scoped main must be verifiable"
         _write_required_sidecar(life, binding, comp_id=comp.id, band=band)
@@ -1739,7 +1740,7 @@ def test_required_outcome_of_another_band_is_not_rendered(tmp_path, set_call):
     stack, comp = _mesh(svc)
     p = _record_main_on_band(life, stack, comp, "868")
     try:
-        svc._set_running_band(stack.id, "868")
+        launch_band_fixture.set_launch_band(svc, stack.id, "868")
         binding = life._binding_for(comp.id, "868")
         assert binding is not None
         # same launch, but the file claims it belongs to the OTHER band
@@ -1756,7 +1757,7 @@ def test_required_outcome_from_a_stale_launch_is_not_rendered(tmp_path, set_call
     stack, comp = _mesh(svc)
     p = _record_main_on_band(life, stack, comp, "433")
     try:
-        svc._set_running_band(stack.id, "433")
+        launch_band_fixture.set_launch_band(svc, stack.id, "433")
         binding = dict(life._binding_for(comp.id, "433"))
         import json as _json
         from lhpc.core import runtime_fs as _rfs
@@ -1791,7 +1792,7 @@ def test_required_outcome_with_malformed_meta_is_not_rendered(tmp_path, meta, se
     stack, comp = _mesh(svc)
     p = _record_main_on_band(life, stack, comp, "433")
     try:
-        svc._set_running_band(stack.id, "433")
+        launch_band_fixture.set_launch_band(svc, stack.id, "433")
         binding = life._binding_for(comp.id, "433")
         path = life.paths.under("state", "post", life.required_result_leaf(binding))
         _rfs.ensure_dir(life.paths, path.parent)

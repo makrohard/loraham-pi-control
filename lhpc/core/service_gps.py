@@ -288,7 +288,7 @@ class GpsOpsMixin:
         malformed config is NOT a disabled stack — `gps_enabled_for()` answers False there, which
         would drop a native reader that still holds the open device (audit F1)."""
         try:
-            cfg = self._stack_config_cached(stack_id)
+            cfg = self._stack_config_cached(stack_id, "", instances.store_inst(self, stack_id))   # K6: its instance's
         except Exception:
             return False
         return str(cfg.get("use_gps", "")).strip().lower() == "off"
@@ -685,7 +685,7 @@ class GpsOpsMixin:
         if not stack_id:
             return False
         try:
-            cfg = self._stack_config_cached(stack_id, "", inst)   # bandless; an instance's own
+            cfg = self._stack_config_cached(stack_id, "", instances.store_inst(self, stack_id, "", inst))   # K6: its own
         except (OSError, ValueError, KeyError, ConfigError):
             return False
         raw = str(cfg.get("use_gps", "")).strip().lower()

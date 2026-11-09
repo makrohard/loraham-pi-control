@@ -223,7 +223,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "rflog_switcher": "read-only",
     "run_blockers": "read-only",
     "run_params_for": "read-only",
-    "running_band": "read-only",
+    "launch_band": "read-only",
     "running_lora_stacks": "read-only",
     "running_tasks": "read-only",
     "runs_on_band": "read-only",

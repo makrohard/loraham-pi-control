@@ -7,9 +7,9 @@ must BLOCK automatic restoration (and gate-based evidence retirement), never loo
 
 The PLANNER is deterministic and service-free: it consumes evidence records that a service-side
 classifier has already validated (liveness, current-boot, manifest membership) plus marker data,
-and produces plan items. Band policy: the ownership record's band is authoritative; running-band
-and last-start markers are consistency checks (any disagreement between two valid sources is a
-typed ambiguity — never a silent preference, never a fallback to another TX band).
+and produces plan items. Band policy: the ownership record's band is authoritative; the last-start
+marker is a consistency check (K6, 13.12.5: no running-band marker is read; a disagreement between two
+valid sources is a typed ambiguity — never a silent preference, never a fallback to another TX band).
 """
 
 from __future__ import annotations
@@ -264,8 +264,6 @@ class StackMeta:
 @dataclass(frozen=True)
 class MarkerView:
     """Tri-state marker reads for one stack: state is "absent" | "valid" | "unsafe"."""
-    running_band_state: str = "absent"
-    running_band: str = ""
     last_start_state: str = "absent"
     last_start_band: str = ""
     last_start_at: float = 0.0           # finite when last_start_state == "valid"
@@ -283,13 +281,11 @@ def _band_candidates(ev: Evidence, meta: StackMeta, mk: MarkerView) -> tuple[str
     The ownership record's band is authoritative; valid markers are CONSISTENCY checks. Markers
     SUPPLY the candidate only for a record whose own band is empty. Any unsafe source
     blocks; any two valid disagreeing sources block. Never fall back to another band."""
-    if mk.running_band_state == "unsafe" or mk.last_start_state == "unsafe":
+    if mk.last_start_state == "unsafe":
         return "", "unsafe band marker"
     sources = []
     if ev.band:
         sources.append(("ownership", ev.band))
-    if mk.running_band_state == "valid" and mk.running_band:
-        sources.append(("running-marker", mk.running_band))
     if mk.last_start_state == "valid" and mk.last_start_band:
         sources.append(("last-start", mk.last_start_band))
     values = {b for _, b in sources}

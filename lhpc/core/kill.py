@@ -322,7 +322,6 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         if not component and copy is not None and copy.rid:
             svc._write_stop_intent([instances.key(stk.id, copy)])       # the instance's own intent
         elif not component and copy is None:
-            svc._safe_unlink(svc._band_marker(stk.id))
             svc.dismiss_interactive(stk.id)
             svc._write_stop_intent([stk.id])
     results = tuple(CompResult(

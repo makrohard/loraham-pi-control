@@ -1071,6 +1071,14 @@ def claim_key(paths, band: str, prefix: str = "loraham.radio.") -> str:
     return f"{prefix}{key_for(paths, band)}"
 
 
+def row_preset(paths, rid: str) -> str:
+    """The daemon preset of radio `rid`'s row (its model variant), "" when it has none (K6: a pin default's)."""
+    row = next((r for r in radios.load(paths).radios if r.id == rid), None)
+    model = radio_models.load().get(row.model) if row else None
+    v = radios.variant(row, model) if model else None
+    return v.preset if v else ""
+
+
 def chip_family(svc, band: str, rid: str = ""):
     """W5-2: the chip family of radio `rid`, or of `band`'s one enabled radio, from its row's model variant (the preset
     its daemon runs with); None when the hardware list does not resolve the band to one radio (0.13.x: its preset)."""

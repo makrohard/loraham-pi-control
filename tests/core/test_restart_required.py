@@ -165,7 +165,8 @@ def test_reset_marker_write_failure_resets_nothing(tmp_path):
     os.symlink(tmp_path / "evil.json", d / "chat@r1.json")
     svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     assert not svc.reset_config("chat").ok                           # typed failure
-    assert load_stack_config(svc._paths, "chat")["file_tx_freq"] == "434.500"   # not reset
+    from lhpc.core.commands import Instance                           # K6: chat@r1's own file
+    assert load_stack_config(svc._paths, "chat", inst=Instance("r1"))["file_tx_freq"] == "434.500"   # not reset
     assert (tmp_path / "evil.json").read_text() == "x"               # nothing through the symlink
 
 

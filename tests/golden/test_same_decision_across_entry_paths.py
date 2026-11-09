@@ -38,6 +38,8 @@ child's own gate.
 
 import json
 import os
+
+import stores_fixture
 import re
 import signal
 import subprocess
@@ -313,8 +315,8 @@ def _band_owner(box):
 
 def _firewall_pending(box):
     """kiss saved to listen beyond loopback (the host's firewall state: `firewall_pending_host`)."""
-    cfgmod.save_stack_config(box.svc._paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9001"},
-                             box.svc._config_band("kiss", ""))
+    cfgmod.update_stack_config(box.svc._paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9001"},
+                               inst=stores_fixture.inst_of(box.svc, "kiss"))   # K6: the instance's own store
     box.svc._invalidate_config()
 
 
@@ -333,12 +335,12 @@ PENDING_SAVED = {"kiss_port": "8001", "verbose": "on"}
 def _pending_config_journal(box):
     """A Settings save crashed mid-write: kiss.toml torn, its journal (with the pre-image) left.
     The pre-image holds a non-default setting, so only its restore can bring it back."""
-    f = box.root / "config" / "stacks" / "kiss.toml"
-    cfgmod.save_stack_config(box.svc._paths, "kiss", PENDING_SAVED, "")
+    f = stores_fixture.own_file(box.svc, "kiss")                 # K6: the instance's own store
+    cfgmod.update_stack_config(box.svc._paths, "kiss", PENDING_SAVED, inst=stores_fixture.inst_of(box.svc, "kiss"))
     pre = f.read_text()
     f.write_text("# torn\n")
     (box.root / "state" / "config-txn.json").write_text(json.dumps({"version": 1, "targets": [
-        {"kind": "stack", "rel": "config/stacks/kiss.toml", "pre": pre, "existed": True,
+        {"kind": "stack", "rel": str(f.relative_to(box.root)), "pre": pre, "existed": True,
          "mode": 0o644}]}))
 
 
@@ -362,7 +364,8 @@ def _ambiguous(box):
     box.manifest = DATA / "scope2_manifest.toml"
     box.svc = ControllerService(manifest_path=box.manifest, system=box.fake.system,
                                 paths=Paths(runtime_root=box.root))
-    cfgmod.update_stack_config(box.svc._paths, "ostack2", {"rp": "LEGACY"})
+    cfgmod.update_stack_config(box.svc._paths, "ostack2", {"rp": "LEGACY"},
+                               inst=stores_fixture.inst_of(box.svc, "ostack2"))   # K6: in the instance's own store
 
 
 
@@ -502,11 +505,12 @@ def test_pending_config_journal(entry):
     succeeds alike."""
     res = _all(entry, "start", "kiss", _pending_config_journal)
     _same(res, started=True, refusal="ok", live=["loraham-kiss-tnc"],
-          files=sorted(["config/stacks/kiss.toml", "state/config-txn.json", *KISS_STARTED]))
+          files=sorted(["config/stacks/kiss@r1.toml", "state/config-txn.json", *KISS_STARTED]))   # K6: kiss@r1's store
     assert _renders(res) == SUCCEEDED
     for r in res.values():
         assert not (r["root"] / "state" / "config-txn.json").exists()
-        assert cfgmod.load_stack_config(Paths(runtime_root=r["root"]), "kiss") == PENDING_SAVED
+        from lhpc.core.commands import Instance                  # K6: the restored store is kiss@r1's own
+        assert cfgmod.load_stack_config(Paths(runtime_root=r["root"]), "kiss", inst=Instance("r1")) == PENDING_SAVED
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)

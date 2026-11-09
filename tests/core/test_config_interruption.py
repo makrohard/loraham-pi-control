@@ -24,7 +24,7 @@ pytestmark = pytest.mark.safety("config-transaction")
 POINTS = [
     ("atomic_write", "state/config-txn.json"),       # the journal with every pre-image
     ("atomic_write", "config/local.toml"),
-    ("atomic_write", "config/stacks/daemon.toml"),
+    ("atomic_write", "config/stacks/daemon@r1.toml"),   # K6: the instance's own store
     ("unlink", "state/config-txn.json"),             # commit
 ]
 SKIP = ("config/.lock", "state/locks")               # lock files, not transaction state

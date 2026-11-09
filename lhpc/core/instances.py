@@ -39,15 +39,6 @@ def recorded_radio(paths, sid: str, rids) -> str:              # transitional: p
     return next((r["rid"] for r in recs if r.get("stack") == sid and r.get("rid") in rids), "")
 
 
-def band_first(paths, inst) -> bool:                                       # transitional: removed in K6
-    """DEC-W384e: the instance's radio is its band's first enabled one (the radio the slot builds called slot 0's): its settings are
-    still the per-band store (<sid>.toml / <sid>@<band>.toml) until K6 moves every store to <sid>@<rid>.toml. The
-    settings-store choice is its ONLY use."""
-    rows = sorted((r for r in radios.load(paths).radios if r.enabled), key=lambda r: int(r.id[1:]))
-    band = next((r.band for r in rows if r.id == getattr(inst, "rid", "")), None)
-    return band is not None and next(r.id for r in rows if r.band == band) == inst.rid
-
-
 def radios_of(stack, paths, disabled: str = "") -> tuple:
     """The radios a stack has an instance on (K4b): every enabled radio of its bands (any radio for a stack without
     bands), in rid order; the hardware list
@@ -127,7 +118,7 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
     return f"{target}@{cands[0] if len(cands) == 1 else '<rid>'}"
 
 
-def running_bands(svc, sid: str) -> set:
+def launch_bands(svc, sid: str) -> set:
     """The bands `sid`'s running instances were LAUNCHED on (their verified records' bands; G1-K4B 6: an edited
     hardware row is no evidence). Empty, so the caller holds every band (fail-safe), when one running instance's
     band is not told by its record (a hand-started token-only process, or a record without a band)."""
@@ -287,22 +278,67 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
 
 
 def own_rid(paths, inst) -> str:
-    """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60); "" for the
-    band's first radio's instance, which reads the per-band store until K6 (band_first, DEC-W384e)."""
-    return inst.rid if inst is not None and inst.rid and not band_first(paths, inst) else ""
+    """The radio whose own settings file `config/stacks/<sid>@<rid>.toml` the instance reads (DEC-W60, K6: every
+    instance); "" without one (the stack's global `<sid>.toml`)."""
+    return inst.rid if inst is not None and inst.rid else ""
+
+
+def elsewhere(svc, target_rid: str):
+    """K6, one app stack per RADIO (W286/W322, triage T9) -> predicate(stack_id, comp): the running `comp` of
+    `stack_id` is told on radios that are not `target_rid`'s, so it does not block that instance. A radio not told (a
+    process no instance claims, a daemon without --id) blocks the whole band, as before (fail-safe)."""
+    held = {}
+    if target_rid:
+        from . import radio_start
+        for s_id, r_id, _c, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
+            held.setdefault(s_id, set()).add(r_id)
+        dprocs = radio_start._daemon_procs(svc)
+        if dprocs and all(p.kind == "id" for p in dprocs):
+            held[svc.stack_of(svc.DAEMON_ID)] = {p.rid for p in dprocs}
+
+    def other(stack_id, comp) -> bool:
+        rids = held.get(stack_id, set())
+        told = rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp))
+        return bool(target_rid and told and target_rid not in rids)
+    return other
+
+
+def saved_insts(svc, sid: str) -> list:
+    """The stack's instances whose own settings a stack-wide entry means (each its own, K6); [None] (the global
+    store) without a hardware list."""
+    return [i for i in commands.stack_instances(svc.stack(sid), svc._paths) if i.rid] or [None]
+
+
+def port_of_default(svc, p, inst) -> str:
+    """A `{port_of:STACK:BASE}` default for instance `inst` (K6S-2, G1-K7G): STACK's instance on the same radio
+    listens on its saved base (the param whose default is `{port:BASE}`, in its own store) else BASE, + 133 x
+    (n - 1); "" for any other default or without a radio. A saved value of `p` wins (the caller's)."""
+    m = commands._PORT_OF_RE.fullmatch(getattr(p, "default_template", "") or "")
+    other = svc.stack(m.group(1)) if m and getattr(inst, "rid", "") else None
+    if other is None:
+        return ""
+    base, stored = int(m.group(2)), store(svc, other.id, inst.band, commands.Instance(inst.rid, band=inst.band))
+    counts = svc._owner_param_counts(other)[0]
+    for c in other.components:
+        for q in c.run_params:
+            if getattr(q, "default_template", "") == f"{{port:{base}}}":
+                saved = svc._resolve_stored(stored, "r", c.id, q.name, counts.get(q.name, 0))[0]
+                base = int(saved) if str(saved or "").strip().isdigit() else base
+    return str(inst.port(base))
+
+
+def store_inst(svc, sid: str, band: str = "", inst=None):
+    """The instance whose own settings a caller means: its own; a band caller (no radio; the web's ?band= until W5)
+    its band's instance (copy_of: the running radio, else the band's first); TEMPLATE-like (no rid) without a list."""
+    return inst if getattr(inst, "rid", "") else (copy_of(svc, sid, band=band)[0] or inst)
 
 
 
-def stores(svc, sid: str, cfg_band: str, inst=None) -> tuple:
-    """(stored, bandless): the saved settings a component of stack `sid` reads. The band's first radio's instance:
-    its band's file and the band-less file (the stack-level params), as before (until K6, band_first); any other
-    instance: its own `config/stacks/<sid>@<rid>.toml` for both (DEC-W60), an instance without its file runs on the
-    defaults."""
-    if own_rid(svc._paths, inst):
-        own = svc._stack_config_cached(sid, "", inst)
-        return own, own
-    stored = svc._stack_config_cached(sid, cfg_band)
-    return stored, (svc._stack_config_cached(sid, "") if cfg_band else stored)
+def store(svc, sid: str, cfg_band: str, inst=None) -> dict:
+    """The saved settings a component of stack `sid` reads: the instance's own `config/stacks/<sid>@<rid>.toml`
+    (K6, DEC-W60; the switches too, DEC-W384k); a band caller's, its band's instance's (store_inst); without a list,
+    the global `<sid>.toml`. An instance without its file runs on the defaults."""
+    return svc._stack_config_cached(sid, "", store_inst(svc, sid, cfg_band, inst))
 
 
 
@@ -490,16 +526,15 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
 
 def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     """7f, DEC-W40: the Settings page's radio chooser of stack `sid`, one entry per enabled radio of its bands
-    ("rN · band"): an instance with its own store opens it (`radio=`); the band's first radio opens the band's store
-    (`band=`, until K6, band_first). Nothing is added first (DEC-W344). `radio` is the shown instance's own rid."""
+    ("rN · band"), each opening that instance's own store (`radio=`, K6: every instance). A band caller's page shows
+    its band's instance (store_inst), so that entry is the selected one. Nothing is added first (DEC-W344). `radio`
+    is the shown instance's own rid."""
     stack = svc.stack(sid)
     bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
     rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
-    shown, out = own_rid(svc._paths, inst), []
-    for r in rows:
-        label, own = f"{r.id} · {r.band}", own_rid(svc._paths, commands.Instance(r.id, band=r.band))
-        out.append({"label": label, "radio": own, "band": "" if own else r.band,
-                    "sel": shown == own if own else (not shown and r.band == (band or r.band)), "disabled": False})
+    shown = own_rid(svc._paths, store_inst(svc, sid, band, inst)) if rows else ""
+    out = [{"label": f"{r.id} · {r.band}", "radio": r.id, "band": "", "sel": r.id == shown, "disabled": False}
+           for r in rows]
     return {"radio": shown, "radio_choices": out if len(out) > 1 else []}
 
 

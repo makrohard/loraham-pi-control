@@ -151,17 +151,12 @@ def _retire_keeps_the_receipt_for_an_owned_dir(tmp_path, monkeypatch, fail, rest
 def _boot_marker_unsafe(which):
     def case(tmp_path, monkeypatch, fail, restore, binary_receipt):
         svc = _svc(tmp_path, monkeypatch)
-        if which == "running-band":
-            leaf = tmp_path / "state" / "running" / "kiss.band"
-            leaf.parent.mkdir(parents=True)
-            leaf.write_text("433")
-        else:
-            leaf = known_working.candidate_path(svc._paths, "kiss")
-            leaf.parent.mkdir(parents=True)
-            leaf.write_text(json.dumps({"band": "433", "started_at": 1.0}))
+        leaf = known_working.candidate_path(svc._paths, "kiss")      # K6: the last-start marker (no band marker)
+        leaf.parent.mkdir(parents=True)
+        leaf.write_text(json.dumps({"band": "433", "started_at": 1.0}))
         fail(leaf)
         view = svc._boot_marker_view("kiss")
-        state = view.running_band_state if which == "running-band" else view.last_start_state
+        state = view.last_start_state
         assert state == "unsafe"
     return case
 
@@ -192,7 +187,6 @@ SITES = {
     "switch-artifact-only": _switch_does_not_take_an_unlisted_tree,
     "retire-still-present": _retire_keeps_the_receipt_for_a_file,
     "retire-owned-dir": _retire_keeps_the_receipt_for_an_owned_dir,
-    "boot-running-band": _boot_marker_unsafe("running-band"),
     "boot-last-start": _boot_marker_unsafe("last-start"),
     "boot-journal": _boot_journal_unsafe,
     "config-journal": _config_journal_blocks,

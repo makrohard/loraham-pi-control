@@ -13,8 +13,8 @@ whose run state is the page's badge and whose `logs_view` target the links use) 
 file(s). Graywolf is the one proxy: its log page shows and saves the kiss-owned switch, because
 the TNC is where graywolf's frames cross the radio boundary.
 
-`rf_log` is a STACK-level, band-less setting (`service_params._BANDLESS_STACK_PARAMS`): the
-daemon's FILES are per band, its SWITCH is not.
+`rf_log` is each instance's own setting (K6, DEC-W384k: in its `<sid>@<rid>.toml`); the stack-wide switch
+entries (`lhpc rflog`, the log page) set every instance.
 """
 
 from __future__ import annotations

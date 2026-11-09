@@ -9,7 +9,15 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
+from . import (
+    commands,
+    config_save,
+    daemon_control,
+    listeners,
+    runtime_fs,
+    spi_mode,
+    validators,
+)
 from . import instances as _instances
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
@@ -73,8 +81,14 @@ _STACK_SWITCHES = (
         default=lambda stacks, sid: _rflog.switch_default(stacks, sid) if sid else _rflog.ON,
         key=_rflog.switch_key),
 )
-_BANDLESS_STACK_PARAMS = tuple(sw.name for sw in _STACK_SWITCHES)
-_UNREAD = object()             # restart_marker_payload: read the committed marker itself
+_UNREAD = object()
+
+
+def _derived(p) -> bool:
+    """DEC-W384q: a hidden row computed from the instance (its sockets, ports, paths): LHPC sets it; a save refuses it
+    and a stored value is never read. Secret hidden rows (keys, passwords) are not derived."""
+    return bool(getattr(p, "hidden", False) and not getattr(p, "secret_file", "")
+                and (getattr(p, "default_template", "") or "{rid}" in str(p.default)))             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -250,7 +264,7 @@ class ParamsConfigMixin:
                                if not getattr(p, "hidden", False)]):
                 idrec = id_rows.get((c.id, kind, p.name))
                 default = ("" if idrec else
-                           self._op_subst(band_default(p, cfg_band or band, self.config().radio)))
+                           self._op_subst(self._band_default(p, cfg_band or band, inst)))
                 value = (self._stored_param_value(target, kind, c.id, p.name, cfg_band, inst)   # 7f: an instance's own
                          if idrec else
                          self._resolved_param_value(target, kind, c.id, p.name, cfg_band, inst))
@@ -376,8 +390,7 @@ class ParamsConfigMixin:
         inherited value is never mistaken for — or round-tripped into — a saved local one."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        use_band = "" if (cfg_band and name in _BANDLESS_STACK_PARAMS) else cfg_band
-        stored, _bandless = _instances.stores(self, self._owner_stack_id(target), use_band, inst)   # 7f: its own
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -390,31 +403,31 @@ class ParamsConfigMixin:
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # 7f: its own
-        if cfg_band and name in _BANDLESS_STACK_PARAMS:
-            # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
-            # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
-            # then display, and which the next bundle save writes back as "at default -> remove",
-            # silently clearing the switch while editing something unrelated.
-            stored = bandless
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
         val, _amb = self._resolve_stored(stored, k, comp_id, name, count)
         if val is None:
             _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
-            bd = band_default(p, cfg_band or band, self.config().radio) if p is not None else ""
+            bd = self._band_default(p, cfg_band or band, inst) if p is not None else ""
             val = self._op_subst(bd)
         if kind == "file" and comp_id == MESHCORE_COMPONENT and name in _openhop_store.ROWS:
             return _openhop_store.row_value(self, name, str(val), inst)    # issue #5: the file wins
         return str(val)
 
-    def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
+    def _band_default(self, p, band: str, inst=None) -> str:
+        """model.band_default with the pin preset of the instance's radio row (K6; a band caller: its band's first
+        radio); the list is read only for a param with pin defaults."""
+        rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band) if getattr(p, "preset_defaults", ()) else ""
+        return band_default(p, band, _radio_start.row_preset(self._paths, rid) if rid else "")
+
+    def _param_default_canon(self, p, cfg_band: str, band: str, inst=None) -> str:
         """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —
         used by `save_config_bundle` to store OVERRIDES ONLY (a submitted value equal to this is not
         persisted, so it always follows the current/updated manifest default). Fail-soft: a
         non-validating default is compared as its raw substituted string."""
-        eff = self._op_subst(band_default(p, cfg_band or band, self.config().radio))
+        eff = self._op_subst(self._band_default(p, cfg_band or band, inst))
         if p.kind == "int" and eff.strip() == "":
             return ""                                   # an unset optional int
         try:
@@ -475,9 +488,13 @@ class ParamsConfigMixin:
         out: list = []
         for stack in self.stacks():
             run_counts, file_counts = self._owner_param_counts(stack)
-            for band in (self.stack_bands(stack.id) or ("",)):
-                cfg_band = self._config_band(stack.id, band)
-                stored = load_stack_config(self._paths, stack.id, cfg_band)
+            # K6: every instance's own file (its radio's band), the global one without a list
+            for inst in ([_instances.copy_of(self, stack.id, i.rid)[0] or i
+                          for i in commands.stack_instances(stack, self._paths) if i.rid] or [None]):
+                # the radio's band only for a stack with bands (its band-specific defaults); "" for one without
+                band = inst.band if inst is not None and self.stack_bands(stack.id) else ""
+                cfg_band = band if inst is not None else self._config_band(stack.id, band)
+                stored = load_stack_config(self._paths, stack.id, cfg_band, inst=inst)
                 if not stored:
                     continue
                 for c in stack.components:
@@ -491,7 +508,7 @@ class ParamsConfigMixin:
                         # would silently revert the stack to inherit at the next self-update
                         if getattr(p, "validator", "") in self._IDENTITY_ENFORCE:
                             continue
-                        default = self._param_default_canon(p, cfg_band, band)
+                        default = self._param_default_canon(p, cfg_band, band, inst)
                         keys = [self._scoped_key(kind, c.id, p.name)]     # scoped: valid for any comp
                         counts = run_counts if kind == "r" else file_counts
                         if counts.get(p.name, 0) <= 1:                    # unique -> flat too
@@ -500,7 +517,7 @@ class ParamsConfigMixin:
                             if key in stored and self._canon_value(p, str(stored[key])) == default:
                                 out.append({"stack": stack.id, "band": cfg_band, "key": key,
                                             "kind": kind, "comp": c.id, "name": p.name,
-                                            "expected": default})
+                                            "expected": default, "rid": getattr(inst, "rid", "")})
         return out
 
     @staticmethod
@@ -608,8 +625,7 @@ class ParamsConfigMixin:
         owner = self._owner_stack(target)
         if owner is None:
             return None
-        stored = _instances.stores(self, self._owner_stack_id(target),        # a listed copy's own file
-                                   self._config_band(target, band), inst)[0]
+        stored = _instances.store(self, self._owner_stack_id(target), self._config_band(target, band), inst)
         run_counts, file_counts = self._owner_param_counts(owner)
         owner_comp_ids = {c.id for c in owner.components}
         for _stack, comp in order:
@@ -639,7 +655,7 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); a listed instance's in its own.
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -649,13 +665,13 @@ class ParamsConfigMixin:
         out = {}
         for c in self._target_components(target):
             for p in c.run_params:
-                val, _amb = self._resolve_stored(
-                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "r", c.id, p.name,
-                    run_counts.get(p.name, 0))
+                val = None if _derived(p) else self._resolve_stored(stored, "r", c.id, p.name, run_counts.get(p.name, 0))[0]
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
+                elif (po := _instances.port_of_default(self, p, _instances.store_inst(self, owner.id, cfg_band, inst))):
+                    out[p.name] = po                          # K6S-2: the other stack's EFFECTIVE port there
                 else:
-                    bd = band_default(p, cfg_band or band, self.config().radio)
+                    bd = self._band_default(p, cfg_band or band, inst)
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
 
@@ -935,7 +951,8 @@ class ParamsConfigMixin:
             stack_of=self.stack_of,
             refused=lambda c, p: (self._HMAC_MANAGED_PARAM_MSG
                                   if self._is_hmac_managed_param(c, p)
-                                  and p.name not in _allow_managed_params else ""))
+                                  and p.name not in _allow_managed_params
+                                  else f"{p.name}: derived: LHPC computes it" if _derived(p) else ""))
         # The global operator callsign is NOT settable through a stack save — the one
         # authoritative mutation path is `set_operator_identity` (atomic restart-marker
         # handling); routing it through here bypassed that. So this save only ever
@@ -966,7 +983,9 @@ class ParamsConfigMixin:
                                    {vid: (vurl or None) for vid, vurl in patch.items()})
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file, all of it
+        cfg_band = self._config_band(target, band)
+        inst = _instances.store_inst(self, sid, cfg_band, inst)          # K6: a band caller saves its band's instance's
+        own = _instances.own_rid(self._paths, inst)                      # its own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -996,8 +1015,8 @@ class ParamsConfigMixin:
         stack_set, stack_remove, bandless_set, bandless_remove, switched = config_save.plan_store(
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
-                                   else self._param_default_canon(ch.param, cfg_band, band)),
-            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band) and not own)
+                                   else self._param_default_canon(ch.param, cfg_band, band, inst)),
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, split=bool(own))
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
@@ -1005,7 +1024,7 @@ class ParamsConfigMixin:
         # reason the global source is locked while in use. Refused BEFORE anything is written;
         # rechecked authoritatively inside the transaction (`_gps_recheck`), because between here
         # and the write a concurrent start can bring the stack up.
-        if _gps_now and _want != ("on" if self.gps_enabled_for(sid) else "off"):
+        if _gps_now and _want != ("on" if self.gps_enabled_for(sid, inst) else "off"):
             # Same rule as the authoritative recheck below, so the fast refusal and the one under
             # the lock can never disagree about what counts as "in use". Cheap read here — the
             # forced-fresh recompute belongs inside the transaction, not on the fast path.
@@ -1032,7 +1051,7 @@ class ParamsConfigMixin:
                 return
             try:
                 _cur = str(_load_runtime_toml(
-                    self._paths, _stack_config_path(self._paths, sid, "")
+                    self._paths, _stack_config_path(self._paths, sid, "", inst)       # K6: the instance's own switch
                 ).get(USE_GPS_PARAM, "")).strip().lower() or _gps_default
             except (OSError, ValueError, KeyError, ConfigError) as exc:
                 raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc
@@ -1158,10 +1177,8 @@ class ParamsConfigMixin:
                 return self._resolved_param_value(
                     tgt, "run" if kind == "r" else "file", c.id, p.name, _band, inst)
             def _key(c, p) -> str:
-                """Which stored value a launch value belongs to: the store's band (none for
-                a band-less param), the component, the param."""
-                b = "" if p.name in _BANDLESS_STACK_PARAMS else (_cfg or "")
-                return f"{b}|{c.id}|{p.name}"
+                """Which stored value a launch value belongs to: the store's band, the component, the param."""
+                return f"{_cfg or ''}|{c.id}|{p.name}"
 
             # F-M1: the marker claims "saved settings differ from the running stack", so a
             # save that brings a value BACK to its recorded launch value takes that param
@@ -1196,19 +1213,12 @@ class ParamsConfigMixin:
 
             if not live_modes:
                 return _unmarked()                # nothing that needs a restart changed
-            live, live_band = (_instances.instance_runs(self, self._owner_stack(sid).main_component, inst, inst.band), inst.band) if getattr(inst, "rid", "") else self.active_config_consumer(sid, fresh=True)
+            live, live_band = self.active_config_consumer(sid, fresh=True, inst=inst)    # K6: the instance's consumers
             live_seen["v"] = live          # reused by the apply hints — never probed twice
             if not live:
                 return _unmarked()                # nobody is reading this configuration
             marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
-            marker_band = _cfg or live_band
-            if _cfg and live_band and _cfg != live_band:
-                # Another band's store — the live instance's own settings are intact. Only a
-                # STACK-LEVEL (band-less) param reaches it from here, so the marker names
-                # those alone, and records the LIVE band: it exists because the running
-                # instance must restart, not the edited one.
-                marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
-                marker_band = live_band
+            marker_band = _cfg or live_band                 # K6: the instance's own band (its consumers, its store)
             if not marked:
                 return _unmarked()
             names = sorted(p.name for _k, _c, p in marked)
@@ -1551,7 +1561,7 @@ class ParamsConfigMixin:
 
     # ---- durable restart-required state (schema, read, merge, clear: restart_required.py) ------
 
-    def active_config_consumer(self, stack_id: str, *, fresh: bool = False) -> tuple[bool, str]:
+    def active_config_consumer(self, stack_id: str, *, fresh: bool = False, inst=None) -> tuple[bool, str]:
         """Is this stack a LIVE consumer of its saved configuration, and on which band?
 
         ONE predicate for every writer that must warn "the running thing no longer matches
@@ -1565,10 +1575,15 @@ class ParamsConfigMixin:
             # operation cached before it acquired the lock (a stack that went live
             # while the save queued for the exclusive lock was committed with no marker).
             self.build_snapshot(fresh=True)
-        if self.stack_running(stack_id):
-            return True, self._effective_band(stack_id, "")
         st = self.stack(stack_id)
         main = st.main_component if st is not None else None
+        rid = getattr(inst, "rid", "")
+        # K6: an instance's save asks about THAT instance: its own process or record, else (below) the presented
+        # command / GUI fallback on its band (the interactive marker is per stack until it is per instance)
+        if (_instances.instance_runs(self, main, inst, inst.band)
+                or (self.stack_running(stack_id) and _instances.unclaimed(self, main))      # fail-safe: maybe this one
+                if rid and main is not None and main.process is not None else self.stack_running(stack_id)):
+            return True, (inst.band if rid else self._effective_band(stack_id, ""))
         # An INTERACTIVE main whose command has been prepared and presented is a live consumer too:
         # the operator can still run it, and it carries the identity that was generated FOR it
         # (Chat fell through this gap — its presented command kept the old callsign
@@ -1577,7 +1592,7 @@ class ParamsConfigMixin:
         if st is not None and (getattr(main, "interactive", False)
                                or self.gui_fallback_active(st)):
             ib = self.interactive_band(stack_id)
-            if ib is not None:
+            if ib is not None and (not rid or not ib or ib == inst.band):
                 return True, ib
         return False, ""
 
@@ -1645,15 +1660,13 @@ class ParamsConfigMixin:
         ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored, bandless = _instances.stores(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
+        stored = _instances.store(self, self._owner_stack_id(target), cfg_band, inst)   # DEC-W60
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
-                bd = band_default(p, cfg_band or band, self.config().radio)
-                val, _amb = self._resolve_stored(
-                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "f", c.id, p.name,
-                    file_counts.get(p.name, 0))
+                bd = self._band_default(p, cfg_band or band, inst)
+                val = None if _derived(p) else self._resolve_stored(stored, "f", c.id, p.name, file_counts.get(p.name, 0))[0]
                 out[p.name] = str(val) if val is not None else bd
         return out
 
@@ -2432,13 +2445,13 @@ class ParamsConfigMixin:
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band, own = self._config_band(target, band), _instances.own_rid(self._paths, inst)   # 7f: an instance's own file alone
-        label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
+        cfg_band = self._config_band(target, band)
+        inst = _instances.store_inst(self, target, cfg_band, inst)       # K6: a band caller resets its band's instance
+        own = _instances.own_rid(self._paths, inst)
+        label = f"'{_instances.key(target, inst)}'" if own else f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
-        # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
-        # reset of one band owns that file too; a band-less stack has only the one.
-        files = [""] if own else ([cfg_band, ""] if cfg_band else [""])   # a listed copy: its own file, by the copy
+        files = [inst, None] if own else [None]          # K6: its own file + the global <sid>.toml (autostart, 13.12.1)
         cleared: list = []
         _gps_busy: dict = {}
 
@@ -2446,11 +2459,12 @@ class ParamsConfigMixin:
             return [k for k in stored
                     if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
 
-        def _render_reset(pth, b):
+        def _render_reset(pth, i):
             # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
             # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
-            merged = merge_stack_values(pth, target, b, {}, inst=inst)
-            normal = _normal(merged)
+            # An instance's reset clears only the GLOBAL keys (autostart) of the shared <sid>.toml.
+            merged = merge_stack_values(pth, target, "", {}, inst=i)
+            normal = [k for k in _normal(merged) if i is not None or not own or k.startswith("autostart_")]
             if not normal:
                 return None
             # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
@@ -2470,7 +2484,7 @@ class ParamsConfigMixin:
         # marker renderer compares that with what the stack uses now, so only a param the reset
         # really changes reaches the restart-required marker — written in the same transaction.
         params = [(kind, c, p, "" if getattr(p, "validator", "") in self._IDENTITY_ENFORCE
-                   else self._param_default_canon(p, cfg_band, band))
+                   else self._param_default_canon(p, cfg_band, band, inst))
                   for c in self.stack(target).components
                   for kind, ps in (("r", self._form_run_params(c)),
                                    ("f", c.config_file.params if c.config_file else ()))
@@ -2478,8 +2492,8 @@ class ParamsConfigMixin:
         try:
             # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
-                ("stack", _stack_config_path(self._paths, target, b, inst),
-                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
+                ("stack", _stack_config_path(self._paths, target, "", i),
+                 lambda pth, i=i: _render_reset(pth, i), 0o644) for i in files] + [
                 self._restart_marker_target(target, target, band, cfg_band, params, set(), {}, inst)])
             if cleared:
                 self._invalidate_config()

@@ -44,7 +44,7 @@ def normalize_values(values: dict, resolve, *, own_ids, optional_ids, stack_of,
 
     `resolve(kind, key)` → (component, param, err) for kind "run"/"file"; `own_ids` the target's
     own component ids; `optional_ids` the components with an autostart flag; `stack_of(comp_id)`
-    names a dependency's stack; `refused(component, param)` → a refusal text for a run param the
+    names a dependency's stack; `refused(component, param)` → a refusal text for a param the
     generic save may not write ("" = allowed)."""
     errors: list[str] = []
     # Each submitted value carries component identity: a run value key is the API key
@@ -76,7 +76,7 @@ def normalize_values(values: dict, resolve, *, own_ids, optional_ids, stack_of,
             continue
         if not _own(c, key):
             continue
-        if kind == "r" and (why := refused(c, p)):
+        if (why := refused(c, p)):                      # a run param (HMAC) or a derived file row (DEC-W384q)
             errors.append(why)                          # never clearable via generic config
             continue
         v = str(value)
@@ -149,11 +149,12 @@ def normalize_remotes(remotes: dict, *, target: str, allowed, stacks,
 
 
 def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks, sid: str,
-               banded: bool) -> tuple[dict, set, dict, set, dict]:
-    """Which stored keys the save sets and clears → (stack_set, stack_remove, bandless_set,
-    bandless_remove, switched): the stack's own (banded) file, the band-less file (empty unless
-    `banded`), and each touched switch name → (wanted, default). `key_of(change)` is the
-    persisted key, `default_of(change)` the canonical default it is compared with."""
+               split: bool) -> tuple[dict, set, dict, set, dict]:
+    """Which stored keys the save sets and clears → (stack_set, stack_remove, global_set,
+    global_remove, switched): the instance's own file, the stack's global `<sid>.toml` (empty unless `split`: the
+    own file is another file), and each touched switch name → (wanted, default). `key_of(change)` is the
+    persisted key, `default_of(change)` the canonical default it is compared with. K6 (K6-SCOPE-v2, DEC-W384k): the
+    switches are the instance's own (its file); autostart is global (13.12.1)."""
     to_set: dict = {}
     to_remove: set = set()
     # Autostart is a STACK-LEVEL flag: it must live in the BAND-LESS stack file —
@@ -188,13 +189,13 @@ def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks
             # the default itself is cleared, so the file never holds a third state.
             key = sw.key(sid)
             if want != default:
-                auto_set[key] = want
-                auto_remove.discard(key)
+                to_set[key] = want
+                to_remove.discard(key)
             else:
-                auto_remove.add(key)
-                auto_set.pop(key, None)
+                to_remove.add(key)
+                to_set.pop(key, None)
             switched[sw.name] = (want, default)
-    if not ((auto_set or auto_remove) and banded):
+    if not ((auto_set or auto_remove) and split):
         to_set.update(auto_set)                         # unbanded: one file holds everything
         to_remove |= auto_remove
         auto_set, auto_remove = {}, set()

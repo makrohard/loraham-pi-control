@@ -354,11 +354,11 @@ def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path,
 
 # ===== external re-audit regressions (@959618e findings) =====
 
-def test_start_identity_follows_the_implicit_running_band(tmp_path, monkeypatch):
+def test_start_identity_follows_the_implicit_launch_band(tmp_path, monkeypatch):
     # enforcement read the raw band argument while the launch resolved the
     # running-band marker — voice with per-band identities was judged on the wrong band.
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "running_band",
+    monkeypatch.setattr(type(svc), "launch_band",
                         lambda self, sid, default="": "868" if sid == "voice" else default)
     # identity only on 433, running band 868, no global -> the 868 launch must REFUSE
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
@@ -452,7 +452,7 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
     # carry --band for that band — a band-less hint saved into the primary store and the
     # same refusal repeated.
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "running_band",
+    monkeypatch.setattr(type(svc), "launch_band",
                         lambda self, sid, default="": "868" if sid == "voice" else default)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
                                   band="433").ok
@@ -619,7 +619,7 @@ def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tm
     svc = _svc(tmp_path)
     cfgmod2.save_operator_config(Paths(runtime_root=tmp_path), "XX0XXA-12")   # legacy global
     svc._invalidate_config()
-    monkeypatch.setattr(type(svc), "running_band",
+    monkeypatch.setattr(type(svc), "launch_band",
                         lambda self, sid, default="": "868" if sid == "voice" else default)
     ok, _f, msg = svc.enforce_identity("voice", svc._launch_band_hint("voice", ""))
     assert ok is False
@@ -811,13 +811,14 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
     # admission, and carried concretely.
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
+    assert svc.save_config_bundle("voice", values={"file_sf": "7"}, band="433").ok and b433.is_file()   # a real file
     seen = {}
     real_guard = type(svc)._admission_guard
     def guard(self, op, target=""):
         # the real running state flips to 868 exactly as admission is entered — after the old
         # pre-admission resolution point, before the new one
-        monkeypatch.setattr(type(svc), "running_band", lambda s, sid, d="": "868")
+        monkeypatch.setattr(type(svc), "launch_band", lambda s, sid, d="": "868")
         return real_guard(self, op, target)
     monkeypatch.setattr(type(svc), "_admission_guard", guard)
     real_stop = type(svc).stop
@@ -904,6 +905,7 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     import json, time
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     path = restart_required.marker_path(svc._paths, "chat@r1")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -926,6 +928,7 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     import json, time
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     path = restart_required.marker_path(svc._paths, "chat@r1")
     # another writer commits a marker; the payload is built AFTERWARDS, inside the transaction
@@ -967,6 +970,7 @@ def test_marker_is_written_when_the_stack_goes_live_while_the_save_waits(tmp_pat
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     live = {"v": False}
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: live["v"])   # K6: an instance is live by its own process
     real_txn = _sp.apply_config_transaction
     def go_live_then_commit(paths, targets):
         live["v"] = True
@@ -983,7 +987,8 @@ def test_a_change_on_another_band_does_not_mark_the_live_band(tmp_path, monkeypa
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868"}, band="868").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "voice")
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: inst.band == "868")   # K6: an instance is live by its own process
+    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433"}, band="433").ok
     assert svc.restart_required("voice") is None, "the live 868 config did not change"
     # ...while a change on the LIVE band still marks
@@ -1000,6 +1005,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
     # A: already inheriting, save blank
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     assert svc.restart_required("chat") is None
@@ -1297,7 +1303,8 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     cfgmod.save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
     # a value an old version accepted that the current APRS rule rejects, persisted directly
-    cfgmod.save_stack_config(svc._paths, "chat", {"file_call": "XX0XXA-99"}, "")
+    from lhpc.core import instances                              # K6: the instance's own file holds it
+    cfgmod.update_stack_config(svc._paths, "chat", {"file_call": "XX0XXA-99"}, inst=instances.store_inst(svc, "chat", "433"))
     svc._invalidate_config()
     assert svc.effective_identity("chat", "433") == ""          # invalid -> no effective value
     assert not svc.test("chat", tx=True, apply=False).ok
@@ -1439,7 +1446,7 @@ def test_web_start_judges_the_active_band(tmp_path, monkeypatch):
     # A bandless dashboard POST is judged on the band the operation will run on: voice running on
     # 868 with a 433-only identity is refused and the Settings row is marked.
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "running_band",
+    monkeypatch.setattr(type(svc), "launch_band",
                         lambda self, sid, default="": "868" if sid == "voice" else default)
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
                                   band="433").ok                # 433-only identity
@@ -1470,9 +1477,9 @@ def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
                                                    "file_sf": "11"}, band="868").ok
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433",
                                                    "file_sf": "7"}, band="433").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
     before = b433.read_bytes()
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
+    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
     seen = {}
     real_impl = type(svc)._start_impl
     def impl(self, target, **kw):
@@ -1506,13 +1513,13 @@ def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch)
     # the target MOVED while both bands stay served — an explicit band outranks the
     # running-band marker in operation_band, so the live band is checked on its own here.
     monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("433", "868"))
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
+    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
     resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice",
                                         "band": "433", "confirmed": "yes", "cascade": "yes"})
     assert resp.status_code == 302 and started == []
     assert "now runs it on 868" in client.get("/stacks").get_data(as_text=True)
     # a STOPPED target may still be started on an explicitly chosen non-primary band
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": d)
+    monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": d)
     resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
                                         "band": "868", "confirmed": "yes"})
     assert resp.status_code == 302 and started == ["868"]
@@ -1527,6 +1534,7 @@ def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, mon
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     live = {"v": False}
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
+    monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: live["v"])   # K6: an instance is live by its own process
     real_impl = type(svc)._start_impl
     seen = {}
     def spy(self, t, **kw):

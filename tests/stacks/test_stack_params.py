@@ -13,6 +13,7 @@ from lhpc.core.services import ControllerService
 
 import repo_paths
 from seams import LifecycleSeam
+import launch_band_fixture
 
 
 def _svc(tmp_path):
@@ -43,8 +44,29 @@ def _seed_raw(svc, stack_id, values, band=None):
     from lhpc.core import config as cfgmod
     if band is None:
         band = svc._config_band(stack_id, "")
-    cfgmod.save_stack_config(svc._paths, stack_id, values, band)
+    path = _own_path(svc, stack_id, band)                    # K6: the instance's own store
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(cfgmod._render_stack_config(stack_id, values))
     svc._invalidate_config()
+
+
+def _own_path(svc, stack_id, band=""):
+    """K6: a stack's settings are its instance's own `config/stacks/<sid>@<rid>.toml`, the instance the product
+    resolves for a caller without a radio (instances.store_inst)."""
+    import stores_fixture
+    return stores_fixture.own_file(svc, stack_id, band)
+
+
+def _load_inst(svc, stack_id, band=""):
+    import stores_fixture
+    from lhpc.core import config as cfgmod
+    return cfgmod.load_stack_config(svc._paths, stack_id, inst=stores_fixture.inst_of(svc, stack_id, band))
+
+
+def _none_stored(svc, name):
+    """Nothing is stored under `name` (a component's name): no global file and no instance file of it."""
+    d = svc._paths.runtime_root / "config" / "stacks"
+    return not [f for f in (d.iterdir() if d.is_dir() else ()) if f.name == f"{name}.toml" or f.name.startswith(f"{name}@")]
 
 
 def test_licensed_refuses_empty_and_n0call(tmp_path):
@@ -332,7 +354,7 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
     nd = "9" if dp.default_value("meshcom", "433", "SF") != "9" else "8"
     assert svc.save_daemon_params("meshcom-qemu", "433", {"SF": nd}).ok
     assert cfgmod.load_stack_config(svc._paths, "meshcom").get("dp_433_SF") == nd   # OWNER stack
-    assert cfgmod.load_stack_config(svc._paths, "meshcom-qemu") == {}               # NOT the component
+    assert _none_stored(svc, "meshcom-qemu")               # NOT the component
     assert svc._daemon_param_overrides("meshcom-qemu", "433") == {"SF": nd}         # read back via comp
     sf = next(r for r in svc.daemon_params_view("meshcom-qemu", "433")["rows"] if r["name"] == "SF")
     assert sf["value"] == nd                                                        # panel shows owner value
@@ -341,13 +363,12 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
 
 
 def test_direct_component_config_save_owner_scope(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("meshcom-qemu", values={"mc_callsign": "XX0XXA-3"}).ok
-    owner_cfg = cfgmod.load_stack_config(svc._paths, "meshcom")                              # OWNER file
+    owner_cfg = _load_inst(svc, "meshcom")                              # OWNER file
     assert owner_cfg.get("__r__meshcom-qemu__mc_callsign") == "XX0XXA-3"                     # COMPONENT-scoped key
     assert "mc_callsign" not in owner_cfg                                                    # not a flat key
-    assert cfgmod.load_stack_config(svc._paths, "meshcom-qemu") == {}                        # NOT component file
+    assert _none_stored(svc, "meshcom-qemu")                        # NOT component file
     assert svc.stack_config("meshcom-qemu").get("mc_callsign") == "XX0XXA-3"                 # later read resolves
     # a direct component may edit ONLY its own fields — sibling/unknown/autostart/remotes rejected
     assert svc.save_config_bundle("meshcom-qemu", values={"port": "7000"}).ok is False       # sibling field
@@ -459,13 +480,12 @@ def test_stack_start_keeps_whole_stack_generation(tmp_path, monkeypatch):
 
 
 def test_direct_persistence_writes_only_allowed_owner_fields(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _scope_svc(tmp_path)
     assert svc.save_config_bundle("tgt", values={"shared": "keepme"}).ok
-    owner_cfg = cfgmod.load_stack_config(svc._paths, "ostack")                       # owner store
+    owner_cfg = _load_inst(svc, "ostack")                       # owner store
     assert owner_cfg.get("__r__tgt__shared") == "keepme"                             # component-scoped key
     assert "shared" not in owner_cfg                                                 # never a flat key
-    assert cfgmod.load_stack_config(svc._paths, "tgt") == {}                         # not component-named
+    assert _none_stored(svc, "tgt")                         # not component-named
     assert svc.save_config_bundle("tgt", values={"dval": "x"}).ok is False           # sibling field rejected
 
 
@@ -497,7 +517,8 @@ def _capture_start(svc, monkeypatch):
 
 def _seed_flat(svc, stack_id, values):
     from lhpc.core import config as cfgmod
-    cfgmod.update_stack_config(svc._paths, stack_id, values)
+    import stores_fixture                                    # K6: the legacy flat key in the instance's own store
+    cfgmod.update_stack_config(svc._paths, stack_id, values, inst=stores_fixture.inst_of(svc, stack_id))
 
 
 def test_scoped_values_isolate_target_and_dependency(tmp_path, monkeypatch):
@@ -565,8 +586,7 @@ def test_unique_flat_legacy_is_backward_compatible(tmp_path, monkeypatch):
 
 
 def _cfg_has_flat(svc, key):
-    from lhpc.core import config as cfgmod
-    return key in cfgmod.load_stack_config(svc._paths, "ostack2")
+    return key in _load_inst(svc, "ostack2")
 
 
 # --- component identity through the whole stack-target parameter pipeline --------------------
@@ -659,50 +679,46 @@ def test_config_view_identity_and_values_per_component(tmp_path):
 
 
 def test_config_unique_fields_stay_bare_and_flat(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
     for f in svc.config_param_fields("kiss"):
         assert "__" not in f["field"] and "." not in f["key"]        # bare fields/keys preserved
     assert svc.save_stack_config("kiss", {"kiss_port": "8002"}).ok    # canonical delegate
-    assert cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", "")).get("kiss_port") == "8002"   # flat key
+    assert _load_inst(svc, "kiss", svc._config_band("kiss", "")).get("kiss_port") == "8002"   # flat key
 
 
 def test_save_stack_config_rejects_unqualified_dup_and_unknown(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _scope2_svc(tmp_path)
     r1 = svc.save_stack_config("ostack2", {"rp": "X"})               # unqualified duplicate
     assert r1.ok is False and "multiple components" in "; ".join(r1.details)
     r2 = svc.save_stack_config("ostack2", {"nope": "Y"})            # unknown field
     assert r2.ok is False and "unknown config field" in "; ".join(r2.details)
-    assert cfgmod.load_stack_config(svc._paths, "ostack2") == {}     # NO mutation on rejection
+    assert _load_inst(svc, "ostack2") == {}     # NO mutation on rejection
     assert svc.save_stack_config("ostack2", {"tgt.rp": "RP-T"}).ok  # valid qualified persists scoped
-    assert cfgmod.load_stack_config(svc._paths, "ostack2").get("__r__tgt__rp") == "RP-T"
+    assert _load_inst(svc, "ostack2").get("__r__tgt__rp") == "RP-T"
 
 
 # --- overrides-only config storage (enables automatic self-update config preservation) ------
 
 def test_config_stores_overrides_only(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
     p = next(pp for pp in svc.run_params_for("kiss") if pp.name == "tx_freq")
     default = svc._param_default_canon(p, "", "")
     # saving the current default persists NOTHING, yet the effective value is still the default
     assert svc.save_config_bundle("kiss", values={"tx_freq": default}).ok
-    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", ""))
+    assert "tx_freq" not in _load_inst(svc, "kiss", svc._config_band("kiss", ""))
     assert svc.stack_config("kiss")["tx_freq"] == default
     # saving a real override persists it and survives reload
     assert svc.save_config_bundle("kiss", values={"tx_freq": "434.500"}).ok
-    assert cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", "")).get("tx_freq") == "434.500"
+    assert _load_inst(svc, "kiss", svc._config_band("kiss", "")).get("tx_freq") == "434.500"
     assert svc.stack_config("kiss")["tx_freq"] == "434.500"
     # saving it back to the default clears the stored override again
     assert svc.save_config_bundle("kiss", values={"tx_freq": default}).ok
-    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", ""))
+    assert "tx_freq" not in _load_inst(svc, "kiss", svc._config_band("kiss", ""))
 
 
 def test_value_at_old_default_follows_new_default(tmp_path):
     # Simulate a self-update that changes a manifest default: a value stored while it equalled the
     # OLD default must resolve to the NEW default; a genuine override must be preserved.
-    from lhpc.core import config as cfgmod
     man = tmp_path / "m.toml"
     man.write_text(
         '[[stack]]\nid="s"\nname="S"\nmain="c"\n'
@@ -714,7 +730,7 @@ def test_value_at_old_default_follows_new_default(tmp_path):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     # user leaves it at the (old) default -> nothing stored
     assert svc.save_config_bundle("s", values={"opt": "OLD"}).ok
-    assert cfgmod.load_stack_config(svc._paths, "s") == {}
+    assert _load_inst(svc, "s") == {}
     # "update" to a manifest whose default changed OLD -> NEW
     man.write_text(man.read_text().replace('default="OLD"', 'default="NEW"'))
     svc2 = ControllerService(manifest_path=man, system=FakeSystem().system,
@@ -731,7 +747,6 @@ def test_value_at_old_default_follows_new_default(tmp_path):
 def test_empty_non_default_override_is_kept(tmp_path):
     # A value that DIFFERS from a non-empty default but is empty ("unset") is a genuine override and
     # must still persist (two-phase write must not drop it).
-    from lhpc.core import config as cfgmod
     man = tmp_path / "m.toml"
     man.write_text(
         '[[stack]]\nid="s"\nname="S"\nmain="c"\n'
@@ -742,7 +757,7 @@ def test_empty_non_default_override_is_kept(tmp_path):
                             paths=Paths(runtime_root=tmp_path))
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     assert svc.save_config_bundle("s", values={"opt": ""}).ok
-    assert cfgmod.load_stack_config(svc._paths, "s").get("opt") == ""   # empty override persisted
+    assert _load_inst(svc, "s").get("opt") == ""   # empty override persisted
     assert svc.stack_config("s")["opt"] == ""
 
 
@@ -792,7 +807,7 @@ def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
     set_call(svc)
-    svc._set_running_band("meshtastic", "433")
+    launch_band_fixture.set_launch_band(svc, "meshtastic", "433")
     assert [b.get("holder_stack") for b in svc.run_blockers("kiss")], "precondition: an owner"
     _seed_raw(svc, "kiss", {"tx_freq": "banana"})
     stops = _spy_stops(monkeypatch)

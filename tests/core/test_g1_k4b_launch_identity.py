@@ -46,7 +46,7 @@ def test_a_running_stacks_band_is_its_launch_band_not_an_edited_row(tmp_path):
     try:
         radios_fixture.write(tmp_path, (R1, dataclasses.replace(R3, band="868")))   # r3's row edited to 868
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-        assert instances.running_bands(svc, "kiss") == {"433"}
+        assert instances.launch_bands(svc, "kiss") == {"433"}
         assert svc._live_bands("kiss", "") == {"433"}
     finally:
         p.kill()
@@ -83,7 +83,7 @@ def test_re3_two_verified_records_that_disagree_on_a_radios_band_tell_no_band(tm
         for p, band, comp in ((a, "433", "loraham-kiss-tnc"), (b, "868", "loraham-kiss-serial")):
             assert svc._lifecycle().record_launch(kiss, kiss.component(comp), p.pid, band=band, extra={"rid": "r3"})
         assert instances.recorded_bands(svc, "kiss") == {"r3": ""}
-        assert instances.running_bands(svc, "kiss") == set()          # the caller holds every band
+        assert instances.launch_bands(svc, "kiss") == set()          # the caller holds every band
     finally:
         for p in (a, b):
             p.kill()

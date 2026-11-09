@@ -21,6 +21,7 @@ from typing import ClassVar
 
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
+from . import commands as _commands
 from . import config as _cfgmod
 from . import instances, radio_start, spi_mode
 from . import manifest as manifest_mod
@@ -792,7 +793,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         from .model import RunState
         live = (RunState.RUNNING, RunState.DEGRADED)
         for ss in snap.stacks:
-            marker = self.running_band(ss.stack.id)
+            marker = self.launch_band(ss.stack.id)
             if not marker:
                 continue
             for comp in ss.stack.components:
@@ -2074,7 +2075,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _effective_band(self, stack_id: str, fallback: str = "") -> str:
         """The band a stack is actually running on (start marker, or for an
         interactive app the band it was launched on)."""
-        return (self.running_band(stack_id, "") or self.interactive_band(stack_id)
+        return (self.launch_band(stack_id, "") or self.interactive_band(stack_id)
                 or fallback)
 
     def _dependents_of(self, target: str, bands=None) -> list[str]:
@@ -2134,18 +2135,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 remaining.append(cand)                                   # unprovable -> keep pending, never delete
                 continue
             old_param, old_default = proven
-            by_file[(cand["stack"], cand["band"])][cand["key"]] = old_default
-            meta[(cand["stack"], cand["band"], cand["key"])] = (cand, old_param)
+            fkey = (cand["stack"], cand["band"], cand.get("rid", ""))     # K6: the instance's own file (rid)
+            by_file[fkey][cand["key"]] = old_default
+            meta[(*fkey, cand["key"])] = (cand, old_param)
         migrated = 0
-        for (stack_id, cfg_band), expected in by_file.items():
-            def _matches(key, raw, exp, _s=stack_id, _b=cfg_band):
-                _cand, old_param = meta[(_s, _b, key)]
+        for (stack_id, cfg_band, rid), expected in by_file.items():
+            def _matches(key, raw, exp, _s=stack_id, _b=cfg_band, _r=rid):
+                _cand, old_param = meta[(_s, _b, _r, key)]
                 return self._canon_value(old_param, raw) == exp          # BOTH sides: OLD param semantics
             try:
-                migrated += conditional_clear_stack_config(self._paths, stack_id, cfg_band,
-                                                           expected, _matches)
+                migrated += conditional_clear_stack_config(self._paths, stack_id, cfg_band, expected, _matches,
+                                                           inst=_commands.Instance(rid) if rid else None)
             except (OSError, ConfigError, PathContainmentError, ValueError):
-                remaining.extend(meta[(stack_id, cfg_band, k)][0] for k in expected)   # keep pending
+                remaining.extend(meta[(stack_id, cfg_band, rid, k)][0] for k in expected)   # keep pending
         if migrated:
             self._invalidate_config()
         return migrated, remaining

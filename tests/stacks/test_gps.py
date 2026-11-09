@@ -343,6 +343,13 @@ def test_the_fixed_pump_keeps_emitting_with_a_current_timestamp(tmp_path):
 
 # --- lifecycle: the plan is resolved BEFORE locks, and drives admission -------------------
 
+def _own_file(svc, sid):
+    """K6 / DEC-W384k: the switch is the instance's own: `config/stacks/<sid>@<rid>.toml` of the instance the product
+    resolves for a caller without a radio (instances.store_inst)."""
+    import stores_fixture
+    return stores_fixture.own_file(svc, sid)
+
+
 def _svc(tmp_path):
     """A service on a FAKE system. Never the real one: these tests ask the service what is
     running, and on a developer machine that also runs a real meshtasticd the answer would
@@ -1786,10 +1793,12 @@ def test_the_gps_switch_survives_a_band_change(tmp_path):
     assert res.ok, res
 
     stacks = tmp_path / "config" / "stacks"
-    assert "use_gps" in (stacks / "meshtastic.toml").read_text(), "must be in the BAND-LESS file"
+    own = _own_file(svc, "meshtastic")
+    assert own.name == "meshtastic@r2.toml" and "use_gps" in own.read_text(), "K6: in the instance's own file (868: r2)"
+    glob = stacks / "meshtastic.toml"
+    assert "use_gps" not in (glob.read_text() if glob.exists() else ""), "K6: the global file holds autostart only"
     banded = stacks / "meshtastic@868.toml"
-    assert "use_gps" not in (banded.read_text() if banded.exists() else ""), \
-        "storing it per band is what made it revert on a band change"
+    assert not banded.exists(), "a per-band file is never written (13.8): storing per band made it revert"
     assert svc.gps_enabled_for("meshtastic") is False, "and the read must see it"
 
     # The other band must agree — that is the whole point of storing it band-lessly.
@@ -1809,12 +1818,15 @@ def test_the_gps_switch_write_keeps_the_rest_of_the_bandless_file(tmp_path):
 
     stacks = tmp_path / "config" / "stacks"
     stacks.mkdir(parents=True, exist_ok=True)
-    (stacks / "meshtastic.toml").write_text('autostart_meshtastic-gps = "on"\n')
+    (stacks / "meshtastic.toml").write_text('autostart_meshtastic-gps = "on"\n')       # K6: autostart is global
+    own = _own_file(svc, "meshtastic")
+    own.write_text('meshtastic_owner = "Kept"\n')                                      # another key of the instance
 
     assert svc.save_config_bundle("meshtastic", values={"use_gps": "off"}).ok
-    after = (stacks / "meshtastic.toml").read_text()
-    assert "autostart_meshtastic-gps" in after, \
-        "the GPS write must MERGE into the band-less file, not replace it"
+    assert (stacks / "meshtastic.toml").read_text() == 'autostart_meshtastic-gps = "on"\n', \
+        "the GPS write must not touch the global file (autostart)"
+    after = own.read_text()
+    assert "meshtastic_owner" in after, "the GPS write must MERGE into the instance's file, not replace it"
     assert "use_gps" in after
 
 
@@ -1902,8 +1914,8 @@ def test_a_component_target_saves_the_owner_stacks_switch(tmp_path):
     # "off" is the stored deviation (the default flipped to on); the CONTRACT — flat,
     # band-less, owner-stack storage from a component target — is unchanged.
     assert svc.save_config_bundle("meshcom-qemu", values={"use_gps": "off"}).ok
-    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
-    assert 'use_gps = "off"' in body, f"not stored flat/band-less: {body!r}"
+    body = _own_file(svc, "meshcom").read_text()
+    assert 'use_gps = "off"' in body, f"not stored flat in the owner stack's instance file: {body!r}"
     assert "__use_gps" not in body, "a component-scoped key is invisible to every GPS reader"
     assert svc.gps_enabled_for("meshcom") is False
     assert svc.gps_enabled_for("meshcom-qemu") is False, "the component must see it too"
@@ -2096,10 +2108,11 @@ def test_the_switch_is_stored_canonically(tmp_path):
     _cfg.save_hardware_setup(svc._paths, "uputronics-868")
     svc._invalidate_config()
     assert svc.save_config_bundle("meshcom", values={"use_gps": "on"}).ok   # default -> cleared
-    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
+    own = _own_file(svc, "meshcom")
+    body = own.read_text() if own.exists() else ""
     assert "use_gps" not in body, f"the default must clear the key, not store it: {body!r}"
     assert svc.save_config_bundle("meshcom", values={"use_gps": ""}).ok      # stack stopped
-    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
+    body = _own_file(svc, "meshcom").read_text()
     # An empty value canonicalizes to "off" — a real deviation now, stored in canonical form
     # (never the raw empty string, which no reader treats as either state).
     assert 'use_gps = "off"' in body, body

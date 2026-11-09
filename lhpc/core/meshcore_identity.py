@@ -294,10 +294,3 @@ def read_secret(paths: Paths, filename: str, rid: str = "") -> str:
     return _read_secret(paths, filename, normalize=normalize, rid=rid)
 
 
-def remove_secret(paths: Paths, filename: str) -> None:
-    """Remove a legacy secret file once its value is durable elsewhere (absent is fine)."""
-    try:
-        secret_path(paths, filename).unlink()
-    except FileNotFoundError:
-        pass
-

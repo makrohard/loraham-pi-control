@@ -183,7 +183,7 @@ def test_attention_names_an_offline_daemon_only_while_a_stack_needs_it(tmp_path,
     svc = _svc(tmp_path, monkeypatch, rows)                                         # offline, nothing runs on it
     assert _row(radio_start.hardware_view(svc), "r1")["attention"] == []
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
-    monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, default="": "433")
+    monkeypatch.setattr(ControllerService, "launch_band", lambda self, sid, default="": "433")
     assert _row(radio_start.hardware_view(svc), "r1")["attention"] == ["daemon offline while kiss needs it"]
 
 

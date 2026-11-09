@@ -22,27 +22,27 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 BUDGETS = {
     "services.py": (2266, 23),  # co-16: doctor names an AP the firewall drops; split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin
     "service_base.py": (166, 0),
-    "service_admission.py": (461, 0),  # split-s4: split from services.py; K4b: a stop locks its running instances' bands
+    "service_admission.py": (457, 0),  # split-s4: split from services.py; K4b: a stop locks its running instances' bands; K6: lowered
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
-    "service_boot_restore.py": (687, 2),  # co-19: a start refused before the claim keeps its reason
+    "service_boot_restore.py": (670, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source)
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
     "service_firewall.py": (1533, 19),
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
-    "service_lifecycle_ops.py": (3249, 32),  # co-17: a stored OCP the band's chip cannot represent blocks that band's start; K4b: lowered (the one-band rule and the band marker out)
+    "service_lifecycle_ops.py": (3254, 32),  # co-17: a stored OCP the band's chip cannot represent blocks that band's start; K4b: lowered (the one-band rule and the band marker out); K6: competitors per radio, launch_band from the launch records
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
     "service_network.py": (1272, 12),  # w17-NA: (DEC-W34) +2 public = ap_cidr() + network_set_ap_cidr(), the fixed interface; lines kept by moving _fw_ap_live's body to ap_network.py
-    "service_params.py": (2499, 39),  # K4b: restart markers per instance (a bare id reads its instances'); MeshCore files by instance
-    "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
+    "service_params.py": (2511, 39),  # K4b: restart markers per instance (a bare id reads its instances'); MeshCore files by instance; K6: stores per radio, live consumers per instance, port_of, derived rows refused (DEC-W384q)
+    "service_rflog.py": (483, 13),  # split-s1: split from service_lifecycle_ops.py; K6: the stack-wide switch sets every instance
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
-    "service_stop.py": (791, 5),  # split-s7: split from service_lifecycle_ops.py
+    "service_stop.py": (762, 5),  # split-s7: split from service_lifecycle_ops.py; K6: lowered (the band-marker clear out)
     "service_system.py": (759, 2),
-    "service_webserver.py": (2391, 42),  # K4b: port suggestions radio by radio, a page's mode note per instance
+    "service_webserver.py": (2394, 42),  # K4b: port suggestions radio by radio, a page's mode note per instance; K6: a password per instance
 }
 
 

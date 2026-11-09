@@ -9,6 +9,7 @@ from htmlq import parse
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+import launch_band_fixture
 
 
 def _row(body, sid):
@@ -466,7 +467,7 @@ def _two_stacks(tmp_path):
                                      4242: ["loraham-kiss-tnc", "--config", "X"]},
                       unix_replies={"/tmp/loraconf-r1.sock": ready, "/tmp/loraconf-r2.sock": ready})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    assert svc._set_running_band("kiss", "868")
+    launch_band_fixture.set_launch_band(svc, "kiss", "868")   # K6: kiss@r2 runs on 868
     return svc
 
 

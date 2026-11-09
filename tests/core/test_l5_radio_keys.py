@@ -43,7 +43,7 @@ def test_w4_1_two_radios_on_one_band_refuse_the_client_naming_both(tmp_path, mon
     # so the band's two radios are named and the start is refused, nothing launched.
     from lhpc.core.lifecycle import Lifecycle
     svc = _svc(tmp_path, TWO_868, cmdlines_data={300: ["meshtasticd"]})
-    svc._set_running_band("meshtastic", "868")
+    svc.launch_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
@@ -73,7 +73,7 @@ def test_a_conflict_names_the_radio(tmp_path):
     svc = _svc(tmp_path, radios_fixture.RADIOS,
                cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r2"], 300: ["meshtasticd"]},
                unix_replies={"/tmp/loraconf-r2.sock": READY % b"r2"})
-    svc._set_running_band("meshtastic", "868")
+    svc.launch_band = lambda sid, d="": "868" if sid == "meshtastic" else d   # K6: its running band (13.12.5: no marker)
     msgs = [c.message for c in svc._observed_conflicts()]
     assert any(m.endswith("on loraham.radio.r2 — both running") for m in msgs), msgs
     assert not any("{radio:" in m or "loraham.radio.868" in m for m in msgs)
@@ -213,8 +213,37 @@ def test_g1_k4b_6_one_instance_without_a_told_band_makes_the_stack_hold_every_ba
                  62: ["/x/loraham-kiss-tnc", *instances._token(svc, tnc, Instance("r2"), "")]}
         svc = _svc(tmp_path, MIXED, cmdlines_data=table)
         assert instances.running_keys(svc, "kiss") == ["kiss@r1", "kiss@r2"]
-        assert instances.running_bands(svc, "kiss") == set()
+        assert instances.launch_bands(svc, "kiss") == set()
         assert any(b["holder_stack"] == "kiss" for b in svc.run_blockers("meshcore", "868"))
     finally:
         p1.kill()
         p1.wait(timeout=5)
+
+
+THREE = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "waveshare-sx1262", "868"),
+         radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01"))
+
+
+@pytest.mark.parametrize("target,claimed,held", [("r3", True, False), ("r2", True, True), ("r3", False, True)])
+def test_k6_one_app_stack_per_radio_a_start_is_blocked_on_its_own_radio_only(tmp_path, target, claimed, held):
+    # W286/W322, triage T9: kiss@r2 runs (its launch record, 868); meshcore@r3 on the same band's other radio is no
+    # rival, meshcore@r2 is. A kiss process no instance claims (no token, no record) blocks every radio (fail-safe).
+    import subprocess
+    import sys
+
+    from lhpc.core import instances
+    from lhpc.core.commands import Instance
+    svc = _svc(tmp_path, THREE)
+    tnc = svc.stack("kiss").component("loraham-kiss-tnc")
+    p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        argv = ["/x/loraham-kiss-tnc"]
+        if claimed:
+            assert svc._lifecycle().record_launch(svc.stack("kiss"), tnc, p.pid, band="868", extra={"rid": "r2"})
+            argv += list(instances._token(svc, tnc, Instance("r2"), ""))
+        svc = _svc(tmp_path, THREE, cmdlines_data={p.pid: argv})
+        blockers = svc.run_blockers("meshcore", "868", inst=Instance(target, band="868"))
+        assert any(b["holder_stack"] == "kiss" for b in blockers) is held, blockers
+    finally:
+        p.kill()
+        p.wait(timeout=5)
