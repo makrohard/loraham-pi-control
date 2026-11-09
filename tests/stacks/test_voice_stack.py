@@ -582,3 +582,15 @@ def test_a_terminal_variant_no_instance_tells_holds_every_instances_ui(tmp_path,
     res = _start(svc, "voice@r1")
     gtk = next(r for r in res.results if r.component == "loraham-voice")
     assert (gtk.outcome, gtk.summary) == (Outcome.BLOCKED, "resource conflict"), outcomes(res)
+
+
+def test_status_reports_no_ui_conflict_for_voice_r1s_gtk_app_beside_a_terminal_variant(tmp_path, monkeypatch, set_call,
+                                                                                         real_spawn):
+    # G1-K7V NOTE: the read-only conflicts every UI shows (CLI status, doctor, /stacks) key the claims as the start does;
+    # voice@r1's GTK app (its record) and a terminal variant no instance tells are no observed voice.ui conflict.
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
+    set_call(svc)
+    _gtk_running_on(svc, "r1", "433", monkeypatch)
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {4711: ["/x/LoRaHAM_Voice/loraham_voice"],
+                                                                 4712: ["/x/LoRaHAM_Voice/loraham_voice_cli"]})
+    assert not [c for c in svc.observed_conflicts() if "voice.ui" in c.resource_key], svc.observed_conflicts()

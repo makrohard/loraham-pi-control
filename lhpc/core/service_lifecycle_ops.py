@@ -11,8 +11,8 @@ import re as _re
 import time
 from pathlib import Path
 
+from . import config as _config
 from . import (
-    commands,
     daemon_control,
     gps,
     instances,
@@ -22,7 +22,6 @@ from . import (
     runtime_fs,
     validators,
 )
-from . import config as _config
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _ohs
 from . import resources as resources_mod
@@ -122,7 +121,15 @@ class LifecycleOpsMixin:
         """Band-aware observed resource conflicts (both claimants running, radio claims limited to each one's band)."""
         snap = snap if snap is not None else self.build_snapshot()
         _, running, running_ids = self._band_limited_running(snap)
-        return [c for c in resources_mod.interpret_conflicts(running, running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed]
+        return [c for c in resources_mod.interpret_conflicts(self._keyed(running), running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed]
+
+    def _keyed(self, running, inst=None) -> list:
+        """`running` with each templated claim keyed per instance (DEC-W351): by its running instances; one no instance
+        tells (no record, no token) keeps its declared key and, against a start of `inst`, holds that one's (fail-safe)."""
+        def keys(c, r):
+            ks = instances.running_claim_keys(self, self.stack_of(c.id), c, r) if r.key_template else {r.key}
+            return ks | {instances.claim_key(r, inst)} if r.key_template and ks == {r.key} else ks
+        return [dataclasses.replace(c, resources=tuple(dataclasses.replace(r, key=k) for r in c.resources for k in keys(c, r))) for c in running]
 
     def observed_conflicts(self, snap=None):
         """PUBLIC read-only band-aware observed conflicts, every UI's one source (CLI status, doctor, /stacks, /stacks/<id>):
@@ -131,18 +138,11 @@ class LifecycleOpsMixin:
 
     def _running_conflicts(self, comp, band: str = "", inst=None) -> list[str]:
         """Observed conflicts that would block starting `comp` (as `inst`) now: radio claims by the band each side uses
-        (868 vs a 433-only daemon: none); a templated claim per instance (DEC-W351), the target's own key."""
-        def keyed(c, keys_of):
-            return dataclasses.replace(c, resources=tuple(dataclasses.replace(r, key=k) for r in c.resources
-                                                          for k in (keys_of(r) if r.key_template else (r.key,))))
-
-        def held(c, r):                     # its running instances' keys; a process no instance tells: every instance's
-            st, ks = self.stack(self.stack_of(c.id)), instances.running_claim_keys(self, self.stack_of(c.id), c, r)
-            return ks if ks != {r.key} else ks | {instances.claim_key(r, i) for i in commands.stack_instances(st, self._paths)}
+        (868 vs a 433-only daemon: none); a templated claim per instance (_keyed), the target's own key."""
         limited, running, running_ids = self._band_limited_running(self.build_snapshot(), conservative=True)  # blocks: every band
-        target = keyed(limited(comp, {band} if band else set()), lambda r: (instances.claim_key(r, inst),))
-        running = [keyed(c, lambda r, c=c: held(c, r)) for c in running]
-        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
+        target = limited(comp, {band} if band else set())
+        target = dataclasses.replace(target, resources=tuple(dataclasses.replace(r, key=instances.claim_key(r, inst)) for r in target.resources))
+        conflicts = resources_mod.interpret_conflicts([*self._keyed(running, inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
         # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
         return [c.message for c in conflicts
