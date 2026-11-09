@@ -111,3 +111,24 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         for f in sockdir.iterdir():
             f.unlink()
         sockdir.rmdir()
+
+
+def test_a_lab_test_that_reboots_leaves_no_fake_behind(tmp_path):
+    """The suite's own teardown: a lab test that simulates a reboot (the boot respawns the fake gpsd) and builds no
+    LabServer, run as the suite runs it, leaves no fake of its lab root."""
+    import subprocess
+    import sys
+    bt = tmp_path / "bt"
+    target = Path(__file__).with_name("test_testlab.py")
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly", "-p", "no:cacheprovider",
+                            f"{target}::test_power_reboot_does_not_tombstone", f"--basetemp={bt}"],
+                           capture_output=True, text=True, timeout=120, check=False)
+        assert r.returncode == 0, r.stdout[-2000:]
+        assert _fakes_of(bt / "test_power_reboot_does_not_tom0") == [], "the reboot's fake gpsd outlived the test"
+    finally:
+        for pid in _fakes_of(bt / "test_power_reboot_does_not_tom0"):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
