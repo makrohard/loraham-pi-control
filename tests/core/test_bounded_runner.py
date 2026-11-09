@@ -31,14 +31,45 @@ def test_timeout_kills_process_group_promptly():
     assert time.time() - t0 < 5.0                          # killed, not waited out
 
 
-def test_timeout_terminates_child_tree():
+def _timeout_once_ready(monkeypatch, ready):
+    """The run's timeout on a fake clock: the exit wait (the runner's poll that registers POLLIN alone; the pipe
+    drains keep the real poll) reaches its deadline only once `ready` exists, i.e. once the program has built its
+    whole tree. No real start margin: a slow start (a loaded host) only delays the deadline. The program must get
+    there within 30 s of real time, else the test fails here, never later on a partial tree."""
+    import select
+    real = select.poll
+
+    class ExitWaitOnFakeClock:
+        def __init__(self):
+            self._p, self._exit_wait = real(), False
+
+        def register(self, fd, mask):
+            self._exit_wait = mask == select.POLLIN
+            self._p.register(fd, mask)
+
+        def poll(self, *a):
+            if not self._exit_wait:
+                return self._p.poll(*a)
+            for _ in range(300):                          # bounded: 300 x 0.1 s of real time
+                if ready.exists():
+                    return []                             # the clock is at the deadline: timed out
+                if self._p.poll(100):
+                    raise AssertionError("the program exited before its tree was ready")
+            raise AssertionError("the program did not build its tree within 30 s")
+    monkeypatch.setattr(select, "poll", ExitWaitOnFakeClock)
+
+
+def test_timeout_terminates_child_tree(tmp_path, monkeypatch):
     # A parent that spawns a grandchild sleep in the SAME session; on timeout the whole
     # group is killed, so the grandchild does not outlive the run.
-    prog = ("import subprocess, time, sys;"
+    ready = tmp_path / "ready"
+    prog = ("import pathlib, subprocess, time, sys;"
             "p = subprocess.Popen(['sleep', '30']);"
             "sys.stdout.write(str(p.pid) + '\\n'); sys.stdout.flush();"
+            f"pathlib.Path({str(ready)!r}).touch();"
             "time.sleep(30)")
-    r = RealCommandRunner().run(["python3", "-c", prog], timeout=0.6)
+    _timeout_once_ready(monkeypatch, ready)
+    r = RealCommandRunner().run(["python3", "-c", prog], timeout=30)
     assert r.timed_out
     child_pid = int(r.stdout.strip().splitlines()[0])
     # The grandchild was killed with the group. Use the PRODUCTION liveness predicate, which reads
@@ -60,21 +91,23 @@ def _dead_or_zombie(pid: int) -> bool:
         return True                                       # /proc gone -> dead
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_timeout_kills_term_ignoring_child_that_outlives_parent():
+def test_timeout_kills_term_ignoring_child_that_outlives_parent(tmp_path, monkeypatch):
     # The parent spawns a child that IGNORES SIGTERM and, on its own SIGTERM, the parent
     # exits immediately — so the leader dies but the child survives in the original session.
     # The runner must detect the surviving session member and SIGKILL the whole group.
     import sys
+    ready = tmp_path / "ready"
     prog = (
         "import signal, subprocess, sys, os, time\n"
-        "child = subprocess.Popen([sys.executable, '-c',"
-        " 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
-        "sys.stdout.write(str(child.pid) + '\\n'); sys.stdout.flush()\n"
         "signal.signal(signal.SIGTERM, lambda *a: os._exit(0))\n"   # leader exits on TERM
+        "child = subprocess.Popen([sys.executable, '-c',"
+        " 'import pathlib, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        " pathlib.Path(sys.argv[1]).touch(); signal.pause()', sys.argv[1]])\n"   # ready once it ignores TERM
+        "sys.stdout.write(str(child.pid) + '\\n'); sys.stdout.flush()\n"
         "time.sleep(60)\n"
     )
-    r = RealCommandRunner().run([sys.executable, "-c", prog], timeout=0.6)
+    _timeout_once_ready(monkeypatch, ready)
+    r = RealCommandRunner().run([sys.executable, "-c", prog, str(ready)], timeout=30)
     assert r.timed_out
     child_pid = int(r.stdout.strip().splitlines()[0])
     for _ in range(60):                                   # bounded wait for the KILL to land
