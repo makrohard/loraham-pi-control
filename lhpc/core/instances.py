@@ -484,16 +484,15 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
 
 def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     """7f, DEC-W40: the Settings page's radio chooser of stack `sid`, one entry per enabled radio of its bands
-    ("rN · band"): an instance with its own store opens it (`radio=`); the band's first radio opens the band's store
-    (`band=`, until K6, band_first). Nothing is added first (DEC-W344). `radio` is the shown instance's own rid."""
+    ("rN · band"), each opening that instance's own store (`radio=`, K6: every instance). A band caller's page shows
+    its band's instance (store_inst), so that entry is the selected one. Nothing is added first (DEC-W344). `radio`
+    is the shown instance's own rid."""
     stack = svc.stack(sid)
     bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
     rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
-    shown, out = own_rid(svc._paths, inst), []
-    for r in rows:
-        label, own = f"{r.id} · {r.band}", own_rid(svc._paths, commands.Instance(r.id, band=r.band))
-        out.append({"label": label, "radio": own, "band": "" if own else r.band,
-                    "sel": shown == own if own else (not shown and r.band == (band or r.band)), "disabled": False})
+    shown = own_rid(svc._paths, store_inst(svc, sid, band, inst)) if rows else ""
+    out = [{"label": f"{r.id} · {r.band}", "radio": r.id, "band": "", "sel": r.id == shown, "disabled": False}
+           for r in rows]
     return {"radio": shown, "radio_choices": out if len(out) > 1 else []}
 
 

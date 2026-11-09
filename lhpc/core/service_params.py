@@ -2499,8 +2499,9 @@ class ParamsConfigMixin:
         def _render_reset(pth, i):
             # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
             # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
+            # An instance's reset clears only the GLOBAL keys (autostart) of the shared <sid>.toml.
             merged = merge_stack_values(pth, target, "", {}, inst=i)
-            normal = _normal(merged)
+            normal = [k for k in _normal(merged) if i is not None or not own or k.startswith("autostart_")]
             if not normal:
                 return None
             # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —

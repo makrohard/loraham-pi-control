@@ -38,12 +38,14 @@ def _section(page, sid="chat"):
     return s[:s.index("</details>")]
 
 
-def test_the_chooser_names_each_radio_slot0s_by_band_and_the_instance_by_radio(box):
+def test_the_chooser_names_each_radio_by_its_radio(box):
+    # K6: every instance's settings are its own file, so every entry opens `radio=`; a band caller's page shows
+    # its band's instance (r1), whose form names it
     c, _post, _tmp = box
     s = _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
-    assert 'href="/stacks?band=433&amp;cfg=chat#stack-settings-chat">r1 · 433</a>' in s
+    assert 'href="/stacks?radio=r1&amp;cfg=chat#stack-settings-chat">r1 · 433</a>' in s
     assert 'href="/stacks?radio=r3&amp;cfg=chat#stack-settings-chat">r3 · 433</a>' in s
-    assert "instance-note" not in s and 'name="radio"' not in s                   # slot 0's own settings
+    assert '<input type="hidden" name="radio" value="r1">' in s
 
 
 def test_an_instances_settings_show_its_own_value_and_say_it_starts_from_defaults(box):
