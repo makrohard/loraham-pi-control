@@ -47,8 +47,8 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
 aarch64 runner; `release-verify` installs, builds, starts and identity-proves every stack a pin
 release may move, on pushes to `main` and on dispatch with `release_verify=true` only
 ([testlab.md](testlab.md#running-the-verification-lanes)); `slow-build`, on the same triggers
-and only after `testlab` passed, is the slow-target build row below. A newer push to a `cons/*`
-branch cancels that branch's superseded runs of both workflows; nothing else is cancelled.
+and only after `testlab` passed, is the slow-target build row below. On a `cons/*` branch (run by
+dispatch only), a newer run of a workflow cancels that branch's older run of it; nothing else is cancelled.
 
 No external project's own test suite runs in CI, apart from meshcom-qemu-raspi's
 `tests/test-fetch-qemu.sh` in `pin-validation`.
