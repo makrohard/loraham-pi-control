@@ -31,32 +31,49 @@ def _kiss_serving() -> bool:
         return False
 
 
-def _foreign_daemons(root) -> list:
+def _foreign_daemons(env) -> list:
     """The loraham_daemon processes on this host that are not this lab's (DEC-W384ap): the product reads every
-    loraham_daemon host-wide as the radio's holder, so another lab's daemon makes boot restore refuse ours. A
-    process is this lab's when its group is one of the lab's owned records (state/owned)."""
+    loraham_daemon host-wide as the radio's holder, so another lab's daemon makes boot restore refuse ours. A daemon
+    is recognised as lhpc does (any argv token named loraham_daemon: a lab's runs as `python3 .../loraham_daemon`), and
+    it is this lab's only when its group is an owned record the product itself proves live (Lifecycle.verify_owned,
+    under the lab's boot id; DEC-W384au: a reused pid or group never counts)."""
     import os
     import posixpath
-    own = set()
-    for f in (root / "state" / "owned").glob("*.json"):
-        try:
-            rec = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        own.add(rec.get("pgid") or rec.get("pid"))          # the recorded group (G1-CR1 N1: never a reused pid)
+    from pathlib import Path
+    from unittest import mock
+
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    with mock.patch.dict(os.environ, {"LHPC_BOOT_ID_FILE": env["LHPC_BOOT_ID_FILE"]}):
+        life = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))._lifecycle()
+        valid, _issues, _state = life.owned_inventory()
+        own = {rec.get("pgid") for rec in valid if life.verify_owned(rec)[0]}
     out = []
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
         try:
             with open(f"/proc/{d}/cmdline", "rb") as fh:
-                argv = fh.read().split(b"\0")
-            if posixpath.basename(argv[0].decode(errors="replace")) == "loraham_daemon" \
-                    and os.getpgid(int(d)) not in own:
+                argv = [t.decode(errors="replace") for t in fh.read().split(b"\0") if t]
+            if any(posixpath.basename(t) == "loraham_daemon" for t in argv) and os.getpgid(int(d)) not in own:
                 out.append(int(d))
-        except (OSError, IndexError):
-            continue                                       # gone meanwhile, or a zombie
+        except OSError:
+            continue                                       # gone meanwhile
     return out
+
+
+def _gps_feed_log(root) -> str:
+    """The gps feed's own log (its exit reason) for a failed start, its last 2 KB; read only on a failure (DEC-W384au):
+    an unreadable or missing log is named as missing evidence, never an error of its own."""
+    logs = sorted((root / "logs").glob("start-meshcore-gps-*.log"))
+    if not logs:
+        return "--- no gps feed log"
+    try:
+        with open(logs[-1], "rb") as fh:
+            fh.seek(max(0, fh.seek(0, 2) - 2048))
+            return f"--- {logs[-1].name} (last 2 KB)\n" + fh.read().decode(errors="replace")
+    except OSError as exc:
+        return f"--- {logs[-1].name} unavailable ({exc})"
 
 
 @pytest.fixture(scope="module")
@@ -165,11 +182,8 @@ def test_meshcore_real_process_over_fake_868(chain):
     try:
         # DEC-W384aq: a failed start names itself: the whole `stack start` output and the gps feed's own log
         # (its exit reason), never a cut repr
-        gps_logs = sorted((chain.root / "logs").glob("start-meshcore-gps-*.log"))
-        gps_name = gps_logs[-1].name if gps_logs else "no gps feed log"
-        gps_tail = gps_logs[-1].read_text(errors="replace")[-2000:] if gps_logs else ""
-        assert r.returncode == 0, (f"stack start meshcore failed\n--- stdout\n{r.stdout}\n--- stderr\n{r.stderr}\n"
-                                   f"--- {gps_name}\n{gps_tail}")
+        assert r.returncode == 0, (f"stack start meshcore failed\n--- stdout (last 4000)\n{r.stdout[-4000:]}\n"
+                                   f"--- stderr (last 4000)\n{r.stderr[-4000:]}\n{_gps_feed_log(chain.root)}")
         port = port_of(chain.env, "meshcore", MESHCORE_COMPANION)          # meshcore@<rid>'s own (DEC-W348)
         assert wait_tcp(port, 180), f"MeshCore companion never opened TCP {port}"
         # chat mode runs no repeater and therefore no plugin manager (the repeater roles are
@@ -219,7 +233,7 @@ def test_simulated_reboot_restores_running_stacks(chain):
         run_lhpc(chain.env, "stack", "start", named(chain.env, "kiss"), "--yes", timeout=300)
     assert wait_tcp(KISS_TCP, 120), "kiss not serving on 127.0.0.1:8001 before reboot"
     before = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
-    foreign = _foreign_daemons(chain.root)
+    foreign = _foreign_daemons(chain.env)
     assert not foreign, (f"foreign loraham_daemon pid {foreign} present (another lab on this host): boot restore "
                          "would refuse this lab's daemon")
     run_lab(chain.env, "_power", "--kind", "reboot", check=True, timeout=300)
