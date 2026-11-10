@@ -82,7 +82,7 @@ SPLITS = [
         "set_rflog_all",
     )),
     ("service_daemon_params", "DaemonParamsMixin", "service_params", "ParamsConfigMixin", (
-        "chip_family_for_band",
+        "radio_chip_family",
         "clear_daemon_feed",
         "daemon_feed",
         "daemon_set",

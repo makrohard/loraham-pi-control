@@ -290,7 +290,7 @@ def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
 ])
 def test_live_set_uses_the_running_family_not_the_saved_board(tmp_path, board, saved, running, value, ok):
     svc, fs = _svc(tmp_path, board, status=_status(running, "0"))
-    assert svc.chip_family_for_band("433") == saved
+    assert svc.radio_chip_family("r1") == saved
     assert svc.daemon_set("r1", "POWER", value, apply=True).ok is ok
     assert any(f"POWER={value}".encode() in payload for _p, payload in fs.sent) is ok
 

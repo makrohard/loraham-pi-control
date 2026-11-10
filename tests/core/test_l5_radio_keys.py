@@ -118,14 +118,14 @@ def test_the_overview_leaves_out_a_disabled_radio(tmp_path):
     assert [r["rid"] for r in next(e for e in svc.radio_overview() if e["band"] == "868")["radios"]] == ["r1"]
 
 
-@pytest.mark.parametrize("rows,band,family", [(MIXED, "433", "sx127x"), (MIXED, "868", "sx1262"),
-                                              (TWO_868, "868", None),
-                                              pytest.param(NO_LIST, "868", None, marks=_ABSENT)])
-def test_w5_2_the_chip_family_is_the_radio_rows_model(tmp_path, rows, band, family):
+@pytest.mark.parametrize("rows,rid,family", [(MIXED, "r1", "sx127x"), (MIXED, "r2", "sx1262"),
+                                             (TWO_868, "r2", "sx127x"), (TWO_868, "r3", None),
+                                             pytest.param(NO_LIST, "r2", None, marks=_ABSENT)])
+def test_w5_2_the_chip_family_is_the_radio_rows_model(tmp_path, rows, rid, family):
+    # W400 (K8f S5'): per radio; two radios on one band each have their own row's family, a radio not listed none
     svc = _svc(tmp_path, rows)
-    assert radio_start.chip_family(svc, band) == family
-    if family:
-        assert svc.chip_family_for_band(band) == family
+    assert radio_start.chip_family(svc, rid) == family
+    assert svc.radio_chip_family(rid) == (family or "")
 
 
 def test_w5_2_a_set_is_checked_against_this_radios_chip(tmp_path):
@@ -133,8 +133,8 @@ def test_w5_2_a_set_is_checked_against_this_radios_chip(tmp_path):
     svc = _svc(tmp_path, MIXED, unix_replies={"/tmp/loraconf-r1.sock": READY % b"r1",
                                               "/tmp/loraconf-r2.sock": READY % b"r2"})
     from lhpc.core import daemon_control
-    assert daemon_control.validate_set("POWER", "20", svc.chip_family_for_band("433"))
-    assert not daemon_control.validate_set("POWER", "20", svc.chip_family_for_band("868"))
+    assert daemon_control.validate_set("POWER", "20", svc.radio_chip_family("r1"))
+    assert not daemon_control.validate_set("POWER", "20", svc.radio_chip_family("r2"))
 
 
 @pytest.mark.parametrize("argv", [["loraham_daemon", "--radio", "433"],                 # a 0.13.x daemon, no --id

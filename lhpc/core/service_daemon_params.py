@@ -110,10 +110,13 @@ class DaemonParamsMixin:
     def _granted(self, band: str, rid: str = "") -> bool:
         """The +20 dBm grant of radio `rid`, else of `band`'s one enabled radio (radio_start.effective_high_power,
         W311); False when the band names no one radio: default denied, never a per-band switch."""
-        if not rid:
-            t = radio_start.band_rid(self, band) if band in daemon_control.ALLOWED_BANDS else None
-            rid = t.rid if t is not None and t.outcome == "proceed" else ""
+        rid = self._one_rid(band, rid)
         return bool(rid) and radio_start.effective_high_power(self, rid)
+
+    def _one_rid(self, band: str, rid: str = "") -> str:
+        """`rid`, else `band`'s one enabled radio, else "" (the per-band console entries, carried over W409aa)."""
+        t = radio_start.band_rid(self, band) if not rid and band in daemon_control.ALLOWED_BANDS else None
+        return rid or (t.rid if t is not None and t.outcome == "proceed" else "")
 
     @invalidates_snapshot
     def set_ocp(self, rid: str, value: str) -> ActionResult:
@@ -142,7 +145,7 @@ class DaemonParamsMixin:
         saved = self._granted(band, rid)
         live = daemon_control.high_power_from_status(status) if view.reachable else None
         fam = daemon_control.chip_family_from_status(status) if view.reachable else ""
-        saved_family = self.chip_family_for_band(band, rid)
+        saved_family = self.radio_chip_family(self._one_rid(band, rid))
         mismatch = ""
         # The permission is inert on a running SX1262, so saved/running disagreement about it is
         # not worth a line there; a family disagreement always is.
@@ -176,13 +179,13 @@ class DaemonParamsMixin:
         return radio_start.set_row_fields(self, rid, lambda row: dict(zip(fields, (on, row.band if on else None), strict=True)),
                                           f"high-power permission for {rid} ({{band}} MHz): {value} — {note}", fields)
 
-    def chip_family_for_band(self, band: str, rid: str = "") -> str:
-        """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware
-        is configured or the preset is unknown; at stage L5 the band's radio row's model (W5-2).
+    def radio_chip_family(self, rid: str) -> str:
+        """Chip family of radio `rid` ("sx127x" / "sx1262"), or "" when the hardware list has no such
+        radio or the preset is unknown: its row's model (W5-2; per radio, W400).
         The accepted POWER range depends on it: daemon 1.0.0 enforces 2..17 on SX127x (below 2
         RadioLib drives RFO instead of PA_BOOST, and 18..20 are refused) against 0..20 on SX1262.
         "" deliberately narrows nothing — see `daemon_control.int_range`."""
-        fam = radio_start.chip_family(self, band, rid)
+        fam = radio_start.chip_family(self, rid)
         return fam or ""
 
     def _daemon_feed_source(self, band: str, rid: str = "") -> Path | None:
@@ -263,7 +266,7 @@ class DaemonParamsMixin:
                        else f"POWER={value}: the daemon of {rid} is not running — a live POWER is "
                             "checked against the running daemon; start it first")
         else:
-            err = daemon_control.validate_set(key, value, self.chip_family_for_band(band, rid))
+            err = daemon_control.validate_set(key, value, self.radio_chip_family(rid))
         if err:
             return ActionResult(False, f"Invalid setting: {err}",
                                 next_commands=[f"lhpc daemon {rid}"])

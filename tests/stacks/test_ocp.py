@@ -127,7 +127,7 @@ def test_set_ocp_takes_only_what_the_radios_chip_represents(tmp_path, setup, val
     r = svc.set_ocp("r1", value)
     assert r.ok is ok, r.summary
     if not ok:
-        assert dc.OCP_LEGAL_TEXT[svc.chip_family_for_band("433", "r1")] in r.summary
+        assert dc.OCP_LEGAL_TEXT[svc.radio_chip_family("r1")] in r.summary
 
 
 @pytest.mark.parametrize("value", ["", "abc", "-5", "100.0", "0100", " 100", "AUTO", "²", "١٠٠", "+100",

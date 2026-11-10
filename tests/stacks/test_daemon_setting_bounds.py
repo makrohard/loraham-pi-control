@@ -143,7 +143,7 @@ def test_service_refuses_out_of_range_power_for_an_sx127x_board(tmp_path, setup,
               b"HIGHPOWER=0 CHIPFAMILY=SX127x\n")
     fs = FakeSystem(unix_replies={dc.conf_socket({"433": "r1", "868": "r2"}[band]): status})
     svc = ControllerService(system=fs.system, paths=p)
-    assert svc.chip_family_for_band(band) == "sx127x"
+    assert svc.radio_chip_family({"433": "r1", "868": "r2"}[band]) == "sx127x"
     r = svc.daemon_set({"433": "r1", "868": "r2"}[band], "POWER", rejected, apply=True)
     assert not r.ok and "POWER" in r.summary
     assert fs.sent == []                       # refused before anything reached the socket
@@ -162,9 +162,11 @@ def test_service_keeps_the_full_range_for_a_waveshare_board(tmp_path, setup, ban
     assert radio_start.setup_radios(p, setup)[0]          # S2: the list `lhpc hardware <setup>` writes names the board
     cfgmod.save_hardware_setup(p, setup)
     svc = ControllerService(system=FakeSystem().system, paths=p)
-    assert svc.chip_family_for_band(band) == "sx1262"
-    assert dc.validate_set("POWER", "20", svc.chip_family_for_band(band)) is None
-    assert dc.validate_set("POWER", "0", svc.chip_family_for_band(band)) is None
+    from lhpc.core import radios
+    rid = next(r.id for r in radios.load(p).radios if r.band == band)
+    assert svc.radio_chip_family(rid) == "sx1262"
+    assert dc.validate_set("POWER", "20", svc.radio_chip_family(rid)) is None
+    assert dc.validate_set("POWER", "0", svc.radio_chip_family(rid)) is None
 
 
 @pytest.mark.no_default_hardware
@@ -172,8 +174,8 @@ def test_unconfigured_box_has_no_family_and_narrows_nothing(tmp_path):
     # The test baseline pretends a LoRaHAM board is fitted (conftest `_default_hardware`), so this
     # one opts out to reach the real fresh-install state: no board picked, no family, no narrowing.
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.chip_family_for_band("433") == ""
-    assert dc.validate_set("POWER", "20", svc.chip_family_for_band("433")) is None
+    assert svc.radio_chip_family("r1") == ""
+    assert dc.validate_set("POWER", "20", svc.radio_chip_family("r1")) is None
 
 
 def test_every_hw_preset_has_a_family():

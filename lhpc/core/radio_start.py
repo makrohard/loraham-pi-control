@@ -721,7 +721,7 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
     if svc._is_daemon_target(sid):
         return {}
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
-    chip, grant = chip_family(svc, "", rid) or "", effective_high_power(svc, rid)
+    chip, grant = chip_family(svc, rid) or "", effective_high_power(svc, rid)
     return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
             and daemon_control.validate_set(name, str(v), chip, grant) is None}
 
@@ -751,7 +751,7 @@ def params_view(svc, target: str, rid: str) -> dict:
     return {"stack": target, "band": band, "rid": rid, "is_daemon": is_daemon,
             "can_apply": is_daemon or _apply_open(radio_clients(svc, rid, sid)), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
-            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, band, rid) or "", effective_high_power(svc, rid))}
+            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, rid) or "", effective_high_power(svc, rid))}
 
 
 def _apply_open(clients) -> bool:
@@ -773,7 +773,7 @@ def save_params(svc, target: str, rid: str, values: dict):
         return ActionResult(False, f"Cannot save the daemon settings of {target} on {rid}: {why}")
     if is_daemon:
         return set_row_dp(svc, rid, None, (target, values))
-    edits, err = dp_updates(svc, sid, band, values, chip_family(svc, band, rid) or "", effective_high_power(svc, rid),
+    edits, err = dp_updates(svc, sid, band, values, chip_family(svc, rid) or "", effective_high_power(svc, rid),
                             inherited=row_dp(svc, rid))
     if err:
         return ActionResult(False, err)
@@ -794,7 +794,7 @@ def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
         return {}, f"Cannot save the settings of {rid}: {why}"
     sid = svc._owner_stack_id(target)
     shown = row_dp(svc, rid)
-    return dp_updates(svc, sid, band, values, svc.chip_family_for_band(band, rid), effective_high_power(svc, rid),
+    return dp_updates(svc, sid, band, values, svc.radio_chip_family(rid), effective_high_power(svc, rid),
                       {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()})
 
 
@@ -1103,11 +1103,10 @@ def row_preset(paths, rid: str) -> str:
     return v.preset if v else ""
 
 
-def chip_family(svc, band: str, rid: str = ""):
-    """W5-2: the chip family of radio `rid`, or of `band`'s one enabled radio, from its row's model variant (the preset
-    its daemon runs with); None when the hardware list does not resolve the band to one radio (0.13.x: its preset)."""
-    t = band_rid(svc, band) if not rid else radio_daemon.Target("proceed", rid, "")
-    row = next((r for r in radios.load(svc._paths).radios if r.id == t.rid), None) if t.outcome == "proceed" else None
+def chip_family(svc, rid: str):
+    """W5-2: the chip family of radio `rid` from its row's model variant (the preset its daemon runs with); None when
+    the hardware list has no such radio (W400: per radio, no band)."""
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None) if rid else None
     model = radio_models.load().get(row.model) if row else None
     v = radios.variant(row, model) if model else None
     return None if row is None else cfgmod.hw_preset_family(v.preset if v else "")
