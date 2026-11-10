@@ -554,11 +554,12 @@ def endpoint_statuses(svc, cs, inst) -> list:
     if inst is None or not inst.rid:
         return list(cs.endpoints or ())
     from . import meshcore_mode as _mm
+    from .model import EndpointObservation
     from .probes.endpoints import tcp_endpoint_match
-    own = (_own_endpoints(svc, svc.stack(_mm.STACK_ID).component(_mm.NODE_ID), inst)
-           if cs.component_id == _mm.NODE_ID else None)                 # K8f S4-5: the node by its own mode
+    if cs.component_id == _mm.NODE_ID:            # K8f S4-5 (DEC-W409ah): its own mode at its own addresses, probed
+        return [EndpointObservation(e, *tcp_endpoint_match(svc._system, e.address)) for e in node_endpoints(svc, [inst])]
     return [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
-            else o for o in cs.endpoints or () if own is None or o.spec in own for e in endpoints_for([o.spec], inst)]
+            else o for o in cs.endpoints or () for e in endpoints_for([o.spec], inst)]
 
 
 def endpoints_for(endpoints, inst) -> list:
@@ -667,6 +668,21 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
     return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),                       # DEC-W384ac; S4-5: its mode
             "endpoints": endpoints_for(_own_endpoints(svc, comp, inst), with_bases(svc, sid, inst))}
+
+
+def node_endpoints(svc, insts) -> list:
+    """The MeshCore node endpoints instances `insts` serve, each by its own running mode at its own (saved-base)
+    addresses (K8f S4-5, DEC-W409ah): status readiness, an instance's view and the stop check read them."""
+    from . import meshcore_mode as _mm
+    from .config import ConfigError
+    comp, out = svc.stack(_mm.STACK_ID).component(_mm.NODE_ID), []
+    for inst in insts:
+        try:
+            based = with_bases(svc, _mm.STACK_ID, inst)
+        except ConfigError:
+            based = inst                           # an unreadable store: its static ports (status and stop never break)
+        out += endpoints_for(_own_endpoints(svc, comp, inst), based)
+    return out
 
 
 def _own_endpoints(svc, comp, inst) -> list:

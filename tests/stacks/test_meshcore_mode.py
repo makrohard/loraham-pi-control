@@ -74,8 +74,8 @@ def test_start_readiness_and_status_agree_per_mode(tmp_path, mode, live, ready):
     svc = _svc(tmp_path, listeners)
     _set_mode(svc, mode)
     node = _node(svc)
-    # Ongoing status: the prober is handed the same mode the service computes.
-    prober = StatusProber(svc._system, svc._paths, meshcore_modes=(svc.meshcore_mode(),))
+    # Ongoing status: the prober is handed the node endpoints of the same mode the service computes (the template's).
+    prober = StatusProber(svc._system, svc._paths, meshcore_node_endpoints=mm.expected_endpoints(node, svc.meshcore_mode()))
     _eps, all_ready, has_expected = prober._assess_endpoints(node)
     assert has_expected and all_ready is ready
     # Start readiness selects the same endpoints (an absent endpoint would make this poll for
@@ -150,7 +150,7 @@ def test_a_mode_change_is_saved_only_and_status_follows_the_running_launch(tmp_p
     assert svc.meshcore_mode() == "repeater"
     assert svc.meshcore_running_mode() == "chat+repeater"         # status keeps the launch's truth
     node = _node(svc)
-    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [5000, 8000]
+    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [5133, 8133]   # r2's own (K8f S4-5)
 
 
 def test_chat_mode_mints_no_repeater_secrets(tmp_path):
@@ -412,7 +412,7 @@ def test_a_malformed_meshcore_stack_file_breaks_neither_status_nor_stop_verifica
     assert svc.status("graywolf").ok and svc.status(mm.STACK_ID).ok
     assert "(unreadable stack config)" in "\n".join(svc.status(mm.STACK_ID).details)
     node = _node(svc)
-    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [5000]
+    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [5133]   # r2's own (K8f S4-5)
     assert svc.page_mode_note(svc.web_page("meshcore-meshcore-node@r2")) == ""   # K4b: meshcore is r2's (868)
 
 
@@ -466,6 +466,6 @@ def test_the_running_mode_is_read_once_per_request_and_again_after_a_render(tmp_
     node = _node(svc)
     svc.invalidate_snapshot()                                     # a request starts
     ports = [[mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] for _ in range(5)]
-    assert ports == [[5000, 8000]] * 5 and len(reads) == 1
+    assert ports == [[5133, 8133]] * 5 and len(reads) == 1
     svc.write_config_files(mm.STACK_ID)                           # a start renders the new role
-    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [8000]
+    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [8133]
