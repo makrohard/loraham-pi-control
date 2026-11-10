@@ -107,7 +107,7 @@ def test_w384q_the_derived_rows_are_exactly_the_hidden_ones_computed_from_the_in
     svc = _svc(tmp_path, radios_fixture.RADIOS)
     got = {p.name for s in svc.stacks() for c in s.components
            for p in (*c.run_params, *(c.config_file.params if c.config_file else ())) if _derived(p)}
-    assert got == set(DERIVED)
+    assert got == set(DERIVED) | {"web_port", "api_port"}           # + meshtastic's ports (DEC-W384cs, its own test)
     assert not got & {n for _s, n in SECRET}
 
 

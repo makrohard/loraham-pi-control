@@ -372,19 +372,20 @@ def test_packaged_base_is_the_authoritative_hardware_config(tmp_path):
     assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())
 
 
-def test_web_port_is_fixed_at_9443_and_not_a_parameter(tmp_path):
-    # F7: the port is declared ONCE (the packaged base) and matches the component endpoint the
-    # dashboard link, the stackweb nginx upstream and the exposure audit all derive from. A
-    # settable param moved only the yaml and silently broke every one of those.
+def test_web_port_is_the_endpoints_and_never_operator_settable(tmp_path):
+    # F7, DEC-W384cs: the port the yaml writes is the component endpoint's (the dashboard link, the stackweb nginx
+    # upstream and the exposure audit derive from it); a SETTABLE param would move only the yaml, so `web_port` is a
+    # hidden derived row ({port:9443}: r2 writes 9576), never a Config-page field.
     svc, _ = _svc(tmp_path)
     comp = _meshtastic_comp(svc)
-    assert not any(p.name == "web_port" for p in comp.config_file.params)
+    web = next(p for p in comp.config_file.params if p.name == "web_port")
+    assert web.hidden and web.default_template == "{port:9443}"
     svc.write_config_files("meshtastic", "868")
     generated = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
-    assert "Port: 9443" in generated
+    assert "Port: 9576" in generated                  # meshtastic on 868 is meshtastic@r2: 9443 + 133
     assert "Port: 443 " not in generated and "Port: 443\n" not in generated
-    ep = [e.address for e in comp.endpoints if e.scheme == "https"]
-    assert ep == ["127.0.0.1:9443"], ep          # config and declaration agree
+    ep = [e.address_template for e in comp.endpoints if e.scheme == "https"]
+    assert ep == ["127.0.0.1:{port:9443}"], ep    # config and declaration share the one template
 
 
 @pytest.mark.parametrize("setup, band, cs, irq", [

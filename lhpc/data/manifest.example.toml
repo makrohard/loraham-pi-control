@@ -1479,6 +1479,24 @@ main = "meshtastic"
       validator = "path"
       label = "Web UI root (the meshtastic-web component)"
       advanced = true
+      [[stack.component.config_file.param]]
+      # DEC-W384cs, controller-owned: each instance's web port is its endpoint's ({port:9443}: r1 9443, r2 9576);
+      # meshtasticd reads Webserver.Port (PortduinoGlue.cpp :1007, v2.7.26). Not operator-settable.
+      name = "web_port"
+      key = "Port"
+      section = "Webserver"
+      kind = "int"
+      hidden = true
+      default = "{port:9443}"
+      [[stack.component.config_file.param]]
+      # DEC-W384cs, controller-owned: each instance's API port is its endpoint's ({port:4403}: r1 4403, r2 4536);
+      # meshtasticd reads General.APIPort when no -p is given (PortduinoGlue.cpp :1056-1059, v2.7.26).
+      name = "api_port"
+      key = "APIPort"
+      section = "General"
+      kind = "int"
+      hidden = true
+      default = "{port:4403}"
       # TX power CAP (dBm), read by meshtasticd at every radio init BEFORE the first frame: the chip
       # clamps whatever the node's own `lora.tx_power` asks for to this value. Without it a fresh
       # node (tx_power unset -> the region maximum) transmits at the RF95's 20 dBm. A lower

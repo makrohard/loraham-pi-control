@@ -220,11 +220,11 @@ Logging:
 
 Webserver:
   # 9443, NOT 443: lhpc runs meshtasticd ROOTLESS and an unprivileged process cannot bind <1024.
-  # This port is ALSO declared as the component's endpoint, and the dashboard link, the stackweb
-  # nginx upstream and the "exposed on all interfaces" audit all derive from that declaration —
-  # so it is fixed here rather than operator-settable (a changed port would silently break all of
-  # them while only this file moved).
-  Port: 9443 # Port for Webserver & Webservices
+  # DERIVED from the endpoint: the manifest's hidden `web_port` param writes each instance's own
+  # {port:9443} here (r2: 9576), as `api_port` writes General.APIPort ({port:4403}); the dashboard
+  # link, the stackweb upstream and the exposure audit derive from the same endpoint, so it is
+  # never operator-settable (DEC-W384cs).
+  Port: 9443 # Port for Webserver & Webservices (the template's; each instance writes its own)
   RootPath: /usr/share/meshtasticd/web # placeholder — ALWAYS overridden by the web_root FileParam ({runtime}/build/tools/meshtastic-web/web)
 #  SSLKey: /etc/meshtasticd/ssl/private_key.pem # Path to SSL Key, generated if not present
 #  SSLCert: /etc/meshtasticd/ssl/certificate.pem # Path to SSL Certificate, generated if not present

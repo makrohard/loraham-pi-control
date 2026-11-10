@@ -25,6 +25,8 @@
 - MeshCore keeps its identities: before the first start, move config/secrets/meshcore_identity.key,
   openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
+- Meshtastic on r2 and up now listens on its own ports (API 4403 + 133 × (n − 1), web 9443 + 133 × (n − 1)); before,
+  every meshtastic@rN bound r1's 4403/9443.
 - Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`
   names the node. After the update, restart running GPS stacks so their feeds move.
 - Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio): MeshCom per radio, each
