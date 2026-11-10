@@ -69,7 +69,7 @@ Upgrading from 0.13.x
 - Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
   `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
 - A port save is judged per radio (each instance at its own base's port, a radio not yet listed at the manifest's):
-  a port refused only by base arithmetic now saves; one another radio's instance listens on is refused by name.
+  a port refused only by base arithmetic (or its r64 projection) saves; one another instance listens on is refused.
 
 Fixed
 

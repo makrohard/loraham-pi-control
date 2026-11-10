@@ -73,13 +73,20 @@ def test_t_p3_a_port_whose_radio_step_reaches_a_fixed_port_is_refused(tmp_path):
         r.details
 
 
-def test_t_p3_a_base_whose_r64_port_leaves_the_range_is_refused_and_the_last_fitting_one_saves(tmp_path):
-    # G1-B1 NOTE: 60000 is in range on r1 but r64's port would be 60000 + 133 x 63 = 68379; 57156 is the last base
-    # whose r64 port (65535) fits.
-    r = _svc(tmp_path).save_config("kiss", {"kiss_port": "60000"})
-    assert not r.ok and r.details == ["kiss@r1/loraham-kiss-tnc: port 60000 on r64 gives 68379, outside 1024..65535"], \
+def test_t_p3_a_base_whose_own_radios_port_leaves_the_range_is_refused_and_the_last_fitting_one_saves(tmp_path):
+    # K8f S4-4b1 (DEC-W409s): a saved base sets its own instance's port only, rid_port(base, its rid); on r2 65403 gives
+    # 65403 + 133 = 65536 (refused by name) and 65402 gives 65535 (saves). (Was G1-B1 NOTE: 60000 refused because r64's
+    # port would be 68379, as if r1's base moved every radio's.) The templates stay in range through r64: T-P1 above.
+    import radios_fixture
+
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))      # r2 on 433: kiss@r2
+    svc = _svc(tmp_path)
+    r2 = instances.parse_target(svc, "kiss@r2", "start")[1]
+    r = svc.save_config("kiss", {"kiss_port": "65403"}, inst=r2)
+    assert not r.ok and r.details == ["kiss@r2/loraham-kiss-tnc: port 65403 on r2 gives 65536, outside 1024..65535"], \
         r.details
-    assert _svc(tmp_path).save_config("kiss", {"kiss_port": "57156"}).ok
+    assert svc.save_config("kiss", {"kiss_port": "65402"}, inst=r2).ok
 
 
 def test_t_p3_a_stack_port_param_outside_the_range_is_refused(tmp_path):

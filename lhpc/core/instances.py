@@ -155,7 +155,8 @@ def instance_pids(svc, sid: str, inst, comp_id: str, get_argvs, pids) -> list:
     if inst is None or not pids:
         return list(pids)
     table = get_argvs() if callable(get_argvs) else (get_argvs or {})
-    return [p for s, r, c, p in instance_processes(svc, table) if (s, r, c) == (sid, inst.rid, comp_id) and p in pids]
+    procs = svc._request_memo(("instance-processes",), lambda: instance_processes(svc, table))   # once per render
+    return [p for s, r, c, p in procs if (s, r, c) == (sid, inst.rid, comp_id) and p in pids]
 
 
 def launch_bands(svc, sid: str) -> set:

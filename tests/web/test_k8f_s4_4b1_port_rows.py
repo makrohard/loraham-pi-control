@@ -54,3 +54,17 @@ def test_each_instances_live_port_is_read_from_its_own_process(tmp_path, monkeyp
                                                                      ("kiss", "r2", "loraham-kiss-tnc", 102)])
     rows = [(w["port"], w["live_scope"]) for w in svc.dashboard_webservers(fw_status={}) if w["kind"] == "port"]
     assert rows == [("8001", "absent"), ("8134", "absent")], rows
+
+
+def test_the_process_table_is_attributed_once_per_render(tmp_path, monkeypatch):
+    # G1-K8F-S4-4B1 N2: the port rows of one render share one instance_processes() pass. red on 3b83a071: one per row
+    svc = _box(tmp_path, monkeypatch, {})
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "kiss":
+            ss.components["loraham-kiss-tnc"].pids = [101, 102]
+    calls = []
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {101: ["k"], 102: ["k"]})
+    monkeypatch.setattr(instances, "instance_processes", lambda s, t: calls.append(1) or [])
+    rows = [w for w in svc.dashboard_webservers(fw_status={}) if w["kind"] == "port"]
+    assert len(rows) == 2 and len(calls) == 1, (len(rows), calls)

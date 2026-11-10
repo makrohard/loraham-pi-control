@@ -89,8 +89,8 @@ def nginx_listeners(svc) -> dict[int, list[str]]:
 
 def param_conflicts(svc, changes, inst=None) -> list[str]:
     """The refusals for a stack config save of instance `inst` (the one the save writes; None without a hardware
-    list): each changed port param whose base is outside 1024..65535 (or whose r64 port is), or whose port on its
-    instance's radio is already another owner's (`stack_listeners`, `nginx_listeners`: exact ports, DEC-W409p).
+    list): each changed port param whose base, or whose port on its instance's radio, is outside 1024..65535 (W409s:
+    a saved base sets its own instance's port only), or whose port is already another owner's (`stack_listeners`, `nginx_listeners`: exact ports, DEC-W409p).
     `changes` are config_save Changes (kind, component, param, value)."""
     rid = instances.own_rid(inst)
     overrides = {(ch.comp.id, ch.param.name, rid): str(ch.value) for ch in changes if ch.kind == "r"}
@@ -113,9 +113,9 @@ def param_conflicts(svc, changes, inst=None) -> list[str]:
             if not PORT_MIN <= base <= PORT_MAX:
                 problems.append(f"{owner}: port {base} is outside {PORT_MIN}..{PORT_MAX}")
                 continue
-            if "{port" in (ep.address_template or ""):        # radio-derived: every radio's port is in range (r64)
+            if "{port" in (ep.address_template or ""):        # radio-derived: its own radio's port is in range (W409s)
                 try:
-                    commands.rid_port(base, f"r{commands.PORT_RADIOS}")
+                    commands.rid_port(base, rid or "r1")
                 except commands.CommandError as exc:
                     problems.append(f"{owner}: {exc}")
                     continue

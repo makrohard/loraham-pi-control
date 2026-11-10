@@ -48,3 +48,12 @@ def test_a_future_radios_listener_is_named_as_its_template(tmp_path):
     r = _save(svc, "kiss@r1", {"kiss_port": "8213"})
     assert not r.ok and r.details == [
         "kiss@r1/loraham-kiss-tnc: port 8213 is already graywolf@r2 (template)/graywolf's listener"], r.details
+
+
+def test_a_saved_base_is_judged_on_its_own_radio_not_projected_to_r64(tmp_path):
+    # G1-K8F-S4-4B1 B1, DEC-W409s: kiss@r1 at base 60000 listens on 60000 (in range); r2 keeps its own base and a new
+    # radio starts from the manifest's, so nothing projects 60000 to r64. red on 3b83a071: refused, "port 60000 on r64
+    # gives 68379, outside 1024..65535"
+    svc = _svc(tmp_path)
+    r = _save(svc, "kiss@r1", {"kiss_port": "60000"})
+    assert r.ok, r.details
