@@ -134,9 +134,9 @@ def daemon_commit(svc) -> str:
     return out.strip() if rc == 0 else ""
 
 
-def served_root(svc, inst=None) -> str:
-    """The `RootPath` meshtasticd instance `inst` is given (its own store; the render rule of service_params, applied
-    here)."""
+def served_root(svc, inst) -> str:
+    """The `RootPath` meshtasticd instance `inst` is given (its own store; None without a hardware list; the render
+    rule of service_params, applied here)."""
     runtime = svc._paths.runtime_root
     raw = svc._resolved_param_value(DAEMON, "file", DAEMON, "web_root", inst=inst)
     return str(current_root(raw, runtime, "{runtime}/" + ROOT_REL + "/web")).replace(
