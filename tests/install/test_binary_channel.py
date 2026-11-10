@@ -1924,3 +1924,15 @@ def test_a_binary_install_journal_of_an_earlier_version_is_refused_by_name(tmp_p
     res = svc.binary_install("meshcom", apply=True)
     assert not res.ok and "an unreadable binary-install journal is present" in res.summary, res.summary
     assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_a_binary_install_journal_whose_auth_is_not_a_map_is_refused_by_name(tmp_path, monkeypatch, stub_pipeline):
+    # G2-0.14.0-DELTA NOTE 14 (W269: refused, never converted): a journal valid in every other field whose `auth` is a
+    # string. red on 67f57e46: AttributeError from .get() on the string, before the shape guard
+    from lhpc.core import binary_install as bi
+    svc, _ins, _pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline)
+    bi.open_txn(svc._paths, "meshcom", "txnOld", auth="config/secrets/prev_pw")
+    assert bi.read_journal(svc._paths)[1] == "valid"
+    ok, why = svc.binary_recover()
+    assert not ok and "(an earlier version's: CHANGELOG 0.14.0 upgrade steps)" in why, why
+    assert "state/binary/install.journal.json" in why

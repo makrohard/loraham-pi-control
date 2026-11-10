@@ -536,7 +536,7 @@ class BinaryOpsMixin:
         j, jstate = bi.read_journal(self._paths)
         if jstate == "absent":
             return True, ""
-        prev_auth = None if jstate == "unsafe" or j is None else (j.get("auth") or {}).get("previous") or {}
+        prev_auth = (a.get("previous") or {}) if j is not None and isinstance(a := j.get("auth") or {}, dict) else None
         if not isinstance(prev_auth, dict):      # unreadable, or G1-K8F-S4-4C B1: an earlier version's (W269, refused)
             return False, ("an unreadable binary-install journal is present (an earlier version's: CHANGELOG 0.14.0 "
                            "upgrade steps) — resolve state/binary/install.journal.json by hand")
