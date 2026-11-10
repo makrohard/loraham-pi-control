@@ -214,7 +214,7 @@ def test_radio_dashboard_has_two_band_columns(web):
     doc = parse(body)
     assert doc.find("div", class_="radiogrid")
     assert doc.find("div", **{"data-radio-band": "433"}) and doc.find("div", **{"data-radio-band": "868"})
-    assert "r1 · 433" in body and "r2 · 868" in body          # S2: the baseline list's radios, one card each (W286)
+    assert "LoRaHAM 433 (r1, 433 MHz)" in body and "LoRaHAM 868 (r2, 868 MHz)" in body   # S2: one card per radio (W286)
     # per-band: a start-stack control and a radio-config link
     assert 'name="op" value="start"' in body
     assert "Radio config" in body or "daemon offline" in body
@@ -1512,7 +1512,7 @@ def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):
         paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham")
     doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
-    link = doc.find("a", href="/stacks?open=daemon&cfg=daemon#stack-settings-daemon")
+    link = doc.find("a", href="/stacks?open=daemon&cfg=daemon&radio=r1#stack-settings-daemon")    # DEC-W384bu: its radio
     assert link and link[0].text == "Radio config"
 
 

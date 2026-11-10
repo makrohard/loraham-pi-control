@@ -79,14 +79,14 @@ def test_a_bind_without_the_token_is_refused(web, tmp_path, monkeypatch):
 
 
 def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypatch):
-    # W285/W286: one Home card per radio ("r1 · 433"), its band a property of the radio (B5's list in a band card before).
+    # W285/W286, DEC-W384bu: one Home card per radio ("<name> (<rid>, <band> MHz)"), its band a property of the radio.
     from lhpc.core.services import ControllerService
     radios_fixture.write(tmp_path)
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     doc = parse(web().get("/").get_data(as_text=True))
     cards = doc.find("div", class_="radio-col")
     assert [(c["data-radio-rid"], c["data-radio-band"]) for c in cards] == [("r1", "433"), ("r2", "868")]
-    assert [doc.within(c).find("h2")[0].text.strip() for c in cards] == ["r1 · 433", "r2 · 868"]
+    assert [doc.within(c).find("h2")[0].text.strip() for c in cards] == ["low (r1, 433 MHz)", "high (r2, 868 MHz)"]
 
 
 def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):

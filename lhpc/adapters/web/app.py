@@ -450,13 +450,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/")
     def dashboard():
-        # Radio-centric overview: one card per radio (W285/W286: "r1 · 868"), grouped by band, with its daemon,
-        # live monitor, the band's stacks and a start-stack control.
-        # DEC-W384bu/bv: one entry per radio, then the §6 stray band daemons in the per-band shape the template reads
-        # until the per-radio switch (W-commit); every element stays (W290)
+        # Radio-centric overview (W285/W286, DEC-W384bu/bv): one card per enabled radio with its own daemon, live
+        # monitor, stacks and start control, then the §6 stray band daemons (their card + Stop kept, W290).
+        from lhpc.core import radio_start as _radio_start
         strays: list = []                                # G1-K8D3 N2: one pass for the radio and the stray cards
-        radios = service.radio_overview(strays) + [{**x, "stray": True, "radios": [], "running": [], "startable": [],
-                                                    "interactive": [], "conflict": []} for x in strays]
+        radios = [{**r, "log": _radio_start.start_log_name(service.DAEMON_ID, r["band"], r["rid"])}   # its daemon log
+                  for r in service.radio_overview(strays)] + [{**x, "stray": True, "interactive": []} for x in strays]
         # W2 (G1-W2 3): an interactive app shows on the card of each radio its instance's marker names, with that
         # instance's Stop; a running entry without a rid is no instance lhpc can address (a stop reaches none of it).
         from lhpc.core import interactive_markers as _im
@@ -470,8 +469,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         tasks, dsid = service.running_tasks(), service.stack_of(service.DAEMON_ID) or "daemon"
         jobs = {t.get("run_id") for t in tasks if t.get("kind") == "job" and t.get("state") == "running"}
         pending_interactive = (any(not s.get("running") and not s.get("blocker") for r in radios for s in r["interactive"])
-                               or any(f"web-{op}-{dsid}-{x['rid']}.log" in jobs
-                                      for r in radios for x in r["radios"] for op in ("start", "restart")))
+                               or any(f"web-{op}-{dsid}-{r['rid']}.log" in jobs
+                                      for r in radios if not r.get("stray") for op in ("start", "restart")))
         # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
@@ -563,6 +562,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             tasks=tasks,
             radio_bands=service.radio_bands(),
             hardware_configured=service.hardware_configured(),
+            radios_listed=bool(_radios_mod.load(service._paths).radios),       # DEC-W384cl: radios, none enabled
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
             attention=(_att := _attention_banner()),              # W272/W273: the "Needs attention" banner
             attention_set=_attention.set_key(_att),                         # C23 B2: the ✕ posts the identity of the set shown

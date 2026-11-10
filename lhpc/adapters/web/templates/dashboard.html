@@ -86,48 +86,54 @@
     <p class="depnote depnote-warn" id="maintenance-notice">Maintenance failed:
       {% for task, at, msg in maintenance_failing %}<code>{{ task }}</code>{% if at %} at {{ at }}{% endif %} — {{ msg }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
   {% endif %}
-  {% if not hardware_configured %}
+  {% if not hardware_configured and radios_listed %}
+    {# DEC-W384cl: the per-band card's "add or enable a radio" hint, as one truthful line: radios, none enabled #}
+    {% call banner('warn', url_for('hardware_view'), 'Open Hardware') %}
+      <strong>Radios are set up, but none is enabled.</strong> No daemon starts on a disabled radio: enable one on the
+      Hardware page.
+    {% endcall %}
+  {% elif not hardware_configured %}
     {% call banner('warn', url_for('hardware_add_page'), 'Open Hardware') %}
       <strong>No radio hardware is set up yet.</strong> No daemon can start until it is (Apps › Daemon › Hardware).
     {% endcall %}
   {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
-    {% for r in radios %}{% for x in (r.radios or [none]) %}
-      {# W285/W286: one card per radio ("r1 · 868"), its band a property; a card without a radio is a band's (a stray
-         band, or no valid hardware list). `key` ends the card's element ids; `dv` is the band's daemon view, shown
-         only where it is this radio's (the band's one radio) until dash.js polls the radio itself. #}
-      {% set key, up = (x.rid, x.reachable) if x else (r.band, r.daemon.reachable) %}
+    {% for r in radios %}
+      {# W285/W286, DEC-W384bu/bv: one card per enabled radio ("<name> (<rid>, <band> MHz)"), every value its own
+         (radio_overview); after them the §6 stray band daemons (stray_daemons: a band, no rid; W290-kept card + Stop).
+         `key` ends the card's element ids; `dv` is the radio's own daemon view. #}
+      {% set key, up, dv = (r.rid or r.band), r.daemon.reachable, r.daemon %}
+      {% set where = r.rid ~ ' (' ~ r.band ~ ' MHz)' if r.rid else r.band ~ ' MHz' %}
       {# W2: every start, stop and restart on this card names its instance, `<target>@<rid>` of the card's radio #}
-      {% set at = '@' ~ x.rid if x else '' %}
-      {% set dv = r.daemon if not x or r.radios | length == 1 else {} %}
+      {% set at = '@' ~ r.rid if r.rid else '' %}
       {# The card's log links, defined once and placed directly under the daemon control in every
          state the daemon is installed in (never when it is not). An absent file still links; the
          page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
       {% set links %}
         <p class="links">
-          <a href="{{ url_for('logs_view', target='loraham-daemon', job=x.log) if x else url_for('logs_view', target='loraham-daemon', job='start-loraham-daemon-' ~ r.band ~ '.log') }}">Daemon log</a>{# §6 stray, G1-W5: its own 0.13.x file (radio_start.start_log_name, no rid) #}
-          <span class="rfline">RF log: {% for l in r.rflogs if not (x and "/" in (l.job or "") and not l.job.startswith(x.rid ~ "/")) %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=x.rid if x else None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
+          <a href="{{ url_for('logs_view', target='loraham-daemon', job=r.log) if r.rid else url_for('logs_view', target='loraham-daemon', job='start-loraham-daemon-' ~ r.band ~ '.log') }}">Daemon log</a>{# §6 stray, G1-W5: its own 0.13.x file (radio_start.start_log_name, no rid) #}
+          <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
-      <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if x %} data-radio-rid="{{ x.rid }}"{% endif %}>
+      <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if r.rid %} data-radio-rid="{{ r.rid }}"{% endif %}>
         <header>
-          <h2>{% if x %}{{ x.rid }} · {{ r.band }}{% else %}{{ r.band }} MHz{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
-          {{ daemon_badge(x or r.daemon, "rd-badge-" ~ key) }}
+          <h2>{% if r.rid %}{{ r.name }} ({{ r.rid }}, {{ r.band }} MHz){% else %}{{ where }}{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
+          {{ daemon_badge(r.daemon, "rd-badge-" ~ key) }}
         </header>
         <div class="body">
-          {% if x %}<p class="muted"><a href="{{ url_for('hardware_radio', rid=x.rid) }}">{{ x.name }}</a> ({{ x.model }})</p>{% endif %}
+          {% if r.rid %}<p class="muted"><a href="{{ url_for('hardware_radio', rid=r.rid) }}">{{ r.name }}</a> ({{ r.model }})</p>{% endif %}
 
           {% if r.daemon.high_power and r.daemon.high_power.warn %}
             {# daemon 1.2.0: keyed on the RUNNING family + permission (STATUS), never the saved
                switch — so it also renders on a stray band after a Hardware change. #}
             <p class="depnote depnote-warn" id="rd-hp-{{ key }}">⚠ SX127x +20 dBm permission is
-              enabled on {{ r.band }} MHz. This does not report the selected TX power. At +20 dBm
+              enabled on {{ where }}. This does not report the selected TX power. At +20 dBm
               obey the 1 % duty-cycle and 3:1 VSWR limits and provide suitable supply and cooling.
               Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
           {% endif %}
           {% if r.daemon.high_power and r.daemon.high_power.mismatch %}
-            <p class="depnote depnote-warn" id="rd-hp-mismatch-{{ key }}">High-power switch, {{ r.band }} MHz: {{ r.daemon.high_power.mismatch }}</p>
+            <p class="depnote depnote-warn" id="rd-hp-mismatch-{{ key }}">High-power switch, {{ where }}: {{ r.daemon.high_power.mismatch }}</p>
           {% endif %}
 
           {% if r.stray %}
@@ -144,7 +150,7 @@
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="stop">
                 <input type="hidden" name="target" value="daemon{{ at }}">
-                {% if not x %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}{# §6: a band daemon no radio names #}
+                <input type="hidden" name="band" value="{{ r.band }}">{# §6: a band daemon no radio names #}
                 <input type="hidden" name="from" value="dash">
                 <button type="submit" class="warnbtn">Stop daemon ({{ key }})</button>
               </form>
@@ -153,25 +159,24 @@
           {% else %}
 
           {% if r.conflict %}
-            <p class="depnote depnote-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
+            <p class="depnote depnote-bad"><strong>Radio conflict on {{ where }}:</strong>
               {{ r.conflict|join(', ') }} are running together and will fight over the
-              radio tuning. Run only one at a time on this band.</p>
+              radio tuning. Run only one at a time on this radio.</p>
           {% endif %}
 
           {# --- radio config (only when the daemon serves this band): one entry per line, in this
                  order — Stop daemon, Radio config, Daemon log (then the RF logs). --- #}
           {% if up %}
-            {% for op in (("stop", "restart") if x else ("stop",)) %}
+            {% for op in ("stop", "restart") %}
             <form method="post" action="{{ url_for('action') }}" class="act">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="{{ op }}">
               <input type="hidden" name="target" value="daemon{{ at }}">
-              {% if not x %}<input type="hidden" name="band" value="{{ r.band }}">{% endif %}
               <input type="hidden" name="from" value="dash">
               <button type="submit">{{ op | capitalize }} daemon ({{ key }})</button>
             </form>
             {% endfor %}
-            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a></h3>
+            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon', radio=r.rid) ~ '#stack-settings-daemon' }}">Radio config</a></h3>
             {{ links }}
             <details class="monitor" id="monitor-{{ key }}" open>
               <summary>RX-TX Monitor</summary>
@@ -189,11 +194,11 @@
                     must not run one). "Scan now" takes a real measurement on request. The daemon's
                     listen-before-talk is UNAFFECTED — it still gates every transmission. -#}
                 <tr><th>CAD state</th>
-                    <td class="mono"><span id="rd-cad-{{ key }}">—</span>{% if x %}
-                      <button type="button" class="btn-link" data-scan-rid="{{ x.rid }}"
+                    <td class="mono"><span id="rd-cad-{{ key }}">—</span>
+                      <button type="button" class="btn-link" data-scan-rid="{{ r.rid }}"
                               data-csrf="{{ csrf_token() }}"
                               title="Take one real CAD measurement. Briefly interrupts reception.">
-                        Scan now</button>{% endif %}</td>
+                        Scan now</button></td>
                     <th>TX active</th><td class="mono" id="rd-tx-{{ key }}">?</td></tr>
                 <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ key }}">?</td>
                     <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ key }}">{{ dv.cadrssi or '?' }}</td></tr>
@@ -212,30 +217,25 @@
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
             {% else %}
-              {% if x %}
-              <p class="muted">Daemon not running on {{ x.rid }}. Start a stack below (it auto-starts the daemon for this
+              <p class="muted">Daemon not running on {{ r.rid }}. Start a stack below (it auto-starts the daemon for this
                 radio), or start the daemon alone:</p>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="start">
                 <input type="hidden" name="target" value="daemon{{ at }}">
                 <input type="hidden" name="from" value="dash">
-                <button type="submit">Start daemon ({{ x.rid }})</button>
+                <button type="submit">Start daemon ({{ r.rid }})</button>
               </form>
-              {% else %}{# W2 (G1-W2 6): a start names a radio; a card without one names where to get it #}
-              <p class="muted" id="noradio-{{ key }}">Daemon not running on {{ r.band }} MHz. A start names a radio: add or
-                enable one for {{ r.band }} MHz on the <a href="{{ url_for('hardware_add_page') }}">Hardware</a> page.</p>
-              {% endif %}
               {{ links }}
             {% endif %}
           {% endif %}
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
-          <h3>Running on {{ x.rid if x else r.band }}</h3>
+          <h3>Running on {{ r.rid }}</h3>
           {# Cleanup C7c, W2 (G1-W2 3): an instance (its `rid`) shows on its own radio's card only, with its Stop and
              Restart; an entry without a rid names no instance (no launch record or argv token tells its radio): it shows
              on each card of its band with its state and its Stop (W370), never Run (which could start nothing). #}
-          {% set runs = (r.running | selectattr("rid", "equalto", x.rid) | list if x else []) + r.running | rejectattr("rid") | list %}
+          {% set runs = r.running %}{# DEC-W384bu: this radio's instances + the band's processes no instance claims #}
           {% if runs %}
             {% for s in runs %}
               {# A rule BETWEEN the running stacks of this radio. `loop.first` keeps it out of the
@@ -325,7 +325,7 @@
                 </ul>
                 <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No launch record or argv names the radio {{ s.name }}
                   runs on. Stop asks for {{ s.id }}{{ at }}; a process lhpc does not own is refused, with Kill offered.</p>
-                {% if x %}<p class="actrow">{# W370: an orphan keeps its state and its Stop #}
+                <p class="actrow">{# W370: an orphan keeps its state and its Stop #}
                   <form method="post" action="{{ url_for('action') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                     <input type="hidden" name="op" value="stop">
@@ -333,7 +333,7 @@
                     <input type="hidden" name="from" value="dash">
                     <button type="submit">Stop</button>
                   </form>
-                </p>{% endif %}
+                </p>
                 {% endif %}
               </div>
             {% endfor %}
@@ -344,7 +344,7 @@
           {# --- interactive apps: tracked, but the operator starts them in a terminal --- #}
           {# W2 (G1-W2 3): an app on the card of each radio its instance's marker names; with no instance marker on
              each card of its band, without a Stop (it names no instance). #}
-          {% set inter = [] %}{% for s in r.interactive if (x and x.rid in s.rids) or not s.rids %}{% set _ = inter.append(s) %}{% endfor %}
+          {% set inter = r.interactive %}{# DEC-W384bu: the apps on this radio, or that can run on it #}
           {% if inter %}
             <h3>Interactive apps</h3>
             {% for s in inter %}
@@ -352,7 +352,7 @@
                 {% if s.running %}
                   <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-running">&#10003; running</span>
-                    {% if x and x.rid in s.rids %}<form method="post" action="{{ url_for('action') }}" class="act">
+                    {% if r.rid in s.rids %}<form method="post" action="{{ url_for('action') }}" class="act">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                       <input type="hidden" name="op" value="stop">
                       <input type="hidden" name="target" value="{{ s.id }}{{ at }}">
@@ -377,8 +377,8 @@
           {% endif %}
 
           {# --- start another stack on this radio --- #}
-          {% if r.startable and x %}{# W2 (G1-W2 6): a card without a radio says so above; its start would name none #}
-            <h3>Start a stack on {{ x.rid }}</h3>
+          {% if r.startable %}
+            <h3>Start a stack on {{ r.rid }}</h3>
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
@@ -393,7 +393,7 @@
           {% endif %}{# /r.stray else #}
         </div>
       </div>
-    {% endfor %}{% endfor %}
+    {% endfor %}
   </div>
 
   {# Webserver box: LHPC console (always), then per RUNNING stack its web-UI line and a line per other

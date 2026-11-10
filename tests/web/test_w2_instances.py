@@ -467,16 +467,22 @@ def test_g1_w2_5_a_stop_waives_no_refusal_but_the_reachable_ones(tmp_path, monke
 
 
 def test_g1_w2_6_a_card_without_a_radio_offers_no_start_that_names_none(tmp_path, monkeypatch, web):
-    # A band card with no radio (the template's `x` absent; the core builds none today: no list gives no card, a stray
-    # card is one per live radio): no start control, which could name no radio; the card names the Hardware page.
+    # A card without a radio is the §6 stray band daemon's only (DEC-W384bu/bv: every radio card has its rid): no start
+    # control, which could name no radio; its Stop names the band (W290-kept).
     from htmlq import parse
     real = ControllerService.radio_overview
-    monkeypatch.setattr(ControllerService, "radio_overview", lambda self, strays=None: [
-        dict(r, radios=[], daemon=dict(r["daemon"], installed=True)) for r in real(self, strays)])
+
+    def with_stray(self, strays=None):
+        out = real(self, strays)
+        if strays is not None:
+            strays.append({"band": "868", "daemon": dict(out[0]["daemon"], installed=True, reachable=True),
+                           "shared_with": [], "rflogs": []})
+        return out
+    monkeypatch.setattr(ControllerService, "radio_overview", with_stray)
     doc = parse(_two_433_web(tmp_path, web).get("/").get_data(as_text=True))
-    card = doc.within(doc.by_id("radio-433"))
-    assert [card.within(f).field_default("op") for f in card.find("form", action="/action")] == []
-    assert "Hardware" in doc.by_id("noradio-433").text
+    card = doc.within(doc.by_id("radio-868"))
+    assert [card.within(f).field_default("op") for f in card.find("form", action="/action")] == ["stop"]
+    assert [card.within(f).field_default("band") for f in card.find("form", action="/action")] == ["868"]
 
 
 @pytest.mark.parametrize("rid", ["r1", "r3"])

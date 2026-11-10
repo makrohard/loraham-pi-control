@@ -158,11 +158,11 @@ def test_the_detail_page_links_the_radios_rf_log_while_a_daemon_is_installed(web
     assert ("job=r2/rf-daemon.log" in page) is installed and ("job=r1/" not in page)
 
 
-def test_home_without_hardware_points_at_add_hardware(web, tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService
-    monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: False)
-    page = _text(web().get("/").get_data(as_text=True))
-    assert "No radio hardware is set up yet." in page and 'href="/hardware/add"' in page
+@pytest.mark.no_default_hardware                        # no hardware list at all (radios, none enabled: test_w_dash)
+def test_home_without_hardware_points_at_add_hardware(web):
+    r = web().get("/")
+    page = _text(r.get_data(as_text=True))
+    assert r.status_code == 200 and "No radio hardware is set up yet." in page and 'href="/hardware/add"' in page
 
 
 def test_the_daemon_settings_hold_no_board_setup_any_more(web, tmp_path, monkeypatch):
