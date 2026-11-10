@@ -462,7 +462,7 @@ class LifecycleOpsMixin:
                         f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
         return blockers
 
-    def _spi_shared_warning(self, target: str, band: str = "", radio: str = "") -> str | None:
+    def _spi_shared_warning(self, target: str, band: str = "", radio: str = "", inst=None) -> str | None:
         """The maintainer's "allow, but warn" for the one shared-SPI pair LHPC admits
         (docs/architecture.md, SPI policy): the daemon on 433 beside a component that drives the
         bus WITHOUT the daemon's spi0.lock (claims `spi.bus.0.unlocked`, not `spi.bus.0`:
@@ -470,7 +470,7 @@ class LifecycleOpsMixin:
         def unlocked(c):
             keys = {r.key for r in c.resources}
             return "spi.bus.0.unlocked" in keys and "spi.bus.0" not in keys
-        order = self._run_order(target) or []
+        order = self._run_order(target, inst) or []
         if any(unlocked(c) for _, c in order) and self._config_band(target, band) == "868" \
                 and "433" in self._daemon_claimed_bands():
             return SPI_SHARED_WARNING
@@ -523,7 +523,7 @@ class LifecycleOpsMixin:
                     f"does not use it — starting it alone would claim the receiver for a "
                     f"consumer that is not running",
                     ["lhpc gps", f"lhpc config {target} use_gps on",
-                     f"lhpc stack start {instances.named(self, target)}"])
+                     f"lhpc stack start {instances.named(self, target, inst)}"])
         cfg = self.config()
         g = getattr(cfg, "gps", None)
         if g is not None and not getattr(g, "valid", True):
@@ -563,14 +563,14 @@ class LifecycleOpsMixin:
                     ["lhpc gps --source gpsd"])
         return "", []
 
-    def hardware_block(self, target: str) -> str:
+    def hardware_block(self, target: str, inst=None) -> str:
         """A reason string when the hardware list has no enabled radio (S2) and this stack needs a radio, else "".
         A fresh install has no list — the daemon must not start until a radio is added on the Hardware page. The
         daemon itself and any band-declaring stack are gated; a stack that needs no radio is not. Remedy = add a
         radio, not stop a holder."""
         if self.hardware_configured():
             return ""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if order is None:
             return ""
         needs_radio = self._is_daemon_target(target) or any((c.band or c.bands) for _, c in order)
@@ -581,12 +581,12 @@ class LifecycleOpsMixin:
             else "no enabled radio in the hardware list"
         return f"{why} — add a radio on the Hardware page before starting a radio stack"
 
-    def radio_mode_block(self, target: str) -> str:
+    def radio_mode_block(self, target: str, inst=None) -> str:
         """A reason string when the hardware list has no enabled radio on ANY band this stack can use, else "" (S2).
         A band-switchable stack stays available if ANY of its bands is on the list (uses the RAW declared
         component bands, not the list-narrowed `stack_bands`). This is NOT a resource conflict — the
         remedy is to add a radio, not stop a holder."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if not order:
             return ""
         needed = {b for _, c in order
@@ -607,7 +607,7 @@ class LifecycleOpsMixin:
                                 next_commands=["lhpc bootstrap"])
         # Hardware not configured: a fresh box has no radio board selected, so the daemon (and any
         # radio stack) must refuse to start until the operator picks one. Checked BEFORE band checks.
-        hw_block = self.hardware_block(target)
+        hw_block = self.hardware_block(target, inst)
         if hw_block:
             return ActionResult(False, f"Cannot {op} '{target}': {hw_block}",
                                 next_commands=["lhpc hardware"])
@@ -621,7 +621,7 @@ class LifecycleOpsMixin:
                                 next_commands=gps_next or ["lhpc gps"])
         # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
         # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
-        rm_block = self.radio_mode_block(target)
+        rm_block = self.radio_mode_block(target, inst)
         if rm_block:
             return ActionResult(False, f"Cannot {op} '{target}': {rm_block}",
                                 next_commands=["lhpc hardware"])
@@ -647,13 +647,13 @@ class LifecycleOpsMixin:
         band, _why = instances.radio_band(self, target, inst, band)
         if _why or (_r := self._controller_refusal(target)) is not None:
             return ActionResult(False, f"Refusing to start: {_why}") if _why else _r
-        if (_r := self._gui_fallback_refusal(target)) is not None:
+        if (_r := self._gui_fallback_refusal(target, inst)) is not None:
             return _r
         if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
         from . import reslock
         if auto_install_ctx is not None:
-            order = self._run_order(target) or []
+            order = self._run_order(target, inst) or []
             ctx_err = self._auto_install_ctx_error(
                 auto_install_ctx, {c.source.path for _, c in order if c.source})
             if ctx_err:
@@ -666,7 +666,7 @@ class LifecycleOpsMixin:
             # The plan takes the apply's outer decision (identity, MeshCore position) at the same
             # point and in the same order, so a start the apply would refuse never plans "ok".
             _ob = self.operation_band(target, band)
-            _order, _radio = self._order_radio(target, _ob)
+            _order, _radio = self._order_radio(target, _ob, inst)
             if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
                                                 position_note, inst)[0]) is not None:
                 return _r
@@ -723,7 +723,7 @@ class LifecycleOpsMixin:
             if not ensured:                              # issue #5: admitted, before the shared guard
                 _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)), inst=inst)
             with self._config_stable():
-                order, radio = self._order_radio(target, op_band)
+                order, radio = self._order_radio(target, op_band, inst)
                 with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
                                            radio=radio, inst=inst):
                     yield op_band, order, radio
@@ -818,7 +818,7 @@ class LifecycleOpsMixin:
             return interactive_markers.one_band(self.interactive_shown(sid))
         return ""
 
-    def _gui_fallback_refusal(self, target: str):
+    def _gui_fallback_refusal(self, target: str, inst=None):
         """PREFLIGHT for a DIRECT start of voice's terminal fallback (a non-main interactive
         component whose stack main is gui_optional): refused before ANY side effect — the
         boot hook, feed clearing, owner stops, daemon ensure and the already-healthy
@@ -839,8 +839,8 @@ class LifecycleOpsMixin:
                         False,
                         f"Cannot start '{target}': it shares {stack.main}'s configuration "
                         f"(callsign, audio device and radio params), which only a stack "
-                        f"start generates — run: lhpc stack start {instances.named(self, stack.id)}",
-                        next_commands=[f"lhpc stack start {instances.named(self, stack.id)}"])
+                        f"start generates — run: lhpc stack start {instances.named(self, stack.id, inst)}",
+                        next_commands=[f"lhpc stack start {instances.named(self, stack.id, inst)}"])
                 return None
         return None
 
@@ -909,7 +909,7 @@ class LifecycleOpsMixin:
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc list"])
-        if (_r := self._gui_fallback_refusal(target)) is not None:
+        if (_r := self._gui_fallback_refusal(target, inst)) is not None:
             return _r
         if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
@@ -1072,7 +1072,7 @@ class LifecycleOpsMixin:
         for bl in blockers:
             details.append(f"  [conflict] {bl['resource']} is held by running stack "
                            f"'{bl['holder_stack']}' ({bl['holder']})")
-        if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
+        if not blockers and (_spi := self._spi_shared_warning(target, band, radio, prep.inst)):
             details.append(f"  [warning] {_spi}")
         details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target, prep.inst)]
         return ActionResult(True, f"Run plan for '{instances.key(target, prep.inst)}': {len(order)} component(s) in order.",
@@ -1592,7 +1592,7 @@ class LifecycleOpsMixin:
             # on the air without a position and the operator has to be able to see that.
             out = [*out, f"  [gps] {prep.position_note}"]
         warned = {}
-        if ok and (_spi := self._spi_shared_warning(target, band, radio)):
+        if ok and (_spi := self._spi_shared_warning(target, band, radio, prep.inst)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
             warned = {"spi_warning": _spi}        # the console's start banner shows it too
         if ok and (_ohw := _ohs.start_warnings(self, target, prep.inst)):
@@ -1711,7 +1711,8 @@ class LifecycleOpsMixin:
         default leaves ordinary start/poststart semantics unchanged."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
-        order = self._run_order(target)
+        inst = inst or instances.copy_of(self, self.stack_of(target) or target, band=band)[0]   # K4b: its instance's
+        order = self._run_order(target, inst)
         if not order:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc status"])
@@ -1734,17 +1735,16 @@ class LifecycleOpsMixin:
         # `band or launch_band(...)` here missed the Voice-on-Lite case the rest of the feature
         # handles.
         _pid_band = self.operation_band(target, band)
-        id_ok, id_fields, id_msg = self.enforce_identity(target, _pid_band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, _pid_band, inst)
         if not id_ok:
             return ActionResult(False, f"Cannot re-run post-start for '{target}': {id_msg}",
                                 data={"enforce_fields": id_fields},
                                 next_commands=self._identity_config_hints(target,
-                                                                          _pid_band))
+                                                                          _pid_band, inst))
         from . import reslock
         try:
             with self._admission_guard("poststart", target), self._config_stable():
-                return self._poststart_impl(target, order, band, require_all=require_all,     # K4b: its instance's
-                                            inst=inst or instances.copy_of(self, self.stack_of(target) or target, band=band)[0])
+                return self._poststart_impl(target, order, band, require_all=require_all, inst=inst)
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
@@ -1783,7 +1783,7 @@ class LifecycleOpsMixin:
             if not comp.post_steps or st_index[comp.id].run_state != RunState.RUNNING:
                 continue
             cfg_band = self.launch_band(stack.id) if self.stack_bands(stack.id) else (band or "")
-            rows = [r for r in self.identity_resolution(comp.id, cfg_band)
+            rows = [r for r in self.identity_resolution(comp.id, cfg_band, inst)
                     if r["comp"] == comp.id]
             _id_stash[comp.id] = rows
             if any(r["problem"] for r in rows) and not _id_problems:
@@ -1794,7 +1794,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot re-run post-start for '{target}': "
                                 + "; ".join(dict.fromkeys(_id_problems)),
                                 data={"enforce_fields": _id_fields},
-                                next_commands=self._identity_config_hints(target, _id_band))
+                                next_commands=self._identity_config_hints(target, _id_band, inst))
         for stack, comp in order:
             if not comp.post_steps:
                 out.append(f"  [skip] {comp.id}: no post-start steps")
@@ -1803,7 +1803,7 @@ class LifecycleOpsMixin:
             if state != RunState.RUNNING:
                 record(comp, stack, Outcome.BLOCKED,
                        f"not running ({state.value}) — start it first "
-                       f"(lhpc stack start {instances.named(self, stack.id)})")
+                       f"(lhpc stack start {instances.named(self, stack.id, inst)})")
                 continue
             cfg_band = self.launch_band(stack.id) if self.stack_bands(stack.id) else (band or "")
             notes, unverified = life._cancel_post_runners(comp, cfg_band or None)
@@ -2177,7 +2177,7 @@ class LifecycleOpsMixin:
         # node has already been stopped: a half-configured Internet IFAC saved cleanly (the save
         # can only judge the endpoint, not the passphrase) would take a working node down and
         # leave it down. So the same rule refuses here, before any mutation.
-        why, reason = self._reticulum_internet_verdict(order, cfg_band)
+        why, reason = self._reticulum_internet_verdict(order, cfg_band, inst)
         if why:
             return ActionResult(False, f"Cannot {op} '{target}': {why}",
                                 next_commands=[f"lhpc config {_ri.STACK_ID}"],
@@ -2188,7 +2188,7 @@ class LifecycleOpsMixin:
         # the manifest names: a known-working composition may still hold the old driver).
         if (any(c.id == _ri.NODE_ID for _stack, c in order)
                 and _ri.enabled(self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID,
-                                                       _ri.RNODE_FRAMING, cfg_band) or "")
+                                                       _ri.RNODE_FRAMING, cfg_band, inst) or "")
                 and not self._rns_driver_has_framing()):
             return ActionResult(
                 False, f"Cannot {op} '{target}': RNode framing is on, but the built LoRa driver "
@@ -2207,7 +2207,7 @@ class LifecycleOpsMixin:
         venv = self._paths.resolve_source(node.source.path) / ".venv" / "lib"
         return any(venv.glob("python3*/site-packages/loraham_rns/framing.py"))
 
-    def _reticulum_internet_verdict(self, order, band: str) -> tuple[str, str]:
+    def _reticulum_internet_verdict(self, order, band: str, inst=None) -> tuple[str, str]:
         """The Internet interface's cross-field verdict for a run order that contains the RNS
         node, as `(sentence, reason token)` — both "" when there is nothing to refuse or the
         node is not in this order. The token is `reticulum_interfaces.reason()`'s, or
@@ -2225,7 +2225,7 @@ class LifecycleOpsMixin:
         broken secrets file must not refuse a start that would never have read it."""
         if not any(c.id == _ri.NODE_ID for _stack, c in order):
             return "", ""
-        vals = {n: (self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID, n, band) or "")
+        vals = {n: (self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID, n, band, inst) or "")
                 for n in (_ri.ENABLED, _ri.HOST, _ri.PORT, _ri.NETNAME)}
         if not _ri.enabled(vals[_ri.ENABLED]):
             return "", ""
@@ -2247,10 +2247,10 @@ class LifecycleOpsMixin:
                             data={"enforce_fields": id_fields},
                             next_commands=self._identity_config_hints(target, band, inst))
 
-    def _order_radio(self, target: str, op_band: str):
+    def _order_radio(self, target: str, op_band: str, inst=None):
         """`(run order, the daemon's requested radio)` for an operation on `op_band` — the radio
         decides which bands the lock bundle covers and what the healthy shortcut judges."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         radio = ""
         if order:
             _r, _ = self._daemon_needs(order, op_band)
@@ -2298,7 +2298,7 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc config {instances.key(target, inst)}"])
         if not check_blockers:
             return None
-        blockers = [bl for bl in self.run_blockers(target, band, radio)
+        blockers = [bl for bl in self.run_blockers(target, band, radio, inst)
                     if bl["holder_stack"] not in exclude_holders]
         if not blockers:
             return None
@@ -2433,7 +2433,7 @@ class LifecycleOpsMixin:
                          "instead."],
                 # The remedy names the instances (K3: the band is the named radio's): stop the holder, then start.
                 next_commands=[*(f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, _dep)),
-                               f"lhpc stack start {instances.named(self, target)} --yes"])
+                               f"lhpc stack start {instances.named(self, target, inst)} --yes"])
         return None
 
     def _band_owner_is_up(self, stack_id: str, snap=None) -> bool:
@@ -2764,7 +2764,7 @@ class LifecycleOpsMixin:
         s = "".join(c for c in str(value or "") if c.isprintable())[:32].strip()
         return s or fallback
 
-    def _render_post_steps(self, steps, log_hint: str, stack_hint: str) -> list[str]:
+    def _render_post_steps(self, steps, log_hint: str, stack_hint: str, inst=None) -> list[str]:
         """Render typed post-start step records into human status lines. Shared by the detached
         and the synchronous (required) feeds so both report identically.
 
@@ -2791,17 +2791,17 @@ class LifecycleOpsMixin:
             elif oc == "exhausted":
                 lines.append(f"post-start: {label} NOT applied — console never became "
                              f"ready within {el}s ({n} attempts); re-apply with: "
-                             f"lhpc stack poststart {instances.named(self, stack_hint)}")
+                             f"lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "unverified":
                 lines.append(f"post-start: {label} UNVERIFIED — the node answered but never "
                              f"reported the expected value within {el}s ({n} attempts); "
-                             f"re-apply with: lhpc stack poststart {instances.named(self, stack_hint)}")
+                             f"re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "ok":
                 lines.append(f"post-start: {label} applied after {el}s")
             elif oc == "failed":
                 lines.append(f"post-start: {label} FAILED "
                              f"(exit {rc if isinstance(rc, int) else '?'}) after {el}s — see "
-                             f"{log_hint}; re-apply with: lhpc stack poststart {instances.named(self, stack_hint)}")
+                             f"{log_hint}; re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "timeout":
                 lines.append(f"post-start: {label} timed out after {el}s (see {log_hint})")
             elif oc == "ready":
@@ -2814,27 +2814,18 @@ class LifecycleOpsMixin:
                 lines.append(f"post-start: {label} outcome '{oc}' (see {log_hint})")
         return lines
 
-    def _required_post_outcomes(self, comp_id: str) -> list[str]:
-        """Status lines from the SYNCHRONOUS (required) post-start run — e.g. the Meshtastic region
-        push, which is required and therefore start-blocking.
-
-        That path writes a sidecar but NO ownership record, so the file is found by recomputing its
-        leaf from the CURRENT verified main binding. The binding must be looked up on the band the
-        stack is ACTUALLY running: a multi-band stack (meshtastic serves 433 or 868) records its
-        ownership band-scoped, so a band-less lookup could never match a real record.
-
-        Three independent checks must all pass before anything is shown, and every one of them
-        fails soft (returns no lines, never raises into status):
-          * the sidecar's meta must name THIS component and THIS band — never another band's file;
-          * the recorded binding must equal the current verified launch — never a stale launch's;
-          * the payload must be well-formed.
-        """
+    def _required_post_outcomes(self, comp_id: str, inst=None) -> list[str]:
+        """Status lines from the SYNCHRONOUS (required) post-start run of running instance `inst` (None: any verified
+        main) — e.g. the Meshtastic region push. That path writes a sidecar but NO ownership record, so the file is
+        found by recomputing its leaf from the CURRENT verified main binding, looked up on the band the instance ACTUALLY
+        runs (a multi-band stack records its ownership band-scoped). Fail-soft (no lines, never a raise into status)
+        unless the sidecar's meta names THIS component and band, its binding is the current verified launch's, and the
+        payload is well-formed."""
         life = self._lifecycle()
         stack_id = self.stack_of(comp_id) or comp_id
-        # A multi-band stack persists which band it came up on; a single-band/bandless stack has
-        # no marker and correctly resolves to "" (unchanged behaviour for those).
-        band = self.launch_band(stack_id) if self.stack_bands(stack_id) else ""
-        binding = life._binding_for(comp_id, band)
+        # A multi-band stack's launch band: the instance's, else the one it runs on; a single-band/bandless stack: "".
+        band = (getattr(inst, "band", "") or self.launch_band(stack_id)) if self.stack_bands(stack_id) else ""
+        binding = life._binding_for(comp_id, band, inst)
         if binding is None:
             return []
         try:
@@ -2857,7 +2848,7 @@ class LifecycleOpsMixin:
         steps = data.get("steps")
         if not isinstance(steps, list):
             return []
-        return self._render_post_steps(steps, "the post-start log", stack_id)
+        return self._render_post_steps(steps, "the post-start log", stack_id, inst)
 
     def _post_start_outcomes(self, comp_id: str) -> list[str]:
         """Human status lines for a component's post-start work — the TERMINAL outcome of e.g.
@@ -2869,11 +2860,15 @@ class LifecycleOpsMixin:
         produces NO line — an intentionally-unsent setting is not a failure."""
         life = self._lifecycle()
         lines: list[str] = []
+        insts = instances.running_insts(self, self.stack_of(comp_id) or comp_id) or []    # K8f S4-3: each its own
         for rec in life.owned_records(comp_id, role="post"):
             # Only trust a result bound to the CURRENT verified main launch — a record whose
             # main was replaced describes a previous run (belt-and-braces on top of the
             # cancel-time sidecar cleanup).
-            binding = life._binding_for(comp_id, rec.get("band", ""))
+            # (a post record names its main, not its radio: its instance is the one whose verified main it is bound to)
+            rinst, binding = next(((i, b) for i in insts if (b := life._binding_for(comp_id, rec.get("band", ""), i))
+                                   and (b["main_pid"], b["main_starttime"]) == (rec.get("main_pid"), rec.get("main_starttime"))),
+                                  (None, life._binding_for(comp_id, rec.get("band", ""))))
             if binding is not None and (
                     rec.get("main_pid") != binding.get("main_pid")
                     or rec.get("main_starttime") != binding.get("main_starttime")):
@@ -2894,8 +2889,9 @@ class LifecycleOpsMixin:
                 lines.append(f"post-start: outcome unknown (see {log_hint})")
                 continue
             lines.extend(self._render_post_steps(steps, log_hint,
-                                                 rec.get("stack", comp_id)))
-        lines.extend(self._required_post_outcomes(comp_id))
+                                                 rec.get("stack", comp_id), rinst))
+        for inst in insts or [None]:
+            lines.extend(self._required_post_outcomes(comp_id, inst))
         return lines
 
     def _daemon_installed(self, dstat) -> bool:
@@ -2943,7 +2939,8 @@ class LifecycleOpsMixin:
         for band in self.radio_bands():                  # only the list's bands get a normal column
             dv = dvs[band]
             other_served = [b for b in usable_bands if b != band]
-            running, startable, interactive, entries = [], [], [], {}
+            running, startable, interactive, entries, band_rows = [], [], [], {}, radio_start.band_radios(self, band)
+            band_rids = [x["rid"] for x in band_rows]     # the cards of this column: each shows its own command
             for s in self.stacks():
                 sbands = self._declared_bands(s)
                 if band not in sbands:
@@ -2970,8 +2967,8 @@ class LifecycleOpsMixin:
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
                           "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
                           # Interactive components (GUI/CLI/REPL) are run by the
-                          # operator, never by lhpc — show the command to copy.
-                          "command": self.manual_start_command(c) if c.interactive else "",
+                          # operator, never by lhpc — show the command to copy, each radio's card its own.
+                          "commands": radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {},
                           "blocker": self.install_blocker(c) if c.interactive else "",
                           # Has tunables -> a config link; lhpc captures a start log
                           # (non-interactive run) or it declares its own -> a log link.
@@ -3024,7 +3021,7 @@ class LifecycleOpsMixin:
                     entry["running"] = running_up
                     # the radios it is live on (a live marker's, a running instance's): radio_overview's card(s)
                     entry["on_rids"] = sorted(set(up_shown) | {k.partition("@")[2] for k in instances.running_keys(self, s.id)})
-                    entry["command"] = self.manual_start_command(main_comp)
+                    entry["commands"] = radio_start.commands_by_radio(self, main_comp, band_rids)
                     entry["blocker"] = self.install_blocker(main_comp)
                     interactive.append(entry)
                     continue
@@ -3045,7 +3042,7 @@ class LifecycleOpsMixin:
                 (running if is_up else startable).append(entry)
             out.append({
                 "band": band,
-                "stray": False, "shared_with": [], "radios": radio_start.band_radios(self, band),   # W6-3
+                "stray": False, "shared_with": [], "radios": band_rows,   # W6-3
                 "daemon": {
                     "reachable": dv.reachable,     # CONF socket answered (daemon live)
                     # OCCUPIED: reachable — the daemon may physically hold the radio/SPI even

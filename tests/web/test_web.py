@@ -2920,7 +2920,7 @@ def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, m
             ss.components["meshtastic"].run_state = RunState.RUNNING
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
     page = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
-    assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli"' in page
+    assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli-r2"' in page
     assert "lhpc meshtastic --help" in page
     assert "Use the meshtastic CLI through lhpc" not in page
 

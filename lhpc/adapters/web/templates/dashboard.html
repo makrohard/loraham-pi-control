@@ -319,7 +319,8 @@
                           {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ c.blocker }}{% endcall %}
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
-                        {{ cmdbox('runc-' ~ c.id, c.command) }}
+                        {# K8f S4-3: this card's radio's own command; the box id is the card's (copy.js copies by id) #}
+                        {{ cmdbox('runc-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(r.rid, '')) }}
                       {% endif %}</li>
                   {% endfor %}
                 </ul>
@@ -370,7 +371,7 @@
                     {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
                   {% endif %}
                   <p class="muted">Run local in a terminal (daemon is ensured):</p>
-                  {{ cmdbox('cmd-' ~ s.id, s.command) }}
+                  {{ cmdbox('cmd-' ~ s.id ~ '-' ~ key, (s.commands or {}).get(r.rid, '')) }}
                 {% endif %}
               </div>
             {% endfor %}

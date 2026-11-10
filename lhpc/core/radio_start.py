@@ -1222,6 +1222,17 @@ def overview_entry(svc, row, e: dict) -> dict:
             "conflict": svc._radio_competitors(running + [x for x in interactive if x.get("running")])}
 
 
+def commands_by_radio(svc, comp, rids) -> dict:
+    """{rid: the command `comp`'s instance on radio rid runs} for the radio cards `rids` (K8f S4-3, D2-CTX B4, D3 B2: two
+    radios of one band are two commands, never one band value); a radio its stack cannot address says why."""
+    from . import instances
+    out = {}
+    for rid in rids:
+        inst, why = instances.copy_of(svc, svc.stack_of(comp.id) or comp.id, rid)
+        out[rid] = svc.manual_start_command(comp, inst) if inst is not None else f"(no run command: {why})"
+    return out
+
+
 def strays(entries) -> list[dict]:
     """The stray rows of service._band_entries (DEC-W384bv): {band, daemon, shared_with, rflogs} each."""
     return [{k: e[k] for k in ("band", "daemon", "shared_with", "rflogs")} for e in entries if e["stray"]]
