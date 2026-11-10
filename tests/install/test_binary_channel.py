@@ -1757,3 +1757,110 @@ def test_a_binary_install_switches_off_every_meshcom_instances_mesh_password(tmp
     svc._invalidate_config()
     assert {r: svc._resolved_param_value("meshcom", "run", hc, "password_file", "", i) for r, i in ins.items()} == {
         "r1": "config/secrets/mc_pw_r1", "r2": "config/secrets/mc_pw_r2"}
+
+
+def _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1", "r2")):
+    # meshcom on two 433 radios (r1, r2), the instances in `saved` with their own password_file; hmac applies
+    import radios_fixture
+
+    from lhpc.core import instances
+    from lhpc.core.install import Installer
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    ins = {r: instances.parse_target(svc, f"meshcom@{r}", "start")[1] for r in ("r1", "r2")}
+    for r in saved:
+        assert svc.save_config_bundle("meshcom", values={"password_file": f"config/secrets/mc_pw_{r}"}, inst=ins[r],
+                                      _allow_managed_params=frozenset({"password_file"})).ok
+    monkeypatch.setattr(type(svc), "hmac_applies", lambda self, sid: sid == "meshcom")
+    monkeypatch.setattr(Installer, "adopt_source", lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    hc = svc._hmac_component("meshcom").id
+
+    def pw():
+        svc._invalidate_config()
+        return {r: svc._resolved_param_value("meshcom", "run", hc, "password_file", "", i) for r, i in ins.items()}
+    return svc, ins, pw
+
+
+def test_a_radio_gone_before_the_rollback_is_refused_by_name_and_no_other_radio_gets_its_password(
+        tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C B2: r2 leaves the hardware list during a failed install. red on d4543d26: meshcom@r2 resolved to no
+    # instance and its password was saved with inst=None (the fallback store), the journal dropped
+    import radios_fixture
+
+    from lhpc.core import binary_install as bi
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline)
+
+    def broken(*a, **k):
+        radios_fixture.write(tmp_path, (radios_fixture.R1,))
+        raise ValueError("bad member header")
+    monkeypatch.setattr(bi, "validate_and_extract", broken)
+    res = svc.binary_install("meshcom", apply=True)
+    text = " ".join([res.summary, *res.details])
+    assert not res.ok and "meshcom@r2 names no radio now" in text, text
+    assert pw()["r1"] == "config/secrets/mc_pw_r1"
+    assert bi.read_journal(svc._paths)[1] == "valid"                     # kept: r2's value is still recorded
+
+
+def test_every_journaled_password_is_tried_and_the_failures_are_named_together(tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C B3: r1's restore fails, r2's succeeds. red on d4543d26: the loop returned at r1, r2 stayed cleared
+    from lhpc.core import binary_install as bi
+    from lhpc.core.service_base import ActionResult
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline)
+    real = type(svc).save_config_bundle
+
+    def save(self, target, *, values=None, inst=None, **k):
+        if (values or {}).get("password_file") and getattr(inst, "rid", "") == "r1":
+            return ActionResult(False, "r1 store unwritable")
+        return real(self, target, values=values, inst=inst, **k)
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad member")))
+    monkeypatch.setattr(type(svc), "save_config_bundle", save)
+    res = svc.binary_install("meshcom", apply=True)
+    text = " ".join([res.summary, *res.details])
+    assert not res.ok and "meshcom@r1: r1 store unwritable" in text, text
+    assert pw() == {"r1": "", "r2": "config/secrets/mc_pw_r2"}
+    assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_a_mesh_password_set_during_the_install_fails_it_by_name(tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C B2 (the opposite transition): only r1 had a password when the journal opened; r2 gets one before the
+    # commit. red on d4543d26: the install committed with r2's --password-file under a firmware without a mesh password
+    from types import SimpleNamespace
+
+    from lhpc.core import binary_install as bi
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1",))
+    spec = svc.binary_spec("meshcom")
+    monkeypatch.setattr(bi, "validate_and_extract",
+                        lambda *a, **k: sorted({*spec.proof_paths, *(next(iter(p)) for p in spec.probes)}))
+    monkeypatch.setattr(bi, "publish", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "run_probe", lambda *a, **k: "")
+    monkeypatch.setattr(type(svc), "_binary_provision", lambda self, *a, **k: ())
+    monkeypatch.setattr(bi, "build_receipt", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: True)
+    monkeypatch.setattr(type(svc), "_binary_installed_is", lambda self, *a: False)
+    monkeypatch.setattr(brx, "receipt_state", lambda *a, **k: ("valid", None, ""))
+
+    other = _svc(tmp_path, monkeypatch=monkeypatch)                        # another process: its own config cache
+
+    def displace(*a, **k):
+        assert other.save_config_bundle("meshcom", values={"password_file": "config/secrets/mc_pw_r2"}, inst=ins["r2"],
+                                        _allow_managed_params=frozenset({"password_file"})).ok
+    monkeypatch.setattr(bi, "displace", displace)
+    res = svc.binary_install("meshcom", apply=True)
+    text = " ".join([res.summary, *res.details])
+    assert not res.ok and "the mesh password of meshcom@r2 was set during the install: install again" in text, text
+    assert pw()["r1"] == "config/secrets/mc_pw_r1"                        # the journaled one restored
+
+
+def test_a_binary_install_journal_of_an_earlier_version_is_refused_by_name(tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C B1 (W269: refused, not converted): an interrupted earlier install's journal keeps a scalar
+    # `previous`. red on d4543d26: AttributeError from .items(), reported as an unexpected error
+    from lhpc.core import binary_install as bi
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline)
+    bi.open_txn(svc._paths, "meshcom", "txnOld", auth={"param": "password_file", "previous": "config/secrets/prev_pw"})
+    ok, why = svc.binary_recover()
+    assert not ok and "(an earlier version's: CHANGELOG 0.14.0 upgrade steps)" in why, why
+    assert "state/binary/install.journal.json" in why
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and "an unreadable binary-install journal is present" in res.summary, res.summary
+    assert bi.read_journal(svc._paths)[1] == "valid"

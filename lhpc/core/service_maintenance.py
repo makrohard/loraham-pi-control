@@ -1015,23 +1015,24 @@ class MaintenanceOpsMixin:
                                          f"{version}"],
                                 next_commands=[f"lhpc build {target} --yes"])
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
-        restart_ok, bad = True, []
+        restart_ok, bad, gone = True, [], []
         # Re-sampled after a fetch of minutes: an operator stop meanwhile (no admission) stays.
         if was_running and not self.stack_running(target):
-            notes.append("  [restart] skipped — the stack was stopped during the fetch "
-                         "(operator stop preserved)")
+            notes.append("  [restart] skipped — the stack was stopped during the fetch (operator stop preserved)")
         elif was_running:           # K8f D3 B7: each running instance by its key; none told = refused by name, no guess
             ks = instances.running_keys(self, target)
-            bad = [k for k in ks if (i := instances.resolve(self, k)[1]) is None or not self.restart(target, apply=True, inst=i).ok]
-            restart_ok = bool(ks) and not bad
-            notes.append(f"  [restart] {'ok' if restart_ok else 'FAILED for ' + ', '.join(bad) + ' — restart it by name' if bad else 'not done: a running process no instance names — restart it by name'}")
+            for k in ks:                        # G1-K8F-S4-4C N1: a key whose radio is gone is not attempted
+                if (i := instances.resolve(self, k)[1]) is None or not self.restart(target, apply=True, inst=i).ok:
+                    (gone if i is None else bad).append(k)
+            restart_ok = bool(ks) and not bad and not gone
+            notes += [t for c, t in ((bad, f"  [restart] FAILED for {', '.join(bad)} — restart it by name"),
+                                     (gone, f"  [restart] not attempted for {', '.join(gone)}: it names no radio now"),
+                                     (not ks, "  [restart] not attempted: a running process no instance names — restart it by name"),
+                                     (restart_ok, "  [restart] ok")) if c]
         # A failed restart leaves the station OFFLINE: not ok (non-zero exit, a console warning).
-        return ActionResult(
-            restart_ok,
-            (f"'{target}' updated to {version}." if restart_ok
-             else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
-            details=notes, next_commands=([f"lhpc status {target}"] if restart_ok
-                                          else [f"lhpc stack restart {k} --yes" for k in bad] or [f"lhpc status {target}"]))
+        return ActionResult(restart_ok, f"'{target}' updated to {version}" + ("." if restart_ok else (
+            f" but the restart FAILED for {', '.join(bad)} — restart it by name." if bad else " but not restarted — see the restart note.")),
+            details=notes, next_commands=[f"lhpc stack restart {k} --yes" for k in bad] or [f"lhpc status {target}"])
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the

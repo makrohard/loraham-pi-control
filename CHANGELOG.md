@@ -39,7 +39,7 @@
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc kill <stack>@<band>` is gone: name the instance (`lhpc kill kiss@r1`); a band form is refused with the running ones.
 - The MeshCore Mode switch saves the shown radio's mode; with a hardware list, a request without a radio is refused, naming the radios.
-- After an update, each running instance is restarted by name; a running process no instance names is not restarted (restart it by name).
+- After an update, each running instance is restarted by name; a running process no instance names, or an instance whose radio is gone, is not restarted (the update says so; restart it by name).
 - Home: each radio's card has its own daemon state, stacks and conflicts (two radios on one band too); a stack running
   on one radio can be started on another radio of the band; graywolf@rN brings its own kiss@rN beside another radio's.
 - Daemon parameters per radio and per instance: `daemon@<rid>`'s (CLI `--daemon-param`, its panel) are radio rN's row;
@@ -69,6 +69,8 @@ Upgrading from 0.13.x
   grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
 - A script calling `lhpc stack <verb> <stack> [--band B]` or `lhpc kill <stack>[@<band>]`: name the instance,
   `<stack>@<rid>` (`lhpc hardware` lists the radios; `daemon --radio rN` still works).
+- Finish or undo an interrupted binary install with 0.13.x before updating (`lhpc install <stack> --source binary --yes`
+  completes its recovery): 0.14.0 refuses the older binary-install journal by name.
 - Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
   `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
 - A port save is judged per radio (each instance at its own base's port, a radio not yet listed at the manifest's):

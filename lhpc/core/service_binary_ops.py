@@ -124,8 +124,7 @@ class BinaryOpsMixin:
             return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
                                 details=["  Switching to the source channel means a full local "
                                          "build (this can take hours on a Pi).",
-                                         f"  Staying on the binary keeps {stack_id} exactly as "
-                                         "it is."],
+                                         f"  Staying on the binary keeps {stack_id} exactly as it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
         _newer_data = {"newer_published": True} if newer else {}
@@ -334,23 +333,17 @@ class BinaryOpsMixin:
             if _running:
                 shutil.rmtree(tmpdir, ignore_errors=True)   # nothing was opened yet; leave nothing
                 return ActionResult(
-                    False, f"Refusing to install '{stack_id}' from binary: component(s) "
-                           "running.",
+                    False, f"Refusing to install '{stack_id}' from binary: component(s) running.",
                     details=[f"  running: {', '.join(_running)} — stop them first"],
                     next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
 
             # OPEN THE TRANSACTION FIRST — before the auth change and before any file moves.
             # The journal carries the previous receipt and the previous mesh-password value, so
             # even a hard crash during download/extract is recoverable.
-            auth_journal: dict = {}
             _auth_restore = None
-            if getattr(self, "hmac_applies", None) and self.hmac_applies(stack_id):
-                _hc = self._hmac_component(stack_id)
-                if _hc is not None:     # K8f S4-4c: every saved instance's own value (one binary for the stack)
-                    _prev = {instances.key(stack_id, i): v for i in instances.saved_insts(self, stack_id)
-                             if (v := self._resolved_param_value(stack_id, "run", _hc.id, "password_file", "", i))}
-                    if _prev:
-                        auth_journal = {"param": "password_file", "previous": _prev}
+            _hc = self._hmac_component(stack_id) if getattr(self, "hmac_applies", None) and self.hmac_applies(stack_id) else None
+            _pw = self._mesh_passwords(stack_id, _hc.id) if _hc is not None else {}   # K8f S4-4c: per saved instance
+            auth_journal = {"param": "password_file", "previous": {k: v for k, (_i, v) in _pw.items()}} if _pw else {}
             try:
                 bi.open_txn(self._paths, stack_id, txn,
                             old_receipt=prev_receipt_raw, auth=auth_journal)
@@ -362,12 +355,11 @@ class BinaryOpsMixin:
                 if auth_journal:
                     # The published firmware has no mesh password: the bridge must not be launched
                     # with --password-file. Journaled above, so this is undoable either way.
-                    _r = next((r for k in auth_journal["previous"] if not (r := self.save_config_bundle(
-                        stack_id, values={"password_file": ""}, inst=instances.resolve(self, k)[1],
-                        _allow_managed_params=frozenset({"password_file"}))).ok), None)
-                    if _r is not None:
-                        raise bi.BinaryInstallError(
-                            f"could not switch the mesh password off ({_r.summary})")
+                    for k, (i, _v) in _pw.items():          # the instances read above, not re-resolved
+                        _r = self.save_config_bundle(stack_id, values={"password_file": ""}, inst=i,
+                                                     _allow_managed_params=frozenset({"password_file"}))
+                        if not _r.ok:
+                            raise bi.BinaryInstallError(f"could not switch the mesh password of {k} off ({_r.summary})")
                     _auth_restore = auth_journal["previous"]
                 tar_path = os.path.join(tmpdir, entry.filename)
                 stage = os.path.join(tmpdir, "stage")
@@ -403,6 +395,9 @@ class BinaryOpsMixin:
                 # must be able to put the old install back completely.
                 bi.displace(self._paths, txn,
                             self._stale_paths(prev_files, files, owned_dirs))
+                # G1-K8F-S4-4C B2: a mesh password set meanwhile (any process: the store read is keyed by its stat)
+                if _hc is not None and (_set := list(self._mesh_passwords(stack_id, _hc.id))):
+                    raise bi.BinaryInstallError(f"the mesh password of {', '.join(_set)} was set during the install: install again")
                 if not bi.commit(self._paths):        # THE commit point
                     raise bi.BinaryInstallError("could not commit the binary transaction")
             except Exception as exc:
@@ -482,10 +477,8 @@ class BinaryOpsMixin:
         newest entry's differing commits (`pin_mismatch`), self-update first, source second."""
         return ActionResult(
             False, f"Binary install of '{stack_id}' refused: {exc.message}",
-            details=["  1. Update LHPC first, then install again (about a minute): "
-                     "lhpc self-update --apply",
-                     f"  2. Or build from source: {src_cmd} (a full local build, this can take "
-                     "hours on a Pi).",
+            details=["  1. Update LHPC first, then install again (about a minute): lhpc self-update --apply",
+                     f"  2. Or build from source: {src_cmd} (a full local build, this can take hours on a Pi).",
                      f"  Staying on the binary keeps {stack_id} exactly as it is."],
             next_commands=["lhpc self-update --apply", src_cmd],
             data={"binary_failed": True, "offer_source": True, "binary_refusal": "none_compatible",
@@ -540,9 +533,10 @@ class BinaryOpsMixin:
         j, jstate = bi.read_journal(self._paths)
         if jstate == "absent":
             return True, ""
-        if jstate == "unsafe" or j is None:
-            return False, ("an unreadable binary-install journal is present — resolve "
-                           "state/binary/install.journal.json by hand")
+        prev_auth = ((j or {}).get("auth") or {}).get("previous") or {}     # K8f S4-4c: {instance key: its value}
+        if jstate == "unsafe" or j is None or not isinstance(prev_auth, dict):   # G1-K8F-S4-4C B1: W269, refused
+            return False, ("an unreadable binary-install journal is present (an earlier version's: CHANGELOG 0.14.0 "
+                           "upgrade steps) — resolve state/binary/install.journal.json by hand")
         stack_id = j.get("stack", "")
         if j.get("state") == "committed":
             # The commit is durable: the NEW install is the truth. Only bookkeeping remains.
@@ -559,16 +553,24 @@ class BinaryOpsMixin:
             # cannot, the journal and backups MUST stay: dropping them would discard the only
             # evidence a later attempt could converge from.
             return False, "the failed install's binary receipt could not be removed"
-        prev_auth = (j.get("auth") or {}).get("previous") or {}      # K8f S4-4c: {instance key: its value}
+        bad = []                                 # G1-K8F-S4-4C B2/B3: every key tried, a radio gone refused by name
         for k, v in prev_auth.items():
-            r = self.save_config_bundle(stack_id, values={"password_file": v}, inst=instances.resolve(self, k)[1],
-                                        _allow_managed_params=frozenset({"password_file"}))
-            if not r.ok:
-                return False, f"the mesh password setting could not be restored ({r.summary})"
+            if (i := instances.resolve(self, k)[1]) is None and "@" in k:
+                bad.append(f"{k} names no radio now")
+            elif not (r := self.save_config_bundle(stack_id, values={"password_file": v}, inst=i,
+                                                   _allow_managed_params=frozenset({"password_file"}))).ok:
+                bad.append(f"{k}: {r.summary}")
+        if bad:                                  # journal RETAINED
+            return False, f"the mesh password setting could not be restored ({'; '.join(bad)})"
         if not bi.drop_txn(self._paths, j):
             return False, "the binary-install journal could not be cleared"
         self.invalidate_snapshot()
         return True, ""
+
+    def _mesh_passwords(self, stack_id: str, comp_id: str) -> dict:
+        """{instance key: (its instance, its saved password_file)} of every saved instance with one (K8f S4-4c)."""
+        return {instances.key(stack_id, i): (i, v) for i in instances.saved_insts(self, stack_id)
+                if (v := self._resolved_param_value(stack_id, "run", comp_id, "password_file", "", i))}
 
     @staticmethod
     def _stale_paths(prev_files, new_files, owned_dirs) -> list:
@@ -809,8 +811,7 @@ class BinaryOpsMixin:
                                            f"{_js}, so the open transaction cannot be proven",
                                     details=["  nothing to run here — the journal must be "
                                              "readable first: inspect state/binary/install.journal"
-                                             ".json (`lhpc doctor` lists it), then run the switch "
-                                             "again"])
+                                             ".json (`lhpc doctor` lists it), then run the switch again"])
             if _j.get("stack") != stack_id or _j.get("txn") != txn:
                 return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
                                            "the open transaction is not this one",
@@ -882,8 +883,7 @@ class BinaryOpsMixin:
                     next_commands=[f"lhpc uninstall {stack_id} --yes"])
         if not locked and (_running := self._binary_running_components(stack_id)):
             return ActionResult(
-                False, f"Refusing to retire the binary install of '{stack_id}': component(s) "
-                       "running.",
+                False, f"Refusing to retire the binary install of '{stack_id}': component(s) running.",
                 details=[f"  running: {', '.join(_running)} — stop them first"],
                 next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
         if txn:
@@ -901,16 +901,14 @@ class BinaryOpsMixin:
                     details=["  nothing to run here — the error named above (a binary-install "
                              "error, a filesystem error, a path under the runtime root that is a "
                              "symlink or escapes it, or a path lhpc rejects as invalid) kept lhpc "
-                             "from moving the files aside; the box's operator fixes what it "
-                             "names, then retries"])
+                             "from moving the files aside; the box's operator fixes what it names, then retries"])
             if not brx.remove_receipt(self._paths, stack_id):
                 return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
                                            "its receipt could not be removed",
                                     details=["  nothing to run here — the receipt under "
                                              "state/binary/ could not be deleted (a filesystem "
                                              "error, or a path there that is a symlink or "
-                                             "escapes the runtime root); the box's operator "
-                                             "fixes it, then retries",
+                                             "escapes the runtime root); the box's operator fixes it, then retries",
                                              "  if it is a path lhpc rejects as invalid: nothing "
                                              "to run here — the receipt path is invalid: "
                                              f"state/binary/{stack_id}.json; report it"])
@@ -935,8 +933,7 @@ class BinaryOpsMixin:
         if still_there or failed:
             return ActionResult(
                 False,
-                f"Retirement of '{stack_id}' is INCOMPLETE — the receipt was kept so the "
-                "remaining files stay owned.",
+                f"Retirement of '{stack_id}' is INCOMPLETE — the receipt was kept so the remaining files stay owned.",
                 details=[f"  still present: {r}" for r in still_there[:5]]
                         + [f"  failed: {f}" for f in failed[:5]],
                 next_commands=[f"lhpc clean {stack_id} --purge --yes"])
