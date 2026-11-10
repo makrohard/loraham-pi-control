@@ -123,8 +123,13 @@ def test_g1_w5_n1_a_radios_process_log_badge_is_that_instances(box, monkeypatch)
 def test_g1_w5_the_stray_band_daemons_log_link_names_its_own_file(box, monkeypatch):
     from lhpc.core.services import ControllerService
     real = ControllerService.radio_overview
-    monkeypatch.setattr(ControllerService, "radio_overview", lambda self: [
-        *real(self), {**real(self)[0], "band": "868", "stray": True, "radios": [], "running": [], "rflogs": []}])
+
+    def with_stray(self, strays=None):                   # G1-K8D3 N2: the stray card's row comes in `strays`
+        out = real(self, strays)
+        if strays is not None:
+            strays.append({"band": "868", "daemon": out[0]["daemon"], "shared_with": [], "rflogs": []})
+        return out
+    monkeypatch.setattr(ControllerService, "radio_overview", with_stray)
     c, _tmp = box
     doc = parse(c.get("/").get_data(as_text=True))
     card = doc.within(next(d for d in doc.find("div", class_="radio-stray")))

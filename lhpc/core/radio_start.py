@@ -721,7 +721,7 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
         return {}
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
     chip, grant = chip_family(svc, "", rid) or "", effective_high_power(svc, rid)
-    return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get("dp_" + name)) not in (None, "")
+    return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
             and daemon_control.validate_set(name, str(v), chip, grant) is None}
 
 
@@ -777,7 +777,7 @@ def save_params(svc, target: str, rid: str, values: dict):
     if err:
         return ActionResult(False, err)
     try:
-        cfgmod.update_stack_config(svc._paths, sid, {"dp_" + n: v for n, v in edits.items()}, inst=commands.Instance(rid))
+        cfgmod.update_stack_config(svc._paths, sid, {f"dp_{n}": v for n, v in edits.items()}, inst=commands.Instance(rid))
     except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
         return ActionResult(False, f"could not save the daemon settings of {sid}@{rid}: {exc}")
     svc._invalidate_config()
@@ -1203,11 +1203,15 @@ def overview_entry(svc, row, e: dict) -> dict:
     elsewhere = [x.get("sid", x["id"]) for x in e["running"] if x.get("rid") and x.get("sid", x["id"]) not in here]
     startable = [x for x in e["startable"] + [e["entries"][sid] for sid in dict.fromkeys(elsewhere) if sid in e["entries"]]
                  if rid in instances.radios_able(svc, x["id"])]
-    interactive = [x for x in e["interactive"] if not x.get("on_rids") or rid in x["on_rids"] or "" in x["on_rids"]]
-    up = dv.reachable
+    interactive = [x for x in e["interactive"] if rid in x.get("on_rids", ()) or "" in x.get("on_rids", ())    # G1-K8D3 N1
+                   or (not x.get("on_rids") and rid in instances.radios_able(svc, x["id"]))]
+    up, procs = dv.reachable, _daemon_procs(svc)
+    own = any(p.rid == rid for p in procs)                                # G1-K8D3 B1: this radio's own process
+    told = all(p.kind == "id" for p in procs)
     return {"rid": rid, "name": row.name, "band": band, "model": row.model, "stray": False, "shared_with": [],
             "radios": [x for x in e["radios"] if x["rid"] == rid],
             "daemon": {**e["daemon"], "reachable": up, "occupied": up, "ready": dv.ready, "usable": dv.ready,
+                       "process": "running" if own else "stopped" if told else "unknown", "process_up": own,
                        "radio_state": dv.radio_state or None,
                        "state_label": "usable" if dv.ready else "occupied" if up else "offline",
                        **{k: dv.status.get(k.upper()) if up else None for k in ("radio", "txmode", "cadrssi", "cadwait")},
@@ -1216,3 +1220,8 @@ def overview_entry(svc, row, e: dict) -> dict:
             "running": running, "startable": startable, "interactive": interactive,
             "rflogs": [x for x in e["rflogs"] if not ("/" in (x.get("job") or "") and not x["job"].startswith(rid + "/"))],
             "conflict": svc._radio_competitors(running + [x for x in interactive if x.get("running")])}
+
+
+def strays(entries) -> list[dict]:
+    """The stray rows of service._band_entries (DEC-W384bv): {band, daemon, shared_with, rflogs} each."""
+    return [{k: e[k] for k in ("band", "daemon", "shared_with", "rflogs")} for e in entries if e["stray"]]

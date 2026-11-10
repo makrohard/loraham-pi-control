@@ -471,8 +471,8 @@ def test_g1_w2_6_a_card_without_a_radio_offers_no_start_that_names_none(tmp_path
     # card is one per live radio): no start control, which could name no radio; the card names the Hardware page.
     from htmlq import parse
     real = ControllerService.radio_overview
-    monkeypatch.setattr(ControllerService, "radio_overview", lambda self: [
-        dict(r, radios=[], daemon=dict(r["daemon"], installed=True)) for r in real(self)])
+    monkeypatch.setattr(ControllerService, "radio_overview", lambda self, strays=None: [
+        dict(r, radios=[], daemon=dict(r["daemon"], installed=True)) for r in real(self, strays)])
     doc = parse(_two_433_web(tmp_path, web).get("/").get_data(as_text=True))
     card = doc.within(doc.by_id("radio-433"))
     assert [card.within(f).field_default("op") for f in card.find("form", action="/action")] == []

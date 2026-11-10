@@ -454,8 +454,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # live monitor, the band's stacks and a start-stack control.
         # DEC-W384bu/bv: one entry per radio, then the §6 stray band daemons in the per-band shape the template reads
         # until the per-radio switch (W-commit); every element stays (W290)
-        radios = service.radio_overview() + [{**x, "stray": True, "radios": [], "running": [], "startable": [],
-                                              "interactive": [], "conflict": []} for x in service.stray_daemons()]
+        strays: list = []                                # G1-K8D3 N2: one pass for the radio and the stray cards
+        radios = service.radio_overview(strays) + [{**x, "stray": True, "radios": [], "running": [], "startable": [],
+                                                    "interactive": [], "conflict": []} for x in strays]
         # W2 (G1-W2 3): an interactive app shows on the card of each radio its instance's marker names, with that
         # instance's Stop; a running entry without a rid is no instance lhpc can address (a stop reaches none of it).
         from lhpc.core import interactive_markers as _im

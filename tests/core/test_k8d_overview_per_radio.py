@@ -55,3 +55,44 @@ def test_a_stray_band_daemon_is_listed_by_stray_daemons_only(tmp_path, monkeypat
     strays = svc.stray_daemons()
     assert [(x["band"], x["daemon"]["reachable"]) for x in strays] == [("868", True)]
     assert set(strays[0]) == {"band", "daemon", "shared_with", "rflogs"}
+
+
+def _band_row(**kw):
+    row = {"band": "433", "stray": False, "radios": [{"rid": "r1"}, {"rid": "r3"}], "running": [], "startable": [],
+           "interactive": [], "rflogs": [], "entries": {},
+           "daemon": {"process": "running", "process_up": True, "installed": True}}
+    row.update(kw)
+    return row
+
+
+def test_g1_k8d3_b1_a_radios_card_carries_its_own_daemon_process_never_the_bands(tmp_path):
+    # r1 and r3 on 433, only r1's daemon runs (--id r1): r3's card says stopped. red on 55fb6469: r3 carried the band's
+    # aggregate process (running / process_up True) beside reachable False
+    from lhpc.core import radio_start
+    svc = _svc(tmp_path, replies={"/tmp/loraconf-r1.sock": READY % b"r1"},
+               cmdlines={100: ["loraham_daemon", "--radio", "433", "--id", "r1"]})
+    e = _band_row()
+    r1, r3 = (radio_start.overview_entry(svc, row, e) for row in TWO_433)
+    assert (r1["daemon"]["process"], r1["daemon"]["process_up"]) == ("running", True)
+    assert (r3["daemon"]["process"], r3["daemon"]["process_up"], r3["daemon"]["reachable"]) == ("stopped", False, False)
+
+
+def test_g1_k8d3_n1_an_interactive_entry_without_a_radio_shows_only_where_it_can_run(tmp_path, monkeypatch):
+    # an active interactive app no radio is told for (on_rids empty) shows on the cards of the radios able to run it
+    # only; a rid-less live marker ("") shows on every card of the band. red on 55fb6469: on every card
+    from lhpc.core import radio_start
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(instances, "radios_able", lambda s, sid, band="": ["r1"])
+    e = _band_row(interactive=[{"id": "chat", "on_rids": []}, {"id": "voice", "on_rids": [""]}])
+    r1, r3 = (radio_start.overview_entry(svc, row, e) for row in TWO_433)
+    assert [x["id"] for x in r1["interactive"]] == ["chat", "voice"]
+    assert [x["id"] for x in r3["interactive"]] == ["voice"]
+
+
+def test_g1_k8d3_n2_the_dashboard_builds_its_band_rows_once(tmp_path, monkeypatch, web):
+    # one _band_entries pass serves the radio cards and the stray cards. red on 55fb6469: two passes per page
+    calls = []
+    real = ControllerService._band_entries
+    monkeypatch.setattr(ControllerService, "_band_entries", lambda self: calls.append(1) or real(self))
+    assert web().get("/").status_code == 200
+    assert len(calls) == 1, calls

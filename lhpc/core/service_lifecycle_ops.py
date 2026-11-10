@@ -2904,17 +2904,20 @@ class LifecycleOpsMixin:
         return bool(dstat) and (dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
                                 or self.binary_covers(self.DAEMON_ID) or dstat.run_state in (RunState.RUNNING, RunState.DEGRADED))
 
-    def radio_overview(self) -> list[dict]:
+    def radio_overview(self, strays: list | None = None) -> list[dict]:
         """DEC-W384bu: the radio dashboard, ONE entry per enabled radio in rid order (radio_start.overview_entry; every
-        entry has its rid). Live RSSI/CAD/feed are polled separately via /api/daemon."""
-        bands = {e["band"]: e for e in self._band_entries()}           # a stray band has no enabled radio to look it up
+        entry has its rid); `strays` gets stray_daemons()'s rows of the same pass (G1-K8D3 N2). Live RSSI/CAD/feed: /api."""
+        all_ = self._band_entries()
+        if strays is not None:
+            strays.extend(radio_start.strays(all_))
+        bands = {e["band"]: e for e in all_}                           # a stray band has no enabled radio to look it up
         rows = sorted((r for r in radios.load(self._paths).radios if r.enabled), key=lambda r: int(r.id[1:]))
         return [radio_start.overview_entry(self, row, bands[row.band]) for row in rows if row.band in bands]
 
     def stray_daemons(self) -> list[dict]:
         """DEC-W384bv (§6, W290 kept): each band with a live daemon and no enabled radio of the hardware list, in band
         order: {band, daemon, shared_with, rflogs}; its dashboard card keeps its Stop."""
-        return [{k: e[k] for k in ("band", "daemon", "shared_with", "rflogs")} for e in self._band_entries() if e["stray"]]
+        return radio_start.strays(self._band_entries())
 
     def _band_entries(self) -> list[dict]:
         """The per-band rows radio_overview and stray_daemons are built from: per band of the list, its stacks
