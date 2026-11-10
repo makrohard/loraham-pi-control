@@ -35,6 +35,18 @@ ITEM_KINDS = ("stack", "daemon-reconcile")
 RUN_STATES = ("running", "done", "failed", "disabled", "no-plan", "unsafe")
 
 
+def daemon_served(procs, rid: str, recorded) -> tuple[set, str]:
+    """(served bands, why) of a radio's daemon item (K8f D3 B4, G1-K8F-S4-4A B1/B2): its radio's daemon process (by id)
+    serves; it running on ANOTHER band than recorded, or an untold daemon process (which may be it) with none of its
+    own, is a why: the item fails by name and nothing is started (never a second start, never a false success)."""
+    mine = [p for p in procs if p.kind == "id" and p.rid == rid]
+    if mine and not {p.band for p in mine} & set(recorded):
+        return set(), f"daemon@{rid} runs on {'+'.join(sorted({p.band for p in mine}))} MHz, recorded on {'+'.join(recorded)}"
+    if not mine and any(p.kind == "unknown" for p in procs):
+        return set(), f"a daemon process that cannot be told runs (it may be daemon@{rid})"
+    return ({p.band for p in mine} & set(recorded)), ""
+
+
 def journal_path(paths: Paths) -> Path:
     return paths.under(*JOURNAL_REL)
 

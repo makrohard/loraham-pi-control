@@ -58,3 +58,19 @@ def test_another_stacks_client_keeps_only_its_own_radios_daemon(tmp_path, monkey
     monkeypatch.setattr(type(svc), "stop", spy)
     svc.stop("kiss", apply=True, inst=k1)
     assert got == released, got
+
+
+def test_the_stop_preview_announces_the_same_release_as_the_apply(tmp_path, monkeypatch):
+    # G1-K8F-S4-4A N1: the plan of kiss@r1's stop (graywolf on r2) says it also stops the daemon (daemon@r1), as the
+    # apply does; red on 09b07002: the preview's own band rule saw graywolf on the band and announced nothing
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    k1, g2 = (instances.parse_target(svc, k, "start")[1] for k in ("kiss@r1", "graywolf@r2"))
+    monkeypatch.setattr(type(svc), "stop_dependents", lambda self, target, bands=None: ["kiss", "graywolf"])
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: [g2] if sid == "graywolf" else [])
+    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid in ("kiss", "graywolf"))
+    real_view = type(svc).daemon_view
+    monkeypatch.setattr(type(svc), "daemon_view",
+                        lambda self, band, rid="": dataclasses.replace(real_view(self, band, rid), reachable=True))
+    plan = svc.stop("kiss", apply=False, inst=k1)
+    assert "  [also stops] daemon 433 MHz: no other stack needs it" in plan.details, plan.details

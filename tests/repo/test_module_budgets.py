@@ -26,7 +26,7 @@ BUDGETS = {
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
-    "service_boot_restore.py": (670, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source)
+    "service_boot_restore.py": (674, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source); K8f S4-4a: a radio's daemon item fails by name (G1-K8F-S4-4A B1/B2)
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
     "service_firewall.py": (1533, 19),

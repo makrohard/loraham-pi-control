@@ -2093,3 +2093,27 @@ def test_boot_restore_starts_only_the_unserved_radios_daemon(tmp_path, monkeypat
     assert svc.boot_restore_run().ok
     assert calls == [("daemon", "433", "r2")], calls
 
+
+
+@pytest.mark.parametrize("procs, says", [
+    ([("unknown", "", "")], "a daemon process that cannot be told runs (it may be daemon@r2)"),
+    ([("id", "r2", "868")], "daemon@r2 runs on 868 MHz, recorded on 433")])
+def test_a_radios_daemon_item_that_cannot_be_reconciled_fails_by_name_and_starts_nothing(tmp_path, monkeypatch, procs, says):
+    # G1-K8F-S4-4A B1 (an untold daemon process: was "succeeded" without a start) and B2 (the radio's daemon on
+    # another band than recorded: was a second start of daemon@r2 on 433); red on 09b07002
+    from lhpc.core import radio_daemon as _rd
+    from lhpc.core import radio_start as _rs
+    svc = _drv(tmp_path, monkeypatch)
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))           # r1 + r2, both 433
+    rec = _v1(pid=101, stack="daemon", comp="loraham-daemon", band="433", nonce="01" * 16)
+    rec["rid"] = "r2"
+    _write_record(tmp_path, rec)
+    monkeypatch.setattr(ControllerService, "_daemon_arbitrated_bands", lambda self, radio: (["433"], {}))
+    monkeypatch.setattr(ControllerService, "_daemon_claimed_bands", lambda self: [])
+    monkeypatch.setattr(_rs, "_daemon_procs", lambda s: [_rd.DaemonProc(300 + i, k, rid=r, band=b)
+                                                         for i, (k, r, b) in enumerate(procs)])
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    svc.boot_restore_run()
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert not calls and item["state"] == "failed" and says in item["result"]["summary"], item

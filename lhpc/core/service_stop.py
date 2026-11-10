@@ -69,7 +69,7 @@ class StopOpsMixin:
             out.append(ss.stack.id)
         return out
 
-    def _daemon_bands_to_release(self, stk, sid, active_bands, inst=None) -> tuple[str, list]:
+    def _daemon_bands_to_release(self, stk, sid, active_bands, inst=None, exclude=()) -> tuple[str, list]:
         """(daemon_stack_id, bands) a stopping CLIENT stack no longer needs — the band(s) it was
         ACTUALLY running on (`active_bands`, resolved from its running marker BEFORE deletion) that
         NO other running daemon-dependent stack still uses and where the daemon is still up. Empty
@@ -82,8 +82,8 @@ class StopOpsMixin:
             return daemon_sid, []
         release, rid = [], getattr(inst, "rid", "")      # K8f D3 B5: an instance's client releases its radio's daemon
         for b in sorted(bb for bb in active_bands if bb in ALLOWED_BANDS):
-            others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if (d != sid and not rid) or (rid and (
-                (ri := instances.running_insts(self, d)) is None or any(getattr(i, "rid", "") == rid for i in ri if d != sid)))]
+            others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d not in exclude and ((d != sid and not rid) or (rid and (
+                (ri := instances.running_insts(self, d)) is None or any(getattr(i, "rid", "") == rid for i in ri if d != sid))))]
             if not others and self.daemon_view(b, rid).reachable:
                 release.append(b)
         return daemon_sid, release
@@ -232,15 +232,10 @@ class StopOpsMixin:
                     details.append(f"  [also stops] {_dep}: dependency no other stack needs")
                 # Daemon prediction must look PAST the dependency releases above (kiss still
                 # counts as a daemon dependent right now, but its own release will free it).
-                _dsid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
-                if _dsid:
-                    for _b in sorted(b for b in self._operation_bands(target, band, "", "stop")
-                                     if b in ALLOWED_BANDS):
-                        _others = [d for d in self.stop_dependents(_dsid, bands={_b})
-                                   if d != _psid and d not in _deps_rel]
-                        if not _others and self.daemon_view(_b).reachable:
-                            details.append(f"  [also stops] {_dsid} {_b} MHz: "
-                                           "no other stack needs it")
+                _dsid, _rel = self._daemon_bands_to_release(_stk, _psid, set(self._operation_bands(target, band, "", "stop")),
+                                                            inst, exclude=_deps_rel)   # N1: the apply's own calculation
+                for _b in _rel:
+                    details.append(f"  [also stops] {_dsid} {_b} MHz: no other stack needs it")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).", details=details,
                                 next_commands=[f"lhpc stack stop {instances.named(self, target, inst)} --yes"],   # this plan's
                                 data={"changes": len(items), "dependents": dependents,

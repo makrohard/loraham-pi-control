@@ -599,8 +599,12 @@ class BootRestoreOpsMixin:
         from . import radio_start
         recorded, rid = [b for b in item.get("bands", []) if b in ALLOWED_BANDS], item.get("rid", "")
         kept, _owners = self._daemon_arbitrated_bands("")
-        served = set(self._daemon_claimed_bands()) if not rid else {b for p in radio_start._daemon_procs(self) for b in (  # an
-            recorded if p.kind == "unknown" else [p.band] if p.kind == "id" and p.rid == rid else [])}   # untold one: served
+        served, why = (set(self._daemon_claimed_bands()), "") if not rid else boot_restore.daemon_served(
+            radio_start._daemon_procs(self), rid, recorded)
+        if why:                                    # G1-K8F-S4-4A B1/B2: fails by name, nothing started
+            item["state"], item["result"] = "failed", {"ok": False, "summary": f"daemon reconciliation: {why}; not started"}
+            boot_restore.write_journal(self._paths, journal) or item.update(_integrity="journal unwritable at settle")
+            return
         residual = [b for b in recorded if b in kept and b not in served]      # K8f D3 B4: by the item's radio
         if not residual:
             item["state"] = "succeeded"
