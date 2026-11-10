@@ -1068,11 +1068,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # The MeshCore stack's Mode switch on the stack body and its pill on the Apps row
                 # ("" elsewhere): the saved mode, the choices, and the mode the running launch was
                 # generated with (shown only while the stack runs and differs from the saved one).
-                "meshcore_mode": (service.meshcore_mode_display()
+                "meshcore_mode": (service.meshcore_mode_display(_view_inst)          # K8f S4-2: the shown radio's
                                   if stack.id == _meshcore_mode.STACK_ID else ""),
                 "meshcore_modes": list(_meshcore_mode.MODES),
-                "meshcore_running_mode": (service.meshcore_running_mode()
+                "meshcore_running_mode": (service.meshcore_running_mode(_view_inst)
                                           if stack.id == _meshcore_mode.STACK_ID else ""),
+                "meshcore_rid": getattr(_view_inst, "rid", "") if stack.id == _meshcore_mode.STACK_ID else "",
                 # A3: an install over the pin check still in force (the pill and the warning), and
                 # the typed pin refusal of the last failed console install job.
                 "pin_override": service.binary_active_override(stack.id),
@@ -2435,10 +2436,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         if not _csrf_ok():
             abort(400)
-        result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")})
+        rid = request.form.get("radio", "")              # K8f S4-2 (D2-CTX N3): the form's radio, kept on the way back
+        inst, why = _instances.parse_target(service, f"{stack_id}@{rid}", "start")[1::2] if rid else (None, "")
+        if why:
+            abort(400)
+        result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")}, inst=inst)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open=stack_id) + "#stack-mode-" + stack_id)
+        return redirect(url_for("stacks_overview", open=stack_id, **({"radio": rid} if rid else {})) + "#stack-mode-" + stack_id)
 
     @app.post("/stacks/<stack_id>/config/reset")
     def stack_config_reset(stack_id: str):

@@ -275,13 +275,16 @@ class RflogOpsMixin:
     RFLOG_LRU_MAX = 2000                    # cached decoded records per job
     RFLOG_NOKEY_TTL_S = 30.0                # a `no-key` answer is kept this long before the frame is retried
 
-    def _rflog_meshcore_mode(self) -> str:
+    def _rflog_meshcore_mode(self, inst=None) -> str:
         """The mode the MeshCore RF log is being WRITTEN in: the running node's mode while it
         runs (a saved-but-not-restarted change must not switch the decoder's identity and
-        stores under a live writer), the saved mode otherwise."""
-        if self.stack_running(_meshcore_mode.STACK_ID):
-            return _meshcore_mode.normalize(self.meshcore_running_mode())
-        return _meshcore_mode.normalize(self.meshcore_mode())
+        stores under a live writer), the saved mode otherwise. K8f (D2-CTX B2): an instance's log is its own node's
+        (its running state, role and saved mode); None only for a slot build's log (no radio)."""
+        node = self._component_index().get(_meshcore_mode.NODE_ID)
+        if (instances.instance_runs(self, node[1], inst, inst.band) if inst is not None and node
+                else self.stack_running(_meshcore_mode.STACK_ID)):
+            return _meshcore_mode.normalize(self.meshcore_running_mode(inst))
+        return _meshcore_mode.normalize(self.meshcore_mode(inst))
 
     def rflog_records(self, target: str, job, lines: int = 300) -> tuple:
         """(path, records) — the RF viewer's data: the two-segment tail as parsed records."""
@@ -367,8 +370,9 @@ class RflogOpsMixin:
         with self._rflog_flight(str(job)):
             lru = self._rflog_lru(str(job))
             # The meshcore job's cache is only valid for the mode the log is written in.
-            if e.decoder == "meshcore":
-                mode = self._rflog_meshcore_mode()
+            if e.decoder == "meshcore":                   # the job's radio (`<rid>/<file>`), else a slot build's
+                _jr = str(job).partition("/")[0] if "/" in str(job) else ""
+                mode = self._rflog_meshcore_mode(instances.copy_of(self, _meshcore_mode.STACK_ID, _jr)[0] if _jr else None)
                 if lru.get("__mode__") not in (None, mode):
                     lru.clear()
                 lru["__mode__"] = mode

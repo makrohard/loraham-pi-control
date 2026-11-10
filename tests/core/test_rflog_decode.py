@@ -287,7 +287,7 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     assert svc.save_config_bundle("meshcore", values={"file_repeater_name": "LAB-REP", "file_mode": "repeater"}).ok
     live = {"running": True, "mode": "chat"}
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, s: live["running"] and s == "meshcore")
-    monkeypatch.setattr(ControllerService, "meshcore_running_mode", lambda self: live["mode"])
+    monkeypatch.setattr(ControllerService, "meshcore_running_mode", lambda self, inst=None: live["mode"])
     argv, err = svc._rflog_decoder_argv(rflog.entry("meshcore"))
     assert err == "" and _mode(argv) == "chat"                            # saved repeater, running chat
     counter = tmp_path / "runs"

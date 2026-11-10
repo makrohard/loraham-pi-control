@@ -9,14 +9,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import (
-    config_save,
-    daemon_control,
-    listeners,
-    runtime_fs,
-    spi_mode,
-    validators,
-)
+from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
 from . import instances as _instances
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
@@ -446,7 +439,7 @@ class ParamsConfigMixin:
         stack_id = str(cand.get("stack") or "")
         if not stack_id:
             return False
-        recs = self._identity_fields(stack_id)
+        recs = self._identity_fields(stack_id, mode_free=True)   # K8f S4-2: an identity field is one in every mode
         kind, comp, name = cand.get("kind"), cand.get("comp"), cand.get("name")
         if kind and comp and name:
             return any(("r" if r["kind"] == "run" else "f") == kind
@@ -899,12 +892,12 @@ class ParamsConfigMixin:
 
     @invalidates_snapshot
     def save_config(self, target: str, values: dict,
-                    band: str = "") -> ActionResult:
+                    band: str = "", inst=None) -> ActionResult:
         """Save the stack's run parameters (via `save_config_bundle`). The global operator
         callsign is NOT settable here — `set_operator_identity` is the one authoritative
         mutation path (it alone computes and commits the restart-required markers
         atomically with the change)."""
-        return self.save_config_bundle(target, values=values, band=band)
+        return self.save_config_bundle(target, values=values, band=band, inst=inst)
 
     @invalidates_snapshot
     def save_config_bundle(self, target: str, *, values: dict | None = None,
@@ -1066,7 +1059,7 @@ class ParamsConfigMixin:
                 # to inherit, and refusing here rolls the whole submission back rather than
                 # persisting first and refusing after.
                 self._invalidate_config()          # the COMMITTED global, never a cached one
-                if (_again := self.identity_refusal_for_values(target, band, values or {})):
+                if (_again := self.identity_refusal_for_values(target, band, values or {}, inst=inst)):
                     raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
             _ohs_recheck()                  # issue #5: openHop's file appeared/vanished since split_saves
@@ -1669,7 +1662,7 @@ class ParamsConfigMixin:
         so the comparison has to fold case itself."""
         return value.strip().casefold() in {p.casefold() for p in self._IDENTITY_PLACEHOLDERS}
 
-    def _identity_fields(self, target: str, inst=None) -> list[dict]:
+    def _identity_fields(self, target: str, inst=None, *, mode_free: bool = False) -> list[dict]:
         """EVERY operator-identity field CALL/node enforcement guards (a stack may have more
         than one — Meshtastic requires both its long and short node names). Scoped to the
         target: a STACK target inspects every component; a direct COMPONENT target only that
@@ -1692,7 +1685,7 @@ class ParamsConfigMixin:
                             "field": self._config_field(target, kind, c.id, p.name),
                             "default": str(getattr(p, "default", "") or "")})
         from . import meshcore_mode as _mm
-        if (any(r["comp"] == _mm.NODE_ID for r in out)
+        if (not mode_free and any(r["comp"] == _mm.NODE_ID for r in out)     # mode_free: the licensed rows (no mode)
                 and not _mm.chat_identity_required(self.meshcore_mode(inst))):
             # Repeater-only: no Companion runs, so the chat node's name is not an identity to
             # enforce (the repeater's own name is checked by `meshcore_mode.start_refusal`).
@@ -1742,16 +1735,16 @@ class ParamsConfigMixin:
                 pass                       # unreadable/absent generated file: unknown
         return None
 
-    def meshcore_running_mode(self) -> str:      # status and logic: the running role, else the saved mode
-        return self._meshcore_running_role() or self.meshcore_mode_display() or _meshcore_mode.DEFAULT_MODE
+    def meshcore_running_mode(self, inst=None) -> str:   # status and logic: the instance's running role, else saved
+        return self._meshcore_running_role(inst) or self.meshcore_mode_display(inst) or _meshcore_mode.DEFAULT_MODE
 
-    def meshcore_mode_display(self) -> str:
+    def meshcore_mode_display(self, inst=None) -> str:
         """The SAVED mode for read-only surfaces (status, the console, stop verification): ""
         when the stack config cannot be read. Those surfaces must keep working for every stack
         with one broken MeshCore file; the START path reads `meshcore_mode()` itself and fails
         closed on the same file."""
         try:
-            return self.meshcore_mode()
+            return self.meshcore_mode(inst)             # K8f S4-2 (D2-CTX B1): the radio's own mode
         except ConfigError:
             return ""
 
@@ -1769,8 +1762,9 @@ class ParamsConfigMixin:
         return _reticulum_interfaces.endpoint_problem(vals)
 
     def _identity_field(self, target: str) -> dict | None:
-        """The PRIMARY identity field (compat: first licensed, else first node field)."""
-        fields = self._identity_fields(target)
+        """The PRIMARY identity field (compat: first licensed, else first node field); its one caller reads only a
+        licensed row, which no MeshCore mode changes, so no mode is read (K8f S4-2, D3 B6)."""
+        fields = self._identity_fields(target, mode_free=True)
         return fields[0] if fields else None
 
     def _identity_cmd(self, target: str, rec: dict, value: str, band: str = "", inst=None) -> str:
@@ -1813,7 +1807,7 @@ class ParamsConfigMixin:
         return key if kind == "run" else f"file_{key}"
 
     def identity_refusal_for_values(self, target: str, band: str, values: dict,
-                                    op: str = "save"):
+                                    op: str = "save", inst=None):
         """THE identity contract for submitted values, in one place, for every writer — the
         Start/Restart panel (Apply and Save), the launch, and the in-transaction recheck.
 
@@ -1823,7 +1817,7 @@ class ParamsConfigMixin:
         never inherits, or a licensed one with no usable global, a blank means MISSING, and
         storing it would delete the stack's only identity and refuse the very next launch."""
         bad: list[dict] = []
-        for rec in self._identity_fields(target):
+        for rec in self._identity_fields(target, inst):           # K8f S4-2: the saved instance's own (its mode)
             # A bundle addresses a param bare (unique in its stack) or component-qualified; a
             # DEPENDENCY bundle is ALWAYS qualified (seeking only the bare name
             # made this a silent no-op there).
@@ -1850,7 +1844,7 @@ class ParamsConfigMixin:
                       else f"{r['label']} is required — a local node identity, never inherited")
                 for r in bad),
             data={"enforce_fields": [r["field"] for r in bad]},
-            next_commands=self._identity_config_hints(target, band))
+            next_commands=self._identity_config_hints(target, band, inst))
 
     def _identity_config_hints(self, target: str, band: str = "", inst=None) -> list[str]:
         """The copy-pasteable remedies for a start refused over missing/invalid identities:
@@ -1956,7 +1950,7 @@ class ParamsConfigMixin:
                             if validate:
                                 validate(cand)
                             remedies.append("keep per-stack SSIDs local ("
-                                            + self._identity_cmd(target, rec, cand, band)
+                                            + self._identity_cmd(target, rec, cand, band, inst)
                                             + ")")
                         except validators.ValidationError:
                             pass
@@ -2007,10 +2001,10 @@ class ParamsConfigMixin:
             (p if kind == "run" else fo)[key] = r["effective"]
         return p, fo
 
-    def effective_identity(self, target: str, band: str = "") -> str:
+    def effective_identity(self, target: str, band: str = "", inst=None) -> str:
         """The stack's primary effective identity value ("" when unresolvable) — for TX-test
         payloads and displays; never a hidden placeholder."""
-        rows = self.identity_resolution(target, band)
+        rows = self.identity_resolution(target, band, inst)
         return rows[0]["effective"] if rows else ""
 
     def enforce_identity(self, target: str, band: str = "", inst=None) -> tuple[bool, list, str]:

@@ -340,9 +340,9 @@ def log_runs(svc, e, rid: str) -> bool:
 def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
     """The MeshCore RF decoder's mode, secrets and stores: the instance's own (7f: its mode, config/secrets/<rid>,
     state/<rid>/…); without a radio, the stack's (a log from the slot builds)."""
-    from . import instances, meshcore_mode
+    from . import instances
     own = (rid,) if rid else ()
-    mode = meshcore_mode.normalize(svc.meshcore_mode(instances.copy_of(svc, sid, rid)[0])) if rid else svc._rflog_meshcore_mode()
+    mode = svc._rflog_meshcore_mode(instances.copy_of(svc, sid, rid)[0] if rid else None)   # K8f: the job's node
     return ["--mode", mode, "--secrets", str(svc._paths.under("config", "secrets", *own)),
             "--store", str(svc._paths.under("state", *own, "meshcore", "companion.db")),
             "--repeater-store", str(svc._paths.under("state", *own, "openhop"))]

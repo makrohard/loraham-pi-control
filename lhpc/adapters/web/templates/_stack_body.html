@@ -10,6 +10,7 @@
   {% if g.meshcore_mode %}
     <form method="post" action="{{ url_for('stack_mode_save', stack_id=g.stack.id) }}" class="actrow" id="stack-mode-{{ g.stack.id }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      {% if g.meshcore_rid %}<input type="hidden" name="radio" value="{{ g.meshcore_rid }}">{% endif %}
       <label>Mode
         <select name="mode" aria-label="Mode">
           {% for m in g.meshcore_modes %}<option value="{{ m }}"{% if m == g.meshcore_mode %} selected{% endif %}>{{ m }}</option>{% endfor %}
