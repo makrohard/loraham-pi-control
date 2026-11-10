@@ -1267,17 +1267,9 @@ class ParamsConfigMixin:
                                         "(journal retained; see lhpc doctor)")
                 self._invalidate_config()          # fresh, lock-consistent, recovered
                 old_call = str(self.config().operator.callsign or "").strip()
-                # Per-stack INHERITED value before the change, so the affected set reflects what
-                # each stack actually uses: comparing the normalized new global
-                # against the RAW stored one flagged every running licensed stack restart-required
-                # when an SSID-bearing or lowercase global is merely re-saved unchanged, with no
-                # effective identity change at all.
-                _before = {}                      # K8f S4-1 (D1 B2/B3): per instance key, each instance's own identity
-                for _st in self.stacks():
-                    for _i in _instances.saved_insts(self, _st.id):
-                        _lic = next((r for r in self._identity_fields(_st.id, _i) if r["enforce"] == "licensed"), None)
-                        if _lic is not None:
-                            _before[_instances.key(_st.id, _i)] = self.inheritable_global(_lic)[0]
+                # Each instance's INHERITED value before vs after (inheritable_global of the old and the new call): comparing
+                # the normalized new global against the RAW stored one flagged a merely re-saved SSID-bearing or
+                # lowercase global (no effective identity change) as restart-required.
                 affected: list = []                # (instance key, run_band)
                 if new_call != old_call:
                     for st in self.stacks():
@@ -1295,9 +1287,8 @@ class ParamsConfigMixin:
                                 continue           # not live, or nothing here inherits the global
                             # ...and only when what it INHERITS changes: an SSID-bearing or lowercase global
                             # re-saved unchanged leaves every effective identity identical (nothing to restart).
-                            after = next((self.inheritable_global(r, new_call)[0] for r in rows
-                                          if r["enforce"] == "licensed"), "")
-                            if after != _before.get(_instances.key(st.id, i), ""):
+                            lic = next(r for r in rows if r["enforce"] == "licensed")   # G1-K8F-S4-1 N1: no _before
+                            if self.inheritable_global(lic, new_call)[0] != self.inheritable_global(lic, old_call)[0]:
                                 affected.append((_instances.key(st.id, i), run_band))
                 # ONE transaction: the [operator] patch + every marker, all-or-recoverable.
                 data = dict(_config._load_runtime_toml(self._paths, local_path))
