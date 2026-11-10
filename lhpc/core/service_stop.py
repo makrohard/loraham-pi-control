@@ -69,7 +69,7 @@ class StopOpsMixin:
             out.append(ss.stack.id)
         return out
 
-    def _daemon_bands_to_release(self, stk, sid, active_bands) -> tuple[str, list]:
+    def _daemon_bands_to_release(self, stk, sid, active_bands, inst=None) -> tuple[str, list]:
         """(daemon_stack_id, bands) a stopping CLIENT stack no longer needs — the band(s) it was
         ACTUALLY running on (`active_bands`, resolved from its running marker BEFORE deletion) that
         NO other running daemon-dependent stack still uses and where the daemon is still up. Empty
@@ -80,10 +80,11 @@ class StopOpsMixin:
             return daemon_sid or "", []
         if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):
             return daemon_sid, []
-        release = []
+        release, rid = [], getattr(inst, "rid", "")      # K8f D3 B5: an instance's client releases its radio's daemon
         for b in sorted(bb for bb in active_bands if bb in ALLOWED_BANDS):
-            others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != sid]
-            if not others and self.daemon_view(b).reachable:
+            others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if (d != sid and not rid) or (rid and (
+                (ri := instances.running_insts(self, d)) is None or any(getattr(i, "rid", "") == rid for i in ri if d != sid)))]
+            if not others and self.daemon_view(b, rid).reachable:
                 release.append(b)
         return daemon_sid, release
 
@@ -240,8 +241,7 @@ class StopOpsMixin:
                         if not _others and self.daemon_view(_b).reachable:
                             details.append(f"  [also stops] {_dsid} {_b} MHz: "
                                            "no other stack needs it")
-            return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).",
-                                details=details,
+            return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).", details=details,
                                 next_commands=[f"lhpc stack stop {instances.named(self, target, inst)} --yes"],   # this plan's
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
@@ -297,8 +297,7 @@ class StopOpsMixin:
         for _, comp in items:
             # Never stop the daemon while a dependent is still running / not verified stopped.
             if target_is_daemon and comp.id == self.DAEMON_ID and dep_block:
-                cr = CompResult(component=comp.id, stack=target, action="stop",
-                    outcome=Outcome.BLOCKED,
+                cr = CompResult(component=comp.id, stack=target, action="stop", outcome=Outcome.BLOCKED,
                     summary="not attempted — a dependent is still running or not verified stopped")
                 results.append(cr)
                 own_results.append(cr)
@@ -378,9 +377,10 @@ class StopOpsMixin:
         # the whole client stop non-success). The just-stopped client is excluded from that check,
         # so there is no recursive re-stop of it.
         if own_ok and not target_is_daemon and release_daemon and _target_is_stack:
-            daemon_sid, release = self._daemon_bands_to_release(_stk, sid, active_bands)
+            daemon_sid, release = self._daemon_bands_to_release(_stk, sid, active_bands, inst)
             for b in release:
-                dres = self.stop(daemon_sid, apply=True, band=b, _operator=False)
+                dres = self.stop(daemon_sid, apply=True, band=b, _operator=False,
+                                 inst=radio_start.daemon_inst(inst.rid) if getattr(inst, "rid", "") else None)
                 results.append(CompResult(component=self.DAEMON_ID, stack=daemon_sid, action="stop",
                     outcome=Outcome.STOPPED if dres.ok else Outcome.UNVERIFIED,
                     summary=(f"released {daemon_sid} {b} (no other stack needs it)" if dres.ok

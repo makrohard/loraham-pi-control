@@ -461,7 +461,7 @@ def test_client_stop_releases_daemon_only_when_unused(tmp_path, monkeypatch):
     voice = svc.stack("voice")
     # daemon reachable on 433
     class _V: reachable = True
-    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b: _V())
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b, rid="": _V())
     # no other running stack needs the daemon -> release the ACTUAL band it ran on (433)
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
     dsid, rel = svc._daemon_bands_to_release(voice, "voice", {"433"})
@@ -482,7 +482,7 @@ def test_component_scoped_stop_releases_nothing_shared(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     asked = []
     monkeypatch.setattr(ControllerService, "_daemon_bands_to_release",
-                        lambda self, stk, sid, bands: (asked.append(sid), ("daemon", []))[1])
+                        lambda self, stk, sid, bands, inst=None: (asked.append(sid), ("daemon", []))[1])
     monkeypatch.setattr(ControllerService, "_dep_stacks_to_release",
                         lambda self, stk, sid: (asked.append(sid), [])[1])
     assert svc.stop("loraham-kiss-serial", apply=True).ok      # component target
@@ -615,7 +615,7 @@ def test_stop_plan_discloses_dependency_and_daemon_collateral(tmp_path, monkeypa
     # must look PAST it and predict the daemon release too.
     monkeypatch.setattr(ControllerService, "stop_dependents",
                         lambda self, t, bands=None: ["kiss"])
-    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b: _V())
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b, rid="": _V())
     monkeypatch.setattr(ControllerService, "_operation_bands",
                         lambda self, t, band, radio, op: {"433"})
     res = svc.stop("graywolf", apply=False)

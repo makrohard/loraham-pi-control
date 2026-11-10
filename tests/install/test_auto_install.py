@@ -1946,7 +1946,7 @@ def test_tx_loop_cancels_between_bands(tmp_path, monkeypatch):
 
     class _V:
         ready = True
-    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b: _V())
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b, rid="": _V())
     calls = []
 
     class _R:

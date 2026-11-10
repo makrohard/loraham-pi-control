@@ -1144,7 +1144,7 @@ def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
         return TxTestResult(ok=True, band=band, txok_before=0, txok_after=1, detail="stub")
     monkeypatch.setattr(Lifecycle, "run_daemon_tx_test", _spy)
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "daemon_view", lambda self, b: _Ready())
+    monkeypatch.setattr(type(svc), "daemon_view", lambda self, b, rid="": _Ready())
 
     # every global an older box could legitimately hold that this version will not transmit under
     for bad in ("", "N0CALL", "XX0XXA-12", "TOOLONGCALL99", "xx"):
@@ -1309,7 +1309,7 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
                         lambda self, band, payload: (sent.append((band, payload)),
                                                      TxTestResult(True, band, 0, 1, "stub"))[1])
     svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "daemon_view", lambda self, b: _Ready())
+    monkeypatch.setattr(type(svc), "daemon_view", lambda self, b, rid="": _Ready())
     cfgmod.save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
     # a value an old version accepted that the current APRS rule rejects, persisted directly
