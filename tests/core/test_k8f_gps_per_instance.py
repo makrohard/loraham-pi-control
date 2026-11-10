@@ -140,3 +140,48 @@ def test_a_partly_told_running_set_never_hides_a_gps_reader(tmp_path, monkeypatc
     svc.build_snapshot = lambda fresh=False: snap
     assert svc.gps_consumers_running() == ["meshtastic"]
     assert not svc.set_gps(source="auto").ok
+
+
+def _token_only_r9(tmp_path, monkeypatch, rows, saves):
+    # a hand-started meshtastic on r9 known by its argv token only (no launch record), and r9 is no radio of the list
+    import radios_fixture
+    radios_fixture.write(tmp_path, rows)
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_gps(source="gpsd", host="127.0.0.1", port=2947).ok
+    for rid, on in saves:
+        assert svc.save_config_bundle("meshtastic", values={"use_gps": on},
+                                      inst=instances.parse_target(svc, f"meshtastic@{rid}", "start")[1]).ok
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: ["meshtastic@r9"] if sid == "meshtastic" else [])
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            st.run_state = RunState.RUNNING if cid == "meshtastic" else RunState.STOPPED
+    svc.build_snapshot = lambda fresh=False: snap
+    return svc
+
+
+@pytest.mark.parametrize("only_r2", [False, True])
+def test_an_unknown_running_instance_is_taken_as_a_gps_user(tmp_path, monkeypatch, only_r2):
+    # G1-K8F-S2-RE B1 (DEC-W384de): an incomplete running set is unknown, never the saved instances; red on b630fe89:
+    # with an empty list (no saved instance) or only r2 (use_gps off) the r9 reader was hidden and the source changed
+    import radios_fixture
+    svc = _token_only_r9(tmp_path, monkeypatch, (radios_fixture.R2_868,) if only_r2 else (),
+                         [("r2", "off")] if only_r2 else [])
+    assert svc.gps_consumers_running() == ["meshtastic"]
+    assert not svc.set_gps(source="auto").ok
+
+
+def test_an_unknown_running_holder_holds_the_receiver(tmp_path, monkeypatch):
+    # the holder side of the same rule: every saved meshtastic instance has use_gps off, the unknown r9 one holds the
+    # receiver a meshcom start would open; red on b630fe89 (the saved instances answered "no claim")
+    import radios_fixture
+
+    from lhpc.core import config as _cfg
+    from lhpc.core import gps as _gps
+    svc = _token_only_r9(tmp_path, monkeypatch, (radios_fixture.R1, radios_fixture.R2_868), [("r1", "off"), ("r2", "off")])
+    _cfg.save_gps(svc._paths, source="nmea", device="/dev/null", nmea_baud="9600")
+    svc._invalidate_config()
+    monkeypatch.setattr(_gps, "gpsd_owns_device", lambda d, h, po, timeout=3.0: (False, "free"))
+    target = instances.parse_target(svc, "meshcom@r1", "start")[1]
+    assert [b["holder_stack"] for b in _gps_blockers(svc, "meshcom", target)] == ["meshtastic"]

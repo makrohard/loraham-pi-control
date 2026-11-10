@@ -435,7 +435,8 @@ class LifecycleOpsMixin:
                 # moment Sideband's start lock was released. Turning that autostart off while
                 # Sideband ran did the same thing to an already-running reader.
                 if sid != target_stack:
-                    _owner_gps = next((k for i in instances.running_insts(self, sid) if (k := self._gps_device_claim(c.id, i))), "")
+                    _owner_gps = (self._gps_device_claim(c.id, on=True) if (ri := instances.running_insts(self, sid)) is None
+                                  else next((k for i in ri if (k := self._gps_device_claim(c.id, i))), ""))   # unknown: a GPS user
                     if _owner_gps and _owner_gps in claims:
                         add(sid, c.id, _owner_gps)
                 for r in c.resources:
@@ -709,8 +710,7 @@ class LifecycleOpsMixin:
         return self.operation_band(target, band)
 
     @contextlib.contextmanager
-    def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool,
-                                  ensured: bool = False, inst=None):
+    def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool, ensured: bool = False, inst=None):
         """The guards of an applied start: task admission → config stability → the lifecycle/
         resource bundle (LOCK ORDER), yielding `(op_band, order, radio)` resolved between them.
         ONE effective band for the WHOLE operation, resolved ONCE under admission and never

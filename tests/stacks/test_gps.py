@@ -2255,13 +2255,17 @@ def test_a_consumer_in_any_live_state_blocks_a_global_source_change(tmp_path, st
     assert svc.gps_settings()["source"] == "auto", "nothing may have been written"
 
 
-def test_a_gps_disabled_stack_does_not_block_a_source_change(tmp_path):
+def test_a_gps_disabled_stack_does_not_block_a_source_change(tmp_path, monkeypatch):
     """It takes no position from the global setting, so it is not affected by the change.
     Blocking on it would make the source unchangeable whenever MeshCom happened to be up."""
+    from lhpc.core import instances
     from lhpc.core.model import RunState
     svc = _svc(tmp_path)
     # off is a DELIBERATE choice now (the default is on) — saved before the stack is up.
     assert svc.save_config_bundle("meshcom", values={"use_gps": "off"}).ok
+    # K8f (DEC-W384de): the running instance is told (meshcom@r1, its record); one no instance claims is unknown and
+    # counts as a GPS user (tests/core/test_k8f_gps_per_instance.py)
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: ["meshcom@r1"] if sid == "meshcom" else [])
     _snap_with(svc, {"meshcom-qemu": RunState.RUNNING})          # running, use_gps off
     assert svc.gps_consumers_running() == []
     assert svc.set_gps(source="gpsd").ok

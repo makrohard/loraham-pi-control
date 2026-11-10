@@ -121,7 +121,7 @@ class GpsOpsMixin:
             # A stack running with its switch OFF takes no position from the global setting, so
             # it is not affected by a source change and must not block one. (Its FEED could not
             # be running in that state anyway — a live feed IS the stack using GPS.)
-            wanted = {s for s in wanted if any(self.gps_enabled_for(s, i) for i in instances.running_insts(self, s))}
+            wanted = {s for s in wanted if (ri := instances.running_insts(self, s)) is None or any(self.gps_enabled_for(s, i) for i in ri)}
         try:
             snap = snap if snap is not None else self.build_snapshot(fresh=True)
         except Exception:
@@ -869,7 +869,7 @@ class GpsOpsMixin:
             return set()
         return {cid} if self._gps_components_for(target, inst) else set()
 
-    def _gps_device_claim(self, target: str, inst=None) -> str:
+    def _gps_device_claim(self, target: str, inst=None, on: bool = False) -> str:
         """The exclusive resource key for the local receiver this stack would open, or "".
 
         Empty for every source that opens no local device (off / fixed / remote gpsd) and for
@@ -885,7 +885,7 @@ class GpsOpsMixin:
         if not self._gps_run_order_uses_position(raw):
             return ""
         try:
-            plan = self.gps_plan(target, inst)
+            plan = self.gps_plan("" if on else target, inst)     # on: the switch taken as on (an unknown holder)
         except (OSError, ValueError, AttributeError):
             return ""
         if not plan.enabled or not plan.claims_device or not plan.device_key:
