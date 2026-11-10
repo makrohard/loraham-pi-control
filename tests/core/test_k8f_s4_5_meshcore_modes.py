@@ -3,7 +3,7 @@ repeater. Status readiness takes each running instance's own-mode endpoints at i
 instance's own view, its stop verification and its Pages notes take its own mode, never the other radio's."""
 import radios_fixture
 
-from lhpc.core import instances
+from lhpc.core import instances, radios
 from lhpc.core import meshcore_mode as mm
 from lhpc.core.model import RunState
 from lhpc.core.outcomes import Outcome
@@ -107,3 +107,26 @@ def test_an_instances_stop_never_waits_for_another_instances_live_endpoint(tmp_p
     res = svc.stop("meshcore", apply=True, inst=r3)
     node = [r for r in res.results if r.component == mm.NODE_ID]
     assert node and node[0].outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED), (res.summary, res.details)
+
+
+def test_r1s_stop_in_chat_and_repeater_never_waits_for_r2s_live_companion(tmp_path):
+    # red on fd735b4a (G1-K8F-S4-5A-RE N1): r1's own endpoints are the template's 5000/8000, so its stop was read as a
+    # whole-node stop and waited for every saved instance's endpoints; r2's live Companion (5133) left r1's stop unverified
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "868", ce="ce0"),
+                                    radios.Radio("r2", "b", "uputronics", "868", ce="ce1")))
+    svc = ControllerService(system=FakeSystem(listeners=[Listener("ipv4", "127.0.0.1", 5133, 74)]).system,
+                            paths=Paths(runtime_root=tmp_path))
+    r1 = instances.parse_target(svc, "meshcore@r1", "start")[1]
+    assert r1 is not None and r1.rid == "r1"
+    assert svc.save_config_bundle("meshcore", values={"file_repeater_name": "RPT1"}, inst=r1).ok
+    assert svc.save_config_bundle("meshcore", values={"file_mode": "chat+repeater"}, inst=r1).ok
+    res = svc.stop("meshcore", apply=True, inst=r1)
+    node = [r for r in res.results if r.component == mm.NODE_ID]
+    assert node and node[0].outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED), (res.summary, res.details)
+
+
+def test_a_whole_node_stop_checks_every_saved_instances_own_endpoints(tmp_path):
+    # the other path (no instance: the whole component): r2's live Companion keeps the whole node's stop unverified
+    svc, _r2, _r3 = _box(tmp_path, listeners=[Listener("ipv4", "127.0.0.1", 5133, 75)])
+    cr = svc._lifecycle().stop(svc.stack("meshcore").component(mm.NODE_ID))
+    assert cr.outcome == Outcome.ENDPOINT_STILL_PRESENT, cr.summary

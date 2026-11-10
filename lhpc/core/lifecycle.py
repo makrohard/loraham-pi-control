@@ -1300,14 +1300,15 @@ class Lifecycle:
             waited += self.STOP_POLL_S
         return self._original_ceased(rec)
 
-    def _ready_endpoints_gone(self, comp: Component) -> tuple[bool, list[str]]:
+    def _ready_endpoints_gone(self, comp: Component, given: bool = False) -> tuple[bool, list[str]]:
         """Probe a component's `ready=true` endpoints after a stop. Returns
         (all_gone, lingering-evidence) — a readiness endpoint that is still present
-        after the owned process ceased means the stop is NOT verified."""
+        after the owned process ceased means the stop is NOT verified. `given`: an instance
+        stop's own endpoints, checked as they are; else the whole component's (expected_endpoints)."""
         from .probes.endpoints import tcp_endpoint_present
         from .probes.unixsock import probe_socket
         lingering = []
-        for e in self.expected_endpoints(comp):
+        for e in (comp.endpoints if given else self.expected_endpoints(comp)):
             if not getattr(e, "ready", False):
                 continue
             if e.kind == "tcp":
@@ -1326,7 +1327,7 @@ class Lifecycle:
                 lingering.append(e.address)
         return (not lingering), lingering
 
-    def _await_ready_endpoints_gone(self, comp: Component) -> tuple[bool, list[str]]:
+    def _await_ready_endpoints_gone(self, comp: Component, given: bool = False) -> tuple[bool, list[str]]:
         """`_ready_endpoints_gone` with a BOUNDED grace poll. A ready endpoint is often owned
         by a CHILD that exits a beat after the tracked process: e.g. the meshcom-qemu wrapper
         `run.sh` backgrounds `qemu-system-xtensa` in the same process group, so a `killpg`
@@ -1335,12 +1336,12 @@ class Lifecycle:
         race and spuriously report ENDPOINT_STILL_PRESENT. Polling up to `STOP_WAIT_S` lets a
         normal slow port release converge to STOPPED; a genuinely orphaned listener (e.g. a
         detached child outside the killed group) still survives the wait and is reported."""
-        gone, lingering = self._ready_endpoints_gone(comp)
+        gone, lingering = self._ready_endpoints_gone(comp, given)
         waited = 0.0
         while not gone and waited < self.STOP_ENDPOINT_GRACE_S:
             time.sleep(self.STOP_POLL_S)
             waited += self.STOP_POLL_S
-            gone, lingering = self._ready_endpoints_gone(comp)
+            gone, lingering = self._ready_endpoints_gone(comp, given)
         return gone, lingering
 
     def _cancel_post_runners(self, comp: Component, band: str | None) -> tuple[list, bool]:
@@ -1434,7 +1435,7 @@ class Lifecycle:
                     return result(Outcome.MANUAL_REQUIRED,
                                   "a matching process is running but not owned by LHPC — "
                                   f"stop it yourself: kill {' '.join(map(str, foreign))}")
-            gone, lingering = self._await_ready_endpoints_gone(ep_comp)
+            gone, lingering = self._await_ready_endpoints_gone(ep_comp, endpoints is not None)
             if not gone:
                 return result(Outcome.ENDPOINT_STILL_PRESENT,
                               "no owned process, but readiness endpoint(s) still present: "
@@ -1487,7 +1488,7 @@ class Lifecycle:
         # grace so a child that outlives the tracked wrapper by a beat (e.g. run.sh's
         # backgrounded qemu closing its 12323 listener) converges to STOPPED instead of a
         # spurious ENDPOINT_STILL_PRESENT.
-        gone, lingering = self._await_ready_endpoints_gone(ep_comp)
+        gone, lingering = self._await_ready_endpoints_gone(ep_comp, endpoints is not None)
         if not gone:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "

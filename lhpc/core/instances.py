@@ -666,8 +666,10 @@ def stop_scope(svc, sid: str, comp, inst, band: str) -> dict:
     if inst is None or not inst.rid:
         return {}
     rband = next((r.band for r in radios.load(svc._paths).radios if r.id == inst.rid), band)
+    from .meshcore_mode import NODE_ID
     return {"rid": inst.rid, "token": _token(svc, comp, inst, rband),                       # DEC-W384ac; S4-5: its mode
-            "endpoints": endpoints_for(_own_endpoints(svc, comp, inst), with_bases(svc, sid, inst))}
+            "endpoints": node_endpoints(svc, [inst]) if comp.id == NODE_ID else endpoints_for(comp.endpoints,
+                                                                                            with_bases(svc, sid, inst))}
 
 
 def node_endpoints(svc, insts) -> list:
@@ -681,16 +683,8 @@ def node_endpoints(svc, insts) -> list:
             based = with_bases(svc, _mm.STACK_ID, inst)
         except ConfigError:
             based = inst                           # an unreadable store: its static ports (status and stop never break)
-        out += endpoints_for(_own_endpoints(svc, comp, inst), based)
+        out += endpoints_for(_mm.expected_endpoints(comp, svc.meshcore_running_mode(inst)), based)
     return out
-
-
-def _own_endpoints(svc, comp, inst) -> list:
-    """`comp`'s declared endpoints that exist for instance `inst` (K8f S4-5, DEC-W409x): the MeshCore node's by the
-    instance's own running mode, every other component's as declared."""
-    from . import meshcore_mode as _mm
-    return (_mm.expected_endpoints(comp, svc.meshcore_running_mode(inst)) if comp.id == _mm.NODE_ID
-            else list(comp.endpoints))
 
 
 

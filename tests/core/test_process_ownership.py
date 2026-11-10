@@ -151,7 +151,7 @@ def test_ceased_process_with_lingering_endpoint_retains_record(tmp_path, reaper,
     p = _leader(reaper)
     life.record_launch(STACK, comp, p.pid, band="433")
     # Genuinely-persistent endpoint (survives the grace) -> patch the grace-poll decision.
-    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c, given=False: (False, ["127.0.0.1:9999"]))
     res = life.stop(comp)
     assert res.outcome.value == "endpoint_still_present" and not res.ok
     assert life.owned_records("loraham-daemon") != []      # evidence retained
@@ -162,7 +162,7 @@ def test_no_record_but_lingering_endpoint_is_not_already_stopped(tmp_path, monke
     comp = Component(id="x", name="x", kind=ComponentKind.SERVICE, readiness="endpoint",
                      endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),))
     life = _life(tmp_path)
-    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c, given=False: (False, ["127.0.0.1:9999"]))
     res = life.stop(comp)
     assert res.outcome.value == "endpoint_still_present" and not res.ok
 
@@ -183,7 +183,7 @@ def test_lingering_endpoint_that_closes_within_grace_converges_to_stopped(tmp_pa
     life.record_launch(STACK, comp, p.pid, band="433")
     calls = {"n": 0}
 
-    def _fake_gone(c):
+    def _fake_gone(c, given=False):
         calls["n"] += 1
         return (calls["n"] >= 3, [] if calls["n"] >= 3 else ["127.0.0.1:9999"])
 
@@ -207,7 +207,7 @@ def test_endpoint_grace_is_bounded(tmp_path, reaper, monkeypatch):
     life.record_launch(STACK, comp, p.pid, band="433")
     calls = {"n": 0}
 
-    def _always_present(c):
+    def _always_present(c, given=False):
         calls["n"] += 1
         return (False, ["127.0.0.1:9999"])
 

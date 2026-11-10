@@ -1857,8 +1857,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
-        lc.expected_endpoints = lambda comp, n=_meshcore_mode.NODE_ID: (self._meshcore_node_endpoints(saved=True) or [] if (
-            comp.id == n and comp.endpoints == self.stack(_meshcore_mode.STACK_ID).component(n).endpoints) else comp.endpoints)
+        lc.expected_endpoints = lambda comp: ((self._meshcore_node_endpoints(saved=True) or [])   # a whole node stop
+                                              if comp.id == _meshcore_mode.NODE_ID else comp.endpoints)
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
             # A provider may wrap the detached-spawn path (the one call that bypasses the
