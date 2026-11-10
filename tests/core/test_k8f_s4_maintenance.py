@@ -31,7 +31,8 @@ def test_a_failed_instance_restart_is_named_with_its_remedy(tmp_path, monkeypatc
     r = svc._graywolf_upstream_update_locked("graywolf", svc.stack("graywolf").main_component)
     assert calls == ["r1", "r2"] and not r.ok
     assert "  [restart] FAILED for graywolf@r2 — restart it by name" in r.details
-    assert "but the restart FAILED for graywolf@r2 — restart it by name." in r.summary
+    assert "  [restart] ok for graywolf@r1" in r.details
+    assert "but the restart FAILED for graywolf@r2 — see the restart notes." in r.summary
     assert r.next_commands == ["lhpc stack restart graywolf@r2 --yes"]
 
 
@@ -41,9 +42,18 @@ def test_a_running_instance_whose_radio_is_gone_is_not_attempted_and_gets_no_res
     svc, calls = _svc(tmp_path, monkeypatch, ["graywolf@r1", "graywolf@r9"])
     r = svc._graywolf_upstream_update_locked("graywolf", svc.stack("graywolf").main_component)
     assert calls == ["r1"] and not r.ok
+    assert "  [restart] ok for graywolf@r1" in r.details                  # G1-K8F-S4-4C-RE N3: the partial success
     assert "  [restart] not attempted for graywolf@r9: it names no radio now" in r.details
-    assert "FAILED" not in r.summary and "not restarted" in r.summary, r.summary
+    assert "FAILED" not in r.summary and "not every running instance was restarted" in r.summary, r.summary
     assert r.next_commands == ["lhpc status graywolf"]
+
+
+def test_a_failed_restart_beside_a_gone_radio_keeps_the_status_command(tmp_path, monkeypatch):
+    # G1-K8F-S4-4C-RE N3: r2 fails, r9's radio is gone. red on e458cbab: only the restart command, `lhpc status` dropped
+    svc, calls = _svc(tmp_path, monkeypatch, ["graywolf@r2", "graywolf@r9"], failing=("r2",))
+    r = svc._graywolf_upstream_update_locked("graywolf", svc.stack("graywolf").main_component)
+    assert calls == ["r2"] and not r.ok
+    assert r.next_commands == ["lhpc stack restart graywolf@r2 --yes", "lhpc status graywolf"]
 
 
 @pytest.mark.parametrize("keys", [[]])
@@ -53,5 +63,5 @@ def test_a_running_stack_without_a_told_instance_is_not_restarted_by_guess(tmp_p
     r = svc._graywolf_upstream_update_locked("graywolf", svc.stack("graywolf").main_component)
     assert calls == [] and not r.ok
     assert "  [restart] not attempted: a running process no instance names — restart it by name" in r.details
-    assert "FAILED" not in r.summary and "not restarted" in r.summary, r.summary     # G1-K8F-S4-4C N1 (B)
+    assert "FAILED" not in r.summary and "not every running instance was restarted" in r.summary, r.summary  # N1 (B)
     assert r.next_commands == ["lhpc status graywolf"]

@@ -961,7 +961,7 @@ def ensure_radio(svc, life, stack, comp, unit, label: str, lines: list, *, reque
     if params is None or refusal:
         lines.append(f"  [BLOCKED] daemon on {label}: {refusal}")
         return False
-    res = life.start(stack, comp, {**dict(svc.stack_config("daemon", inst=(di := daemon_inst(rid, band)))), **params}, band=band,
+    res = life.start(stack, comp, {**svc.stack_config("daemon", inst=(di := daemon_inst(rid, band))), **params}, band=band,
                      requested_target=requested_target, start_scope=start_scope, inst=di)
     base = f"start daemon {rid} --radio {band}"
     if not res.ok:

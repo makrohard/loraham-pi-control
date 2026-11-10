@@ -180,6 +180,9 @@ class BinaryOpsMixin:
         try:
             if not locked:
                 self._admit(_stack, "install", stack_id)
+                # DEC-W409u: config held for the whole run (the lock order of record, as an auto-install): no save
+                # lands between the password snapshot, its clear, the commit and a rollback
+                _stack.enter_context(self._config_stable(exclusive=True))
                 _srcs = self._binary_source_paths(stack_id)
                 if _srcs:
                     _stack.enter_context(
@@ -395,7 +398,7 @@ class BinaryOpsMixin:
                 # must be able to put the old install back completely.
                 bi.displace(self._paths, txn,
                             self._stale_paths(prev_files, files, owned_dirs))
-                # G1-K8F-S4-4C B2: a mesh password set meanwhile (any process: the store read is keyed by its stat)
+                # G1-K8F-S4-4C B2: a mesh password set meanwhile by hand (the store read is keyed by its stat)
                 if _hc is not None and (_set := list(self._mesh_passwords(stack_id, _hc.id))):
                     raise bi.BinaryInstallError(f"the mesh password of {', '.join(_set)} was set during the install: install again")
                 if not bi.commit(self._paths):        # THE commit point
@@ -432,8 +435,8 @@ class BinaryOpsMixin:
                         exc = bi.BinaryInstallError(
                             f"filesystem error during install ({type(_orig).__name__})")
                     exc.__cause__ = _orig
-                _detail = ([] if _rb_ok else
-                           [f"  the previous install could NOT be fully restored: {_rb_why}"])
+                _detail = ([f"  {_rb_why}"] if _rb_why else []) if _rb_ok else [
+                    f"  the previous install could NOT be fully restored: {_rb_why}"]
                 return ActionResult(False, f"Binary install of '{stack_id}' failed: {exc.message}",
                                     details=_detail, next_commands=[src_cmd],
                                     data={"binary_failed": True, "offer_source": True,
@@ -533,8 +536,8 @@ class BinaryOpsMixin:
         j, jstate = bi.read_journal(self._paths)
         if jstate == "absent":
             return True, ""
-        prev_auth = ((j or {}).get("auth") or {}).get("previous") or {}     # K8f S4-4c: {instance key: its value}
-        if jstate == "unsafe" or j is None or not isinstance(prev_auth, dict):   # G1-K8F-S4-4C B1: W269, refused
+        prev_auth = None if jstate == "unsafe" or j is None else (j.get("auth") or {}).get("previous") or {}
+        if not isinstance(prev_auth, dict):      # unreadable, or G1-K8F-S4-4C B1: an earlier version's (W269, refused)
             return False, ("an unreadable binary-install journal is present (an earlier version's: CHANGELOG 0.14.0 "
                            "upgrade steps) — resolve state/binary/install.journal.json by hand")
         stack_id = j.get("stack", "")
@@ -553,10 +556,13 @@ class BinaryOpsMixin:
             # cannot, the journal and backups MUST stay: dropping them would discard the only
             # evidence a later attempt could converge from.
             return False, "the failed install's binary receipt could not be removed"
-        bad = []                                 # G1-K8F-S4-4C B2/B3: every key tried, a radio gone refused by name
+        bad, kept = [], []                       # G1-K8F-S4-4C B2/B3: every key tried, a radio gone refused by name
+        _hc = self._hmac_component(stack_id) if prev_auth else None
         for k, v in prev_auth.items():
             if (i := instances.resolve(self, k)[1]) is None and "@" in k:
                 bad.append(f"{k} names no radio now")
+            elif _hc is not None and self._resolved_param_value(stack_id, "run", _hc.id, "password_file", "", i):
+                kept.append(k)                   # G1-K8F-S4-4C-RE B2: saved during the install, never overwritten
             elif not (r := self.save_config_bundle(stack_id, values={"password_file": v}, inst=i,
                                                    _allow_managed_params=frozenset({"password_file"}))).ok:
                 bad.append(f"{k}: {r.summary}")
@@ -565,7 +571,8 @@ class BinaryOpsMixin:
         if not bi.drop_txn(self._paths, j):
             return False, "the binary-install journal could not be cleared"
         self.invalidate_snapshot()
-        return True, ""
+        return True, (f"the mesh password of {', '.join(kept)} was changed during the install: its new value kept"
+                      if kept else "")
 
     def _mesh_passwords(self, stack_id: str, comp_id: str) -> dict:
         """{instance key: (its instance, its saved password_file)} of every saved instance with one (K8f S4-4c)."""

@@ -486,8 +486,7 @@ class MaintenanceOpsMixin:
                 who = ", ".join(f"{st.id}/{c.id} ({sel})" for st, c, sel, _, _ in members)
                 conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
                                  "resolve to incompatible source identities (selector/"
-                                 "remote/known-working) — resolve or re-confirm before "
-                                 "installing/updating")
+                                 "remote/known-working) — resolve or re-confirm before installing/updating")
                 continue
             st, comp, sel, _, resolved = members[0]
             if freeze and not resolved[0] and (sel != "pinned"
@@ -928,8 +927,7 @@ class MaintenanceOpsMixin:
             avail = " — refetch/reinstall to record it"
         if not _write(tag, ""):
             return ActionResult(False, f"observed upstream {tag} ({inst_txt}"
-                                       f"{avail}) but could NOT record it — the pill may not "
-                                       "persist across a reload",
+                                       f"{avail}) but could NOT record it — the pill may not persist across a reload",
                                 next_commands=[f"lhpc status {target}"])
         return ActionResult(True, f"upstream latest is {tag}; {inst_txt}{avail}",
                             next_commands=[f"lhpc status {target}"])
@@ -1015,24 +1013,31 @@ class MaintenanceOpsMixin:
                                          f"{version}"],
                                 next_commands=[f"lhpc build {target} --yes"])
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
-        restart_ok, bad, gone = True, [], []
+        restart_ok, ks, done, bad, gone = True, [], [], [], []
         # Re-sampled after a fetch of minutes: an operator stop meanwhile (no admission) stays.
         if was_running and not self.stack_running(target):
             notes.append("  [restart] skipped — the stack was stopped during the fetch (operator stop preserved)")
         elif was_running:           # K8f D3 B7: each running instance by its key; none told = refused by name, no guess
             ks = instances.running_keys(self, target)
-            for k in ks:                        # G1-K8F-S4-4C N1: a key whose radio is gone is not attempted
-                if (i := instances.resolve(self, k)[1]) is None or not self.restart(target, apply=True, inst=i).ok:
-                    (gone if i is None else bad).append(k)
+            for k in ks:            # G1-K8F-S4-4C N1, -RE N3: done / failed / its radio gone (not attempted)
+                i = instances.resolve(self, k)[1]
+                if i is None:
+                    gone.append(k)
+                elif self.restart(target, apply=True, inst=i).ok:
+                    done.append(k)
+                else:
+                    bad.append(k)
             restart_ok = bool(ks) and not bad and not gone
-            notes += [t for c, t in ((bad, f"  [restart] FAILED for {', '.join(bad)} — restart it by name"),
-                                     (gone, f"  [restart] not attempted for {', '.join(gone)}: it names no radio now"),
-                                     (not ks, "  [restart] not attempted: a running process no instance names — restart it by name"),
-                                     (restart_ok, "  [restart] ok")) if c]
+            parts = [(done, f"ok for {', '.join(done)}"), (bad, f"FAILED for {', '.join(bad)} — restart it by name"),
+                     (gone, f"not attempted for {', '.join(gone)}: it names no radio now"),
+                     (not ks, "not attempted: a running process no instance names — restart it by name")]
+            notes += ["  [restart] ok"] if restart_ok else [f"  [restart] {t}" for c, t in parts if c]
         # A failed restart leaves the station OFFLINE: not ok (non-zero exit, a console warning).
-        return ActionResult(restart_ok, f"'{target}' updated to {version}" + ("." if restart_ok else (
-            f" but the restart FAILED for {', '.join(bad)} — restart it by name." if bad else " but not restarted — see the restart note.")),
-            details=notes, next_commands=[f"lhpc stack restart {k} --yes" for k in bad] or [f"lhpc status {target}"])
+        return ActionResult(restart_ok, f"'{target}' updated to {version}" + ("." if restart_ok else
+                            f" but the restart FAILED for {', '.join(bad)} — see the restart notes." if bad else
+                            " but not every running instance was restarted — see the restart notes."),
+                            details=notes, next_commands=[f"lhpc stack restart {k} --yes" for k in bad]
+                            + ([f"lhpc status {target}"] if restart_ok or gone or not ks else []))
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -1226,8 +1231,7 @@ class MaintenanceOpsMixin:
                 # `no_dismiss`: the ✕ is suppressed — a truncation is resolved by the restart
                 # remedy, never dismissed (task_dismiss refuses it server-side as well).
                 out.append({**_base, "state": "failed", "no_dismiss": True,
-                            "hint": "run truncated — remainder restorable: "
-                                    "systemctl --user restart lhpc-boot-restore"})
+                            "hint": "run truncated — remainder restorable: systemctl --user restart lhpc-boot-restore"})
             elif _state in ("unsafe", "blocked"):
                 # `blocked` = LIVE integrity condition (unreadable current boot id): red like
                 # unsafe, never dismissible, the reason is the whole story.
@@ -1533,8 +1537,7 @@ class MaintenanceOpsMixin:
             live = False
         if live:
             return ActionResult(False, f"Refusing to {action}: MeshCore is running, and its plugin "
-                                       "manager runs from the venv this would rewrite — stop the "
-                                       "stack first.",
+                                       "manager runs from the venv this would rewrite — stop the stack first.",
                                 details=list(refusal.details),
                                 next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, "meshcore")],
                                 data=dict(refusal.data))
@@ -1665,8 +1668,7 @@ class MaintenanceOpsMixin:
                 return ActionResult(False, f"'{stack_id}' has no source composition to record "
                                     "(binary install or fetched release) — nothing to confirm.")
             if not self._manual_only_stack(stack):
-                return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — "
-                                    "start the stack first.")
+                return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — start the stack first.")
             # Manual-only stack: LHPC can never record a healthy start for it. Rest the
             # confirmation on the live probe (running NOW) + the ownership registry; the
             # handle-bound identity revalidation below is IDENTICAL to the candidate path.
@@ -1681,11 +1683,9 @@ class MaintenanceOpsMixin:
                 return ActionResult(True, f"'{stack_id}' is already recorded as known working.")
             if probe_basis:
                 return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not "
-                                    "running — start it from its dashboard card, then "
-                                    "re-confirm.")
+                                    "running — start it from its dashboard card, then re-confirm.")
             return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not running "
-                                "or its sources changed since that start — start it again "
-                                "and re-confirm.")
+                                "or its sources changed since that start — start it again and re-confirm.")
         # SOURCE-LOCKED identity revalidation: nothing may be recorded as known working while
         # any of its trees drifted from LHPC's registry truth. Runs under the same source-
         # operation boundary update/uninstall/clean use.
@@ -1740,8 +1740,7 @@ class MaintenanceOpsMixin:
                              "confirmed_at": time.time(),
                              "evidence": ("probe-verified running manual-start stack + "
                                           "operator confirmation" if probe_basis else
-                                          "healthy verified stack start + operator "
-                                          "confirmation")}
+                                          "healthy verified stack start + operator confirmation")}
                 ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
                                                validated)
         except AdmissionRefused as _adm:
@@ -1809,8 +1808,7 @@ class MaintenanceOpsMixin:
             return ActionResult(
                 False, f"'{target}' has no compiled lane — its release is fetched, not built from "
                        "a checkout.", data={"refusal": "no_compiled_lane"},
-                details=["  the pinned release: --source binary; the newest upstream release: "
-                         "--source stable"],
+                details=["  the pinned release: --source binary; the newest upstream release: --source stable"],
                 next_commands=[f"lhpc update {target} --source binary --yes",
                                f"lhpc update {target} --source stable --yes"])
         # ---- BINARY channel dispatch ----------------------------------------------------
@@ -1872,8 +1870,7 @@ class MaintenanceOpsMixin:
                 details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
                                f"{source} version from {c.source.remote or 'local checkout'}")
             return ActionResult(
-                True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) "
-                "from the remote.",
+                True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",
                 details=details,
                 next_commands=[f"lhpc update {target} --yes"] if items else [],
                 data={"changes": len(items)})
@@ -1914,8 +1911,7 @@ class MaintenanceOpsMixin:
                     owners = sorted({self._owner_stack_id(cid) for cid in running})
                     return ActionResult(
                         False, f"Refusing to update '{target or 'all'}': component(s) "
-                        "using the affected source(s) started while the update was "
-                        "acquiring its locks.",
+                        "using the affected source(s) started while the update was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {k} --yes" for o in owners for k in instances.stop_keys(self, o)])
                 # MeshCore's plugin manager runs out of the venv an update of its sources would
@@ -1932,8 +1928,7 @@ class MaintenanceOpsMixin:
                                                 for p in affected) if c})
                 if conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
-                                        "shared-source remote configuration is "
-                                        "inconsistent.",
+                                        "shared-source remote configuration is inconsistent.",
                                         details=[*(f"  {c}" for c in conflicts),
                                                  "  nothing to run here — the box's operator "
                                                  "sets one remote for every component of that "

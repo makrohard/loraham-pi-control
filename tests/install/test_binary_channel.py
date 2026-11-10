@@ -1822,34 +1822,94 @@ def test_every_journaled_password_is_tried_and_the_failures_are_named_together(t
     assert bi.read_journal(svc._paths)[1] == "valid"
 
 
-def test_a_mesh_password_set_during_the_install_fails_it_by_name(tmp_path, monkeypatch, stub_pipeline):
-    # G1-K8F-S4-4C B2 (the opposite transition): only r1 had a password when the journal opened; r2 gets one before the
-    # commit. red on d4543d26: the install committed with r2's --password-file under a firmware without a mesh password
+def _to_commit(svc, monkeypatch):
+    # the install runs through to its commit point: extract, publish, probes, provisioning and the receipt answered
     from types import SimpleNamespace
 
     from lhpc.core import binary_install as bi
-    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1",))
     spec = svc.binary_spec("meshcom")
     monkeypatch.setattr(bi, "validate_and_extract",
                         lambda *a, **k: sorted({*spec.proof_paths, *(next(iter(p)) for p in spec.probes)}))
     monkeypatch.setattr(bi, "publish", lambda *a, **k: None)
     monkeypatch.setattr(bi, "run_probe", lambda *a, **k: "")
     monkeypatch.setattr(type(svc), "_binary_provision", lambda self, *a, **k: ())
+    monkeypatch.setattr(type(svc), "_binary_installed_is", lambda self, *a: False)
     monkeypatch.setattr(bi, "build_receipt", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: True)
-    monkeypatch.setattr(type(svc), "_binary_installed_is", lambda self, *a: False)
     monkeypatch.setattr(brx, "receipt_state", lambda *a, **k: ("valid", None, ""))
 
-    other = _svc(tmp_path, monkeypatch=monkeypatch)                        # another process: its own config cache
 
-    def displace(*a, **k):
-        assert other.save_config_bundle("meshcom", values={"password_file": "config/secrets/mc_pw_r2"}, inst=ins["r2"],
-                                        _allow_managed_params=frozenset({"password_file"})).ok
-    monkeypatch.setattr(bi, "displace", displace)
+def _hand_edit(svc, inst, value):
+    # the bytes a hand edit writes to the instance's own file (password_file = value); the file is put back
+    from lhpc.core.config import _stack_config_path
+    path = _stack_config_path(svc._paths, "meshcom", inst)
+    before = path.read_bytes() if path.exists() else None
+    assert svc.save_config_bundle("meshcom", values={"password_file": value}, inst=inst,
+                                  _allow_managed_params=frozenset({"password_file"})).ok
+    edited = path.read_bytes()
+    path.unlink() if before is None else path.write_bytes(before)
+    return lambda: path.write_bytes(edited)
+
+
+def test_a_mesh_password_set_by_hand_during_the_install_fails_it_by_name(tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C B2 (the opposite transition): only r1 had a password when the journal opened; r2's file gets one by
+    # hand before the commit. red on d4543d26: the install committed with r2's --password-file under a firmware
+    # without a mesh password
+    from lhpc.core import binary_install as bi
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1",))
+    _to_commit(svc, monkeypatch)
+    edit = _hand_edit(svc, ins["r2"], "config/secrets/mc_pw_r2")
+    monkeypatch.setattr(bi, "displace", lambda *a, **k: edit())
     res = svc.binary_install("meshcom", apply=True)
     text = " ".join([res.summary, *res.details])
     assert not res.ok and "the mesh password of meshcom@r2 was set during the install: install again" in text, text
-    assert pw()["r1"] == "config/secrets/mc_pw_r1"                        # the journaled one restored
+    assert pw() == {"r1": "config/secrets/mc_pw_r1", "r2": "config/secrets/mc_pw_r2"}   # r1 restored, r2's kept
+
+
+def test_a_journaled_password_changed_during_the_install_is_never_overwritten_by_the_rollback(
+        tmp_path, monkeypatch, stub_pipeline):
+    # G1-K8F-S4-4C-RE B2: r1 had A, the install journaled and cleared it, then r1 got B by hand; the pre-commit check
+    # aborts. red on e458cbab: the rollback restored A over B, nothing said
+    from lhpc.core import binary_install as bi
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1",))
+    _to_commit(svc, monkeypatch)
+    edit = _hand_edit(svc, ins["r1"], "config/secrets/mc_pw_r1_new")
+    monkeypatch.setattr(bi, "displace", lambda *a, **k: edit())
+    res = svc.binary_install("meshcom", apply=True)
+    text = " ".join([res.summary, *res.details])
+    assert not res.ok and "the mesh password of meshcom@r1 was changed during the install: its new value kept" in text
+    assert pw()["r1"] == "config/secrets/mc_pw_r1_new"
+    assert bi.read_journal(svc._paths)[1] == "absent"                     # nothing left to restore
+
+
+def test_a_save_during_a_direct_binary_install_is_refused_busy_and_the_install_completes(
+        tmp_path, monkeypatch, stub_pipeline):
+    # DEC-W409u: the install holds the config lock for its whole run (as an auto-install). red on e458cbab: another
+    # process's save of r1's password landed between the clear and the commit
+    import threading
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core import config as cfgmod
+    svc, ins, pw = _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1",))
+    _to_commit(svc, monkeypatch)
+    real = cfgmod.config_lock
+    monkeypatch.setattr(cfgmod, "config_lock", lambda paths, timeout=None: real(paths, 0.3))  # the wait, short
+    other, seen = _svc(tmp_path, monkeypatch=monkeypatch), {}             # another process: its own lock descriptor
+
+    def save():
+        seen["r"] = other.save_config_bundle("meshcom", values={"password_file": "config/secrets/mc_pw_r1_new"},
+                                             inst=ins["r1"], _allow_managed_params=frozenset({"password_file"}))
+
+    def displace(*a, **k):                                                # its own thread, as another process
+        t = threading.Thread(target=save)
+        t.start()
+        t.join(10)
+        assert not t.is_alive()
+    monkeypatch.setattr(bi, "displace", displace)
+    res = svc.binary_install("meshcom", apply=True)
+    assert res.ok, " ".join([res.summary, *res.details])
+    assert not seen["r"].ok and "busy" in " ".join([seen["r"].summary, *seen["r"].details]).lower(), seen["r"]
+    assert pw()["r1"] == ""                                               # cleared by the install; the save never landed
 
 
 def test_a_binary_install_journal_of_an_earlier_version_is_refused_by_name(tmp_path, monkeypatch, stub_pipeline):
