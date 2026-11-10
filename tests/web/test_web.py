@@ -2599,7 +2599,7 @@ def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_p
     assert c.post("/stacks/graywolf/mode", data={"_csrf": tok, "mode": "chat"}).status_code == 404
     svc = ControllerService(paths=Paths(runtime_root=tmp_path))
     # a repeater mode without a saved repeater name is refused (the save-time rule), mode stays
-    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater"})
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater", "radio": "r2"})   # K8f: the form's radio
     assert r.status_code in (302, 303) and "#stack-mode-meshcore" in r.headers["Location"]
     assert svc.meshcore_mode() == "chat"
     # C08: the refusal names where the name is saved (this form has no name field), and the
@@ -2613,7 +2613,7 @@ def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_p
     text = refused.summary + " " + " ".join(refused.details)
     assert not refused.ok and "`lhpc config meshcore repeater_name <name>`" in text
     assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
-    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater"})
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater", "radio": "r2"})
     assert r.status_code in (302, 303)
     svc._invalidate_config()
     assert svc.meshcore_mode() == "chat+repeater"
