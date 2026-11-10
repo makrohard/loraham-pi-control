@@ -19,7 +19,6 @@
     "forwardPorts": [
         8770,
         8080,
-        5000,
         18083,
         9080,
         9443,
@@ -27,7 +26,12 @@
         8445,
         8446,
         8447,
-        8788
+        8448,
+        8449,
+        8450,
+        8451,
+        5133,
+        8921
     ],
     "portsAttributes": {
         "8770": {
@@ -38,10 +42,6 @@
         },
         "8080": {
             "label": "graywolf web UI",
-            "visibility": "private"
-        },
-        "5000": {
-            "label": "meshcore",
             "visibility": "private"
         },
         "18083": {
@@ -68,6 +68,34 @@
         },
         "8446": {
             "label": "stackweb proxy 3",
+            "visibility": "private"
+        },
+        "8447": {
+            "label": "stackweb proxy 4",
+            "visibility": "private"
+        },
+        "8448": {
+            "label": "stackweb proxy 5 (r2)",
+            "visibility": "private"
+        },
+        "8449": {
+            "label": "stackweb proxy 6 (r2)",
+            "visibility": "private"
+        },
+        "8450": {
+            "label": "stackweb proxy 7 (r2)",
+            "visibility": "private"
+        },
+        "8451": {
+            "label": "stackweb proxy 8 (r2)",
+            "visibility": "private"
+        },
+        "5133": {
+            "label": "meshcore@r2 (868, the lab list's r2: 5000 + 133)",
+            "visibility": "private"
+        },
+        "8921": {
+            "label": "meshcore@r2 web UI (8788 + 133)",
             "visibility": "private"
         }
     },
