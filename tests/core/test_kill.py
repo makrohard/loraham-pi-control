@@ -794,3 +794,17 @@ def test_the_admission_wait_is_its_deadline_on_the_injected_clock(tmp_path, cloc
     monkeypatch.setattr(reslock, "operation_lock", _busy(lambda: {"pid": os.getpid()}))
     res = kill.kill(svc, "kiss", apply=True)
     assert not res.ok and "not freed in time" in res.summary and clock.t < svc._SELF_LOCK_WAIT_S + 0.05
+
+
+@pytest.mark.parametrize("running, says", [
+    (["kiss@r1", "kiss@r3"], "Cannot kill kiss@433: a band is no instance; kiss runs on r1, r3: use kiss@r1 or kiss@r3."),
+    ([], "Cannot kill kiss@433: a band is no instance, and kiss is not running.")])
+def test_w405_a_band_is_no_kill_target_and_the_refusal_names_the_running_instances(tmp_path, monkeypatch, running, says):
+    # W405 (his yes): `lhpc kill <stack>@<band>` is gone; the refusal names what runs. red on a5a047ce:
+    # "Cannot kill kiss@433: kiss@433: 433 is not a radio of the hardware list."
+    from lhpc.core import instances
+    from lhpc.core import kill as killmod
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: running if sid == "kiss" else [])
+    res = killmod.kill(svc, "kiss@433", apply=True)
+    assert (res.ok, res.summary) == (False, says)

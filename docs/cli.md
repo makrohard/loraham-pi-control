@@ -332,8 +332,9 @@ restarting it (any live retry runner is cancelled first). Use it when `lhpc stat
 slow QEMU boot.
 
 ### kill
-`lhpc kill <stack>[@<rid>] [<component>] [--yes]` — the hard stop of one stack copy (`<stack>` is slot 0, `<stack>@<rid>` a listed copy), or of one
-component of it, when a stop failed or hangs. The plan names the processes. Each gets SIGTERM, and
+`lhpc kill <stack>@<rid> [<component>] [--yes]` — the hard stop of one instance, the stack on radio rN, or of one
+component of it, when a stop failed or hangs. A band (`lhpc kill kiss@433`) is no instance: the refusal names the
+instances that run (`use kiss@r1 or kiss@r3`). The plan names the processes. Each gets SIGTERM, and
 SIGKILL after 5 s if it is still running; unsaved data in them is lost. The targets are the
 processes whose argv names this instance, including one you started by hand, and those LHPC's
 ownership records name. A component kill leaves the rest of the stack running, and a client stack's

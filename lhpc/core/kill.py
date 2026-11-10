@@ -29,10 +29,15 @@ def _parse(svc, target: str, component: str):
     per radio). `<stack>` is the whole stack (copy None; the CLI refuses it first, W323, and the console follows);
     `<stack>@<rid>` is parse_target's instance on that radio, for the daemon that radio's own. A disabled radio's is
     still addressed."""
-    sid, at, _rid = target.partition("@")
+    sid, at, rid = target.partition("@")
     stk = svc.stack(sid)
     if stk is None:
         return None, None, [], f"Unknown stack '{sid}' (kill takes a stack id)."
+    if rid in ("433", "868"):                            # W405 (his yes): `<stack>@<band>` is no kill form
+        run = instances.running_keys(svc, sid)
+        return None, None, [], (f"Cannot kill {target}: a band is no instance; {sid} runs on "
+                                f"{', '.join(k.partition('@')[2] for k in run)}: use {' or '.join(run)}." if run else
+                                f"Cannot kill {target}: a band is no instance, and {sid} is not running.")
     copy, why = (instances.parse_target(svc, target, "kill")[1::2]) if at else (None, "")
     if at and copy is None:
         return None, None, [], f"Cannot kill {target}: {why}."
