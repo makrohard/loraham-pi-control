@@ -70,6 +70,8 @@
 
 Upgrading from 0.13.x
 
+- The box says "the old [radio] configuration is present and nothing was converted": run `lhpc hardware <setup>`
+  to list your radios (an existing list is kept), then re-enter settings and pages.
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
 - The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
