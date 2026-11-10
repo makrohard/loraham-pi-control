@@ -229,7 +229,10 @@ class RflogOpsMixin:
     def set_rflog(self, stack_id: str, value) -> ActionResult:
         """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge), on every instance
         of it (K6, DEC-W384k: each its own). Graywolf's page deliberately writes the kiss store."""
-        e = _rflog.entry(stack_id)
+        e, sid = _rflog.entry(stack_id), stack_id.partition("@")[0]
+        if e is None and sid != stack_id and _rflog.entry(sid) is not None:   # DEC-W384ci: `<stack>@<rid>`
+            return ActionResult(False, f"Cannot switch the RF log of {stack_id}: the switch is {sid}'s, one for all its "
+                                       f"radios (switch '{sid}').")
         if e is None or self.stack(e.owner) is None:
             return ActionResult(False, f"'{stack_id}' has no RF log.")
         v = str(value or "").strip().lower()

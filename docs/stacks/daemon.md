@@ -41,7 +41,7 @@ this release.
   it to a stick, and the page offers the one-time USB setup as one command
   ([USB radios](../usb-radios.md)).
 - **Two radios on one band:** two radios on one band each run their own daemon: address one by its radio id
-  (`lhpc stack stop daemon --radio rN`). A client starts its own radio's daemon; a stop of `daemon@rN` stops that radio's
+  (`lhpc stack stop daemon@rN`). A client starts its own radio's daemon; a stop of `daemon@rN` stops that radio's
   clients first, then its daemon.
 - x86 hosts: not yet verified.
 

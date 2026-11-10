@@ -11,7 +11,7 @@
 - USB radios (Meshstick and PINE64 adapter at 868 MHz, CH341A + RFM98PW stick at 433 MHz): Hardware adds and binds
   a stick, offers the USB setup as one command; a start is refused by name when the stick or its access is missing.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
-  radio id (`lhpc stack stop daemon --radio rN`).
+  radio id (`lhpc stack stop daemon@rN`).
 - LoRaHAM daemon v1.4.0 (3ffee009, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per radio with `lhpc hardware --ocp <rid>`.
 - Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 98b656bf).

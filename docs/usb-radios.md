@@ -41,7 +41,7 @@ guesses a stick's model from the id or from its serial:
 On *Add Hardware* (`/hardware/add`) each listed stick shows its serial (or, without one, its port). **Add**
 creates a radio for the chosen model on that stick; **Re-bind** on a radio's detail page points that radio at a
 stick. A start is refused by name when the radio's stick or the access to it is missing. Two radios on one band
-each run their own daemon: address one by its radio id (`lhpc stack stop daemon --radio rN`).
+each run their own daemon: address one by its radio id (`lhpc stack stop daemon@rN`).
 
 ## Host access
 

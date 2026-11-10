@@ -43,7 +43,7 @@
     {% endif %}
     <p><a class="button" href="{{ url_for('hardware_add_page') }}" id="hw-add">Add Hardware</a></p>
     <p class="muted" id="hardware-shared-band">Two radios on one band each run their own daemon: address one by its radio id
-      (<code>lhpc stack stop daemon --radio rN</code>).</p>
+      (<code>lhpc stack stop daemon@rN</code>).</p>
     {% if view.copybox %}
       <section class="cfgsec" id="usb-setup">
         <h3>USB setup</h3>

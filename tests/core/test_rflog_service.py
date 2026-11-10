@@ -573,3 +573,16 @@ def test_g1_k6c_re_3_the_stack_wide_switch_skips_a_stack_without_a_radio(tmp_pat
     assert r.ok and "meshcom: RF log not saved: no radio for 'meshcom' in the hardware list" in r.details
     assert _store(svc, "kiss", "r3")["rf_log"] == "off" and "rf_log" not in _store(svc, "meshcom")
     assert svc.rflog_logging_state() == "off"                        # meshcom is left out, not "mixed"
+
+
+def test_dec_w384ci_an_instance_form_names_the_stacks_one_switch(tmp_path):
+    # DEC-W384ci: `daemon@r1` is no switch of its own; the refusal says whose switch it is, nothing is saved.
+    # red on a5a047ce: "'daemon@r1' has no RF log."
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    res = svc.set_rflog("daemon@r1", "off")
+    assert (res.ok, res.summary) == (False, "Cannot switch the RF log of daemon@r1: the switch is daemon's, one for all "
+                                            "its radios (switch 'daemon').")
+    assert not (tmp_path / "config" / "stacks").exists() or not list((tmp_path / "config" / "stacks").iterdir())
