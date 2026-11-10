@@ -231,7 +231,7 @@ class RflogOpsMixin:
         of it (K6, DEC-W384k: each its own). Graywolf's page deliberately writes the kiss store."""
         e = _rflog.entry(stack_id)
         if e is None or self.stack(e.owner) is None:
-            return ActionResult(False, _rflog.no_switch(stack_id))       # DEC-W384ci: an instance form names whose
+            return ActionResult(False, _rflog.no_switch(stack_id, self.stack))       # DEC-W384ci: an instance form names whose
         v = str(value or "").strip().lower()
         if v not in (_rflog.ON, _rflog.OFF):
             return ActionResult(False, "RF log: the switch is 'on' or 'off'.")

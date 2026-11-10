@@ -401,10 +401,10 @@ def switcher(svc, job: str, rid: str = "") -> dict:
     return {"radio": shown, "radios": radios, "stacks": stacks}
 
 
-def no_switch(target: str) -> str:
+def no_switch(target: str, stack) -> str:
     """Why `target` has no RF log switch of its own (DEC-W384ci): a `<stack>@<rid>` of a stack with one is that stack's
-    one switch for all its radios; anything else has no RF log."""
+    one switch for all its radios, while `stack` (the service's lookup) knows its owner; anything else has no RF log."""
     sid = target.partition("@")[0]
-    if sid != target and entry(sid) is not None:
+    if sid != target and (e := entry(sid)) is not None and stack(e.owner) is not None:     # G1-K8F-S1 N1
         return f"Cannot switch the RF log of {target}: the switch is {sid}'s, one for all its radios (switch '{sid}')."
     return f"'{target}' has no RF log."

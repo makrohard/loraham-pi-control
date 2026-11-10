@@ -586,3 +586,16 @@ def test_dec_w384ci_an_instance_form_names_the_stacks_one_switch(tmp_path):
     assert (res.ok, res.summary) == (False, "Cannot switch the RF log of daemon@r1: the switch is daemon's, one for all "
                                             "its radios (switch 'daemon').")
     assert not (tmp_path / "config" / "stacks").exists() or not list((tmp_path / "config" / "stacks").iterdir())
+
+
+def test_g1_k8f_s1_n1_an_instance_form_names_no_switch_whose_owner_is_absent(tmp_path, monkeypatch):
+    # G1-K8F-S1 N1: without the owner stack, `switch 'daemon'` fails too, so the refusal names no switch.
+    # red on 29b437d7: "... the switch is daemon's, one for all its radios (switch 'daemon')."
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    real = svc.stack
+    monkeypatch.setattr(svc, "stack", lambda sid: None if sid == "daemon" else real(sid))
+    assert svc.set_rflog("daemon@r1", "off").summary == "'daemon@r1' has no RF log."
+    assert svc.set_rflog("daemon", "off").summary == "'daemon' has no RF log."
