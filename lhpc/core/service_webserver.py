@@ -592,10 +592,11 @@ class WebserverOpsMixin:
         def served(mode: str) -> bool:
             if page.component_id in _mm.CLIENT_IDS:
                 return _mm.clients_available(mode)              # the Web UI needs the Companion
-            inst = commands.Instance(page.page_id.partition("@")[2])     # K4b: the page's instance's own addresses
             return any(e.address == page.address for e in instances.endpoints_for(_mm.expected_endpoints(comp, mode), inst))
 
-        mode = self.meshcore_mode_display()
+        rid = page.page_id.partition("@")[2]                     # K4b: the page's instance's own addresses
+        inst = (instances.copy_of(self, _mm.STACK_ID, rid)[0] or commands.Instance(rid)) if rid else None
+        mode = self.meshcore_mode_display(inst)                  # K8f S4-5: the page's instance's own mode
         if not mode or served(mode):
             return ""
         modes = " and ".join(m for m in _mm.MODES if served(m))

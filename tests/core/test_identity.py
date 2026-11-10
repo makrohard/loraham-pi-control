@@ -858,19 +858,6 @@ def test_a_fixed_band_client_never_scopes_the_daemon_to_another_band(tmp_path):
     assert svc._daemon_needs(order, svc.operation_band("meshcore", "433"))[0] == "868"
 
 
-def test_identity_policy_reads_component_qualified_bundle_keys(tmp_path):
-    # REVIEW-FOUND: a DEPENDENCY bundle addresses params component-qualified, while the policy
-    # looked up only the bare name — so the dependency identity guard was a silent no-op. Latent
-    # today (no dependency declares an identity), but a guard must do what its comment claims.
-    svc = _svc(tmp_path)
-    bare = svc.identity_refusal_for_values("meshtastic", "", {"node_name": ""})
-    qual = svc.identity_refusal_for_values("meshtastic", "", {"meshtastic.node_name": ""})
-    assert bare is not None and qual is not None            # BOTH shapes are seen
-    assert qual.data.get("enforce_fields") == ["c_node_name"]      # the Settings field
-    fq = svc.identity_refusal_for_values("meshcore", "", {"file_meshcore-node.node_name": ""})
-    assert fq is not None                                   # ...including the file-kind shape
-
-
 def test_daemon_operation_band_reaches_the_radio_sink(tmp_path, monkeypatch):
     # AUDIT-FOUND: `operation_band("daemon","433")` was correct, but `_start_impl_inner` flattened
     # it again through `_config_band` — and the daemon has no per-band store, so the terminal sink

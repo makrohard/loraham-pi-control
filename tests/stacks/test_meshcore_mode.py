@@ -75,7 +75,7 @@ def test_start_readiness_and_status_agree_per_mode(tmp_path, mode, live, ready):
     _set_mode(svc, mode)
     node = _node(svc)
     # Ongoing status: the prober is handed the same mode the service computes.
-    prober = StatusProber(svc._system, svc._paths, meshcore_mode=svc.meshcore_mode())
+    prober = StatusProber(svc._system, svc._paths, meshcore_modes=(svc.meshcore_mode(),))
     _eps, all_ready, has_expected = prober._assess_endpoints(node)
     assert has_expected and all_ready is ready
     # Start readiness selects the same endpoints (an absent endpoint would make this poll for
@@ -462,7 +462,7 @@ def test_the_running_mode_is_read_once_per_request_and_again_after_a_render(tmp_
     reads = []
     orig = ControllerService.meshcore_running_mode
     monkeypatch.setattr(ControllerService, "meshcore_running_mode",
-                        lambda self: (reads.append(1), orig(self))[1])
+                        lambda self, inst=None: (reads.append(1), orig(self, inst))[1])
     node = _node(svc)
     svc.invalidate_snapshot()                                     # a request starts
     ports = [[mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] for _ in range(5)]

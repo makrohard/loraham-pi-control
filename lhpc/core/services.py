@@ -563,7 +563,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover,
                             owned_running=self._lifecycle().owned_running(), sources=sources,
                             cache=None if fresh else source_cache.SHARED,
-                            meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
+                            meshcore_modes=self._meshcore_modes()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._overlay_licensed_tx_enabled(snap)
@@ -1849,12 +1849,16 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # ---- lifecycle operations: build/start/stop/logs/test ----------------
 
+    def _meshcore_modes(self) -> tuple:
+        """The running mode of each saved MeshCore instance, once per request (K8f S4-5, DEC-W409x: L, every one's)."""
+        return self._request_memo(("meshcore-running-modes",), lambda: tuple(dict.fromkeys(self.meshcore_running_mode(
+            i) for i in (instances.saved_insts(self, _meshcore_mode.STACK_ID) if self.stack(_meshcore_mode.STACK_ID)
+                         else ()))) or (_meshcore_mode.DEFAULT_MODE,))
+
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
-        # Stop verification probes the endpoints the RUNNING launch opened (MeshCore: by mode).
-        # read when a stop verifies, not here: the mode's instance comes from the records this lifecycle reads
-        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(
-            comp, self._request_memo(("meshcore-running-mode",), self.meshcore_running_mode))
+        # A stop verifies the RUNNING launch's endpoints (MeshCore by mode: an instance's own via stop_scope, else any's)
+        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints_any(comp, self._meshcore_modes())
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
             # A provider may wrap the detached-spawn path (the one call that bypasses the

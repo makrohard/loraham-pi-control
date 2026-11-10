@@ -39,6 +39,8 @@
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc kill <stack>@<band>` is gone: name the instance (`lhpc kill kiss@r1`); a band form is refused with the running ones.
 - The MeshCore Mode switch saves the shown radio's mode; with a hardware list, a request without a radio is refused, naming the radios.
+- MeshCore on several radios: status, a stop's check and the Pages mode notes take each radio's own mode, not one
+  radio's for all.
 - After an update, each running instance is restarted by name; a running process no instance names, or an instance
   whose radio is gone, is not restarted (the update names it).
 - A binary install holds the configuration for its whole run, as an auto-install does: a save or start meanwhile is

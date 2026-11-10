@@ -176,7 +176,6 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "hmac_managed_param_hint": "read-only",
     "hmac_status": "read-only",
     "hw_setups": "read-only",
-    "identity_refusal_for_values": "read-only",
     "identity_resolution": "read-only",
     "inheritable_global": "read-only",
     "install_blocker": "read-only",

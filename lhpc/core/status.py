@@ -67,16 +67,17 @@ class StatusProber:
 
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
-                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True,
+                 meshcore_modes: tuple = (_meshcore_mode.DEFAULT_MODE,), sources: bool = True,
                  cache=None, owned_running: dict | None = None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
         self._paths = paths
         self._profiles = profiles or {}
-        # The MeshCore stack's effective mode (services.meshcore_mode()): decides which of the
-        # node's DECLARED endpoints are expected, so ongoing status and start readiness agree.
-        self._meshcore_mode = _meshcore_mode.normalize(meshcore_mode)
+        # The running modes of the MeshCore instances (services._meshcore_modes, K8f S4-5): a node endpoint is
+        # expected when any instance's mode has it; each instance's own view filters by its own mode
+        # (instances.endpoint_statuses), so ongoing status and start readiness agree.
+        self._meshcore_modes = tuple(_meshcore_mode.normalize(m) for m in meshcore_modes)
         # {component_id: BinaryReceipt} for components currently provided by a verified
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
@@ -402,7 +403,7 @@ class StatusProber:
     ) -> tuple[list[EndpointObservation], bool, bool, bool]:
         observations: list[EndpointObservation] = []
         expected_present: list[bool] = []
-        for spec in _radio_start.radio_endpoints(self._paths, _meshcore_mode.expected_endpoints(comp, self._meshcore_mode)):
+        for spec in _radio_start.radio_endpoints(self._paths, _meshcore_mode.expected_endpoints_any(comp, self._meshcore_modes)):
             obs = EndpointObservation(spec=spec)
             if spec.kind == "tcp":
                 # Use the ONE host/family-aware matcher (not a port-only check): a listener

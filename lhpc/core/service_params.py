@@ -1784,46 +1784,6 @@ class ParamsConfigMixin:
         key = self._param_key(target, kind, rec["comp"], rec["name"])
         return key if kind == "run" else f"file_{key}"
 
-    def identity_refusal_for_values(self, target: str, band: str, values: dict,
-                                    op: str = "save", inst=None):
-        """THE identity contract for submitted values, in one place, for every writer — the
-        Start/Restart panel (Apply and Save), the launch, and the in-transaction recheck.
-
-        A value is judged only if the bundle actually carries it. The manifest validator alone
-        accepts the generic defaults; and a blank means "inherit" ONLY for a LICENSED
-        field with a global it can actually inherit — for an unlicensed node identity, which
-        never inherits, or a licensed one with no usable global, a blank means MISSING, and
-        storing it would delete the stack's only identity and refuse the very next launch."""
-        bad: list[dict] = []
-        for rec in self._identity_fields(target, inst):           # K8f S4-2: the saved instance's own (its mode)
-            # A bundle addresses a param bare (unique in its stack) or component-qualified; a
-            # DEPENDENCY bundle is ALWAYS qualified (seeking only the bare name
-            # made this a silent no-op there).
-            key = next((k for k in (self._identity_bundle_key(target, rec),
-                                    ("" if rec["kind"] == "run" else "file_")
-                                    + f"{rec['comp']}.{rec['name']}") if k in values), "")
-            if not key:
-                continue
-            val = str(values.get(key) or "").strip()
-            inherited, why = ("", "") if val else self.inheritable_global(rec)
-            if (val and self._is_identity_placeholder(val)) or (
-                    not val and (rec["enforce"] != "licensed" or not inherited)):
-                bad.append({**rec, "_v": bool(val), "_why": why,
-                            "_lic": not val and rec["enforce"] == "licensed"})
-        if not bad:
-            return None
-        return ActionResult(
-            False, f"Cannot {op} '{target}': "
-            + "; ".join(
-                f"{r['label']} is a placeholder, not an identity" if r["_v"]
-                else ((f"{r['label']} cannot be cleared — {r['_why']}" if r.get("_why")
-                       else f"{r['label']} cannot be cleared — there is no global operator "
-                            "callsign to inherit") if r.get("_lic")
-                      else f"{r['label']} is required — a local node identity, never inherited")
-                for r in bad),
-            data={"enforce_fields": [r["field"] for r in bad]},
-            next_commands=self._identity_config_hints(target, band, inst))
-
     def _identity_config_hints(self, target: str, band: str = "", inst=None) -> list[str]:
         """The copy-pasteable remedies for a start refused over missing/invalid identities:
         ONE `lhpc config <stack> <field> <value>` per problem field — a fresh Meshtastic
@@ -1860,8 +1820,8 @@ class ParamsConfigMixin:
     def inheritable_global(self, rec: dict, candidate: str | None = None) -> tuple:
         """`(value, reason)`: the global operator callsign AS THIS FIELD WOULD INHERIT IT, or
         `("", why)` when there is no global or this stack's protocol cannot carry it. THE single
-        accept-decision, shared by `identity_resolution` (what a stack effectively uses) and
-        `identity_refusal_for_values` (whether clearing a local callsign is safe) —
+        accept-decision of `identity_resolution` (what a stack effectively uses) and the
+        save's inherited-value check —
         the Web pre-gate refused a licensed clear while the service persisted it first, so the
         same submission had two different persistence semantics. The reason is returned rather
         than swallowed so the caller can word its remedy without recomputing the failure."""

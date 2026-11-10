@@ -97,6 +97,13 @@ def expected_endpoints(comp, mode) -> list:
     return out
 
 
+def expected_endpoints_any(comp, modes) -> list:
+    """The endpoints of `comp` that exist in ANY of `modes` (K8f S4-5, DEC-W409x: a stack-wide view of several
+    MeshCore instances, each its own mode); an instance's own view filters by its own mode (expected_endpoints)."""
+    sets = [expected_endpoints(comp, m) for m in modes or (DEFAULT_MODE,)]
+    return [e for e in getattr(comp, "endpoints", ()) or () if any(e in s for s in sets)]
+
+
 def _node_live(svc, inst) -> bool:
     """The instance's node process runs, by its own token or record; without an instance (a template caller): by the
     snapshot."""
