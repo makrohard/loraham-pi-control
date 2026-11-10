@@ -185,8 +185,8 @@ repositories.
     at boot only after the older release's `lhpc self-update --repair-integration`.
     0.12.2, by the maintainer's decision, changed a refusal and added a selector as a patch: the
     start refusal for a band the daemon holds names the narrower, correct remedy, and
-    `lhpc stack stop daemon` takes `--band` (that remedy; daemon only); no format or default
-    changes.
+    `lhpc stack stop daemon` took a band selector (that remedy; daemon only; 0.14.0 replaced it with
+    `daemon@rN`); no format or default changes.
   - **Changing a unit** takes two releases, so a box restores at boot after an update and after a
     downgrade between them. First a release that only ACCEPTS the new bytes: edits in
     `_COMPATIBLE_EDITS` (`lhpc/core/updater_units.py`), pinned in `unit-templates-compatible.sha256`;
@@ -303,7 +303,7 @@ build step and its `build_marker` name, plus a new sha256 in the fetch script's 
 
 **openHop moves** (the meshcore core and repeater): the node's stop relies on upstream's plugin-manager SIGTERM
 handler ending the loop, running `stop_all()` and returning 0 (`meshcore_host/plugin_manager.py`, `SELF_EXIT_S`).
-After a move, `lhpc stack restart meshcore` on a box must log "Plugin manager stopped" (exit 0, marker cleared);
+After a move, `lhpc stack restart meshcore@<rid>` on a box must log "Plugin manager stopped" (exit 0, marker cleared);
 "Plugin manager exited (code -15)" means the handler changed, and plugins stay blocked until a reboot.
 
 **Two pins are not commits**, and the bot moves both: the Meshtastic web client (meshtastic/web

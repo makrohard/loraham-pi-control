@@ -352,9 +352,9 @@ lhpc build reticulum
 ```
 
 ```bash
-lhpc stack start <stack>
+lhpc stack start <stack>@<rid>
 lhpc status
-lhpc stack stop <stack>
+lhpc stack stop <stack>@<rid>
 ```
 </details>
 

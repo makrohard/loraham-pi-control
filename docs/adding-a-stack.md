@@ -76,9 +76,9 @@ Every component executes [**shell-free**](architecture.md#safety-model):
   `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`). A shell-syntax shorthand without its structured field fails the
   manifest load; there is no shell fallback.
 - **Instance tokens**, anywhere in an argv token, env value, pre/post step or param default:
-  `{port:BASE}` is the instance's port (BASE + 10 × its slot), `{port_of:STACK:BASE}` the port of
-  STACK's instance on the same radio, and `{instance_dir}` a per-radio path level. At slot 0 they
-  resolve to BASE and to nothing, so a stack's first instance keeps today's ports and paths.
+  `{port:BASE}` is the instance's port (BASE + 133 × (n − 1) on rN, BASE on r1), `{port_of:STACK:BASE}`
+  the port of STACK's instance on the same radio, and `{instance_dir}` a per-radio path level (`<rid>/`;
+  empty only in the manifest's template values).
 
 ### Build
 

@@ -277,8 +277,8 @@ and Clean requires typing the stack id. Daemon live settings:
 [daemon control](architecture.md#daemon-control).
 
 **Start means start.** Start or Restart runs the **saved** configuration
-([config layers](architecture.md#manifest-and-config-layers)). The click fixes the band (the Apps
-dropdown, else the running band, else an active band fallback, else the primary), plans the run (hardware, band arbitration,
+([config layers](architecture.md#manifest-and-config-layers)). The click names the instance,
+`<stack>@<rid>` (its radio's band; a bare stack is refused as in the CLI), plans the run (hardware, band arbitration,
 GPS, radio mode, firewall exposure, resource conflicts, identity), and then:
 
 - **nothing consequential** → the start runs; you return with the result flashed;

@@ -188,4 +188,4 @@ The daemon reads no position; the stacks that do are listed in [GPS](../gps.md).
   (daemon 433 + reticulum 868).
 - The SPI bus is shared through `spi0.lock`; model and the one non-participant:
   [architecture](../architecture.md#radios-bands-and-resource-claims).
-- Client stacks obey **one app stack per band** — see [kiss](kiss.md#notes).
+- Client stacks obey **one app stack per radio** — see [kiss](kiss.md#notes).

@@ -302,31 +302,27 @@ lhpc firewall --recommended                # safe preset; not combinable with th
 `lhpc stack {start|stop|restart} <stack>@<rid> [--yes]` — start, stop or restart a stack's instance on radio
 rN (its radio's band); a radio the stack cannot run on is refused before anything starts. When another
 running stack holds what the start needs, `start` asks, as the console's confirm page does,
-whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack> --yes` stops the
-holders and starts, also from a script — the apps first, then the daemon on the held band only.
-A single daemon process serving both bands stops on both when the other band has no clients, and
-the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
-stopped. `lhpc stack {start|stop|restart} daemon@rN` (`daemon --radio rN` in scripts) acts on the daemon of radio rN alone (its clients
+whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack>@<rid> --yes` stops the
+holders and starts, also from a script — the apps first, then the held radio's daemon. Each radio
+has its own daemon process, so a radio's daemon stops only with that radio's clients. A no, or no
+terminal to ask on, refuses with nothing stopped. `lhpc stack {start|stop|restart} daemon@rN` (`daemon --radio rN` in scripts) acts on the daemon of radio rN alone (its clients
 first on a stop) — the remedy a held radio names. A band option is refused by name with the instance form. A start of a
 stack that already runs changes nothing; a GPS feed running without a position source under
 `[gps] source = "auto"` counts as running.
 
-**Instances on another radio.** A stack can also run on other radios, as `<stack>@<rid>`
-(`rid` is the radio's id in `config/radios.toml`). Only kiss, meshcore and chat can; every other
-stack is refused with its reason (for example, voice has one sound card).
-- `lhpc stack add-instance <stack> <rid>` lists `<stack>@<rid>` at the stack's next free slot (1 to 7)
-  in `config/instances.toml`. Only LHPC writes that file.
-- `lhpc stack remove-instance <stack> <rid>` removes it; a running instance is refused (stop it first).
-  Its slot stays reserved, so no other instance's ports move.
-- `lhpc stack start|stop|restart <stack>@<rid>` acts on that instance alone, on its radio's band. An
-  instance's ports are the stack's own plus 10 per slot (kiss-tnc at slot 1: 8011).
-- A plain `lhpc stack start <stack>` is slot 0, today's instance. It runs on the first enabled radio
-  of its band that holds no listed instance of the stack. When the band has several radios, the start
-  says which one it chose, for example `kiss starts on r2 (433 MHz); kiss@r1 is a separate instance`.
-  It is refused when every radio of the band holds a listed instance; start one of them as
-  `<stack>@<rid>`. A plain `lhpc stack stop <stack>` stops slot 0 alone; listed instances keep running.
+**Instances.** A stack has one instance on each enabled radio of its bands, `<stack>@<rid>` (`rid` is
+the radio's id in `config/radios.toml`); nothing is listed first. A stack with fixed ports (Reticulum,
+one node) runs one instance at a time: a start of a second is refused, naming the one that runs.
+- `lhpc stack start|stop|restart <stack>@<rid>` acts on that instance alone, on its radio's band.
+- A bare `<stack>` is refused with the radios it can run on (`kiss can run on r1 or r3: use kiss@r1 or
+  kiss@r3`); a bare stop, restart or kill names the instances that run (`kiss runs as kiss@r1 and
+  kiss@r3: name one (kiss@r1)`).
+- An instance's ports are the stack's base ports on r1, + 133 per further radio (base + 133 × (n − 1)
+  on rN; kiss-tnc on r2: 8134).
+- On a box with several radios, a page or command that names no radio acts on one instance of the
+  stack: the one already running on that band, else the band's first enabled radio (lowest rN).
 
-`lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
+`lhpc stack poststart <stack>@<rid> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows
 "post-start: … NOT applied", e.g. a MeshCom callsign push that outlived its retry window after a
 slow QEMU boot.
