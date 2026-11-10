@@ -1918,7 +1918,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         owner = self._owner_stack(target)
         return owner is not None and owner.main == self.DAEMON_ID
 
-    def _run_order(self, target: str):
+    def _run_order(self, target: str, inst=None):
         """Ordered (stack, component) list to bring `target` up: the target's
         non-optional components plus their transitive dependencies, deps first."""
         idx = self._component_index()
@@ -1940,8 +1940,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # lock — so run order, claims and the rendered config all describe the same plan.
             # Without this, turning GPS on could never add the component: this order is built
             # from static manifest data plus saved autostart flags only.
-            allowed_optional |= self._gps_components_for(target)
-            allowed_optional -= self._gps_components_excluded(target)
+            allowed_optional |= self._gps_components_for(target, inst)          # K8f: the starting instance's switch
+            allowed_optional -= self._gps_components_excluded(target, inst)
             if s.id == _meshcore_mode.STACK_ID and not _meshcore_mode.clients_available(
                     self.meshcore_mode()):
                 # Repeater-only: no Companion on TCP 5000, so a saved webui/cli auto-start must not
@@ -1963,8 +1963,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # fixture relay) must not drag the other one in either: both write the same endpoint,
             # and an explicit fixture run must stay possible.
             if target in self._gps_consumer_ids():
-                _feeds = (self._gps_components_for(target)
-                          - self._gps_components_excluded(target))
+                _feeds = (self._gps_components_for(target, inst)
+                          - self._gps_components_excluded(target, inst))
                 allowed_optional |= _feeds
                 seeds += sorted(_feeds)
         else:

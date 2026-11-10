@@ -1460,7 +1460,7 @@ def test_stack_start_gate_fails_closed_on_unmapped_nonloopback_listener(tmp_path
     comp = types.SimpleNamespace(id="future-comp")
     stk = types.SimpleNamespace(id="future")
     ep = types.SimpleNamespace(address="0.0.0.0:7788", kind="tcp", role="listener", firewall=None)
-    monkeypatch.setattr(svc, "_run_order", lambda t: [(stk, comp)])
+    monkeypatch.setattr(svc, "_run_order", lambda t, inst=None: [(stk, comp)])
     monkeypatch.setattr(svc, "_fw_listener_endpoints", lambda: ([], [(stk, comp, ep)]))
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "firewall_status",

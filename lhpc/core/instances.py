@@ -102,6 +102,12 @@ def running_keys(svc, sid: str) -> list:
     return [f"{sid}@{r}" for r in sorted(rids, key=lambda x: int(x[1:]))]
 
 
+def running_insts(svc, sid: str) -> list:
+    """The running instances of `sid` (running_keys); none told (a process no instance claims): every instance of it
+    (saved_insts), so a question about a live stack is answered for each radio it may be on (fail-safe)."""
+    return [i for k in running_keys(svc, sid) if (i := copy_of(svc, sid, k.partition("@")[2])[0])] or saved_insts(svc, sid)
+
+
 
 def recorded(svc, sid: str) -> set:
     """The radios `sid`'s running instances were launched on, by their verified launch records (13.16): a running

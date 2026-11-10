@@ -611,7 +611,7 @@ def _restart_without_processes(monkeypatch, svc):
     monkeypatch.setattr(T, "stop", leg("stop", "stopped"))
     monkeypatch.setattr(T, "_start_impl", leg("start", "started"))
     monkeypatch.setattr(T, "_start_outer_refusal", lambda self, *a, **k: (None, None, ""))
-    monkeypatch.setattr(T, "_position_refusal", lambda self, t, op: (None, None, ""))
+    monkeypatch.setattr(T, "_position_refusal", lambda self, t, op, inst: (None, None, ""))
     return calls
 
 

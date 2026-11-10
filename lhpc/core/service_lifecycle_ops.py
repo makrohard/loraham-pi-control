@@ -357,7 +357,7 @@ class LifecycleOpsMixin:
         868 does not block another stack on 433; the daemon only conflicts on the
         bands it currently serves). A daemon start's bands come from its REQUESTED radio
         mode (`radio`), not its empty `Component.band`."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if not order:
             return []
         order_ids = {c.id for _, c in order}
@@ -385,7 +385,7 @@ class LifecycleOpsMixin:
         # plan — not from a static manifest resource). It must be in the CONFLICT set and not
         # only the lock set: the lock is released when the start completes, so locks alone let
         # a second stack start afterwards and open the same receiver.
-        _gps_key = self._gps_device_claim(target)
+        _gps_key = self._gps_device_claim(target, inst)
         if _gps_key:
             claims.setdefault(_gps_key, target)
 
@@ -435,7 +435,7 @@ class LifecycleOpsMixin:
                 # moment Sideband's start lock was released. Turning that autostart off while
                 # Sideband ran did the same thing to an already-running reader.
                 if sid != target_stack:
-                    _owner_gps = self._gps_device_claim(c.id)
+                    _owner_gps = next((k for i in instances.running_insts(self, sid) if (k := self._gps_device_claim(c.id, i))), "")
                     if _owner_gps and _owner_gps in claims:
                         add(sid, c.id, _owner_gps)
                 for r in c.resources:
@@ -483,7 +483,7 @@ class LifecycleOpsMixin:
                         return SPI_SHARED_WARNING
         return None
 
-    def gps_block(self, target: str) -> tuple[str, list]:
+    def gps_block(self, target: str, inst=None) -> tuple[str, list]:
         """(reason, next_commands) when this stack must NOT start under the current GPS plan.
 
         Three refusals, all fail-closed:
@@ -517,7 +517,7 @@ class LifecycleOpsMixin:
         # looking healthy. The fixture relay is deliberately NOT covered here: it runs when
         # named directly, which is its whole contract (see `optional_role`).
         if (raw != target and raw in self._all_gps_feed_ids()
-                and raw not in self._gps_components_for(target)):
+                and raw not in self._gps_components_for(target, inst)):
             return (f"'{raw}' is the GPS feed for '{target}', and the current position plan "
                     f"does not use it — starting it alone would claim the receiver for a "
                     f"consumer that is not running",
@@ -534,7 +534,7 @@ class LifecycleOpsMixin:
         # starts WITHOUT position instead, and the GPS card/`lhpc gps` say why. Fail-closed
         # protection now lives with EXPLICIT intent: a named source that cannot be used
         # (malformed section above, unresolvable plan below) still refuses.
-        plan = self.gps_plan(target)
+        plan = self.gps_plan(target, inst)
         # VALIDITY FIRST. An unresolvable plan (a `nmea` device that does not exist, or is not a
         # character device) is REPRESENTED as `source = off`, so testing `enabled` first returned
         # success for it: the stack started with no feed, no receiver claim and no warning —
@@ -597,7 +597,7 @@ class LifecycleOpsMixin:
             return f"requires the {missing} MHz radio — the hardware list {have}; add one on the Hardware page"
         return ""
 
-    def _start_static_refusal(self, target: str, op: str):
+    def _start_static_refusal(self, target: str, op: str, inst):
         """The start refusals that do not depend on whether the target runs (runtime root,
         hardware, GPS, the hardware list), or None — so a restart takes them BEFORE its stop, with the
         same wording as the start."""
@@ -614,7 +614,7 @@ class LifecycleOpsMixin:
         # and config rendering is the same one validated here. A direct-NMEA source is the case
         # that fails intermittently rather than cleanly (two readers on one receiver), so it is
         # refused up front rather than discovered as flaky position later.
-        gps_block, gps_next = self.gps_block(target)
+        gps_block, gps_next = self.gps_block(target, inst)
         if gps_block:
             return ActionResult(False, f"Cannot {op} '{target}': {gps_block}",
                                 next_commands=gps_next or ["lhpc gps"])
@@ -905,7 +905,7 @@ class LifecycleOpsMixin:
         PreparedStart, or the ActionResult that ends the start here. The plan stops after the checks it
         shares with the apply; the apply adds the already-healthy no-op and the preflight (firewall gate,
         which renders the FW-R8 apply script; ambiguity; band owners unless `stop_owners`)."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc list"])
@@ -913,7 +913,7 @@ class LifecycleOpsMixin:
             return _r
         if (_r := self._meshcore_mode_refusal(target, inst)) is not None:
             return _r
-        if (_r := self._start_static_refusal(target, "start")) is not None:
+        if (_r := self._start_static_refusal(target, "start", inst)) is not None:
             return _r
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         # An explicit band wins; otherwise inherit the band the stack is ALREADY running
@@ -2142,7 +2142,7 @@ class LifecycleOpsMixin:
         launch after the running stack is already down. Only a parameter VALUE problem refuses
         here; anything else the launch reports typed as it always did. No pre-step runs."""
         from . import commands
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if not order:
             return None
         hint = self._launch_band_hint(target, band)
@@ -2257,10 +2257,10 @@ class LifecycleOpsMixin:
             radio = _r or ""
         return order, radio
 
-    def _position_refusal(self, target: str, op: str):
+    def _position_refusal(self, target: str, op: str, inst):
         """`(refusal or None, position, note)` from the MeshCore position decision — the one
         wording the start and restart plans and applies share."""
-        position, note = self.meshcore_position(target)
+        position, note = self.meshcore_position(target, inst)
         if position is None:
             return (ActionResult(False, f"Cannot {op} '{target}': {note}",
                                  next_commands=[f"lhpc status {target}"]), None, note)
@@ -2275,7 +2275,7 @@ class LifecycleOpsMixin:
         if order and (_r := self._identity_refusal(target, band, "start", inst)) is not None:
             return _r, position, note
         if position is None and order and not self._order_already_healthy(order, radio):
-            return self._position_refusal(target, "start")
+            return self._position_refusal(target, "start", inst)
         return None, position, note
 
     def _start_preflight_refusal(self, target: str, order, band: str, radio: str, op: str, *,

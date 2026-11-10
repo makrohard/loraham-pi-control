@@ -36,7 +36,7 @@ class GpsOpsMixin:
         from .gps import CONSUMER_MESHCORE, CONSUMER_MESHTASTIC, bridge_endpoint_path
         # TARGET-AWARE: the global source says WHERE, the stack's switch says WHETHER. Using
         # the bare global plan here rendered a device into a stack whose GPS was off.
-        plan = self.gps_plan(target)
+        plan = self.gps_plan(target, inst)
         owner = self.gps_owner_stack(target)
         device = ""
         if plan.enabled:
@@ -121,7 +121,7 @@ class GpsOpsMixin:
             # A stack running with its switch OFF takes no position from the global setting, so
             # it is not affected by a source change and must not block one. (Its FEED could not
             # be running in that state anyway — a live feed IS the stack using GPS.)
-            wanted = {s for s in wanted if self.gps_enabled_for(s, inst=None)}
+            wanted = {s for s in wanted if any(self.gps_enabled_for(s, i) for i in instances.running_insts(self, s))}
         try:
             snap = snap if snap is not None else self.build_snapshot(fresh=True)
         except Exception:
@@ -619,7 +619,7 @@ class GpsOpsMixin:
                 details.append(f"  note: could not check whether gpsd owns {v['device']} ({detail})")
         return ActionResult(True, f"position source set to {v['source']}", details=details)
 
-    def gps_plan(self, target: str = ""):
+    def gps_plan(self, target: str = "", inst=None):
         """THE resolved GPS plan. One object, computed from `[gps]` PLUS the target stack's
         persisted `use_gps` switch, shared by run order, claims, config rendering, post-steps,
         status, stop and boot restore — so no two of them can act on a different idea of where
@@ -629,7 +629,7 @@ class GpsOpsMixin:
         """
         from .gps import plan_from_config
         plan = plan_from_config(self.config())
-        if target and plan.enabled and not self.gps_enabled_for(target, inst=None):
+        if target and plan.enabled and not self.gps_enabled_for(target, inst):
             # The stack opted out: it opens nothing, claims nothing, renders no device and
             # pushes "no GPS" to its node. Same shape as a global `off`, scoped to one stack.
             return plan.disabled_for_stack()
@@ -742,7 +742,7 @@ class GpsOpsMixin:
             owner = ""
         return owner if owner in gps_stacks else ""
 
-    def _gps_components_for(self, target: str) -> set:
+    def _gps_components_for(self, target: str, inst) -> set:
         """GPS feed components this stack must run under the current plan.
 
         Empty unless the stack has a consumer that needs a device-shaped stream: Meshtastic
@@ -757,7 +757,7 @@ class GpsOpsMixin:
             return set()
         if not self._meshcore_consumes_position(target):
             return set()
-        plan = self.gps_plan(target)
+        plan = self.gps_plan(target, inst)
         if not plan.enabled:
             return set()
         cid = self._production_feeds().get(target)
@@ -850,7 +850,7 @@ class GpsOpsMixin:
             return "hidden"
         return "tickable" if c.kind == ComponentKind.SERVICE else "listed"
 
-    def _gps_components_excluded(self, target: str) -> set:
+    def _gps_components_excluded(self, target: str, inst) -> set:
         """Feed components that must not run under the current plan.
 
         The fixture relay runs only when named directly (`lhpc stack start meshcom-gps-relay`)
@@ -867,9 +867,9 @@ class GpsOpsMixin:
         cid = self._FIXTURE_FEEDS.get(target)
         if not cid:
             return set()
-        return {cid} if self._gps_components_for(target) else set()
+        return {cid} if self._gps_components_for(target, inst) else set()
 
-    def _gps_device_claim(self, target: str) -> str:
+    def _gps_device_claim(self, target: str, inst=None) -> str:
         """The exclusive resource key for the local receiver this stack would open, or "".
 
         Empty for every source that opens no local device (off / fixed / remote gpsd) and for
@@ -885,7 +885,7 @@ class GpsOpsMixin:
         if not self._gps_run_order_uses_position(raw):
             return ""
         try:
-            plan = self.gps_plan(target)
+            plan = self.gps_plan(target, inst)
         except (OSError, ValueError, AttributeError):
             return ""
         if not plan.enabled or not plan.claims_device or not plan.device_key:

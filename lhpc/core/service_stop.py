@@ -458,7 +458,7 @@ class StopOpsMixin:
                 return _pf_err
             if (_pf_err := self._saved_launch_refusal(target, _rband, "restart", inst)) is not None:
                 return _pf_err
-            if (_pf_err := self._position_refusal(target, "restart")[0]) is not None:
+            if (_pf_err := self._position_refusal(target, "restart", inst)[0]) is not None:
                 return _pf_err
             return self._restart_impl(target, apply=False, stop_owners=stop_owners, band=band,
                                       cascade=cascade, inst=inst)
@@ -503,7 +503,7 @@ class StopOpsMixin:
                         # once and a refusal leaves the running node up rather than stopping
                         # it and only then discovering there is no position.
                         _pf_err, _position, _pos_note = self._position_refusal(target,
-                                                                               "restart")
+                                                                               "restart", inst)
                         if _pf_err is not None:
                             return _pf_err
                         # PRE-MUTATION HOOK: every lock held, nothing stopped yet. A refusal
@@ -610,7 +610,7 @@ class StopOpsMixin:
         # On apply `band` is already the operation band; on the plan an explicit band
         # is still raw, so it is resolved here the way the apply resolved it.
         _rband = self.operation_band(target, band)
-        if (_r := self._start_static_refusal(target, "restart")) is not None:
+        if (_r := self._start_static_refusal(target, "restart", inst)) is not None:
             return _r
         if (_pf_err := self._identity_refusal(target, _rband, "restart", inst)) is not None:
             return _pf_err
@@ -619,7 +619,7 @@ class StopOpsMixin:
         # The dependency band rule: a chain member of another stack live on a different band.
         # `stop_owners` cannot clear that state: owner-stop acts on resource-conflict HOLDERS, and
         # chain members are exempt from that set precisely because they are in the run order.
-        _pre_order = self._run_order(target)
+        _pre_order = self._run_order(target, inst)
         if _pre_order:
             _bb = self._dep_band_block(target, _pre_order,
                                        _rband or self._config_band(target, _rband), inst)

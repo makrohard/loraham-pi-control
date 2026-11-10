@@ -404,7 +404,7 @@ def test_start_plan_takes_the_position_decision_like_the_apply(tmp_path, monkeyp
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     monkeypatch.setattr(svc, "meshcore_position",
-                        lambda t: (None, "the global position source is not usable: x"))
+                        lambda t, inst=None: (None, "the global position source is not usable: x"))
     monkeypatch.setattr(svc, "firewall_gate_stack_start",
                         lambda *a, **k: (False, "Firewall changes pending", []))
     plan = svc.start("meshcore", apply=False)

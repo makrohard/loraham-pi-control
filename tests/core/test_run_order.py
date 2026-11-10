@@ -1320,7 +1320,7 @@ def test_restart_refuses_gps_and_radio_mode_before_its_stop(tmp_path, monkeypatc
     # stopped kiss and then reported "Restarted 'kiss'. Cannot start …".
     svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
     stopped = _spy_life_stops(monkeypatch)
-    monkeypatch.setattr(ControllerService, seam, lambda self, t: value)
+    monkeypatch.setattr(ControllerService, seam, lambda self, t, *_inst: value)
     res = svc.restart("kiss", apply=True)
     assert res.ok is False and res.summary.startswith("Cannot restart 'kiss':")
     assert needle in res.summary

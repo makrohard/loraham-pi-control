@@ -127,7 +127,7 @@ def test_the_real_helper_filters_planned_interactive_and_non_optional(tmp_path, 
     running = NS(run_state=RunState.RUNNING)
     snap = NS(stacks=[NS(stack=stack, components={cid: running for cid in ids})])
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self: snap)
-    monkeypatch.setattr(type(svc), "_run_order", lambda self, t: [(stack, stack.component("rns"))])
+    monkeypatch.setattr(type(svc), "_run_order", lambda self, t, inst=None: [(stack, stack.component("rns"))])
     got = svc._running_optional_components("reticulum")
     assert "meshchat" in got
     assert "nomadnet" not in got and "rns" not in got

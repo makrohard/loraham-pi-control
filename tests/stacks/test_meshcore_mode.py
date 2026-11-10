@@ -283,6 +283,7 @@ def test_every_mode_consumes_the_position(tmp_path, monkeypatch):
     """Issue #5: the repeater reads the box's position too (openHop's own GPS file source, written
     by the host from the same feed), so the feed, the receiver claim and the GPS gate follow
     `use_gps` in every mode."""
+    from lhpc.core.commands import Instance
     from lhpc.core.config import save_gps
     from lhpc.core.model import RunState
     svc = _svc(tmp_path)
@@ -291,7 +292,7 @@ def test_every_mode_consumes_the_position(tmp_path, monkeypatch):
     assert all(mm.position_consumed(m) for m in mm.MODES)
     for mode in mm.MODES:
         _set_mode(svc, mode)
-        assert svc._gps_components_for(mm.STACK_ID) == {"meshcore-gps"}
+        assert svc._gps_components_for(mm.STACK_ID, Instance("r2", band="868")) == {"meshcore-gps"}   # K8f: meshcore@r2
         assert "meshcore-gps" in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
         assert svc._gps_run_order_uses_position(mm.STACK_ID)
     _set_mode(svc, "repeater")

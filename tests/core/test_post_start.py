@@ -2054,12 +2054,12 @@ def _kiss_with_held_required_post_start(svc, monkeypatch, real_spawn):
 
     real_order = ControllerService._run_order
 
-    def order_with_required_post(self, t):
+    def order_with_required_post(self, t, inst=None):
         return [(stack, dataclasses.replace(
             comp, post_steps=({"kind": "exec", "argv": ["true", "--tx-freq", "{param:tx_freq}"],
                               "required": True},))
             if comp.id == "loraham-kiss-tnc" else comp)
-            for stack, comp in real_order(self, t)]
+            for stack, comp in real_order(self, t, inst)]
 
     monkeypatch.setattr(ControllerService, "_run_order", order_with_required_post)
     entered, release, seen = threading.Event(), threading.Event(), {}

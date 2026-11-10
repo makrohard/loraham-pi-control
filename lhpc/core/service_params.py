@@ -1416,7 +1416,7 @@ class ParamsConfigMixin:
                 out.append(dest.path)
         return tuple(out)
 
-    def meshcore_position(self, target: str) -> tuple[dict | None, str]:
+    def meshcore_position(self, target: str, inst=None) -> tuple[dict | None, str]:
         """The STATIC coordinates for a MeshCore start — `(position, message)`.
 
           * `({...}, "")`     — write these coordinates into the config;
@@ -1435,11 +1435,11 @@ class ParamsConfigMixin:
         from .gps import CONSUMER_MESHCORE, plan_from_config
         # `_run_order` is None for an unknown target — the caller reports that properly a
         # moment later, so say "no position" rather than raising out of the start path.
-        if not any(c.id == MESHCORE_COMPONENT for _s, c in (self._run_order(target) or ())):
+        if not any(c.id == MESHCORE_COMPONENT for _s, c in (self._run_order(target, inst) or ())):
             return {}, ""                              # not a MeshCore start
         if not self._meshcore_consumes_position(self.gps_owner_stack(target)):
             return {}, ""                              # repeater-only: nothing reads it
-        if not self.gps_enabled_for(target, inst=None):
+        if not self.gps_enabled_for(target, inst):
             return {}, ""                              # use_gps off — omit, never refuse
         plan = plan_from_config(self.config())
         if not plan.valid:
