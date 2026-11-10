@@ -80,8 +80,8 @@ every Apply. Nothing is written back to the file at a start.
 
 ## Settings
 
-**Hardware setup** — `lhpc hardware <setup>` sets the
-served band(s) and `--hw` preset (the console adds radios on *Add Hardware*) ([cli](../cli.md#hardware)). A single-radio setup blocks stacks
+**Hardware setup** — `lhpc hardware <setup>`, or the **Board setup** form on the console's *Add Hardware*
+page, sets the served band(s) and `--hw` preset ([cli](../cli.md#hardware)). A single-radio setup blocks stacks
 needing the absent band (`meshcore`: 868). A fresh install is `unset`; the daemon refuses to start
 until a setup is chosen.
 

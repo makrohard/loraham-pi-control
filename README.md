@@ -371,8 +371,9 @@ A stack with a login of its own creates it on its **first start** (**Apps → *s
 
 ## Configure & run stacks
 
-*Home* shows the banners (*Needs attention* among them), the Webserver box and the System box; the radios are under
-*Apps › Daemon › Hardware*. *Apps* has one row per stack:
+*Home* shows one card per enabled radio ("<name> (<rid>, <band> MHz)": its daemon's state, Stop daemon, Radio
+config, Daemon log), the banners (*Needs attention* among them), the Webserver box and the System box. *Apps* has
+one row per stack:
 Settings, Start/Stop, logs, Password. The console: [operations](docs/operations.md#operating-the-console).
 
 <details><summary><em>The same from the CLI</em></summary>

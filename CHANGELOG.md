@@ -95,6 +95,8 @@ Fixed
   it had done both.
 - Docs: after an update from 0.12.10 or older, one venv sync to `requirements.lock` (that release synced
   without it).
+- The board setup moved from the daemon's Settings to the Board setup form on Add Hardware; `lhpc hardware <setup>`
+  stays.
 - Known limitation: with several radios, a page or command that names no radio acts on the instance running on
   that band, else the band's first enabled radio (lowest rN); name the radio (`<stack>@<rid>`) to choose.
 

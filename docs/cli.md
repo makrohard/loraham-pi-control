@@ -196,8 +196,8 @@ lhpc hardware --ocp r1 auto|<mA>      # radio r1's PA over-current limit (auto: 
 
 Web: *Apps › Daemon › Hardware* (`/hardware`) lists the radios. Each radio's detail page
 (`/hardware/radio/<rid>`) and *Add Hardware* (`/hardware/add`, a listed USB stick or a HAT on the SPI bus) offer
-**Detect**, the same probe as `lhpc hardware detect <rid>` below. The board setup itself stays a CLI command
-(`lhpc hardware <setup>`).
+**Detect**, the same probe as `lhpc hardware detect <rid>` below. *Add Hardware* also has the **Board setup**
+form (the setups above); `lhpc hardware <setup>` stays its CLI equivalent.
 
 #### hardware detect
 Ask the chip of one radio in the hardware list whether it answers, on that radio's own lines or stick:
