@@ -2860,19 +2860,18 @@ class LifecycleOpsMixin:
         produces NO line — an intentionally-unsent setting is not a failure."""
         life = self._lifecycle()
         lines: list[str] = []
-        insts = instances.running_insts(self, self.stack_of(comp_id) or comp_id) or []    # K8f S4-3: each its own
+        insts = instances.running_insts(self, self.stack_of(comp_id) or comp_id)      # K8f S4-3: None = unknown
         for rec in life.owned_records(comp_id, role="post"):
-            # Only trust a result bound to the CURRENT verified main launch — a record whose
-            # main was replaced describes a previous run (belt-and-braces on top of the
-            # cancel-time sidecar cleanup).
-            # (a post record names its main, not its radio: its instance is the one whose verified main it is bound to)
-            rinst, binding = next(((i, b) for i in insts if (b := life._binding_for(comp_id, rec.get("band", ""), i))
-                                   and (b["main_pid"], b["main_starttime"]) == (rec.get("main_pid"), rec.get("main_starttime"))),
-                                  (None, life._binding_for(comp_id, rec.get("band", ""))))
-            if binding is not None and (
-                    rec.get("main_pid") != binding.get("main_pid")
-                    or rec.get("main_starttime") != binding.get("main_starttime")):
+            band, main = rec.get("band", ""), (rec.get("main_pid"), rec.get("main_starttime"))
+            # Only a result bound to a CURRENT verified main is trusted (a replaced main's record is a previous run). A
+            # post record names its main, not its radio: its instance is the ONE running instance bound to it (none or
+            # two: not shown); an unknown running set (a launch without a radio id) takes the verified main, as before.
+            hits = ([(None, life._binding_for(comp_id, band))] if insts is None else
+                    [(i, b) for i in insts if (b := life._binding_for(comp_id, band, i))])
+            hits = [(i, b) for i, b in hits if b is None or (b["main_pid"], b["main_starttime"]) == main]
+            if len(hits) != 1:
                 continue
+            rinst = hits[0][0]
             log_hint = rec.get("log_path") or "the post-start log"
             if not life._original_ceased(rec):
                 lines.append(f"post-start: applying — retry window active (log {log_hint})")
@@ -2890,7 +2889,7 @@ class LifecycleOpsMixin:
                 continue
             lines.extend(self._render_post_steps(steps, log_hint,
                                                  rec.get("stack", comp_id), rinst))
-        for inst in insts or [None]:
+        for inst in insts if insts is not None else [None]:
             lines.extend(self._required_post_outcomes(comp_id, inst))
         return lines
 

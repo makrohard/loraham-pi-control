@@ -123,3 +123,44 @@ def test_post_start_outcomes_of_two_instances_are_each_their_own(tmp_path, set_c
     finally:
         for p in procs:
             _end(p)
+
+
+@pytest.mark.needs_session
+def test_a_post_record_whose_main_two_instances_claim_is_shown_for_neither(tmp_path, set_call):
+    # one live main recorded for meshtastic@r1 AND @r2 (a duplicated record): both bindings are that main, so a detached
+    # post record bound to it belongs to no ONE instance and is not shown, never under r1's name. red on e0ae538e (the
+    # first match, r1, was taken: "re-apply with: lhpc stack poststart meshtastic@r1")
+    svc = _svc(tmp_path)
+    set_call(svc)
+    life = svc._lifecycle()
+    stack = svc.stack("meshtastic")
+    comp = stack.component("meshtastic")
+    p = _live_main(life, stack, comp, "r1", "433")
+    try:
+        assert life.record_launch(stack, comp, p.pid, "433", ident=life._capture_identity(p.pid), role="",
+                                  extra={"rid": "r2"})
+        b1, b2 = (life._binding_for(comp.id, "433", instances.copy_of(svc, "meshtastic", r)[0]) for r in ("r1", "r2"))
+        assert b1 is not None and (b1["main_pid"], b1["main_starttime"]) == (b2["main_pid"], b2["main_starttime"])
+        det = life.paths.under("state", "post", "detached-dup.json")
+        _steps(det, "owner-dup", "exhausted")
+        _ceased_post_record(life, stack, comp, "433", b2, det)
+        lines = svc._post_start_outcomes(comp.id)
+        assert not [ln for ln in lines if "owner-dup" in ln], lines
+    finally:
+        _end(p)
+
+
+def test_the_reticulum_internet_verdict_of_a_start_is_its_own_instances(tmp_path):
+    # reticulum@r1 has the Internet interface off, @r2 on with a network name and no passphrase: a start of r2 is
+    # refused on r2's own settings, r1 plans. red on f6c9fe2c: both judged by the band's fallback instance (r1, off)
+    from lhpc.core import reticulum_interfaces as ri
+    svc = _svc(tmp_path)
+    r1 = instances.parse_target(svc, "reticulum@r1", "start")[1]
+    r2 = instances.parse_target(svc, "reticulum@r2", "start")[1]
+    assert svc.save_config_bundle("reticulum", values={
+        "file_internet_enabled": "yes", "file_internet_host": "hub.example.org", "file_internet_port": "4965",
+        "file_internet_ifac_netname": "private"}, inst=r2).ok
+    res2 = svc.start("reticulum", apply=False, inst=r2)
+    assert not res2.ok and (res2.data or {}).get("reason") == ri.REASON_IFAC_KEY_MISSING, res2.summary
+    res1 = svc.start("reticulum", apply=False, inst=r1)
+    assert res1.ok, res1.summary
