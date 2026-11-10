@@ -1170,10 +1170,10 @@ class WebserverOpsMixin:
     def _default_stack_web_port(self, page_id: str, console_port: int,
                                 extra_taken=()) -> int:
         """A STABLE per-page default port: `console_port + 1 + position`, where position is the
-        page's index in `_page_positions()` — the stacks' first pages sorted by id, then any
-        further pages (so a stack growing a second page shifts nobody else). So graywolf → 8444,
-        meshcom → 8445, meshcore → 8446, meshtastic → 8447, reticulum → 8448,
-        deterministically and without colliding.
+        page's index in `_page_positions()` — radio by radio, each radio's stacks' first pages sorted by id, then its
+        further pages (so a stack growing a second page shifts nobody else). The default list (r1 433, r2 868), console
+        8443: graywolf@r1 8444, meshcom@r1 8445, meshtastic@r1 8446, reticulum@r1 8447, graywolf@r2 8448, meshcore@r2
+        8449, meshtastic@r2 8450, meshcore-meshcore-node@r2 8451 — deterministically and without colliding.
 
         A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
         no port key, so a fresh deployment's rendered nginx stays unchanged.
