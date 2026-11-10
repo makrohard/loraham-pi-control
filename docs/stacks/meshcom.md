@@ -9,12 +9,12 @@ Unmodified MeshCom firmware running headless under QEMU, bridged to the LoRaHAM 
 |---|---|
 | Components | `meshcom-bridge` · `meshcom-gps` (position feed, admitted by the global GPS plan) · `meshcom-gps-relay` (test fixture) · `meshcom-qemu` (main) · `meshcom-firmware` (the PlatformIO image, cloned by ref during the build) |
 | Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `icssw-org/MeshCom-Firmware` branch `dev`, pinned by commit |
-| Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham --data-socket /tmp/loraf-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000 --rflog on --rflog-path <runtime>/logs/<rid>/rf-meshcom.log`; consumes its radio's framed socket `/tmp/loraf-<rid>.sock`; built with cmake (needs `libssl-dev`) |
-| QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary> --node-image <runtime>/state/meshcom/node-flash.bin`; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323`; readiness window 600 s |
+| Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port <port> --backend loraham --data-socket /tmp/loraf-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000 --rflog on --rflog-path <runtime>/logs/<rid>/rf-meshcom.log`; `<port>` is 7000 on r1, + 133 per further radio; consumes its radio's framed socket `/tmp/loraf-<rid>.sock`; built with cmake (needs `libssl-dev`) |
+| QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary> --node-image <runtime>/state/<rid>/meshcom/node-flash.bin --instance <n − 1> --ports <web>:<console> --xr-redirect 7000:<bridge port>` on rN; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323` on r1 (each + 133 per further radio); readiness window 600 s |
 | Firmware image | `.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin`, completion marker `.lhpc-build-complete` beside it |
 | Callsign | `mc_callsign` is pushed over the net-console (`--setcall`) after boot, unless a `--info` probe shows the node already has it (it persists in the node's NVS); an empty or cut reply counts as not ready. Re-sent on a stepped schedule (~13 min) until the firmware ACKs; a call never confirmed shows `UNVERIFIED` in `lhpc status` and does not fail the start. `lhpc stack poststart meshcom` re-runs it |
 | Secrets | `<runtime>/config/secrets/xr_pw` (0600) — the HMAC password, first line |
-| Resources | `tcp.port.7000` / `.18083` / `.12323` exclusive · `loraham.daemon-socket.433` consumer · `loraham.profile.433` requirement `MANAGED` · `meshcom.uart1.feed` exclusive (one feed on the UART: production or fixture) |
+| Resources | `tcp.port.<port>` for the bridge, web UI and net-console (7000 / 18083 / 12323 on r1) exclusive · `loraham.daemon-socket.433` consumer · `loraham.profile.433` requirement `MANAGED` · `meshcom.uart1.feed` exclusive (one feed on the UART: production or fixture) |
 | Install channel | **binary** by default ([provenance](../provenance.md#the-binary-channel)): the QEMU binary, firmware image and bridge overlaid on the pinned clone, which keeps the run scripts. Its firmware has an empty password: open auth, HMAC changes refused until installed from source. `--source pinned\|dev\|stable` builds everything on the box (about 2 h on a Pi Zero 2W). After an LHPC update that moves MeshCom's pins it does not start until updated (the node keeps its ID): `lhpc stack stop meshcom --yes`, `lhpc update meshcom --yes`, `lhpc stack start meshcom --yes` |
 
 ## Contents
@@ -33,7 +33,7 @@ Unmodified MeshCom firmware running headless under QEMU, bridged to the LoRaHAM 
 | `use_gps` | qemu | on | use the global position source |
 | `env` | qemu | `qemu-headless-extradio-gpsd` | firmware image to boot; another env needs its own build |
 | `qemu` | qemu | the managed in-root binary | advanced: a custom `qemu-system-xtensa` |
-| `port` / `bind` | bridge | `7000` / `127.0.0.1` | the port must equal the firmware's baked `XR_PORT` |
+| `port` / `bind` | bridge | `7000` on r1, + 133 per further radio / `127.0.0.1` | the firmware's baked `XR_PORT` stays 7000; `--xr-redirect 7000:<port>` forwards it to this bridge |
 | `backend` | bridge | `loraham` | `fake` = no RF |
 | `password_file` | bridge | blank = open auth | managed only by the HMAC flow, never by generic config |
 | `ping_interval` / `pong_timeout` | bridge | 30000 / 90000 ms | XR keepalive sized for QEMU/TCG stalls (the bridge's own 15 s / 10 s defaults flap under emulation) |
@@ -44,7 +44,7 @@ RF parameters come from the firmware over the XR protocol; the daemon-side profi
 [daemon](daemon.md#radio-parameters).
 
 **HMAC password** — `lhpc hmac status|enable|disable|renew` ([cli](../cli.md#hmac)). The firmware
-has `XR_HOST=10.0.2.2` (QEMU's user-net gateway), `XR_PORT=7000` and `XR_PASSWORD` (first line of
+has `XR_HOST=10.0.2.100` (forwarded per connection to its instance's bridge by `--xr-redirect`), `XR_PORT=7000` and `XR_PASSWORD` (first line of
 `config/secrets/xr_pw`) baked in at build; the bridge reads the same file via `--password-file`.
 `enable`/`renew` mint the secret, rebuild the firmware and restart the link (minutes). While HMAC
 is enabled the stack page's **Password** section shows it; change it only through those actions,
@@ -78,7 +78,7 @@ test facility, never started by a normal start (`lhpc stack start meshcom-gps-re
 ## Notes
 
 - **What normal looks like.** The emulated node boots in about a minute on a Pi 5 and 6 to 14
-  minutes on a Pi Zero 2W; until then the web UI at `:18083` answers 502 and the callsign stays
+  minutes on a Pi Zero 2W; until then the web UI (`:18083` on r1) answers 502 and the callsign stays
   the placeholder, and the node reads *booting* in the console while the callsign push is still
   running. The QEMU process sits around 50 % CPU at steady state on a Pi.
 - Box→peer texts leave on MeshCom's own TX scheduling (tens of seconds). At a noisy site the 433
@@ -89,6 +89,6 @@ test facility, never started by a normal start (`lhpc stack start meshcom-gps-re
 
 ## Conflicts
 
-- One app stack per band ([kiss](kiss.md#notes)): not with kiss/graywolf, chat or voice on 433, nor
-  with meshtastic or reticulum holding 433.
+- One app stack per radio ([kiss](kiss.md#notes)): not with kiss/graywolf, chat or voice on its radio,
+  nor with meshtastic or reticulum holding it.
 - `meshcom.uart1.feed`: the production feed and the fixture relay never run together.

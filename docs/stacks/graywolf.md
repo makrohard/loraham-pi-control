@@ -6,7 +6,7 @@ station — AX.25 decode, digipeater, iGate, SQLite packet log and a web UI — 
 sockets, the daemon owns the transmitter.
 
 ```text
-APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> loraham_daemon <-> RF
+APRS-IS <-> graywolf <-> KISS/TCP (8001 on r1) <-> loraham-kiss-tnc <-> framed DATA <-> loraham_daemon <-> RF
 ```
 
 | | |
@@ -14,13 +14,13 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | Component | `graywolf` |
 | Source / pin | upstream release `.deb`, version pinned in the manifest (no git source). `lhpc build graywolf` runs `lhpc/data/scripts/graywolf-fetch.sh`: fetch the `.deb` for this architecture, check its recorded sha256 (arm64/armhf/amd64), unpack rootless with `dpkg-deb -x` (needs `curl`, `dpkg-deb`). Marker `build/tools/graywolf/.lhpc-built-<version>`; a rebuild at the same version needs no network |
 | Binary | `<runtime>/build/tools/graywolf/usr/bin/graywolf` |
-| Run | `graywolf -config <runtime>/state/graywolf/graywolf.db -http 127.0.0.1:8080` |
-| Web UI | `127.0.0.1:8080`, password-authenticated, loopback only (no bind param) — reach it via the web proxy (`lhpc webserver proxy graywolf`) or an [SSH tunnel](../ssh-tunnel.md) |
-| Config | SQLite `<runtime>/state/graywolf/graywolf.db`, provisioned through the REST API on every start |
-| Password file | `<runtime>/state/graywolf/graywolf-admin.txt` (0600), user `admin` |
-| Resources | `tcp.port.8080` exclusive · `tcp.port.8001` consumer |
+| Run | `graywolf -config <runtime>/state/<rid>/graywolf/graywolf.db -http 127.0.0.1:<port>` (8080 on r1, + 133 per further radio) |
+| Web UI | `127.0.0.1:8080` on r1 (+ 133 per further radio), password-authenticated, loopback only (no bind param) — reach it via the web proxy (`lhpc webserver proxy graywolf@<rid>`) or an [SSH tunnel](../ssh-tunnel.md) |
+| Config | SQLite `<runtime>/state/<rid>/graywolf/graywolf.db`, provisioned through the REST API on every start |
+| Password file | `<runtime>/state/<rid>/graywolf/graywolf-admin.txt` (0600), user `admin` |
+| Resources | `tcp.port.<its port>` exclusive · `tcp.port.<the kiss instance's port on the same radio>` consumer |
 | Depends on | `loraham-kiss-tnc` + `loraham-daemon`, `requires_daemon_tx = MANAGED` |
-| Install channel | the release fetch above. `lhpc clean graywolf --purge` removes `build/tools/graywolf` and `state/graywolf` (the whole station configuration, beacons included, and the UI password). `lhpc update graywolf --source stable` (*Check upstream*; formerly `--upstream`) installs the latest `chrissnell/graywolf` release, verified against that release's own `checksums.txt`; `--source binary` is the pinned release its build fetches; a bare `lhpc update graywolf` installs the pinned build — if the installed version is newer than the pin, that is a downgrade; use `--source stable` to stay on upstream; `pinned`/`dev` are refused, graywolf has no compiled lane. Moving the pin: [maintenance](../maintenance.md#moving-a-pin) |
+| Install channel | the release fetch above. `lhpc clean graywolf --purge` removes `build/tools/graywolf`, `state/graywolf` and every `state/<rid>/graywolf` (the whole station configuration, beacons included, and the UI password). `lhpc update graywolf --source stable` (*Check upstream*; formerly `--upstream`) installs the latest `chrissnell/graywolf` release, verified against that release's own `checksums.txt`; `--source binary` is the pinned release its build fetches; a bare `lhpc update graywolf` installs the pinned build — if the installed version is newer than the pin, that is a downgrade; use `--source stable` to stay on upstream; `pinned`/`dev` are refused, graywolf has no compiled lane. Moving the pin: [maintenance](../maintenance.md#moving-a-pin) |
 
 ## Contents
 
@@ -39,7 +39,7 @@ callsign, the GPS source and the iGate config; a failed push fails the start.
 | param | default | notes |
 |---|---|---|
 | `call` | inherits the global base callsign while empty | optional APRS SSID `-1`…`-15` (bare = SSID 0), shaped like `G0ABC-10` with your own call. Graywolf derives the APRS-IS passcode from it — LHPC stores none |
-| `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | where `loraham-kiss-tnc` listens |
+| `tnc_host` / `tnc_port` | `127.0.0.1` / the kiss instance's port on the same radio (8001 on r1) | where `loraham-kiss-tnc` listens |
 | `use_gps` | `on` | use the global position source (`lhpc gps`) |
 | `rf_log` (kiss) | `on` | the frames cross the radio at the kiss TNC, so the file (`logs/<rid>/rf-kiss.log`) and the switch (`lhpc config kiss rf_log off`) are the kiss stack's; graywolf's log page shows both |
 | `igate` | `0` | enable Graywolf's APRS-IS iGate |
@@ -90,5 +90,5 @@ graywolf's UI; a `use_gps` beacon sends nothing while there is no fix.
 
 - **Not with `loraham-kiss-serial`** — one KISS client: if the PTY holds the TNC, graywolf's
   dial is refused and retried; if graywolf holds it, the PTY is dead. LHPC does not lock it.
-- One app stack per band ([kiss](kiss.md#notes)): its kiss/daemon chain claims the band, so a
-  start on the other band is refused while that chain is up.
+- One app stack per radio ([kiss](kiss.md#notes)): its kiss/daemon chain holds its radio; graywolf on
+  another radio is a separate instance with its own chain.

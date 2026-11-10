@@ -8,10 +8,10 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | Component | `loraham-chat` (interactive; readiness manual) |
 | Source / pin | `src/LoRaHAM_Daemon` ← `makrohard/LoRaHAM_Daemon`, single-file artifact `clients/chat/lorachat_ncurses_113.c` |
 | Build | `gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread` (needs `libncurses-dev`) |
-| Run | `<source>/loraham_chat` from `<runtime>/config/files`, so it reads the seeded config. `lhpc stack start chat` ensures the daemon (433, MANAGED) and prints the command (also on the Dashboard card); run it yourself, locally or over SSH |
-| Config | `<runtime>/config/files/lorachat.conf` (`KEY=VALUE`); the in-app Ctrl-K menu saves back to it |
-| History | `<runtime>/config/files/lorachat.log`, written by the client; `lhpc clean chat --purge` keeps it (the config goes) |
-| Sockets | `/tmp/lora433.sock`, `/tmp/loraconf433.sock` (hard-coded 433) |
+| Run | `<source>/loraham_chat --data-socket /tmp/lora-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock` from `<runtime>/config/files/<rid>/`, so it reads the seeded config. `lhpc stack start chat` ensures the daemon (433, MANAGED) and prints the command (also on the Dashboard card); run it yourself, locally or over SSH |
+| Config | `<runtime>/config/files/<rid>/lorachat.conf` (`KEY=VALUE`); the in-app Ctrl-K menu saves back to it |
+| History | `lorachat.log` in its working directory `<runtime>/config/files/<rid>/`, written by the client; `lhpc clean chat --purge` keeps it (the config goes) |
+| Sockets | its radio's `/tmp/lora-<rid>.sock` (raw) and `/tmp/loraconf-<rid>.sock`, the advanced params `data_socket` / `conf_socket` |
 | Install channel | source only |
 
 ## Contents
@@ -41,5 +41,5 @@ None — chat has no position setting.
 
 ## Conflicts
 
-- One app stack per band ([kiss](kiss.md#notes)): chat holds 433 like kiss/graywolf, voice on 433
-  and meshcom.
+- One app stack per radio ([kiss](kiss.md#notes)): chat holds its 433 radio like kiss/graywolf, voice
+  and meshcom do.
