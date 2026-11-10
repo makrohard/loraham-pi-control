@@ -8,6 +8,7 @@ import os
 import time
 from contextlib import contextmanager
 
+from . import instances
 from .daemon_control import ALLOWED_BANDS
 from .model import ResourceMode
 from .service_base import AdmissionRefused, SourceTxnBlocked
@@ -95,8 +96,7 @@ class AdmissionOpsMixin:
         except reslock.ResourceBusy as exc:
             return f"a source operation is already in progress ({getattr(exc, 'key', '')})"
 
-    def _operation_bands(self, target: str, band: str = "", radio: str = "",
-                         op: str = "") -> set:
+    def _operation_bands(self, target: str, band: str = "", radio: str = "", op: str = "") -> set:
         """THE authoritative radio band(s) a lifecycle op on `target` touches — one source of truth
         for radio locking + conflict detection.
           * START  — the REQUESTED bands (client: its chosen/declared band; daemon: `radio`, else
@@ -156,7 +156,7 @@ class AdmissionOpsMixin:
         return {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
 
     def _operation_resource_keys(self, target: str, band: str = "", radio: str = "",
-                                 op: str = "") -> list[str]:
+                                 op: str = "", inst=None) -> list[str]:
         """Canonical resource keys an EXCLUSIVE/PROVIDER operation on `target` touches —
         the basis for cross-stack operation locks so a start/stop/restart of one stack
         serializes against another stack claiming the SAME radio/port/socket. Radio claims
@@ -164,7 +164,7 @@ class AdmissionOpsMixin:
         so the lock set equals the conflict set, except that ADVISORY claims still lock: they
         never block a start, but two operations on the same slot still run one after the other.
         CONSUMER/COOPERATIVE claims take no lock."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)
         if not order:
             return []
         keys = set()
@@ -179,7 +179,7 @@ class AdmissionOpsMixin:
             for r in c.resources:
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith(_band_scoped)):
-                    keys.add(r.key)
+                    keys.add(instances.claim_key(r, instances.with_bases(self, self.stack_of(c.id), inst)))   # K8f: its own
         # Only a DAEMON-BACKED operation claims a daemon socket. A radio-direct stack
         # (meshtastic, reticulum) drives the hardware itself and never touches one — adding the
         # key for it would invent a conflict with every daemon client on the same band.
@@ -195,7 +195,7 @@ class AdmissionOpsMixin:
         # readers on one device, which loses fixes intermittently instead of failing cleanly.
         # Keyed on the real character device (st_rdev), so /dev/ttyACM0 and its by-id alias
         # cannot be claimed as if they were two different receivers.
-        gps_key = self._gps_device_claim(target)
+        gps_key = self._gps_device_claim(target, inst)
         if gps_key:
             keys.add(gps_key)
         return sorted(keys)
@@ -210,7 +210,7 @@ class AdmissionOpsMixin:
 
     def _lifecycle_lock_keys(self, op: str, target: str, band: str = "",
                              stop_owners: bool = False, cascade: bool = False,
-                             radio: str = "") -> list[str]:
+                             radio: str = "", inst=None) -> list[str]:
         """The COMPLETE lock bundle a lifecycle op must hold: the target's
         `lifecycle.<stack>` + `claim.<resource>` keys (+ source-path keys for start/
         restart), AND — for `stop_owners`/`cascade` — the owners'/dependents' keys too, so
@@ -220,21 +220,21 @@ class AdmissionOpsMixin:
         from . import reslock
         keys: set[str] = set()
 
-        def add(t: str, with_source: bool, scoped_band: str, scoped_radio: str, scoped_op: str) -> None:
+        def add(t: str, with_source: bool, scoped_band: str, scoped_radio: str, scoped_op: str, insts) -> None:
             sid = self.stack_of(t) or t
             keys.add(f"lifecycle.{sid}")
-            for rk in self._operation_resource_keys(t, scoped_band, scoped_radio, scoped_op):
+            for rk in {k for i in insts for k in self._operation_resource_keys(t, scoped_band, scoped_radio, scoped_op, i)}:
                 keys.add(f"claim.{rk}")
             if with_source:
                 for sp in self._operation_source_paths(t):
                     keys.add(reslock.source_lock_key(sp))
 
-        add(target, op in ("start", "restart"), band, radio, op)
+        add(target, op in ("start", "restart"), band, radio, op, [inst])
         if stop_owners and op in ("start", "restart"):
-            for b in self.run_blockers(target, band, radio):
+            for b in self.run_blockers(target, band, radio, inst):
                 holder = b.get("holder_stack") or b.get("holder")
                 if holder:
-                    add(holder, False, "", "", "")   # holder is a running peer; its own bands apply
+                    add(holder, False, "", "", "", instances.running_insts(self, h := self.stack_of(holder) or holder) or instances.saved_insts(self, h))
         if cascade and op in ("stop", "restart"):      # a restart's stop leg cascades too
             # A PER-BAND daemon stop cascades only to the band(s) its stop leg takes down (dual-band
             # collateral included) — the same scope `_stop_impl` gives `stop_dependents`.
@@ -243,7 +243,7 @@ class AdmissionOpsMixin:
             per_band = (stk is not None and stk.main == self.DAEMON_ID and band in ("433", "868"))
             stopped = self._operation_bands(target, band, "", "stop") if per_band else None
             for dep in self._dependents_of(target, stopped):
-                add(dep, False, band if per_band else "", "", "stop")
+                add(dep, False, band if per_band else "", "", "stop", [i for i in (instances.running_insts(self, dep) or instances.saved_insts(self, dep)) if not stopped or i is None or i.band in stopped])
         return sorted(keys, key=reslock.canonical_key)
 
     def _held_counts(self) -> dict:
@@ -386,14 +386,14 @@ class AdmissionOpsMixin:
 
     @contextmanager
     def _lifecycle_guard(self, op: str, target: str, band: str = "",
-                         stop_owners: bool = False, cascade: bool = False, radio: str = ""):
+                         stop_owners: bool = False, cascade: bool = False, radio: str = "", inst=None):
         """Acquire the lifecycle lock bundle. RE-ENTRANT per THREAD: a key already held by
         an outer guard in THIS thread is not re-flocked (so restart→stop+start and
         stop_owners→stop nest without self-contending), but an INDEPENDENT thread sharing
         this service contends through `reslock` and gets `ResourceBusy`. Recursion counts
         ensure a nested guard never releases an outer guard's flock."""
         from . import reslock
-        keys = self._lifecycle_lock_keys(op, target, band, stop_owners, cascade, radio)
+        keys = self._lifecycle_lock_keys(op, target, band, stop_owners, cascade, radio, inst)
         counts = self._held_counts()
         bumped: list[str] = []
         # For a start/restart that acquires source locks FRESH (not nested inside an outer

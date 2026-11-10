@@ -124,6 +124,7 @@ class StopOpsMixin:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
+        band = band or (inst.band if getattr(inst, "rid", "") and self._is_daemon_target(target) else "")   # K8f: rN's
         if (_r := self._controller_refusal(target) or self.band_refusal(target, band, "stop")) is not None:
             return _r
         from . import reslock
@@ -142,7 +143,7 @@ class StopOpsMixin:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
                                    release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst)
         try:
-            with self._lifecycle_guard("stop", target, band, cascade=cascade):
+            with self._lifecycle_guard("stop", target, band, cascade=cascade, inst=inst):
                 inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # a band caller's, under the lock (G1-C47)
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
                                       release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
@@ -497,7 +498,7 @@ class StopOpsMixin:
                         return _pf_err
                     with self._lifecycle_guard("restart", target, _rband,
                                                stop_owners=stop_owners, cascade=cascade,
-                                               radio=_radio):
+                                               radio=_radio, inst=inst):
                         # MESHCORE POSITION: taken HERE — under the guard, before the stop —
                         # and handed to the nested start, so a restart queries gpsd exactly
                         # once and a refusal leaves the running node up rather than stopping

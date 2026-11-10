@@ -725,7 +725,7 @@ class LifecycleOpsMixin:
             with self._config_stable():
                 order, radio = self._order_radio(target, op_band)
                 with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
-                                           radio=radio):
+                                           radio=radio, inst=inst):
                     yield op_band, order, radio
 
     def _start_supersedes_stop_intent(self, target: str, res: ActionResult) -> bool:
