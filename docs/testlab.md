@@ -54,10 +54,10 @@ voice's terminal variant are interactive TUIs LHPC never auto-spawns.
 
 **Codespace:** the badge above builds from `.devcontainer/Dockerfile`, onCreate installs and
 builds every stack, and the console starts on **8770** (forwarded privately); a restart re-runs
-the idempotent start script. Stack UIs: graywolf **8080**, meshcom **18083**, meshcore's Web UI
-**8788** (Companion TCP **5000**), meshtastic **9080** (a plain-HTTP socat bridge to
-meshtasticd's self-signed `:9443`, which the Codespace proxy 502s on). **8444–8447** are
-forwarded for stack proxy pages, which you create on the Webserver page.
+the idempotent start script. Stack UIs: graywolf **8080**, meshcom **18083**, meshcore (it runs as meshcore@r2, the lab list's
+868 radio) Web UI **8921** (Companion TCP **5133**), meshtastic **9080** (a plain-HTTP socat bridge to
+meshtasticd's self-signed `:9443`, which the Codespace proxy 502s on). **8444–8451** are
+forwarded for stack proxy pages (the lab list's r1 and r2), which you create on the Webserver page.
 
 **Any container/box:**
 

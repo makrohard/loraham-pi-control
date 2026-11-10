@@ -8,10 +8,10 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radi
 | Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan) · `meshtastic-web` (the browser UI, [its own selectors](../provenance.md#the-web-client)) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
 | Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a managed git source |
 | Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/<rid>/meshtasticd.yaml -d <runtime>/state/<rid>/meshtasticd` |
-| Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
+| Endpoints | TCP API `:4403` · web UI `:9443` on r1, each + 133 per further radio (r2: 4536 / 9576), written into the instance's config (`General.APIPort`, `Webserver.Port`) (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
 | Config | `<runtime>/config/files/<rid>/meshtasticd.yaml`, one per instance, regenerated from `lhpc/data/bases/meshtasticd.yaml` at every start (LoRa pins from the radio's board preset, else its band; web root, TLS paths, log level) |
 | Artifacts | `build/tools/meshtasticd/meshtasticd`, the web UI at `build/tools/meshtastic-web/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
-| Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
+| Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.<api>` + `.<web>` exclusive (4403 / 9443 on r1) |
 | System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
 | Install channel | **binary** by default (then the web client, `binary`, in the same run); `--source pinned\|dev\|stable` builds natively. Policy: [provenance](../provenance.md#the-binary-channel) |
 
@@ -37,7 +37,7 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radi
 
 Region, node identity, GPS mode and fixed position are device settings applied through the
 managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic`).
-The web port is fixed at 9443 and serves HTTPS only. Upstream meshtastic/web #1464, merged after the
+The web port is derived, not settable: 9443 on r1, + 133 per further radio; it serves HTTPS only. Upstream meshtastic/web #1464, merged after the
 pinned v2.7.2, makes the Add Connection dialog default a local address to HTTP in Chromium-based
 browsers; if it shows HTTP, switch it to HTTPS for this box.
 
