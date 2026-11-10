@@ -1858,8 +1858,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
-    pin_tag = "722b5e8"
+    pin_commit = "c17fbeba5d80950622815af36f320930aaa5586d"
+    pin_tag = "c17fbeb"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2099,8 +2099,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "722b5e8e535e08c0a8a63c244f0c23853ec4e8a7"
-    pin_tag = "722b5e8"
+    pin_commit = "c17fbeba5d80950622815af36f320930aaa5586d"
+    pin_tag = "c17fbeb"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2159,8 +2159,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "4f60051ce4ef2810df81d42a21df98de5228bbc9"
-    pin_tag = "v4.40a.10.28-31-g4f60051c"
+    pin_commit = "5d76238b33259ab05ff2e53235e7f9808767389b"
+    pin_tag = "v4.40a.11.07"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2527,8 +2527,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "141d94492bd313e908b44379ace213cd2cf8e3f2"
-    pin_tag = "v1.0.10-457-g141d944"
+    pin_commit = "63f9d305a7de79b3356123c07fe7d2f8d3f1e448"
+    pin_tag = "v1.0.10-490-g63f9d30"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -2850,8 +2850,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "72266e24f5f62caeae49cbe75d02183f8ec6176c"
-    pin_tag = "1.1.4-179-g72266e2"
+    pin_commit = "98444069ee49d21aff1e2a4d67a53ae7c53fecaa"
+    pin_tag = "1.1.4-231-g9844406"
 
 [[stack]]
 id = "reticulum"
@@ -2896,8 +2896,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "e40191b3d193b46b7f2d8a44424a594cd758839b"
-pin_tag = "1.5.5-1-ge40191b3"
+pin_commit = "2c7cf8272bb36abaea1a44c3435af17c9d1fdcb2"
+pin_tag = "1.6.0-4-g2c7cf827"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -3327,8 +3327,8 @@ note = "Interactive ncurses browser (needs a real TTY; no headless mode) — sta
 path = "src/nomadnet"
 remote = "https://github.com/markqvist/NomadNet.git"
 branch = "master"
-pin_commit = "b2f852c9e0efc68d89d9185939f42ec0c2fee125"
-pin_tag = "1.4.4"
+pin_commit = "9dd3d861ea243f593520bad412c9971fd675af18"
+pin_tag = "1.5.0"
 [stack.component.process]
 exec_name = "nomadnet"
 [[stack.component.pre_steps]]
@@ -3380,8 +3380,8 @@ note = "Propagation is OFF by default: enabling it on a duty-limited link is a d
 path = "src/lxmf"
 remote = "https://github.com/markqvist/LXMF.git"
 branch = "master"
-pin_commit = "c3ff2d6dc2f256daab896dadc044dd5a913ecbb7"
-pin_tag = "1.2.0"
+pin_commit = "101fd447815b4f4f699f8bb700e0df613f71efce"
+pin_tag = "1.3.0-1-g101fd44"
 [stack.component.process]
 exec_name = "lxmd"
 [[stack.component.pre_steps]]

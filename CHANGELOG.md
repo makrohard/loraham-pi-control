@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.9
+
+- meshcom-qemu-raspi: 722b5e8e5 -> c17fbeba5 (c17fbeb), used by meshcom-gps-relay, meshcom-qemu
+- MeshCom-Firmware: 4f60051ce -> 5d76238b3 (v4.40a.11.07), used by meshcom-firmware
+- openhop-core: 141d94492 -> 63f9d305a (v1.0.10-490-g63f9d30), used by meshcore-node
+- openhop-repeater: 72266e24f -> 98444069e (1.1.4-231-g9844406), used by openhop-repeater-src
+- reticulum: e40191b3d -> 2c7cf8272 (1.6.0-4-g2c7cf827), used by rns
+- nomadnet: b2f852c9e -> 9dd3d861e (1.5.0), used by nomadnet
+- lxmf: c3ff2d6dc -> 101fd4478 (1.3.0-1-g101fd44), used by lxmd
+
 ## 0.13.8
 
 - LoRaHAM_Voice: 9c000225f -> 2547c4b80 (2547c4b), used by loraham-voice, loraham-voice-cli
