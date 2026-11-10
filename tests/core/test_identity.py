@@ -345,6 +345,12 @@ def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path,
     assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-7"}).ok      # local -> unaffected
     monkeypatch.setattr(type(svc), "stack_running",
                         lambda self, sid: sid in ("chat", "graywolf"))
+    # K8f S4-1: the running instances are told (chat@r1, graywolf@r1 whose file holds the override), as their launch
+    # records would; an UNKNOWN running set counts every instance on the running band as live (DEC-W384de)
+    from lhpc.core import instances
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: [f"{sid}@r1"] if sid in ("chat", "graywolf") else [])
+    monkeypatch.setattr(instances, "instance_runs", lambda s, comp, inst, band: getattr(inst, "rid", "") == "r1"
+                        and s.stack_of(comp.id) in ("chat", "graywolf") and comp.id == s.stack(s.stack_of(comp.id)).main)
     r = svc.set_operator_identity(callsign="XX0XXB")
     assert r.ok
     assert any("chat" in d and "restart" in d for d in r.details), r.details

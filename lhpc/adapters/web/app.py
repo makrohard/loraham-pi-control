@@ -2094,7 +2094,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         inst = _settings_form_inst(stack_id)
         band = inst.band if inst else ""
-        view = service.config_view(stack_id, band)
+        view = service.config_view(stack_id, band, rid=getattr(inst, "rid", ""))       # K8f S4-1: the instance's fields
         # Fold each submitted Config-page field (`c_`/`f_`, component-qualified when the name
         # collides) into the canonical API key (`name` or `component.name`; file keys carry the
         # `file_` prefix) BEFORE save — so duplicate names never flatten and unqualified duplicates

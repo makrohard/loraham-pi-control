@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import (
-    commands,
     config_save,
     daemon_control,
     listeners,
@@ -471,9 +470,8 @@ class ParamsConfigMixin:
         out: list = []
         for stack in self.stacks():
             run_counts, file_counts = self._owner_param_counts(stack)
-            # K6: every instance's own file (its radio's band), the global one without a list
-            for inst in ([_instances.copy_of(self, stack.id, i.rid)[0] or i
-                          for i in commands.stack_instances(stack, self._paths) if i.rid] or [None]):
+            # K6: every instance's own file (its radio's band); the global one only WITHOUT a list (D3 B1: a list where no
+            for inst in _instances.saved_insts(self, stack.id):     # radio runs the stack has no candidate, never [None])
                 # the radio's band only for a stack with bands (its band-specific defaults); "" for one without
                 band = inst.band if inst is not None and self.stack_bands(stack.id) else ""
                 cfg_band = band if inst is not None else self._config_band(stack.id, band)
@@ -794,15 +792,20 @@ class ParamsConfigMixin:
         if s is not None and s.main == self.DAEMON_ID:
             comps = []
         cfg = self.config()
-        stored = self._stack_config_cached(target)
+        # K8f S4-1 (D1 B1, D3 N4): `<stack>@<rid>`'s view is its own in every part; autostart: the global file (K6)
+        inst = _instances.copy_of(self, self._owner_stack_id(target) or target, rid)[0] if rid else None
+        cfg_band = self._config_band(target, band, inst)
+        stored = self._stack_config_cached(target, "", None)
         live = {cid: st.run_state for ss in self.build_snapshot().stacks
                 for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
+        def runs(c) -> bool:
+            return live.get(c.id) in up and (inst is None or _instances.instance_runs(self, c, inst, cfg_band))
         # `optional_role` decides the row: hidden (library/firmware/feed/fixture), listed (run on
         # demand, no auto-start control) or tickable (the `autostart_<id>` checkbox).
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
                      "autostart": stored.get(f"autostart_{c.id}") == "on",
-                     "running": live.get(c.id) in up,
+                     "running": runs(c),
                      "startable": self.optional_role(c) == "tickable"}
                     for c in members if self.optional_role(c) != "hidden"]
         main = s.main_component if s else None
@@ -816,7 +819,6 @@ class ParamsConfigMixin:
                     "overridden": c.id in cfg.remotes}
                    for c in members if c.source and c.source.remote]
         bands = self.stack_bands(target)
-        cfg_band = self._config_band(target, band)
         view = {
             # Each component carries its OWN field-name map (`fields`) and its OWN
             # component-scoped value map (`values`) so duplicate run/file names across components
@@ -825,7 +827,7 @@ class ParamsConfigMixin:
                             "fields": {p.name: self._config_field(target, "run", c.id, p.name)
                                        for p in rparams},
                             "values": {p.name: self._resolved_param_value(target, "run", c.id,
-                                                                          p.name, cfg_band)
+                                                                          p.name, cfg_band, inst)
                                        for p in rparams}}
                            for c in comps
                            for rparams in (self._form_run_params(c),) if rparams],
@@ -837,17 +839,17 @@ class ParamsConfigMixin:
                                  "fields": {p.name: self._config_field(target, "file", c.id, p.name)
                                             for p in c.config_file.params},
                                  "values": {p.name: self._resolved_param_value(target, "file", c.id,
-                                                                               p.name, cfg_band)
+                                                                               p.name, cfg_band, inst)
                                             for p in c.config_file.params}}
                                 for c in members if c.config_file
                                 and any(not p.hidden for p in c.config_file.params)],
             "file_params": [p for c in members if c.config_file
                             for p in c.config_file.params if not p.hidden],
-            "file_values": self.file_config_values(target, cfg_band),
+            "file_values": self.file_config_values(target, cfg_band, inst),
             "bands": list(bands),       # allowed bands ([] = single-band stack)
             "band": cfg_band,           # the band currently being edited
-            "values": self.stack_config(target, cfg_band),
-            "running": bool(main and live.get(main.id) in up),
+            "values": self.stack_config(target, cfg_band, inst=inst),
+            "running": bool(main and runs(main)),
             "radios": [],
         }
         # GPS is GLOBAL, but it is shown on EVERY stack that can use a position — beside that
@@ -1127,7 +1129,7 @@ class ParamsConfigMixin:
         def _render_marker(_paths, tgt=target, _sid=mkey, _band=band, _cfg=cfg_band,
                            _params=tuple(params)):
             id_recs = {(r["kind"], r["comp"], r["name"]): r
-                       for r in self._identity_fields(tgt)}
+                       for r in self._identity_fields(tgt, inst)}
 
             def _post_effective(kind, c, p, v) -> str:
                 """What the stack will ACTUALLY use once this value is stored. A cleared
@@ -1277,47 +1279,45 @@ class ParamsConfigMixin:
                 # against the RAW stored one flagged every running licensed stack restart-required
                 # when an SSID-bearing or lowercase global is merely re-saved unchanged, with no
                 # effective identity change at all.
-                _before = {}
+                _before = {}                      # K8f S4-1 (D1 B2/B3): per instance key, each instance's own identity
                 for _st in self.stacks():
-                    for _rec in self._identity_fields(_st.id):
-                        if _rec["enforce"] == "licensed":
-                            _before[_st.id] = self.inheritable_global(_rec)[0]
-                            break
-                affected: list = []                # (sid, run_band)
+                    for _i in _instances.saved_insts(self, _st.id):
+                        _lic = next((r for r in self._identity_fields(_st.id, _i) if r["enforce"] == "licensed"), None)
+                        if _lic is not None:
+                            _before[_instances.key(_st.id, _i)] = self.inheritable_global(_lic)[0]
+                affected: list = []                # (instance key, run_band)
                 if new_call != old_call:
                     for st in self.stacks():
                         # ACTIVE = main running, OR the GUI fallback is what runs here and
                         # its interactive marker is presented (Voice on Lite: the main is
                         # gui-skipped, the operator runs the TUI — its shared config still
                         # carries the inherited callsign).
-                        active, run_band = self.active_config_consumer(st.id)
-                        if not active:
-                            continue
-                        rows = self.identity_resolution(st.id, run_band)
-                        if not any(r["enforce"] == "licensed" and not r["explicit"]
-                                   for r in rows):
-                            continue           # nothing here inherits the global
-                        # ...and only when what it INHERITS actually changes. Re-saving an SSID-bearing
-                        # or lowercase global unchanged leaves every effective identity identical,
-                        # so there is nothing to restart for.
-                        after = next((self.inheritable_global(r, new_call)[0] for r in rows
-                                      if r["enforce"] == "licensed"), "")
-                        if after != _before.get(st.id, ""):
-                            affected.append((st.id, run_band))
+                        unknown = self.stack_running(st.id) and _instances.running_insts(self, st.id) is None
+                        eb = self._effective_band(st.id, "") if unknown else ""   # unknown (DEC-W384de): the running
+                        for i in _instances.saved_insts(self, st.id):            # band's instances are live (all if "")
+                            active, run_band = (True, i.band) if unknown and i is not None and eb in ("", i.band) \
+                                else self.active_config_consumer(st.id, inst=i)
+                            rows = self.identity_resolution(st.id, run_band, i) if active else []
+                            if not any(r["enforce"] == "licensed" and not r["explicit"] for r in rows):
+                                continue           # not live, or nothing here inherits the global
+                            # ...and only when what it INHERITS changes: an SSID-bearing or lowercase global
+                            # re-saved unchanged leaves every effective identity identical (nothing to restart).
+                            after = next((self.inheritable_global(r, new_call)[0] for r in rows
+                                          if r["enforce"] == "licensed"), "")
+                            if after != _before.get(_instances.key(st.id, i), ""):
+                                affected.append((_instances.key(st.id, i), run_band))
                 # ONE transaction: the [operator] patch + every marker, all-or-recoverable.
                 data = dict(_config._load_runtime_toml(self._paths, local_path))
                 _config._patch_local_table(data, "operator", {"callsign": new_call})
                 targets = [("local", local_path,
                             _config.render_local_tables(data), 0o600)]
-                for sid, run_band in affected:       # K5: each running instance's own marker (else the band's reader)
-                    for k in (_instances.running_keys(self, sid)
-                              or [_instances.key(sid, _instances.copy_of(self, sid, band=run_band)[0])]):
-                        _pre = self.restart_required(k)
-                        if _pre is not None and _pre.get("unsafe"):
-                            keep_unsafe.append(k)    # left byte-identical, and disclosed below
-                            continue
-                        targets.append(("state", _rr.marker_path(self._paths, k),
-                                        self.restart_marker_payload(k, ["callsign (inherited global)"], run_band), 0o600))
+                for k, run_band in affected:         # exactly the affected instances' own markers
+                    _pre = self.restart_required(k)
+                    if _pre is not None and _pre.get("unsafe"):
+                        keep_unsafe.append(k)    # left byte-identical, and disclosed below
+                        continue
+                    targets.append(("state", _rr.marker_path(self._paths, k),
+                                    self.restart_marker_payload(k, ["callsign (inherited global)"], run_band), 0o600))
                 _config._apply_config_transaction_locked(self._paths, targets)
         except _config.ConfigRecoveryRequired:
             return ActionResult(False, "a pending configuration transaction could "
