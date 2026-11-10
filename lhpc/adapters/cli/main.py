@@ -986,8 +986,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_proxy = ws_sub.add_parser("proxy",
                                    help="Configure a stack's web-UI reverse proxy (intent; run apply)")
     p_ws_proxy.add_argument("stack", metavar="page",
-                            help="The web UI to proxy: the stack id, or <stack>-<component> for a "
-                                 "stack's further web UIs")
+                            help="The web UI to proxy: <stack>@<rid>, or <stack>-<component>@<rid> for a "
+                                 "stack's further web UIs (one per radio it runs on)")
     p_ws_proxy.add_argument("--mode", choices=_STACKWEB_MODES,
                             help="local = loopback only; lan = listen, only --cidr passes; "
                                  "public = like lan; --cidr 0.0.0.0/0 admits everyone (needs "

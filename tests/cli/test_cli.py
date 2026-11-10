@@ -1429,3 +1429,22 @@ def test_g1_k8a_re_c_the_daemon_monitor_needs_its_radio():
     from lhpc.core.daemon_control import DaemonView
     with pytest.raises(TypeError):
         _render_daemon(DaemonView(band="868", reachable=True, status={"RADIO": "READY"}))
+
+
+def test_dec_w384ci_the_proxy_help_names_the_forms_the_proxy_takes(tmp_path, capsys):
+    # DEC-W384ci (2), measured: a page is `<stack>@<rid>` or `<stack>-<component>@<rid>`; a bare id names no page.
+    # red on a5a047ce: the help said "the stack id"
+    from lhpc.adapters.cli import main as cli
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    try:
+        cli.main(["webserver", "proxy", "--help"])
+    except SystemExit:
+        pass
+    text = " ".join(capsys.readouterr().out.split())
+    assert "<stack>@<rid>, or <stack>-<component>@<rid> for a stack's further web UIs" in text, text
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ids = [p.page_id for p in svc.web_pages()]
+    assert "meshcore@r2" in ids and "meshcore-meshcore-node@r2" in ids
+    assert svc.stack_web_configure("meshcore", mode="local").summary == "'meshcore' names no web UI to proxy"
