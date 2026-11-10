@@ -399,3 +399,12 @@ def switcher(svc, job: str, rid: str = "") -> dict:
         return (own if by_job(own) else e.job()) if RADIO_JOB.fullmatch(job) else job   # G1-W5-RE B1: by its shape
     radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]
     return {"radio": shown, "radios": radios, "stacks": stacks}
+
+
+def no_switch(target: str) -> str:
+    """Why `target` has no RF log switch of its own (DEC-W384ci): a `<stack>@<rid>` of a stack with one is that stack's
+    one switch for all its radios; anything else has no RF log."""
+    sid = target.partition("@")[0]
+    if sid != target and entry(sid) is not None:
+        return f"Cannot switch the RF log of {target}: the switch is {sid}'s, one for all its radios (switch '{sid}')."
+    return f"'{target}' has no RF log."

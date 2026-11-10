@@ -173,10 +173,9 @@ def test_the_daemon_goes_per_radio_by_its_id(tmp_path, clock, procs):
 
 
 def test_the_band_form_is_gone(tmp_path):
-    # W298, the maintainer's yes under W290: `<stack>@<band>` is no kill target any more.
+    # W298, the maintainer's yes under W290: `<stack>@<band>` is no kill target any more; W405: the refusal says so
     plan = kill.kill(_copy_svc(tmp_path, {}), "kiss@433")
-    assert not plan.ok and plan.summary == (
-        "Cannot kill kiss@433: kiss@433: 433 is not a radio of the hardware list.")
+    assert not plan.ok and plan.summary == "Cannot kill kiss@433: a band is no instance, and kiss is not running."
 
 
 def test_k4_a_user_started_chat_is_killed(tmp_path, clock, procs):
