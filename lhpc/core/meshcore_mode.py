@@ -55,6 +55,14 @@ def clients_available(mode) -> bool:
     return chat_identity_required(mode)
 
 
+def running_reads_position(svc) -> bool:
+    """Does a RUNNING MeshCore instance read a position (K8f, D3 B8): each running instance's own running role; an
+    unknown running set (instances.running_insts None) counts as reading, the conservative side."""
+    from . import instances
+    ri = instances.running_insts(svc, STACK_ID)
+    return ri is None or any(position_consumed(svc.meshcore_running_mode(i)) for i in ri)
+
+
 def position_consumed(mode) -> bool:
     """Every mode reads the box's position (issue #5): the Companion through the `meshcore-gps`
     feed or fixed coordinates, the repeater through openHop's own GPS file source, which the host

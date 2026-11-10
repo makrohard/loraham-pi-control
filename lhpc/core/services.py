@@ -882,12 +882,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append(f"[{ss.stack.id}] {ss.stack.name}  ({rollup[ss.stack.id]})")
             if ss.stack.id == _meshcore_mode.STACK_ID:
                 # The ONE mode decision, as saved — and, while the stack runs with another one,
-                # the mode the running launch was generated with (a change is restart-required).
-                saved, live = self.meshcore_mode_display(), self.meshcore_running_mode()
-                line = f"  mode: {saved or '(unreadable stack config)'}"
-                if saved and live != saved and rollup[ss.stack.id] in ("running", "degraded"):
-                    line += f"  (running: {live} — restart to apply)"
-                details.append(line)
+                # the mode the running launch was rendered from (a change is restart-required). K8f: per radio.
+                _mi = instances.saved_insts(self, ss.stack.id)
+                for i in _mi:
+                    saved, live = self.meshcore_mode_display(i), self.meshcore_running_mode(i)
+                    line = f"  mode{f' {i.rid}' if i is not None and len(_mi) > 1 else ''}: {saved or '(unreadable stack config)'}"
+                    if saved and live != saved and rollup[ss.stack.id] in ("running", "degraded"):
+                        line += f"  (running: {live} — restart to apply)"
+                    details.append(line)
             _ov = self.binary_active_override(ss.stack.id)       # A3: {} unless in force
             for comp in ss.stack.components:
                 st = ss.components[comp.id]

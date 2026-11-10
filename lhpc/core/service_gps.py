@@ -113,9 +113,8 @@ class GpsOpsMixin:
         a fresh one is taken. A snapshot that cannot be built at all is itself a blocker.
         """
         watch = self._gps_consumer_ids() | self._all_gps_feed_ids()
-        if not self._meshcore_consumes_position(_meshcore_mode.STACK_ID,
-                                                self.meshcore_running_mode()):
-            watch = watch - {_meshcore_mode.NODE_ID}     # a live repeater reads no position
+        if not _meshcore_mode.running_reads_position(self):
+            watch = watch - {_meshcore_mode.NODE_ID}     # no running MeshCore instance reads a position
         wanted = {s for s in stack_ids if s}
         if require_enabled:
             # A stack running with its switch OFF takes no position from the global setting, so
@@ -326,8 +325,7 @@ class GpsOpsMixin:
         from .probes.systemd import UnitState, probe_unit
         try:
             watch = self._gps_consumer_ids() | self._all_gps_feed_ids()
-            if not self._meshcore_consumes_position(_meshcore_mode.STACK_ID,
-                                                    self.meshcore_running_mode()):
+            if not _meshcore_mode.running_reads_position(self):
                 watch = watch - {_meshcore_mode.NODE_ID}
             feeds = self._all_gps_feed_ids()
             index = self._component_index()
