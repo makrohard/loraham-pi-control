@@ -315,12 +315,15 @@ the radio's id in `config/radios.toml`); nothing is listed first. A stack with f
 one node) runs one instance at a time: a start of a second is refused, naming the one that runs.
 - `lhpc stack start|stop|restart <stack>@<rid>` acts on that instance alone, on its radio's band.
 - A bare `<stack>` is refused with the radios it can run on (`kiss can run on r1 or r3: use kiss@r1 or
-  kiss@r3`); a bare stop, restart or kill names the instances that run (`kiss runs as kiss@r1 and
-  kiss@r3: name one (kiss@r1)`).
+  kiss@r3`): `lhpc stack start|stop|restart|poststart`, a bare `lhpc kill` and `lhpc config <stack>` (with
+  `--reset` or `--daemon-param` too); a bare stop, restart or `lhpc kill` names the instances that run
+  (`kiss runs as kiss@r1 and kiss@r3: name one (kiss@r1)`). The console's controls and Settings saves name the
+  radio as well; `lhpc logs <component>` without a radio tails the newest log.
 - An instance's ports are the stack's base ports on r1, + 133 per further radio (base + 133 × (n − 1)
   on rN; kiss-tnc on r2: 8134).
-- On a box with several radios, a page or command that names no radio acts on one instance of the
-  stack: the one already running on that band, else the band's first enabled radio (lowest rN).
+- The Apps page without a radio it can use (no `?radio=`, or one the stack cannot run on) shows each
+  stack's Settings for one instance: the radio it runs on, else the first radio able to run it; its Save
+  names that radio. Pick another with the page's radio selector (`?radio=rN`).
 
 `lhpc stack poststart <stack>@<rid> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows

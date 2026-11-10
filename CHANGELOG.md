@@ -97,8 +97,8 @@ Fixed
   without it).
 - The board setup moved from the daemon's Settings to the Board setup form on Add Hardware; `lhpc hardware <setup>`
   stays.
-- Known limitation: with several radios, a page or command that names no radio acts on the instance running on
-  that band, else the band's first enabled radio (lowest rN); name the radio (`<stack>@<rid>`) to choose.
+- Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
+  Settings for one instance, the radio it runs on, else the first radio able to run it; `?radio=rN` picks another.
 
 ## 0.13.8
 
