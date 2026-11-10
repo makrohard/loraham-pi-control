@@ -164,3 +164,29 @@ def test_the_reticulum_internet_verdict_of_a_start_is_its_own_instances(tmp_path
     assert not res2.ok and (res2.data or {}).get("reason") == ri.REASON_IFAC_KEY_MISSING, res2.summary
     res1 = svc.start("reticulum", apply=False, inst=r1)
     assert res1.ok, res1.summary
+
+
+@pytest.mark.parametrize("r2_main, shown", [((999, 1), []), ((111, 5), ["r2"])], ids=["r2-bound-elsewhere", "r2-bound"])
+def test_a_running_instance_without_a_verified_main_owns_no_post_record(tmp_path, monkeypatch, r2_main, shown):
+    # G1-K8F-S4-3-RE B1 (DEC-W409n: measured not present, pinned): meshtastic runs on r1 and r2 (a known set), r1 has
+    # no verified main (no binding), r2 one; a ceased post record bound to main (111, 5). r2 bound to another main: the
+    # record is shown for nobody, never as r1's; r2 bound to it: shown as r2's, not discarded beside r1's None
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _svc(tmp_path)
+    r1, r2 = (instances.copy_of(svc, "meshtastic", r)[0] for r in ("r1", "r2"))
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: [r1, r2])
+    binds = {"r1": None, "r2": {"main_launch_id": "l2", "main_pid": r2_main[0], "main_starttime": r2_main[1]}}
+    monkeypatch.setattr(Lifecycle, "_binding_for", lambda self, comp_id, band, inst=None: binds[inst.rid] if inst else None)
+    result = tmp_path / "result.json"
+    _steps_at(result, "owner", "exhausted")
+    rec = {"band": "433", "main_pid": 111, "main_starttime": 5, "result_path": str(result), "stack": "meshtastic"}
+    monkeypatch.setattr(Lifecycle, "owned_records",
+                        lambda self, comp_id, band=None, role="", rid=None: [rec] if role == "post" else [])
+    monkeypatch.setattr(Lifecycle, "_original_ceased", lambda self, r: True)
+    lines = [ln for ln in svc._post_start_outcomes("meshtastic") if "owner NOT applied" in ln]
+    assert [ln.rsplit("meshtastic@", 1)[1] for ln in lines] == shown, lines
+
+
+def _steps_at(path, label, outcome):
+    path.write_text(json.dumps({"steps": [{"kind": "exec", "label": label, "outcome": outcome, "rc": 0,
+                                           "attempts": 1, "elapsed_s": 1.0}]}))
