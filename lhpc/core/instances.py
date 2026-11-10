@@ -149,6 +149,15 @@ def named(svc, target: str, inst=None, band: str = "") -> str:
     return f"{target}@{cands[0] if len(cands) == 1 else '<rid>'}"
 
 
+def instance_pids(svc, sid: str, inst, comp_id: str, get_argvs, pids) -> list:
+    """Those of `pids` (component `comp_id`'s) that instance `inst` runs (instance_processes over the caller's one
+    cmdline table, `get_argvs`: a callable or the table); all of them without an instance (K8f S4-4b1)."""
+    if inst is None or not pids:
+        return list(pids)
+    table = get_argvs() if callable(get_argvs) else (get_argvs or {})
+    return [p for s, r, c, p in instance_processes(svc, table) if (s, r, c) == (sid, inst.rid, comp_id) and p in pids]
+
+
 def launch_bands(svc, sid: str) -> set:
     """The bands `sid`'s running instances were LAUNCHED on (their verified records' bands; G1-K4B 6: an edited
     hardware row is no evidence). Empty, so the caller holds every band (fail-safe), when one running instance's

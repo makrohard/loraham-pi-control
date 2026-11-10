@@ -949,12 +949,13 @@ class WebserverOpsMixin:
             for page in self.stack_web_pages(stk.id):          # one row per proxied page; F3b: its component's state
                 cs = ss.components.get(page.component_id)
                 rows.append({**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""})
+            insts = instances.running_insts(self, stk.id)    # K8f S4-4b1 (D3 B3): a row per running instance
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
                     if self._is_raw_endpoint(ep):
-                        rows.append(self._dashboard_port_row(
+                        rows.extend(self._dashboard_port_row(
                             stk, comp, ep, snap, fw_status,
-                            comp_state=ss.components.get(comp.id), get_argvs=_argvs))
+                            comp_state=ss.components.get(comp.id), get_argvs=_argvs, inst=i) for i in insts or [None])
         return rows
 
     @staticmethod
@@ -1016,7 +1017,7 @@ class WebserverOpsMixin:
                 "direct_port": direct_port, "direct_scheme": page.scheme,
                 "direct_scope": direct_scope}
 
-    def _endpoint_bind_host(self, stk_id: str, comp, ep) -> str | None:
+    def _endpoint_bind_host(self, stk_id: str, comp, ep, inst=None) -> str | None:
         """The component's configured BIND HOST, from the endpoint's declared firewall metadata
         (`bind_param`) — not from scanning for a `validator="bind"` param, which finds the
         ALLOW-LIST instead. KISS declares both: `kiss_host` is the listen address, `kiss_bind` the
@@ -1030,11 +1031,10 @@ class WebserverOpsMixin:
                              ("file", comp.config_file.params if comp.config_file else ())):
             for p in params:
                 if p.name == name:
-                    return self._resolved_param_value(
-                        stk_id, kind, comp.id, p.name, self._config_band(stk_id, ""))
+                    return self._resolved_param_value(stk_id, kind, comp.id, p.name, self._config_band(stk_id, "", inst), inst)
         return None
 
-    def _bind_exposure(self, stk_id: str, comp) -> tuple[str, str, bool]:
+    def _bind_exposure(self, stk_id: str, comp, inst=None) -> tuple[str, str, bool]:
         """Exposure (level, label, has_bind_control) from the component's bind ALLOW-LIST param
         (`validator="bind"`). Only one caller (`_dashboard_port_row`); the third element says the
         service has an allow-list control at all, which drives its log link and restart marker.
@@ -1047,8 +1047,7 @@ class WebserverOpsMixin:
                              ("file", comp.config_file.params if comp.config_file else ())):
             for p in params:
                 if getattr(p, "validator", "") == "bind":
-                    val = self._resolved_param_value(
-                        stk_id, kind, comp.id, p.name, self._config_band(stk_id, ""))
+                    val = self._resolved_param_value(stk_id, kind, comp.id, p.name, self._config_band(stk_id, "", inst), inst)
                     level, label = port_exposure(val)
                     return level, label, True
         return "bad", "public", False
@@ -1097,8 +1096,7 @@ class WebserverOpsMixin:
         val = found.pop()
         return (int(val), True) if val.isdigit() else (static_port, False)
 
-    def _dashboard_port_row(self, stk, comp, ep, listeners=None, fw_status=None,
-                            comp_state=None, get_argvs=None) -> dict:
+    def _dashboard_port_row(self, stk, comp, ep, listeners=None, fw_status=None, comp_state=None, get_argvs=None, inst=None) -> dict:
         """A `kind="port"` box row for a no-authentication TCP service (any scheme — an https
         listener with no auth and no bind knob is exactly as directly reachable as a tcp one).
 
@@ -1125,15 +1123,16 @@ class WebserverOpsMixin:
         of services with a log link and a restart hint is unchanged.
         These ports have no auth, so the colour is the whole warning."""
         from .model import RunState
-        level, label, has_bind = self._bind_exposure(stk.id, comp)
+        # K8f S4-4b1 (D3 B3): instance `inst` (None: an unknown running set) at its own ports, bind host and processes
+        ep = instances.endpoints_for([ep], instances.with_bases(self, stk.id, inst))[0] if inst is not None else ep
+        level, label, has_bind = self._bind_exposure(stk.id, comp, inst)
         static = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
-        live = (comp_state is not None
-                and comp_state.run_state in (RunState.RUNNING, RunState.DEGRADED))
-        pids = list(comp_state.pids or ()) if live else []
+        live = comp_state is not None and comp_state.run_state in (RunState.RUNNING, RunState.DEGRADED)
+        pids = instances.instance_pids(self, stk.id, inst, comp.id, get_argvs, comp_state.pids or ()) if live else []
         port, verified = self._endpoint_live_port(comp, ep, pids, get_argvs)
 
         def row(port_shown, live_scope, level, label, warn_reason):
-            return {"kind": "port", "name": stk.name, "sid": stk.id, "port": str(port_shown),
+            return {"kind": "port", "name": f"{stk.name} ({inst.rid})" if inst else stk.name, "sid": stk.id, "rid": getattr(inst, "rid", ""), "port": str(port_shown),
                     "anchor": f"#stack-webserver-{stk.id}",
                     "scheme": ep.scheme or "tcp", "live_scope": live_scope,
                     "exposure": {"level": level, "label": label},
@@ -1150,7 +1149,7 @@ class WebserverOpsMixin:
         if not scopes:
             # Nothing is listening on it. The allow-list is all there is to show, and an absent
             # listener contributes no reachability at all to the summary.
-            bind_host = self._endpoint_bind_host(stk.id, comp, ep)
+            bind_host = self._endpoint_bind_host(stk.id, comp, ep, inst)
             if (level == "ok" and bind_host is not None
                     and not self.scope_is_loopback({"addr": str(bind_host).strip()})):
                 # The configured bind host is non-loopback (or unparseable/`::`) — do not
