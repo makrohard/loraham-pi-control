@@ -229,9 +229,9 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
 def radio_band(svc, target: str, inst, band: str = "") -> tuple:
     """K8d: an instance runs on its radio's band -> (band, why). A `<stack>@<rid>` start or restart takes its radio
     ROW's band, resolved here by the rid (G1-K8D1: never a band the caller or the instance carries); without a row it
-    is refused by name (DEC-W384aj: "rN is not in the hardware list"), never run on another band. The daemon's own
-    instance (its own band rule) and the template keep the caller's band."""
-    if inst is None or not inst.rid or svc._is_daemon_target(target):
+    is refused by name (DEC-W384aj: "rN is not in the hardware list"), never run on another band; the daemon's own
+    instance too (K8f: `daemon@r2` is radio r2, never every band). The template keeps the caller's band."""
+    if inst is None or not inst.rid:
         return band, ""
     row = next((r for r in radios.load(svc._paths).radios if r.id == inst.rid), None)
     return (row.band, "") if row is not None else ("", f"{target}@{inst.rid}: {inst.rid} is not in the hardware list")

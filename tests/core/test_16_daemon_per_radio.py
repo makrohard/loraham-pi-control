@@ -133,7 +133,9 @@ def test_the_same_stack_on_the_other_radio_keeps_no_settings_from_this_radio(tmp
 
 
 def test_a_daemon_start_for_a_radio_not_on_the_band_launches_nothing(tmp_path, monkeypatch):
-    # G1-C18 (3): an explicit radio the band does not have is refused, never every radio of the band.
+    # G1-C18 (3): an explicit radio the band does not have is refused, never every radio of the band; K8f: by name at
+    # the entry, like every instance whose radio the hardware list does not have (was "[BLOCKED] daemon: r3 is no
+    # enabled radio of 433 MHz" from the launch)
     svc, launches = _box(tmp_path, monkeypatch)
     res = svc.start("daemon", apply=True, band="433", inst=radio_start.daemon_inst("r3"))
-    assert launches == [] and "  [BLOCKED] daemon: r3 is no enabled radio of 433 MHz" in res.details, res.details
+    assert launches == [] and res.summary == "Refusing to start: daemon@r3: r3 is not in the hardware list", res.summary
