@@ -164,8 +164,10 @@ def test_the_daemon_goes_per_radio_by_its_id(tmp_path, clock, procs):
              d3.pid: ["/x/loraham_daemon", "--radio=868", "--id=r3"]}
     svc = _copy_svc(tmp_path, table)
     sid = svc.stack_of(svc.DAEMON_ID)
-    stk = svc.stack(sid)                                      # r2's verified record (slot field 0, like every daemon's)
-    svc._lifecycle().record_launch(stk, stk.component(svc.DAEMON_ID), d2.pid, band="868", extra={"rid": "r2", "slot": 0})
+    stk = svc.stack(sid)                                      # r2's verified ownership record (its rid, no slot key)
+    life = svc._lifecycle()
+    life.record_launch(stk, stk.component(svc.DAEMON_ID), d2.pid, band="868", extra={"rid": "r2"})
+    assert [r["rid"] for r in life.owned_records(svc.DAEMON_ID) if life.verify_owned(r)[0]] == ["r2"]
     assert kill.kill(svc, f"{sid}@r3", apply=True).ok
     assert _gone(d3) and d2.poll() is None
 
