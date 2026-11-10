@@ -65,6 +65,8 @@
   not reported as failed while it still completes.
 - Every stack verb and `lhpc kill` name the instance, `<stack>@<rid>`; a bare `<stack>` is refused with the radios it
   can run on ("kiss can run on r1 or r3: use kiss@r1 or kiss@r3"), and the stack verbs take no `--band`.
+- The console's Kill names its instance too (after a failed stop, on the Apps page): it kills that radio's processes
+  only, never another radio's instance of the stack.
 
 Upgrading from 0.13.x
 

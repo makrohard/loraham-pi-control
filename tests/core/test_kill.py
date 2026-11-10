@@ -807,3 +807,33 @@ def test_w405_a_band_is_no_kill_target_and_the_refusal_names_the_running_instanc
     monkeypatch.setattr(instances, "running_keys", lambda s, sid: running if sid == "kiss" else [])
     res = killmod.kill(svc, "kiss@433", apply=True)
     assert (res.ok, res.summary) == (False, says)
+
+
+def test_g2_f1_the_web_kill_after_a_failed_instance_stop_takes_that_instance_alone(tmp_path, clock, procs, web, csrf,
+                                                                                    monkeypatch):
+    # Gate 2 finding 1 (DEC-W409ba): kiss@r1 and kiss@r2 run (both 433, each its own sockets); a failed stop of kiss@r1
+    # offers its Kill: the confirm names kiss@r1's process only and the POST kills it while kiss@r2 runs on. red on
+    # 01d3d09e: the offered Kill was the bare stack's (preview and POST killed kiss@r2 too)
+    from lhpc.core.service_base import ActionResult
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    p1, p2 = procs(), procs()
+    probe = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = probe.stack("kiss").component("loraham-kiss-tnc")
+    src = str(probe._paths.resolve_source(comp.source.path)) if comp.source else str(probe._paths.runtime_root)
+
+    def argv(rid):
+        inst = instances.copy_of(probe, "kiss", rid)[0]
+        return commands.expand_argv(comp.run_argv, comp, probe.stack_config(comp.id, "433", inst), Config().operator,
+                                    str(probe._paths.runtime_root), src, "433", inst=inst)
+    table = {p1.pid: argv("r1"), p2.pid: argv("r2")}
+    assert table[p1.pid] != table[p2.pid]
+    svc = ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "run_action",
+                        lambda self, op, target, **kw: ActionResult(False, f"stop of {target} failed"))
+    c = web(service_factory=lambda: svc)
+    page = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1", "confirmed": "yes"},
+                  follow_redirects=True).get_data(as_text=True)
+    i = page.find("kill-processes")
+    assert f"pid {p1.pid}" in page and f"pid {p2.pid}" not in page, (page[page.find("<h2>"):page.find("<h2>") + 200], page[i:i + 400])
+    c.post("/kill/kiss", data={"_csrf": csrf(c), "component": "", "radio": "r1"})
+    assert _gone(p1) and p2.poll() is None

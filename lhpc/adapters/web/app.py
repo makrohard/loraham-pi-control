@@ -1934,21 +1934,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if result.ok else "warn")
         if op == "stop" and not result.ok and service.stack(target) is not None:
-            # A failed, timed-out or refused stop offers the whole-stack Kill (A §2.12, W44).
-            return _render_kill(target, "", failed=result)
+            # A failed, timed-out or refused stop offers the Kill of THAT instance (A §2.12, W44; gate 2 finding 1).
+            return _render_kill(target, "", failed=result, rid=rid)
         return _redirect_for(target, rid)
 
-    def _render_kill(sid: str, component: str, failed=None):
-        # The kill confirm: one click, with the processes the kill would signal named first.
-        plan = _kill.kill(service, sid, component)
-        return render_template("kill_confirm.html", version=__version__, sid=sid,
+    def _render_kill(sid: str, component: str, failed=None, rid: str = ""):
+        # The kill confirm: one click, with the processes the kill would signal named first; an instance's kill keeps
+        # its radio through the preview and the POST (gate 2 finding 1).
+        plan = _kill.kill(service, f"{sid}@{rid}" if rid else sid, component)
+        return render_template("kill_confirm.html", version=__version__, sid=sid, rid=rid,
                                component=component, plan=plan, failed=failed)
 
     @app.get("/kill/<sid>")
     def kill_page(sid: str):
         if service.stack(sid) is None:
             abort(404)
-        return _render_kill(sid, request.args.get("component", ""))
+        return _render_kill(sid, request.args.get("component", ""), rid=request.args.get("radio", ""))
 
     @app.post("/kill/<sid>")
     def kill_action(sid: str):
@@ -1956,9 +1957,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         if service.stack(sid) is None:
             abort(404)
-        res = _kill.kill(service, sid, request.form.get("component", ""), apply=True)
+        rid = request.form.get("radio", "")
+        res = _kill.kill(service, f"{sid}@{rid}" if rid else sid, request.form.get("component", ""), apply=True)
         flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
-        return _redirect_for(sid)
+        return _redirect_for(sid, rid)
 
     def _safe_job(value):
         # a plain logs/<name>.log filename, or exactly a radio's daemon RF log `r<1-99>/rf-daemon.log` (stage L5,
