@@ -2,6 +2,8 @@
 
 ## 0.14.0
 
+- Dashboard Webserver box: a port row per running instance (its own port, bind host, allow-list and process); a
+  stack whose running instances cannot be told apart keeps its one row.
 - Test lab: the testlab lane's own Python packages, Chromium and Meshtastic web client are fetched before the
   lane and proved complete offline; the product's pip steps still fetch from PyPI, as for a user.
 - `LHPC_MESHTASTIC_WEB_TARBALL` (a local Meshtastic web client `build.tar`, still sha256-checked) now reaches
