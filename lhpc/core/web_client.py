@@ -134,24 +134,29 @@ def daemon_commit(svc) -> str:
     return out.strip() if rc == 0 else ""
 
 
-def served_root(svc) -> str:
-    """The `RootPath` meshtasticd is given (the render rule of service_params, applied here)."""
+def served_root(svc, inst=None) -> str:
+    """The `RootPath` meshtasticd instance `inst` is given (its own store; the render rule of service_params, applied
+    here)."""
     runtime = svc._paths.runtime_root
-    raw = svc._resolved_param_value(DAEMON, "file", DAEMON, "web_root")
+    raw = svc._resolved_param_value(DAEMON, "file", DAEMON, "web_root", inst=inst)
     return str(current_root(raw, runtime, "{runtime}/" + ROOT_REL + "/web")).replace(
         "{runtime}", str(runtime)).rstrip("/")
 
 
 def status(svc) -> str:
-    """The status/doctor line for the installed client ("" when none); "not served" when the
-    operator's own `web_root` makes meshtasticd serve another directory."""
+    """The status/doctor line for the installed client ("" when none); "not served" when an instance's own
+    `web_root` (an operator setting) makes its meshtasticd serve another directory, each such instance named
+    (K8f S4-4b2, G1-K8F-S4-D2-CTX N1: the predicate over every saved instance)."""
+    from . import instances
     comp = component(svc)
     if comp is None:
         return ""
     line = status_line(read_provenance(svc._paths), pin(comp)[0], daemon_commit(svc))
-    root = served_root(svc)
-    if line and root != str(svc._paths.runtime_root / ROOT_REL / "web"):
-        line += f" — not served: meshtasticd's RootPath is {root} (an operator setting)"
+    managed = str(svc._paths.runtime_root / ROOT_REL / "web")
+    other = [(i, r) for i in instances.saved_insts(svc, DAEMON) if (r := served_root(svc, i)) != managed]
+    if line and other:
+        line += " — not served: " + "; ".join(f"meshtasticd's RootPath is {r}" + (f" on {instances.key(DAEMON, i)}" if i else "")
+                                             for i, r in other) + " (an operator setting)"
     return line
 
 

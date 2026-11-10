@@ -178,12 +178,13 @@ class HmacOpsMixin:
         return self._hmac_component(stack_id) is not None
 
     def hmac_status(self, stack_id: str):
-        """None when HMAC does not apply here; else whether password-auth is ENABLED (the resolved
-        `password_file` param is non-blank)."""
-        c = self._hmac_component(stack_id)
-        if c is None:
+        """None when HMAC does not apply here; else whether password-auth is ENABLED: every saved instance's resolved
+        `password_file` is non-blank, one instance at least (K8f S4-4b2, G1-K8F-S4-D2-CTX N2: one secret per box)."""
+        if (c := self._hmac_component(stack_id)) is None:
             return None
-        return bool((self._resolved_param_value(stack_id, "run", c.id, _HMAC_PARAM) or "").strip())
+        vals = [(self._resolved_param_value(stack_id, "run", c.id, _HMAC_PARAM, inst=i) or "").strip()
+                for i in instances.saved_insts(self, stack_id)]
+        return bool(vals) and all(vals)
 
     def hmac_default_stack(self):
         """The single stack HMAC applies to (meshcom), or None — the CLI's default target."""
@@ -219,16 +220,15 @@ class HmacOpsMixin:
         if action not in ("enable", "disable", "renew"):
             return ActionResult(False, f"unknown HMAC action: {action!r}")
         path = self._xr_pw_path()
-        # --- snapshot for rollback ---
-        try:
+        try:                                                 # --- snapshot for rollback: the secret, each instance's value ---
             old_secret = runtime_fs.read_bytes(self._paths, path)
         except (FileNotFoundError, OSError):
             old_secret = None
-        old_resolved = self._resolved_param_value(stack_id, "run", c.id, _HMAC_PARAM)
-        # --- 1. config change FIRST (validates + recoverable; writes nothing on failure) ---
-        want = "" if action == "disable" else _XR_PW_VALUE
-        r = self.save_config_bundle(stack_id, values={_HMAC_PARAM: want},
-                                    _allow_managed_params=frozenset({_HMAC_PARAM}))
+        insts = instances.saved_insts(self, stack_id)        # K8f S4-4b2: every instance's file (one secret per box)
+        old_resolved = [self._resolved_param_value(stack_id, "run", c.id, _HMAC_PARAM, inst=i) for i in insts]
+        want = "" if action == "disable" else _XR_PW_VALUE   # --- 1. config change FIRST (validates + recoverable) ---
+        r = instances.save_each(self, stack_id, [(i, {_HMAC_PARAM: want}, {_HMAC_PARAM: o}) for i, o in zip(insts, old_resolved, strict=True)],
+                                _allow_managed_params=frozenset({_HMAC_PARAM}))
         if not r.ok:
             return ActionResult(False, f"could not {action} HMAC password: {r.summary}", details=r.details)
         # --- 2. secret-file change (atomic writes: a failed write leaves the OLD file intact) ---
@@ -242,8 +242,8 @@ class HmacOpsMixin:
                 if not path.exists():
                     runtime_fs.atomic_write(self._paths, path, _secrets.token_hex(16) + "\n", 0o600)
         except Exception as exc:
-            self.save_config_bundle(stack_id, values={_HMAC_PARAM: old_resolved},
-                                    _allow_managed_params=frozenset({_HMAC_PARAM}))
+            instances.save_each(self, stack_id, [(i, {_HMAC_PARAM: o}, {}) for i, o in zip(insts, old_resolved, strict=True)],
+                                _allow_managed_params=frozenset({_HMAC_PARAM}))
             try:
                 if old_secret is None:
                     if path.exists():

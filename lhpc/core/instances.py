@@ -159,6 +159,22 @@ def instance_pids(svc, sid: str, inst, comp_id: str, get_argvs, pids) -> list:
     return [p for s, r, c, p in procs if (s, r, c) == (sid, inst.rid, comp_id) and p in pids]
 
 
+def save_each(svc, sid: str, items, **kw):
+    """Save each (instance, values, previous values) of stack `sid` in order (svc.save_config_bundle(.., inst=i, **kw));
+    the first refusal puts the instances saved before it back to their previous values and is returned. No item: refused
+    by name, there is no instance to write (K8f S4-4b2)."""
+    from .service_base import ActionResult
+    done, r = [], ActionResult(False, f"{sid}: no radio of its bands on the hardware list")
+    for inst, values, previous in items:
+        r = svc.save_config_bundle(sid, values=values, inst=inst, **kw)
+        if not r.ok:
+            for j, prev in reversed(done):
+                svc.save_config_bundle(sid, values=prev, inst=j, **kw)
+            return r
+        done.append((inst, previous))
+    return r
+
+
 def launch_bands(svc, sid: str) -> set:
     """The bands `sid`'s running instances were LAUNCHED on (their verified records' bands; G1-K4B 6: an edited
     hardware row is no evidence). Empty, so the caller holds every band (fail-safe), when one running instance's
