@@ -1435,9 +1435,8 @@ def _run(argv: list[str] | None = None) -> int:
                 return 1
 
         def _admitted():
-            # G4-web: the web and this job hash the same instance's plan; daemon@rN its row's band (transitional)
-            dband = getattr(inst, "band", "") if svc._is_daemon_target(args.target) else ""
-            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, dband):
+            # G4-web: the web and this job hash the same instance's plan (its band: instances.radio_band, K8f)
+            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst):
                 return _AR(False, f"Cannot {op} '{args.target}': the plan changed since it was confirmed — check it "
                                   "and confirm again (nothing was run).")
             if jobresult.mark_running(svc._paths, web, aid):
@@ -1499,17 +1498,14 @@ def _run(argv: list[str] | None = None) -> int:
                     return 2
                 args.stack = f"{args.stack}@{args.radio}"
             # W323/W326: `<stack>@<rid>`, one parser for every operator entry (instances.parse_target).
-            sid, inst, dband, why = instances.parse_target(svc, args.stack, args.stack_action)
-            # G4-web: the instance names its band; TRANSITIONAL for daemon@rN its radio ROW's band (the core's
-            # instances.radio_band keeps the caller's band for the daemon until S3/S4)
-            dband = dband if svc._is_daemon_target(sid) else ""
+            sid, inst, _band, why = instances.parse_target(svc, args.stack, args.stack_action)    # G4-web, K8f: the
+            # instance names its band, the daemon's too (instances.radio_band)
             if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, sid, apply=a, stop_owners=stop_owners, inst=inst,
-                                     **({"band": dband} if dband else {}))      # the daemon's row band (transitional)
+                res = svc.run_action(args.stack_action, sid, apply=a, stop_owners=stop_owners, inst=inst)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).

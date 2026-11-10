@@ -74,7 +74,8 @@ def test_a_radio_cards_stop_confirms_and_stops_that_radios_daemon(tmp_path, monk
     # W2: the confirm carries the instance, `daemon@r1`, never a band or a second rid
     assert (form.field_default("target"), form.field_default("rid"), form.field_default("band")) == ("daemon@r1", None, None)
     c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "daemon@r1", "confirmed": "yes", "from": "dash"})
-    assert stops == [("daemon", False, "433", "r1"), ("daemon", True, "433", "r1")]    # the plan and the stop: r1
+    assert stops == [("daemon", False, "", "r1"), ("daemon", True, "", "r1")]    # the plan and the stop: r1 (K8f: the
+    # adapter passes the instance only; the core's stop takes r1's band, tests/core/test_k8f_lock_keys_per_instance.py)
 
 
 def test_an_unknown_or_disabled_rid_is_refused_and_nothing_runs(tmp_path, monkeypatch, web, csrf):

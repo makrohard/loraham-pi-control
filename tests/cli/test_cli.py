@@ -620,7 +620,7 @@ def test_stack_stop_of_a_radios_daemon(monkeypatch):
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
     assert main(["stack", "stop", "daemon@r2", "--yes"]) == 0
-    assert calls[-1] == ("stop", "daemon", True, "868", "r2")      # G4-web: its instance; the row band is transitional
+    assert calls[-1] == ("stop", "daemon", True, None, "r2")       # G4-web, K8f: its instance only (radio_band)
 
 
 @pytest.mark.contract

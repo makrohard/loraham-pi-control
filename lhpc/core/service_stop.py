@@ -168,8 +168,7 @@ class StopOpsMixin:
                     self._write_stop_intent([instances.key(target, inst)])
                 return res
         except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot stop '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
+            return ActionResult(False, f"Cannot stop '{target}': {busy}", next_commands=[f"lhpc status {target}"])
 
     def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
                    band: str = "", release_daemon: bool = True,

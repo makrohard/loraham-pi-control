@@ -51,4 +51,4 @@ def test_a_restart_passes_its_radios_instance_on(tmp_path, monkeypatch, rid, ban
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
     assert cli.main(["stack", "restart", f"daemon@{rid}", "--yes"]) == 0
-    assert calls[-1] == ("restart", "daemon", True, band, rid, band)   # the row band: transitional (core radio_band)
+    assert calls[-1] == ("restart", "daemon", True, None, rid, band)   # K8f: no band passed; the core takes the row's

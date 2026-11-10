@@ -62,7 +62,8 @@ def cli(tmp_path, monkeypatch, capsys):
     calls = []
 
     def run_action(self, action, sid, apply=False, band="", stop_owners=False, inst=None):
-        calls.append((action, sid, apply, band, getattr(inst, "rid", None)))
+        assert band == "", band                     # K8f (DEC-W384df): the adapter passes the instance, never a band;
+        calls.append((action, sid, apply, getattr(inst, "band", None), getattr(inst, "rid", None)))   # the core takes its
         from lhpc.core.services import ActionResult
         return ActionResult(True, "done", data={"changes": 1})          # a plan with something to do
     monkeypatch.setattr(ControllerService, "run_action", run_action)

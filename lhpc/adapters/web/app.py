@@ -1739,6 +1739,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "confirm.html", version=__version__,
             op=op, target=target, plan=plan, tx=("tx" in op),
             source=source, band=band, rid=rid,
+            shown_band=band or (getattr(inst, "band", "") if service._is_daemon_target(sid or target) else ""),   # K8f
             plan_hash=(_instances.plan_hash(service, op, target, inst, band, plan) if op in ("start", "restart") else ""),
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
             stop_labels=([lbl for lbl, _ in service.owner_stops(plan.data.get("blockers") or [])]
@@ -1787,9 +1788,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
                 _instances.parse_target(service, target, op)
-            # G4-web: the instance names its band; kept only for the §6 stray Stop and, TRANSITIONAL until the core's
-            # instances.radio_band takes the daemon's row band too (S3/S4), for daemon@rN its radio ROW's band
-            band = band if stray or service._is_daemon_target(sid or target) else ""
+            # G4-web: the instance names its band (instances.radio_band, the daemon's too, K8f); kept only for the §6
+            # stray Stop
+            band = band if stray else ""
             # G1-W2 5: the parser hands an instance WITH a why only where a stop must reach it (instances.copy_of: a
             # disabled radio; a RUNNING instance whose radio left the list, whose row moved band — "stop it first" — or
             # whose band the stack cannot use); every other refusal comes without one and is refused for a stop too.
