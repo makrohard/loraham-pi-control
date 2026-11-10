@@ -40,6 +40,8 @@ def daemon_served(procs, rid: str, recorded) -> tuple[set, str]:
     serves; it running on ANOTHER band than recorded, or an untold daemon process (which may be it) with none of its
     own, is a why: the item fails by name and nothing is started (never a second start, never a false success)."""
     mine = [p for p in procs if p.kind == "id" and p.rid == rid]
+    if any(not p.band for p in mine):                    # gate 2 finding 3: an untold band is refused, never ""
+        return set(), f"daemon@{rid} runs on a band its command line does not tell (no one --radio 433|868)"
     if mine and not {p.band for p in mine} & set(recorded):
         return set(), f"daemon@{rid} runs on {'+'.join(sorted({p.band for p in mine}))} MHz, recorded on {'+'.join(recorded)}"
     if not mine and any(p.kind == "unknown" for p in procs):

@@ -110,14 +110,15 @@ def daemon_entry(exe, exe_err, argv, argv_err, comm, comm_err, binary: str = DAE
 
 
 def parse_daemon_proc(pid: int, argv) -> DaemonProc:
-    """A confirmed daemon's argv: exactly one --id <rid> (or --id=<rid>) → "id"; else exactly one --radio 433|868 →
+    """A confirmed daemon's argv: exactly one --id <rid> (or --id=<rid>) → "id", with its one --radio 433|868 as its
+    band ("" when the argv names none or several: the caller refuses it by name); else exactly one --radio 433|868 →
     "no-id"; else "unknown" with the reason. Whole tokens only, never a substring."""
     if not isinstance(argv, list) or not argv:
         return DaemonProc(pid, "unknown", reason="the command line cannot be read")
     ids, bands = _option(argv, "--id"), _option(argv, "--radio")
     if ids:
         if len(ids) == 1 and _RID.fullmatch(ids[0]):
-            return DaemonProc(pid, "id", rid=ids[0])
+            return DaemonProc(pid, "id", rid=ids[0], band=bands[0] if len(bands) == 1 and bands[0] in _BANDS else "")
         return DaemonProc(pid, "unknown", reason=f"--id {ids!r} is not exactly one radio id")
     if len(bands) == 1 and bands[0] in _BANDS:
         return DaemonProc(pid, "no-id", band=bands[0])

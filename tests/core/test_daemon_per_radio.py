@@ -182,8 +182,8 @@ def test_daemon_entry_unknown_when_nothing_is_readable():
 # ---- parse_daemon_proc and start_refusal (S6, D5, D6) ----------------------------------------------
 
 @pytest.mark.parametrize("argv,kind,rid,band", [
-    (["loraham_daemon", "--radio", "868", "--id", "r2"], "id", "r2", ""),
-    (["loraham_daemon", "--id=r12", "--radio=433"], "id", "r12", ""),
+    (["loraham_daemon", "--radio", "868", "--id", "r2"], "id", "r2", "868"),   # gate 2 finding 3: its band kept
+    (["loraham_daemon", "--id=r12", "--radio=433"], "id", "r12", "433"),
     (["loraham_daemon", "--radio", "433"], "no-id", "", "433"),
     (["loraham_daemon", "--radio=868"], "no-id", "", "868"),
 ])
