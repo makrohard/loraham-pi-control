@@ -346,8 +346,9 @@ class BinaryOpsMixin:
             _auth_restore = None
             if getattr(self, "hmac_applies", None) and self.hmac_applies(stack_id):
                 _hc = self._hmac_component(stack_id)
-                if _hc is not None:
-                    _prev = self._resolved_param_value(stack_id, "run", _hc.id, "password_file")
+                if _hc is not None:     # K8f S4-4c: every saved instance's own value (one binary for the stack)
+                    _prev = {instances.key(stack_id, i): v for i in instances.saved_insts(self, stack_id)
+                             if (v := self._resolved_param_value(stack_id, "run", _hc.id, "password_file", "", i))}
                     if _prev:
                         auth_journal = {"param": "password_file", "previous": _prev}
             try:
@@ -361,10 +362,10 @@ class BinaryOpsMixin:
                 if auth_journal:
                     # The published firmware has no mesh password: the bridge must not be launched
                     # with --password-file. Journaled above, so this is undoable either way.
-                    _r = self.save_config_bundle(
-                        stack_id, values={"password_file": ""},
-                        _allow_managed_params=frozenset({"password_file"}))
-                    if not _r.ok:
+                    _r = next((r for k in auth_journal["previous"] if not (r := self.save_config_bundle(
+                        stack_id, values={"password_file": ""}, inst=instances.resolve(self, k)[1],
+                        _allow_managed_params=frozenset({"password_file"}))).ok), None)
+                    if _r is not None:
                         raise bi.BinaryInstallError(
                             f"could not switch the mesh password off ({_r.summary})")
                     _auth_restore = auth_journal["previous"]
@@ -558,9 +559,9 @@ class BinaryOpsMixin:
             # cannot, the journal and backups MUST stay: dropping them would discard the only
             # evidence a later attempt could converge from.
             return False, "the failed install's binary receipt could not be removed"
-        prev_auth = (j.get("auth") or {}).get("previous")
-        if prev_auth:
-            r = self.save_config_bundle(stack_id, values={"password_file": prev_auth},
+        prev_auth = (j.get("auth") or {}).get("previous") or {}      # K8f S4-4c: {instance key: its value}
+        for k, v in prev_auth.items():
+            r = self.save_config_bundle(stack_id, values={"password_file": v}, inst=instances.resolve(self, k)[1],
                                         _allow_managed_params=frozenset({"password_file"}))
             if not r.ok:
                 return False, f"the mesh password setting could not be restored ({r.summary})"

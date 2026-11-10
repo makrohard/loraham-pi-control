@@ -906,7 +906,7 @@ def _interrupted_meshcom_install(svc, monkeypatch, binary_receipt):
     from lhpc.core import binary_install as bi
     binary_receipt(svc, "meshcom")
     bi.open_txn(svc._paths, "meshcom", "txn-h4", old_receipt=None,
-                auth={"param": "password_file", "previous": "config/secrets/prev_pw"})
+                auth={"param": "password_file", "previous": {"meshcom@r1": "config/secrets/prev_pw"}})
     assert svc.save_config_bundle("meshcom", values={"password_file": ""},
                                   _allow_managed_params=frozenset({"password_file"})).ok
     seen, real = [], ControllerService.binary_recover
@@ -975,7 +975,7 @@ def test_interrupted_install_restores_the_mesh_password(tmp_path, monkeypatch):
     assert before
     # exactly what binary_install does before touching anything else
     bi.open_txn(svc._paths, "meshcom", "txnH", old_receipt=None,
-                auth={"param": "password_file", "previous": before})
+                auth={"param": "password_file", "previous": {"meshcom@r1": before}})
     assert svc.save_config_bundle("meshcom", values={"password_file": ""},
                                   _allow_managed_params=frozenset({"password_file"})).ok
     svc.invalidate_snapshot()
@@ -1306,7 +1306,7 @@ def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
     prev = svc._resolved_param_value("meshcom", "run",
                                      svc._hmac_component("meshcom").id, "password_file")
     bi.open_txn(svc._paths, "meshcom", "txnI", auth={"param": "password_file",
-                                                     "previous": prev})
+                                                     "previous": {"meshcom@r1": prev}})
     assert svc.save_config_bundle("meshcom", values={"password_file": ""},
                                   _allow_managed_params=frozenset({"password_file"})).ok
     j, _st = bi.read_journal(svc._paths)
@@ -1723,3 +1723,37 @@ def test_receipt_refusals_name_the_invalid_path_cause(tmp_path, monkeypatch):
     for res in (switch, plain):
         assert not res.ok and "receipt" in res.summary
         assert any(line in d for d in res.details), res.details
+
+
+def test_a_binary_install_switches_off_every_meshcom_instances_mesh_password(tmp_path, monkeypatch, stub_pipeline):
+    # K8f S4-4c (the binary_ops rows :350/:364/:563): one published binary for the stack, so every saved instance's
+    # password_file is journaled, switched off for the install and restored on its failure. Two radios on 433 run
+    # meshcom (r1, r2). red on e46e04e0: only the fallback instance's value was journaled and cleared, r2 kept its
+    # --password-file under a firmware without a mesh password
+    import radios_fixture
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core import instances
+    from lhpc.core.install import Installer
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    ins = {r: instances.parse_target(svc, f"meshcom@{r}", "start")[1] for r in ("r1", "r2")}
+    hc = svc._hmac_component("meshcom").id
+    for r, i in ins.items():                                                       # each its own file
+        assert svc.save_config_bundle("meshcom", values={"password_file": f"config/secrets/mc_pw_{r}"}, inst=i,
+                                      _allow_managed_params=frozenset({"password_file"})).ok
+    monkeypatch.setattr(type(svc), "hmac_applies", lambda self, sid: sid == "meshcom")
+    monkeypatch.setattr(Installer, "adopt_source", lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    during = {}
+
+    def broken(*a, **k):
+        svc._invalidate_config()
+        during.update({r: svc._resolved_param_value("meshcom", "run", hc, "password_file", "", i) for r, i in ins.items()})
+        raise ValueError("bad member header")
+    monkeypatch.setattr(bi, "validate_and_extract", broken)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and during == {"r1": "", "r2": ""}, during
+    svc._invalidate_config()
+    assert {r: svc._resolved_param_value("meshcom", "run", hc, "password_file", "", i) for r, i in ins.items()} == {
+        "r1": "config/secrets/mc_pw_r1", "r2": "config/secrets/mc_pw_r2"}
