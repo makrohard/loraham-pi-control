@@ -98,7 +98,7 @@ Fixed
 - The board setup moved from the daemon's Settings to the Board setup form on Add Hardware; `lhpc hardware <setup>`
   stays.
 - Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
-  Settings for one instance, the radio it runs on, else the first radio able to run it; `?radio=rN` picks another.
+  Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
 
 ## 0.13.8
 
