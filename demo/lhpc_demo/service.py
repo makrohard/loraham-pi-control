@@ -160,7 +160,7 @@ class DemoService(ControllerService):
         return any(self._d(o)["running"] and self._band(o) == band
                    for o in list(self._demo) if o != "daemon")
 
-    def daemon_view(self, band: str):
+    def daemon_view(self, band: str, rid: str = ""):          # the core's signatures: the console passes the rid
         from lhpc.core.daemon_control import DaemonView
         if not self._daemon_up_on(band):
             return DaemonView(band=band, reachable=False)
@@ -170,7 +170,7 @@ class DemoService(ControllerService):
                                         daemon_sim.channel(band))
         return v
 
-    def daemon_channel(self, band: str) -> dict:
+    def daemon_channel(self, band: str, rid: str = "") -> dict:
         """Passive channel read — the simulated counterpart of `GET CHANNEL NOSCAN`.
 
         The real controller no longer puts channel fields in `daemon_view()`, so the demo has to
@@ -186,7 +186,7 @@ class DemoService(ControllerService):
         ch["CADSTATE"] = "NOTSCANNED"
         return ch
 
-    def daemon_channel_scan(self, band: str) -> dict:
+    def daemon_channel_scan(self, band: str, rid: str = "") -> dict:
         """Operator-invoked scan — what "Scan now" calls. Here it is where the simulated CAD
         verdict actually appears, since that is the only thing a real scan buys."""
         if not self._daemon_up_on(band):
@@ -197,13 +197,13 @@ class DemoService(ControllerService):
         ch["CAD"] = "1"
         return ch
 
-    def daemon_feed(self, band: str, lines: int = 40) -> list:
+    def daemon_feed(self, band: str, lines: int = 40, rid: str = "") -> list:
         if not self._daemon_up_on(band):
             return []
         from . import daemon_sim
         return daemon_sim.feed(band, lines)
 
-    def daemon_socket_line(self, band: str) -> str:
+    def daemon_socket_line(self, band: str, rid: str = "") -> str:
         if not self._daemon_up_on(band):
             return ""
         from . import daemon_sim
@@ -615,7 +615,7 @@ class DemoService(ControllerService):
         return None, "blocked", fn().summary
 
     def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
-                        cascade: bool = False):
+                        cascade: bool = False, rid: str = "", plan_hash: str | None = None):   # the core's signature
         """The web Start/Restart is a DETACHED job in production; Pyodide cannot spawn one, so run
         the simulated operation synchronously and return the `blocked` shape with the real summary
         (the web flashes it and returns to the stack)."""

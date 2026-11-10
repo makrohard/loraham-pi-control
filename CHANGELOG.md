@@ -103,6 +103,8 @@ Fixed
   without it).
 - The board setup moved from the daemon's Settings to the Board setup form on Add Hardware; `lhpc hardware <setup>`
   stays.
+- Known limitation: an interactive app's command on the Apps page runs only after its first start from the console
+  (the start writes that radio's own config directory); before it, the command stops at its `cd`.
 - Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
   Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
 

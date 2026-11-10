@@ -38,6 +38,7 @@ from lhpc_testlab.release import (
 )
 from lhpc_testlab.testing import named, port_of, run_lhpc
 
+from lhpc.core import instances
 from lhpc.core.manifest import default_manifest_path, load_manifest
 
 pytestmark = pytest.mark.slow
@@ -175,8 +176,12 @@ def test_release_chat(env, svc):
     # The lab's fake daemon: a prerequisite of a DIFFERENT stack, so its start is unattributed
     # — a broken fixture must never freeze chat.
     _start(env, "daemon", timeout=300, attribute=False)
+    # The product flow: the start presents chat's instance (writes its config into its own config/files/<rid>/); the operator then
+    # runs the presented command. K8: an instance's run directory is its own, written by that start.
+    _start(env, "chat", timeout=300)
     comp = next(c for c in svc.stack("chat").components if c.id == "loraham-chat")
-    pty_readiness(svc.manual_start_command(comp), env, CHAT_DRAWS, stack="chat")
+    inst = instances.copy_of(svc, "chat", named(env, "chat").partition("@")[2])[0]
+    pty_readiness(svc.manual_start_command(comp, inst), env, CHAT_DRAWS, stack="chat")
 
 
 def test_release_voice_gtk(env, svc):
