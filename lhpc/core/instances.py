@@ -1,6 +1,5 @@
 """Stack instances (item 7, CLEANUP-DESIGN-v13 13.2, DEC-W327: no slots): every operator entry names `<stack>@<rid>`,
 and a stack has one instance on each enabled radio of its bands (radios_of), each with its radio's paths and ports.
-A MAY stack's instances run side by side; any other stack runs one at a time until its 13.6 work (K7).
 config/instances.toml and its two CLI verbs are gone (DEC-W344): nothing is listed first."""
 from __future__ import annotations
 
@@ -12,10 +11,6 @@ import re
 from . import commands, radios
 
 _RID_RE = re.compile(r"r[1-9][0-9]?")
-# T2.2 (DEC-W4/W15): the stacks whose instances may run side by side, one per radio (DEC-W384d: voice and graywolf
-# too, their 13.17/13.5 work follows in the web lane). TRANSITIONAL: the others run one at a time until their 13.6 work
-# in K7 (meshtastic's pins, meshcom's ports, Reticulum's one node); W330 removes MAY there, the K8 grep checks it.
-MAY = ("kiss", "meshcore", "chat", "voice", "graywolf")
 
 
 def stack_bands(stack) -> tuple:
