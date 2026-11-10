@@ -103,9 +103,12 @@ def running_keys(svc, sid: str) -> list:
 
 
 def running_insts(svc, sid: str) -> list:
-    """The running instances of `sid` (running_keys); none told (a process no instance claims): every instance of it
-    (saved_insts), so a question about a live stack is answered for each radio it may be on (fail-safe)."""
-    return [i for k in running_keys(svc, sid) if (i := copy_of(svc, sid, k.partition("@")[2])[0])] or saved_insts(svc, sid)
+    """The running instances of `sid` when that is known in full: every running key resolves to its instance and no
+    process of the stack runs unclaimed (no record, no token: `unclaimed`). Otherwise (none told, a key that does not
+    resolve, an unclaimed process) every instance of it (saved_insts), never a partial set (G1-K8F-S2 B1)."""
+    told, stack = [copy_of(svc, sid, k.partition("@")[2])[0] for k in running_keys(svc, sid)], svc.stack(sid)
+    whole = told and all(told) and not any(c.process and unclaimed(svc, c) for c in (stack.components if stack else ()))
+    return told if whole else saved_insts(svc, sid)
 
 
 

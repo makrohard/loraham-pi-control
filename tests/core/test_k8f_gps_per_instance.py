@@ -123,3 +123,20 @@ def test_a_running_holder_holds_the_receiver_by_its_own_instances_switch(tmp_pat
     _running(svc, monkeypatch, {"meshtastic": [holder]}, {"meshtastic"})
     target = instances.parse_target(svc, f"meshcom@{instances.keys(svc, 'meshcom')[0].partition('@')[2]}", "start")[1]
     assert bool(_gps_blockers(svc, "meshcom", target)) is blocked
+
+
+@pytest.mark.parametrize("keys, unclaimed", [(["meshtastic@r2"], True), (["meshtastic@r2", "meshtastic@r9"], False)])
+def test_a_partly_told_running_set_never_hides_a_gps_reader(tmp_path, monkeypatch, keys, unclaimed):
+    # G1-K8F-S2 B1: r2 (use_gps off) is told, but a meshtastic process no instance claims runs too, or a running key
+    # does not resolve (r9 is no radio of the list): either may be r1 (use_gps on), so the source change is refused.
+    # red on ec85c9f1: the told r2 alone answered "no GPS user" and the source changed beneath it
+    svc, _i1, _i2 = _box(tmp_path)
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: keys if sid == "meshtastic" else [])
+    monkeypatch.setattr(instances, "unclaimed", lambda s, comp, *a: unclaimed and comp.id == "meshtastic")
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            st.run_state = RunState.RUNNING if cid == "meshtastic" else RunState.STOPPED
+    svc.build_snapshot = lambda fresh=False: snap
+    assert svc.gps_consumers_running() == ["meshtastic"]
+    assert not svc.set_gps(source="auto").ok
