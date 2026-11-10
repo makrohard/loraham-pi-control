@@ -762,6 +762,10 @@ def _daemon_env(tmp_path, monkeypatch, *, kept=("433", "868"), served=(), bands=
     monkeypatch.setattr(ControllerService, "_daemon_arbitrated_bands",
                         lambda self, radio: (list(kept), {}))
     monkeypatch.setattr(ControllerService, "_daemon_claimed_bands", lambda self: list(served))
+    # K8f D3 B4: a radio's daemon item asks whether ITS radio's daemon runs (the process names the radio)
+    from lhpc.core import radio_daemon, radio_start
+    monkeypatch.setattr(radio_start, "_daemon_procs", lambda s: [radio_daemon.DaemonProc(
+        200 + i, "id", rid=radios_fixture.RID[b], band=b) for i, b in enumerate(served)])
     return svc
 
 
@@ -771,7 +775,7 @@ def test_daemon_reconcile_two_residual_bands_is_all_active(tmp_path, monkeypatch
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     res = svc.boot_restore_run()
     assert res.ok
-    assert calls == [{"target": "daemon", "band": ""}]                  # band "" = all-active
+    assert calls == [{"target": "daemon", "band": "433"}, {"target": "daemon", "band": "868"}]   # K8f: per radio
 
 
 def test_daemon_reconcile_one_residual_band_is_explicit(tmp_path, monkeypatch):
@@ -790,8 +794,8 @@ def test_daemon_reconcile_no_residual_succeeds_without_start(tmp_path, monkeypat
     res = svc.boot_restore_run()
     assert res.ok and not calls
     j = _journal_on_disk(tmp_path)
-    assert [i["state"] for i in j["items"]] == ["succeeded"]
-    assert "no residual band" in j["items"][0]["result"]["summary"]
+    assert [i["state"] for i in j["items"]] == ["succeeded", "succeeded"]          # K8f: one item per radio
+    assert all("no residual band" in i["result"]["summary"] for i in j["items"])
 
 
 def test_daemon_reconcile_runs_after_client_stacks(tmp_path, monkeypatch):
@@ -2064,3 +2068,28 @@ def test_k6_an_old_band_marker_file_is_never_read_by_boot_restore(tmp_path):
         view = svc._boot_marker_view("kiss")
         assert not hasattr(view, "running_band_state") and view.last_start_state == "absent"
         assert br._band_candidates(_ev(band="433"), _SWITCH, view) == ("433", "")
+
+
+def test_boot_restore_starts_only_the_unserved_radios_daemon(tmp_path, monkeypatch):
+    from lhpc.core import radio_daemon as _rd
+    from lhpc.core import radio_start as _rs
+    # K8f S4-4a2 (G1-K8F-S4-D3 B4): restore the unserved daemon INSTANCES of the records, never a band; red on fd487a09: one band item -> start(daemon, band="433") with no instance (both radios' daemons)
+    svc = _drv(tmp_path, monkeypatch)
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))           # r1 + r2, both 433
+    for i, rid in enumerate(("r1", "r2")):
+        rec = _v1(pid=100 + i, stack="daemon", comp="loraham-daemon", band="433", nonce=f"{i:02d}" * 16)
+        rec["rid"] = rid
+        _write_record(tmp_path, rec)
+    monkeypatch.setattr(ControllerService, "_daemon_arbitrated_bands", lambda self, radio: (["433"], {}))
+    monkeypatch.setattr(ControllerService, "_daemon_claimed_bands", lambda self: ["433"])
+    monkeypatch.setattr(_rs, "_daemon_procs", lambda s: [_rd.DaemonProc(300, "id", rid="r1", band="433")])
+    calls = []
+
+    def start(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+              _before_start_locked=None, _operator=True, position=None, position_note="", inst=None):
+        calls.append((target, band, getattr(inst, "rid", "")))
+        return (_before_start_locked() if _before_start_locked else None) or ActionResult(True, "started")
+    monkeypatch.setattr(ControllerService, "start", start)
+    assert svc.boot_restore_run().ok
+    assert calls == [("daemon", "433", "r2")], calls
+

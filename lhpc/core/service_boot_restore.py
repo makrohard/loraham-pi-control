@@ -61,8 +61,7 @@ class BootRestoreOpsMixin:
                 return False, f"wants symlink points at {resolved} (expected {expected})"
         except OSError as exc:
             return False, f"cannot inspect the enablement symlink: {exc}"
-        verdict = updater_units.verify(Path(user_dir), updater_units.WEB_UNIT,
-                                       str(root), checkout, venv)
+        verdict = updater_units.verify(Path(user_dir), updater_units.WEB_UNIT, str(root), checkout, venv)
         if not updater_units.boot_restore_runs(verdict):
             return False, f"lhpc-web.service is not canonical ({verdict})"
         return True, updater_units.COMPATIBLE_NOTE if verdict == updater_units.COMPATIBLE else ""
@@ -172,8 +171,7 @@ class BootRestoreOpsMixin:
             evidence.append(Evidence(
                 launch_id=rec["launch_id"], stack=rec.get("stack", ""),
                 component=rec.get("component", ""), band=rec.get("band", ""),
-                launched_at=float(rec.get("launched_at", 0)),
-                rid=boot_restore.rid_of(rec.get("rid")),
+                launched_at=float(rec.get("launched_at", 0)), rid=boot_restore.rid_of(rec.get("rid")),
                 start_scope=rec.get("start_scope", ""),
                 requested_target=rec.get("requested_target", "")))
         # OPERATOR STOP INTENT beats leftover evidence (see the section note above), per instance key (7e). The
@@ -598,10 +596,12 @@ class BootRestoreOpsMixin:
         self._boot_settle_item(journal, item, res, parts=parts)
 
     def _boot_run_daemon_item(self, journal, item) -> None:
-        recorded = [b for b in item.get("bands", []) if b in ALLOWED_BANDS]
+        from . import radio_start
+        recorded, rid = [b for b in item.get("bands", []) if b in ALLOWED_BANDS], item.get("rid", "")
         kept, _owners = self._daemon_arbitrated_bands("")
-        served = set(self._daemon_claimed_bands())
-        residual = [b for b in recorded if b in kept and b not in served]
+        served = set(self._daemon_claimed_bands()) if not rid else {b for p in radio_start._daemon_procs(self) for b in (  # an
+            recorded if p.kind == "unknown" else [p.band] if p.kind == "id" and p.rid == rid else [])}   # untold one: served
+        residual = [b for b in recorded if b in kept and b not in served]      # K8f D3 B4: by the item's radio
         if not residual:
             item["state"] = "succeeded"
             item["result"] = {"ok": True, "summary": "daemon reconciliation: no residual band "
@@ -619,7 +619,7 @@ class BootRestoreOpsMixin:
         # ONE residual band -> an explicit per-band daemon start; several -> the serve-all start
         # (band ""), exactly what the operator's `lhpc stack start daemon [--band]` would do.
         band = residual[0] if len(residual) == 1 else ""
-        res = self.start(self.DAEMON_STACK_ID, apply=True, band=band,
+        res = self.start(self.DAEMON_STACK_ID, apply=True, band=band, inst=radio_start.daemon_inst(rid) if rid else None,
                          _before_start_locked=self._boot_claim_hook(journal, item))
         self._boot_settle_item(journal, item, res)
 

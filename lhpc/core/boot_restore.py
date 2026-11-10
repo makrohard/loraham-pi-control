@@ -317,6 +317,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
 
     daemon_bands: set[str] = set()
     daemon_evidence: list[str] = []
+    daemon_items: list[dict] = []
     orderable: list[tuple[float, str, dict]] = []
     daemon_main = metas[daemon_stack_id].main if daemon_stack_id in metas else None
 
@@ -330,6 +331,10 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
             continue
         if stack_id == daemon_stack_id:
             ok_bands = {e.band for e in evs if e.band in ALLOWED_BANDS}
+            if rid_of(evs[0].rid):            # K8f D3 B4: a radio's daemon (daemon@rN) is its own item, by its radio
+                daemon_items.append(new_item(secrets.token_hex(6), "daemon-reconcile", bands=tuple(sorted(ok_bands)),
+                                             evidence_ids=tuple(ev_ids), rid=evs[0].rid))
+                continue
             daemon_bands |= ok_bands
             daemon_evidence.extend(ev_ids)
             continue
@@ -380,8 +385,9 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
 
     for _key, _sid, item in sorted(orderable, key=lambda t: (t[0], t[1])):
         plan.items.append(item)
-    if daemon_evidence:
+    if daemon_evidence:                       # records without a radio (before 0.14.0): one item by band, as before
         plan.items.append(new_item(secrets.token_hex(6), "daemon-reconcile",
                                    bands=tuple(sorted(daemon_bands)),
                                    evidence_ids=tuple(daemon_evidence)))
+    plan.items.extend(daemon_items)
     return plan
