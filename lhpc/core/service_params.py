@@ -939,7 +939,7 @@ class ParamsConfigMixin:
             allowed=({c.id for c in owner.components if c.source and c.source.remote}
                      if is_stack_target else set()),
             stacks=self.stacks, declarers=lambda pth: [d.id for d in self._path_declarers(pth)])
-        errors += remote_errors + listeners.param_conflicts(self, clean_params)   # A §2.4 inventory
+        errors += remote_errors + listeners.param_conflicts(self, clean_params, _instances.saved_inst(self, sid, self._config_band(target, band), inst))   # A §2.4, its instance's
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
         _ohs_pending = _openhop_store.pending_rows(clean_params)        # gate 2 r1 F3: judged on these

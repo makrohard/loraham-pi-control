@@ -1,7 +1,8 @@
 """L4: the host-listener inventory (A §2.4, F4; PROOF T-P1, T-P3). Every TCP port this LHPC would listen on has one
 owner: a stack component's listener (at its configured port), the console, or a stack web page. A save that would put
 two owners on one port, or a port outside 1024..65535, is refused at save and names both owners. The radio save of
-T-P3 comes with radios at L5."""
+T-P3 comes with radios at L5. K8f S4-4b1 (DEC-W409p/q): the inventory is per instance, each at its own radio's port
+(`<sid>@<rid>/<component>`), and each radio r1..r64 without a saved instance holds the stack's template instance."""
 
 import re
 
@@ -46,28 +47,37 @@ def test_t_p1_the_bases_are_the_manifests():
 def test_t_p3_a_stack_port_param_meeting_another_stacks_listener_is_refused(tmp_path):
     svc = _svc(tmp_path)
     r = svc.save_config("kiss", {"kiss_port": "8080"})          # graywolf's web UI
-    assert not r.ok and any("port 8080 is already graywolf/graywolf's listener" in d for d in r.details), r.details
+    assert not r.ok and any("port 8080 is already graywolf@r1/graywolf's listener" in d for d in r.details), r.details
 
 
 def test_t_p3_a_port_one_radio_step_from_another_stacks_listener_is_refused(tmp_path):
-    # DEC-W348: kiss on 8213 is kiss@r2's 8346 and graywolf's 8080 is graywolf@r2's 8213: the two meet on some radio.
+    # DEC-W348: kiss@r1 on 8213 meets graywolf@r2, whose 8080 is 8213 on r2 (K8f S4-4b1: exact ports per instance).
     r = _svc(tmp_path).save_config("kiss", {"kiss_port": "8213"})               # 8080 + 133
-    assert not r.ok and any("port 8213 is already graywolf/graywolf's listener" in d for d in r.details), r.details
+    assert not r.ok and any("port 8213 is already graywolf@r2/graywolf's listener" in d for d in r.details), r.details
 
 
 def test_t_p3_a_port_whose_radio_step_reaches_a_fixed_port_is_refused(tmp_path):
-    # A fixed port (meshchat's 8790, one node) meets a derived one when base + 133 x k reaches it: kiss@r2 would be 8790.
-    from lhpc.core import listeners
+    # A fixed port (meshchat's 8790, one node) meets a derived one when the instance's own base + 133 x (n - 1) reaches
+    # it. K8f S4-4b1 (DEC-W409q): a base is its own instance's, so kiss@r1 on 8657 saves (8657 on r1; a new kiss@r2
+    # starts from the manifest base, 8134); kiss on r2 with base 8657 listens on 8790 and is refused. (Was: kiss@r1's
+    # 8657 refused, as if it moved every radio's base.)
+    import radios_fixture
+
+    from lhpc.core import instances, listeners
     assert 8790 in listeners.FIXED_PORTS
-    r = _svc(tmp_path).save_config("kiss", {"kiss_port": "8657"})               # 8790 - 133
-    assert not r.ok and r.details == ["kiss/loraham-kiss-tnc: port 8657 is already reticulum/meshchat's listener"], r.details
+    assert _svc(tmp_path).save_config("kiss", {"kiss_port": "8657"}).ok        # 8790 - 133, on r1
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))      # r2 on 433: kiss@r2
+    svc = _svc(tmp_path)
+    r = svc.save_config("kiss", {"kiss_port": "8657"}, inst=instances.parse_target(svc, "kiss@r2", "start")[1])
+    assert not r.ok and r.details == ["kiss@r2/loraham-kiss-tnc: port 8790 is already reticulum/meshchat's listener"], \
+        r.details
 
 
 def test_t_p3_a_base_whose_r64_port_leaves_the_range_is_refused_and_the_last_fitting_one_saves(tmp_path):
     # G1-B1 NOTE: 60000 is in range on r1 but r64's port would be 60000 + 133 x 63 = 68379; 57156 is the last base
     # whose r64 port (65535) fits.
     r = _svc(tmp_path).save_config("kiss", {"kiss_port": "60000"})
-    assert not r.ok and r.details == ["kiss/loraham-kiss-tnc: port 60000 on r64 gives 68379, outside 1024..65535"], \
+    assert not r.ok and r.details == ["kiss@r1/loraham-kiss-tnc: port 60000 on r64 gives 68379, outside 1024..65535"], \
         r.details
     assert _svc(tmp_path).save_config("kiss", {"kiss_port": "57156"}).ok
 
@@ -99,5 +109,5 @@ def test_t_p3_a_stack_port_param_meeting_the_console_is_refused(tmp_path):
 def test_t_p3_a_stack_web_port_meeting_a_stack_listener_is_refused(tmp_path):
     svc = _svc(tmp_path)
     r = svc.stack_web_configure("graywolf@r1", port=8001)       # kiss's KISS port (K4b: the page is per instance)
-    assert not r.ok and any("port 8001 is already kiss/loraham-kiss-tnc's listener" in d
+    assert not r.ok and any("port 8001 is already kiss@r1/loraham-kiss-tnc's listener" in d
                             for d in (r.summary, *r.details)), (r.summary, r.details)
