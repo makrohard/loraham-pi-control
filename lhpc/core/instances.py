@@ -160,19 +160,33 @@ def instance_pids(svc, sid: str, inst, comp_id: str, get_argvs, pids) -> list:
 
 
 def save_each(svc, sid: str, items, **kw):
-    """Save each (instance, values, previous values) of stack `sid` in order (svc.save_config_bundle(.., inst=i, **kw));
-    the first refusal puts the instances saved before it back to their previous values and is returned. No item: refused
-    by name, there is no instance to write (K8f S4-4b2)."""
+    """Save each (instance, values, previous values) of stack `sid` in order (svc.save_config_bundle(.., inst=i, **kw)).
+    A write that is refused or raises restores every instance written before it (restore_each) and is returned, naming
+    each instance it could not restore. No item: nothing to write, ok (K8f S4-4b2, DEC-W409w)."""
     from .service_base import ActionResult
-    done, r = [], ActionResult(False, f"{sid}: no radio of its bands on the hardware list")
+    done, r = [], ActionResult(True, "")
     for inst, values, previous in items:
-        r = svc.save_config_bundle(sid, values=values, inst=inst, **kw)
+        r = _save_one(svc, sid, inst, values, kw)
         if not r.ok:
-            for j, prev in reversed(done):
-                svc.save_config_bundle(sid, values=prev, inst=j, **kw)
-            return r
+            left = restore_each(svc, sid, done, **kw)
+            return ActionResult(False, r.summary + (f" (not restored: {', '.join(left)})" if left else ""), details=r.details)
         done.append((inst, previous))
     return r
+
+
+def restore_each(svc, sid: str, pairs, **kw) -> list:
+    """Put each (instance, previous values) of stack `sid` back, best effort, latest first: the instance keys whose
+    restore was refused or raised (G1-K8F-S4-4B2 B1-B3)."""
+    return [key(sid, i) for i, prev in reversed(list(pairs)) if not _save_one(svc, sid, i, prev, kw).ok]
+
+
+def _save_one(svc, sid: str, inst, values, kw):
+    """One instance's save; an exception is its refusal (the caller restores what was written before)."""
+    from .service_base import ActionResult
+    try:
+        return svc.save_config_bundle(sid, values=values, inst=inst, **kw)
+    except Exception as exc:                             # any failure of one write is that write's refusal
+        return ActionResult(False, f"{key(sid, inst)}: {exc}")
 
 
 def launch_bands(svc, sid: str) -> set:

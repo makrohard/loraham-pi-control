@@ -242,8 +242,8 @@ class HmacOpsMixin:
                 if not path.exists():
                     runtime_fs.atomic_write(self._paths, path, _secrets.token_hex(16) + "\n", 0o600)
         except Exception as exc:
-            instances.save_each(self, stack_id, [(i, {_HMAC_PARAM: o}, {}) for i, o in zip(insts, old_resolved, strict=True)],
-                                _allow_managed_params=frozenset({_HMAC_PARAM}))
+            left = instances.restore_each(self, stack_id, [(i, {_HMAC_PARAM: o}) for i, o in zip(insts, old_resolved, strict=True)],
+                                          _allow_managed_params=frozenset({_HMAC_PARAM}))
             try:
                 if old_secret is None:
                     if path.exists():
@@ -252,9 +252,9 @@ class HmacOpsMixin:
                     runtime_fs.atomic_write_bytes(self._paths, path, old_secret, 0o600)
             except Exception:
                 pass
-            return ActionResult(False, f"could not {action} HMAC password (secret file): {exc} — rolled back")
+            return ActionResult(False, f"could not {action} HMAC password (secret file): {exc} — rolled back" + (f", not restored: {', '.join(left)}" if left else ""))
         verb = {"enable": "enabled", "disable": "disabled", "renew": "renewed"}[action]
-        return ActionResult(True, f"HMAC password {verb}")
+        return ActionResult(True, f"HMAC password {verb}" + ("" if insts else f" (no {stack_id} instance uses it yet)"))   # DEC-W409w
 
     # ---- auto-apply flow: rebuild firmware + restart the link, with a live progress run ----------
     #

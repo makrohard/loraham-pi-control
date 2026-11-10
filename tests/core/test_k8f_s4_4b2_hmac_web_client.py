@@ -42,15 +42,18 @@ def test_the_mesh_password_is_enabled_only_when_every_instance_names_it(tmp_path
     assert svc.hmac_status("meshcom") is False
 
 
-def test_a_box_without_a_meshcom_radio_has_no_mesh_password(tmp_path):
+def test_a_box_without_a_meshcom_radio_has_no_mesh_password_to_name(tmp_path):
     # a hardware list with no 433 radio: no saved meshcom instance, so not enabled (all() over none is not "enabled"),
-    # whatever the global file holds; enabling is refused by name. red on b4f83823: the global file's value (True)
+    # whatever the global file holds; enabling writes the secret file alone and says no instance uses it yet
+    # (DEC-W409w: no refusal; the global file is not written). red on b4f83823: the global file's value (True)
     svc = _svc(tmp_path, (radios_fixture.R2_868,))
     assert instances.saved_insts(svc, "meshcom") == []
     config.save_stack_config(svc._paths, "meshcom", {"password_file": "/x"}, inst=None)          # the global file
     assert svc.hmac_status("meshcom") is False
     r = svc.hmac_set_secret("meshcom", "enable")
-    assert not r.ok and "meshcom: no radio of its bands on the hardware list" in r.summary + " ".join(r.details), r
+    assert r.ok and r.summary == "HMAC password enabled (no meshcom instance uses it yet)", r
+    assert svc._xr_pw_path().exists() and svc.hmac_status("meshcom") is False
+    assert config.load_stack_config(svc._paths, "meshcom", inst=None).get("password_file") == "/x"
 
 
 def test_a_refused_instance_write_rolls_the_written_ones_back(tmp_path, monkeypatch):
@@ -65,8 +68,58 @@ def test_a_refused_instance_write_rolls_the_written_ones_back(tmp_path, monkeypa
         return real(self, target, values=values, inst=inst, **kw)
     monkeypatch.setattr(ControllerService, "save_config_bundle", save)
     r = svc.hmac_set_secret("meshcom", "enable")
-    assert not r.ok and "refused for the test" in r.summary, r.summary
+    assert not r.ok and r.summary == "could not enable HMAC password: refused for the test", r.summary
     assert not any(_password_files(svc).values()), _password_files(svc)
+
+
+def _refusing(monkeypatch, refuse):
+    """save_config_bundle refusing (False) or raising (an exception) where refuse(inst, values) says so."""
+    real = ControllerService.save_config_bundle
+
+    def save(self, target, *, values=None, inst=None, **kw):
+        from lhpc.core.service_base import ActionResult
+        how = refuse(inst, values or {})
+        if isinstance(how, Exception):
+            raise how
+        return ActionResult(False, "refused for the test") if how else real(self, target, values=values, inst=inst, **kw)
+    monkeypatch.setattr(ControllerService, "save_config_bundle", save)
+
+
+def test_a_restore_that_is_refused_is_named(tmp_path, monkeypatch):
+    # G1-K8F-S4-4B2 B1: r2's write is refused and r1's restore is refused too: the enable fails naming meshcom@r1 as not
+    # restored. red on 27b15a0c: only r2's refusal was reported, r1 silently kept the new value
+    svc = _svc(tmp_path)
+    _refusing(monkeypatch, lambda inst, values: getattr(inst, "rid", "") == "r2" or values.get("password_file") == "")
+    r = svc.hmac_set_secret("meshcom", "enable")
+    assert not r.ok and r.summary.endswith("refused for the test (not restored: meshcom@r1)"), r.summary
+
+
+def test_a_write_that_raises_restores_the_written_ones(tmp_path, monkeypatch):
+    # G1-K8F-S4-4B2 B2: saving meshcom@r2 raises OSError: meshcom@r1, written first, is restored and the enable fails by
+    # name. red on 27b15a0c: the exception escaped and r1 kept the new value
+    svc = _svc(tmp_path)
+    _refusing(monkeypatch, lambda inst, values: OSError("disk full") if getattr(inst, "rid", "") == "r2" else False)
+    r = svc.hmac_set_secret("meshcom", "enable")
+    assert not r.ok and "meshcom@r2: disk full" in r.summary, r.summary
+    assert not any(_password_files(svc).values()), _password_files(svc)
+
+
+def test_a_secret_file_failure_names_an_instance_it_could_not_restore(tmp_path, monkeypatch):
+    # G1-K8F-S4-4B2 B3: both instances written, the secret file write fails, and meshcom@r2's restore is refused: the
+    # failure names it. red on 27b15a0c: the restore's result was discarded ("rolled back" only)
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    real_write = runtime_fs.atomic_write
+
+    def write(paths, path, *a, **k):
+        if path == svc._xr_pw_path():
+            raise OSError("no space")                                            # the secret file only
+        return real_write(paths, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "atomic_write", write)
+    _refusing(monkeypatch, lambda inst, values: getattr(inst, "rid", "") == "r2" and values.get("password_file") == "")
+    r = svc.hmac_set_secret("meshcom", "enable")
+    assert not r.ok and r.summary.endswith("no space — rolled back, not restored: meshcom@r2"), r.summary
+    assert _password_files(svc)["r1"] == "", _password_files(svc)
 
 
 def test_the_web_client_status_names_each_instance_serving_another_root(tmp_path, monkeypatch):
