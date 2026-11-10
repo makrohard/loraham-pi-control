@@ -156,7 +156,7 @@ def _param_raw(p, params, inst: Instance) -> str:
     saved = (params or {}).get(p.name)
     raw = str(p.default_template or p.default) if saved is None else str(saved)
     if saved is not None and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
-        return str(inst.port(int(raw)))
+        return str(rid_port(int(raw), inst.rid))          # the saved base itself, never mapped again (G2 4)
     raw = inst.subst(raw)
     if "{rid}" in raw:                               # W3-1: never a socket path without this instance's radio
         raise CommandError(f"{p.name}: needs this instance's radio (no radio id given)")

@@ -1087,8 +1087,9 @@ def test_config_page_post_persists_scoped_and_reloads(tmp_path, web, csrf):
     from lhpc.core import config as cfgmod
     m, c = _collide_app(web, tmp_path)
     tok = csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
-    r = c.post("/stacks/ostack2/config",
-               data={"_csrf": tok, "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+    assert 'name="radio" value="r1"' in c.get("/stacks?open=ostack2").get_data(as_text=True)   # G2 2: per radio
+    r = c.post("/stacks/ostack2/config",                 # the rendered form's radio
+               data={"_csrf": tok, "radio": "r1", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                      "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     assert r.status_code in (200, 302)
     from lhpc.core.probes.backends import FakeSystem
@@ -1107,8 +1108,8 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch, web, cs
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     m, c = _collide_app(web, tmp_path)
     tok = csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
-    c.post("/stacks/ostack2/config",
-           data={"_csrf": tok, "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+    c.post("/stacks/ostack2/config",                     # the rendered form's radio (G2 2)
+           data={"_csrf": tok, "radio": "r1", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                  "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     seen = {}
     def stub(self, stack, comp, cfg, band="", **_scope):

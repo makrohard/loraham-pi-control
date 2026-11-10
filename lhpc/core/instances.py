@@ -43,7 +43,7 @@ def radios_of(stack, paths, disabled: str = "") -> tuple:
     still addressed for a stop)."""
     if stack is None:
         return ()
-    bands = stack_bands(stack)                     # a stack without bands (graywolf: KISS over TCP) on every radio
+    bands = stack_bands(stack)                     # a stack without bands runs on every radio
     return tuple(r.id for r in sorted((r for r in radios.load(paths).radios
                                        if (r.enabled or r.id == disabled) and (not bands or r.band in bands)),
                                       key=lambda r: int(r.id[1:])))
@@ -84,9 +84,7 @@ def one_radio(svc, sid: str, band: str) -> tuple:
 
 def can_run_on(svc, stack) -> list:
     """The enabled radios `stack` can run on, by rid order: those of its bands (any band for a stack without one)."""
-    bands = stack_bands(stack)
-    return sorted((r.id for r in radios.load(svc._paths).radios if r.enabled and (not bands or r.band in bands)),
-                  key=lambda x: int(x[1:]))
+    return list(radios_of(stack, svc._paths))
 
 
 def running_keys(svc, sid: str) -> list:
@@ -556,6 +554,7 @@ def endpoint_statuses(svc, cs, inst) -> list:
     from . import meshcore_mode as _mm
     from .model import EndpointObservation
     from .probes.endpoints import tcp_endpoint_match
+    inst = _based(svc, svc.stack_of(cs.component_id), inst)        # G2 NOTE 11: at its saved ports, as a start judges
     if cs.component_id == _mm.NODE_ID:            # K8f S4-5 (DEC-W409ah): its own mode at its own addresses, probed
         return [EndpointObservation(e, *tcp_endpoint_match(svc._system, e.address)) for e in node_endpoints(svc, [inst])]
     return [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
@@ -676,15 +675,19 @@ def node_endpoints(svc, insts) -> list:
     """The MeshCore node endpoints instances `insts` serve, each by its own running mode at its own (saved-base)
     addresses (K8f S4-5, DEC-W409ah): status readiness, an instance's view and the stop check read them."""
     from . import meshcore_mode as _mm
+    comp = svc.stack(_mm.STACK_ID).component(_mm.NODE_ID)
+    return [e for inst in insts for e in endpoints_for(_mm.expected_endpoints(comp, svc.meshcore_running_mode(inst)),
+                                                       _based(svc, _mm.STACK_ID, inst))]
+
+
+def _based(svc, sid, inst):
+    """with_bases for a read-only view: an unreadable store keeps the instance's static ports (status and a stop's
+    check never break on a malformed file)."""
     from .config import ConfigError
-    comp, out = svc.stack(_mm.STACK_ID).component(_mm.NODE_ID), []
-    for inst in insts:
-        try:
-            based = with_bases(svc, _mm.STACK_ID, inst)
-        except ConfigError:
-            based = inst                           # an unreadable store: its static ports (status and stop never break)
-        out += endpoints_for(_mm.expected_endpoints(comp, svc.meshcore_running_mode(inst)), based)
-    return out
+    try:
+        return with_bases(svc, sid, inst)
+    except ConfigError:
+        return inst
 
 
 
@@ -694,8 +697,8 @@ def settings_choice(svc, sid: str, band: str, inst=None) -> dict:
     its band's instance (store_inst), so that entry is the selected one. Nothing is added first (DEC-W344). `radio`
     is the shown instance's own rid."""
     stack = svc.stack(sid)
-    bands = stack_bands(stack) if stack is not None and not svc._is_daemon_target(sid) else ()   # the daemon: its panel
-    rows = sorted((r for r in radios.load(svc._paths).radios if r.enabled and r.band in bands), key=lambda r: int(r.id[1:]))
+    rids = radios_of(stack, svc._paths) if not svc._is_daemon_target(sid) else ()     # the daemon: its panel; G2 2
+    rows = [r for rid in rids for r in radios.load(svc._paths).radios if r.id == rid]
     shown = own_rid(store_inst(svc, sid, band, inst)) if rows else ""
     out = [{"label": f"{r.id} · {r.band}", "radio": r.id, "band": "", "sel": r.id == shown, "disabled": False}
            for r in rows]
