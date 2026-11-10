@@ -42,3 +42,24 @@ def test_a_bare_config_with_one_radio_is_that_instance(box, capsys):
     paths = Paths(runtime_root=box)
     assert cfgmod.load_stack_config(paths, "kiss", inst=Instance("r1")).get("rx_only") == "on"
     assert cli.main(["config", "kiss"]) == 0 and "OK    kiss@r1 settings:" in capsys.readouterr().out
+
+
+ONLY_868 = (radios.Radio("r1", "s", "meshstick-1262", "868", usb_serial="MS1"),)
+
+
+@pytest.mark.parametrize("argv", [["config", "chat"], ["config", "chat", "call"], ["config", "chat", "call", "XX0XXA-7"],
+                                  ["config", "chat", "--reset", "--yes"]])
+def test_g1_g4w_b1_no_radio_able_on_a_list_is_refused_before_any_config_operation(box, capsys, argv):
+    # DEC-W384dd: chat runs on 433 only, the list has one 868 radio: no instance, never the global chat.toml
+    radios_fixture.write(box, ONLY_868)
+    before = _stacks(box)
+    assert cli.main(argv) == 1
+    assert "chat can run on no radio of the hardware list" in capsys.readouterr().out
+    assert _stacks(box) == before and "chat.toml" not in _stacks(box)
+
+
+@pytest.mark.no_default_hardware
+def test_g1_g4w_b1_without_a_list_the_global_settings_stay(box):
+    (box / "config").mkdir(parents=True, exist_ok=True)
+    assert cli.main(["config", "chat", "call", "XX0XXA-7"]) == 0
+    assert cfgmod.load_stack_config(Paths(runtime_root=box), "chat").get("file_call") == "XX0XXA-7"

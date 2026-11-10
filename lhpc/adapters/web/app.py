@@ -968,7 +968,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return next((c for rid in (*running, *_instances.can_run_on(service, stack)) if (c := _settings_copy(stack.id, rid))),
                     None)
 
-    def _stack_groups(only_sid=None, cfg_sid="", *, fw_status=None, listeners=None,
+    def _stack_groups(only_sid=None, *, fw_status=None, listeners=None,
                       restored_open=frozenset()):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail: component statuses/evidence, system+build+runtime
@@ -1220,7 +1220,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                   ("", "", ""))
         return request.environ["lhpc.page_radio"]
 
-    def _stacks_context(*, only_sid=None, cfg_sid=""):
+    def _stacks_context(*, only_sid=None):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
         with a missing var.
@@ -1232,7 +1232,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # (CLS). One general mechanism: any top-level row id (a stack sid, or "controller-row").
         from urllib.parse import unquote as _unquote
         restored_open = {s for s in _unquote(request.cookies.get("lhpc_open", "")).split(",") if s}
-        groups, snapshot = _stack_groups(only_sid, cfg_sid, fw_status=fw_status,
+        groups, snapshot = _stack_groups(only_sid, fw_status=fw_status,
                                          listeners=listeners, restored_open=restored_open)
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
@@ -1290,8 +1290,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
         # cached-only — no live git/network/identity on a GET.
-        ctx, _groups, _snapshot = _stacks_context(
-                                                 cfg_sid=request.args.get("cfg", ""))
+        ctx, _groups, _snapshot = _stacks_context()
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
         # expanding any row; the per-stack Settings carry only their own `use_gps` switch.
@@ -1319,8 +1318,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
         # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
-        ctx, groups, _snapshot = _stacks_context(only_sid=sid,
-                                                 cfg_sid=request.args.get("cfg", ""))
+        ctx, groups, _snapshot = _stacks_context(only_sid=sid)
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
             abort(404)

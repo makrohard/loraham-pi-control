@@ -26,7 +26,7 @@
   openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
 - Scripts: a bare `lhpc config <stack>` that several radios can run is refused with its instances (`lhpc config
-  <stack>@<rid>`); a `band` field on the console's actions is refused (a band is a radio's attribute).
+  <stack>@<rid>`), and one that no listed radio can run is refused (not the global file); a band field is refused.
 - Meshtastic on r2 and up now listens on its own ports (API 4403 + 133 × (n − 1), web 9443 + 133 × (n − 1)); before,
   every meshtastic@rN bound r1's 4403/9443.
 - Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`

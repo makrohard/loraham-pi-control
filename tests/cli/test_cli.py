@@ -493,10 +493,13 @@ def test_config_ambiguous_param_refuses_without_mutating(monkeypatch):
     from lhpc.adapters.cli import main as cli_main
     from lhpc.core.services import ActionResult
 
-    from lhpc.core import instances
+    from lhpc.core import instances, radios
     monkeypatch.setattr(instances, "radios_able", lambda svc, sid, band="": [])     # a stack no radio runs: global
+    monkeypatch.setattr(radios, "load", lambda paths: radios.State(radios.ABSENT))   # ... because there is no list
 
     class _Fake:
+        _paths = None
+
         def __init__(self):
             self.saved = []
 

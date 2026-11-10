@@ -308,7 +308,7 @@ def _cmd_config(svc, args) -> int:
     if op_flags:
         print("ERR   --callsign applies only to 'lhpc config operator'")
         return 2
-    from lhpc.core import instances
+    from lhpc.core import instances, radios
     target, (stack, inst, _band, why) = stack, instances.resolve(svc, stack)     # 7f: `<stack>@<rid>`, its own
     if why:
         print(f"ERR   {why}")
@@ -332,6 +332,12 @@ def _cmd_config(svc, args) -> int:
             if inst is None or why:
                 print(f"ERR   {why or f'{stack}@{rids[0]} cannot be addressed'}")
                 return 1
+        elif radios.load(svc._paths).kind != radios.ABSENT:
+            # G1-G4W B1 (DEC-W384dd): a list on which no radio can run it has no instance whose settings these are;
+            # never the global file (instances.saved_insts, G1-K6C-RE 3). Without a list, the global settings stay.
+            print(f"ERR   {stack} can run on no radio of the hardware list: add or enable one on the Hardware page")
+            print("\nNext:\n  lhpc hardware")
+            return 1
     band = getattr(inst, "band", "")              # only for the core calls that still take one (S3/S4): its radio's
     if daemon_mode and not svc._has_daemon_params(stack):      # never another stack's way into a radio's settings
         print(f"ERR   {stack} has no configurable daemon parameters")
