@@ -211,11 +211,12 @@ def test_update_reports_a_failed_restart_as_not_ok(tmp_path, monkeypatch):
     from lhpc.core.service_base import ActionResult as _AR
     monkeypatch.setattr(ControllerService, "restart",
                         lambda self, t, **kw: _AR(False, "restart failed"))
-
+    from lhpc.core import instances                 # K8f D3 B7: the running instance is told (its launch record)
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: ["graywolf@r1"] if sid == "graywolf" else [])
     res = svc.graywolf_upstream_update("graywolf", apply=True)
     assert res.ok is False, "a failed restart must surface as not-ok"
     assert "restart FAILED" in res.summary
-    assert res.next_commands == ["lhpc stack start graywolf@<rid> --yes"]      # two radios: the operator names it
+    assert res.next_commands == ["lhpc stack restart graywolf@r1 --yes"]      # the failed instance, by name
 
 
 def test_upstream_update_holds_task_admission(tmp_path, monkeypatch):
