@@ -560,7 +560,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             welcome=service.auto_install_welcome(),
             welcome_dismissed=service.welcome_note_dismissed(),
             tasks=tasks,
-            radio_bands=service.radio_bands(),
             hardware_configured=service.hardware_configured(),
             radios_listed=bool(_radios_mod.load(service._paths).radios),       # DEC-W384cl: radios, none enabled
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
@@ -959,13 +958,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         own = f"{rid}/{e.job()}"
         return {"target": e.writer, "radio": rid or None, "job": own if rid and _rflog.by_job(own) else e.job()}
 
-    def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None,
+    def _shown_instance(stack):
+        """G4-web: the instance a stack's Settings view shows without a page radio it can use (what the band default
+        picked before): one it runs on (its launch records), else the first radio able to run it; None without one (no
+        list, the daemon: its global settings)."""
+        if service._is_daemon_target(stack.id):
+            return None
+        running = sorted(_instances.recorded(service, stack.id), key=lambda r: int(r[1:]))
+        return next((c for rid in (*running, *_instances.can_run_on(service, stack)) if (c := _settings_copy(stack.id, rid))),
+                    None)
+
+    def _stack_groups(only_sid=None, cfg_sid="", *, fw_status=None, listeners=None,
                       restored_open=frozenset()):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail: component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
-        and stack-scoped conflicts — all read-only, GET-safe. `band` is threaded (as the detail page
-        did) into the band-aware views. `only_sid` limits the heavy per-stack build to ONE row (the
+        and stack-scoped conflicts — all read-only, GET-safe. Every view is the stack's instance's (G4-web: the page
+        radio's, else `_shown_instance`), never a band's. `only_sid` limits the heavy per-stack build to ONE row (the
         lazy-body partial) — the holistic snapshot/conflicts are still computed, but the ~14 per-stack
         service calls run for just that stack instead of all of them. On the whole page those calls
         run only for the rows rendered inline (`_row_inline`); a closed row carries what its summary
@@ -994,14 +1003,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if only_sid is not None and ss.stack.id != only_sid:
                 continue                              # lazy-body partial: build only the requested row
             stack = ss.stack
-            # A band chosen in the URL belongs to ONE stack (`cfg`), not the page.
-            # Every OTHER band-switchable stack falls back to the band it is actually
-            # RUNNING on — not to its declared primary: a stack started on 433 flipped
-            # to 868 as soon as the URL lost its band/cfg (any stop redirect does that),
-            # which also decided which per-band config a Save would write.
-            sband = (band if (cfg_sid and stack.id == cfg_sid)
-                     else service.launch_band(stack.id, ""))
             _inst = _settings_copy(stack.id, _page_radio()[0])      # G1-W2-RE F2: every stack's view on the page radio
+            _view_inst = _inst or _shown_instance(stack)            # G4-web: the Settings view's instance, never a band
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
                    if not main or c.id != main.id]
@@ -1117,10 +1120,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                    "view": {**service.config_view(stack.id, _inst.band if _inst else sband, rid=_view_rid(stack.id, "")),
-                             **_instances.settings_choice(service, stack.id, sband, _inst),   # 7f, DEC-W40
+                    "view": {**service.config_view(stack.id, _view_inst.band if _view_inst else "", rid=_view_rid(stack.id, "")),
+                             **_instances.settings_choice(service, stack.id, "", _view_inst),   # 7f, DEC-W40
                              "live_radios": _live_radios},   # W3: the daemon's radio links
-                    "config_groups": service.config_param_groups(stack.id, _inst.band if _inst else sband, _inst),
+                    "config_groups": service.config_param_groups(stack.id, inst=_view_inst),
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
@@ -1217,7 +1220,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                   ("", "", ""))
         return request.environ["lhpc.page_radio"]
 
-    def _stacks_context(band="", *, only_sid=None, cfg_sid=""):
+    def _stacks_context(*, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
         with a missing var.
@@ -1229,7 +1232,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # (CLS). One general mechanism: any top-level row id (a stack sid, or "controller-row").
         from urllib.parse import unquote as _unquote
         restored_open = {s for s in _unquote(request.cookies.get("lhpc_open", "")).split(",") if s}
-        groups, snapshot = _stack_groups(band, only_sid, cfg_sid, fw_status=fw_status,
+        groups, snapshot = _stack_groups(only_sid, cfg_sid, fw_status=fw_status,
                                          listeners=listeners, restored_open=restored_open)
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
@@ -1287,7 +1290,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_stacks(**over):
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
         # cached-only — no live git/network/identity on a GET.
-        ctx, _groups, _snapshot = _stacks_context(_page_radio()[1],
+        ctx, _groups, _snapshot = _stacks_context(
                                                  cfg_sid=request.args.get("cfg", ""))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
@@ -1316,7 +1319,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
         # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
-        ctx, groups, _snapshot = _stacks_context(_page_radio()[1], only_sid=sid,
+        ctx, groups, _snapshot = _stacks_context(only_sid=sid,
                                                  cfg_sid=request.args.get("cfg", ""))
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
@@ -1716,11 +1719,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, radio=rid or None)
                         + "#stack-settings-" + sid)
 
-    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None, inst=None, rid=""):
+    def _render_confirm(op: str, target: str, source: str, frm: str, plan=None, inst=None, rid="", band=""):
         """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
         (a resource conflict that stops another stack's owner, dependents a restart takes down) —
         a routine Start/Restart runs directly (Start means start). Install/update/clean
-        keep their confirmation (source selector, typed clean)."""
+        keep their confirmation (source selector, typed clean). `band`: the §6 stray band daemon's Stop only (G4-web:
+        every other plan names its instance, never a band)."""
         if plan is None:
             plan = service.run_action(op, target, apply=False, source=source, band=band, inst=inst)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
@@ -1772,7 +1776,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         target = request.form.get("target", "")
         if op not in service.WEB_ACTIONS:
             abort(400)
-        confirmed, rid, inst, band = request.form.get("confirmed") == "yes", "", None, ""
+        confirmed, rid, inst, band = request.form.get("confirmed") == "yes", "", None, ""   # band: the §6 stray Stop's
         if op in ("start", "stop", "restart"):
             # W2 (CLEANUP-DESIGN-v13 13.2): an instance, `<stack>@<rid>`, through the one parser; a `band` or `rid`
             # field is a second selector (obsolete, a bad request). A refusal says why and runs nothing; a disabled
@@ -1785,6 +1789,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
                 _instances.parse_target(service, target, op)
+            # G4-web: the instance names its band; kept only for the §6 stray Stop and, TRANSITIONAL until the core's
+            # instances.radio_band takes the daemon's row band too (S3/S4), for daemon@rN its radio ROW's band
+            band = band if stray or service._is_daemon_target(sid or target) else ""
             # G1-W2 5: the parser hands an instance WITH a why only where a stop must reach it (instances.copy_of: a
             # disabled radio; a RUNNING instance whose radio left the list, whose row moved band — "stop it first" — or
             # whose band the stack cannot use); every other refusal comes without one and is refused for a stop too.
@@ -1794,8 +1801,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             target, rid = sid, (inst.rid if inst is not None else "")
         elif "rid" in request.form:                 # install, update, build, clean are stack-wide: no radio
             abort(400)
-        else:
-            band = request.form.get("band", "")
+        elif "band" in request.form:                # G4-web: a stack-wide op names no band either (by name)
+            abort(make_response(_BAND_REFUSAL, 400))
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
         # to the CLI's `default_channel` — binary wherever it is published (a fresh Pi must not
         # silently start a four-hour compile because nobody touched the selector), "pinned"
@@ -1837,17 +1844,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # from; an identity refusal lands on the Settings row to fix; only a CONSEQUENTIAL
             # choice — another stack's owner to stop, dependents a restart takes down — asks for
             # confirmation. Everything else runs now.
-            plan = service.run_action(op, target, apply=False, band=band, inst=inst)
+            plan = service.run_action(op, target, apply=False, band=band, inst=inst)   # band: daemon/stray only
             if not plan.ok:
                 if plan.data.get("enforce_fields"):
                     return _settings_back(target, plan, rid)
                 flash(f"{plan.summary} {' '.join(plan.details[:6])}", "warn")
                 return _redirect_for(target, rid)
             if plan.data.get("blockers") or plan.data.get("dependents"):
-                return _render_confirm(op, target, band, source, frm, plan=plan, inst=inst, rid=rid)
+                return _render_confirm(op, target, source, frm, plan=plan, inst=inst, rid=rid)
         elif not confirmed:
             # Stage 1: show the dry-run plan, options and a confirmation form.
-            return _render_confirm(op, target, band, source, frm, inst=inst, rid=rid)
+            return _render_confirm(op, target, source, frm, inst=inst, rid=rid, band=band)
         # Stage 2: apply.
         # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
         # a mismatch re-renders the confirm with ZERO mutation.
@@ -1857,7 +1864,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if typed != target:
                 flash(f"Clean not applied: type the stack id '{target}' exactly to confirm "
                       "the destructive purge.", "warn")
-                return _render_confirm(op, target, band, source, frm)
+                return _render_confirm(op, target, source, frm)
             purge = True
         # install/build/test run as detached jobs streaming to a log -> show it live.
         if op in ("install", "build", "test"):
@@ -1886,8 +1893,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # DETACHED: the start/restart runs as a tracked job (the hidden `_stack-start` verb); the
             # page returns at once and the task banner follows it — a stack row shows "starting"
             # while the job runs and the page reloads once when it ends. Blocked = typed refusal.
-            job, admission, reason = service.spawn_start_job(op, target, band=band,
-                                                             stop_owners=stop_owners,
+            job, admission, reason = service.spawn_start_job(op, target, stop_owners=stop_owners,
                                                              cascade=cascade, rid=rid,
                                                              plan_hash=request.form.get("plan_hash", "") if confirmed else None)
             if job is None:                             # blocked, or admission_blocked (typed)
@@ -1904,7 +1910,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op == "update" and not result.ok and _pin_refusal(result):
             # The inline Update's pin refusal is shown on the confirm page itself, with the same
             # ways out (self-update first) as the dry run's — not flattened into a flash.
-            return _render_confirm(op, target, band, source, frm, plan=result)
+            return _render_confirm(op, target, source, frm, plan=result)
         if op == "update" and result.ok and result.data.get("needs_build"):
             # The updated sources need their build before the stack can start: the CLI's update
             # runs it inline, the console as its detached build job (the live output below). A
@@ -2121,7 +2127,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # at the LAUNCH boundary, which refuses to start without a resolvable identity; the row
         # here carries the problem note, and the next Start sends the operator back to this row.
         result = service.save_config_bundle(
-            stack_id, values=values, band=band, remotes=remotes, inst=inst)
+            stack_id, values=values, remotes=remotes, inst=inst)                # G4-web: the instance names its band
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)

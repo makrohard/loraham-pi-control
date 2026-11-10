@@ -485,13 +485,16 @@ def test_config_daemon_param_saves(tmp_path, monkeypatch, capsys):
     assert "OK    saved the daemon settings of r1" in capsys.readouterr().out
 
 
-def test_config_ambiguous_param_refuses_without_mutating():
+def test_config_ambiguous_param_refuses_without_mutating(monkeypatch):
     # No stack in the shipped manifest has a duplicated param name, so drive the guard directly with
     # a fake service: a bare name owned by two components must REFUSE (print component.param) and
     # never call save_config_bundle.
     import argparse
     from lhpc.adapters.cli import main as cli_main
     from lhpc.core.services import ActionResult
+
+    from lhpc.core import instances
+    monkeypatch.setattr(instances, "radios_able", lambda svc, sid, band="": [])     # a stack no radio runs: global
 
     class _Fake:
         def __init__(self):
@@ -500,11 +503,14 @@ def test_config_ambiguous_param_refuses_without_mutating():
         def stack(self, s):
             return object()
 
+        def _is_daemon_target(self, s):
+            return False
+
         def config_param_fields(self, stack, band):
             return [{"component": "a", "name": "call", "kind": "run", "key": "a.call", "default": ""},
                     {"component": "b", "name": "call", "kind": "run", "key": "b.call", "default": ""}]
 
-        def config_param_groups(self, stack, band):
+        def config_param_groups(self, stack, band="", inst=None):
             return []
 
         def save_config_bundle(self, *a, **k):
@@ -552,8 +558,9 @@ def test_stack_poststart_is_a_command(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.contract
-def test_stack_start_passes_its_radios_band(monkeypatch, capsys):
-    # K3 (W323): `<stack>@<rid>` starts on its radio's band, for the plan AND the apply (was F-A2's --band).
+def test_stack_start_passes_its_instance_never_a_band(monkeypatch, capsys):
+    # K3 (W323), G4-web: `<stack>@<rid>` hands its instance to the plan AND the apply; the core takes the band from
+    # the instance's radio row (instances.radio_band), the adapter never passes one (was F-A2's --band).
     from lhpc.core.services import ControllerService, ActionResult
     calls = []
     def cap(self, op, target, **kw):
@@ -561,7 +568,7 @@ def test_stack_start_passes_its_radios_band(monkeypatch, capsys):
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
     assert main(["stack", "start", "kiss@r2", "--yes"]) == 0
-    assert calls == [("start", "kiss", False, "868", "r2"), ("start", "kiss", True, "868", "r2")]
+    assert calls == [("start", "kiss", False, None, "r2"), ("start", "kiss", True, None, "r2")]
 
 
 @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
@@ -606,11 +613,11 @@ def test_stack_stop_of_a_radios_daemon(monkeypatch):
     calls = []
 
     def cap(self, op, target, **kw):
-        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        calls.append((op, target, kw.get("apply"), kw.get("band"), getattr(kw.get("inst"), "rid", None)))
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
     assert main(["stack", "stop", "daemon@r2", "--yes"]) == 0
-    assert calls[-1] == ("stop", "daemon", True, "868")
+    assert calls[-1] == ("stop", "daemon", True, "868", "r2")      # G4-web: its instance; the row band is transitional
 
 
 @pytest.mark.contract

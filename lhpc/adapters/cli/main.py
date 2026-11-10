@@ -95,12 +95,11 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
-def _start_flow(run, stack: str, yes: bool, band: str = "", stop_cmds=None,
-                stop_labels=None) -> int:
+def _start_flow(run, stack: str, yes: bool, stop_cmds=None, stop_labels=None) -> int:
     """`lhpc stack start`: `_apply_flow`, except when the plan names running stacks that hold what
     the start needs. Then it asks, as the console's confirm page does, whether to stop them and
     start; `--yes` answers yes. A no, or no terminal to ask on, refuses with nothing stopped; its
-    suggested retry repeats an explicit `--band`."""
+    suggested retry names the instance (`<stack>@<rid>`, W323)."""
     plan = run(False)
     blockers = (plan.data.get("blockers") or []) if plan.ok else []
     if not blockers:
@@ -241,17 +240,17 @@ def _render(result: ActionResult) -> int:
     return 0 if result.ok else 1
 
 
-def _config_rows(svc, stack: str, band: str, inst=None) -> list[dict]:
+def _config_rows(svc, stack: str, inst=None) -> list[dict]:
     """Flatten config_param_groups into rows (each carries component/name/value/default/is_identity)."""
-    return [r for g in svc.config_param_groups(stack, band, inst) for r in g["rows"]]
+    return [r for g in svc.config_param_groups(stack, inst=inst) for r in g["rows"]]
 
 
-def _config_list(svc, stack: str, band: str, inst=None) -> int:
-    groups = svc.config_param_groups(stack, band, inst)
+def _config_list(svc, stack: str, inst=None) -> int:
+    groups = svc.config_param_groups(stack, inst=inst)
     if not groups:
         print(f"OK    '{stack}' has no configurable parameters")
         return 0
-    print(f"OK    {stack} settings" + (f" (band {band})" if band else "") + ":")
+    print(f"OK    {stack}" + (f"@{inst.rid}" if getattr(inst, "rid", "") else "") + " settings:")
     has_identity = False
     for g in groups:
         print(f"  [{g['name']}]")
@@ -310,7 +309,7 @@ def _cmd_config(svc, args) -> int:
         print("ERR   --callsign applies only to 'lhpc config operator'")
         return 2
     from lhpc.core import instances
-    target, (stack, inst, iband, why) = stack, instances.resolve(svc, stack)     # 7f: `<stack>@<rid>`, its own
+    target, (stack, inst, _band, why) = stack, instances.resolve(svc, stack)     # 7f: `<stack>@<rid>`, its own
     if why:
         print(f"ERR   {why}")
         return 1
@@ -318,9 +317,22 @@ def _cmd_config(svc, args) -> int:
         print(f"ERR   unknown stack '{stack}'")
         print("\nNext:\n  lhpc list")
         return 1
-    band = iband                                  # K8 (W308/W310): the instance's radio's band, never a --band
-
     daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
+    if inst is None and not daemon_mode and not svc._is_daemon_target(stack):
+        # G4-web, DEC-W384da: a bare `lhpc config <stack>` never picks among several radios by band: one radio able to
+        # run it is that instance (exact); several are refused by name with the instances (W323)
+        rids = instances.radios_able(svc, stack)
+        if len(rids) > 1:
+            print(f"ERR   {stack} can run on {' or '.join(rids)}: use "
+                  + " or ".join(f"{stack}@{r}" for r in rids))
+            print("\nNext:\n" + "\n".join(f"  lhpc config {stack}@{r}" for r in rids))
+            return 2
+        if rids:
+            inst, why = instances.copy_of(svc, stack, rids[0])
+            if inst is None or why:
+                print(f"ERR   {why or f'{stack}@{rids[0]} cannot be addressed'}")
+                return 1
+    band = getattr(inst, "band", "")              # only for the core calls that still take one (S3/S4): its radio's
     if daemon_mode and not svc._has_daemon_params(stack):      # never another stack's way into a radio's settings
         print(f"ERR   {stack} has no configurable daemon parameters")
         return 1
@@ -347,7 +359,7 @@ def _cmd_config(svc, args) -> int:
         if not args.yes and not _confirm(f"\nReset {target} settings to defaults? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(svc.reset_config(stack, band, inst))
+        return _render(svc.reset_config(stack, inst=inst))
 
     if daemon_mode:
         if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
@@ -375,7 +387,7 @@ def _cmd_config(svc, args) -> int:
         return _render(svc.save_daemon_params(stack, vals, rid=drid))
 
     if args.param is None or args.param == "list":
-        return _config_list(svc, stack, band, inst)
+        return _config_list(svc, stack, inst)
 
     # show / set a single parameter — resolve the name to its canonical key (NO first-match).
     fields = svc.config_param_fields(stack, band)
@@ -396,7 +408,7 @@ def _cmd_config(svc, args) -> int:
             print(f"    lhpc config {target} {form} <value>")
         return 1
     fld = matches[0]
-    row = next((r for r in _config_rows(svc, stack, band, inst)
+    row = next((r for r in _config_rows(svc, stack, inst)
                 if r["component"] == fld["component"] and r["name"] == fld["name"]), None)
 
     if args.value is None:                                  # show
@@ -413,10 +425,10 @@ def _cmd_config(svc, args) -> int:
     # Plain config editing, the CLI counterpart of the Settings page: clearing an identity is
     # allowed and WARNed about below; `lhpc stack start/restart` is what refuses to launch without
     # one, exactly as the web Start/Restart panel does.
-    res = svc.save_config_bundle(stack, values={key: args.value}, band=band, inst=inst)
+    res = svc.save_config_bundle(stack, values={key: args.value}, inst=inst)
     rc = _render(res)
     if res.ok and row is not None and row["is_identity"]:
-        ok, _fields, msg = svc.enforce_identity(stack, band, inst)
+        ok, _fields, msg = svc.enforce_identity(stack, inst=inst)
         if not ok:
             print(f"WARN  {msg}")
     return rc
@@ -1417,8 +1429,9 @@ def _run(argv: list[str] | None = None) -> int:
                 return 1
 
         def _admitted():
-            band = getattr(inst, "band", "")                # K8: no --band; the web hashed on its instance's band
-            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, band):
+            # G4-web: the web and this job hash the same instance's plan; daemon@rN its row's band (transitional)
+            dband = getattr(inst, "band", "") if svc._is_daemon_target(args.target) else ""
+            if args.plan_hash is not None and args.plan_hash != instances.plan_hash(svc, op, args.target, inst, dband):
                 return _AR(False, f"Cannot {op} '{args.target}': the plan changed since it was confirmed — check it "
                                   "and confirm again (nothing was run).")
             if jobresult.mark_running(svc._paths, web, aid):
@@ -1480,13 +1493,17 @@ def _run(argv: list[str] | None = None) -> int:
                     return 2
                 args.stack = f"{args.stack}@{args.radio}"
             # W323/W326: `<stack>@<rid>`, one parser for every operator entry (instances.parse_target).
-            sid, inst, iband, why = instances.parse_target(svc, args.stack, args.stack_action)
+            sid, inst, dband, why = instances.parse_target(svc, args.stack, args.stack_action)
+            # G4-web: the instance names its band; TRANSITIONAL for daemon@rN its radio ROW's band (the core's
+            # instances.radio_band keeps the caller's band for the daemon until S3/S4)
+            dband = dband if svc._is_daemon_target(sid) else ""
             if why and not (inst is not None and args.stack_action == "stop"):   # G1-C7 B3: a stop still reaches it
                 print(f"ERR   {why}", file=sys.stderr)
                 return 1
 
             def _run(a, stop_owners=False):
-                res = svc.run_action(args.stack_action, sid, apply=a, band=iband, stop_owners=stop_owners, inst=inst)
+                res = svc.run_action(args.stack_action, sid, apply=a, stop_owners=stop_owners, inst=inst,
+                                     **({"band": dband} if dband else {}))      # the daemon's row band (transitional)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
@@ -1495,7 +1512,7 @@ def _run(argv: list[str] | None = None) -> int:
                     return replace(res, ok=True)
                 return res
             if args.stack_action == "start":
-                return _start_flow(_run, args.stack, yes=args.yes, band=iband,
+                return _start_flow(_run, args.stack, yes=args.yes,
                                    stop_cmds=svc.owner_stop_commands,
                                    stop_labels=svc.owner_stops)
             return _apply_flow(_run, yes=args.yes)

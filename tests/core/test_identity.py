@@ -1513,7 +1513,7 @@ def test_a_confirmed_form_names_its_instance_never_a_band(tmp_path, monkeypatch)
     assert started == []
     resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice@r2", "confirmed": "yes",
                                         "plan_hash": "h"})
-    assert resp.status_code == 302 and started == [("868", "r2", "h")]      # the radio's band, the confirmed plan
+    assert resp.status_code == 302 and started == [("", "r2", "h")]      # G4-web: its radio, no band; the confirmed plan
 
 
 def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, monkeypatch):

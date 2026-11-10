@@ -2670,7 +2670,7 @@ def test_routine_start_runs_with_no_page_between(tmp_path, monkeypatch, web, csr
     tok = csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat@r1", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
-    assert spawns == [("start", "chat", "433", False, False, "r1")] and calls == []       # W2: chat@r1
+    assert spawns == [("start", "chat", "", False, False, "r1")] and calls == []       # W2: chat@r1, no band
     page = c.get("/").get_data(as_text=True)
     assert "Starting &#39;chat&#39; — follow it in the banner" in page
 
@@ -2685,7 +2685,7 @@ def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch, web, c
     tok = csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat@r1"})
     assert r.status_code == 302                                # no stage-1 page
-    assert spawns == [("restart", "chat", "433", False, False, "r1")]
+    assert spawns == [("restart", "chat", "", False, False, "r1")]
     assert "Restarting &#39;chat&#39;" in c.get("/stacks").get_data(as_text=True)
 
 
@@ -2784,7 +2784,7 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     r2 = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon@r2",
                                  "confirmed": "yes", "stop_owners": "yes"})
     assert r2.status_code == 302
-    assert spawns == [("start", "daemon", "868", True, False, "r2")]
+    assert spawns == [("start", "daemon", "", True, False, "r2")]
 
 
 def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, web, csrf):
@@ -2811,7 +2811,7 @@ def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, 
     assert "chat" in body and "Stop dependents &amp; restart</button>" in body
     r2 = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon@r1", "confirmed": "yes",
                                  "cascade": "yes"})
-    assert r2.status_code == 302 and spawns == [("restart", "daemon", "433", False, True, "r1")]   # consent travels
+    assert r2.status_code == 302 and spawns == [("restart", "daemon", "", False, True, "r1")]   # consent travels
 
 
 def test_start_daemon_only_on_a_band(tmp_path, monkeypatch, web, csrf):
@@ -2824,7 +2824,7 @@ def test_start_daemon_only_on_a_band(tmp_path, monkeypatch, web, csrf):
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon@r2",
                                 "from": "dash"})
     assert r.status_code == 302
-    assert spawns == [("start", "daemon", "868", False, False, "r2")]
+    assert spawns == [("start", "daemon", "", False, False, "r2")]
     assert 'name="p_radio"' not in c.get("/").get_data(as_text=True)
 
 

@@ -2,7 +2,7 @@
 {% from "_macros.html" import cmdbox, webserver_pills, banner, daemon_badge %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {# One band on the hardware list: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
-{% block body_class %}{% if radio_bands | length != 2 %}dash-narrow{% endif %}{% endblock %}
+{% block body_class %}{% if radios | length != 2 %}dash-narrow{% endif %}{% endblock %}
 {# A running component's state, name and note: one markup for every instance's rows (G1-C49). #}
 {% macro comp_state(c) %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
@@ -139,7 +139,7 @@
           {% if r.stray %}
             <div class="depnote depnote-warn">
               <strong>A daemon is still running on {{ r.band }} MHz, where the hardware list has no enabled radio
-              (it has: {{ radio_bands | join('+') or 'none' }}).</strong>
+              (it has: {% for x in radios if not x.stray %}{{ x.rid }} ({{ x.band }} MHz){{ ', ' if not loop.last }}{% else %}none{% endfor %}).</strong>
               {% if r.shared_with %}
                 It is the <strong>same process</strong> as the {{ r.shared_with|join(', ') }} MHz
                 daemon — stopping it stops {{ r.shared_with|join(', ') }} too.

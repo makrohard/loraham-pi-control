@@ -1144,7 +1144,7 @@ def test_cli_config_reports_typed_failure_without_side_effects(tmp_path, monkeyp
     cli.main(["bootstrap", "--yes"]); capsys.readouterr()
     paths = Paths(runtime_root=tmp_path)
     bad = [_write_malformed(paths, "kiss", b) for b in ("", "868", "433")]
-    rc = cli.main(["config", "kiss", "list"])            # reads stored values through the funnel
+    rc = cli.main(["config", "kiss@r1", "list"])         # reads stored values through the funnel (G4-web: an instance)
     err = capsys.readouterr().err
     assert rc == 1
     assert "malformed" in err.lower() or "unreadable" in err.lower()

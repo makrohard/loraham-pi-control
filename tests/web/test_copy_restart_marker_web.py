@@ -64,7 +64,7 @@ def test_the_copys_restart_button_restarts_exactly_that_copy(tmp_path, web, monk
     c = web(service_factory=lambda: svc)
     spawns = _spy_spawns(monkeypatch)
     r = c.post("/action", data={"_csrf": csrf(c), "op": "restart", "target": "kiss@r3", "from": "dash"})
-    assert r.status_code == 302 and spawns == [("restart", "kiss", "433", "r3")]
+    assert r.status_code == 302 and spawns == [("restart", "kiss", "", "r3")]   # G4-web: no band, its rid
 
 
 def test_the_copys_stop_confirms_and_stops_exactly_that_copy(tmp_path, web, monkeypatch, csrf):

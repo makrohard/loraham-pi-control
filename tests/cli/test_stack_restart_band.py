@@ -40,13 +40,15 @@ def test_a_restart_of_a_shared_band_is_no_longer_refused_and_signals_no_unowned_
 
 
 @pytest.mark.parametrize("rid,band", [("r1", "433"), ("r2", "868")])
-def test_a_restart_passes_its_radios_band_on(tmp_path, monkeypatch, rid, band):
+def test_a_restart_passes_its_radios_instance_on(tmp_path, monkeypatch, rid, band):
+    # K3, G4-web: the instance names the radio (and so its band, instances.radio_band); the adapter passes no band
     _fake_service(monkeypatch, tmp_path, radios_fixture.RADIOS)
     calls = []
 
     def cap(self, op, target, **kw):
-        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        calls.append((op, target, kw.get("apply"), kw.get("band"), getattr(kw.get("inst"), "rid", None),
+                      getattr(kw.get("inst"), "band", None)))
         return ActionResult(True, "ok", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "run_action", cap)
-    assert cli.main(["stack", "restart", f"daemon@{rid}", "--yes"]) == 0          # K3: the radio's band
-    assert calls[-1] == ("restart", "daemon", True, band)
+    assert cli.main(["stack", "restart", f"daemon@{rid}", "--yes"]) == 0
+    assert calls[-1] == ("restart", "daemon", True, band, rid, band)   # the row band: transitional (core radio_band)

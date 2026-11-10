@@ -58,7 +58,7 @@ def test_an_instance_target_starts_that_instance_only(tmp_path, monkeypatch, web
     seen, c = _spy(monkeypatch), web()
     assert ControllerService.set_operator_identity  # the plan needs no callsign for kiss
     _post(c, csrf, op="start", target="kiss@r2")
-    assert seen["spawns"] == [("start", "kiss", "868", "r2")], seen
+    assert seen["spawns"] == [("start", "kiss", "", "r2")], seen      # G4-web: its rid, no band
 
 
 # W2, the confirm's freshness: the confirm page carries the core's plan hash; the detached `_stack-start` recomputes it

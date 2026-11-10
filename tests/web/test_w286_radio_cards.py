@@ -60,7 +60,7 @@ def test_a_radio_cards_start_and_restart_run_that_radios_daemon(tmp_path, monkey
     for op in ("start", "restart"):
         r = c.post("/action", data={"_csrf": csrf(c), "op": op, "target": "daemon@r2", "from": "dash"})
         assert r.status_code == 302 and r.headers["Location"].endswith("/")
-    assert spawns == [("start", "daemon", "868", "r2"), ("restart", "daemon", "868", "r2")]   # r2's band, by rid
+    assert spawns == [("start", "daemon", "", "r2"), ("restart", "daemon", "", "r2")]   # G4-web: r2 by rid, no band
     assert plans == [("start", False, "r2"), ("restart", False, "r2")]
 
 
