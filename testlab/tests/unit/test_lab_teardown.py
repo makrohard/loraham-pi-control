@@ -54,9 +54,11 @@ def test_a_fake_that_ignores_term_is_killed_with_its_whole_group(tmp_path):
         assert ops.stop_fakes(paths, grace_s=0.5) == [fake.pid]
         assert fake.wait(timeout=5) == -signal.SIGKILL               # it ignored TERM: killed after the grace
         state = ""
-        if os.path.exists(f"/proc/{child}"):
+        try:                                   # reaped between the open and the read (ESRCH) is gone too
             with open(f"/proc/{child}/stat") as fh:
                 state = fh.read().split(") ")[1][0]
+        except (FileNotFoundError, ProcessLookupError):
+            state = ""
         assert state in ("", "Z", "X"), state                         # the child of its group is gone too
     finally:
         for pid in (fake.pid, child):
