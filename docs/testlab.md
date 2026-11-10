@@ -112,9 +112,9 @@ LHPC_SLOW_BUILD=1 SLOW_CPUS=0.25 SLOW_MEM=416m SLOW_WRITE_IOPS=120 SLOW_READ_IOP
   pytest testlab/tests/slowbuild -q             # slow-build lane: only inside the throttled container
 ```
 
-**From a worktree, prefix these with `PYTHONPATH=$PWD`** (or re-run
+**From a worktree, prefix these with `PYTHONPATH=$PWD:$PWD/testlab`** (or re-run
 `pip install -e . && pip install -e ./testlab` there): the lab lanes' console and CLI
-subprocesses import `lhpc` from the editable install, i.e. whichever checkout was
+subprocesses import `lhpc` and `lhpc_testlab` from the editable installs, i.e. whichever checkout was
 `pip install -e`'d, and can pass on another checkout's code. CI installs from the commit itself.
 
 **What a CI lane may fetch.** A lane reaches an external service only where that service is what it

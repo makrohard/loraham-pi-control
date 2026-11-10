@@ -39,10 +39,11 @@ MeshCom, MeshCore and Reticulum — on a Pi Zero 2W or Pi 5.
 ## Hardware
 
 Any Raspberry Pi HAT whose radio is an **SX1276**, **SX1278** or **SX1262** wired **directly to the
-Pi's SPI bus** — `lhpc` drives the chip itself, so there is no LoRaWAN concentrator, no USB or
-serial radio and no RNode firmware in between.
+Pi's SPI bus** — `lhpc` drives the chip itself, so there is no LoRaWAN concentrator and no RNode
+firmware in between. Three USB sticks on a CH341 bridge are supported as well (ELECROW Meshstick,
+PINE64 USB adapter, a self-built CH341A + RFM98PW stick): [USB radios](docs/usb-radios.md).
 
-Three boards ship with a ready-made hardware preset:
+Three HATs ship with a ready-made hardware preset:
 
 - **LoRaHAM Pi HAT** — the [LoRaHAM project's](https://loraham.de) own dual-module board
   (SX1278 for 433 MHz + RFM95 for 868 MHz).
@@ -65,14 +66,14 @@ Waveshare SX1262 433M; dated records of the LoRaHAM Pi HAT runs: `docs/live-test
 
 | Stack | Band(s) | Licence | What it is | Docs |
 |---|---|---|---|---|
-| `daemon` | 433 + 868 | — | LoRaHAM daemon — owns the radios, exposes per-band sockets | [daemon](docs/stacks/daemon.md) |
+| `daemon` | 433 + 868 | — | LoRaHAM daemon — owns the radios, one process and socket set per radio | [daemon](docs/stacks/daemon.md) |
 | `chat` | 433 | yes | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
 | `voice` | 433 / 868 | yes | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | yes | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
 | `graywolf` | via `kiss` | yes | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | no | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | yes | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
-| `meshcore` | 868 | no | MeshCore on openHop — chat node (TCP 5000) and/or repeater (dashboard :8000), by `mode` | [meshcore](docs/stacks/meshcore.md) |
+| `meshcore` | 868 | no | MeshCore on openHop — chat node (TCP 5000 on r1) and/or repeater (dashboard :8000 on r1), by `mode`; + 133 per further radio | [meshcore](docs/stacks/meshcore.md) |
 | `reticulum` | 433 / 868 | no | Reticulum node, drives the radio directly over SPI | [reticulum](docs/stacks/reticulum.md) |
 </details>
 
@@ -385,7 +386,7 @@ lhpc stack start|stop|restart <stack>@<rid>       # plans + confirms; --yes to s
 lhpc stack stop daemon@r1                         # stop one radio's daemon only
 lhpc logs <target>                 # tail a component log
 lhpc rflog <stack>@<rid>          # tail an instance's RF log (what the radio heard and sent)
-lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)
+lhpc rflog <stack>@<rid> --decrypt # the same, decoded with the keys on this box (encrypted stacks)
 lhpc doctor                        # environment / dependency checks
 lhpc test <stack> [--tx] --yes     # host tests; --tx transmits
 ```
