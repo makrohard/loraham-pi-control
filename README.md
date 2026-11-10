@@ -39,8 +39,8 @@ MeshCom, MeshCore and Reticulum — on a Pi Zero 2W or Pi 5.
 ## Hardware
 
 Any Raspberry Pi HAT whose radio is an **SX1276**, **SX1278** or **SX1262** wired **directly to the
-Pi's SPI bus** — `lhpc` drives the chip itself, so there is no LoRaWAN concentrator and no RNode
-firmware in between. Three USB sticks on a CH341 bridge are supported as well (ELECROW Meshstick,
+Pi's SPI bus** — `lhpc` drives the chip itself, so there is no LoRaWAN concentrator, no serial (UART)
+radio and no RNode firmware in between. Three USB sticks on a CH341 bridge are supported as well (ELECROW Meshstick,
 PINE64 USB adapter, a self-built CH341A + RFM98PW stick): [USB radios](docs/usb-radios.md).
 
 Three HATs ship with a ready-made hardware preset:
