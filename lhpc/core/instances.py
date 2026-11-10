@@ -263,7 +263,13 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
     run = recorded(svc, sid)                     # ONE verified snapshot for the parse and its instance (G1-B1-RE)
     inst, why = copy_of(svc, sid, rid, run=run)
     if inst is None and why.endswith("is not in the hardware list"):
-        why = f"{name}@{rid}: {rid or '(no radio)'} is not a radio of the hardware list"
+        state = radios.load(svc._paths)
+        if state.kind == radios.ABSENT:          # no list (gate 2 (b), DEC-W409ax): the W1-8 reason, its next step
+            from . import radio_daemon
+            t = radio_daemon._unstartable(state, radio_daemon.old_config_state(svc._paths))
+            why = f"{name}@{rid}: {t.reason} (next: {t.next_command})"
+        else:
+            why = f"{name}@{rid}: {rid or '(no radio)'} is not a radio of the hardware list"
     return sid, inst, inst.band if inst is not None else "", why
 
 
