@@ -78,6 +78,8 @@ Upgrading from 0.13.x
   `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
 - A port save is judged per radio (each instance at its own base's port, a radio not yet listed at the manifest's):
   a port refused only by base arithmetic (or its r64 projection) saves; one another instance listens on is refused.
+- MeshCom mesh password: "enabled" means every meshcom instance names it (one at least); the web client's status
+  names each meshtastic instance whose own web_root serves another directory.
 
 Fixed
 

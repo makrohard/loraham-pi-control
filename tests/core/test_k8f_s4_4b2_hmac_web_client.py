@@ -68,7 +68,7 @@ def test_a_refused_instance_write_rolls_the_written_ones_back(tmp_path, monkeypa
         return real(self, target, values=values, inst=inst, **kw)
     monkeypatch.setattr(ControllerService, "save_config_bundle", save)
     r = svc.hmac_set_secret("meshcom", "enable")
-    assert not r.ok and r.summary == "could not enable HMAC password: refused for the test", r.summary
+    assert not r.ok and r.summary == "could not enable HMAC password: meshcom@r2: refused for the test", r.summary
     assert not any(_password_files(svc).values()), _password_files(svc)
 
 
@@ -91,7 +91,7 @@ def test_a_restore_that_is_refused_is_named(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _refusing(monkeypatch, lambda inst, values: getattr(inst, "rid", "") == "r2" or values.get("password_file") == "")
     r = svc.hmac_set_secret("meshcom", "enable")
-    assert not r.ok and r.summary.endswith("refused for the test (not restored: meshcom@r1)"), r.summary
+    assert not r.ok and r.summary.endswith("meshcom@r2: refused for the test (not restored: meshcom@r1)"), r.summary
 
 
 def test_a_write_that_raises_restores_the_written_ones(tmp_path, monkeypatch):
@@ -133,3 +133,24 @@ def test_the_web_client_status_names_each_instance_serving_another_root(tmp_path
     svc.invalidate_snapshot()
     assert wc.status(svc) == ("web client 2.6.0 — not served: meshtasticd's RootPath is /srv/x on meshtastic@r2"
                               " (an operator setting)"), wc.status(svc)
+
+
+def test_a_save_that_fails_inside_its_write_leaves_its_own_file_as_it_was(tmp_path, monkeypatch):
+    # G1-K8F-S4-4B2-RE B1 (measured, DEC: close by a pin): meshcom@r2's save fails INSIDE its write (the atomic replace
+    # of its file raises): the journalled transaction leaves r2's file as it was, and meshcom@r1, written first, is
+    # restored; the failure names r2
+    from lhpc.core import config as cfg
+    svc = _svc(tmp_path)
+    r2_file = tmp_path / "config" / "stacks" / "meshcom@r2.toml"
+    before = r2_file.read_bytes() if r2_file.exists() else None
+    real = cfg._atomic_write
+
+    def write(paths, path, *a, **k):
+        if path.name == "meshcom@r2.toml":
+            raise OSError("disk full")
+        return real(paths, path, *a, **k)
+    monkeypatch.setattr(cfg, "_atomic_write", write)
+    r = svc.hmac_set_secret("meshcom", "enable")
+    assert not r.ok and "meshcom@r2: " in r.summary and "not restored" not in r.summary, r.summary
+    assert (r2_file.read_bytes() if r2_file.exists() else None) == before
+    assert not any(_password_files(svc).values()), _password_files(svc)

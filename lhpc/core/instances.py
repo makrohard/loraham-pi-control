@@ -181,12 +181,15 @@ def restore_each(svc, sid: str, pairs, **kw) -> list:
 
 
 def _save_one(svc, sid: str, inst, values, kw):
-    """One instance's save; an exception is its refusal (the caller restores what was written before)."""
+    """One instance's save, a refusal named by its instance; an exception is its refusal (the caller restores what was
+    written before). A failed save leaves its own file as it was: the commit is one journalled transaction that rolls
+    every target back (config._apply_config_transaction_locked)."""
     from .service_base import ActionResult
     try:
-        return svc.save_config_bundle(sid, values=values, inst=inst, **kw)
+        r = svc.save_config_bundle(sid, values=values, inst=inst, **kw)
     except Exception as exc:                             # any failure of one write is that write's refusal
         return ActionResult(False, f"{key(sid, inst)}: {exc}")
+    return r if r.ok else ActionResult(False, f"{key(sid, inst)}: {r.summary}", details=r.details)
 
 
 def launch_bands(svc, sid: str) -> set:
