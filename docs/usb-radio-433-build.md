@@ -90,6 +90,9 @@ What that choice means:
   from a standard port.
 - So start at the **lowest** transmit power and watch the kernel log (`journalctl -k -f`) for a USB
   disconnect or an over-current message.
+- +20 dBm (`lhpc hardware --high-power <rid> on`, `POWER=20`) on this stick is **unmeasured**. LHPC admits it,
+  because the model has the high-power switch, but it has not been tried on USB power. Leave it off until it is
+  measured with an antenna or a dummy load.
 - A separately regulated 5–6 V supply, with the grounds joined and its positive never tied to USB VBUS,
   is the alternative for high power.
 

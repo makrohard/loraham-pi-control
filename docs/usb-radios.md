@@ -43,6 +43,8 @@ creates a radio for the chosen model on that stick; **Re-bind** on a radio's det
 stick. A start is refused by name when the radio's stick or the access to it is missing. Two radios on one band
 each run their own daemon: address one by its radio id (`lhpc stack stop daemon@rN`).
 
+A stick's serial must not be just `-` or `?`: the daemon's status shows those for "no serial" and "unreadable".
+
 ## Host access
 
 The daemon opens the stick as your user. The console shows the one-time USB setup as one command
