@@ -31,7 +31,8 @@ def start_plan(svc, rid: str) -> tuple:
     except ValueError as exc:
         return None, str(exc), ()
     refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
-    rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
+    rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band,
+                                       daemon_inst(radio.id, radio.band))   # K8f S4-4c: this radio's daemon store
     port = ""
     if model.transport != "spi":                       # DEC-W35: the daemon opens the stick by its port now
         port, why = stick_port(radio.usb_serial, radio.usb_port)
@@ -942,11 +943,11 @@ def daemon_units(svc, bands, rid: str = "") -> tuple:
     return out, ""
 
 
-def daemon_inst(rid: str):
+def daemon_inst(rid: str, band: str = ""):
     """The Instance a radio's daemon launches as, `daemon@<rid>`: its ownership record names the radio, so one radio's
-    daemon can be stopped alone (item 16)."""
+    daemon can be stopped alone (item 16); `band` its radio row's (D3 N3: the launch knows it)."""
     from . import commands
-    return commands.Instance(rid)
+    return commands.Instance(rid, band=band)
 
 
 def ensure_radio(svc, life, stack, comp, unit, label: str, lines: list, *, requested_target: str = "",
@@ -960,8 +961,8 @@ def ensure_radio(svc, life, stack, comp, unit, label: str, lines: list, *, reque
     if params is None or refusal:
         lines.append(f"  [BLOCKED] daemon on {label}: {refusal}")
         return False
-    res = life.start(stack, comp, {**dict(svc.stack_config("daemon")), **params}, band=band,
-                     requested_target=requested_target, start_scope=start_scope, inst=daemon_inst(rid))
+    res = life.start(stack, comp, {**dict(svc.stack_config("daemon", inst=daemon_inst(rid, band))), **params}, band=band,
+                     requested_target=requested_target, start_scope=start_scope, inst=daemon_inst(rid, band))
     base = f"start daemon {rid} --radio {band}"
     if not res.ok:
         lines.append(f"  [fail] {base}: {res.detail}")
