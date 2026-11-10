@@ -1,15 +1,15 @@
 # Stack: Meshtastic
 
-Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on 868 (default) or 433 MHz.
+Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radio's band (868 or 433 MHz).
 `lhpc` starts and stops it as a user process — no sudo, no systemd.
 
 | | |
 |---|---|
 | Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan) · `meshtastic-web` (the browser UI, [its own selectors](../provenance.md#the-web-client)) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
 | Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a managed git source |
-| Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtasticd` |
+| Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/<rid>/meshtasticd.yaml -d <runtime>/state/<rid>/meshtasticd` |
 | Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
-| Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
+| Config | `<runtime>/config/files/<rid>/meshtasticd.yaml`, one per instance, regenerated from `lhpc/data/bases/meshtasticd.yaml` at every start (LoRa pins from the radio's board preset, else its band; web root, TLS paths, log level) |
 | Artifacts | `build/tools/meshtasticd/meshtasticd`, the web UI at `build/tools/meshtastic-web/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
 | System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
@@ -91,7 +91,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   `lhpc gps`. A remote `--dest` is unrestricted.
 - `--configure`/`--import-config` and the channel-URL setters (`--seturl`/`--ch-set-url`/
   `--ch-add-url`) run, then LHPC re-asserts and verifies region/name/GPS; if it cannot, the
-  command exits non-zero and names `lhpc stack poststart meshtastic`.
+  command exits non-zero and names `lhpc stack poststart meshtastic@<rid>`.
 - The three `--factory-reset*` flags warn and ask (`--yes` skips); afterwards
   `lhpc stack poststart meshtastic` re-applies the managed settings.
 - Node operations need the running stack; `--help`, `--version`, `--support`, `--test` do not.
@@ -109,7 +109,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   start step cut its transmission, the throttle then applied, and the node's later answer was
   dropped by a peer still holding the old key (next note). Record:
   [live test](../live-tests/live-test.md#notes-from-the-run).
-- A new image, `lhpc clean meshtastic --purge` or a deleted `state/meshtasticd` gives the node a
+- A new image, `lhpc clean meshtastic --purge` or a deleted `state/<rid>/meshtasticd` gives the node a
   new key but the same node number (from the Pi's Bluetooth MAC; the YAML sets no `MACAddress`).
   A peer that stored the old key drops node-info carrying the new one, so direct messages fail both
   ways (`PKI_UNKNOWN_PUBKEY`, `NO_CHANNEL`) while broadcasts on a shared channel work. On the peer,
@@ -117,7 +117,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   node-info.
 - The `gpiochip` is not hard-coded in the YAML base: the Pi Zero 2W header is `gpiochip0`; a Pi 5
   puts it on another chip — add a per-pin `gpiochip:` only if your kernel needs it.
-- The web TLS certificate is generated into the writable data dir (`state/meshtasticd/ssl`).
+- The web TLS certificate is generated into the writable data dir (`state/<rid>/meshtasticd/ssl`).
 
 ## Conflicts
 
