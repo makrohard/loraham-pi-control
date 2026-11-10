@@ -1037,10 +1037,9 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     assert m["band"] == "433", m
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch):
-    # REVIEW-FOUND: Save-only is the one panel path that does NOT defer the identity to a launch,
-    # so its `_identity_guard=True` in-transaction recheck is what stops a raced blank from
-    # persisting there. That parameter exists because of an earlier finding in this chain and had
-    # lost its only witness when the four-path test was removed.
+    # REVIEW-FOUND: a raced blank must not persist through the start panel. The panel takes no per-launch values any
+    # more (a start runs the saved configuration), so nothing of this POST is saved; the in-transaction recheck that once
+    # guarded it (`_identity_guard`) had no caller left and is gone (G1-K8F-S4-2-RE N2). This pins the outcome.
     import re
     from lhpc.adapters.web.app import create_app
     from lhpc.core import service_params as _sp

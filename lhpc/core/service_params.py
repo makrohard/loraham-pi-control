@@ -902,8 +902,7 @@ class ParamsConfigMixin:
     @invalidates_snapshot
     def save_config_bundle(self, target: str, *, values: dict | None = None,
                            band: str = "", remotes: dict | None = None, inst=None,
-                           _allow_managed_params: frozenset = frozenset(),
-                           _identity_guard: bool = False) -> ActionResult:
+                           _allow_managed_params: frozenset = frozenset()) -> ActionResult:
         """Validate the WHOLE Config-page submission, then persist it as ONE
         all-or-recoverable transaction (local.toml + the per-stack config file).
         Nothing is written unless every value validates; unknown fields are
@@ -1049,18 +1048,6 @@ class ParamsConfigMixin:
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
         def _render_stack(pth, tgt=sid, b=cfg_band, setv=stack_set, rmv=stack_remove, i=inst):
-            # AUTHORITATIVE RECHECK, inside the transaction (the caller's
-            # accept/refuse decision was taken before this lock, so a concurrent global-identity
-            # clear could land in between and the submission was persisted and only THEN refused).
-            # Raising here rolls the whole transaction back — nothing is persisted.
-            if _identity_guard:
-                # THE authoritative identity decision, re-taken INSIDE this transaction: a
-                # concurrent `set_operator_identity` may have cleared the global a blank was about
-                # to inherit, and refusing here rolls the whole submission back rather than
-                # persisting first and refusing after.
-                self._invalidate_config()          # the COMMITTED global, never a cached one
-                if (_again := self.identity_refusal_for_values(target, band, values or {}, inst=inst)):
-                    raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
             _ohs_recheck()                  # issue #5: openHop's file appeared/vanished since split_saves
             current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, i))

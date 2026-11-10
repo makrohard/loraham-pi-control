@@ -2438,9 +2438,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         rid = request.form.get("radio", "")              # K8f S4-2 (D2-CTX N3): the form's radio, kept on the way back
         inst, why = None, ""
-        if rid or _radios_mod.load(service._paths).kind != _radios_mod.ABSENT:   # G1-K8F-S4-2 B1: a list needs a radio
-            _sid, inst, _band, why = _instances.parse_target(service, f"{stack_id}@{rid}" if rid else stack_id, "start")
-        if why:                                         # the bare form is refused by name, naming the instances (W323)
+        if not rid and _radios_mod.load(service._paths).kind != _radios_mod.ABSENT:   # G1-K8F-S4-2 B1: a box with a
+            why = _instances.parse_target(service, stack_id, "start")[3] or "name the radio"   # list saves a radio's mode
+        elif rid:                                                                         # only; refused by name
+            _sid, inst, _band, why = _instances.parse_target(service, f"{stack_id}@{rid}", "start")
+        if why:
             abort(make_response(f"Mode: {why}", 400))
         result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")}, inst=inst)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
