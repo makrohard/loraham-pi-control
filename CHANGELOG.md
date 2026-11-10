@@ -39,6 +39,7 @@
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc kill <stack>@<band>` is gone: name the instance (`lhpc kill kiss@r1`); a band form is refused with the running ones.
 - The MeshCore Mode switch saves the shown radio's mode; with a hardware list, a request without a radio is refused, naming the radios.
+- After an update, each running instance is restarted by name; a running process no instance names is not restarted (restart it by name).
 - Home: each radio's card has its own daemon state, stacks and conflicts (two radios on one band too); a stack running
   on one radio can be started on another radio of the band; graywolf@rN brings its own kiss@rN beside another radio's.
 - Daemon parameters per radio and per instance: `daemon@<rid>`'s (CLI `--daemon-param`, its panel) are radio rN's row;

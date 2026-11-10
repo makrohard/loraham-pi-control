@@ -1015,24 +1015,23 @@ class MaintenanceOpsMixin:
                                          f"{version}"],
                                 next_commands=[f"lhpc build {target} --yes"])
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
-        restart_ok = True
+        restart_ok, bad = True, []
         # Re-sampled after a fetch of minutes: an operator stop meanwhile (no admission) stays.
         if was_running and not self.stack_running(target):
             notes.append("  [restart] skipped — the stack was stopped during the fetch "
                          "(operator stop preserved)")
-        elif was_running:
-            rs = [self.restart(target, apply=True, inst=instances.resolve(self, k)[1])     # K7: every running instance
-                  for k in instances.running_keys(self, target)] or [self.restart(target, apply=True)]
-            res = next((r for r in rs if not r.ok), rs[-1])
-            restart_ok = res.ok
-            notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
+        elif was_running:           # K8f D3 B7: each running instance by its key; none told = refused by name, no guess
+            ks = instances.running_keys(self, target)
+            bad = [k for k in ks if (i := instances.resolve(self, k)[1]) is None or not self.restart(target, apply=True, inst=i).ok]
+            restart_ok = bool(ks) and not bad
+            notes.append(f"  [restart] {'ok' if restart_ok else 'FAILED for ' + ', '.join(bad) + ' — restart it by name' if bad else 'not done: a running process no instance names — restart it by name'}")
         # A failed restart leaves the station OFFLINE: not ok (non-zero exit, a console warning).
         return ActionResult(
             restart_ok,
             (f"'{target}' updated to {version}." if restart_ok
              else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
             details=notes, next_commands=([f"lhpc status {target}"] if restart_ok
-                                          else [f"lhpc stack start {instances.named(self, target)} --yes"]))
+                                          else [f"lhpc stack restart {k} --yes" for k in bad] or [f"lhpc status {target}"]))
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
