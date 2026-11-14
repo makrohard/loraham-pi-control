@@ -7,6 +7,48 @@
 {% macro comp_state(c) %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
                       {% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}{% endmacro %}
+{# A running component's links, as the 0.13.x card showed them: config, logs, and each interface per viewer (local
+   or remote, the host it reached). `rid`: an instance's radio (its Settings and log for that radio), "" for an
+   entry without an instance (A23). #}
+{% macro comp_links(c, s, rid) %}{% set sid = s.sid if rid else s.id %}{% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=sid, radio=rid or None) }}#stack-settings-{{ sid }}" aria-label="{{ c.id }} config">config</a>{% endif %}
+                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
+                      {% for itf in c.interfaces %}
+                        {% set _settings = url_for('stacks_overview', open=sid, cfg=sid, radio=rid or None) ~ '#stack-settings-' ~ sid %}
+                        {% if itf.is_web and itf.proxy_scope %}
+                          {# PROXIED web UI: link via the nginx PROXY, per its LIVE scope — exposed →
+                             reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote
+                             or absent → this stack's Settings (Apply), never a dead proxy URL. #}
+                          {% if itf.proxy_scope == 'exposed' and req_host %}
+                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% elif itf.proxy_scope == 'loopback' and peer_loopback %}
+                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://127.0.0.1:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% else %}
+                            <a class="iface iface-local" href="{{ _settings }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings.">{{ itf.label }} · {{ 'proxy not active — Apply' if itf.proxy_scope == 'absent' else 'local only' }}</a>
+                          {% endif %}
+                        {% elif itf.is_web %}
+                          {# Non-proxied web UI: link to the DIRECT endpoint where it's reachable
+                             (exposed → reached host; loopback → local viewer), else Settings. #}
+                          {% if itf.remote_ok and req_host %}
+                            <a class="iface iface-web" href="{{ itf.scheme }}://{{ req_host }}:{{ itf.port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% elif peer_loopback and itf.port %}
+                            <a class="iface iface-web" href="{{ itf.link or (itf.scheme ~ '://127.0.0.1:' ~ itf.port ~ '/') }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% else %}
+                            <a class="iface iface-local" href="{{ _settings }}" title="Reachable only on the Pi itself. Open it there, or expose it in this stack's Settings.">{{ itf.label }} · local only</a>
+                          {% endif %}
+                        {% else %}
+                          {# Non-web (KISS/TCP/serial): a COPYABLE address, never an inert tcp:// link (no
+                             browser handler). Show the host that works for this viewer; a loopback-only
+                             service seen remotely is labelled 'local only'. #}
+                          {% if itf.remote_ok and req_host %}
+                            <span class="iface mono">{{ itf.scheme }}: {{ req_host }}:{{ itf.port }}</span>
+                          {% elif itf.port %}
+                            <span class="iface mono">{{ itf.scheme }}: 127.0.0.1:{{ itf.port }}{% if not peer_loopback %} · local only{% endif %}</span>
+                          {% else %}
+                            <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
+                          {% endif %}
+                        {% endif %}
+                        {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}
+                      {% endfor %}{% endmacro %}
 {% block content %}
   {% include "_task_banner.html" %}
   {% if attention %}
@@ -247,7 +289,8 @@
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
                 {# G1-C49: the instance's component rows in one markup; W325: its own Stop and Restart (target `<stack>@<rid>`) #}
-                <ul class="complist">{% for c in s.components %}<li>{{ comp_state(c) }}</li>{% endfor %}</ul>
+                <ul class="complist">{% for c in s.components %}<li>{{ comp_state(c) }}
+                  {{ comp_links(c, s, s.rid) }}</li>{% endfor %}</ul>
                 <p class="actrow">{% for op in ("stop", "restart") %}
                   <form method="post" action="{{ url_for('action') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -263,45 +306,7 @@
                 <ul class="complist">
                   {% for c in s.components %}
                     <li>{{ comp_state(c) }}
-                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
-                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
-                      {% for itf in c.interfaces %}
-                        {% set _settings = url_for('stacks_overview', open=s.id, cfg=s.id) ~ '#stack-settings-' ~ s.id %}
-                        {% if itf.is_web and itf.proxy_scope %}
-                          {# PROXIED web UI: link via the nginx PROXY, per its LIVE scope — exposed →
-                             reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote
-                             or absent → this stack's Settings (Apply), never a dead proxy URL. #}
-                          {% if itf.proxy_scope == 'exposed' and req_host %}
-                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% elif itf.proxy_scope == 'loopback' and peer_loopback %}
-                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://127.0.0.1:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% else %}
-                            <a class="iface iface-local" href="{{ _settings }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings.">{{ itf.label }} · {{ 'proxy not active — Apply' if itf.proxy_scope == 'absent' else 'local only' }}</a>
-                          {% endif %}
-                        {% elif itf.is_web %}
-                          {# Non-proxied web UI: link to the DIRECT endpoint where it's reachable
-                             (exposed → reached host; loopback → local viewer), else Settings. #}
-                          {% if itf.remote_ok and req_host %}
-                            <a class="iface iface-web" href="{{ itf.scheme }}://{{ req_host }}:{{ itf.port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% elif peer_loopback and itf.port %}
-                            <a class="iface iface-web" href="{{ itf.link or (itf.scheme ~ '://127.0.0.1:' ~ itf.port ~ '/') }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                          {% else %}
-                            <a class="iface iface-local" href="{{ _settings }}" title="Reachable only on the Pi itself. Open it there, or expose it in this stack's Settings.">{{ itf.label }} · local only</a>
-                          {% endif %}
-                        {% else %}
-                          {# Non-web (KISS/TCP/serial): a COPYABLE address, never an inert tcp:// link (no
-                             browser handler). Show the host that works for this viewer; a loopback-only
-                             service seen remotely is labelled 'local only'. #}
-                          {% if itf.remote_ok and req_host %}
-                            <span class="iface mono">{{ itf.scheme }}: {{ req_host }}:{{ itf.port }}</span>
-                          {% elif itf.port %}
-                            <span class="iface mono">{{ itf.scheme }}: 127.0.0.1:{{ itf.port }}{% if not peer_loopback %} · local only{% endif %}</span>
-                          {% else %}
-                            <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
-                          {% endif %}
-                        {% endif %}
-                        {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}
-                      {% endfor %}
+                      {{ comp_links(c, s, "") }}
                       {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
                         <form method="post" action="{{ url_for('action') }}" class="act">
                           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

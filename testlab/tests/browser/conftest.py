@@ -108,11 +108,13 @@ def flask_page(browser, tmp_path, monkeypatch):
     `page`, it FAILS the test on any JS console error or page error of a page it opened."""
     errors: list[str] = []
 
-    def make(*, choices=True, activity=False, path="/hardware/radio/r3", unix_replies=None, api=None):
+    def make(*, choices=True, activity=False, path="/hardware/radio/r3", unix_replies=None, api=None, cmdlines=None,
+             listeners=()):
         """A real Chromium page over the console app (no lab): every request of the page is answered by a Flask test
         client on a runtime with a USB radio r3. `unix_replies`: the fake daemon sockets' replies (a radio whose daemon
-        answers is up); `api`: {path: JSON} answered in place of the app (a live poll's reply). Returns (page, posts):
-        `posts` collects each POST the page sends."""
+        answers is up); `api`: {path: JSON} answered in place of the app (a live poll's reply); `cmdlines` and
+        `listeners`: the fake processes and TCP listeners (a running stack). Returns (page, posts): `posts` collects
+        each POST the page sends."""
         import json
         from urllib.parse import urlsplit
 
@@ -133,8 +135,10 @@ def flask_page(browser, tmp_path, monkeypatch):
             real = radio_start.radio_detail
             monkeypatch.setattr(radio_start, "radio_detail", lambda svc, rid: {**real(svc, rid), "activity": ["daemon"],
                                                                                "stop_first": "stop its daemon"})
-        client = create_app(service_factory=lambda: ControllerService(
-            system=FakeSystem(unix_replies=unix_replies or {}).system, paths=Paths(runtime_root=tmp_path))).test_client()
+        system = FakeSystem(unix_replies=unix_replies or {}, cmdlines_data=cmdlines or {},
+                            listeners=list(listeners)).system
+        client = create_app(service_factory=lambda: ControllerService(system=system,
+                                                                      paths=Paths(runtime_root=tmp_path))).test_client()
         posts = []
 
         def handle(route, request):

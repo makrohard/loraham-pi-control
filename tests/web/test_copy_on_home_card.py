@@ -35,7 +35,7 @@ def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeyp
     doc = _home(tmp_path, web, monkeypatch)
     r3, r1 = _card(doc, "r3"), _card(doc, "r1")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 Stop Restart"]
+        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 config logs Stop Restart"]
     assert not r1.find("div", class_="runstack")
     assert "No stack running on this radio." in r1.text
     forms = [r3.within(x) for x in r3.find("form", action="/action")]
@@ -67,7 +67,7 @@ def test_a_copy_whose_own_listener_is_up_reads_running_with_no_note(tmp_path, we
     # G1-C49: the copy's rows are judged on its OWN listener, as slot 0's are on slot 0's (already_healthy's calls).
     r3 = _card(_home(tmp_path, web, monkeypatch, listening=True), "r3")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC Stop Restart"]
+        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC config logs kiss: 127.0.0.1:8267 Stop Restart"]
 
 
 def test_a_copys_entry_and_rows_come_from_one_read_of_its_processes(tmp_path, web, monkeypatch):
