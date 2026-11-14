@@ -200,7 +200,7 @@ details[open] summary { margin-bottom: .4rem; }
 details.monitor > summary { font-size: 1rem; font-weight: 600; color: var(--ink);
                             margin: .6rem 0 .3rem; }
 .monrssi th { white-space: nowrap; }
-.monrssi td { display: flex; align-items: center; gap: .5rem; }
+.monrssi td { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }   /* A32: the value and its unit never break; the meter gives way */
 pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); padding: .6rem .8rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
 .endpoint-ok { color: var(--ok); }
 .endpoint-bad { color: var(--idle); }
