@@ -1,7 +1,11 @@
 """A23 core part (with the web bundle B6): Home's instance rows carry configurable, writes_log and interfaces, each from
 the instance's own endpoints and its own `<page>@<rid>` policy; "booting" is a badge only, links follow the listeners
-(his Q-B2-5 rule). Through radio_start.running_instances and the band entries Home renders from."""
+(his Q-B2-5 rule). Through radio_start.running_instances, the band entries Home renders from, and the rendered Home
+page for the band card (Home renders an instance row's state only; its links are the web bundle's)."""
+import dataclasses
+
 import radios_fixture
+from htmlq import parse
 
 from lhpc.core import commands, instances, radio_start, radios
 from lhpc.core.lifecycle import Lifecycle
@@ -130,3 +134,29 @@ def test_the_band_card_shows_booting_and_the_link(tmp_path, monkeypatch):
     row = next(r for e in svc._band_entries() if "meshcom" in e.get("entries", {})
                for r in e["entries"]["meshcom"]["components"] if r["id"] == "meshcom-qemu")
     assert row["state"] == "booting" and any(i["is_web"] for i in row["interfaces"])
+
+
+def test_home_renders_a_booting_band_card_with_its_web_link(tmp_path, monkeypatch, web):
+    # red-before (085034cf): the booting band card rendered no link (G1-B1A-CODE N1, through GET /)
+    _booting(monkeypatch, "")
+    svc = _svc(tmp_path, rids=(), ports=(18083, 12323), legacy=True)            # an unclaimed MeshCom: the band card
+    r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
+    assert r.status_code == 200
+    doc = parse(r.get_data(as_text=True))
+    cards = [doc.within(d) for d in doc.find("div", class_="runstack")
+             if doc.within(d).find("p", **{"data-stack": "meshcom"})]
+    assert len(cards) == 3                                                       # each 433 radio's card: r1, r3, r30
+    for card in cards:
+        assert card.find("span", class_="badge-booting")
+        assert [a["href"] for a in card.find("a", class_="iface-web")] == ["http://127.0.0.1:18083"]
+
+
+def test_without_its_own_page_an_instance_never_takes_a_longer_rids(tmp_path):
+    # G1-B1A-CODE N2: meshcom@r3's page absent (r3 disabled), meshcom@r30's proxied -> no proxied page for r3
+    svc = _svc(tmp_path)
+    _proxy(svc, "meshcom@r30", 8471)
+    cs = next(ss.components["meshcom-qemu"] for ss in svc.build_snapshot().stacks if "meshcom-qemu" in ss.components)
+    radios_fixture.write(tmp_path, tuple(dataclasses.replace(r, enabled=False) if r.id == "r3" else r for r in ROWS))
+    assert "meshcom@r3" not in [p.page_id for p in svc.stack_web_pages("meshcom")]
+    web_itfs = [i for i in svc._client_interfaces(cs, "meshcom", rid="r3") if i["is_web"]]
+    assert web_itfs and all(i["proxy_port"] == 0 for i in web_itfs), web_itfs
