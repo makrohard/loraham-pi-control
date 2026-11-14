@@ -342,6 +342,15 @@ def test_the_templates_band_agnostic_row_covers_no_diverged_band():
     assert sf._fw_has_row({**launch, "port": 9001, "band": "868", "allow_cidrs": ["10.0.0.0/8"]}, applied)
 
 
+def test_another_instances_row_at_the_same_port_is_no_row():
+    # second read X13: the key names the endpoint id; another instance's row with the same proto/family/address/port/
+    # band never serves a newcomer at that port (it would carry the old instance's CIDRs and tick)
+    sc = {"id": "loraham-kiss-tnc-r3.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 9001, "band": ""}
+    row = {**sc, "id": "loraham-kiss-tnc-r1.tcp-8001"}
+    assert not sf._fw_has_row(sc, {"endpoints": [row]})
+    assert sf._fw_has_row(sc, {"endpoints": [row, {**sc}]})              # anchor: its own id matches
+
+
 def test_a_band_labelled_row_serves_its_own_band_only():
     sc = {"id": "a.tcp-1", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 1, "band": "433"}
     row = {k: sc[k] for k in ("id", "proto", "family", "addr", "port")}
@@ -380,6 +389,8 @@ TAMPER = {
     "model-hash": lambda lab: _tamper_snapshot(lab, lambda s: s["model"]["rules"].pop()),
     "snapshot-key-missing": lambda lab: _tamper_snapshot(lab, lambda s: s.pop("integration_rev")),
     "snapshot-old-helper": lambda lab: _tamper_snapshot(lab, lambda s: s.update(integration_rev="OLD")),
+    "snapshot-old-protocol": lambda lab: _tamper_snapshot(lab, lambda s: s.update(protocol=fh.PROTOCOL_VERSION - 1)),
+    "receipt-other-intent": lambda lab: _tamper_receipt(lab, intent_hash="0" * 64),
     "snapshot-invalid-json": lambda lab: lab.write(fw.SNAPSHOT_DEST, "{not json"),
     "snapshot-group-writable": lambda lab: os.chmod(fw.SNAPSHOT_DEST, 0o664),
     "receipt-other-boot": lambda lab: _tamper_receipt(lab, boot_id="another-boot"),
@@ -830,3 +841,16 @@ def test_a_snapshot_over_the_bound_is_refused_before_any_live_change(tmp_path, m
     assert not any(c[:2] == ["nft", "-f"] for c in sysx.calls)            # nothing loaded
     assert not os.path.exists(fw.JOURNAL_DEST)
     assert {p: open(p).read() for p in before} == before                  # the applied evidence is untouched
+
+
+def test_a_journal_over_the_bound_is_refused_before_any_live_change(tmp_path, monkeypatch, capsys):
+    # second read X10: the journal carries the old snapshot, so it can pass the bound by its framing while the new
+    # snapshot fits; the same candidate again gives a new snapshot of the old one's size
+    lab = _box(tmp_path, monkeypatch)
+    before = {p: open(p).read() for p in (fw.SNAPSHOT_DEST, fw.RECEIPT_PATH)}
+    monkeypatch.setattr(fh, "MAX_SNAPSHOT_BYTES", len(json.dumps(lab.snapshot(), sort_keys=True)) + 16)
+    sysx = _Sys()
+    assert lab.apply(sysx) == fh.EXIT_CANDIDATE
+    assert "the journal would be" in capsys.readouterr().out
+    assert not any(c[:2] == ["nft", "-f"] for c in sysx.calls) and not os.path.exists(fw.JOURNAL_DEST)
+    assert {p: open(p).read() for p in before} == before
