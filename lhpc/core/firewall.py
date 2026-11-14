@@ -638,8 +638,8 @@ def endpoint_rows(stack, bands, resolve, selected, paths=None) -> list:
             sc = resolve(band, inst)
             if sc["loopback"] and not sc["deny"]:
                 continue
-            stup = (sc["proto"], sc["family"], sc["addr"], sc["port"],
-                    tuple(sorted(sc["allow_cidrs"])), sc["deny"])
+            stup = (sc["proto"], sc["family"], sc["addr"], sc["port"],      # every field a row carries
+                    tuple(sorted(sc["allow_cidrs"])), sc["deny"], sc.get("auth", "none"))
             per_scope.setdefault(stup, (band, sc))
         band_agnostic = len(per_scope) <= 1
         for band, sc in per_scope.values():

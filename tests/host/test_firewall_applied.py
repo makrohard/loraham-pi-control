@@ -302,8 +302,8 @@ def test_a_policy_the_applied_firewall_does_not_carry_waits_for_its_apply(tmp_pa
 def test_an_unmapped_listener_never_has_a_row():
     sc = {"id": "x.tcp-1", "proto": "tcp", "family": "dual", "addr": "*", "port": 1, "band": "", "_unmapped": True}
     row = {k: sc[k] for k in ("id", "proto", "family", "addr", "port", "band")}
-    assert not sf._fw_has_row(sc, {"endpoints": [row]})
-    assert sf._fw_has_row({**sc, "_unmapped": False}, {"endpoints": [row]})     # anchor: the same key matches
+    assert not sf._fw_has_row(sc, {"endpoints": [row]}, {"endpoints": [row]})
+    assert sf._fw_has_row({**sc, "_unmapped": False}, {"endpoints": [row]}, {"endpoints": [row]})   # anchor
 
 
 def test_a_band_agnostic_row_never_covers_a_band_whose_scope_diverged(tmp_path, monkeypatch):
@@ -326,20 +326,51 @@ def test_a_band_agnostic_row_never_covers_a_band_whose_scope_diverged(tmp_path, 
     assert lab.apply() == fh.EXIT_OK and _gate(lab.svc(), "kiss", "r2")[0]   # its apply covers it
 
 
-def test_the_templates_band_agnostic_row_covers_no_diverged_band():
-    # The same proof for the template (no radio): the row builder writes band="" only for one scope on every band;
-    # a band whose port diverged does not match that row, a CIDR-only divergence does (his word: CIDRs follow the apply).
+@pytest.mark.parametrize("field, value", [("auth", "password"), ("deny_default", True), ("addr", "192.0.2.7"),
+                                          ("family", "dual"), ("proto", "udp")])
+def test_one_field_of_one_bands_row_not_as_applied_is_refused_until_its_apply(tmp_path, monkeypatch, field, value):
+    # G1-FW-A21 B1 (strict) through the start gate: the 868 band's (r2's) kiss row differs from the applied one in ONE
+    # field, so it is refused until its apply; r1 (433) still starts. The applied side is the real evidence with that
+    # one field changed (auth and deny come from the manifest, so no saved setting can change them on one band).
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    for rid in ("r1", "r2"):
+        _kiss(lab.svc(), {"kiss_host": "0.0.0.0"}, rid=rid)
+    assert lab.apply() == fh.EXIT_OK
+    svc = lab.svc()
+    real = svc._fw_applied_candidate()
+    assert _gate(svc, "kiss", "r2")[0] and _gate(svc, "kiss", "r1")[0]   # anchor: both covered as applied
+    other = json.loads(json.dumps(real))
+    next(e for e in other["endpoints"] if e["id"].startswith("loraham-kiss-tnc-r2"))[field] = value
+    monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: other)
+    ok, msg, _cmds = _gate(svc, "kiss", "r2")
+    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert _gate(svc, "kiss", "r1")[0]
+    monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: real)        # its apply: the evidence as saved
+    assert _gate(svc, "kiss", "r2")[0]
+
+
+BASE_SCOPE = {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 9001,
+              "allow_cidrs": [], "deny": False, "auth": "none", "loopback": False}
+
+
+@pytest.mark.parametrize("field, value, covered", [
+    ("port", 9002, False), ("addr", "192.0.2.7", False), ("family", "dual", False), ("auth", "password", False),
+    ("deny", True, False), ("allow_cidrs", ["10.0.0.0/8"], True)])
+def test_the_templates_band_agnostic_row_covers_no_band_whose_scope_diverged(field, value, covered):
+    # G1-FW-A21 B1 (strict, the coordinator's DEC): applied with one scope on both bands (one row band=""), then ONE
+    # field of the 868 band's scope changes: through the real row builder the 868 band now has its own row, which equals
+    # no applied row: refused until its apply. Only the source CIDRs follow the applied firewall (his word).
     import types
     stk = types.SimpleNamespace(id="kiss", components=())
-
-    def scope(port, cidrs=()):
-        return {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": port,
-                "allow_cidrs": list(cidrs), "deny": False, "auth": "none", "loopback": False}
-    applied = {"endpoints": fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: scope(9001), set())}
+    applied = {"endpoints": fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: dict(BASE_SCOPE), set())}
     assert [e["band"] for e in applied["endpoints"]] == [""]
-    launch = {k: v for k, v in scope(9002).items() if k in ("id", "proto", "family", "addr", "port")}
-    assert not sf._fw_has_row({**launch, "band": "868"}, applied)
-    assert sf._fw_has_row({**launch, "port": 9001, "band": "868", "allow_cidrs": ["10.0.0.0/8"]}, applied)
+    saved = {"endpoints": fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: {
+        **BASE_SCOPE, **({field: value} if band == "868" else {})}, set())}
+    def launch(band):
+        e = next(r for r in saved["endpoints"] if r["band"] in (band, ""))
+        return {k: e[k] for k in ("id", "proto", "family", "addr", "port")} | {"band": band}
+    assert sf._fw_has_row(launch("868"), applied, saved) is covered
+    assert sf._fw_has_row(launch("433"), applied, saved)                  # the other band still starts
 
 
 def test_another_instances_row_at_the_same_port_is_no_row():
@@ -347,16 +378,23 @@ def test_another_instances_row_at_the_same_port_is_no_row():
     # band never serves a newcomer at that port (it would carry the old instance's CIDRs and tick)
     sc = {"id": "loraham-kiss-tnc-r3.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 9001, "band": ""}
     row = {**sc, "id": "loraham-kiss-tnc-r1.tcp-8001"}
-    assert not sf._fw_has_row(sc, {"endpoints": [row]})
-    assert sf._fw_has_row(sc, {"endpoints": [row, {**sc}]})              # anchor: its own id matches
+    assert not sf._fw_has_row(sc, {"endpoints": [row]}, {"endpoints": [row, {**sc}]})
+    assert sf._fw_has_row(sc, {"endpoints": [row, {**sc}]}, {"endpoints": [row, {**sc}]})   # anchor: its own id
 
 
-def test_a_band_labelled_row_serves_its_own_band_only():
+def test_an_applied_row_covers_a_band_only_with_its_identical_scope():
+    # strict (G1-FW-A21 B1): the band LABEL is not compared (nft holds the scope's rule, not the band's); every field
+    # the row carries is, except the CIDRs and the tick that follow the apply
     sc = {"id": "a.tcp-1", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 1, "band": "433"}
-    row = {k: sc[k] for k in ("id", "proto", "family", "addr", "port")}
-    assert not sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868"}]})
-    assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": "433"}]})
-    assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": ""}]})              # band-agnostic: every band
+    row = {**{k: sc[k] for k in ("id", "proto", "family", "addr", "port")}, "allow_cidrs": [], "selected": False,
+           "deny_default": False, "auth": "none"}
+    for band in ("433", ""):
+        saved = {"endpoints": [{**row, "band": band}]}
+        assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868"}]}, saved)
+        assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868", "allow_cidrs": ["10.0.0.0/8"],
+                                                  "selected": True}]}, saved)
+        for field, value in (("auth", "password"), ("deny_default", True)):
+            assert not sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868", field: value}]}, saved)
 
 
 @pytest.mark.parametrize("bind", ["192.168.178.5", "::"])
@@ -733,6 +771,50 @@ def test_a_console_without_ipv4_networks_preopens_nothing(tmp_path, monkeypatch,
     rows = svc.firewall_candidate()["proxy_ingress"]
     assert [r for r in rows if r["port"] in ports] == []
     assert [r["port"] for r in rows] == [8443]                            # anchor: the console's own row stays
+
+
+def _conflicts_box(tmp_path, monkeypatch):
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    _remote_console(lab)
+    return lab, lab.svc()
+
+
+@pytest.mark.parametrize("case", ["console", "shared", "listener-later"])
+def test_a_saved_page_port_conflict_is_never_preopened_and_is_shown(tmp_path, monkeypatch, case):
+    # G1-FW-A21 B2 (the coordinator's DEC): no silent keep. A saved page port on the console's port, one two pages
+    # share, or a valid one a listener took later (hand edits: each save refuses them) is not pre-opened and is
+    # named "port conflict: <why>" in the Firewall panel
+    lab, svc = _conflicts_box(tmp_path, monkeypatch)
+    port = svc._page_ports()["meshcom@r1"]
+    if case == "console":
+        port = 8443
+        cfgmod.save_stackweb_config(svc._paths, "meshcom@r1", mode="local", port=port)
+    elif case == "shared":
+        cfgmod.save_stackweb_config(svc._paths, "meshcom@r1", mode="local", port=port)
+        cfgmod.save_stackweb_config(svc._paths, "graywolf@r1", mode="local", port=port)
+    else:
+        assert svc.stack_web_configure("meshcom@r1", mode="local", port=port).ok      # valid when saved
+        _kiss(svc, {"kiss_port": str(port)})                              # a listener takes it afterwards
+    svc._invalidate_config()
+    rows = [p for p, _c in _ingress(svc.firewall_candidate())]
+    assert port not in rows or (case == "console" and rows.count(port) == 1)   # the console keeps only its own row
+    lines = svc.firewall_settings_view()["port_conflicts"]
+    assert len(lines) == 1 and lines[0].startswith(f"port conflict: page port {port} of "), lines
+    assert {"console": "console's port", "shared": "the pages share it", "listener-later": "listens on it"}[case] \
+        in lines[0]
+    assert (svc._page_ports()["graywolf@r1"] if case != "shared" else svc._page_ports()["meshtastic@r1"]) in rows
+
+
+def test_lhpc_firewall_prints_each_page_port_conflict(tmp_path, monkeypatch, capsys):
+    from lhpc.adapters.cli.main import main
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    cfgmod.save_stackweb_config(Paths(runtime_root=tmp_path), "meshcom@r1", mode="local", port=8443)
+    capsys.readouterr()
+    assert main(["firewall"]) == 0
+    out = capsys.readouterr().out
+    assert "WARN  port conflict: page port 8443 of meshcom@r1: it is the console's port" in out
+    assert "Firewall:" in out                                             # anchor: the status still prints
 
 
 def test_preopened_rows_only_while_the_console_is_remote_and_one_row_per_page(tmp_path, monkeypatch):

@@ -181,10 +181,30 @@ class FirewallOpsMixin:
             # nothing, so an empty list never reads "any"; nor is the console's or a listener's port pre-opened, even
             # where a hand-edited page port took one.
             from . import listeners
-            reserved = {int(ws.port), *listeners.stack_listeners(self)}
+            reserved = {int(ws.port), *listeners.stack_listeners(self), *self._fw_page_port_conflicts()}
             out += [{"proto": "tcp", "family": "ipv4", "addr": "*", "port": port,
                      "allow_cidrs": [] if ap_managed else nets}
                     for sid, port in self._page_ports().items() if sid not in exposed and port not in reserved]
+        return out
+
+    def _fw_page_port_conflicts(self) -> dict:
+        """{port: "port conflict: <why>"} for every saved page port that is not its page's alone: the
+        console's, a stack listener's, or one two pages share (a hand edit; the saves refuse each). Such a
+        port is never pre-opened (`_fw_proxy_ingress`); the Firewall panel and `lhpc firewall` show the line."""
+        from . import listeners
+        cfg = self.config()
+        owners, pages = listeners.stack_listeners(self), {}
+        for sid, swc in (cfg.stackweb or {}).items():
+            if getattr(swc, "port", 0):
+                pages.setdefault(int(swc.port), []).append(sid)
+        out = {}
+        for port, sids in sorted(pages.items()):
+            why = (["it is the console's port"] if port == int(cfg.webserver.port) else []) + \
+                  ([f"{', '.join(owners[port])} listens on it"] if port in owners else []) + \
+                  (["the pages share it"] if len(sids) > 1 else [])
+            if why:
+                out[port] = (f"port conflict: page port {port} of {', '.join(sorted(sids))}: {'; '.join(why)} "
+                             "— not opened by the firewall; save the page on another port")
         return out
 
     # ---- status (FW-4): three honest dimensions ---------------------------------------------
@@ -632,7 +652,7 @@ class FirewallOpsMixin:
         if not saved or saved["mode"] != applied["mode"] or \
                 _canon_rows(saved["extra_allow"]) != _canon_rows(applied["extra_allow"]):
             return "pending"
-        if not all(_fw_has_row(sc, applied) for sc in listeners):
+        if not all(_fw_has_row(sc, applied, saved) for sc in listeners):
             return "uncovered"
         rows = {_ingress_key(e) for e in applied["proxy_ingress"]}
         return "" if all(_ingress_key(sc) in rows for sc in ingress) else "pending"
@@ -1157,6 +1177,7 @@ class FirewallOpsMixin:
             "mode": cand["mode"],
             "endpoints": rows,
             "proxy_ingress": cand["proxy_ingress"],           # locked/informational
+            "port_conflicts": list(self._fw_page_port_conflicts().values()),
             "ssh_ports": list(getattr(fwcfg, "ssh_ports", ()) or ()),
             "ap": cand["ap"],
             "status": st,
@@ -1593,16 +1614,21 @@ def _canon_rows(rows):
     return sorted(json.dumps(r, sort_keys=True) for r in rows)
 
 
-def _fw_has_row(sc, candidate) -> bool:
-    """True iff launch scope `sc` has a row in `candidate` with the same key: endpoint id, proto,
-    family, address, port and band (a band-agnostic row serves every band: `fw.endpoint_rows` writes
-    band="" only while the scope is the same on every band, so a band whose scope diverged has another
-    port, address or family and no row). Its CIDRs and tick are the applied firewall's. An unmapped
-    listener never has one."""
+def _fw_has_row(sc, applied, saved) -> bool:
+    """True iff launch scope `sc` is covered by the applied candidate: the row the SAVED candidate holds
+    for it now (its id and key, its band or band-agnostic) equals an applied row in every field but the
+    two that follow the applied firewall until the next apply (his word), allow_cidrs and selected, and
+    the band label (the rule nft holds is the scope's, not the band's). So any other change on one band
+    (port, address, family, auth, deny) has no applied row, while the unchanged bands keep theirs. An
+    unmapped listener never has one."""
     if sc.get("_unmapped"):
         return False
-    return any(e["id"] == sc["id"] and (not e.get("band") or e["band"] == sc["band"])
-               and _ingress_key(e) == _ingress_key(sc) for e in candidate["endpoints"])
+
+    def same(e):
+        return {k: v for k, v in e.items() if k not in ("allow_cidrs", "selected", "band")}
+    now = [e for e in saved["endpoints"] if e["id"] == sc["id"] and _ingress_key(e) == _ingress_key(sc)
+           and (not e.get("band") or e["band"] == sc["band"])]
+    return bool(now) and all(any(same(a) == same(e) for a in applied["endpoints"]) for e in now)
 
 
 def _cidrs_covered(launch_cidrs, model_cidrs) -> bool:

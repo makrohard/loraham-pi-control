@@ -40,7 +40,8 @@
             {% else %}<span class="muted">auto-detected from the running sshd</span>{% endif %}</td></tr>
           <tr><th>Proxy ingress (nginx)</th><td>
             {% if firewall_view.proxy_ingress %}{% for p in firewall_view.proxy_ingress %}<span class="pill">{{ p.proto }}/{{ p.port }} @ {{ p.addr }}</span> {% endfor %}
-            {% else %}<span class="muted">none exposed</span>{% endif %}</td></tr>
+            {% else %}<span class="muted">none exposed</span>{% endif %}
+            {% for c in firewall_view.port_conflicts %}<p class="depnote depnote-warn">{{ c }}</p>{% endfor %}</td></tr>
           <tr><th>Access-Point rules</th><td>{% if firewall_view.ap.enabled %}enabled — {{ firewall_view.ap.interface or 'wlan0' }} / {{ firewall_view.ap.cidr }}
             {% else %}<span class="muted">off</span>{% endif %}</td></tr>
         </table>

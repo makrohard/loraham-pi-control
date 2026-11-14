@@ -1679,6 +1679,8 @@ def _run(argv: list[str] | None = None) -> int:
         print(f"  Config {'ok' if st['config_ok'] else 'pending'} · "
               f"Boot {'ok' if st['boot_ok'] else 'off'} · "
               f"Live {'verified' if st['live_ok'] else 'unverified'}")
+        for line in svc.firewall_settings_view(st)["port_conflicts"]:
+            print(f"WARN  {line}")
         if st["foreign"]:
             print(f"  foreign firewall tables present: {', '.join(st['foreign'])} "
                   f"(an lhpc allow does not guarantee reachability — a foreign chain may drop)")
