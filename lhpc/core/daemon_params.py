@@ -55,7 +55,7 @@ NUMERIC_RANGE = {
 
 
 def numeric_range(name: str, family: str = "",
-                  high_power: bool = False) -> tuple[str, str] | None:
+                  high_power: bool = False, power_max: int | None = None) -> tuple[str, str] | None:
     """Bounds for a numeric param, narrowed to the chip family where the chip matters.
 
     Delegates POWER to `daemon_control.int_range` so the input the operator sees and the gate
@@ -68,6 +68,7 @@ def numeric_range(name: str, family: str = "",
     if name == "POWER":
         from . import daemon_control
         lo, hi = daemon_control.int_range("POWER", family)
+        hi = hi if power_max is None else min(hi, power_max)          # A34: the model's continuous maximum
         if high_power:
             extra = daemon_control._POWER_EXTRA.get(family, frozenset())
             if extra:
@@ -153,13 +154,15 @@ def is_client(stack_id: str) -> bool:
     return stack_id in CLIENT_STACKS
 
 
-def default_value(stack_id: str, band: str, name: str) -> str:
+def default_value(stack_id: str, band: str, name: str, power_max: int | None = None) -> str:
     """The value the app will set (or the daemon base) for `name` on `band` — the displayed
-    default. Empty string when nothing defines it."""
+    default. Empty string when nothing defines it. A POWER default above the radio's model maximum
+    (`power_max`, A34) is that maximum."""
     per = STACK_DEFAULTS.get(stack_id, {})
     for key in (band, "*"):
         if name in per.get(key, {}):
-            return per[key][name]
+            v = per[key][name]
+            return str(min(int(v), power_max)) if name == "POWER" and power_max is not None else v
     if name in _BASE.get(band, {}):
         return _BASE[band][name]
     return _BASE["_"].get(name, "")
@@ -175,7 +178,7 @@ def _app_owned(stack_id: str, band: str, name: str) -> bool:
 
 
 def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None,
-               family: str = "", high_power: bool = False) -> list[dict]:
+               family: str = "", high_power: bool = False, power_max: int | None = None) -> list[dict]:
     """Grouped, ordered parameter rows for one stack+band. Every param is editable; `overrides`
     are persisted operator values. Each row: name, group, value (override or default), default,
     app_owned (greyed hint — still applied, but the app overwrites it), desc.
@@ -186,8 +189,8 @@ def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None
     rows: list[dict] = []
     for group, names in (("radio", RADIO_PARAMS), ("lbt", LBT_PARAMS)):
         for name in names:
-            dv = default_value(stack_id, band, name)
-            num = numeric_range(name, family, high_power)
+            dv = default_value(stack_id, band, name, power_max)
+            num = numeric_range(name, family, high_power, power_max)
             rows.append({"name": name, "group": group,
                          "value": overrides.get(name) or dv, "default": dv,
                          "app_owned": _app_owned(stack_id, band, name),

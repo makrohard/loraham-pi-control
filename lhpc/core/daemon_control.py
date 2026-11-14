@@ -347,7 +347,8 @@ def int_range(key: str, family: str = "") -> tuple[int, int] | None:
     return _ALLOWED_SET_INT.get(key)
 
 
-def validate_set(key: str, value: str, family: str = "", high_power: bool = False) -> str | None:
+def validate_set(key: str, value: str, family: str = "", high_power: bool = False,
+                 power_max: int | None = None) -> str | None:
     """Return an error string if (key, value) is not an allowed SET, else None.
 
     `family` narrows the POWER range to the chip actually fitted; omitted, POWER is validated
@@ -358,7 +359,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
     SX127x — with no family this stays the non-authoritative union utility (`apply_set` calls it
     that way), and its default of False must never turn that second check into a refusal of an
     already-authorised 20: the union admits 20 regardless. The authorisation boundary for a LIVE
-    20 is `live_power_error`, not this function.
+    20 is `live_power_error`, not this function. `power_max` (the radio's model `power_max_dbm`, A34: the top of
+    the CONTINUOUS window) narrows that window; the high-power extra (exactly 20 on SX127x) stays.
     """
     key = key.upper()
     value = value.upper()
@@ -368,6 +370,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
         return None
     if key in _ALLOWED_SET_INT:
         lo, hi = int_range(key, family)
+        cap = power_max if key == "POWER" and power_max is not None else None
+        hi = hi if cap is None else min(hi, cap)
         if not _INT_RE.fullmatch(value):
             return f"{key} must be an integer in [{lo}, {hi}]"
         try:
