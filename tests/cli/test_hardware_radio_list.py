@@ -70,6 +70,10 @@ def test_an_unreadable_serial_of_the_rows_model_is_named(tmp_path, monkeypatch, 
 def test_two_sticks_with_the_rows_serial_are_named(tmp_path, monkeypatch, capsys):
     _rc, out, _s = _run(tmp_path, monkeypatch, capsys, devices=(_dev("3-2", "CHE1W433"), _dev("3-3", "CHE1W433"), _dev("1-1")))
     assert "r3 ch341-rfm98pw-433 433 MHz more than one stick reports serial CHE1W433" in _radio_lines(out)
+    # G1-B3-CODE N1: a third stick of the model with an unreadable serial does not hide the ambiguity
+    _rc, out, _s = _run(tmp_path, monkeypatch, capsys, devices=(_dev("3-2", "CHE1W433"), _dev("3-3", "CHE1W433"),
+                                                                 _dev("3-4", unknown=True), _dev("1-1")))
+    assert "r3 ch341-rfm98pw-433 433 MHz more than one stick reports serial CHE1W433" in _radio_lines(out)
 
 
 def test_a_disabled_radio_stays_listed(tmp_path, monkeypatch, capsys):
