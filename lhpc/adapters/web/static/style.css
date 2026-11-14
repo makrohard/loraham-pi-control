@@ -307,6 +307,9 @@ a.iface { text-decoration: none; color: var(--brand); }
                   background: var(--surface); color: var(--ink); border: 1px solid var(--line);
                   border-radius: 6px; }
 .dismiss button:hover { background: var(--line); color: var(--ink); }   /* stay neutral, not blue */
+/* A16, the approved banner concept (MOCK-BANNER-v2): a banner's ✕ on the banner's own colour, no box of its own */
+.depnote > .dismiss button { background: transparent; color: inherit; border-color: transparent; font-size: 1.1rem; }
+.depnote > .dismiss button:hover { background: transparent; color: inherit; border-color: currentColor; }
 .startform { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .actline { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .3rem 0; }
 .actline .grouplabel { min-width: 3.5rem; }

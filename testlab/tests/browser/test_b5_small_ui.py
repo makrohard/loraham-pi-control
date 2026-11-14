@@ -170,6 +170,12 @@ _GEOMETRY = """sel => [...document.querySelectorAll(sel)].map(b => {
 })"""
 
 
+_LOOK = """sel => [...document.querySelectorAll(sel)].map(b => {
+  const s = getComputedStyle(b.querySelector(':scope > form.dismiss button'));
+  return {bg: s.backgroundColor, border: s.borderTopColor, ink: s.color, banner_ink: getComputedStyle(b).color};
+})"""
+
+
 def test_each_banner_closes_from_its_top_right_corner(browser, tmp_path, monkeypatch):
     # A16, his "B top right": the ✕ inside the banner, on its first line at the right, over no text, 360 and 1280 px.
     _banners(monkeypatch)
@@ -181,4 +187,7 @@ def test_each_banner_closes_from_its_top_right_corner(browser, tmp_path, monkeyp
             assert len(got) == n, (path, got)
             for g in got:
                 assert g["inside"] and g["top"] <= 4 and g["right"] <= 20 and not g["overlap"], (path, width, g)
+        look = page.evaluate(_LOOK, ".depnote:has(> form.dismiss)")
+        assert look and all(x["bg"] == "rgba(0, 0, 0, 0)" and x["border"] == "rgba(0, 0, 0, 0)" and x["ink"] == x["banner_ink"]
+                            for x in look), (path, look)
         page.context.close()

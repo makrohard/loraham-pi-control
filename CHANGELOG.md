@@ -116,7 +116,8 @@ Fixed
 - Hardware: a radio's Re-bind, Detect and Remove sit on one row (wrapping on a phone); Remove, and the remove
   confirm's button, are red; a Remove refused while the radio runs looks disabled.
 - Daemon Settings: the repository section is headed "Repositories" (no per-band wording).
-- Home and Apps: each banner's ✕ sits inside the banner, in its top-right corner (it hung below the banner).
+- Home and Apps: each banner's ✕ sits inside the banner, in its top-right corner, on the banner's own colour (it hung
+  below the banner as a white box).
 
 ## 0.13.8
 
