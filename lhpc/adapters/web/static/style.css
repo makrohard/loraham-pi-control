@@ -255,9 +255,10 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
 .logslink { font-size: .8rem; margin-left: .3rem; display: inline-block; padding: .25rem .45rem; }
 /* A normally-spaced, blue button-style link (e.g. the HMAC pre-start "Cancel") — sits beside a real
    button in an action row without competing with a yellow warn button. */
-.btnlink { display: inline-block; margin-left: .6rem; padding: .35rem .7rem; border-radius: 8px;
+.btnlink, a.button { display: inline-block; margin-left: .6rem; padding: .35rem .7rem; border-radius: 8px;
            border: 1px solid var(--brand); color: var(--brand); text-decoration: none; font-size: .9rem; }
-.btnlink:hover { background: var(--bg); }
+.btnlink:hover, a.button:hover { background: var(--bg); }
+a.button { margin-left: 0; }   /* A10: a page's own button link (Add Hardware, Remove) starts its line */
 .iface { font-size: .8rem; margin-left: .4rem; padding: .05rem .4rem; border-radius: 6px;
          background: var(--bg); border: 1px solid var(--line); }
 a.iface { text-decoration: none; color: var(--brand); }
