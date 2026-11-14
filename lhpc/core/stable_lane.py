@@ -23,12 +23,12 @@ _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Z
 
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    newest version key per tagged commit, the target's own key (None = the default-branch HEAD)."""
+    upstream's tag names per commit, the target's own key (None = the default-branch HEAD)."""
     sha: str = ""
     label: str = ""
     verified: bool = False
     why: str = ""
-    keys: dict | None = None
+    tags: dict | None = None
     key: tuple | None = None
 
     def frozen(self) -> tuple:
@@ -77,10 +77,9 @@ def resolve(run, remote: str) -> StableRef:
             name = parts[1][len("refs/tags/"):]
             (peeled if name.endswith("^{}") else plain)[name.removesuffix("^{}")] = parts[0]
     commits = {n: peeled.get(n, sha) for n, sha in plain.items()}
-    keys: dict = {}
+    tags: dict = {}
     for n, sha in commits.items():
-        if (k := version_key(n)) is not None and k > keys.get(sha, ()):
-            keys[sha] = k
+        tags.setdefault(sha, []).append(n)
     release, verified = "", True
     if gh := _GITHUB_REMOTE_RE.match(remote):
         api = run(["curl", "-sSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json",
@@ -97,17 +96,24 @@ def resolve(run, remote: str) -> StableRef:
     note = "" if verified else " — releases not checked"
     if name := stable_tag(commits, release):
         sha = commits[name]
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", keys, version_key(name))
+        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", tags, version_key(name))
     head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
     if head.returncode != 0 or not head.stdout.strip():
         return StableRef(why=f"could not resolve HEAD on {remote}")
     sha = head.stdout.split()[0]
-    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", keys)
+    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", tags)
+
+
+def tag_key(names):
+    """A commit's version from its tag names: the newest version-shaped one; with none, the newest version-prefixed
+    one (a release-only name such as `v2.8.0.7239fe8`), so a snapshot beside a real version never counts; else None."""
+    shaped = [version_key(n) for n in names if STABLE_TAG_RE.match(n)]
+    return max(shaped or [k for n in names if (k := version_key(n)) is not None], default=None)
 
 
 def is_older(ref: StableRef, installed: str) -> bool:
     """The target is older than the installed commit: a lower tag key, or none while the installed commit has one."""
-    have = (ref.keys or {}).get(installed)
+    have = tag_key((ref.tags or {}).get(installed, ()))
     return have is not None and (ref.key is None or ref.key < have)
 
 

@@ -187,3 +187,13 @@ def test_the_stable_key_table(names, release, expected):
 def test_the_leading_version_is_whole_numeric_segments(name, key):
     from lhpc.core import stable_lane
     assert stable_lane.version_key(name) == key
+
+
+def test_a_snapshot_tag_on_the_installed_commit_does_not_hide_a_newer_release(box):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v99.0-dev", box.c[0])               # a snapshot name on the installed v2.7.0 commit
+    box.push_tag("v2.8.0", box.c[2])
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                  # RED before: the snapshot made the install look newer
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
