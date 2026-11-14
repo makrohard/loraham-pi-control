@@ -387,6 +387,38 @@ def _account() -> str:
         return ""
 
 
+def radio_list_lines(svc) -> list:
+    """A26: `lhpc hardware`'s radio list, one line per radio of the list: rN, its type (model), band and USB port (his
+    four fields), and "disabled" (kept by his word). At most one USB scan, none without a USB row."""
+    from . import usb_access
+    state = radios.load(svc._paths)
+    if state.kind == radios.ABSENT:
+        return ["  no hardware list"]
+    if state.kind != radios.VALID:
+        return [f"  hardware list unreadable: {'; '.join(state.reasons)}"]
+    models = radio_models.load()
+    usb = {r.id: m for r in state.radios if (m := models.get(r.model)) is not None and m.transport != "spi"}
+    found = usb_access.scan() if usb else None
+    return [f"  {r.id}  {r.model}  {r.band} MHz  {_usb_port_text(r, usb[r.id], found) if r.id in usb else '-'}"
+            + ("" if r.enabled else "  disabled") for r in state.radios]
+
+
+def _usb_port_text(row, model, found) -> str:
+    """The port a USB radio's stick is on now (stick_port), or why not, never a guess: an unreadable listing, an
+    unreadable serial on a stick of the row's model, two sticks with its serial, or not attached."""
+    from . import usb_access
+    port, why = stick_port(row.usb_serial, row.usb_port, found)
+    if port:
+        return port
+    if found.listing is not usb_access.Probe.PRESENT:
+        return "USB list unreadable"
+    ids = (model.usb["vid"], model.usb["pid"]) if model.usb else None
+    if row.usb_serial and any(d.serial.state is usb_access.Probe.UNKNOWN and (d.vid.value.lower(), d.pid.value.lower()) == ids
+                              for d in found.devices):
+        return "serial unreadable"
+    return why if why.startswith("more than one stick") else "not attached"
+
+
 def hardware_view(svc) -> dict:
     """B5 Hardware section: the hardware list's rows, each with its daemon's state on its own socket and, for a
     USB row, the sticks it can be bound to (usb_flow.usb_choices); the copybox when a USB row is listed and the
