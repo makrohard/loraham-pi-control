@@ -335,7 +335,7 @@ main = "loraham-chat"
   run_argv = ["{source}/loraham_chat", "{param:data_socket}", "{param:conf_socket}"]
   run_cwd = "{runtime}/config/files/{instance_dir}"
   readiness = "manual"
-  note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. One daemon client per band: it holds 433 like every daemon-backed stack."
+  note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. One daemon client per radio: each instance is a client of its 433 radio's daemon, like every daemon-backed stack."
 
     [[stack.component.require]]
     check_file = "/usr/include/ncurses.h"
@@ -512,8 +512,8 @@ main = "loraham-voice"
     note = "This instance's voice UI: its GTK app or its terminal variant, never both (a busy sound device is the app's own error)."
 
     # Seeded into {runtime}/config/files/{instance_dir}loraham_voice.conf (KEY=VALUE, split on '=').
-    # The app keeps both bands' params in one file; active_band selects which is used
-    # (0=433, 1=868), defaulted from the band column the app was launched on.
+    # LHPC writes this instance's band only (433_* or 868_*) and active_band (0=433, 1=868) from it;
+    # the app's own save writes both bands' params into the same file.
     [stack.component.config_file]
     path = "{runtime}/config/files/{instance_dir}loraham_voice.conf"
     fmt = "env"
@@ -526,9 +526,8 @@ main = "loraham-voice"
       key = "callsign"
       default = "{callsign}"
       label = "Callsign (max 11 chars; portable forms like N0CALL/P allowed — use your own call)"
-      # Per-band LoRa radio params: the file key carries {band}, so editing the 433 config writes
-      # lora433_* and the 868 config writes lora868_* (one file holds both bands; active_band selects
-      # which is used). Defaults match the app struct.
+      # Per-band LoRa radio params: the file key carries {band}, so the 433 config writes 433_* and
+      # the 868 config writes 868_* (an instance writes its radio's band only). Defaults match the app struct.
       [[stack.component.config_file.param]]
       name = "freq"
       key = "{band}_freq"

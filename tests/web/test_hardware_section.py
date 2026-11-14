@@ -37,6 +37,9 @@ def test_the_section_lists_each_radio_and_a_usb_radios_sticks(web, tmp_path, mon
     assert "r2 — stick" in detail and "Stick port 1-1.9 (no serial)" in detail
     assert 'name="port" value="1-1.3"' in c.get("/hardware/radio/r2").get_data(as_text=True)   # the Meshstick, selectable
     assert 'id="usb-copybox"' in page and "sha256sum -c -" in page     # the USB setup is offered
+    # What it says it writes is what usb_flow.usb_setup_text writes: no module blacklist (W226).
+    assert "Once per box, as root: the udev rule and the plugdev group for this account." in page
+    assert "blacklist" not in page
     assert (tmp_path / "state" / "usb-setup" / "usb-setup.sh").is_file()
 
 
