@@ -86,23 +86,23 @@ def test_the_high_power_extra_stays_above_the_continuous_maximum(tmp_path):
     assert daemon_control.validate_set("POWER", "20", "sx127x", False, 17) is not None
 
 
-def test_a_power_saved_above_the_models_maximum_before_the_cap_is_named_not_an_invalid_list(tmp_path):
-    # G1-B3-CODE B2: a list saved before the cap with dp_POWER 17 on the PineDio stays valid (every other radio still
-    # starts); the Hardware page and `lhpc hardware` name the row; Apply sends it as before and the daemon refuses it
-    from lhpc.core import radio_start
+def test_a_power_saved_above_the_models_maximum_before_the_cap_is_named_not_an_invalid_list(tmp_path, monkeypatch,
+                                                                                             capsys, web):
+    # G1-B3-CODE B2: a list saved before the cap with dp_POWER 17 on the PineDio still loads VALID (a start is refused
+    # only for an INVALID list); the Hardware page and `lhpc hardware` name the row (G1-B3-CODE-RE N2: through the
+    # route and the CLI); Apply sends it as before and the daemon refuses it
     old = dataclasses.replace(PINE, dp=(("POWER", "17"),))
-    svc, fake = _svc(tmp_path)
-    (tmp_path / "config" / "radios.toml").write_text(radios.render((*ROWS[:2], old)))
-    assert radios.load(svc._paths).kind == radios.VALID
+    svc, fake, page_notes, cli_power_lines = _public(tmp_path, monkeypatch, capsys, web, (*ROWS[:2], old))
     note = "POWER 17 is above the model maximum 14 dBm: lower it"
-    view = radio_start.hardware_view(svc)
-    assert [note in r["problems"] for r in view["rows"]] == [False, False, True], view["rows"]
-    assert [note in line for line in radio_start.radio_list_lines(svc)] == [False, False, True]
+    assert radios.load(svc._paths).kind == radios.VALID
+    assert f"⚠ {note}" in page_notes()
+    (line,) = cli_power_lines()
+    assert line.split()[0] == "r4" and f"({note})" in line, line
     res = svc.apply_daemon_params("daemon", rid="r4")
     assert ("/tmp/loraconf-r4.sock", "SET POWER=17") in fake.sent and "POWER=17" in "\n".join(res.details), res
     at_max = dataclasses.replace(PINE, dp=(("POWER", "14"),))
     (tmp_path / "config" / "radios.toml").write_text(radios.render((*ROWS[:2], at_max)))
-    assert not any("POWER" in p for r in radio_start.hardware_view(svc)["rows"] for p in r["problems"])   # its maximum
+    assert not any("POWER" in n for n in page_notes()) and cli_power_lines() == []          # its maximum is fine
 
 
 def test_an_instance_sets_power_saved_before_the_cap_is_sent_as_before(tmp_path):
