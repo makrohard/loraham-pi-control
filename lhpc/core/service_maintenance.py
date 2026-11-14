@@ -14,11 +14,11 @@ from . import (
     commands,
     instances,
     power,
-    provenance,
     restart_required,
     runtime_fs,
     source_fs,
     source_registry,
+    stable_lane,
     task_hide,
     validators,
     web_client,
@@ -116,18 +116,26 @@ class MaintenanceOpsMixin:
         entry["remote"] = remote
         ref = comp.source.branch or "HEAD"
         run = self._system.runner.run
-        rem = run(["git", "ls-remote", remote, ref], timeout=12.0)
-        if rem.returncode != 0 or not rem.stdout.strip():
-            return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
-        remote_sha = rem.stdout.split()[0]
+        rec = source_registry.read_record(self._paths, comp.source.path)
+        if rec is not None and rec.selector == "stable" and not comp.source.artifact:
+            sref = stable_lane.resolve(run, remote)                 # U1: the lane's target, not the branch tip
+            if not (sref.sha and sref.verified):
+                return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
+            remote_sha = sref.sha
+        else:
+            sref, rem = None, run(["git", "ls-remote", remote, ref], timeout=12.0)
+            if rem.returncode != 0 or not rem.stdout.strip():
+                return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
+            remote_sha = rem.stdout.split()[0]
         loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
         if loc.returncode != 0 or not loc.stdout.strip():
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = loc.stdout.strip()
-        want = stackupdates.pinned_target(self._paths, self.stack(self.stack_of(comp.id) or ""), comp,
-                                          self._effective_remote) or remote_sha
+        want = sref.sha if sref else stackupdates.pinned_target(
+            self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        entry["status"] = stackupdates.UP_TO_DATE if local_sha == want else stackupdates.BEHIND
+        current = local_sha == want or (sref is not None and stable_lane.is_older(sref, local_sha))
+        entry["status"] = stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
 
     def update_status(self, comp) -> str:
@@ -403,35 +411,10 @@ class MaintenanceOpsMixin:
             label = ("declared artifact (default branch)" if spec.artifact
                      else f"development branch {ref}")
             return (sha, f"frozen: {label} @ {sha[:9]}"), ""
-        # stable: newest VERSION-SHAPED tag (peeled commit), else default-branch HEAD —
-        # resolved remotely so the whole run uses ONE exact commit. The tag rule itself is
-        # `provenance.stable_version_tag`, shared with the local clone path in install.py, so
-        # `install --source stable` and `auto-install --source stable` cannot disagree.
-        out = run(["git", "ls-remote", "--tags", remote], timeout=15.0)
-        if out.returncode != 0:
-            return (None, None), f"could not list tags on {remote}"
-        plain, peeled = {}, {}
-        for line in (out.stdout or "").splitlines():
-            parts = line.split()
-            if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
-                continue
-            name = parts[1][len("refs/tags/"):]
-            if name.endswith("^{}"):
-                peeled[name[:-3]] = parts[0]
-            else:
-                plain[name] = parts[0]
-        best_name = provenance.stable_version_tag(plain)
-        if best_name:
-            best_sha = peeled.get(best_name, plain[best_name])
-            return (best_sha, f"frozen: latest stable tag @ {best_sha[:9]}"), ""
-        out2 = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
-        if out2.returncode != 0 or not out2.stdout.strip():
-            return (None, None), f"could not resolve HEAD on {remote}"
-        sha = out2.stdout.split()[0]
-        return (sha, f"frozen: default branch @ {sha[:9]} (no version tags)"), ""
+        return stable_lane.resolve(run, remote).frozen()      # stable: the lane's one target (U1)
 
     def _plan_source_groups(self, items, source: str, freeze: bool = False,
-                            exact_pin: bool = False) -> tuple:
+                            exact_pin: bool = False, stable_refs: dict | None = None) -> tuple:
         """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
 
           * known-working is resolved ONCE per affected stack from one complete compatible
@@ -479,7 +462,7 @@ class MaintenanceOpsMixin:
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
-        frozen_cache: dict = {}
+        frozen_cache = {p: r.frozen() for p, r in (stable_refs or {}).items()}   # stable refs `update` read
         for path, members in by_path.items():
             idents = {m[3] for m in members}
             if len(idents) > 1:
@@ -489,8 +472,8 @@ class MaintenanceOpsMixin:
                                  "remote/known-working) — resolve or re-confirm before installing/updating")
                 continue
             st, comp, sel, _, resolved = members[0]
-            if freeze and not resolved[0] and (sel != "pinned"
-                                               or comp.source.artifact):
+            # A stable group is resolved here also unfrozen (U1): install and update take the lane's one target.
+            if (freeze or sel == "stable") and not resolved[0] and (sel != "pinned" or comp.source.artifact):
                 # FROZEN selector resolution (auto-install plan): one exact immutable commit per
                 # group, resolved HERE — adoption never performs a second lookup.
                 # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
@@ -506,6 +489,8 @@ class MaintenanceOpsMixin:
                     fb = self._kw_fallback_expected(st, comp)
                     if sel == "dev" and fb[0]:
                         resolved = fb
+                    elif not freeze:     # stable, remote unreadable: adoption's local fallback decides
+                        pass
                     else:
                         conflicts.append(f"source {path!r}: exact {sel} resolution "
                                          f"failed — {why}")
@@ -1860,6 +1845,19 @@ class MaintenanceOpsMixin:
                                 details=["  nothing to run here — this is an lhpc defect (the "
                                          "auto-install run's lock context does not match), not a "
                                          "problem on the box; report it with this message"])
+        # U1: an installed stable source moves only to a verified target not older than its commit. Read once, outside
+        # every lock, and reused by the plan; a refusal changes nothing.
+        stable_refs, refused = {}, []
+        for _, c in items if source == "stable" else ():
+            if not c.source.artifact and source_fs.source_present(self._paths, src := self._paths.resolve_source(
+                    c.source.path)):
+                ref = stable_refs[c.source.path] = stable_lane.resolve(self._system.runner.run, self._effective_remote(c))
+                head = self._system.runner.run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+                if why := stable_lane.update_refusal(ref, (head.stdout or "").strip()):
+                    refused.append(f"  {c.id}: {why}")
+        if refused:
+            return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",
+                                details=refused, next_commands=[f"lhpc source-check {target}".strip()])
         if not apply:
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
@@ -1934,8 +1932,8 @@ class MaintenanceOpsMixin:
                                                  "sets one remote for every component of that "
                                                  "checkout ([remotes] in config/local.toml), "
                                                  "then retries"])
-                groups, plan_conflicts = self._plan_source_groups(items, source,
-                                                                  exact_pin=exact_pin)
+                groups, plan_conflicts = self._plan_source_groups(items, source, exact_pin=exact_pin,
+                                                                  stable_refs=stable_refs)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "incompatible source resolutions for a shared "
