@@ -2084,9 +2084,10 @@ main = "meshcom-qemu"
     # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the console up only
     # after MINUTES. The stepped `schedule` keeps an 8 s cadence for the first minute (Pi 4/5,
     # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
-    # uses it up and no attempt starts after it. `lhpc stack poststart meshcom` re-runs this
-    # against a running stack if the window ever expires.
-    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # uses it up and no attempt starts after it. A console that never answers within the window
+    # (`on_exhausted = "warn"`) leaves the node running with its callsign unconfirmed (Q-B2-7):
+    # the start names it, and `lhpc stack poststart meshcom@rN` re-runs this against the stack.
+    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], on_exhausted = "warn", skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
