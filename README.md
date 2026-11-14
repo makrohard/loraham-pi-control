@@ -256,7 +256,8 @@ Uputronics: CE0 carries 433, CE1 carries 868 (`uputronics-x` for crossed modules
 setup (CE0: CS 8, IRQ 25; CE1: CS 7, IRQ 16); set them by hand only for a board not listed here.
 </details>
 
-`lhpc hardware` alone prints the catalog. Which stacks inherit the callsign:
+`lhpc hardware` alone prints the setup, the catalog and the radios (each one's type, band and USB port). Which
+stacks inherit the callsign:
 [identity](docs/architecture.md#identity-and-callsigns).
 
 #### 8. The WebGUI — and reaching it from another machine

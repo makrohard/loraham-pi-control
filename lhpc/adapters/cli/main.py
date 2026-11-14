@@ -782,7 +782,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_hw = sub.add_parser("hardware",
                           help="Show or set the radio hardware setup (which board(s) the box has)")
     p_hw.add_argument("setup", nargs="?", choices=(*_HW_SETUPS, "remove", "detect"),
-                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list); "
+                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show the setup and the radios); "
                            "`remove <rid>` removes one radio of the hardware list; `detect <rid>` asks its chip")
     p_hw.add_argument("rid", nargs="?", help="with remove or detect: the radio id (r1 … r99)")
     p_hw.add_argument("--confirm-phrase", default="", dest="hw_confirm_phrase",
