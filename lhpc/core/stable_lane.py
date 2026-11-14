@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 STABLE_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 _LEADING_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)(?![0-9A-Za-z])")     # whole numeric segments only
+_RELEASE_NAME_RE = re.compile(r"^v?\d+(?:\.\d+)*(?:\.[0-9a-f]{7,40})?$")      # a version, optionally a commit suffix
 # A GitHub remote (https or scp-style ssh): its owner and repository, for the releases API.
 _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)"
                                r"(?:\.git)?/?$")
@@ -106,10 +107,10 @@ def resolve(run, remote: str) -> StableRef:
 
 
 def tag_key(names):
-    """A commit's version from its tag names: the newest version-shaped one; with none, the newest version-prefixed
-    one (a release-only name such as `v2.8.0.7239fe8`), so a snapshot beside a real version never counts; else None."""
+    """A commit's version from its tag names: the newest version-shaped one; with none, the newest release-only name
+    (a version with a commit suffix, `v2.8.0.7239fe8`); a snapshot (`v99.0-dev`) never counts; else None."""
     shaped = [version_key(n) for n in names if STABLE_TAG_RE.match(n)]
-    return max(shaped or [k for n in names if (k := version_key(n)) is not None], default=None)
+    return max(shaped or [version_key(n) for n in names if _RELEASE_NAME_RE.match(n)], default=None)
 
 
 def local_tags(run, src) -> list:

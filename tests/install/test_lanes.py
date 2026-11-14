@@ -201,6 +201,18 @@ def test_a_snapshot_tag_on_the_installed_commit_does_not_hide_a_newer_release(bo
     assert box.head() == box.c[2]
 
 
+def test_a_snapshot_tag_beside_a_release_only_name_does_not_hide_a_newer_tag(box):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+    box.push_tag("v99.0-dev", box.c[1])               # the installed commit: ["v2.8.0.7239fe8", "v99.0-dev"]
+    box.push_tag("v2.9.0", box.c[2])
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                  # RED before: the snapshot made the install look newer
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+
+
 def test_a_release_answer_without_a_tag_name_is_not_verified(box, capsys):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v2.9.0", box.c[2])
