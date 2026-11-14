@@ -868,6 +868,10 @@ main = "loraham-kiss-tnc"
     key = "loraham.daemon-socket.{radio:433}"
     kind = "daemon-socket"
     mode = "consumer"
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.{radio:868}"
+    kind = "daemon-socket"
+    mode = "consumer"
 
   [[stack.component]]
   id = "loraham-kiss-serial"

@@ -157,6 +157,16 @@ def test_meshcore_daemon_backed_does_not_claim_direct_spi():
     assert "spi.bus.0" not in keys
 
 
+def test_kiss_consumes_the_daemon_socket_of_each_band_it_may_run_on():
+    # kiss runs on 433 or 868 (one instance per radio): its declared claims name both bands' sockets, as the
+    # daemon declares both providers.
+    kiss = _index(load_manifest())["loraham-kiss-tnc"]
+    keys = {r.key: r.mode for r in kiss.resources}
+    assert set(kiss.bands) == {"433", "868"}
+    for band in kiss.bands:
+        assert keys[radio_claim(band, "loraham.daemon-socket.")] is ResourceMode.CONSUMER
+
+
 def test_gui_stacks_keep_their_state_out_of_a_read_only_home():
     # lhpc-web.service runs ProtectHome=read-only. Both desktop GUIs create a state
     # directory at import/startup, so each MUST be redirected into the runtime root or it
