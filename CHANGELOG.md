@@ -90,6 +90,7 @@ Upgrading from 0.13.x
   names each meshtastic instance whose own web_root serves another directory.
 - Auto-start ticks are per radio now: tick them again on each radio's Settings page; the old stack-wide ticks are no
   longer read.
+- A Settings reset resets one radio: its own settings and its auto-start ticks.
 
 Fixed
 

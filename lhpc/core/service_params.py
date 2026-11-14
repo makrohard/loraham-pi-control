@@ -2347,10 +2347,12 @@ class ParamsConfigMixin:
         inst = _instances.saved_inst(self, target, self._config_band(target, band), inst)   # K6: a band caller's
         cfg_band = self._config_band(target, band, inst)
         own = _instances.own_rid(inst)
+        if not own and not _instances.saved_insts(self, target):     # a list, but no radio of its bands (G1-K6C-RE 3)
+            return ActionResult(False, f"Config not reset: {target}: no radio of its bands in the hardware list")
         label = f"'{_instances.key(target, inst)}'" if own else f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         # The generic Config form's run params: the HMAC-managed password_file is never reset here.
         run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
-        files = [inst, None] if own else [None]          # K6: its own file + the global <sid>.toml (autostart, 13.12.1)
+        files = [inst] if own else [None]                # A29 B: one radio's own file, its ticks included
         cleared: list = []
         _gps_busy: dict = {}
 
@@ -2361,10 +2363,8 @@ class ParamsConfigMixin:
         def _render_reset(pth, i):
             # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
             # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
-            # An instance's reset clears only the GLOBAL keys (autostart) of the shared <sid>.toml.
             merged = merge_stack_values(pth, target, "", {}, inst=i)
-            normal = [k for k in _normal(merged) if i is not None or not own or k.startswith("autostart_")]
-            if not normal:
+            if not (normal := _normal(merged)):
                 return None
             # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
             # a running consumer or feed derived its claims and config from the current value.

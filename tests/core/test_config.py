@@ -1248,36 +1248,6 @@ def test_known_working_record_is_contained(tmp_path):
     assert outside.read_text() == "orig"
 
 
-def test_reset_of_one_band_also_clears_the_band_less_keys(tmp_path):
-    # autostart_* and use_gps live in the BAND-LESS file of a band-switchable stack; a reset of
-    # band 433 used to load only kiss@433.toml and leave them set.
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core import config as cfgmod
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    for band, text in (("433", 'rx_only = "on"\n'), ("", 'autostart_loraham-kiss-serial = "on"\n')):
-        p = cfgmod._stack_config_path(svc._paths, "kiss")
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
-    assert svc.reset_config("kiss", band="433").ok
-    assert "rx_only" not in cfgmod.load_stack_config(svc._paths, "kiss", "433")
-    assert "autostart_loraham-kiss-serial" not in cfgmod.load_stack_config(svc._paths, "kiss", "")
-
-
-def test_reset_of_one_band_is_refused_whole_on_a_malformed_band_less_file(tmp_path):
-    # The band's file and the band-less file are one reset: a broken band-less file refuses it
-    # whole, and "not modified" is true — the band's settings are still there.
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    from stores_fixture import inst_of, own_file           # K6: the instance's own file + the global one
-    for p, text in ((own_file(svc, "kiss", "433"), 'rx_only = "on"\n'),
-                    (cfgmod._stack_config_path(svc._paths, "kiss"), "rx_only = \n")):   # global: invalid TOML
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
-    r = svc.reset_config("kiss", band="433")
-    assert not r.ok and "not modified" in r.summary
-    assert cfgmod.load_stack_config(svc._paths, "kiss", inst=inst_of(svc, "kiss", "433"))["rx_only"] == "on"
-
-
 def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
     # Clearing use_gps is a GPS change and takes the same liveness gate as a Settings save.
     from lhpc.core.services import ControllerService
@@ -1648,10 +1618,8 @@ def test_unchanged_param_produces_no_apply_hint(tmp_path):
 
 def test_reset_config_refuses_symlinked_leaf(tmp_path):
     import os
-    from lhpc.core.config import _stack_config_path
     svc = _svc_config_typed(tmp_path)
-    p = _stack_config_path(svc._paths, "daemon")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = stores_fixture.own_file(svc, "daemon")      # the file a reset writes: the radio's own (A29 B)
     outside = tmp_path / "evil.toml"; outside.write_text("x=1")
     os.symlink(outside, p)                        # symlinked config leaf
     r = svc.reset_config("daemon")
