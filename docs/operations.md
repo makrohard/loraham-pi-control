@@ -219,7 +219,7 @@ skipped:
 
 ```bash
 cd ~/loraham-pi-control          # or: cd "$LHPC_RUNTIME_ROOT"
-inst=$(ls -d state/r[1-9]*/{graywolf,meshcom,meshcore,meshcore-webui,meshtasticd,openhop} 2>/dev/null)
+inst=$(ls -d state/r{[1-9],[1-9][0-9]}/{graywolf,meshcom,meshcore,meshcore-webui,meshtasticd,openhop} 2>/dev/null)
 tar -czpf ~/lhpc-backup-$(date +%F).tgz --ignore-failed-read config profiles \
     state/graywolf state/meshcore state/openhop state/meshtasticd \
     state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat $inst
