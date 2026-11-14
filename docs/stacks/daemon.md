@@ -5,14 +5,14 @@ one `loraham_daemon` process per enabled radio of the hardware list (433/868 MHz
 
 | | |
 |---|---|
-| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (the project's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the ELECROW Meshstick; an optional build input (source checkout), adopted by default; never started |
+| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (the project's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the [USB radios](../usb-radios.md); an optional build input (source checkout), adopted by default; never started |
 | Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `makrohard/libch341-spi-userspace`, the fork carrying the serial/port selection fix, at 98b656bf (the commit in the daemon's `.github/ci/libpinedio.lock`) |
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/<rid>/rf-daemon.log --id <rid> [--usb-port <port>]` — one process per radio; lhpc computes every value at spawn |
 | Sockets (per radio) | `/tmp/loraconf-<rid>.sock` (CONF / status), `/tmp/loraf-<rid>.sock` (framed), `/tmp/lora-<rid>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)) + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.{radio:<band>}` / `loraham.daemon-socket.{radio:<band>}` provider, resolved to a radio through the hardware list |
-| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`, `libusb-1.0-0-dev`). The binary carries `loraham_daemon/lib/libloraham-ch341.so` beside the daemon, which loads it from there for the Meshstick; running it needs `libusb-1.0-0`. A source build without the library clone has no Meshstick support until `lhpc install daemon` adopts it; with the clone it needs `libusb-1.0-0-dev`, and the build stops naming it when the headers are missing. Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
+| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`, `libusb-1.0-0-dev`). The binary carries `loraham_daemon/lib/libloraham-ch341.so` beside the daemon, which loads it from there for the USB radios; running it needs `libusb-1.0-0`. A source build without the library clone has no USB radio support until `lhpc install daemon` adopts it; with the clone it needs `libusb-1.0-0-dev`, and the build stops naming it when the headers are missing. Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
 
 ## Contents
 
@@ -165,8 +165,8 @@ lhpc config <stack>@<rid> --reset-daemon
 Values are validated server-side (`daemon_control.validate_set`). An apply is `ok` only when every
 SET landed: a SET the daemon answers `ERR` (or does not answer) fails with its reason; radio params
 the daemon accepted with `OK` are echoed by no `GET`, so they report *sent*, not confirmed. An app
-stack's apply is refused, naming the stack, on a band another running stack uses; the band's radio
-claim is held from that check to the last SET, so a start cannot take the band in between. `MODE=FSK`
+stack's apply is refused, naming the stack, on a radio another running stack uses; the radio's
+claim is held from that check to the last SET, so a start cannot take the radio in between. `MODE=FSK`
 switches LoRa off and breaks every stack.
 
 ## Position (GPS)

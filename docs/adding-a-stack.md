@@ -106,7 +106,7 @@ CI's pin validation fails a pin that does not contain it.
 - `endpoint`: every `ready = true` endpoint came up (below);
 - `manual`: an interactive TUI the operator runs themselves;
 - `gps-feed`: the feed's own readiness marker (never the endpoint path existing);
-- `daemon-band`: the LoRaHAM daemon, verified per band by `GET STATUS` reporting `RADIO=READY`;
+- `daemon-band`: the LoRaHAM daemon, verified per radio by `GET STATUS` reporting `RADIO=READY`;
 - `external-systemd`: a `units`-only component (no `run_argv`): LHPC prints
   `sudo systemctl start <unit>` and probes the unit.
 
