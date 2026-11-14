@@ -184,8 +184,11 @@ def test_the_waits_nest_inside_the_required_post_starts_cap():
     ({"kind": "log_wait", "path": "x", "pattern": "", "timeout": 10}, "pattern"),
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": REQUIRED_POST_TIMEOUT_S + 1}, "timeout"),
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": 0}, "timeout"),
+    ({"kind": "log_wait", "pattern": "p", "timeout": 10}, "path"),                     # no path
+    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": "1300"}, "timeout"),  # a string, not a number
+    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": True}, "timeout"),    # a bool is no number here
 ])
-def test_a_log_wait_without_a_pattern_or_beyond_the_cap_is_refused(step, why):
+def test_a_log_wait_without_its_fields_or_beyond_the_cap_is_refused(step, why):
     with pytest.raises(commands.CommandError, match=why):
         commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "")
 

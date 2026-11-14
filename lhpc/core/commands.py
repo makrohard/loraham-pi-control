@@ -637,13 +637,15 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             # B2a: wait for a line in a log file (MeshCom: the firmware's own console announcement); the path is
             # opened fresh on every poll, so a guest reboot's new log (a moved symlink) is read from its start.
             from .lifecycle import REQUIRED_POST_TIMEOUT_S
-            pattern, timeout = step.get("pattern"), float(step.get("timeout", 0))
+            path, pattern, timeout = step.get("path"), step.get("pattern"), step.get("timeout", 0)
+            if not isinstance(path, str) or not path:
+                raise CommandError("log_wait: path must be a non-empty string")
             if not isinstance(pattern, str) or not pattern:
                 raise CommandError("log_wait: pattern must be a non-empty string")
-            if not 0 < timeout <= REQUIRED_POST_TIMEOUT_S:
+            if type(timeout) not in (int, float) or not 0 < timeout <= REQUIRED_POST_TIMEOUT_S:
                 raise CommandError(f"log_wait: timeout must be > 0 and <= {REQUIRED_POST_TIMEOUT_S:.0f} s")
-            resolved.append({"kind": "log_wait", "path": _paths_subst(str(step["path"]), runtime, source, band, inst),
-                             "pattern": pattern, "timeout": timeout, "label": _post_label(step.get("label") or "log"),
+            resolved.append({"kind": "log_wait", "path": _paths_subst(path, runtime, source, band, inst),
+                             "pattern": pattern, "timeout": float(timeout), "label": _post_label(step.get("label") or "log"),
                              "optional": (bool(step.get("optional")) and not step.get("required")) and not require_all})
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")

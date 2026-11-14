@@ -669,10 +669,8 @@ class GpsOpsMixin:
     def gps_enabled_for(self, target: str, inst) -> bool:
         """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
 
-        Stored and read BANDLESSLY. "Does this box report its position" is a property of the
-        stack, not of the frequency it happens to be on. Reading it per band made the switch
-        revert on a band change; reading "on if ANY band says on" then made turning it OFF on
-        one band ineffective. One value, one answer.
+        Stored and read per instance: each radio's own settings hold its switch (K6, DEC-W384k); a
+        box without a hardware list keeps the stack's one file. One instance, one value, one answer.
 
         `target` may be a component id — it is normalized to its owner stack, so a direct
         component start is gated exactly like a stack start.

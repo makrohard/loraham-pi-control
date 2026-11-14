@@ -2389,7 +2389,7 @@ class ParamsConfigMixin:
                                    ("f", c.config_file.params if c.config_file else ()))
                   for p in ps]
         try:
-            # ONE transaction for both files and the marker: all are written, or none is.
+            # ONE transaction for the instance's file and the marker: both are written, or neither is.
             apply_config_transaction(self._paths, [
                 ("stack", _stack_config_path(self._paths, target, i),
                  lambda pth, i=i: _render_reset(pth, i), 0o644) for i in files] + [

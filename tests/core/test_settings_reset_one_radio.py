@@ -57,6 +57,15 @@ def test_a_reset_on_a_list_without_a_radio_of_its_bands_is_refused_and_changes_n
     assert {p.name: p.read_bytes() for p in (tmp_path / "config" / "stacks").iterdir()} == files
 
 
+def test_a_malformed_own_file_refuses_the_reset_and_changes_nothing(tmp_path):
+    svc = _svc(tmp_path)
+    own = tmp_path / "config" / "stacks" / "meshcore@r3.toml"
+    own.write_text("autostart_meshcore-webui = \n")                           # not TOML
+    res = svc.reset_config("meshcore", inst=_inst(svc, "meshcore@r3"))
+    assert not res.ok and "refused, not modified" in res.summary, res.summary
+    assert own.read_text() == "autostart_meshcore-webui = \n"
+
+
 @pytest.mark.no_default_hardware                     # the list is really absent (conftest's baseline list off)
 def test_a_box_without_a_hardware_list_resets_its_one_file_ticks_included(tmp_path):
     svc = _svc(tmp_path, rows=None)
