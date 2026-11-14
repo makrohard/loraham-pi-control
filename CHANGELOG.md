@@ -72,8 +72,8 @@ Upgrading from 0.13.x
 
 - The box says "the old [radio] configuration is present and nothing was converted": run `lhpc hardware <setup>`
   to list your radios (an existing list is kept), then re-enter settings and pages.
-- `lhpc self-update` leaves installed stack binaries as they are; the daemon's and MeshCom's pins moved: run
-  `lhpc update daemon` and `lhpc update meshcom` (a start says "installed binary artifact is behind the manifest").
+- `lhpc self-update` leaves installed stacks as they are; run `lhpc update <stack> --yes` for each installed stack
+  whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
 - The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
