@@ -105,9 +105,12 @@ def seeded_rf_logs(lab):
 @pytest.fixture()
 def flask_page(browser, tmp_path, monkeypatch):
     """A factory: a real Chromium page over the console app itself (no lab), for pages the lab cannot set up."""
-    def make(*, choices=True, activity=False, path="/hardware/radio/r3"):
+    def make(*, choices=True, activity=False, path="/hardware/radio/r3", unix_replies=None, api=None):
         """A real Chromium page over the console app (no lab): every request of the page is answered by a Flask test
-        client on a runtime with a USB radio r3. Returns (page, posts): `posts` collects each POST the page sends."""
+        client on a runtime with a USB radio r3. `unix_replies`: the fake daemon sockets' replies (a radio whose daemon
+        answers is up); `api`: {path: JSON} answered in place of the app (a live poll's reply). Returns (page, posts):
+        `posts` collects each POST the page sends."""
+        import json
         from urllib.parse import urlsplit
 
         from lhpc.adapters.web.app import create_app
@@ -127,13 +130,16 @@ def flask_page(browser, tmp_path, monkeypatch):
             real = radio_start.radio_detail
             monkeypatch.setattr(radio_start, "radio_detail", lambda svc, rid: {**real(svc, rid), "activity": ["daemon"],
                                                                                "stop_first": "stop its daemon"})
-        client = create_app(service_factory=lambda: ControllerService(system=FakeSystem().system,
+        client = create_app(service_factory=lambda: ControllerService(system=FakeSystem(unix_replies=unix_replies or {}).system,
                                                                       paths=Paths(runtime_root=tmp_path))).test_client()
         posts = []
 
         def handle(route, request):
             u = urlsplit(request.url)
             path = u.path + ("?" + u.query if u.query else "")
+            if u.path in (api or {}):
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(api[u.path]))
+                return
             if request.method == "POST":
                 posts.append((u.path, request.post_data or ""))
                 route.fulfill(status=200, body="posted")              # captured, not run

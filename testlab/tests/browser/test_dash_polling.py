@@ -140,3 +140,32 @@ def test_a_reachable_daemon_whose_radio_failed_reads_occupied_not_usable(page):
         "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent === 'daemon occupied (FAILED)')",
         arg=list(RIDS), timeout=15000)
     assert all(page.get_attribute(f"#rd-badge-{rid}", "class") == "badge badge-degraded" for rid in RIDS)
+
+
+# --- A32: the Live RSSI value stays on one line on a phone (Home served by the console app, r3 up, the value from
+#     dash.js's own poll) ---------------------------------------------------------------------------------------
+
+_READY = b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"
+_POLL = {"reachable": True, "ready": True, "channel": {"LIVERSSI": "-115.00"}, "status": {"RADIO": "READY"}}
+
+_CELL = """rid => { const td = document.querySelector('#monitor-' + rid + ' .monrssi td');
+  const sp = td.querySelector('span'), lh = parseFloat(getComputedStyle(sp).lineHeight) || 20;
+  const unit = [...td.childNodes].find(n => n.nodeType === 3 && n.textContent.trim() === 'dBm');
+  const r = document.createRange(); r.selectNodeContents(unit);
+  return {value: sp.textContent, spanH: sp.getBoundingClientRect().height, lineH: lh,
+          unitLines: [...r.getClientRects()].filter(q => q.width).length,
+          meterW: td.querySelector('meter').getBoundingClientRect().width,
+          scrollW: document.documentElement.scrollWidth}; }"""
+
+
+def test_the_live_rssi_value_stays_on_one_line_on_a_phone(flask_page):
+    page, _posts = flask_page(path="/", unix_replies={"/tmp/loraconf-r3.sock": _READY}, api={"/api/daemon/r3": _POLL})
+    page.wait_for_function("(document.getElementById('rd-rssiv-r3') || {}).textContent === '-115.00'")
+    for width in (390, 360):
+        page.set_viewport_size({"width": width, "height": 900})
+        c = page.evaluate(_CELL, "r3")
+        assert c["value"] == "-115.00" and c["spanH"] < 1.5 * c["lineH"] and c["unitLines"] == 1, (width, c)
+        assert c["meterW"] >= 48 and c["scrollW"] <= width, (width, c)
+    page.set_viewport_size({"width": 1280, "height": 900})
+    assert round(page.evaluate(_CELL, "r3")["meterW"]) == 192                     # the desktop meter is unchanged
+    page.context.close()
