@@ -27,6 +27,7 @@
 - `lhpc status` and the status pages probe each component at the ports of the instance it runs as (r3's, not r1's).
 - Home: each radio's stack rows link their own web UI, Settings and logs; a stack still applying its settings shows
   "booting" and its web link as soon as the web UI listens.
+- MeshCore: a radio's start judges its auto-started clients by that radio's own mode (DEC-W52), not another radio's.
 - MeshCore keeps its identities: before the first start, move config/secrets/meshcore_identity.key,
   openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
 - After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
