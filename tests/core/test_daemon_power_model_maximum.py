@@ -88,12 +88,13 @@ def test_the_high_power_extra_stays_above_the_continuous_maximum(tmp_path):
 
 def test_a_power_saved_above_the_models_maximum_before_the_cap_is_named_not_an_invalid_list(tmp_path, monkeypatch,
                                                                                              capsys, web):
-    # G1-B3-CODE B2: a list saved before the cap with dp_POWER 17 on the PineDio still loads VALID (a start is refused
-    # only for an INVALID list); the Hardware page and `lhpc hardware` name the row (G1-B3-CODE-RE N2: through the
-    # route and the CLI); Apply sends it as before and the daemon refuses it
+    # G1-B3-CODE B2: a list saved before the cap with dp_POWER 17 on the PineDio still loads VALID and the start's
+    # gate passes the unaffected r1 (G1-B3-CODE-RE2 NOTE 1); the Hardware page and `lhpc hardware` name the row
+    # (G1-B3-CODE-RE N2: through the route and the CLI); Apply sends it as before and the daemon refuses it
     old = dataclasses.replace(PINE, dp=(("POWER", "17"),))
     svc, fake, page_notes, cli_power_lines = _public(tmp_path, monkeypatch, capsys, web, (*ROWS[:2], old))
     note = "POWER 17 is above the model maximum 14 dBm: lower it"
+    assert svc.hardware_configured() and svc.hardware_block("daemon@r1") == ""          # the start's gate passes r1
     assert radios.load(svc._paths).kind == radios.VALID
     assert f"⚠ {note}" in page_notes()
     (line,) = cli_power_lines()
