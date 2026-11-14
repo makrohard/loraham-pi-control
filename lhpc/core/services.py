@@ -560,10 +560,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if state == "valid" and rec is not None:
                 for cid in spec.covers:
                     binary_cover[cid] = rec
-        snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover,
-                            owned_running=self._lifecycle().owned_running(), sources=sources,
-                            cache=None if fresh else source_cache.SHARED,
-                            meshcore_node_endpoints=self._meshcore_node_endpoints()).assess_stacks(self.stacks())
+        owned = self._lifecycle().owned_running()
+        snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover, owned_running=owned,
+                            sources=sources, cache=None if fresh else source_cache.SHARED,
+                            instance_endpoints=lambda t: instances.status_endpoints(self, t, owned)).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._overlay_licensed_tx_enabled(snap)
@@ -1849,15 +1849,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # ---- lifecycle operations: build/start/stop/logs/test ----------------
 
-    def _meshcore_node_endpoints(self, saved: bool = False):
-        """node_endpoints of the running MeshCore instances (`saved`: every saved one, a whole node stop's); None without any."""
-        sid, f = _meshcore_mode.STACK_ID, instances.saved_insts if saved else instances.running_insts
-        return self._request_memo(("meshcore-node-endpoints", saved), lambda: (
-            instances.node_endpoints(self, i) if self.stack(sid) and (i := f(self, sid)) else None))
+    def _meshcore_node_endpoints(self):
+        """node_endpoints of every saved MeshCore instance (a whole node stop's check); None without any."""
+        sid = _meshcore_mode.STACK_ID
+        return self._request_memo(("meshcore-node-endpoints",), lambda: (
+            instances.node_endpoints(self, i) if self.stack(sid) and (i := instances.saved_insts(self, sid)) else None))
 
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
-        lc.expected_endpoints = lambda comp: ((self._meshcore_node_endpoints(saved=True) or [])   # a whole node stop
+        lc.expected_endpoints = lambda comp: ((self._meshcore_node_endpoints() or [])   # a whole node stop
                                               if comp.id == _meshcore_mode.NODE_ID else comp.endpoints)
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
