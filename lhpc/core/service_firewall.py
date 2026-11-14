@@ -139,10 +139,15 @@ class FirewallOpsMixin:
                 "proxy_ingress": proxy, "ssh_ports": ssh_ports, "ap": ap,
                 "extra_allow": extra}
 
-    def _fw_proxy_ingress(self, cfg, ap_managed: bool = False):
+    def _fw_proxy_ingress(self, cfg, ap_managed: bool = False, preopen: bool = True):
         """External nginx ingress the firewall must ALLOW: the console when remote-exposed,
         and each enabled+remote stack proxy — each following its configured bind (0.0.0.0
         when remote) and allowed CIDRs. Loopback-only backends are NEVER opened here.
+
+        PRE-OPENED page rows (`preopen`, the candidate's): while the console is remote, every
+        other page gets one row at its allocated port (`_page_ports`) with the console's networks,
+        so exposing a page to them after its radio's apply needs no further apply. The gates pass
+        `preopen=False`: they ask what nginx binds, never what is merely opened.
 
         AP-MANAGED (Lite) boxes emit these UNSCOPED (empty allow_cidrs -> one unrestricted
         accept per port): the box roams between its own AP subnet and joined WLANs, and a
@@ -161,13 +166,19 @@ class FirewallOpsMixin:
             out.append({"proto": "tcp", "family": fam, "addr": addr, "port": int(ws.port),
                         "allow_cidrs": [] if ap_managed
                         else _norm_cidrs(ws.allowed_cidrs, fam)})
-        for swc in (cfg.stackweb or {}).values():
+        exposed = set()
+        for sid, swc in (cfg.stackweb or {}).items():
             if swc.enabled and swc.remote:
                 # A remote stack proxy is rendered by nginx as `listen 0.0.0.0:<port>` (IPv4
                 # wildcard) — independent of the console bind. Match that exactly.
+                exposed.add(sid)
                 out.append({"proto": "tcp", "family": "ipv4", "addr": "*", "port": int(swc.port),
                             "allow_cidrs": [] if ap_managed
                             else _norm_cidrs(swc.allowed_cidrs, "ipv4")})
+        if preopen and ws.remote_exposed:
+            nets = [] if ap_managed else _norm_cidrs(ws.allowed_cidrs, "ipv4")
+            out += [{"proto": "tcp", "family": "ipv4", "addr": "*", "port": port, "allow_cidrs": nets}
+                    for sid, port in self._page_ports().items() if sid not in exposed]
         return out
 
     # ---- status (FW-4): three honest dimensions ---------------------------------------------
@@ -622,7 +633,8 @@ class FirewallOpsMixin:
 
     def _fw_nginx_decision(self, st=None) -> str:
         """`_fw_gate_decision` for what nginx binds with the saved config (console + exposed pages)."""
-        return self._fw_gate_decision(ingress=self._fw_proxy_ingress(self.config()), st=st)
+        return self._fw_gate_decision(ingress=self._fw_proxy_ingress(self.config(), preopen=False),
+                                      st=st)
 
     def firewall_gate_activation(self, prospective_ports, action_hint="Apply the webserver again"):
         """The receipt gate for any operation that CREATES, WIDENS or MOVES a non-loopback
@@ -782,19 +794,20 @@ class FirewallOpsMixin:
         live = _ws.listener_addresses(self._system, int(ws.port))
         if len(live) != 1:
             return False                       # absent or ambiguous -> refuse rather than guess
-        # Canonicalize: /proc reports a wildcard as 0.0.0.0 while the candidate stores addr="*".
-        family, addr = _classify_bind(live[0])
+        # The same config with the console still remote on that address: its ingress, and the page
+        # rows pre-opened beside it (`_fw_proxy_ingress`). /proc reports a wildcard as 0.0.0.0.
+        import dataclasses
+        cfg = self.config()
+        was = dataclasses.replace(cfg, webserver=dataclasses.replace(ws, remote_exposed=True,
+                                                                     bind=live[0]))
         try:
             cand = self.firewall_candidate()
+            previous = {**cand, "proxy_ingress": self._fw_proxy_ingress(
+                was, ap_managed=bool((cand.get("ap") or {}).get("enabled")))}
         except Exception:
             return False
         # `canonical_intent` sorts proxy_ingress and each CIDR list, so insertion order is
         # irrelevant. `intent_hash` RAISES on a malformed candidate — fail closed.
-        previous = {**cand, "proxy_ingress": [
-            {"proto": "tcp", "family": family, "addr": addr, "port": int(ws.port),
-             "allow_cidrs": [] if (cand.get("ap") or {}).get("enabled")     # as _fw_proxy_ingress
-             else _norm_cidrs(ws.allowed_cidrs, family)},
-            *(cand.get("proxy_ingress") or [])]}
         try:
             want = _fw.intent_hash(previous)
         except (ValueError, TypeError, KeyError):

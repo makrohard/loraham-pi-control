@@ -1192,6 +1192,13 @@ class WebserverOpsMixin:
         port = _listener_inv.free_port(self._owner_map(), derived, extra_taken)
         return (port, "") if port else (None, f"{page_id}: no free port at or above {derived}")
 
+    def _page_ports(self) -> dict:
+        """{page_id: port}: THE page-port allocation the firewall pre-opens (`_fw_proxy_ingress`): the bulk walk's ports
+        (`_stack_webs_candidates`: a saved port kept, else the page's default, never one taken or given to an earlier
+        page), so exposing a page at its suggested port is one click after its radio's apply. A page without a default
+        has no entry."""
+        return {sid: port for sid, port, _keeps, _why in self._stack_webs_candidates() if port}
+
     @staticmethod
     def _exposure_missing(plan, *, confirm, confirm_public, cidr_flag) -> list:
         """Aggregate EVERY unmet exposure requirement into ONE list (a single refusal names them
@@ -1299,9 +1306,8 @@ class WebserverOpsMixin:
 
     def _stack_webs_candidates(self) -> list:
         """THE candidate port walk for the 'Stacks WebGUIs' bulk policy — the ONE place that
-        decides, per eligible stack, which port a bulk Apply uses: the saved nonzero port
-        (kept), else the same suggested default the per-stack panel offers, candidate-aware so
-        the assigned set stays unique. The form's overview and the bulk Apply both consume
+        decides, per eligible stack, which port a bulk Apply uses: `_page_ports()` (the saved
+        nonzero port kept, else the same suggested default the per-stack panel offers, unique). The form's overview and the bulk Apply both consume
         this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
         Returns [(page_id, port, keeps, why)] in `_page_positions()` order (stacks' first pages
         first); port None with `why` when a page gets no default (`_default_stack_web_port`)."""

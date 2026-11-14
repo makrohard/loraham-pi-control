@@ -81,9 +81,10 @@ class Lab:
     def radios(self, rows):
         radios_fixture.write(self.root, rows)
 
-    def apply(self, sysx=None):
-        """The operator's `sudo bash firewall-apply.sh`: the helper applies the saved candidate. Returns its rc."""
-        cand = self.svc().firewall_candidate()
+    def apply(self, sysx=None, cand=None):
+        """The operator's `sudo bash firewall-apply.sh`: the helper applies `cand` (default: the saved candidate).
+        Returns its rc."""
+        cand = self.svc().firewall_candidate() if cand is None else cand
         if not os.path.exists(fw.META_DEST):
             _seed_meta(self.etc)
         for dest, text in ((fw.HELPER_DEST, fw.helper_source()), (fw.CANDIDATE_DEST, json.dumps(cand))):
@@ -506,3 +507,177 @@ def test_the_snapshot_read_inside_the_managed_unit(tmp_path, monkeypatch, unit, 
     monkeypatch.setattr(sf, "_own_cgroup_text", lambda: f"0::/user.slice/user@1000.service/app.slice/{unit}")
     read = sf._read_root_json(fw.SNAPSHOT_DEST if path == "canonical" else copy, fw.MAX_SNAPSHOT_BYTES)
     assert (read is not None) is trusted
+
+
+# --- one-click pages (§3): the console's networks pre-open every page's allocated port -----------------------------
+
+NET = "192.168.178.0/24"                                                  # the console's networks (_remote_console)
+
+
+def _expose(svc, page, port=None, cidrs=(NET,), mode="lan"):
+    port = svc._page_ports()[page] if port is None else port
+    return svc.stack_web_configure_apply(page, mode=mode, port=port, cidrs=list(cidrs), confirm=True)
+
+
+def _ingress(cand):
+    return [(e["port"], tuple(e["allow_cidrs"])) for e in cand["proxy_ingress"]]
+
+
+def test_a_page_exposed_to_the_consoles_networks_after_its_radios_apply_is_one_click(tmp_path, monkeypatch):
+    # red on 085034cf (and on the decision alone): the page's own row was missing, so its Apply was refused
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    applied = _nginx_stubs(monkeypatch, svc)
+    r = _expose(svc, "graywolf@r1", port=8444)                            # its allocated port on the default list
+    assert r.ok and applied == [1], r.summary
+    assert not svc.webserver_apply_pending()
+
+
+def test_the_bulk_expose_of_every_page_is_one_click_after_the_apply(tmp_path, monkeypatch):
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    applied = _nginx_stubs(monkeypatch, svc)
+    r = svc.stack_webs_configure_apply(mode="lan", scheme="https", access_mode="local-open-remote-auth",
+                                       cidrs=[NET], confirm=True)
+    assert r.ok and applied == [1], r.summary
+
+
+def test_an_enabled_local_only_page_switched_to_remote_after_the_apply_is_one_click(tmp_path, monkeypatch):
+    # red on 085034cf: a local page saved before the apply had no pre-opened row
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    _remote_console(lab)
+    svc = lab.svc()
+    assert svc.stack_web_configure("meshcom@r1", mode="local", port=8445).ok    # its allocated port
+    assert lab.apply() == fh.EXIT_OK
+    svc = lab.svc()
+    applied = _nginx_stubs(monkeypatch, svc)
+    r = _expose(svc, "meshcom@r1", port=8445)
+    assert r.ok and applied == [1], r.summary
+
+
+def test_a_page_exposed_to_other_networks_passes_and_its_apply_sets_them(tmp_path, monkeypatch):
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    _nginx_stubs(monkeypatch, svc)
+    assert _expose(svc, "graywolf@r1", cidrs=("10.0.0.0/8",)).ok
+    port = svc._page_ports()["graywolf@r1"]
+    assert (port, ("10.0.0.0/8",)) in _ingress(svc.firewall_candidate())   # the apply sets the page's networks
+    assert not svc.firewall_status()["config_ok"]                         # "Changes pending" says so
+
+
+def _server_block(text, port):
+    return next(b for b in text.split("server {") if f":{port}" in b.split("\n", 3)[1])
+
+
+def test_a_page_reusing_another_pages_port_passes_and_nginx_enforces_its_own_networks(tmp_path, monkeypatch):
+    # his contract (§1.3, §9): the firewall keeps page A's networks at P until the apply; nginx enforces B's
+    from lhpc.core import webserver as _ws
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    _nginx_stubs(monkeypatch, svc)
+    port = svc._page_ports()["graywolf@r1"]
+    assert _expose(svc, "graywolf@r1", cidrs=("10.1.0.0/16",)).ok
+    assert lab.apply() == fh.EXIT_OK
+    svc = lab.svc()
+    _nginx_stubs(monkeypatch, svc)
+    assert svc.stack_web_configure("graywolf@r1", mode="local", port=port + 100).ok
+    assert _expose(svc, "meshcom@r1", port=port, cidrs=("10.2.0.0/16",)).ok      # passes on A's row at P
+    assert (port, ("10.1.0.0/16",)) in _ingress(lab.snapshot()["candidate"])     # the firewall: A's networks
+    text = _ws.render_nginx_config(svc._paths, svc.config().webserver, svc._stack_web_proxies())
+    block = _server_block(text, port)
+    assert "allow 10.2.0.0/16;" in block and "10.1.0.0/16" not in block and "deny all;" in block
+
+
+def _script_candidate(svc):
+    import re
+    text = open(svc._paths.under("config/files/firewall/firewall-apply.sh")).read()
+    return json.loads(re.search(r"<<'LHPC_EOF_CANDIDATE'\n(.*?)\nLHPC_EOF_CANDIDATE", text, re.S).group(1))
+
+
+def test_one_apply_after_the_update_is_enough_when_pages_are_re_entered(tmp_path, monkeypatch):
+    # B2 #5 (A5, NOTE-STEP6-FW-v1 §4): red on 409869a2 (the decision alone) and on 085034cf — the update's reconcile
+    # rendered the script, the operator re-entered a page (the upgrade step), ran the ONE apply (TRANSITIONAL: a 0.13.x
+    # page the update does not carry), and `webserver apply` refused "Firewall changes pending" (H1: the saved intent
+    # changed after the render). Now the re-entered page at its allocated port (meshcom@r1: 8445 on the default list)
+    # with the console's networks is its pre-opened row: the intent the script carries is the saved one.
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    _remote_console(lab)
+    paths = Paths(runtime_root=lab.root)
+    cfgmod.save_stackweb_config(paths, "meshtastic@r1", mode="lan", port=9100, allowed_cidrs=(NET,))
+    with monkeypatch.context() as m:
+        m.setattr(fh, "integration_rev", lambda: "OLD-HELPER")             # 0.13.x applied it
+        assert lab.apply() == fh.EXIT_OK
+    cfgmod.save_stackweb_config(paths, "meshtastic@r1", port=0)             # the update does not carry that page
+    svc = lab.svc()
+    os.makedirs(svc._paths.under("state"), exist_ok=True)
+    svc._fw_mark_post_update()
+    svc.firewall_post_update_reconcile()                                  # the restarted console renders
+    cfgmod.save_stackweb_config(paths, "meshcom@r1", mode="lan", port=8445, allowed_cidrs=(NET,))   # re-entered
+    assert lab.apply(cand=_script_candidate(lab.svc())) == fh.EXIT_OK     # the ONE apply of the rendered script
+    assert lab.snapshot()["transitional"]
+    svc = lab.svc()
+    applied = _nginx_stubs(monkeypatch, svc)
+    st = svc.firewall_status()
+    r = svc.webserver_apply()
+    assert r.ok and applied == [1], (r.summary, {k: st[k] for k in ("config_ok", "live_ok", "transitional")})
+    # anchor: a real intent change after the apply still refuses (the gate is not weakened)
+    cfgmod.save_stackweb_config(paths, "graywolf@r1", mode="lan", port=9200, allowed_cidrs=(NET,))
+    svc._invalidate_config()
+    r = svc.webserver_apply()
+    assert not r.ok and "Firewall changes pending" in r.summary and applied == [1]
+
+
+def test_page_ports_are_unique_and_stable_and_avoid_the_console_and_every_listener(tmp_path, monkeypatch):
+    from lhpc.core import listeners
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    svc = lab.svc()
+    before = svc._page_ports()
+    assert (before["graywolf@r1"], before["meshcom@r1"]) == (8444, 8445)  # the literals the one-click tests use
+    _kiss(svc, {"kiss_port": str(before["meshcom@r1"])})                  # a listener takes a page's default
+    ports = svc._page_ports()
+    owned = set(listeners.stack_listeners(svc))
+    assert before["meshcom@r1"] in owned and ports["meshcom@r1"] != before["meshcom@r1"]
+    assert len(set(ports.values())) == len(ports)                         # no two pages share a port
+    assert not set(ports.values()) & ({svc.config().webserver.port} | owned)
+    for page, port in ports.items():                                      # saving at the allocation moves nobody
+        assert svc.stack_web_configure(page, mode="local", port=port).ok
+        assert svc._page_ports() == ports, page
+
+
+def test_preopened_rows_only_while_the_console_is_remote_and_one_row_per_page(tmp_path, monkeypatch):
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    svc = lab.svc()
+    assert _ingress(svc.firewall_candidate()) == []                       # console local: nothing pre-opened
+    _remote_console(lab)
+    svc._invalidate_config()
+    ports = svc._page_ports()
+    rows = _ingress(svc.firewall_candidate())
+    assert sorted(rows) == sorted([(8443, (NET,))] + [(p, (NET,)) for p in ports.values()])
+    assert svc.stack_web_configure("graywolf@r1", mode="lan", port=ports["graywolf@r1"], cidrs=["10.0.0.0/8"],
+                                   confirm=True).ok
+    rows = _ingress(svc.firewall_candidate())
+    assert [r for r in rows if r[0] == ports["graywolf@r1"]] == [(ports["graywolf@r1"], ("10.0.0.0/8",))]
+
+
+def test_preopened_rows_are_unscoped_on_an_ap_box(tmp_path, monkeypatch):
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    _remote_console(lab)
+    svc = lab.svc()
+    assert svc.firewall_configure(ap_enabled=True, ap_interface="wlan0", ap_cidr="10.42.0.0/24").ok
+    rows = _ingress(svc.firewall_candidate())
+    assert len(rows) == 1 + len(svc._page_ports()) and all(c == () for _p, c in rows)
+
+
+def test_the_console_removal_narrowing_holds_with_preopened_rows(tmp_path, monkeypatch):
+    # kept: closing the console passes on the receipt alone (no applied evidence) while a page stays exposed
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    _nginx_stubs(monkeypatch, svc)
+    assert _expose(svc, "graywolf@r1", cidrs=("10.0.0.0/8",)).ok
+    assert lab.apply() == fh.EXIT_OK
+    cfgmod.save_webserver_config(Paths(runtime_root=lab.root), bind="127.0.0.1", remote_exposed=False)
+    svc = lab.svc()
+    monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: None)       # the receipt's branch, on its own
+    monkeypatch.setattr("lhpc.core.webserver.listener_addresses", lambda system, port: ["0.0.0.0"])
+    assert svc._narrowing_is_console_removal_only()
+    assert svc.firewall_gate_activation(svc._prospective_nginx_ports())[0]

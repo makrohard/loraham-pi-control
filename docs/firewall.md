@@ -213,6 +213,13 @@ with the next apply, and the dashboard says *Changes pending* until then. Refuse
 
 A radio removed without an apply keeps its rows until the next apply.
 
+**Pages.** While the console is remote, the firewall pre-opens every page's port (the port its
+Settings suggest) to the console's networks, so after a radio's apply, exposing any of its pages
+to them is one click. With other networks the Webserver Apply passes and the next firewall apply
+sets them. A page saved on a port another page held keeps that page's networks in the firewall
+until the next apply; nginx admits only the new page's. A pre-opened port has no listener until
+its page is exposed.
+
 A restart refused by the gate says *restart was not performed; the running stack was left up* with
 the same reason; the dry run (`lhpc stack start <id>` / `lhpc stack restart <id>` without `--yes`)
 shows the same refusal.
