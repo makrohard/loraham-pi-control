@@ -8,7 +8,7 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | Component | `loraham-chat` (interactive; readiness manual) |
 | Source / pin | `src/LoRaHAM_Daemon` ← `makrohard/LoRaHAM_Daemon`, single-file artifact `clients/chat/lorachat_ncurses_113.c` |
 | Build | `gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread` (needs `libncurses-dev`) |
-| Run | `<source>/loraham_chat --data-socket /tmp/lora-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock` from `<runtime>/config/files/<rid>/`, so it reads the seeded config. `lhpc stack start chat` ensures the daemon (433, MANAGED) and prints the command (also on the Dashboard card); run it yourself, locally or over SSH |
+| Run | `<source>/loraham_chat --data-socket /tmp/lora-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock` from `<runtime>/config/files/<rid>/`, so it reads the seeded config. `lhpc stack start chat@<rid>` ensures the daemon (433, MANAGED) and prints the command (also on the Dashboard card); run it yourself, locally or over SSH |
 | Config | `<runtime>/config/files/<rid>/lorachat.conf` (`KEY=VALUE`); the in-app Ctrl-K menu saves back to it |
 | History | `lorachat.log` in its working directory `<runtime>/config/files/<rid>/`, written by the client; `lhpc clean chat --purge` keeps it (the config goes) |
 | Sockets | its radio's `/tmp/lora-<rid>.sock` (raw) and `/tmp/loraconf-<rid>.sock`, the advanced params `data_socket` / `conf_socket` |
@@ -31,7 +31,7 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | `aprs_path` | `PATH` | `APRS,WIDE1-1` | |
 
 433.775 both ways matches [kiss](kiss.md#settings) and stock ESP32 trackers, so chat boxes and a
-Graywolf station hear each other. For the classic LoRa-APRS split: `lhpc config chat rx_freq 433.900`.
+Graywolf station hear each other. For the classic LoRa-APRS split: `lhpc config chat@<rid> rx_freq 433.900`.
 
 Radio parameters (the LoRaHAM amateur profile): [daemon](daemon.md#radio-parameters).
 
