@@ -400,7 +400,8 @@ def radio_list_lines(svc) -> list:
     usb = {r.id: m for r in state.radios if (m := models.get(r.model)) is not None and m.transport != "spi"}
     found = usb_access.scan() if usb else None
     return [f"  {r.id}  {r.model}  {r.band} MHz  {_usb_port_text(r, usb[r.id], found) if r.id in usb else '-'}"
-            + ("" if r.enabled else "  disabled") for r in state.radios]
+            + ("" if r.enabled else "  disabled") + ((note := power_note(r, models.get(r.model))) and f"  ({note})")
+            for r in state.radios]
 
 
 def _usb_port_text(row, model, found) -> str:
@@ -437,7 +438,7 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready, "radio_state": v.radio_state,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
-                     "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
+                     "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, m, usb, v, found)),
                      "attention": _attention(pr, _radio_users(svc, r))})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
@@ -449,10 +450,11 @@ def hardware_view(svc) -> dict:
     return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
 
 
-def _problems(radio, usb: bool, view, found) -> list:
+def _problems(radio, model, usb: bool, view, found) -> list:
     """W257: a row's short notes, read-only facts in a fixed order (no Detect, no bus): its daemon offline (enabled,
-    the CONF socket does not answer), then its stick not plugged in. A wrong band or a USB row with no binding never
-    reaches here: the list's own checks make such a list invalid, and an invalid list has no rows."""
+    the CONF socket does not answer), then its stick not plugged in, then a POWER above its model's maximum. A wrong
+    band or a USB row with no binding never reaches here: the list's own checks make such a list invalid, and an
+    invalid list has no rows."""
     out = ["daemon offline"] if radio.enabled and not view.reachable else []
     if usb:
         _port, why = stick_port(radio.usb_serial, radio.usb_port, found)
@@ -461,7 +463,16 @@ def _problems(radio, usb: bool, view, found) -> list:
                        else f"stick not plugged in on port {radio.usb_port}")
         elif why:
             out.append(why)
-    return out
+    return out + ([note] if (note := power_note(radio, model)) else [])
+
+
+def power_note(radio, model) -> str:
+    """G1-B3-CODE B2: a row's dp_POWER above its model's maximum (saved before the cap) is named, never an invalid
+    list: saves refuse it, and Apply sends it as before (the daemon refuses it)."""
+    value, cap = dict(radio.dp).get("POWER"), model.power_max_dbm if model else None
+    if not value or cap is None or int(value) <= cap:
+        return ""
+    return f"POWER {value} is above the model maximum {cap} dBm: lower it"
 
 
 def _attention(problems: list, users: list) -> list:
