@@ -103,3 +103,15 @@ def test_a_power_saved_above_the_models_maximum_before_the_cap_is_named_not_an_i
     at_max = dataclasses.replace(PINE, dp=(("POWER", "14"),))
     (tmp_path / "config" / "radios.toml").write_text(radios.render((*ROWS[:2], at_max)))
     assert not any("POWER" in p for r in radio_start.hardware_view(svc)["rows"] for p in r["problems"])   # its maximum
+
+
+def test_an_instance_sets_power_saved_before_the_cap_is_sent_as_before(tmp_path):
+    # second read B1: meshcore@r4's own set holds dp_POWER 17 (saved before the cap): the panel shows it and the
+    # start sends it, as before (the daemon refuses it), never a silent 14
+    from lhpc.core import commands, config as cfgmod
+    svc, fake = _svc(tmp_path)
+    cfgmod.save_stack_config(svc._paths, "meshcore", {"dp_POWER": "17"}, inst=commands.Instance("r4"))
+    row = next(r for r in svc.daemon_params_view("meshcore", rid="r4")["rows"] if r["name"] == "POWER")
+    assert row["value"] == "17", row
+    lines, _tx_ok, _gate = svc._apply_stack_daemon_params("meshcore", "868", "r4")
+    assert ("/tmp/loraconf-r4.sock", "SET POWER=17") in fake.sent, (fake.sent, lines)

@@ -776,7 +776,7 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
     chip, grant = chip_family(svc, rid) or "", effective_high_power(svc, rid)
     return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
-            and daemon_control.validate_set(name, str(v), chip, grant, power_max(svc, rid)) is None}
+            and daemon_control.validate_set(name, str(v), chip, grant) is None}
 
 
 def dp_target(svc, target: str, rid: str) -> tuple:
