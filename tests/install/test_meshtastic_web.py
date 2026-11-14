@@ -209,7 +209,7 @@ def test_a_bare_update_keeps_the_recorded_selector(tmp_path, monkeypatch, binary
     _daemon(svc, binary_receipt, DAEMON_A)
     _serve(monkeypatch, [_web("6" * 64, "dev", DAEMON_A)])
     assert svc.update("meshtastic-web", apply=True, source="dev").ok
-    assert svc.update_default_channel("meshtastic-web") == ""      # the CLI's bare update
+    assert svc.stack_lane("meshtastic-web") == ""      # the CLI's bare update
     _serve(monkeypatch, [_web("7" * 64, "dev", DAEMON_A), _web("6" * 64, "dev", DAEMON_A)])
     assert svc.update("meshtastic-web", apply=True, source="").ok
     prov = wc.read_provenance(svc._paths)

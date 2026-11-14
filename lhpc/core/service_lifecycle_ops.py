@@ -3142,7 +3142,7 @@ class LifecycleOpsMixin:
                    band: str = "", purge: bool = False, inst=None) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
-        if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
+        if op in ("install", "update") and source not in self.CHANNEL_CHOICES and (op, source) != ("update", ""):
             return ActionResult(False, f"Invalid source '{source}' (choose "
                                 f"{', '.join(self.SOURCE_CHOICES)}).",
                                 next_commands=[f"lhpc {op} {target} --source pinned"])

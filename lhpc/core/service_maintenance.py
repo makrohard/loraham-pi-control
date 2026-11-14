@@ -434,20 +434,18 @@ class MaintenanceOpsMixin:
         the manifest `pin_commit` itself, never a known-working entry — the artifact was
         checked against the manifest pins, so its supporting checkout must be exactly there."""
         from . import known_working, source_registry
-        # `source` may be a uniform selector string OR a per-stack resolver `source_of(stack_id)`
-        # (the auto-install driver passes the latter for per-stack Version). The SELECTOR is part
-        # of the source identity below, so two stacks sharing a path with different selectors
-        # conflict even if they resolve to the same commit.
-        _sel = source if callable(source) else (lambda _sid, _s=source: _s)
+        # `source`: one selector OR `source_of(stack_id, comp)` (auto-install per stack; a bare update per source). The
+        # SELECTOR is part of the source identity: stacks sharing a path with different selectors conflict.
+        _sel = source if callable(source) else (lambda _sid, _comp, _s=source: _s)
         compositions: dict = {}
         for st in {s.id: s for s, _ in items}.values():
-            if _sel(st.id) == "pinned":
+            if any(_sel(st.id, c) == "pinned" for s, c in items if s.id == st.id):
                 compositions[st.id] = known_working.compatible_composition(
                     self._paths, st, self._effective_remote)
         by_path: dict = {}
         for st, comp in items:
             spec = comp.source
-            sel = _sel(st.id)
+            sel = _sel(st.id, comp)
             if sel != "pinned" or spec.artifact:
                 resolved = ("", "")
             elif exact_pin:
@@ -490,9 +488,7 @@ class MaintenanceOpsMixin:
                     fb = self._kw_fallback_expected(st, comp)
                     if sel == "dev" and fb[0]:
                         resolved = fb
-                    elif not freeze:     # stable, remote unreadable: adoption's local fallback decides
-                        pass
-                    else:
+                    elif freeze:         # unfrozen stable, remote unreadable: adoption's local fallback decides
                         conflicts.append(f"source {path!r}: exact {sel} resolution "
                                          f"failed — {why}")
                         continue
@@ -1841,17 +1837,19 @@ class MaintenanceOpsMixin:
             required = {dep for _, c in all_items if not c.optional for dep in c.build_requires}
             items = [(s, c) for s, c in all_items if self._stack_scope_keeps(c, required)]
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
+
+        def sel_of(c) -> str:          # U2: a bare update (`stack_lane` ""): each source on its own recorded selector
+            return source or source_registry.recorded_selector(self._paths, c.source.path)
         if ctx_err:
             return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}",
                                 details=["  nothing to run here — this is an lhpc defect (the "
                                          "auto-install run's lock context does not match), not a "
                                          "problem on the box; report it with this message"])
-        # U1: an installed stable source moves only to a verified target not older than its commit. Read once, outside
-        # every lock, and reused by the plan; a refusal changes nothing.
+        # U1: an installed stable source moves only to a verified, not older target (read once, before the locks).
         stable_refs, refused = {}, []
-        for _, c in items if source == "stable" else ():
-            if not c.source.artifact and source_fs.source_present(self._paths, src := self._paths.resolve_source(
-                    c.source.path)):
+        for _, c in items:
+            if sel_of(c) == "stable" and not c.source.artifact and source_fs.source_present(
+                    self._paths, src := self._paths.resolve_source(c.source.path)):
                 ref = stable_refs[c.source.path] = stable_lane.resolve(self._system.runner.run, self._effective_remote(c))
                 head = self._system.runner.run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
                 if why := stable_lane.update_refusal(ref, (head.stdout or "").strip(),
@@ -1868,7 +1866,7 @@ class MaintenanceOpsMixin:
             for _, c in items:
                 fresh = self.update_status(c)
                 details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
-                               f"{source} version from {c.source.remote or 'local checkout'}")
+                               f"{sel_of(c)} version from {c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",
                 details=details,
@@ -1934,8 +1932,8 @@ class MaintenanceOpsMixin:
                                                  "sets one remote for every component of that "
                                                  "checkout ([remotes] in config/local.toml), "
                                                  "then retries"])
-                groups, plan_conflicts = self._plan_source_groups(items, source, exact_pin=exact_pin,
-                                                                  stable_refs=stable_refs)
+                groups, plan_conflicts = self._plan_source_groups(items, lambda _sid, c: sel_of(c),
+                                                                  exact_pin=exact_pin, stable_refs=stable_refs)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "incompatible source resolutions for a shared "
@@ -1987,12 +1985,12 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
                                 details=[TXN_BLOCKED_REMEDY],
                                 next_commands=[f"lhpc update {target + ' ' if target else ''}"
-                                               f"{'' if source == 'pinned' else f'--source {source} '}--yes"])
+                                               f"{'' if source in ('pinned', '') else f'--source {source} '}--yes"])
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {busy}",
                                 details=[busy_remedy(busy)],
                                 next_commands=[f"lhpc update {target + ' ' if target else ''}"
-                                               f"{'' if source == 'pinned' else f'--source {source} '}--yes"])
+                                               f"{'' if source in ('pinned', '') else f'--source {source} '}--yes"])
         needs_build = []
         # Every activated source of a public update is checked, also when another part failed
         # (auto-install builds itself; the binary channel's exact-pin repin builds nothing): the

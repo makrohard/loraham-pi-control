@@ -1158,7 +1158,7 @@ class AutoInstallOpsMixin:
                 # ONE immutable global plan (frozen selectors/remotes) + reconciliation —
                 # conflicts refuse BEFORE any marker/candidate/source mutation.
                 items = [(st, c) for st, w in scope for c in w.source]
-                groups, conflicts = self._plan_source_groups(items, source_of, freeze=True)
+                groups, conflicts = self._plan_source_groups(items, lambda sid, _c: source_of(sid), freeze=True)
                 if conflicts:
                     return ActionResult(False, "Refusing the auto-install run: incompatible "
                                         "source resolutions for a shared checkout.",

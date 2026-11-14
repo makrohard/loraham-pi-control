@@ -15,6 +15,7 @@ from __future__ import annotations
 import platform
 
 from . import binary_receipt as brx
+from . import source_registry
 from .model import ComponentKind
 from .web_client import COMPONENT as WEB_CLIENT
 
@@ -67,7 +68,7 @@ class BinaryChannelMixin:
         return ((self.BINARY_CHANNEL, *self.SOURCE_CHOICES)) if ok else self.SOURCE_CHOICES
 
     def default_channel(self, stack_id: str) -> str:
-        """The channel a bare `install` uses (`update`: `update_default_channel`). Binary WHERE
+        """The channel a bare `install` uses (`update`: `stack_lane`). Binary WHERE
         AVAILABLE (a fresh Pi should not compile for hours), else `pinned` — not the branch tip —
         because a default install must land on a composition this release actually proved: the
         operator's newest known-working entry, else the manifest pin. The image builder runs the
@@ -76,15 +77,15 @@ class BinaryChannelMixin:
         ok, _why = self.binary_available(stack_id)
         return self.BINARY_CHANNEL if ok else "pinned"
 
-    def update_default_channel(self, target: str) -> str:
-        """A bare `update`: `binary` while binary-installed and for a fetched release (graywolf: its
-        pinned release; `stable` is always explicit), else `pinned`. CLI and web alike."""
-        if target == WEB_CLIENT:           # its own recorded selector (web_client)
-            return ""
+    def stack_lane(self, target: str) -> str:
+        """A bare `update`'s lane (R1, CLI and web): `binary` while binary-installed and for a fetched release, else the
+        selector the target's source records share ("": they differ, every stack, the web client; none: `pinned`)."""
         sid = self.stack_of(target) or target
-        if sid and (self.fetched_version_state(sid) or self.on_binary_channel(sid)):
+        if target != WEB_CLIENT and sid and (self.fetched_version_state(sid) or self.on_binary_channel(sid)):
             return self.BINARY_CHANNEL
-        return "pinned"
+        comps = [c for c in (self.stack(sid).components if self.stack(sid) else ()) if target in (sid, c.id) and c.source]
+        sels = {source_registry.recorded_selector(self._paths, c.source.path, "") for c in comps} - {""}
+        return "" if target in ("", WEB_CLIENT) or len(sels) > 1 else sels.pop() if sels else "pinned"
 
     def channel_error(self, stack_id: str, channel: str) -> str:
         """"" when `channel` is usable for this stack, else the typed refusal reason."""

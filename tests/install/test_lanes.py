@@ -1,17 +1,22 @@
-"""U1 (PLAN-UPDATE-v6, D8): ONE stable target for install, update and freshness: the newest of the version-shaped
-tags and the upstream's latest GitHub release, by its leading version; an update of an installed stable source
-only to a VERIFIED target that is not older than the installed commit.
+"""The stack lanes (PLAN-UPDATE-v6).
+U1 (D8): ONE stable target for install, update and freshness: the newest of the version-shaped tags and the
+upstream's latest GitHub release, by its leading version; an update of an installed stable source only to a
+VERIFIED target that is not older than the installed commit.
+U2: a bare update stays on the installed lane (`stack_lane`); a mixed stack updates each source on its own
+recorded selector.
 
 Through the public path, cli.main(["install" | "update" | "source-check", ...]) and the web's Update form. The
 upstream is a local bare repository behind git's own `insteadOf` rewrite (the remote policy admits https:// only,
 so the URL stays a GitHub one); the GitHub releases API is the one faked command (`curl`), nothing reaches the
 network. Red before U1: the install took the plain tag, the check compared with the branch tip, and a failed
-release check updated anyway."""
+release check updated anyway. Red before U2: a bare update moved every source to the pin."""
 import json
 
+import htmlq
 import pytest
 
 from lhpc.adapters.cli import main as cli
+from lhpc.core import source_registry
 from lhpc.core import stackupdates as su
 from lhpc.core.paths import Paths
 from lhpc.core.probes import backends
@@ -21,6 +26,7 @@ from lhpc.core.services import ControllerService
 GH = "https://github.com/up/app"
 OTHER = "https://example.invalid/up/app"          # not GitHub: tags only, no releases API
 REL = "src/app"
+LIB = "src/lib"                                   # a second source of the same stack (the mixed-stack case)
 
 
 @pytest.fixture
@@ -71,20 +77,33 @@ def box(tmp_path, git, make_repo, monkeypatch):
     (rt / "config").mkdir(parents=True)
     manifest = tmp_path / "m.toml"
 
-    def use(remote):
+    def use(remote, lib=False):
         manifest.write_text(
             '[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
             '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
             'run_argv = ["true"]\nreadiness = "process"\n'
             f'[stack.component.source]\npath = "{REL}"\nremote = "{remote}"\nbranch = "main"\n'
-            f'pin_commit = "{c1}"\n')
+            f'pin_commit = "{c1}"\n'
+            + ('[[stack.component]]\nid = "lib"\nname = "lib"\nkind = "library"\ntx_capable = false\n'
+               f'[stack.component.source]\npath = "{LIB}"\nremote = "{remote}"\nbranch = "main"\n'
+               f'pin_commit = "{c1}"\n' if lib else ""))
     use(GH)
     svc = lambda: ControllerService(manifest_path=manifest, system=RealSystem(), paths=Paths(runtime_root=rt))  # noqa: E731
     monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc())
     b.c, b.work, b.rt, b.dest, b.use, b.svc, b.manifest = commits, work, rt, rt / REL, use, svc, manifest
     b.cli = lambda *argv: cli.main(list(argv))
-    b.head = lambda: git(b.dest, "rev-parse", "HEAD")
-    b.status = lambda: su.view(Paths(runtime_root=rt))["components"]["app"]["status"]
+    b.head = lambda rel=REL: git(rt / rel, "rev-parse", "HEAD")
+    b.status = lambda cid="app": su.view(Paths(runtime_root=rt))["components"][cid]["status"]
+    b.selector = lambda rel=REL: source_registry.read_record(Paths(runtime_root=rt), rel).selector
+
+    def advance():
+        """A new commit on the upstream's main; its sha."""
+        (work / "f").write_text(f"{len(b.c) + 1}\n")
+        git(work, "commit", "-qam", "next")
+        git(work, "push", "-q", "origin", "main")
+        b.c.append(git(work, "rev-parse", "HEAD"))
+        return b.c[-1]
+    b.advance = advance
 
     def push_tag(name, at):
         git(work, "tag", name, at)
@@ -296,3 +315,66 @@ def test_an_all_digit_commit_suffix_is_no_version_number(box):
     assert box.head() == box.c[0]                     # RED before: read as the plain version 2.8.0.1234567 (c3)
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
+# ---- U2: the lane sticks ---------------------------------------------------------------------------------------
+
+def test_a_bare_update_keeps_a_dev_stack_on_dev(box, web, csrf):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    tip = box.advance()
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s"}).get_data(as_text=True)
+    assert "fetches the dev version" in page          # RED before: the web's bare update planned pinned
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == tip and box.selector() == "dev"   # RED before: moved to the pin (c1), recorded pinned
+
+
+def test_a_mixed_stack_updates_each_source_on_its_own_lane(box):
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
+    assert box.head(LIB) == box.c[0] and box.selector(LIB) == "stable"
+    tip = box.advance()
+    box.push_tag("v2.9.0", tip)
+    assert box.cli("update", "s", "--yes") == 0
+    assert (box.head(), box.selector()) == (tip, "dev")             # RED before: both to the pin
+    assert (box.head(LIB), box.selector(LIB)) == (tip, "stable")
+
+
+def test_control_a_mixed_stack_with_one_stable_update_offers_the_update(box, web, csrf):
+    """Each source is checked on its own lane (U1's probe): a current dev source does not hide the stable one's."""
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])                  # the dev tip, now also the newest tag
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    assert client.post("/source-check/s", data={"_csrf": csrf(client)}).status_code == 302
+    assert (box.status("app"), box.status("lib")) == (su.UP_TO_DATE, su.BEHIND)
+    doc = htmlq.parse(client.get("/stacks").get_data(as_text=True))
+    assert [a for a in doc.find("a", class_="update-link") if "open=s" in (a["href"] or "")]
+
+
+def test_a_bare_update_of_a_stable_source_keeps_the_release_gate(box, capsys, web, csrf):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    box.release = "429"
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s"}).get_data(as_text=True)
+    assert "releases could not be checked — try again later" in page
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0      # RED before: a bare update moved it to the pin
+    assert "releases could not be checked — try again later" in capsys.readouterr().out
+    assert (box.head(), box.selector()) == (box.c[0], "stable")
+
+
+def test_a_bare_update_of_a_mixed_stack_keeps_the_stable_sources_release_gate(box, capsys, web, csrf):
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.advance())
+    box.release = "429"
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s"}).get_data(as_text=True)
+    assert "lib: releases could not be checked — try again later" in page
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0
+    assert "lib: releases could not be checked — try again later" in capsys.readouterr().out
+    assert (box.head(), box.head(LIB)) == (box.c[2], box.c[0])

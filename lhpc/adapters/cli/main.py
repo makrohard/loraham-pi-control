@@ -1735,9 +1735,9 @@ def _run(argv: list[str] | None = None) -> int:
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
                                yes=args.yes)
-        # An unspecified selector follows the core's update default (binary while the target's
-        # stack is binary-installed, else `pinned`). Following the branch tip is `--source dev`.
-        _usrc = args.source or svc.update_default_channel(args.target or "")
+        # An unspecified selector follows the installed lane (`stack_lane`: binary while binary-installed, else the
+        # selector the sources were installed from).
+        _usrc = args.source or svc.stack_lane(args.target or "")
         return _apply_flow(lambda a: svc.update(args.target, apply=a, source=_usrc),
                            yes=args.yes)
     if args.command == "uninstall":

@@ -1826,10 +1826,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # everywhere else. An INVALID selector is rejected by run_action (never silently
         # rewritten). A binary plan does fetch the index, so an offline box renders a typed refusal
         # that offers the source channel — the honest outcome, not a source build nobody asked for.
-        # An UPDATE uses the core's update default instead (`update_default_channel`), as the CLI.
+        # An UPDATE follows the installed lane instead (`stack_lane`), as the CLI.
         _sid = service.stack_of(target) or target
         if op == "update":
-            _dflt = service.update_default_channel(target)
+            _dflt = service.stack_lane(target)
         else:
             _dflt = service.default_channel(_sid) if _sid else "pinned"
         source = request.form.get("source") or _dflt

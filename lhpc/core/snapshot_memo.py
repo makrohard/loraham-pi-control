@@ -262,7 +262,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "unbuilt_components": "read-only",
     "uninstall_guard_blocks": "read-only",
     "units_stale": "read-only",
-    "update_default_channel": "read-only",
+    "stack_lane": "read-only",
     "update_status": "read-only",
     "updater_integration": "read-only",
     "web_page": "read-only",

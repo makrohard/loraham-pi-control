@@ -58,7 +58,7 @@ def test_the_shared_checkout_conflict_names_each_consumer_with_its_selection(tmp
     comp = next(c for c in kiss.components if c.source)
     other = types.SimpleNamespace(id="other", components=kiss.components)
     groups, conflicts = svc._plan_source_groups(
-        [(kiss, comp), (other, comp)], lambda sid: "pinned" if sid == "kiss" else "dev")
+        [(kiss, comp), (other, comp)], lambda sid, _comp: "pinned" if sid == "kiss" else "dev")
     assert groups is None and len(conflicts) == 1
     assert f"kiss/{comp.id} (pinned)" in conflicts[0] and f"other/{comp.id} (dev)" in conflicts[0]
 

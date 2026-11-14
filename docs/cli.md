@@ -361,6 +361,8 @@ is a host test too; it runs against the pinned upstream in the built environment
 - When no published binary was built for this lhpc's pins, the update refuses and names the ways
   forward (self-update, then a source build); cancelling keeps the working binary.
 - Switching channels is an `install`, and the CLI says so.
+- Without `--source` the update keeps the installed lane, per source
+  ([keeping stacks current](operations.md#keeping-stacks-current)).
 - A fetched release (graywolf) has no checkout: `--source binary` (also a bare update) is its
   pinned release, which its build fetches; `--source stable` the latest upstream release, verified
   against its `checksums.txt`, named every time (`--upstream` still works); `pinned` and `dev` are

@@ -124,6 +124,12 @@ def read_record(paths: Paths, source_rel: str) -> RegistryRecord | None:
     return rec if state == "valid" else None
 
 
+def recorded_selector(paths: Paths, source_rel: str, default: str = "pinned") -> str:
+    """The selector a source was installed from (its valid record), else `default` (U2: the lane a bare update keeps)."""
+    rec = read_record(paths, source_rel)
+    return rec.selector if rec is not None else default
+
+
 def update_components(paths: Paths, source_rel: str, components) -> bool:
     """Rewrite ONLY the record's live consumer membership (departure decrement / install
     re-join). Refuses an empty membership — the caller removes the leaf+record instead.

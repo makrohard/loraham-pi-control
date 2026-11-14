@@ -74,6 +74,8 @@ Upgrading from 0.13.x
   to list your radios (an existing list is kept), then re-enter settings and pages.
 - `lhpc self-update` leaves installed stacks as they are; run `lhpc update <stack> --yes` for each installed stack
   whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
+- `lhpc update <stack>` without `--source` (and the console's Update) no longer moves a dev or stable source to the
+  pin; to go back to the pins run `lhpc update <stack> --source pinned --yes`.
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
 - A radio whose saved POWER is above its model's maximum (a PineDio stick: 14 dBm) is named on the Hardware page and

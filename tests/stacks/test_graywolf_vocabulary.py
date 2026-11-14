@@ -83,8 +83,8 @@ def test_binary_is_the_pinned_release_its_build_fetches(tmp_path, monkeypatch, a
 def test_a_bare_update_is_binary(tmp_path):
     """§F4: `binary` is the default at, behind or ahead of the pin (an earlier `--source stable`
     is not a lane a bare update infers; `stable` is always named)."""
-    assert _svc(tmp_path / "a", installed="0.14.14").update_default_channel("graywolf") == "binary"
-    assert _svc(tmp_path / "b", installed="0.14.12").update_default_channel("graywolf") == "binary"
+    assert _svc(tmp_path / "a", installed="0.14.14").stack_lane("graywolf") == "binary"
+    assert _svc(tmp_path / "b", installed="0.14.12").stack_lane("graywolf") == "binary"
     svc = _svc(tmp_path / "c", installed="0.16.0")
-    assert svc.update_default_channel("graywolf") == "binary"
-    assert svc.update_default_channel("kiss") == "pinned"
+    assert svc.stack_lane("graywolf") == "binary"
+    assert svc.stack_lane("kiss") == "pinned"
