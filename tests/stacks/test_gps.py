@@ -1028,9 +1028,18 @@ def test_ownership_matches_by_device_identity_not_by_path(tmp_path, fake_gpsd):
         srv.close()
 
 
-def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(tmp_path, fake_gpsd):
+@pytest.mark.wallclock("a real gpsd socket thread: the waits are hang guards, not margins; "
+                       "the late case sleeps on purpose")
+@pytest.mark.parametrize("first_look_s", [0.0, 0.5], ids=["at-once", "late"])
+def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(tmp_path, fake_gpsd,
+                                                                                 first_look_s):
     """The gpsd pump end to end: NMEA reaches the output, readiness goes ready, and a server
-    that goes away drives the feed to source-lost instead of silently stalling."""
+    that goes away drives the feed to source-lost instead of silently stalling.
+
+    The fake streams until the test closes it, so `ready` holds until then however late the
+    test looks: a fake that closed itself after a few sentences made `ready` last a quarter
+    second, and a test thread that looked later (the `late` case) saw only the reconnect's
+    `starting`."""
     from lhpc.core.gps_bridge import Readiness, _Output, _pump_gpsd
     from lhpc.core.paths import Paths
 
@@ -1043,21 +1052,21 @@ def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(
             self.data += d
             self._bytes += len(d)
 
-    srv = fake_gpsd(sentences=["$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,*44"],
-                    close_after=6)
+    srv = fake_gpsd(sentences=["$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,*44"])
     out = _Sink()
     ready = Readiness(str(tmp_path / "r.json"), Paths(runtime_root=tmp_path))
     stop = threading.Event()
     t = threading.Thread(target=_pump_gpsd,
                          args=("127.0.0.1", srv.port, out, ready, stop), daemon=True)
     t.start()
-    deadline = time.time() + 5.0
+    time.sleep(first_look_s)                      # a test thread that looks late, as on a loaded runner
+    deadline = time.time() + 30.0
     while ready.state != "ready" and time.time() < deadline:
         time.sleep(0.05)
     assert ready.state == "ready" and out.data.startswith(b"$GPGGA")
 
     srv.close()                                   # the source goes away
-    deadline = time.time() + 6.0
+    deadline = time.time() + 30.0
     while ready.state == "ready" and time.time() < deadline:
         time.sleep(0.1)
     stop.set()
