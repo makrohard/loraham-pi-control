@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_hw_macros.html" import detect_result, hidden with context %}
+{% from "_hw_macros.html" import detect_result, hidden, picked with context %}
 {% block title %}Add Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
 {% with here = "Add Hardware" %}{% include "_hw_crumbs.html" %}{% endwith %}
@@ -16,7 +16,7 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         {{ hidden([("kind", "stick"), ("port", s.port), ("back", url_for('hardware_add_page'))]) }}
         <p><strong>{{ s.label }}</strong></p>
-        <select name="model" id="detect-port-{{ s.port }}" aria-label="The model of the stick on port {{ s.port }}">{% for m in s.models %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}</select>
+        <select name="model" id="detect-port-{{ s.port }}" aria-label="The model of the stick on port {{ s.port }}">{% for m in s.models %}<option value="{{ m.id }}"{{ picked("port-" ~ s.port, "model", m.id) }}>{{ m.label }}</option>{% endfor %}</select>
         <button type="submit" formaction="{{ url_for('hardware_detect') }}">Detect</button>
         <button type="submit">Add</button>
         {{ detect_result("port-" ~ s.port) }}
@@ -29,8 +29,8 @@
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       {{ hidden([("kind", "board"), ("back", url_for('hardware_add_page'))]) }}
       <p><strong>A HAT on the Pi's SPI bus</strong> <span class="muted">(not USB: it does not show up by itself)</span></p>
-      <label>Board <select name="board" id="detect-board">{% for value, label in boards %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
-      <label>Band <select name="band"><option value="433">433 MHz</option><option value="868">868 MHz</option></select></label>
+      <label>Board <select name="board" id="detect-board">{% for value, label in boards %}<option value="{{ value }}"{{ picked("board", "board", value) }}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Band <select name="band"><option value="433"{{ picked("board", "band", "433") }}>433 MHz</option><option value="868"{{ picked("board", "band", "868") }}>868 MHz</option></select></label>
       <button type="submit" formaction="{{ url_for('hardware_detect') }}">Detect</button>
       <button type="submit">Add</button>
       {{ detect_result("board") }}

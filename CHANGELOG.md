@@ -111,6 +111,7 @@ Fixed
   started by hand (`lhpc stack start daemon@<rid>`).
 - Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
   Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
+- Add Hardware: Detect keeps the stick model, board and band it probed (they no longer jump back to the first entry).
 
 ## 0.13.8
 

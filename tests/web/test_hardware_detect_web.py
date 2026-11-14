@@ -103,3 +103,63 @@ def test_without_a_valid_token_or_kind_nothing_runs(web, tmp_path, monkeypatch, 
     monkeypatch.setattr(run, "detect_radio", lambda svc, rid: pytest.fail("Detect ran"))
     token = csrf(c, "/hardware") if form["kind"] == "nonsense" else "wrong"
     assert c.post("/hardware/detect", data={"_csrf": token, **form}).status_code == 400
+
+
+def _picked(page_html, name):
+    """The option a browser shows as chosen in the rendered select `name`: the `selected` one, else the first."""
+    from htmlq import parse
+    doc = parse(page_html)
+    sel = next(s for s in doc.find("select") if s["name"] == name)
+    opts = doc.within(sel).find("option")
+    return next((o for o in opts if o.has_attr("selected")), opts[0])["value"]
+
+
+def test_a_detect_keeps_the_board_and_band_it_probed(web, tmp_path, monkeypatch, csrf):
+    # A18: after Detect the HAT row still shows the board and band that were probed, not the first options.
+    c = _box(web, tmp_path, monkeypatch)
+    monkeypatch.setattr(run, "detect_board", lambda svc, m, v, b: run.Detected("not-found", "no SX127x answered", ""))
+    first = _picked(c.get("/hardware/add").get_data(as_text=True), "board")
+    board = next(v for v in ("uputronics:ce1", "uputronics:ce0") if v != first)
+    token = csrf(c, "/hardware/add")
+    c.post("/hardware/detect", data={"_csrf": token, "back": "/hardware/add", "kind": "board", "board": board,
+                                     "band": "868"})
+    page = c.get("/hardware/add").get_data(as_text=True)
+    assert (_picked(page, "board"), _picked(page, "band")) == (board, "868")
+    again = c.get("/hardware/add").get_data(as_text=True)            # the pick shows once, like the result line
+    assert (_picked(again, "board"), _picked(again, "band")) == (first, "433")
+
+
+def test_a_detect_keeps_the_stick_model_it_probed(web, tmp_path, monkeypatch, csrf):
+    # A18: a stick row with two candidate models keeps the probed one; another port's row keeps its first.
+    c = _box(web, tmp_path, monkeypatch)
+    port = type("C", (), {"port": "1-1.3", "label": "USB 1a86:5512"})()
+    other = type("C", (), {"port": "1-2", "label": "USB 1a86:5512"})()
+    monkeypatch.setattr(radio_start, "hardware_view", lambda svc, _real=radio_start.hardware_view: {
+        **_real(svc), "addable": [("meshstick-1262", port), ("pinedio-usb-1262", port),
+                                  ("meshstick-1262", other), ("pinedio-usb-1262", other)]})
+    monkeypatch.setattr(run, "detect_stick", lambda svc, m, p: run.Detected("found", f"{m} on {p}: found", "sx1262"))
+    token = csrf(c, "/hardware/add")
+    c.post("/hardware/detect", data={"_csrf": token, "back": "/hardware/add", "kind": "stick",
+                                     "model": "pinedio-usb-1262", "port": "1-1.3"})
+    from htmlq import parse
+    doc = parse(c.get("/hardware/add").get_data(as_text=True))
+    chosen = {}
+    for sel in doc.find("select"):
+        if sel["name"] == "model":
+            opts = doc.within(sel).find("option")
+            chosen[sel["id"]] = next((o for o in opts if o.has_attr("selected")), opts[0])["value"]
+    assert chosen == {"detect-port-1-1.3": "pinedio-usb-1262", "detect-port-1-2": "meshstick-1262"}
+
+
+def test_a_kept_pick_shows_once_on_the_page_that_consumes_it(web, tmp_path, monkeypatch, csrf):
+    # A18, G1 NOTE 2: the pick is stored with the result, in one entry; another Hardware page that renders it
+    # consumes both, so Add Hardware afterwards shows the first options and no result line.
+    c = _box(web, tmp_path, monkeypatch)
+    monkeypatch.setattr(run, "detect_board", lambda svc, m, v, b: run.Detected("not-found", "no SX127x answered", ""))
+    first = _picked(c.get("/hardware/add").get_data(as_text=True), "board")
+    token = csrf(c, "/hardware/add")
+    c.post("/hardware/detect", data={"_csrf": token, "back": "/hardware/add", "kind": "board", "board": "uputronics:ce1",
+                                     "band": "868"})
+    c.get("/hardware/radio/r1")                                         # consumes the entry
+    page = c.get("/hardware/add").get_data(as_text=True)
+    assert (_picked(page, "board"), _picked(page, "band")) == (first, "433") and "no SX127x answered" not in page

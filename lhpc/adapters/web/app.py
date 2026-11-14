@@ -2305,7 +2305,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             key, res = "board", run.detect_board(service, model, variant, f.get("band", ""))
         else:
             abort(400)
-        session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line}
+        session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line,      # A18: the probed choice
+                                "picked": {k: f.get(k, "") for k in ("model", "board", "band")}}  # stays shown
         back = f.get("back", "")              # W257: back to the page Detect was pressed on, a /hardware page only
         ok_back = back.startswith("/hardware") and "//" not in back and "\\" not in back
         return redirect((back if ok_back else url_for("hardware_view")) + "#detect-" + key)

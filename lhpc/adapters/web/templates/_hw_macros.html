@@ -5,4 +5,6 @@
     <p class="depnote depnote-{{ {'found': 'ok', 'refused': 'bad'}.get(detect.outcome, 'info') }}" data-detect="{{ detect.outcome }}">{{ detect.line }}</p>
   {% endif %}
 {% endmacro %}
+{# A18: an option keeps the choice its Detect probed (the row Detect was pressed on, one render) #}
+{% macro picked(key, field, value) %}{% if detect and detect.key == key and (detect.picked or {}).get(field) == value %} selected{% endif %}{% endmacro %}
 {% macro hidden(fields) %}{% for name, value in fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}{% endmacro %}
