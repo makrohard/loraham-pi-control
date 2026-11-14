@@ -1949,7 +1949,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             allowed_optional |= self._gps_components_for(target, inst)          # K8f: the starting instance's switch
             allowed_optional -= self._gps_components_excluded(target, inst)
             if s.id == _meshcore_mode.STACK_ID and not _meshcore_mode.clients_available(
-                    self.meshcore_mode()):
+                    self.meshcore_mode(inst)):                                    # the starting radio's own (A22)
                 # Repeater-only: no Companion on TCP 5000, so a saved webui/cli auto-start must not
                 # launch a client against nothing (same decision as status and readiness).
                 allowed_optional -= set(_meshcore_mode.CLIENT_IDS)
