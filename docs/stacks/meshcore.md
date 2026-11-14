@@ -201,7 +201,7 @@ node log is the truth.
 
 ## Conflicts
 
-- One app stack per band ([kiss](kiss.md)): not with meshtastic or reticulum on 868 (they own the
-  band exclusively), not with the daemon serving 868 for another client.
+- One app stack per radio ([kiss](kiss.md)): not with meshtastic or reticulum on 868 (they own the
+  band exclusively), not with the daemon serving its radio for another client.
 - `meshcore.companion-client`: advisory — one Companion client at a time, see
   [Command-line client](#command-line-client).
