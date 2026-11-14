@@ -90,7 +90,8 @@ def resolve(run, remote: str) -> StableRef:
             try:
                 release = str(json.loads(body).get("tag_name") or "")
             except (ValueError, AttributeError):
-                verified = False
+                pass
+            verified = bool(release)                              # a 200 without a usable tag_name: no answer
         elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
             verified = False
     note = "" if verified else " — releases not checked"

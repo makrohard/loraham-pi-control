@@ -59,6 +59,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
         b.api_calls.append(argv)
         if b.release in ("404", "429"):
             return CommandResult(0, f'{{"message": "x"}}\n{b.release}', "")
+        if b.release == "{}":                         # a 200 without a tag_name
+            return CommandResult(0, "{}\n200", "")
         return CommandResult(0, json.dumps({"tag_name": b.release}) + "\n200", "")
     monkeypatch.setattr(backends.RealCommandRunner, "run", run)
 
@@ -197,3 +199,15 @@ def test_a_snapshot_tag_on_the_installed_commit_does_not_hide_a_newer_release(bo
     assert box.status() == su.BEHIND                  # RED before: the snapshot made the install look newer
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[2]
+
+
+def test_a_release_answer_without_a_tag_name_is_not_verified(box, capsys):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    box.release = "{}"
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                   # RED before: verified, "behind"
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    assert "releases could not be checked — try again later" in capsys.readouterr().out
+    assert box.head() == box.c[0]
