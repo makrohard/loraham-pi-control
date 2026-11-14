@@ -12,12 +12,6 @@
   {% if attention %}
   {# W272/W273: one banner, one line per important condition, each linked to its row; one ✕ for the set #}
   <div class="depnote depnote-warn" id="needs-attention">
-    <strong>Needs attention</strong>
-    <ul>{% for c in attention %}<li data-attention="{{ c.key }}"><a href="
-      {%- if c.kind == 'radio' %}{{ url_for('hardware_radio', rid=c.ref) }}
-      {%- elif c.kind == 'stack' %}{{ url_for('stacks_overview', open=c.ref) }}#stackrow-{{ c.ref }}
-      {%- elif c.kind == 'usb' %}{{ url_for('hardware_view') }}#usb-setup
-      {%- else %}{{ c.ref or url_for('dashboard') }}{% endif %}">{{ c.line }}</a></li>{% endfor %}</ul>
     {% if attention | rejectattr('sticky') | list %}
     <form method="post" action="{{ url_for('attention_dismiss') }}" class="act dismiss" title="Close">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -25,31 +19,37 @@
       <button type="submit" aria-label="Close the attention list">&times;</button>
     </form>
     {% endif %}
+    <strong>Needs attention</strong>
+    <ul>{% for c in attention %}<li data-attention="{{ c.key }}"><a href="
+      {%- if c.kind == 'radio' %}{{ url_for('hardware_radio', rid=c.ref) }}
+      {%- elif c.kind == 'stack' %}{{ url_for('stacks_overview', open=c.ref) }}#stackrow-{{ c.ref }}
+      {%- elif c.kind == 'usb' %}{{ url_for('hardware_view') }}#usb-setup
+      {%- else %}{{ c.ref or url_for('dashboard') }}{% endif %}">{{ c.line }}</a></li>{% endfor %}</ul>
   </div>
   {% endif %}
   {% if hardware_changes and hardware_changes.lines %}
   <div class="depnote depnote-warn" id="hardware-changes">
-    <strong>Radio hardware changed</strong> (since you last closed this)
-    <ul>{% for e in hardware_changes.lines %}<li data-change="{{ e.id }}">{{ e.at }} {{ e.line }}</li>{% endfor %}</ul>
-    <a href="{{ url_for('hardware_view') }}">Open Hardware</a>
     <form method="post" action="{{ url_for('hardware_changes_dismiss') }}" class="act dismiss" title="Close">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       {% for e in hardware_changes.lines %}<input type="hidden" name="id" value="{{ e.id }}">{% endfor %}
       <button type="submit" aria-label="Close the hardware changes">&times;</button>
     </form>
+    <strong>Radio hardware changed</strong> (since you last closed this)
+    <ul>{% for e in hardware_changes.lines %}<li data-change="{{ e.id }}">{{ e.at }} {{ e.line }}</li>{% endfor %}</ul>
+    <a href="{{ url_for('hardware_view') }}">Open Hardware</a>
   </div>
   {% endif %}
   {% if welcome and welcome.fresh and not welcome_dismissed %}
   <div class="depnote depnote-ok">
-    <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
-    guided run:
-    <a href="{{ url_for('auto_install_page') }}"><button type="button">Install and Build
-      all Stacks</button></a>
-    {# Onboarding hint, not a fault: dismissable so it does not sit on the dashboard forever. #}
+    {# Onboarding hint, not a fault: dismissable so it does not sit on the dashboard forever. A16: the ✕ first, top right. #}
     <form method="post" action="{{ url_for('welcome_dismiss') }}" class="act dismiss" title="Dismiss">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <button type="submit" aria-label="Dismiss the welcome note">&times;</button>
     </form>
+    <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
+    guided run:
+    <a href="{{ url_for('auto_install_page') }}"><button type="button">Install and Build
+      all Stacks</button></a>
   </div>
   {% elif welcome and not welcome.fresh %}
   <div class="depnote depnote-warn">
