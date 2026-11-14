@@ -1991,7 +1991,7 @@ main = "meshcom-qemu"
   start_order = 3
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
-  start_note = "MeshCom node launched under QEMU — the emulated firmware boots in ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
+  start_note = "MeshCom node launched under QEMU — the emulated firmware boots in ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W. Its web UI is sluggish until then, and its callsign switches to yours once the node finishes booting."
   # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
   # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
