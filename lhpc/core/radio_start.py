@@ -1122,6 +1122,14 @@ def running_instances_on(svc, rids) -> list:
 
 
 
+def link_kinds(c) -> dict:
+    """A component row's link kinds, one rule for the band entries and the instance rows (A23): tunables -> a config
+    link; a start log lhpc captures (a non-interactive run) or one it declares -> a log link."""
+    return {"configurable": c.show_config_link if c.show_config_link is not None else bool(c.run_params or c.config_file),
+            "writes_log": (c.show_log_link if c.show_log_link is not None
+                           else bool(c.log_paths) or bool(c.run_argv and not c.interactive))}
+
+
 def running_instances(svc, band: str, live: dict, procs=None) -> list:
     """Cleanup C7c (W286, W290; K5: decision B out): Home's entry for each instance that runs on a radio of `band`
     (`<sid>@<rid>`, for its own radio's card only), with a row per component that runs as that instance, both from
@@ -1144,8 +1152,10 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
                 continue
             eps = instances.endpoint_statuses(svc, cs, inst)
             st = RunState.DEGRADED if any(o.spec.kind == "tcp" and not o.present for o in eps) else RunState.RUNNING
-            rows.append({"id": c.id, "name": c.name, "optional": c.optional, "state": st.value,
-                         "note": component_note(dataclasses.replace(cs, run_state=st, endpoints=eps))})
+            own = dataclasses.replace(cs, run_state=st, endpoints=eps)          # its own endpoints only (G1-B1-PLAN-RE2 B2)
+            rows.append({"id": c.id, "name": c.name, "optional": c.optional, **link_kinds(c),
+                         "state": "booting" if svc._component_booting(c.id, inst.rid) else st.value,
+                         "note": component_note(own), "interfaces": svc._client_interfaces(own, stk.id, inst.rid)})
         if rows:                                         # an instance that runs no component shows nowhere
             out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
                         "main": stk.main, "components": rows, "multi_band": False})

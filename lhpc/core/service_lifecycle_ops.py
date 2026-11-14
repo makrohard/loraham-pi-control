@@ -2669,7 +2669,7 @@ class LifecycleOpsMixin:
         # exit and is silenced when there is no tty (piped/captured).
         return f"cd {shlex.quote(cwd)} && {cmd}; stty sane 2>/dev/null"
 
-    def _client_interfaces(self, status, stack_id: str = "") -> list[dict]:
+    def _client_interfaces(self, status, stack_id: str = "", rid: str = "") -> list[dict]:
         """User-facing interfaces a client connects to (KISS TCP, web UIs, serial
         PTYs) that are currently present — NOT internal transport sockets.
 
@@ -2681,14 +2681,16 @@ class LifecycleOpsMixin:
         stays loopback, and a pending-restart bind change does not move the link until the RUNNING
         listener actually changes. Only an "exposed" listener sets `remote_ok`, so the template points
         the pin at `req_host` (127.0.0.1 locally, the AP/LAN IP remotely); loopback/absent stay
-        loopback-only (no dead remote link)."""
+        loopback-only (no dead remote link). With `rid` (an instance row) the page is exactly `<page>@<rid>`, never a
+        sibling's (G1-B1-PLAN N9); without one, the stack's first page of the component (the band entries)."""
         if status is None:
             return []
         from . import webserver as _ws
         # A status is per COMPONENT, so its web endpoint belongs to exactly one proxied page (a
         # stack may have several): that page's saved policy — never a sibling's — decides "proxied".
         pages = self.stack_web_pages(stack_id) if stack_id else ()
-        page = next((p for p in pages if p.component_id == status.component_id), None)
+        page = next((p for p in pages if p.component_id == status.component_id
+                     and (not rid or p.page_id.rpartition("@")[2] == rid)), None)
         swc = self.config().stackweb.get(page.page_id) if page is not None else None
         try:
             # ONE /proc read per REQUEST for every component's pins (the Dashboard asks for each
@@ -2743,16 +2745,14 @@ class LifecycleOpsMixin:
             out.append(entry)
         return out
 
-    def _component_booting(self, comp_id: str) -> bool:
-        """True while a detached post-start runner (e.g. MeshCom's `--setcall` retry) is STILL
-        applying settings to a just-launched component. Surfaced as a transient 'booting' state
-        (yellow, no client link yet) until the callsign lands and the runner finishes — then the
-        component reads 'running' (green) with its web-UI link."""
+    def _component_booting(self, comp_id: str, rid: str | None = None) -> bool:
+        """True while a detached post-start runner (e.g. MeshCom's `--setcall` retry) is STILL applying settings to a
+        just-launched component: a transient 'booting' badge until the runner finishes; its links follow its listeners
+        (his Q-B2-5 rule). `rid` None: any runner (the band entries); a rid: that radio's or one without a radio (an
+        older runner, radio unknown; G1-B1-PLAN-RE BLOCKING 2, N1)."""
         life = self._lifecycle()
-        for rec in life.owned_records(comp_id, role="post"):
-            if not life._original_ceased(rec):        # the runner process is still alive
-                return True
-        return False
+        return any(not life._original_ceased(rec) for rec in life.owned_records(comp_id, role="post")
+                   if rid is None or rec.get("rid", "") in ("", rid))
 
     # An outcome value read off disk is interpolated into CLI/web lines — bound its shape.
     _OUTCOME_RE = _re.compile(r"[a-z][a-z-]{0,23}")
@@ -2959,8 +2959,8 @@ class LifecycleOpsMixin:
                     up_elsewhere = not running_up
                 comps = []
                 for c in s.components:
-                    # A running component whose post-start runner is still applying settings reads
-                    # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
+                    # A running component whose post-start runner is still applying settings reads 'booting' until
+                    # the callsign lands (e.g. MeshCom); its links follow its listeners only (his Q-B2-5 rule).
                     booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
                     comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
@@ -2969,18 +2969,10 @@ class LifecycleOpsMixin:
                           # operator, never by lhpc — show the command to copy, each radio's card its own.
                           "commands": radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {},
                           "blocker": self.install_blocker(c) if c.interactive else "",
-                          # Has tunables -> a config link; lhpc captures a start log
-                          # (non-interactive run) or it declares its own -> a log link.
-                          "configurable": (c.show_config_link if c.show_config_link is not None
-                                           else bool(c.run_params or c.config_file)),
-                          "writes_log": (c.show_log_link if c.show_log_link is not None
-                                         else bool(c.log_paths)
-                                         or bool(c.run_argv and not c.interactive)),
+                          **radio_start.link_kinds(c),
                           "state": ("booting" if booting
                                     else (live[c.id].run_state.value if c.id in live else "unknown")),
-                          # No web-UI/client link while booting — it isn't serving yet.
-                          "interfaces": ([] if booting
-                                         else self._client_interfaces(live.get(c.id), s.id))})
+                          "interfaces": self._client_interfaces(live.get(c.id), s.id)})
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
                 entries[s.id] = entry
