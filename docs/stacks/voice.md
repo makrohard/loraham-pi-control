@@ -42,7 +42,8 @@ airtime, and a MANAGED CAD wait would gap live audio.
 
 LHPC writes each instance's file with its radio's band only (`433_*` or `868_*`) and `active_band`
 (0 = 433, 1 = 868) from that band; the app rewrites it with both bands whenever it saves (its config
-dialog, and at every exit). Daemon-side radio parameters: [daemon](daemon.md#radio-parameters).
+dialog, and when it quits by itself; a stop by signal, such as lhpc's stop, saves nothing). Daemon-side
+radio parameters: [daemon](daemon.md#radio-parameters).
 
 ## Position (GPS)
 
