@@ -437,6 +437,31 @@ def new_marker(run_id: str, mode: str, source: str, tests: bool, tx: bool,
                        for s in stacks]}
 
 
+def starting_run(paths: Paths, st) -> str:
+    """The run id of a NEW run starting over the last run's terminal marker (or over none): its reservation is live
+    (spawning/spawned/claimed, identity proven) and its own marker is not written yet; "" otherwise. While it is set,
+    the last run's outcome is not the current one (A3)."""
+    from . import procident
+    if st is not None and (st.get("unsafe") or st.get("state") not in TERMINAL_OK):
+        return ""
+    rstate, res = read_reservation(paths)
+    live = (rstate == "valid" and res.get("phase") in ("spawning", "spawned", "claimed")
+            and procident.identity_matches(res.get("ident", {}), res.get("pid", -1)))
+    return res.get("run_id", "") if live and res.get("run_id") != (st or {}).get("run_id") else ""
+
+
+def current(paths: Paths, st):
+    """The marker the task banner reports: a new run starting over the last one's terminal marker is that run."""
+    new = starting_run(paths, st)
+    return {"run_id": new, "state": "preparing"} if new else st
+
+
+def tests_off(marker) -> bool:
+    """No stack of the run had its tests on (Q-B2-3 B): the page says so once and leaves every Tests cell empty. A
+    stack's own selection decides, else the run's flag (a marker from before the per-stack selection)."""
+    return not any((r.get("selected") or {}).get("tests", marker.get("tests")) for r in marker.get("stacks", ()))
+
+
 def valid_marker(d) -> bool:
     try:
         return (isinstance(d, dict) and d.get("version") == 1

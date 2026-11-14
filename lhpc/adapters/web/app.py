@@ -621,23 +621,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         mode = service.auto_install_mode()
         running = service.auto_install_running()
         # A JUST-SPAWNED run: reservation live but the driver hasn't written its marker
-        # yet — show a 'starting' card immediately (never a blank page after the POST).
-        starting = False
-        starting_run = ""
-        # ... including when the previous run's TERMINAL marker is still on disk (a new
-        # run may start over it without acknowledgement) and during the brief "spawning"
-        # phase — the POST redirect lands within milliseconds of the spawn.
+        # yet — show a 'starting' card immediately (never a blank page after the POST),
+        # also over the previous run's TERMINAL marker, whose outcome is then not the current one.
         from lhpc.core import auto_install as ai_mod
-        if st is None or (not st.get("unsafe") and st.get("state") in ai_mod.TERMINAL_OK):
-            from lhpc.core import procident
-            rstate, res = ai_mod.read_reservation(service._paths)
-            if (rstate == "valid"
-                    and res.get("phase") in ("spawning", "spawned", "claimed")
-                    and res.get("run_id") != (st or {}).get("run_id")
-                    and procident.identity_matches(res.get("ident", {}),
-                                                   res.get("pid", -1))):
-                starting = True
-                starting_run = res.get("run_id", "")
+        starting_run = ai_mod.starting_run(service._paths, st)
+        starting = bool(starting_run)
         # A spawned run that ended BEFORE claiming (typed preflight refusal): show its
         # actual output instead of silently falling back to the old run's card.
         spawn_failed = ""
@@ -674,6 +662,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             recovery=recovery, orphan_risk=orphan_risk,
             needs_process_confirmation=needs_process_confirmation,
             starting=starting, starting_run=starting_run,
+            tests_off=bool(st and not st.get("unsafe") and ai_mod.tests_off(st)),
             spawn_failed=spawn_failed, dep_preflight=service.auto_install_dep_preflight(),
             log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS,
             rows=(_rows := service.auto_install_rows()),

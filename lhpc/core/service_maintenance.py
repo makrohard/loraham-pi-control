@@ -1144,7 +1144,7 @@ class MaintenanceOpsMixin:
         (jobs use `active_jobs(cleanup=False)`/`log_running`/`jobresult.read_results`, all no-follow, bounded).
         Colours: running=yellow, done=green, failed/unsafe=red."""
 
-        from . import jobresult
+        from . import auto_install, jobresult
         now = int(time.time())
         out = []
         dismissed = self._task_dismissed_ids()
@@ -1185,7 +1185,7 @@ class MaintenanceOpsMixin:
             return (str(reason).strip()[:200]) if reason else "malformed or unreadable state — recovery required"
 
         try:
-            bst = self.auto_install_status()
+            bst = auto_install.current(self._paths, self.auto_install_status())   # a starting run is current (A3)
         except Exception:
             bst = None
         if bst and bst.get("unsafe"):

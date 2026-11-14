@@ -30,7 +30,7 @@
       <h2>{% if mode == 'install' %}Install and Build all Stacks
           {% elif mode == 'update' %}Update all Stacks
           {% else %}Install and update all stacks{% endif %}</h2>
-      {% if st and not st.unsafe %}
+      {% if st and not st.unsafe and not starting %}{# a new run starting: the last run's outcome is not the current one #}
         <span class="badge badge-{{ 'running' if running else ('stopped' if st.state in ('completed','completed-with-failures','aborted') else 'failed') }}"
               id="ai-status">
           {{ 'run in progress' if running else
@@ -162,7 +162,8 @@
     <div class="body">
       {# Version is the LAST column ON PURPOSE: the live poller (auto_install.js) writes Status/Tests/
          Detail by fixed child index (1/2/3), so keeping Version at the end leaves those aligned. #}
-      <table class="tasklist" id="ai-tasks">
+      {% if tests_off %}<p class="muted" id="ai-tests-off">tests were disabled for this run</p>{% endif %}
+      <table class="tasklist" id="ai-tasks"{% if tests_off %} data-tests-off="1"{% endif %}>
         <tr><th>Stack</th><th>Status</th><th>Tests</th><th>Detail</th><th>Version</th></tr>
         {% for r in st.stacks %}
         <tr data-stack="{{ r.id }}">
@@ -170,8 +171,8 @@
           <td><span class="badge badge-{{ 'running' if r.status in ('downloading','building','testing')
                  else ('ok' if r.status == 'success' else ('failed' if r.status == 'fail' else 'stopped')) }}">
             {{ r.status }}{% if r.status in ('downloading','building','testing') %}&hellip;{% endif %}</span></td>
-          <td>{% if r.tests.ran %}{{ 'passed' if r.tests.ok else 'FAILED' }}{% else %}{{ r.tests.detail or '—' }}{% endif %}
-              {% if r.tx.ran %} / TX {{ 'passed' if r.tx.ok else 'FAILED' }}{% endif %}</td>
+          <td>{% if not tests_off %}{% if r.tests.ran %}{{ 'passed' if r.tests.ok else 'FAILED' }}{% else %}{{ r.tests.detail or '—' }}{% endif %}
+              {% if r.tx.ran %} / TX {{ 'passed' if r.tx.ok else 'FAILED' }}{% endif %}{% endif %}</td>
           <td class="muted">{{ r.detail }}</td>
           <td class="muted">{{ r.selected.version if r.selected else '—' }}</td>
         </tr>

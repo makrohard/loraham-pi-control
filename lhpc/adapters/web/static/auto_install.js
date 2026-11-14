@@ -65,7 +65,7 @@
       if (r.tests && r.tests.ran) t = r.tests.ok ? "passed" : "FAILED";
       else if (r.tests) t = r.tests.detail || "—";
       if (r.tx && r.tx.ran) t += " / TX " + (r.tx.ok ? "passed" : "FAILED");
-      row.children[2].textContent = t;
+      row.children[2].textContent = row.closest("[data-tests-off]") ? "" : t;   // tests off: one run line, empty cells
       row.children[3].textContent = r.detail || "";
     });
     var txRow = runCard.querySelector('tr[data-stack="__tx__"]');
