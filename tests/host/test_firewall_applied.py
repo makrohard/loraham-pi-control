@@ -936,3 +936,113 @@ def test_a_journal_over_the_bound_is_refused_before_any_live_change(tmp_path, mo
     assert "the journal would be" in capsys.readouterr().out
     assert not any(c[:2] == ["nft", "-f"] for c in sysx.calls) and not os.path.exists(fw.JOURNAL_DEST)
     assert {p: open(p).read() for p in before} == before
+
+
+# --- gate 2 (G2-FW-CODE ff9df944): the reader, the partial refusal, the fallback, the success order ----------------
+
+@pytest.mark.parametrize("which", ["SNAPSHOT_DEST", "RECEIPT_PATH"])
+def test_a_fifo_at_the_snapshot_or_the_receipt_never_hangs_a_gate(tmp_path, monkeypatch, which):
+    # G2 B1: red on 254d9e10, where the reader's open() of a FIFO with no writer blocked the gate (no deadline reached)
+    import threading
+    lab = _box(tmp_path, monkeypatch, console=False)
+    lab.radios((R1, R2, R3))
+    path = getattr(fw, which)
+    os.remove(path)
+    os.mkfifo(path, 0o644)
+    out = []
+    t = threading.Thread(target=lambda: out.append(_gate(lab.svc(), "meshtastic", "r1")), daemon=True)
+    t.start()
+    t.join(30)
+    try:                                                                  # release a reader stuck in open() (red run)
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+    except OSError:
+        pass
+    assert out, "the gate hung on a FIFO"
+    assert not out[0][0]                                                  # not a regular file: no evidence, refused
+
+
+def test_a_snapshot_that_grew_after_its_fstat_is_not_evidence(tmp_path, monkeypatch):
+    # G2 B2: red on 254d9e10, where the bound was the fstat size only: a complete object followed by whitespace past
+    # the bound was read (bound + 1 bytes) and parsed
+    lab = _box(tmp_path, monkeypatch, console=False)
+    text = json.dumps(lab.snapshot(), sort_keys=True)
+    lab.write(fw.SNAPSHOT_DEST, text + " " * 100)
+    monkeypatch.setattr(fw, "MAX_SNAPSHOT_BYTES", len(text) + 10)
+    real = os.fstat
+
+    def fstat(fd):                                                        # the size seen before it grew
+        st = real(fd)
+        return type("S", (), {"st_mode": st.st_mode, "st_uid": st.st_uid, "st_size": len(text)})()
+    svc = lab.svc()
+    monkeypatch.setattr(sf.os, "fstat", fstat)
+    assert svc._fw_applied_candidate() is None
+    lab.write(fw.SNAPSHOT_DEST, text)                                     # anchor: within the bound it is evidence
+    assert svc._fw_applied_candidate() is not None
+
+
+def test_the_partial_install_start_refusal_names_the_script_only_when_it_was_rendered(tmp_path, monkeypatch):
+    # G2 B3: red on 254d9e10, where it named `sudo bash .../firewall-apply.sh` without rendering it
+    lab = _box(tmp_path, monkeypatch, console=False)
+    lab.write(fw.JOURNAL_DEST, {"op": "apply", "phase": "begin"}, 0o600)  # an interrupted apply: partial
+    svc = lab.svc()
+    assert svc._fw_integration_state() == "partial"
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(False, "could not render firewall scripts: EACCES"))
+    ok, msg, cmds = _gate(svc, "meshtastic", "r1", render=True)
+    assert not ok and "partially installed" in msg and cmds == ["lhpc firewall --script"], cmds
+    ok, _msg, cmds = _gate(svc, "meshtastic", "r1", render=False)        # the dry run: re-render first
+    assert not ok and cmds[0] == "lhpc firewall --script > /dev/null", cmds
+    monkeypatch.setattr(type(svc), "firewall_render", lambda self: ActionResult(True, "regenerated"))
+    ok, _msg, cmds = _gate(svc, "meshtastic", "r1", render=True)
+    assert not ok and cmds[0].startswith("sudo bash ") and cmds[-1] == "lhpc webserver apply", cmds
+
+
+def test_an_error_receipt_published_after_the_status_read_refuses(tmp_path, monkeypatch):
+    # G2 NOTE a: red on 254d9e10, where the fallback kept the green status read before an apply failed and voided
+    # the evidence; the fallback now reads the receipt after the evidence
+    lab = _box(tmp_path, monkeypatch, console=False)
+    svc = lab.svc()
+    assert _gate(svc, "meshtastic", "r1")[0]                              # anchor: green
+    real = svc._fw_applied_candidate
+
+    def failed_meanwhile():                                               # an apply fails between the two reads
+        _tamper_receipt(lab, verdict="error")
+        return real()
+    monkeypatch.setattr(svc, "_fw_applied_candidate", failed_meanwhile)
+    assert not _gate(svc, "meshtastic", "r1")[0]
+
+
+def test_a_successful_apply_writes_its_receipt_before_it_removes_the_journal(tmp_path, monkeypatch):
+    # G2 NOTE b (the coordinator: must-fix, the plan's order): red on 254d9e10, where the journal went first; a receipt
+    # write that fails now leaves the journal, so the integration reads partial and recover() finishes the apply
+    lab = _box(tmp_path, monkeypatch, console=False)
+    lab.radios((R1, R2, R3))
+    seen, real = [], fh.write_receipt
+
+    def barrier(sysx, verdict, *a, **k):
+        if verdict == "verified":
+            seen.append((os.path.exists(fw.JOURNAL_DEST), lab.svc()._fw_integration_state()))
+            raise OSError("the receipt write failed")
+        return real(sysx, verdict, *a, **k)
+    monkeypatch.setattr(fh, "write_receipt", barrier)
+    with pytest.raises(OSError):
+        lab.apply()
+    assert seen == [(True, "partial")], seen
+    assert os.path.exists(fw.JOURNAL_DEST) and not _gate(lab.svc(), "meshtastic", "r3")[0]
+
+
+def test_the_activation_decides_through_the_one_decision(tmp_path, monkeypatch):
+    # G2 NOTE d: red on 254d9e10, whose activation passed on config_ok + live_ok without asking the decision
+    lab = _box(tmp_path, monkeypatch)
+    svc = lab.svc()
+    assert svc.firewall_status()["config_ok"] and svc.firewall_gate_activation({8443})[0]
+    monkeypatch.setattr(svc, "_fw_nginx_decision", lambda st=None: "pending")
+    monkeypatch.setattr(type(svc), "firewall_render", lambda self: ActionResult(True, "regenerated"))
+    assert not svc.firewall_gate_activation({8443})[0]
+
+
+def test_the_bounds_and_the_model_hash_have_one_definition():
+    # G2 NOTE c: the controller takes them from the packaged helper
+    assert (fw.MAX_ENDPOINTS, fw.MAX_PROXY_INGRESS, fw.MAX_SNAPSHOT_BYTES) == \
+        (fh.MAX_ENDPOINTS, fh.MAX_PROXY_INGRESS, fh.MAX_SNAPSHOT_BYTES)
+    assert fw.model_hash is fh.model_hash

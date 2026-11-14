@@ -36,15 +36,19 @@ FRESH_WINDOW_S = 200
 # current-boot receipt before falling back to a loopback-only listener.
 BOOT_GATE_WAIT_S = 20
 
-# Bound of the root-written snapshot (/etc/lhpc/firewall.snapshot.json) the controller reads as the
-# applied evidence of its gates (service_firewall `_fw_applied_candidate`). The helper's copy refuses an
-# apply whose snapshot or journal would exceed it, so no valid apply ever hits this reader's bound.
-MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+# ONE definition, the packaged helper's (it imports nothing from lhpc): the row caps both validators
+# apply, the bound of the root-written snapshot the gates read as applied evidence (the helper refuses an
+# apply whose snapshot or journal would exceed it, so no valid apply hits this reader's bound), and the
+# model hash the controller recomputes over a snapshot before trusting it.
+from .firewall_helper import (  # noqa: E402,F401
+    MAX_ENDPOINTS,
+    MAX_PROXY_INGRESS,
+    MAX_SNAPSHOT_BYTES,
+    model_hash,
+)
 
 # Bounded collections: the helper treats the candidate as untrusted data, so every list the
 # unprivileged side controls has a hard cap (schema-rejected above it, never truncated).
-MAX_ENDPOINTS = 512                    # 64 radios: 256 rows measured (knob + deny rows)
-MAX_PROXY_INGRESS = 512                # the console + every page of 64 radios: 226 measured
 MAX_CIDRS = 32
 MAX_SSH_PORTS = 16
 MAX_EXTRA_ALLOW = 64
@@ -349,13 +353,6 @@ def intent_hash(cand: dict) -> str:
     if errors:
         raise ValueError("invalid candidate: " + "; ".join(errors[:5]))
     return hashlib.sha256(canonical_intent(cand).encode("utf-8")).hexdigest()
-
-
-def model_hash(model: dict) -> str:
-    """sha256 of the helper's canonical model (firewall_helper.model_hash, drift-tested): the
-    controller recomputes it over a snapshot's model before trusting that snapshot."""
-    return hashlib.sha256(json.dumps(model, sort_keys=True, separators=(",", ":"))
-                          .encode("utf-8")).hexdigest()
 
 
 # --- root artifact renderers (FW-3) ----------------------------------------------------------

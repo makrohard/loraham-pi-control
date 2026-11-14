@@ -31,9 +31,9 @@ POINTS = [
     ("firewall_helper.atomic_write", "etc/firewall.journal.json"),               # snapshot-staged
     ("os.replace", "etc/firewall.snapshot.json.staging-*"),                      # promote
     ("firewall_helper.atomic_write", "etc/firewall.transition.json"),
-    ("firewall_helper._durable_unlink", "etc/firewall.journal.json"),
     ("firewall_helper.atomic_write", "run/check.json"),                          # the receipt
     ("firewall_helper.atomic_write", "run/firewall.log"),                        # its log line
+    ("firewall_helper._durable_unlink", "etc/firewall.journal.json"),           # then the journal (G2 NOTE b)
 ]
 
 

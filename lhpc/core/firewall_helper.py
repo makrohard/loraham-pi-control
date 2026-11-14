@@ -1484,10 +1484,12 @@ def op_apply(sysx, candidate_path, *, cleanup=False, etc_dir=ETC_DIR, run_dir=RU
                 "cleanup": "apply --cleanup"}, sort_keys=True), 0o644)
         elif os.path.exists(p["transition"]):
             _durable_unlink(p["transition"])
-        _durable_unlink(p["journal"])
+        # Receipt before journal, as on the failure path: while the journal exists the controller reads
+        # the integration as partial; a receipt write that fails leaves the journal for recover().
         write_receipt(sysx, "verified", "", snap["intent_hash"], snap["model_hash"],
                       list_foreign_tables(sysx) or [], transitional=transitional,
                       run_dir=run_dir)
+        _durable_unlink(p["journal"])
         print("applied and live-verified" + (" (TRANSITIONAL — run the cleanup apply "
               "after the listener move completes)" if transitional else ""))
         return EXIT_OK

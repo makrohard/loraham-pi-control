@@ -641,8 +641,9 @@ class FirewallOpsMixin:
         every scope it binds has a row in the applied candidate with the same key (listener: id,
         proto, family, address, port and band; nginx: proto, family, address, port). Source CIDRs
         and the direct-access tick follow the applied firewall until the next apply (his word)."""
-        st = self.firewall_status() if st is None else st
         applied = self._fw_applied_candidate()
+        if st is None or applied is None:              # the fallback reads the receipt after the evidence:
+            st = self.firewall_status()                # an error receipt that voided it never reads green
         if applied is None:
             if not (st.get("config_ok") and st.get("live_ok")):
                 return "pending"
@@ -706,15 +707,13 @@ class FirewallOpsMixin:
                     + ("" if rendered.ok else f" Also: {rendered.summary}."),
                     self._fw_apply_commands(rendered))
         st = self.firewall_status()
-        # config_ok proves the receipt's intent == the CURRENT saved intent (ports AND CIDRs);
-        # live_ok proves that intent is actually loaded this boot. Both: nothing to redo — and a
-        # port that is already socket-exposed is NOT evidence of firewall protection.
-        if st.get("config_ok") and st.get("live_ok"):
-            return True, "", []
-        # From here the saved intent DIFFERS from the receipt, so the apply script no longer embeds
-        # it: regenerate before returning on ANY path — otherwise the operator runs a stale
+        # config_ok + live_ok: the receipt's intent is the CURRENT saved one and loaded this boot, so the
+        # script is current. Otherwise the saved intent DIFFERS from the receipt and the apply script no
+        # longer embeds it: regenerate before returning on ANY path — otherwise the operator runs a stale
         # firewall-apply.sh that can never satisfy the new intent — including when the LAST remote
-        # listener is being closed.
+        # listener is being closed. The decision itself is `_fw_nginx_decision`'s, never a fast pass here.
+        if st.get("config_ok") and st.get("live_ok") and not self._fw_nginx_decision(st):
+            return True, "", []
         rendered = self.firewall_render()
         if not prospective_ports:
             # Nothing remote left to protect: a local-only activation is always allowed. The intent
@@ -1112,7 +1111,6 @@ class FirewallOpsMixin:
         state = self._fw_integration_state()
         if state == "absent":
             return True, "", []
-        base = self._paths.under("config/files/firewall/firewall-apply.sh")
         rerender = [] if render else ["lhpc firewall --script > /dev/null"]
 
         def _msg(reason, start_tail, remedy):
@@ -1125,7 +1123,8 @@ class FirewallOpsMixin:
                     _msg("Firewall integration is partially installed",
                          "refusing to start a non-loopback listener until it is repaired.",
                          f"Repair it first, then restart '{target}'."),
-                    [f"sudo bash {base}"])
+                    self._fw_apply_commands(self.firewall_render()) if render
+                    else [*rerender, *self._fw_apply_lines()])
         scopes = self._fw_prospective_stack_scopes(target, band, inst)
         if not scopes:
             return True, "", []                            # nothing non-loopback -> nothing to gate
@@ -1457,9 +1456,10 @@ def _owner_is_host_root(st_uid, *, canonical_path):
 def _read_root_json(path, max_bytes):
     """A JSON object from a root-written lhpc file, or None: a bounded O_NOFOLLOW read of a regular
     file owned by host root (`_owner_is_host_root`; its sandbox trust only for the canonical receipt
-    and snapshot paths, never a caller's path), with no group/other write, at most `max_bytes`."""
+    and snapshot paths, never a caller's path), with no group/other write, at most `max_bytes` read.
+    O_NONBLOCK: a FIFO there must never hang a gate in its open (fstat then refuses it)."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
     try:
@@ -1476,6 +1476,8 @@ def _read_root_json(path, max_bytes):
         return None
     finally:
         os.close(fd)
+    if len(raw) > max_bytes:                           # grew after the fstat: the bound is on what was read
+        return None
     try:
         r = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
