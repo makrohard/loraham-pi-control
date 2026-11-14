@@ -874,3 +874,13 @@ def test_the_rule_map_exempts_each_pattern_by_its_own_rule_only(repo, pattern, r
         hard = pattern in ("assert-True", "getsource")
         assert (rc, line.split()[-1]) == ((1, "HARD") if hard else (0, "WARN")) and f" {pattern} 1" in line, line
         assert "exempt" not in line, line
+
+
+# Delta second read MINOR 1: the legacy tag is read from the comment too, never from a string's text.
+@pytest.mark.parametrize("pattern", ["getsource", "source-read"])
+def test_the_legacy_tag_inside_a_string_exempts_nothing(repo, pattern):
+    """A pin: passes at the parent 40892d57 as well; its mutant reads the legacy tag from the raw line."""
+    rc, line = _patterns(repo, f'{HIT_LINES[pattern]} != "{LEGACY}"')
+    hard = pattern == "getsource"
+    assert (rc, line.split()[-1]) == ((1, "HARD") if hard else (0, "WARN")) and f" {pattern} 1" in line, line
+    assert "exempt" not in line, line
