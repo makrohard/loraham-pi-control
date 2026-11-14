@@ -51,4 +51,4 @@ None — an APRS position belongs to the TNC's client ([graywolf](graywolf.md#po
 ## Conflicts
 
 - `loraham-kiss-serial` and [graywolf](graywolf.md) cannot share the TNC — single client.
-- Same band: chat, voice, meshcom (433) and meshcore (868).
+- Same radio: chat, voice, meshcom (433) and meshcore (868).
