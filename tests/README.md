@@ -62,7 +62,8 @@ in a file named after when or how a defect was found:
   recorded in `golden/argv_r1_0af1d413.json`, except for the tokens its `EXCEPTIONS` names.
 
 `tools/check_houserules.py` refuses (HARD) a new or renamed test file outside these folders and their
-`testlab/tests/` counterparts; which of them a test belongs in is the table above.
+`testlab/tests/` counterparts; which of them a test belongs in is the table above. A test of lhpc code
+belongs in `tests/<area>`, not in `testlab/tests/unit`, which tests the simulator itself.
 
 A transaction whose state another run must recover (a journal, receipt or marker) is also driven
 through `interrupts.py`: its module pins the operation's durable writes and fails each one in turn
@@ -122,6 +123,13 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
     goes into a plain function module, not a mixin; an item that touches the family removes at
     least what it adds; a budget is raised only with `# <item id>: <reason>` on its line. Lowering a
     budget is free; the test enforces fixed caps and never lowers one by itself.
+
+**Exemptions.** `tools/check_houserules.py` counts a WARN pattern's hit on a test line unless the line carries
+the tag of that pattern's rule with a reason, `# rule-<n>: <reason>`: source-read is rule 1, network rule 4,
+startswith rule 10. A wrong or unknown rule number or an empty reason exempts nothing, and one tag exempts only
+its own pattern. The older `# rule-1 exception` exempts `inspect.getsource` and source-read only; `assert True`
+has no exemption. The checker lists every exemption in its patterns row. An exemption never hides a failing or
+flaky test.
 
 **Coverage is diagnostic, not the target:** a new test should normally accompany a behaviour or a
 defect; no test added or kept only because it covers lines.
