@@ -74,7 +74,7 @@
                    writes a port — a BLANK port silently saves as 0 (not proxied). #}
                 <td><input name="port" type="number" min="0" max="65535"
                      value="{{ sw.cfg.port or sw.suggested_port }}" autocomplete="off"></td>
-                <td class="dphelp muted">default {{ sw.suggested_port }}; 0 = not proxied; ≥ 1024</td>
+                <td class="dphelp muted">{% if sw.suggested_port %}default {{ sw.suggested_port }}{% else %}{{ sw.suggested_note }}{% endif %}; 0 = not proxied; ≥ 1024</td>
               </tr>
               <tr>
                 <th>Scheme</th>
@@ -133,7 +133,7 @@
               <strong>Port {{ sw.cfg.port }} is not listening</strong> — nginx is not running or Apply has not been run.
             {% endif %}
           {% else %}
-            Set a port (suggested <code>{{ sw.suggested_port }}</code>) in Settings to enable the proxy.
+            Set a port ({% if sw.suggested_port %}suggested <code>{{ sw.suggested_port }}</code>{% else %}{{ sw.suggested_note }}{% endif %}) in Settings to enable the proxy.
           {% endif %}</p>
         {% if sw.urls %}
           <ul class="kv">{% for u in sw.urls %}<li><code>{{ u }}</code></li>{% endfor %}</ul>

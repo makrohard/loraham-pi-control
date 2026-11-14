@@ -64,11 +64,11 @@ def test_saved_meshcore_proxy_settings_still_govern_the_web_ui(tmp_path):
     # implementation against itself and stop this catching an accidental reordering, which
     # silently moves an operator's saved [stackweb] policy from one page to another.
     # reticulum joined as a primary page (MeshChat). K4b: radio by radio, r1's four pages, then r2's, the node's
-    # (non-primary) last: the dashboard sits at +8 on the default list (r1 433, r2 868).
-    console = svc.config().webserver.port
+    # (non-primary) last. B1b: the walk order no longer decides a port; the dashboard's is its kind's (k = 5) on r2,
+    # 8444 + 5 + 133 = 8582, on the default list (r1 433, r2 868).
     assert svc._page_positions() == ["graywolf@r1", "meshcom@r1", "meshtastic@r1", "reticulum@r1", "graywolf@r2",
                                      "meshcore@r2", "meshtastic@r2", "meshcore-meshcore-node@r2"]
-    assert svc._default_stack_web_port("meshcore-meshcore-node@r2", console) == console + 8
+    assert svc.stack_web_view("meshcore-meshcore-node@r2")["suggested_port"] == 8582
     assert svc.stack_web_eligible() == ["graywolf@r1", "graywolf@r2", "meshtastic@r1", "meshtastic@r2", "meshcom@r1",
                                         "meshcore@r2", "meshcore-meshcore-node@r2", "reticulum@r1"]
 

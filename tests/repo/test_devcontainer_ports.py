@@ -27,5 +27,5 @@ def test_the_codespace_forwards_meshcore_at_r2_and_every_proxy_page(tmp_path):
     forwarded = _forwarded()
     assert {5133, 8921} <= ports and {5133, 8921} <= forwarded       # its companion and its web UI
     assert not forwarded & {5000, 8788}                               # r1's: nothing listens there in the lab
-    pages = {svc._default_stack_web_port(p, svc.config().webserver.port) for p in svc._page_positions()}
+    pages = {svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()}
     assert pages <= forwarded, sorted(pages - forwarded)

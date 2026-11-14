@@ -24,12 +24,12 @@
         9443,
         8444,
         8445,
-        8446,
         8447,
         8448,
-        8449,
-        8450,
-        8451,
+        8577,
+        8579,
+        8580,
+        8582,
         5133,
         8921
     ],
@@ -59,35 +59,35 @@
             "protocol": "https"
         },
         "8444": {
-            "label": "stackweb proxy 1",
+            "label": "stackweb proxy graywolf@r1 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
         "8445": {
-            "label": "stackweb proxy 2",
-            "visibility": "private"
-        },
-        "8446": {
-            "label": "stackweb proxy 3",
+            "label": "stackweb proxy meshcom@r1 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
         "8447": {
-            "label": "stackweb proxy 4",
+            "label": "stackweb proxy meshtastic@r1 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
         "8448": {
-            "label": "stackweb proxy 5 (r2)",
+            "label": "stackweb proxy reticulum@r1 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
-        "8449": {
-            "label": "stackweb proxy 6 (r2)",
+        "8577": {
+            "label": "stackweb proxy graywolf@r2 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
-        "8450": {
-            "label": "stackweb proxy 7 (r2)",
+        "8579": {
+            "label": "stackweb proxy meshcore@r2 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
-        "8451": {
-            "label": "stackweb proxy 8 (r2)",
+        "8580": {
+            "label": "stackweb proxy meshtastic@r2 (8444 + kind + 133 x (n - 1))",
+            "visibility": "private"
+        },
+        "8582": {
+            "label": "stackweb proxy meshcore-meshcore-node@r2 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
         "5133": {

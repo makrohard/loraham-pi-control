@@ -732,14 +732,15 @@ def test_configure_refuses_a_stack_without_a_web_ui(tmp_path):
 def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     # The default is deterministic per page, NOT "first free above the console" — which handed
     # every not-yet-enabled stack 8444, so accepting two suggestions collided on 8444.
-    # K4b: console_port + 1 + the page's position RADIO BY RADIO: r1's first pages by id, then r1's further
-    # pages, then r2's, ... (the default list: r1 433, r2 868; meshcore is 868-only, so it is r2's).
+    # B1b: 8444 + its kind's index + 133 x (n - 1) on rN (the default list: r1 433, r2 868; meshcore is 868-only,
+    # so it is r2's), no longer the position in a radio-by-radio list.
     svc = _svc(tmp_path)
-    want = {"graywolf@r1": 8444, "meshcom@r1": 8445, "meshtastic@r1": 8446, "reticulum@r1": 8447,
-            "graywolf@r2": 8448, "meshcore@r2": 8449, "meshtastic@r2": 8450, "meshcore-meshcore-node@r2": 8451}
+    want = {"graywolf@r1": 8444, "meshcom@r1": 8445, "meshtastic@r1": 8447, "reticulum@r1": 8448,
+            "graywolf@r2": 8577, "meshcore@r2": 8579, "meshtastic@r2": 8580, "meshcore-meshcore-node@r2": 8582}
     assert {p: svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()} == want
     # stable after one is enabled
     assert svc.stack_web_configure("meshcom@r1", mode="local", port=8445).ok
+    svc._invalidate_config()
     assert {p: svc.stack_web_view(p)["suggested_port"] for p in want} == want
 
 
@@ -750,7 +751,7 @@ def test_an_added_radio_never_shifts_an_earlier_radios_suggestions(tmp_path):
     after = {p: svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()}
     assert {p: after[p] for p in before} == before                       # r1's and r2's unchanged
     assert {p: v for p, v in after.items() if p.endswith("@r3")} == {
-        "graywolf@r3": 8452, "meshcore@r3": 8453, "meshtastic@r3": 8454, "meshcore-meshcore-node@r3": 8455}
+        "graywolf@r3": 8710, "meshcore@r3": 8712, "meshtastic@r3": 8713, "meshcore-meshcore-node@r3": 8715}
 
 
 def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
