@@ -339,6 +339,8 @@ def _validate_component(comp) -> None:
     for step in comp.post_steps:
         if step.get("kind") not in _POST_KINDS:
             raise ManifestError(f"{cid}: invalid post-step kind {step.get('kind')!r}")
+        if "on_exhausted" in step and (step["kind"] != "tcp_send" or step["on_exhausted"] != "warn"):
+            raise ManifestError(f"{cid}: on_exhausted is a tcp_send field, and its one value is \"warn\"")
     for k, _v in comp.run_env:
         if not _ENV_NAME.fullmatch(k):
             raise ManifestError(f"{cid}: invalid environment variable name {k!r}")

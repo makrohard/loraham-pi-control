@@ -598,6 +598,8 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                     d["intervals"] = [d["interval"]] * (d["repeat"] - 1)
                 if step.get("label") is not None:
                     d["label"] = _post_label(step["label"])
+                if step.get("on_exhausted") == "warn":     # a console that never answers warns, never fails
+                    d["on_exhausted"] = "warn"
                 # ACKNOWLEDGEMENT-AWARE sending (17 blind --setcall
                 # connects starved the MeshCom node's heap and killed its web UI):
                 #  * stop_on: read the reply after each send; a match STOPS the repeats
@@ -1061,7 +1063,8 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.stderr.write("tcp_send %s:%s: all %d attempt(s) failed\\n"
                                      % (s["host"], s["port"], n))
-                    sys.exit(1)
+                    if s.get("on_exhausted") != "warn":
+                        sys.exit(1)
             else:
                 _done("sent-unacked", n)
     except Exception:

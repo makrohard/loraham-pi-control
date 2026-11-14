@@ -1651,17 +1651,11 @@ class LifecycleOpsMixin:
 
     def _run_post_start(self, life, stack, comp, comp_cfg, band,
                         announce=None, strict=False, require_all=False, inst=None) -> tuple[bool | None, str]:
-        """Run post-start steps. Returns (required_ok, summary):
-          * (None, "")               — no post-start;
-          * (None, "…scheduled")     — OPTIONAL steps scheduled detached (never gates);
-          * (True,  "…completed")    — REQUIRED steps ran synchronously and PASSED;
-          * (False, "…failed (rc N)")— REQUIRED steps FAILED → caller blocks VERIFIED
-                                        and invokes verified cleanup.
-        `required_ok is False` is the only blocking case (an explicit bool, not an
-        enum attribute). `announce` (a `_log_announcer` callback) gets the post-start
-        log path the moment it exists — required synchronously via run_job's
-        on_log_open, detached from the schedule result — so the operator can tail the
-        (possibly minutes-long) retry window.
+        """Run post-start steps. Returns (required_ok, summary): (None, "") no post-start; (None, "…scheduled")
+        OPTIONAL steps scheduled detached (never gates); (True, "…completed") REQUIRED steps ran synchronously and
+        PASSED, or a step's `on_exhausted = "warn"` line and the log (Q-B2-7: the node keeps running); (False, "…failed
+        (rc N)") REQUIRED steps FAILED: the caller blocks VERIFIED and cleans up. `announce` (a `_log_announcer`
+        callback) gets the post-start log path the moment it exists, so the operator can tail the retry window.
 
         `strict=True` (the `poststart` verb, whose ONLY job is this work) also reports a
         failed OPTIONAL scheduling as `False`. The START path leaves it False so a
@@ -1678,7 +1672,8 @@ class LifecycleOpsMixin:
                                               on_log_open=announce, require_all=require_all,
                                               while_running=self._config_unstable())
             if jr.ok:
-                return True, "required post-start completed"
+                warn = [ln for ln in self._required_post_outcomes(comp.id, inst, life) if " NOT applied " in ln]
+                return True, f"{'; '.join(warn)} (log {jr.log_path})" if warn else "required post-start completed"
             return False, f"required post-start failed (rc {jr.returncode})"
         # OPTIONAL: scheduling never gates the start, but its typed result makes any
         # scheduling failure VISIBLE in the details (it is no longer swallowed by
@@ -2814,14 +2809,14 @@ class LifecycleOpsMixin:
                 lines.append(f"post-start: {label} outcome '{oc}' (see {log_hint})")
         return lines
 
-    def _required_post_outcomes(self, comp_id: str, inst=None) -> list[str]:
+    def _required_post_outcomes(self, comp_id: str, inst=None, life=None) -> list[str]:
         """Status lines from the SYNCHRONOUS (required) post-start run of running instance `inst` (None: any verified
         main) — e.g. the Meshtastic region push. That path writes a sidecar but NO ownership record, so the file is
         found by recomputing its leaf from the CURRENT verified main binding, looked up on the band the instance ACTUALLY
         runs (a multi-band stack records its ownership band-scoped). Fail-soft (no lines, never a raise into status)
         unless the sidecar's meta names THIS component and band, its binding is the current verified launch's, and the
         payload is well-formed."""
-        life = self._lifecycle()
+        life = life or self._lifecycle()
         stack_id = self.stack_of(comp_id) or comp_id
         # A multi-band stack's launch band: the instance's, else the one it runs on; a single-band/bandless stack: "".
         band = (getattr(inst, "band", "") or self.launch_band(stack_id)) if self.stack_bands(stack_id) else ""
