@@ -200,12 +200,12 @@ class AdmissionOpsMixin:
             keys.add(gps_key)
         return sorted(keys)
 
-    def _operation_source_paths(self, target: str) -> list[str]:
+    def _operation_source_paths(self, target: str, inst=None) -> list[str]:
         """Distinct managed source paths a start touches (generated config, command
         expansion, launch, post-start prep all read from them) — locked for the start so
         a concurrent update/uninstall cannot swap the tree mid-start. Sorted for a stable
         acquisition order; shared checkouts collapse to one key."""
-        order = self._run_order(target)
+        order = self._run_order(target, inst)                # its radio's ticked components too
         return sorted({c.source.path for _, c in order if c.source})
 
     def _lifecycle_lock_keys(self, op: str, target: str, band: str = "",
@@ -226,7 +226,7 @@ class AdmissionOpsMixin:
             for rk in {k for i in insts for k in self._operation_resource_keys(t, scoped_band, scoped_radio, scoped_op, i)}:
                 keys.add(f"claim.{rk}")
             if with_source:
-                for sp in self._operation_source_paths(t):
+                for sp in self._operation_source_paths(t, insts[0]):
                     keys.add(reslock.source_lock_key(sp))
 
         add(target, op in ("start", "restart"), band, radio, op, [inst])

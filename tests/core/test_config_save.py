@@ -103,22 +103,21 @@ def test_normalize_remotes_refuses_foreign_invalid_and_diverging_remotes():
     assert patch == {"a": "https://one.invalid/x", "b": "https://two.invalid/x"}
 
 
-def _plan(changes, auto=None, split=True, gps_default="on"):
+def _plan(changes, auto=None, gps_default="on"):
     stack = Stack("s", "S", components=(Component(
         "app", "App", ComponentKind.SERVICE,
         run_params=(RunParam("use_gps", default=gps_default), RunParam("rf_log", default="on"))),))
     return SimpleNamespace(**dict(zip(
-        ("stack_set", "stack_remove", "global_set", "global_remove", "switched"),
+        ("stack_set", "stack_remove", "switched"),
         config_save.plan_store(changes, auto or {}, key_of=lambda ch: ch.param.name,
                                default_of=lambda ch: ch.param.default, switches=_STACK_SWITCHES,
-                               stacks=[stack], sid="s", split=split), strict=True)))
+                               stacks=[stack], sid="s"), strict=True)))
 
 
 def test_plan_stores_overrides_only():
     plan = _plan([Change("f", APP, FREQ, "434.5"), Change("r", APP, MODE, "a")],
                  {"autostart_opt": "on", "autostart_two": ""})
-    assert (plan.stack_set, plan.stack_remove) == ({"tx_freq": "434.5"}, {"mode"})
-    assert (plan.global_set, plan.global_remove) == ({"autostart_opt": "on"}, {"autostart_two"})
+    assert (plan.stack_set, plan.stack_remove) == ({"tx_freq": "434.5", "autostart_opt": "on"}, {"mode", "autostart_two"})
     assert plan.switched == {}
 
 
@@ -132,7 +131,6 @@ def test_plan_routes_the_gps_switch_to_the_instances_own_key(submitted, stored, 
     scoped = RunParam("__r__app__use_gps", default="on")       # a component-scoped key shape
     plan = _plan([Change("r", APP, scoped, submitted)])
     assert (plan.stack_set, plan.stack_remove) == (stored, cleared)
-    assert plan.global_set == {} and plan.global_remove == set()
     assert plan.switched == {"use_gps": (wanted, "on")}
 
 
@@ -143,22 +141,14 @@ def test_plan_a_removed_switch_key_wins_and_rf_log_reads_anything_but_off_as_on(
                  gps_default="off")
     assert plan.switched == {"use_gps": ("off", "off"), "rf_log": ("on", "on")}
     assert plan.stack_set == {} and plan.stack_remove == {"use_gps", "rf_log"}
-    assert plan.global_set == {} and plan.global_remove == set()
 
 
-def test_plan_folds_everything_into_one_file_when_the_own_file_is_the_global_one():
-    # no instance (no hardware list): the stack's one file `<sid>.toml` holds everything
+def test_plan_puts_the_ticks_and_the_switch_into_the_one_file_it_saves():
+    # Q-09 C: an instance's ticks are its own, like its switches; a list-less box's one file holds them the same way
     plan = _plan([Change("r", APP, RunParam("rf_log", default="on"), "OFF"),
-                  Change("f", APP, FREQ, "434.5")], {"autostart_opt": "on"}, split=False)
+                  Change("f", APP, FREQ, "434.5")], {"autostart_opt": "on"})
     assert plan.stack_set == {"tx_freq": "434.5", "autostart_opt": "on", "rf_log": "off"}
     assert plan.stack_remove == set()
-    assert plan.global_set == {} and plan.global_remove == set()
-
-
-def test_plan_an_instances_save_keeps_autostart_global_and_the_switch_its_own():
-    plan = _plan([Change("r", APP, RunParam("rf_log", default="on"), "OFF"),
-                  Change("f", APP, FREQ, "434.5")], {"autostart_opt": "on"}, split=True)
-    assert plan.stack_set == {"tx_freq": "434.5", "rf_log": "off"} and plan.global_set == {"autostart_opt": "on"}
 
 
 def test_overlay_keeps_other_keys_and_drops_the_cleared_ones():

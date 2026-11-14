@@ -2075,7 +2075,7 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
 
 def _stack_config_path(paths: Paths, stack_id: str, inst=None) -> Path:
     # K6 (K6-SCOPE-v2): an instance's settings are its own "<id>@<rid>.toml" (DEC-W60), whatever other radios the
-    # list holds; without an instance, the stack's global "<id>.toml" (autostart, 13.12.1). A "<id>@<band>.toml" is
+    # list holds; without an instance, the stack's global "<id>.toml" (a list-less box). A "<id>@<band>.toml" is
     # never read or written (13.8).
     # Defence in depth: the id and the rid are single path components. The result is
     # then proven to stay inside config/stacks/ (rejects any symlink/escape).

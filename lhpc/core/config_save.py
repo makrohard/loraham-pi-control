@@ -148,21 +148,14 @@ def normalize_remotes(remotes: dict, *, target: str, allowed, stacks,
     return remote_patch, remote_notes, errors
 
 
-def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks, sid: str,
-               split: bool) -> tuple[dict, set, dict, set, dict]:
-    """Which stored keys the save sets and clears → (stack_set, stack_remove, global_set,
-    global_remove, switched): the instance's own file, the stack's global `<sid>.toml` (empty unless `split`: the
-    own file is another file), and each touched switch name → (wanted, default). `key_of(change)` is the
-    persisted key, `default_of(change)` the canonical default it is compared with. K6 (K6-SCOPE-v2, DEC-W384k): the
-    switches are the instance's own (its file); autostart is global (13.12.1)."""
+def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks,
+               sid: str) -> tuple[dict, set, dict]:
+    """Which stored keys the save sets and clears in the instance's own file → (stack_set, stack_remove, switched),
+    with each touched switch name → (wanted, default). `key_of(change)` is the persisted key, `default_of(change)` the
+    canonical default it is compared with. K6 (K6-SCOPE-v2, DEC-W384k): the switches are the instance's own, and so
+    are the auto-start ticks (Q-09 C: one tick per radio)."""
     to_set: dict = {}
     to_remove: set = set()
-    # Autostart is a STACK-LEVEL flag: it must live in the BAND-LESS stack file —
-    # `_run_order` reads it band-independently. (Live finding: stored in the
-    # band-suffixed file, the option never took effect for band-switchable
-    # stacks like kiss.)
-    auto_set = {k: av for k, av in autostart.items() if av == "on"}
-    auto_remove = {k for k, av in autostart.items() if av != "on"}
     for change in changes:
         key = key_of(change)
         if str(change.value) == default_of(change):
@@ -195,11 +188,9 @@ def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks
                 to_remove.add(key)
                 to_set.pop(key, None)
             switched[sw.name] = (want, default)
-    if not ((auto_set or auto_remove) and split):
-        to_set.update(auto_set)                         # unbanded: one file holds everything
-        to_remove |= auto_remove
-        auto_set, auto_remove = {}, set()
-    return to_set, to_remove, auto_set, auto_remove, switched
+    to_set.update({k: av for k, av in autostart.items() if av == "on"})   # a tick is "on"; off is the default
+    to_remove |= {k for k, av in autostart.items() if av != "on"}
+    return to_set, to_remove, switched
 
 
 def overlay(current: dict, setv: dict, rmv) -> dict:

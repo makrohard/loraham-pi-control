@@ -510,7 +510,7 @@ class LifecycleOpsMixin:
         # `meshcom-bridge`, `meshcom-firmware` and the fixture relay read no position, and a
         # Reticulum start without Sideband reads none either — refusing those over GPS settings
         # they never consult blocks perfectly valid work.
-        if not self._gps_run_order_uses_position(raw):
+        if not self._gps_run_order_uses_position(raw, inst):
             return "", []
         # A PRODUCTION FEED started on its own is only meaningful when the stack's plan actually
         # calls for it. Run outside that plan it publishes an endpoint and claims the receiver

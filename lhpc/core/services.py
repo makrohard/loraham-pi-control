@@ -1931,8 +1931,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         s = self.stack(target)
         if s is not None:
             # Optional components are soft: included only when the operator has
-            # opted into auto-starting them (even via another component's depends_on).
-            cfg = self._stack_config_cached(target)
+            # opted into auto-starting them (even via another component's depends_on), on this radio (Q-09 C).
+            cfg = self._stack_config_cached(target, "", inst)
             # Only a TICKABLE optional component (`optional_role`) honours its saved tick: a stale
             # `autostart_<feed>` or `autostart_<fixture>` flag must never force a feed the position
             # plan does not want (the whole stack then stopped starting) or silently replay a

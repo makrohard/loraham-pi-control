@@ -794,7 +794,7 @@ class GpsOpsMixin:
                 c.id for s in self.stacks() for c in s.components if c.reads_position)
         return self._gps_consumers_cache
 
-    def _gps_run_order_uses_position(self, target: str) -> bool:
+    def _gps_run_order_uses_position(self, target: str, inst=None) -> bool:
         """Does what this start would ACTUALLY bring up read a position, or feed one?
 
         The owner stack is the wrong unit. `meshcom-bridge` and `meshcom-firmware` belong to a
@@ -803,7 +803,7 @@ class GpsOpsMixin:
         Gating and claiming on stack membership refused those starts over settings they never
         use, and took the receiver away from something that would have used it.
         """
-        order = self._run_order(target)
+        order = self._run_order(target, inst)                # its radio's ticks (Q-09 C)
         if not order:
             return False
         ids = {c.id for _s, c in order}
@@ -880,7 +880,7 @@ class GpsOpsMixin:
         # Claim only what this start actually brings up. Stack membership is not enough: a
         # Reticulum start without Sideband, or a `meshcom-bridge`/`meshcom-firmware`/fixture run,
         # reads no position and must not take the receiver from something that would.
-        if not self._gps_run_order_uses_position(raw):
+        if not self._gps_run_order_uses_position(raw, inst):
             return ""
         try:
             plan = self.gps_plan("" if on else target, inst)     # on: the switch taken as on (an unknown holder)

@@ -2110,7 +2110,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 v = request.form.get(f["field"], f["default"])
             values[f"file_{f['key']}" if f["kind"] == "file" else f["key"]] = v
         # Auto-start toggles for the stack's optional components.
-        for opt in view["optional"]:                         # 13.12.1: auto-start and remotes are global
+        for opt in view["optional"]:                         # the radio's own ticks (Q-09 C)
             if not opt.get("startable", True):
                 continue                       # listed as run-on-demand: no auto-start key
             values[f"autostart_{opt['id']}"] = (
