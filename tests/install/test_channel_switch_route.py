@@ -112,7 +112,7 @@ def test_a_failed_switch_to_source_restores_the_binary_install(box, csrf, monkey
             network.append(what)
             raise bi.BinaryInstallError(f"no network in this phase: {what}")
         return offline
-    for name in ("fetch_index", "index_entry", "download_artifact", "_http_get", "_open_stream"):
+    for name in ("fetch_index", "index_entries", "download_artifact", "_http_get", "_open_stream"):
         monkeypatch.setattr(bi, name, refuse(name))
     assert _switch(client, csrf, monkeypatch, "pinned") != 0
     assert network == []                            # restored without asking the index or the net

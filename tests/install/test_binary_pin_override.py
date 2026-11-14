@@ -26,13 +26,13 @@ def _svc(tmp_path, monkeypatch):
 
 
 def _lagging_entry(svc, stack, cid, commit, stub_pipeline, *, sha="a" * 64, download=None):
-    """The published entry of `stack` with `cid` built from `commit` (the others at the pins)."""
+    """The published entries (one) of `stack` with `cid` built from `commit` (the others at the pins)."""
     entry = stub_pipeline(svc, download=download)
 
     def _e(idx, sid):
         e = entry(sid)
-        return dataclasses.replace(e, sha256=sha, filename=f"{sid}-{sha}.tar.zst",
-                                   components={**e.components, cid: commit})
+        return [dataclasses.replace(e, sha256=sha, filename=f"{sid}-{sha}.tar.zst",
+                                    components={**e.components, cid: commit})]
     return _e
 
 
@@ -63,7 +63,7 @@ def test_none_compatible_is_one_typed_refusal_self_update_first(tmp_path, monkey
     installed over the pin check, nothing is downloaded, no receipt is written."""
     svc = _svc(tmp_path, monkeypatch)
     cid = cid or _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, stack, cid, A, stub_pipeline,
+    monkeypatch.setattr(bi, "index_entries", _lagging_entry(svc, stack, cid, A, stub_pipeline,
                                                           download=_never_download))
     r = (svc.install if op == "install" else svc.update)(stack, apply=apply, source="binary")
     assert not r.ok and r.data["binary_refusal"] == "none_compatible"
@@ -94,7 +94,7 @@ def test_malformed_commit_refused_before_download(tmp_path, monkeypatch, stub_pi
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     if side == "binary":
-        monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, bad,
+        monkeypatch.setattr(bi, "index_entries", _lagging_entry(svc, "daemon", cid, bad,
                                                               stub_pipeline,
                                                               download=_never_download))
     else:
@@ -102,7 +102,7 @@ def test_malformed_commit_refused_before_download(tmp_path, monkeypatch, stub_pi
         pins = dict(svc._binary_pins("daemon"))
         monkeypatch.setattr(ControllerService, "_binary_pins",
                             lambda self, sid: {**pins, cid: bad})
-        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: fixed)
+        monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [fixed])
     call = (svc.install if op == "install" else svc.update)
     r = call("daemon", apply=apply, source="binary")
     assert not r.ok and ("malformed" in r.summary or "not a full commit id" in r.summary)

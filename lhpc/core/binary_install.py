@@ -8,7 +8,7 @@ descriptor-safe runtime_fs discipline.
 
 Ordering is the security contract:
 
-  1. the index is fetched bounded + parsed STRICTLY (schema 2, or 3 = index-v3);
+  1. the index is fetched bounded + parsed STRICTLY (schema 3 = index-v3);
   2. the entry's target/os must match this box, and its `components` map must equal the
      manifest pins for EVERY covered component (`built_from` is display-only, never the gate);
      under index-v3 the first such entry whose build-input digests are this lhpc's is taken;
@@ -46,9 +46,8 @@ from dataclasses import dataclass
 from . import runtime_fs, validators
 from .paths import PathContainmentError, Paths
 
-INDEX_SCHEMA = 2
-INDEX_SCHEMAS = (2, 3)            # 3 = index-v3: a list of entries per stack, newest first
-_INDEX_MAX_BYTES = 1 << 20            # index.json is a few KiB; 1 MiB is a generous ceiling
+INDEX_SCHEMA = 3                  # index-v3: a list of entries per stack, newest first
+_INDEX_MAX_BYTES = 1 << 20            # index-v3.json is a few KiB; 1 MiB is a generous ceiling
 _ARTIFACT_MAX_BYTES = 512 << 20       # meshtastic (web assets) is the big one at ~53 MB
 _HTTP_TIMEOUT_S = 60.0
 _PROBE_TIMEOUT_S = 60.0
@@ -226,48 +225,37 @@ def _http_get(url: str, max_bytes: int) -> bytes:
 
 
 def fetch_index(index_url: str) -> dict:
-    """Bounded fetch + STRICT parse of a schema-2 or schema-3 (index-v3) index."""
+    """Bounded fetch + STRICT parse of a schema-3 (index-v3) index."""
     raw = _http_get(index_url, _INDEX_MAX_BYTES)
     try:
         idx = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise BinaryInstallError(f"binary index is not valid JSON ({exc})") from None
-    if not isinstance(idx, dict) or idx.get("schema") not in INDEX_SCHEMAS:
+    if not isinstance(idx, dict) or idx.get("schema") != INDEX_SCHEMA:
         raise BinaryInstallError(
             f"binary index schema {idx.get('schema') if isinstance(idx, dict) else '?'} is not "
-            f"supported (this lhpc reads schemas {INDEX_SCHEMAS}) — update lhpc or use --source")
+            f"supported (this lhpc reads schema {INDEX_SCHEMA}) — update lhpc or use --source")
     if not isinstance(idx.get("stacks"), dict):
         raise BinaryInstallError("binary index has no stacks table")
-    if idx["schema"] == 3 and set(idx) != {"schema", "stacks"}:     # index-v3 names no other key
+    if set(idx) != {"schema", "stacks"}:                            # index-v3 names no other key
         raise BinaryInstallError("binary index (schema 3) has keys other than schema and stacks")
     return idx
 
 
-def index_entry(idx: dict, stack_id: str) -> IndexEntry:
-    """The one entry of a schema-2 index."""
-    e = idx["stacks"].get(stack_id)
-    if not isinstance(e, dict):
-        raise BinaryInstallError(f"no binary is published for {stack_id!r}")
-    return _parse_entry(stack_id, e)
-
-
 def index_entries(idx: dict, stack_id: str) -> list:
     """Every published entry for `stack_id`, newest first: index-v3's list (each entry validated;
-    a malformed one refuses the whole read, never a silent skip; none published = []), or a
-    schema-2 index's one entry."""
-    if idx.get("schema") == INDEX_SCHEMA:
-        return [index_entry(idx, stack_id)]
+    a malformed one refuses the whole read, never a silent skip; none published = [])."""
     lst = idx["stacks"].get(stack_id, [])
     if not isinstance(lst, list):
         raise BinaryInstallError(f"binary index list for {stack_id!r} is malformed")
     if not all(isinstance(e, dict) for e in lst):
         raise BinaryInstallError(f"binary index list for {stack_id!r} is malformed")
-    return [_parse_entry(stack_id, e, v3=True) for e in lst]
+    return [_parse_entry(stack_id, e) for e in lst]
 
 
-def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
+def _parse_entry(stack_id: str, e: dict) -> IndexEntry:
     # dict() would turn `[]` into {} and an array of pairs into a map: the schema says object.
-    if not isinstance(e.get("components"), dict) or (v3 and not isinstance(e.get("inputs"), dict)):
+    if not isinstance(e.get("components"), dict) or not isinstance(e.get("inputs"), dict):
         raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid (components/inputs not an object)")
     try:
         entry = IndexEntry(
@@ -279,8 +267,8 @@ def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
             provenance={k: e.get(k) for k in
                         ("lhpc_commit", "builder_commit", "container_digest", "smoke",
                          "built_from", "target", "os", "channel", "web_version")},
-            inputs=dict(e["inputs"]) if v3 else None,
-            published_at=e.get("published_at") if v3 else None,
+            inputs=dict(e["inputs"]),
+            published_at=e.get("published_at"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid ({exc})") from None
@@ -292,10 +280,10 @@ def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
         raise BinaryInstallError("binary index entry filename is not content-addressed")
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in entry.components.items()):
         raise BinaryInstallError("binary index components map is malformed")
-    if v3 and not all(k in entry.components and validators.is_hex(v, 64)
+    if not all(k in entry.components and validators.is_hex(v, 64)
                       for k, v in entry.inputs.items()):
         raise BinaryInstallError("binary index inputs map is malformed")
-    if v3 and not _utc_stamp(e.get("published_at")):
+    if not _utc_stamp(e.get("published_at")):
         raise BinaryInstallError("binary index entry has a malformed published_at")
     smoke = entry.provenance.get("smoke")
     if smoke != {"mode": "mandatory", "result": "passed"}:

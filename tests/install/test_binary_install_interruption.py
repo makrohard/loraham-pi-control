@@ -89,8 +89,8 @@ def box(monkeypatch, stub_pipeline):
         assert svc.binary_install("daemon", apply=True).ok
         assert (root / BIN).read_bytes() == b"v1"
         version[0] = "v2"           # another artifact: its own digest (the same one is a no-op)
-        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: dataclasses.replace(
-            entry(sid), sha256="b" * 64, filename=f"{sid}-{'b' * 64}.tar.zst"))
+        monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [dataclasses.replace(
+            entry(sid), sha256="b" * 64, filename=f"{sid}-{'b' * 64}.tar.zst")])
         return svc, lambda: svc.binary_install("daemon", apply=True)
     return make
 

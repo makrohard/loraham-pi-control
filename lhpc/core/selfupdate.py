@@ -243,7 +243,7 @@ def local_changes(system: System, limit: int = 20) -> tuple[str, ...]:
     return (*lines[:limit], f"… and {len(lines) - limit} more")
 
 
-def divergence(system: System, branch: str = "") -> tuple[int, int]:
+def divergence(system: System) -> tuple[int, int]:
     """NETWORK-FREE `(ahead, behind)` of HEAD vs the already-fetched `origin/<branch>` ref.
 
     Uses the remote-tracking ref the last 'check for updates' fetch populated, so no network call.
@@ -252,7 +252,7 @@ def divergence(system: System, branch: str = "") -> tuple[int, int]:
     root = repo_root()
     if root is None:
         return (0, 0)
-    br = branch or local_state(system).get("branch") or "main"
+    br = local_state(system).get("branch") or "main"
     r = _git(system, root, ["rev-list", "--left-right", "--count", f"HEAD...{_REMOTE}/{br}"],
              _LOCAL_TIMEOUT)
     if r.returncode != 0:
@@ -833,8 +833,7 @@ def _last_apply_view(raw):
 
 # ---- apply + restart guidance -----------------------------------------------------------------
 
-def apply_update(system: System, paths: Paths, *, force: bool = False, branch: str = "",
-                 before_mutation=None) -> dict:
+def apply_update(system: System, paths: Paths, *, force: bool = False, before_mutation=None) -> dict:
     """Fast-forward the checkout to the upstream branch (fetching fresh). Returns a result dict:
     {ok, message, dirty, already, deps_changed, new_head_short, new_version}.
 
@@ -854,13 +853,13 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
     if root is None:
         return {"ok": False, "message": "Not a git checkout — self-update is unavailable."}
     local = local_state(system)
-    if not branch and local.get("head") and not local.get("branch"):
+    if local.get("head") and not local.get("branch"):
         # A detached HEAD (a developer moved the checkout): fast-forwarding it would leave it
         # detached; nothing is fetched or moved until it is back on its branch.
         return {"ok": False, "detached": True,
                 "message": "The checkout is not on a branch (detached HEAD) — self-update follows "
                            "a branch; switch the checkout back to it first."}
-    br = branch or local.get("branch") or "main"
+    br = local.get("branch") or "main"
     up = check_upstream(system, br)
     if not up.get("ok"):
         return {"ok": False, "unreachable": True,

@@ -165,8 +165,8 @@ def stub_pipeline(monkeypatch):
 
         def _reached(*a, **k):
             raise bi.BinaryInstallError("DOWNLOAD-REACHED")
-        monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: entry(sid))
+        monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})
+        monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [entry(sid)])
         monkeypatch.setattr(bi, "require_zstd", lambda: None)
         monkeypatch.setattr(bi, "download_artifact", download or _reached)
         return entry

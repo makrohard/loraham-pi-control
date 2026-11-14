@@ -31,8 +31,8 @@ def _published(monkeypatch, stack, cid, commit):
                              components={**pins, cid: commit}, runtime_deps=(),
                              target="aarch64-trixie",
                              provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", _entry)
+    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})
+    monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [_entry(idx, sid)])
     monkeypatch.setattr(bi, "require_zstd", lambda: None)
     monkeypatch.setattr(bi, "download_artifact",
                         lambda *a, **k: pytest.fail("must not download"))

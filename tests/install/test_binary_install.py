@@ -71,13 +71,14 @@ def _entry(tar_path, stack="demo", **over):
 
 
 def _index(entry):
-    return {"schema": 2, "stacks": {entry.stack: {
+    return {"schema": 3, "stacks": {entry.stack: [{
         "filename": entry.filename, "url": entry.url, "sha256": entry.sha256,
         "size": entry.size, "built_from": "b" * 40, "components": entry.components,
         "runtime_deps": list(entry.runtime_deps), "target": entry.target, "os": "trixie",
         "smoke": {"mode": "mandatory", "result": "passed"},
         "lhpc_commit": "d" * 40, "builder_commit": "e" * 40,
-        "container_digest": "debian@sha256:" + "f" * 64, "extract_to": "runtime-root"}}}
+        "container_digest": "debian@sha256:" + "f" * 64, "extract_to": "runtime-root",
+        "inputs": {}, "published_at": "2026-01-01T00:00:00Z"}]}}
 
 
 def _serve_stream(monkeypatch, blobs):
@@ -108,7 +109,7 @@ def test_index_and_entry_round_trip(tmp_path, monkeypatch):
     e = _entry(tar)
     _serve(monkeypatch, {"https://idx/index.json": json.dumps(_index(e)).encode()})
     idx = bi.fetch_index("https://idx/index.json")
-    got = bi.index_entry(idx, "demo")
+    [got] = bi.index_entries(idx, "demo")
     assert got.sha256 == e.sha256 and got.target == "aarch64-trixie"
     assert got.components == {"demo-main": "c" * 40}
 
@@ -117,8 +118,9 @@ def test_index_and_entry_round_trip(tmp_path, monkeypatch):
 @pytest.mark.parametrize("payload,msg", [
     (b"{not json", "not valid JSON"),
     (json.dumps({"schema": 1, "stacks": {}}).encode(), "schema 1 is not supported"),
+    (json.dumps({"schema": 2, "stacks": {}}).encode(), "schema 2 is not supported"),   # index.json (<= v0.12.10)
     (json.dumps({"schema": 4, "stacks": {}}).encode(), "not supported"),
-    (json.dumps({"schema": 2}).encode(), "no stacks table"),
+    (json.dumps({"schema": 3}).encode(), "no stacks table"),
 ])
 def test_index_rejections(monkeypatch, payload, msg):
     _serve(monkeypatch, {"https://idx/index.json": payload})
@@ -129,24 +131,31 @@ def test_index_rejections(monkeypatch, payload, msg):
 def test_unknown_stack_in_index(tmp_path, monkeypatch):
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"X"})
     idx = _index(_entry(tar))
-    with pytest.raises(bi.BinaryInstallError, match="no binary is published"):
-        bi.index_entry(idx, "other")
+    assert bi.index_entries(idx, "other") == []          # none published: the caller names it
 
 
 def test_entry_requires_content_addressed_filename(tmp_path):
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"X"})
     idx = _index(_entry(tar))
-    idx["stacks"]["demo"]["filename"] = "demo.tar.zst"
+    idx["stacks"]["demo"][0]["filename"] = "demo.tar.zst"
     with pytest.raises(bi.BinaryInstallError, match="content-addressed"):
-        bi.index_entry(idx, "demo")
+        bi.index_entries(idx, "demo")
 
 
 def test_entry_requires_mandatory_passed_smoke(tmp_path):
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"X"})
     idx = _index(_entry(tar))
-    idx["stacks"]["demo"]["smoke"] = {"mode": "skipped", "result": "skipped"}
+    idx["stacks"]["demo"][0]["smoke"] = {"mode": "skipped", "result": "skipped"}
     with pytest.raises(bi.BinaryInstallError, match="mandatory smoke test"):
-        bi.index_entry(idx, "demo")
+        bi.index_entries(idx, "demo")
+
+
+@pytest.mark.parametrize("inputs", [[], [["demo-main", "0" * 64]], "x"])
+def test_entry_requires_an_inputs_object(tmp_path, inputs):
+    idx = _index(_entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"})))
+    idx["stacks"]["demo"][0]["inputs"] = inputs        # dict() would turn a list into a map
+    with pytest.raises(bi.BinaryInstallError, match="components/inputs not an object"):
+        bi.index_entries(idx, "demo")
 
 
 def test_non_https_url_refused(monkeypatch):
@@ -1040,7 +1049,7 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
     target = "aarch64-trixie"
     spec = svc.binary_spec("meshcom")
 
-    idx = {"schema": 2, "stacks": {"meshcom": {
+    idx = {"schema": 3, "stacks": {"meshcom": [{
         "filename": "meshcom-" + "0" * 64 + ".tar.zst", "url": "https://example.invalid/meshcom.tar.zst",
         "sha256": "0" * 64, "size": 1024, "built_from": "b" * 40,
         # The index must record a commit for EVERY covered component or the pins-must-match
@@ -1051,7 +1060,8 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
         "runtime_deps": [], "target": target, "os": target.split("-", 1)[1],
         "smoke": {"mode": "mandatory", "result": "passed"}, "lhpc_commit": "d" * 40,
         "builder_commit": "e" * 40, "container_digest": "debian@sha256:" + "f" * 64,
-        "extract_to": "runtime-root"}}}
+        "extract_to": "runtime-root", "published_at": "2026-01-01T00:00:00Z",
+        "inputs": _bi.input_digests(svc.stack("meshcom"), spec.covers, svc.build_inputs_text)}]}}
     monkeypatch.setattr(_bi, "_http_get",
                         lambda url, max_bytes: _json.dumps(idx).encode())
 
@@ -1780,11 +1790,11 @@ def test_update_without_a_published_binary_names_the_source_channel(
     rec = binary_receipt(svc)
     entry = stub_pipeline(svc)
     if missing == "no asset for the stack":
-        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: (_ for _ in ()).throw(
+        monkeypatch.setattr(bi, "index_entries", lambda idx, sid: (_ for _ in ()).throw(
             bi.BinaryInstallError(f"no binary is published for '{sid}'")))
     else:
-        monkeypatch.setattr(bi, "index_entry",
-                            lambda idx, sid: dataclasses.replace(entry(sid), target="armv6-other"))
+        monkeypatch.setattr(bi, "index_entries",
+                            lambda idx, sid: [dataclasses.replace(entry(sid), target="armv6-other")])
     res = svc.update("daemon", apply=True, source="binary")
     assert not res.ok
     assert res.next_commands == (["lhpc install daemon --source pinned --yes"] if missing == "no asset for the stack"

@@ -94,7 +94,7 @@ def test_the_web_client_is_its_own_component_outside_the_meshtasticd_tree(tmp_pa
 # ---- selection -----------------------------------------------------------------------------
 
 def test_select_web_takes_the_first_entry_of_the_channel_paired_with_the_installed_daemon():
-    entries = [bi._parse_entry("meshtastic-web", e, v3=True) for e in (
+    entries = [bi._parse_entry("meshtastic-web", e) for e in (
         _web("1" * 64, "dev", DAEMON_A), _web("2" * 64, "stable", DAEMON_B),
         _web("3" * 64, "stable", DAEMON_A), _web("4" * 64, "stable", DAEMON_A))]
     assert bi.select_web(entries, "stable", DAEMON_A).sha256 == "3" * 64

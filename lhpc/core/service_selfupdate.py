@@ -546,11 +546,12 @@ class SelfUpdateOpsMixin:
         """Apply the source update, then — ONLY on a REAL advance — synchronize the editable venv install
         with the SAME `sys.executable -m pip install -e <repo-root>` the managed helper runs, so a
         dependency change never leaves the install unusable. MUST be called with task admission already
-        HELD (by the operator flow) so nothing starts between apply and sync. A no-op/already-current or a
+        HELD (the operator flow, the one-click unit) so nothing starts between apply and sync. A no-op/already-current or a
         failed/refused apply runs NO pip. On a real advance the result carries `update_applied=True`; a
         pip failure returns `ok=False` + `venv_sync_failed=True`, preserving the apply-result data."""
         import dataclasses as _dc
         import sys as _sys
+        import time as _time
 
         from . import selfupdate
         res = self.self_update_apply(force=force)
@@ -559,8 +560,10 @@ class SelfUpdateOpsMixin:
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
         if root is not None:
+            t0 = _time.monotonic()
             pip = selfupdate.venv_sync(self._system.runner, _sys.executable, root,
                                        self._PIP_SYNC_TIMEOUT_S)
+            res = _dc.replace(res, data={**res.data, "pip_sync_s": _time.monotonic() - t0})
             if pip.returncode != 0:
                 detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
                 # Named and recorded, or — the record not written — the cause and the command
@@ -657,7 +660,28 @@ class SelfUpdateOpsMixin:
                                 next_commands=["lhpc self-update --apply"])
 
     @staticmethod
-    def _operator_outcome(res: ActionResult, *, restarted: bool) -> ActionResult:
+    def _without_restart_advice(res: ActionResult) -> list:
+        """The result's details without the apply's restart advice (both flows restart the console themselves)."""
+        instr = res.data.get("restart") or {}
+        done = {instr.get("note", ""), "Restart the web console to load the new version:",
+                "Restart the web console after cleaning up:"}
+        done |= {"  " + c for c in instr.get("commands", ())}
+        return [d for d in res.details if d and d not in done]
+
+    @classmethod
+    def _oneclick_outcome(cls, res: ActionResult) -> ActionResult:
+        """The one-click unit restarts the console itself (OnSuccess=/OnFailure=): a finished advance asks for nothing,
+        its cleanup-only partial says so (`_ONECLICK_CLEANUP_SUMMARY`); every advance drops the restart advice."""
+        import dataclasses as _dc
+        if not res.data.get("update_applied"):
+            return res
+        if res.data.get("units_refreshed") and not res.data.get("record_not_cleared"):
+            return _dc.replace(res, details=cls._without_restart_advice(res), next_commands=[],
+                               summary=cls._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed") else res.summary)
+        return _dc.replace(res, details=cls._without_restart_advice(res))
+
+    @classmethod
+    def _operator_outcome(cls, res: ActionResult, *, restarted: bool) -> ActionResult:
         """Replace the request path's advice with what this flow did; a named state keeps its command."""
         import dataclasses as _dc
 
@@ -666,11 +690,7 @@ class SelfUpdateOpsMixin:
         finished = res.ok or partial
         if not res.data.get("update_applied") or (not finished and res.data.get("venv_sync_failed")):
             return res
-        instr = res.data.get("restart") or {}
-        done = {instr.get("note", ""), "Restart the web console to load the new version:",
-                "Restart the web console after cleaning up:"}
-        done |= {"  " + c for c in instr.get("commands", ())}
-        details = [d for d in res.details if d and d not in done]
+        details = cls._without_restart_advice(res)
         details.append("The web console was restarted on the new version." if restarted else
                        "The web console is not running; it loads the new version when started.")
         if not finished:
@@ -1169,53 +1189,10 @@ class SelfUpdateOpsMixin:
                                                 "escapes the runtime root; the box's operator "
                                                 "checks state/locks/, then retries"])
                     raise _StopRun() from None
-            res = self.self_update_apply(force=force)
-            if self._source_advanced(res) or self._resumes_sync(res):   # incl. reset+clean-failed
-                root = selfupdate.repo_root()
-                if root is not None:
-                    t0 = _time.monotonic()
-                    pip = selfupdate.venv_sync(self._system.runner, sys.executable, root,
-                                               self._PIP_SYNC_TIMEOUT_S)
-                    # The slow-target budget's L4 quantity; the unit appends stderr to
-                    # logs/lhpc-selfupdate.log (docs/test-matrix.md#slow-target-baseline).
-                    print(f"[selfupdate] pip sync {_time.monotonic() - t0:.1f} s",
-                          file=sys.stderr, flush=True)
-                    if pip.returncode != 0:                     # P2: a failed sync FAILS the update
-                        # First line of pip's diagnostics, stripped of box-drawing/ANSI so the
-                        # persisted summary reads cleanly in the GUI flash (never a mid-box tail).
-                        detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
-                        summary, nxt, extra = self._incomplete_outcome(
-                            res, "venv-unsynced",
-                            "the venv sync FAILED" + (f" ({detail})" if detail else ""))
-                        res = ActionResult(False, summary, next_commands=nxt,
-                                           data={**dict(res.data), "venv_sync_failed": True,
-                                                 **extra})
-                    else:
-                        # Refresh the managed units with the NEW code. This path applies
-                        # inline (it does not go through _apply_and_sync), so without this
-                        # a one-click update left the OLD units installed: the new version
-                        # then reads its own integration as non-canonical, one-click
-                        # updating goes away and boot restore is skipped.
-                        ok_u, det_u = proxy_rerender.after_advance(self)
-                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u}
-                        # `venv-unsynced` is cleared only now, with the units refreshed (as in
-                        # `_apply_and_sync`): an interruption in between keeps it recorded.
-                        uncleared = self._clear_incomplete_states(
-                            ActionResult(bool(res.ok), res.summary,
-                                         data={**dict(res.data), **refreshed}),
-                            ("venv-unsynced", "units-stale")) if ok_u else None
-                        if uncleared is not None:
-                            res = uncleared
-                        else:
-                            if ok_u:
-                                summary, nxt, extra = (
-                                    self._ONECLICK_CLEANUP_SUMMARY
-                                    if res.data.get("cleanup_failed") else res.summary), [], {}
-                            else:
-                                summary, nxt, extra = self._units_stale_outcome(res, det_u)
-                            res = ActionResult(bool(res.ok) and ok_u, summary,
-                                               data={**dict(res.data), **refreshed, **extra},
-                                               next_commands=nxt)
+            res = self._apply_and_sync(force)                 # the one post-update path (venv sync, units)
+            if "pip_sync_s" in res.data:  # the slow-target budget's L4 quantity (docs/test-matrix.md#slow-target-baseline)
+                print(f"[selfupdate] pip sync {res.data['pip_sync_s']:.1f} s", file=sys.stderr, flush=True)
+            res = self._oneclick_outcome(res)
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the
