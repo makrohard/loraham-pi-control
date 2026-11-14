@@ -134,7 +134,8 @@ class MaintenanceOpsMixin:
         want = sref.sha if sref else stackupdates.pinned_target(
             self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        current = local_sha == want or (sref is not None and stable_lane.is_older(sref, local_sha))
+        current = local_sha == want or (sref is not None and stable_lane.is_older(
+            sref, local_sha, stable_lane.local_tags(run, src)))
         entry["status"] = stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
 
@@ -1853,7 +1854,8 @@ class MaintenanceOpsMixin:
                     c.source.path)):
                 ref = stable_refs[c.source.path] = stable_lane.resolve(self._system.runner.run, self._effective_remote(c))
                 head = self._system.runner.run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-                if why := stable_lane.update_refusal(ref, (head.stdout or "").strip()):
+                if why := stable_lane.update_refusal(ref, (head.stdout or "").strip(),
+                                                     stable_lane.local_tags(self._system.runner.run, src)):
                     refused.append(f"  {c.id}: {why}")
         if refused:
             return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",

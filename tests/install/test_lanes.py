@@ -211,3 +211,18 @@ def test_a_release_answer_without_a_tag_name_is_not_verified(box, capsys):
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0
     assert "releases could not be checked — try again later" in capsys.readouterr().out
     assert box.head() == box.c[0]
+
+
+def test_a_deleted_upstream_tag_still_blocks_a_downgrade(box, git, capsys):
+    box.push_tag("v3.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+    git(box.work, "push", "-q", "origin", "--delete", "v3.0")      # upstream withdraws v3.0 ...
+    box.push_tag("v2.9", box.c[1])
+    box.release = "v2.9"                                           # ... and its latest release is older
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
+    assert "older than the installed commit" in capsys.readouterr().out
+    assert box.head() == box.c[2]
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE

@@ -112,16 +112,24 @@ def tag_key(names):
     return max(shaped or [k for n in names if (k := version_key(n)) is not None], default=None)
 
 
-def is_older(ref: StableRef, installed: str) -> bool:
-    """The target is older than the installed commit: a lower tag key, or none while the installed commit has one."""
-    have = tag_key((ref.tags or {}).get(installed, ()))
+def local_tags(run, src) -> list:
+    """The tag names on the checkout's HEAD, kept from its clone: a tag the upstream deleted since still counts."""
+    out = run(["git", "-C", str(src), "tag", "--points-at", "HEAD"], timeout=5.0)
+    return out.stdout.split() if out.returncode == 0 else []
+
+
+def is_older(ref: StableRef, installed: str, mine=()) -> bool:
+    """The target is older than the installed commit: a lower tag key, or none while the installed commit has one.
+    The installed commit's tags: the upstream's and `mine` (`local_tags`). No tag at all (a default-branch HEAD install)
+    is not older: the plan's rule L6, the stable update appears when the upstream tags or releases."""
+    have = tag_key([*(ref.tags or {}).get(installed, ()), *mine])
     return have is not None and (ref.key is None or ref.key < have)
 
 
-def update_refusal(ref: StableRef, installed: str) -> str:
+def update_refusal(ref: StableRef, installed: str, mine=()) -> str:
     """Why an installed source at `installed` may not move to `ref` ("" = it may)."""
     if not ref.sha or not ref.verified:
         return "releases could not be checked — try again later" + (f" ({ref.why})" if ref.why else "")
-    if is_older(ref, installed):
+    if is_older(ref, installed, mine):
         return f"the stable target ({ref.label}) is older than the installed commit — nothing to update"
     return ""
