@@ -107,6 +107,8 @@ Fixed
   stays.
 - Known limitation: an interactive app's command on the Apps page runs only after its first start from the console
   (the start writes that radio's own config directory); before it, the command stops at its `cd`.
+- Known limitation: a client's stop also stops its radio's daemon when no other client uses it, also a daemon
+  started by hand (`lhpc stack start daemon@<rid>`).
 - Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
   Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
 
