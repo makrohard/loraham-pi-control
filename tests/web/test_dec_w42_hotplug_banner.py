@@ -311,7 +311,8 @@ def test_a_moved_unlisted_stick_is_one_line(web, tmp_path, monkeypatch):
     usb.devices = [*BOUND, UNLISTED]
     _lines(c)
     usb.devices = [*BOUND, _dev("1-6", "ABCD1234")]
-    assert sum("ABCD1234" in x for x in _lines(c)) == 1
+    lines = [x for x in _lines(c) if "ABCD1234" in x]
+    assert len(lines) == 1 and "port 1-6" in lines[0] and "1-2" not in lines[0]   # its current port (G1-B3-CODE B1)
 
 
 def test_an_old_event_without_an_identity_shows_beside_its_twin_and_one_close_closes_both(web, tmp_path, monkeypatch,

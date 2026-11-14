@@ -165,8 +165,9 @@ def _write(paths, state) -> bool:
 
 def banner(svc, scan=None, now=None) -> dict:
     """The dashboard's banner: {"lines": [{"id", "at", "line", "ids"}]}: the changes not yet closed, then one line per
-    attached stick no radio holds (A27; hidden when an undismissed event names the same stick, whose ✕ then carries
-    its "u:<identity>" too; `quiet` until it is unplugged or listed); [] = no banner.
+    attached stick no radio holds (A27; hidden when an undismissed event names the same stick, which then shows the
+    stick's current port and whose ✕ carries its "u:<identity>" too; `quiet` until it is unplugged or listed); [] = no
+    banner.
     It never raises: it renders on the home page, so a source that fails (the scan, the model table, the hardware
     list) gives no banner this time, never an error page."""
     try:
@@ -205,7 +206,9 @@ def _banner(svc, scan, now) -> dict:
         state = _read(svc._paths) or {"events": []}         # nothing recorded this time; the render still shows
     events = state["events"][-MAX_EVENTS:]
     named = {e.get("ident") for e in events} - {None, ""}
-    lines = [{**e, "ids": [e["id"], *([f"u:{e['ident']}"] if e.get("ident") in derived else [])]} for e in events]
+    lines = [{**e, "ids": [e["id"]]} if e.get("ident") not in derived else       # still attached and unlisted: the
+             {**e, "line": _new_stick(*derived[e["ident"]]), "ids": [e["id"], f"u:{e['ident']}"]}   # current port
+             for e in events]
     lines += [{"id": f"u:{i}", "at": "", "line": _new_stick(*derived[i]), "ids": [f"u:{i}"]}
               for i in sorted(derived, key=lambda i: derived[i][0]) if i not in named and i not in state.get("quiet", [])]
     return {"lines": lines}
