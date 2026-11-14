@@ -84,6 +84,33 @@ def test_the_stacks_row_headers_have_one_grid_track_per_field(page):
     assert len({r["version"] for r in rows if r["version"] is not None}) == 1, rows
 
 
+_HW_ROWS = """() => [...document.querySelectorAll('#hw-list tr.hwrow')].map(r => {
+    const b = r.querySelector('td.act button').getBoundingClientRect(), row = r.getBoundingClientRect();
+    return {rid: r.dataset.rid, cells: [...r.cells].every(c => { const x = c.getBoundingClientRect();
+                                                                return x.left >= 0 && x.right <= innerWidth; }),
+            button: b.width > 0 && b.left >= 0 && b.right <= innerWidth,
+            top_right: b.top - row.top < 24 && row.right - b.right < 24};   // the mock: Disable on the first line, right
+})"""
+
+
+def test_the_hardware_list_reflows_per_row_on_a_phone(page):
+    """At 390 px each radio is one block: every cell and its Disable/Enable sit inside the viewport,
+    and the list does not scroll inside its box. Desktop keeps the table; another wide table (the
+    Auto-install list) still scrolls inside its own box."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.goto(page.lab_base + "/hardware", wait_until="networkidle").ok
+    assert page.evaluate(_HW_ROWS) == [{"rid": rid, "cells": True, "button": True, "top_right": True}
+                                      for rid in ("r1", "r2")]
+    assert page.evaluate("() => { const t = document.getElementById('hw-list');"
+                         " return t.scrollWidth - t.clientWidth; }") <= 1
+    assert not page.locator("#hw-list thead").is_visible()
+    assert page.goto(page.lab_base + "/auto-install", wait_until="networkidle").ok
+    assert page.evaluate("() => getComputedStyle(document.getElementById('ai-select')).overflowX") == "auto"
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(page.lab_base + "/hardware", wait_until="networkidle")
+    assert page.locator("#hw-list thead").is_visible()
+
+
 def _auto_install_rows(page):
     page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
     page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)

@@ -2,7 +2,7 @@
    USB setup stays on the /hardware page (it is the only page that prepares it). Context: view, models, hp. -#}
 {%- from "_macros.html" import daemon_badge -%}
     {% if view.rows %}
-    <table class="hwlist" id="hw-list">
+    <table class="hwlist hwlist-reflow" id="hw-list">
       <thead><tr><th>Radio</th><th>Model</th><th>Band</th><th>Stick</th><th>State</th><th></th></tr></thead>
       <tbody>
       {% for r in view.rows %}
