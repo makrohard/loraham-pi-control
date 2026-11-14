@@ -619,7 +619,7 @@ def _pr(port, data="A\n"):
     return comp, Stack(id="prs", name="prs", components=(comp,), main="pr")
 
 
-def _record_main(life, comp, stack):
+def _record_main(life, comp, stack, extra=None):
     # A real main session leader recorded as the verified role="" launch, so spawn_post_start has a
     # main to bind its runner to (a detached runner must never be unbound).
     import subprocess
@@ -629,7 +629,7 @@ def _record_main(life, comp, stack):
         if idn and idn.get("exec") == "sleep":
             break
         time.sleep(0.05)
-    assert life.record_launch(stack, comp, p.pid, "", ident=life._capture_identity(p.pid), role="")
+    assert life.record_launch(stack, comp, p.pid, "", ident=life._capture_identity(p.pid), role="", extra=extra)
     return p
 
 
@@ -800,6 +800,21 @@ def _main_leader(life, port):
     comp, stack = _pr(port)                       # comp id "pr" WITH post_steps
     p = _record_main(life, comp, stack)
     return p, comp, stack
+
+
+@pytest.mark.needs_session
+def test_an_instances_post_runner_record_names_its_radio(tmp_path):
+    # G1-B1A second read M1: an instance's runner record carries its rid, so only that instance's row reads "booting"
+    from lhpc.core.commands import Instance
+    life = _real_life(tmp_path)
+    comp, stack = _pr(_free_port())
+    p = _record_main(life, comp, stack, extra={"rid": "r3"})         # r3's main launch
+    try:
+        assert life.spawn_post_start(stack, comp, {}, "", inst=Instance("r3")).ok
+        assert [r.get("rid") for r in life.owned_records("pr", role="post")] == ["r3"]
+    finally:
+        life._cancel_post_runners(comp, None)
+        p.terminate(); p.wait()
 
 
 @pytest.mark.needs_session
