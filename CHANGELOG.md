@@ -76,6 +76,8 @@ Upgrading from 0.13.x
   whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
+- A radio whose saved POWER is above its model's maximum (a PineDio stick: 14 dBm) is named on the Hardware page and
+  by `lhpc hardware`: lower it there; until then its daemon refuses the value.
 - The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
   grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
 - An update adds no USB stick: add your USB sticks on the Hardware page.
