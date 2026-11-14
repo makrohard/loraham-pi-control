@@ -739,3 +739,73 @@ def test_a_range_without_a_profile_reads_the_same_in_any_locale(repo, lang):
                        check=False, env={**os.environ, "LC_ALL": lang, "LANG": lang})
     assert p.returncode in (0, 1) and "VERDICT" in p.stdout, (p.returncode, p.stderr)
     assert "git failed" not in p.stderr
+
+
+# ---- T0: an exemption is judged per pattern hit (tests/README.md "The rules") ------------------------------------
+# Assembled, so that this file's own lines do not match the patterns they test.
+STW = ".starts" + "with("
+NET = "reque" + "sts."
+SRC = 'open("lh' + 'pc/core/x.py").read()'
+LEGACY = "# rule-1 " + "exception"
+
+
+def _patterns(repo, body):
+    """The checker's rc and patterns row for test_two's body; its first line is tests/core/test_ok.py:5."""
+    _commit(repo, _test("\ndef test_two():\n" + body + "\n"))
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False)
+    assert "Traceback" not in p.stderr, p.stderr
+    return p.returncode, next((ln for ln in p.stdout.splitlines() if ln.startswith("patterns")), p.stderr)
+
+
+def test_a_tag_of_the_patterns_rule_with_a_reason_exempts_its_hit(repo):
+    """Red before at the parent: no `# rule-<n>:` tag was read, the hit counted (startswith 1, WARN)."""
+    rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  # rule-10: a log sentence, not a decision')
+    assert rc == 0 and line.split()[-1] == "OK" and "startswith 0" in line, line
+    assert "1 exempt: tests/core/test_ok.py:5 rule-10 (a log sentence, not a decision)" in line, line
+
+
+@pytest.mark.parametrize("tag", ["# rule-4: lab-local server", "# rule-99: no such rule", "# rule-10:",
+                                 "# rule-10:   ", LEGACY],
+                         ids=["wrong-rule", "unknown-rule", "empty-reason", "blank-reason", "legacy-tag"])
+def test_a_tag_that_is_not_the_hits_rule_with_a_reason_leaves_the_hit(repo, tag):
+    """The four `rule-` cases are controls at the parent (no such tag was read there); their mutants are a tag of any
+    rule or an empty reason accepted. The legacy tag is red before: it skipped the whole line."""
+    rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  {tag}')
+    assert rc == 0 and line.split()[-1] == "WARN" and "startswith 1" in line, line
+    assert "exempt" not in line, line
+
+
+def test_one_tag_exempts_only_its_own_pattern_on_a_line_with_two(repo):
+    """Red before at the parent: both hits counted (network 1)."""
+    rc, line = _patterns(repo, f'    assert {NET}get(URL).text{STW}"ok")  # rule-4: lab-local server')
+    assert rc == 0 and line.split()[-1] == "WARN" and "network 0" in line and "startswith 1" in line, line
+    assert "1 exempt: tests/core/test_ok.py:5 rule-4 (lab-local server)" in line, line
+
+
+def test_the_legacy_tag_does_not_exempt_assert_true(repo):
+    """Red before at the parent: the legacy tag skipped the line before the HARD patterns (OK)."""
+    rc, line = _patterns(repo, "    assert " + "True  " + LEGACY)
+    assert rc == 1 and line.split()[-1] == "HARD" and "assert-True 1" in line, line
+
+
+@pytest.mark.parametrize("body, pattern", [
+    ("    import inspect\n    assert inspect." + "getsource(len)  " + LEGACY, "getsource"),
+    ("    pass\n    assert " + SRC + "  " + LEGACY + ": a docs symbol exists", "source-read"),
+], ids=["getsource", "source-read"])
+def test_the_legacy_tag_exempts_getsource_and_source_read_and_is_listed(repo, body, pattern):
+    """Red before at the parent: the hit was skipped but never listed."""
+    rc, line = _patterns(repo, body)
+    reason = "a docs symbol exists" if pattern == "source-read" else "legacy tag"
+    assert rc == 0 and line.split()[-1] == "OK" and f"{pattern} 0" in line, line
+    assert f"1 exempt: tests/core/test_ok.py:6 rule-1 ({reason})" in line, line
+
+
+def test_the_row_lists_every_exemption_as_place_rule_and_reason(repo):
+    """The listed form, whole. Red before at the parent: the row had no list."""
+    rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  # rule-10: a log sentence\n'
+                               f'    assert {NET}get(URL)  # rule-4: lab-local server')
+    assert rc == 0, line
+    assert line == (f"patterns     getsource 0 assert-True 0 source-read 0 {SL} 0 startswith 0 network 0; 2 exempt: "
+                    "tests/core/test_ok.py:5 rule-10 (a log sentence); tests/core/test_ok.py:6 rule-4 (lab-local server)"
+                    "   OK")

@@ -63,7 +63,14 @@ WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"'
                  "sleep": re.compile(r"time\.sleep\("),           # outside WALLCLOCK_DIRS only: inside, the HARD row
                  "startswith": re.compile(r"assert .*\.startswith\("),
                  "network": re.compile(r"\b(requests\.|urllib\.request|socket\.create_connection)")}
+# An exemption is judged per pattern hit: a hit is exempt only when its line carries the tag of that pattern's rule
+# (tests/README.md "The rules") with a reason, `# rule-<n>: <reason>`. A wrong or unknown rule number or an empty
+# reason exempts nothing, and one tag exempts only its own pattern. The legacy `# rule-1 exception` exempts getsource
+# and source-read only; `assert True` and the textual sleep take no tag. Every exemption is listed in the row.
+PATTERN_RULE = {"source-read": 1, "network": 4, "startswith": 10}
+RULE_TAG = re.compile(r"#\s*rule-(?P<n>\d+):(?P<reason>[^#]*)")
 EXEMPT = "# rule-1 exception"
+LEGACY_PATTERNS = ("getsource", "source-read")
 # The wall-clock rule (HARD, the same for every repository): a real clock in a test, judged on the HEAD file's AST
 # for the added lines only. A call of time.time/monotonic/sleep (also through an alias of the module or of the
 # function), a string with "sleep N" (an executed shell text or a fake-script body alike) and an argv list or tuple
@@ -328,6 +335,17 @@ def wallclock_lines(src: str, added: set[int]) -> list[int]:
     return sorted(hits)
 
 
+def exemption(pattern: str, text: str) -> str | None:
+    """`rule-<n> (<reason>)` when the line's tag exempts this pattern's hit on it, else None (the hit counts)."""
+    rule = PATTERN_RULE.get(pattern)
+    for m in RULE_TAG.finditer(text):
+        if rule is not None and int(m["n"]) == rule and m["reason"].strip():
+            return f"rule-{rule} ({m['reason'].strip()})"
+    if pattern in LEGACY_PATTERNS and EXEMPT in text:
+        return f"rule-1 ({text.split(EXEMPT, 1)[1].strip(' :') or 'legacy tag'})"
+    return None
+
+
 def check(base: str, head: str, facts: list[str], correction: bool = False) -> list[tuple[str, str, str]]:
     rng = f"{base}..{head}"
     added = added_lines(git("diff", "--unified=0", rng))
@@ -390,16 +408,22 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # patterns
     in_tests = [(p, n, t) for p, n, t in added if is_test_file(p) or layer_of(p)]
     counts = dict.fromkeys((*HARD_PATTERNS, *WARN_PATTERNS), 0)
-    for p, _, text in in_tests:
-        if EXEMPT in text:
-            continue
+    exempt = []
+    for p, n, text in in_tests:
         for k, rx in (*HARD_PATTERNS.items(), *WARN_PATTERNS.items()):
             if k == "sleep" and p.startswith(WALLCLOCK_DIRS):
                 continue                    # the wallclock row judges a sleep there (HARD), not this textual WARN
-            counts[k] += bool(rx.search(text))
+            if not rx.search(text):
+                continue
+            reason = exemption(k, text)
+            if reason:
+                exempt.append(f"{p}:{n} {reason}")
+            else:
+                counts[k] += 1
     v = ("HARD" if any(counts[k] for k in HARD_PATTERNS)
          else "WARN" if any(counts[k] for k in WARN_PATTERNS) else "OK")
-    rows.append(("patterns", " ".join(f"{k} {c}" for k, c in counts.items()), v))
+    rows.append(("patterns", " ".join(f"{k} {c}" for k, c in counts.items())
+                 + (f"; {len(exempt)} exempt: {'; '.join(exempt)}" if exempt else ""), v))
 
     # markers
     unmarked = 0
