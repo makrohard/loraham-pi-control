@@ -21,6 +21,13 @@ def stack_bands(stack) -> tuple:
     return tuple(sorted({c.band for c in stack.components if getattr(c, "band", "")}))
 
 
+def fixed_band(stack) -> str:
+    """The one band of a fixed-band stack (no component declares `bands`, and it has exactly one band: meshcom,
+    meshcore, chat), else "". Such a stack has no band to choose, so its launch records carry none: one means this."""
+    bands = stack_bands(stack)
+    return bands[0] if len(bands) == 1 and not any(c.bands for c in stack.components) else ""
+
+
 def fixed_ports_only(stack) -> bool:                          # transitional: per-radio Reticulum (next week)
     """DEC-W384h, by property: every TCP listener of the stack has a fixed port (no `{port:B}` template), so one set
     of ports serves whichever radio it runs on, and it gets ONE instance's pages and firewall rows."""
@@ -116,12 +123,15 @@ def recorded(svc, sid: str) -> set:
 
 def recorded_bands(svc, sid: str) -> dict:
     """{rid: the band it was launched on} of `sid`'s running instances, by their verified launch records (13.16): the
-    launch's own evidence, never the hardware row as it reads now (G1-K4B 3, 6). A record without a band: ""."""
+    launch's own evidence, never the hardware row as it reads now (G1-K4B 3, 6). A record without a band: "", or the
+    one band of a fixed-band stack (`fixed_band`)."""
     life, out = svc._lifecycle(), {}
+    stack = svc.stack(sid)
+    fixed = fixed_band(stack) if stack is not None else ""
     for rec in life.owned_inventory()[0]:
         if rec.get("rid") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
                 and life.verify_owned(rec)[0]:
-            band = str(rec.get("band") or "")
+            band = str(rec.get("band") or "") or fixed
             out[rec["rid"]] = band if out.setdefault(rec["rid"], band) == band else ""   # G1-K4B-RE 3: disagree -> ""
     return out
 
