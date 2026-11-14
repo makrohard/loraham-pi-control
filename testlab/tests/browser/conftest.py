@@ -100,3 +100,50 @@ def seeded_rf_logs(lab):
                                 timeout=10) as r:
         record = json.loads(r.read())["records"][0]
     return SimpleNamespace(dir=logs, older=older, newer=newer, meshtastic_record=record)
+
+
+@pytest.fixture()
+def flask_page(browser, tmp_path, monkeypatch):
+    """A factory: a real Chromium page over the console app itself (no lab), for pages the lab cannot set up."""
+    def make(*, choices=True, activity=False, path="/hardware/radio/r3"):
+        """A real Chromium page over the console app (no lab): every request of the page is answered by a Flask test
+        client on a runtime with a USB radio r3. Returns (page, posts): `posts` collects each POST the page sends."""
+        from urllib.parse import urlsplit
+
+        from lhpc.adapters.web.app import create_app
+        from lhpc.core import radio_start, radios, usb_flow
+        from lhpc.core.paths import Paths
+        from lhpc.core.probes.backends import FakeSystem
+        from lhpc.core.services import ControllerService
+        from lhpc.core.usb_access import Probe
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config" / "radios.toml").write_text(radios.render((
+            radios.Radio("r1", "low", "loraham", "433"),
+            radios.Radio("r3", "mstick", "meshstick-1262", "868", usb_serial="MSTICK01"))))
+        items = (usb_flow.Choice("1-1.3", "MSTICK01", True, "port 1-1.3: serial MSTICK01", ""),
+                 usb_flow.Choice("1-2", "MSTICK02", True, "port 1-2: serial MSTICK02", "")) if choices else ()
+        monkeypatch.setattr(usb_flow, "usb_choices", lambda found, m: usb_flow.Choices(Probe.PRESENT, "", items))
+        if activity:
+            real = radio_start.radio_detail
+            monkeypatch.setattr(radio_start, "radio_detail", lambda svc, rid: {**real(svc, rid), "activity": ["daemon"],
+                                                                               "stop_first": "stop its daemon"})
+        client = create_app(service_factory=lambda: ControllerService(system=FakeSystem().system,
+                                                                      paths=Paths(runtime_root=tmp_path))).test_client()
+        posts = []
+
+        def handle(route, request):
+            u = urlsplit(request.url)
+            path = u.path + ("?" + u.query if u.query else "")
+            if request.method == "POST":
+                posts.append((u.path, request.post_data or ""))
+                route.fulfill(status=200, body="posted")              # captured, not run
+                return
+            resp = client.get(path)
+            route.fulfill(status=resp.status_code, body=resp.get_data(),
+                          headers={k: v for k, v in resp.headers.items() if k.lower() != "content-length"})
+        context = browser.new_context(viewport={"width": 1280, "height": 900})
+        context.route("http://127.0.0.1:9/**", handle)
+        page = context.new_page()
+        page.goto("http://127.0.0.1:9" + path, wait_until="load")
+        return page, posts
+    return make
