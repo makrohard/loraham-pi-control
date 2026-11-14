@@ -305,9 +305,9 @@ class DaemonParamsMixin:
         if why or not self._has_daemon_params(stack_id):
             return {}
         ov = {**radio_start.row_dp(self, rid), **radio_start.instance_dp(self, stack_id, rid)}   # the instance's set wins
-        out: dict[str, str] = {}
+        out, pmax = {}, radio_start.power_max(self, rid)          # one list + model read for every param (G1-B3-CODE N3)
         for name in daemon_params.ALL_PARAMS:
-            eff = ov.get(name) or daemon_params.default_value(stack_id, band, name, radio_start.power_max(self, rid))
+            eff = ov.get(name) or daemon_params.default_value(stack_id, band, name, pmax)
             if eff:
                 out[name] = eff
         return out
