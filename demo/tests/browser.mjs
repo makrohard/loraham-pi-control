@@ -62,11 +62,14 @@ try {
   step = "line 56: await hasOp(page, \"start\");"; console.log("STEP", step);
   await hasOp(page, "start");
   await page.evaluate(() => {
+    // 0.14: the stack's Run form names its instance through a radio select (kiss@r1, kiss@r2).
+    const offers = (t) => t.value === "kiss@r1" || [...(t.options || [])].some((o) => o.value === "kiss@r1");
     const f = [...document.querySelectorAll('form')].find((f) => {
-      const op = f.querySelector('input[name="op"]'), t = f.querySelector('input[name="target"]');
-      return op && op.value === "start" && t && /kiss/.test(t.value);
+      const op = f.querySelector('input[name="op"]'), t = f.querySelector('[name="target"]');
+      return op && op.value === "start" && t && offers(t);
     });
     if (!f) throw new Error("kiss start form not found");
+    f.querySelector('[name="target"]').value = "kiss@r1";
     console.log("CLICKED FORM:", f.outerHTML.replace(/\s+/g, " ").slice(0, 600));   // DIAGNOSTIC (B4b)
     console.log("RUN FORMS:", [...document.querySelectorAll('form')].filter(x => { const o = x.querySelector('input[name="op"]'); return o && o.value === "start"; }).map(x => x.outerHTML.replace(/\s+/g, " ").slice(0, 300)).join(" || ").slice(0, 2000));
     (f.querySelector('button') || { click() { f.requestSubmit(); } }).click();
