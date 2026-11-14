@@ -41,9 +41,9 @@ airtime, and a MANAGED CAD wait would gap live audio.
 | `audio_capture` / `audio_playback` | `default` | | ALSA devices. The terminal client lists up to 16 PCMs (capture-capable or without IOID restriction): with two or more it uses the saved names if both are listed, else asks at start (Enter = default); with one it uses it; with none it keeps the saved names |
 
 LHPC writes each instance's file with its radio's band only (`433_*` or `868_*`) and `active_band`
-(0 = 433, 1 = 868) from that band; the app rewrites it with both bands whenever it saves (its config
-dialog, and when it quits by itself; a stop by signal, such as lhpc's stop, saves nothing). Daemon-side
-radio parameters: [daemon](daemon.md#radio-parameters).
+(0 = 433, 1 = 868) from that band; the app rewrites it with both bands whenever it saves (its dialogs,
+and when it quits by itself; a stop by signal, such as lhpc's stop, saves nothing). Daemon-side radio
+parameters: [daemon](daemon.md#radio-parameters).
 
 ## Position (GPS)
 
