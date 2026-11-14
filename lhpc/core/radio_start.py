@@ -725,7 +725,15 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
-def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None, inherited=None) -> tuple:
+def power_max(svc, rid: str):
+    """A34: radio `rid`'s model `power_max_dbm` (the daemon's continuous POWER window's top), or None without its row
+    or model."""
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None) if rid else None
+    model = radio_models.load().get(row.model) if row else None
+    return model.power_max_dbm if model else None
+
+
+def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None, inherited=None, pmax=None) -> tuple:
     """The daemon-param edits of a settings save, ({PARAM: canonical value, or "" to clear}, ""), or ({}, why): a
     param not in `values` is left out; a blank clears; a value is validated for the chip, then canonicalised, and one
     equal to what it inherits (`inherited`, an instance's: its radio's row; else its default) clears. A radio's save (`shown`: the values its panel shows) keeps only what the operator
@@ -736,12 +744,12 @@ def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=N
         if name not in values:
             continue
         raw = str(values[name]).strip()
-        if raw and (err := daemon_control.validate_set(name, raw, chip, high_power)):
+        if raw and (err := daemon_control.validate_set(name, raw, chip, high_power, pmax)):
             return {}, f"{name}: {err}"
         canon = daemon_control.canonical_value(name, raw) if raw else ""
         if shown is None:
-            out[name] = "" if canon == (inherited or {}).get(name, daemon_params.default_value(sid, band, name)) else canon
-        elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name)):
+            out[name] = "" if canon == (inherited or {}).get(name, daemon_params.default_value(sid, band, name, pmax)) else canon
+        elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name, pmax)):
             out[name] = canon
     return out, ""
 
@@ -755,7 +763,7 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
     chip, grant = chip_family(svc, rid) or "", effective_high_power(svc, rid)
     return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
-            and daemon_control.validate_set(name, str(v), chip, grant) is None}
+            and daemon_control.validate_set(name, str(v), chip, grant, power_max(svc, rid)) is None}
 
 
 def dp_target(svc, target: str, rid: str) -> tuple:
@@ -783,7 +791,8 @@ def params_view(svc, target: str, rid: str) -> dict:
     return {"stack": target, "band": band, "rid": rid, "is_daemon": is_daemon,
             "can_apply": is_daemon or _apply_open(radio_clients(svc, rid, sid)), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
-            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, rid) or "", effective_high_power(svc, rid))}
+            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, rid) or "", effective_high_power(svc, rid),
+                                             power_max(svc, rid))}
 
 
 def _apply_open(clients) -> bool:
@@ -806,7 +815,7 @@ def save_params(svc, target: str, rid: str, values: dict):
     if is_daemon:
         return set_row_dp(svc, rid, None, (target, values))
     edits, err = dp_updates(svc, sid, band, values, chip_family(svc, rid) or "", effective_high_power(svc, rid),
-                            inherited=row_dp(svc, rid))
+                            inherited=row_dp(svc, rid), pmax=power_max(svc, rid))
     if err:
         return ActionResult(False, err)
     try:
@@ -827,7 +836,7 @@ def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
     sid = svc._owner_stack_id(target)
     shown = row_dp(svc, rid)
     return dp_updates(svc, sid, band, values, svc.radio_chip_family(rid), effective_high_power(svc, rid),
-                      {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()})
+                      {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()}, pmax=power_max(svc, rid))
 
 
 def effective_high_power(svc, rid: str) -> bool:

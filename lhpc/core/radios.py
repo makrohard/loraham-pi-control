@@ -244,11 +244,11 @@ def _model_checks(r, models):
     if r.high_power is True and not m.high_power_switch:
         out.append(f"{r.id}: {m.label} has no high-power switch")
     out += [f"{r.id}: {why}" for why in _setting_errors(r.txmode, r.cadmon, r.cadrssi, r.ocp_ma, dict(r.dp), m.chip,
-                                                         bool(r.high_power))]
+                                                         bool(r.high_power), m.power_max_dbm)]
     return out
 
 
-def _setting_errors(txmode, cadmon, cadrssi, ocp, dp, chip, high_power) -> list:
+def _setting_errors(txmode, cadmon, cadrssi, ocp, dp, chip, high_power, power_max=None) -> list:
     """The per-radio setting rules; a None value is "not set" and passes."""
     out = []
     if txmode is not None and txmode not in TXMODES:
@@ -262,20 +262,20 @@ def _setting_errors(txmode, cadmon, cadrssi, ocp, dp, chip, high_power) -> list:
         if why:
             out.append(why)
     for name, value in sorted(dp.items()):
-        why = _dp_error(name, value, chip, high_power)
+        why = _dp_error(name, value, chip, high_power, power_max)
         if why:
             out.append(f"dp_{name} {value!r}: {why}")
     return out
 
 
-def _dp_error(name, value, chip, high_power) -> str:
+def _dp_error(name, value, chip, high_power, power_max=None) -> str:
     """One dp value's rule: a known param; an integer param in canonical form (daemon_control.validate_set admits
     "08" and "-090", Q12); then validate_set's own range and choice rules."""
     if name not in ALL_PARAMS:
         return "unknown"
     if daemon_control.int_range(name, chip) is not None and not _CANON_INT.fullmatch(value):
         return "not a canonical integer (no leading zero, no + sign, 0 without a sign)"
-    return daemon_control.validate_set(name, value, chip, high_power) or ""
+    return daemon_control.validate_set(name, value, chip, high_power, power_max) or ""
 
 
 def _ocp_error(ocp, chip):
