@@ -71,6 +71,19 @@ def test_a_phone_viewport_has_no_horizontal_overflow(page, path):
     assert page.locator("a.home").is_visible(), "the Home link must stay reachable"
 
 
+def test_the_stacks_row_headers_have_one_grid_track_per_field(page):
+    """At desktop width each top-level row header lays its fields out on a grid with ONE track per field (marker,
+    name, status, version, extra): no empty track left over, and the version cells of all rows line up."""
+    page.set_viewport_size({"width": 1280, "height": 900})
+    assert page.goto(page.lab_base + "/stacks", wait_until="networkidle").ok
+    rows = page.evaluate("""() => [...document.querySelectorAll('.stacklist .stackrow > summary')].map(s => {
+        const v = s.querySelector('.col-version');
+        return {tracks: getComputedStyle(s).gridTemplateColumns.split(' ').length,
+                version: v ? Math.round(v.getBoundingClientRect().left) : null}; })""")
+    assert len(rows) >= 2 and all(r["tracks"] == 5 for r in rows), rows
+    assert len({r["version"] for r in rows if r["version"] is not None}) == 1, rows
+
+
 def _auto_install_rows(page):
     page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
     page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)

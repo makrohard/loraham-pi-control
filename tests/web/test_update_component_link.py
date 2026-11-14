@@ -114,8 +114,8 @@ def _seed(tmp_path, entries, now=1000):
     su.record(Paths(runtime_root=tmp_path), entries, now=now)
 
 
-def _page(web, tmp_path, cmds, dirs):
-    r = web(system=FakeSystem(commands=cmds, paths=_fs_paths(*dirs)).system).get("/stacks")
+def _page(web, tmp_path, cmds, dirs, path="/stacks"):
+    r = web(system=FakeSystem(commands=cmds, paths=_fs_paths(*dirs)).system).get(path)
     assert r.status_code == 200                       # an absent link on an error page proves nothing
     doc = htmlq.parse(r.get_data(as_text=True))
     assert doc.by_id("stackrow-daemon")               # the row the link would sit beside is there
@@ -154,6 +154,7 @@ def test_stale_cache_renders_unchecked_not_a_stale_verdict(web, tmp_path, status
     # The verdict was computed against A; the checkout has since moved to B.
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(status, A)})
-    doc = _page(web, tmp_path, _git_src(ds, B), [ds])
+    doc = _page(web, tmp_path, _git_src(ds, B), [ds], path="/stacks?open=daemon")
     assert not doc.find("a", class_="update-link")               # no stale nagging
-    assert "unchecked" in doc.text                               # the Install panel says so
+    install = doc.within(doc.by_id("stack-install-daemon"))
+    assert [p.text.strip() for p in install.find("span", class_="pill")][:1] == ["unchecked"]   # the panel says so
