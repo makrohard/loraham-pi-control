@@ -37,13 +37,14 @@ FRESH_WINDOW_S = 200
 BOOT_GATE_WAIT_S = 20
 
 # Bound of the root-written snapshot (/etc/lhpc/firewall.snapshot.json) the controller reads as the
-# applied evidence of its gates (service_firewall `_fw_applied_candidate`).
+# applied evidence of its gates (service_firewall `_fw_applied_candidate`). The helper's copy refuses an
+# apply whose snapshot or journal would exceed it, so no valid apply ever hits this reader's bound.
 MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 
 # Bounded collections: the helper treats the candidate as untrusted data, so every list the
 # unprivileged side controls has a hard cap (schema-rejected above it, never truncated).
-MAX_ENDPOINTS = 128
-MAX_PROXY_INGRESS = 32
+MAX_ENDPOINTS = 512                    # 64 radios: 256 rows measured (knob + deny rows)
+MAX_PROXY_INGRESS = 512                # the console + every page of 64 radios: 226 measured
 MAX_CIDRS = 32
 MAX_SSH_PORTS = 16
 MAX_EXTRA_ALLOW = 64

@@ -51,8 +51,8 @@ CHAIN_NAME = "input"
 CHAIN_HOOK = "input"
 CHAIN_PRIORITY = 0            # "filter" priority
 
-MAX_ENDPOINTS = 128
-MAX_PROXY_INGRESS = 32
+MAX_ENDPOINTS = 512
+MAX_PROXY_INGRESS = 512
 MAX_CIDRS = 32
 MAX_SSH_PORTS = 16
 MAX_EXTRA_ALLOW = 64
@@ -633,7 +633,11 @@ RUN_DIR = "/run/lhpc-firewall"
 LOCK_PATH = ETC_DIR + "/.firewall.lock"
 RECEIPT_PATH = RUN_DIR + "/check.json"
 
-MAX_CANDIDATE_BYTES = 256 * 1024
+MAX_CANDIDATE_BYTES = 1024 * 1024
+# Every privileged state file (snapshot, journal, meta, transition record) is read within this bound, and
+# an apply whose snapshot or journal would exceed it is refused by name before any live change. The
+# controller reads the snapshot with the same bound (lhpc.core.firewall.MAX_SNAPSHOT_BYTES, drift-tested).
+MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 LOCK_WAIT_S = 10.0
 
 
@@ -1054,7 +1058,7 @@ def _paths(etc_dir, run_dir):
 
 
 def _read_json(path):
-    text, err = read_bounded(path, MAX_CANDIDATE_BYTES)
+    text, err = read_bounded(path, MAX_SNAPSHOT_BYTES)
     if err:
         return None
     try:
@@ -1069,7 +1073,7 @@ def _read_json_state(path):
     interrupted or tampered privileged state that must NEVER be treated as 'absent'. Mutating
     callers (apply/reset/recovery) fail closed with zero writes on 'present-invalid'; read-only
     callers report unverifiable."""
-    text, err = read_bounded(path, MAX_CANDIDATE_BYTES)
+    text, err = read_bounded(path, MAX_SNAPSHOT_BYTES)
     if err:
         try:
             os.lstat(path)
@@ -1430,6 +1434,13 @@ def op_apply(sysx, candidate_path, *, cleanup=False, etc_dir=ETC_DIR, run_dir=RU
         old_hash = _sha256_file(p["snapshot"]) if sstate == "valid" else ""
         jrec = {"op": "apply", "txid": txid, "old_snapshot": old_snap,
                 "old_hash": old_hash, "new_hash": new_hash, "staged": staged}
+        journal = json.dumps({**jrec, "phase": "snapshot-staged"}, sort_keys=True)
+        for name, text in (("snapshot", snap_json), ("journal", journal)):
+            size = len(text.encode("utf-8"))
+            if size > MAX_SNAPSHOT_BYTES:      # its reader could not read it back: refuse, nothing changed
+                print(f"candidate refused: the {name} would be {size} bytes, over MAX_SNAPSHOT_BYTES "
+                      f"({MAX_SNAPSHOT_BYTES}) — nothing was changed")
+                return EXIT_CANDIDATE
         atomic_write(p["journal"], json.dumps({**jrec, "phase": "begin"}, sort_keys=True), 0o600)
         atomic_write(staged, snap_json, 0o644)
         atomic_write(p["journal"], json.dumps({**jrec, "phase": "snapshot-staged"},

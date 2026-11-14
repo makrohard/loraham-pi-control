@@ -22,7 +22,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
-from firewall_fixture import _expected_live_json, _FakeSys, _seed_meta
+from firewall_fixture import _candidate, _ep, _expected_live_json, _FakeSys, _seed_meta
 
 R1, R2 = radios_fixture.RADIOS
 R3 = radios.Radio("r3", "ch341", "ch341-rfm98pw-433", "433", usb_serial="CHE1W433")
@@ -681,3 +681,72 @@ def test_the_console_removal_narrowing_holds_with_preopened_rows(tmp_path, monke
     monkeypatch.setattr("lhpc.core.webserver.listener_addresses", lambda system, port: ["0.0.0.0"])
     assert svc._narrowing_is_console_removal_only()
     assert svc.firewall_gate_activation(svc._prospective_nginx_ports())[0]
+
+
+# --- caps and bounds (§4): a full 64-radio list fits, a snapshot the reader could not read is never written --------
+
+def _full_list(lab, long_cidrs):
+    """64 radios, every knob listener exposed on each, every page remote (evidence-caps-v1/m7, v3/m9)."""
+    from lhpc.core.commands import Instance
+    rows = [R1, R2] + [radios.Radio(f"r{i}", f"n{i}", "ch341-rfm98pw-433" if i % 2 else "pinedio-usb-1262",
+                                    "433" if i % 2 else "868", usb_serial=f"S{i:04d}XYZW") for i in range(3, 65)]
+    lab.radios(rows)
+    paths = Paths(runtime_root=lab.root)
+    nets = (lambda n: [f"172.{16 + j % 16}.{n % 256}.{(n * 7 + j) % 256}/32" for j in range(32)]) if long_cidrs \
+        else (lambda n: [NET])
+    for r in rows:
+        n = int(r.id[1:])
+        cfgmod.update_stack_config(paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_bind": ",".join(nets(n))},
+                                   inst=Instance(r.id))
+        cfgmod.update_stack_config(paths, "meshcom", {"bind": "0.0.0.0"}, inst=Instance(r.id))
+        cfgmod.update_stack_config(paths, "meshcore", {"meshcore_allow": ",".join(nets(n + 100))}, inst=Instance(r.id))
+    cfgmod.save_webserver_config(paths, bind="0.0.0.0", remote_exposed=True,
+                                 allowed_cidrs=[f"10.{i}.0.0/16" for i in range(32)] if long_cidrs else [NET])
+    for n, page in enumerate(lab.svc().web_pages()):
+        cfgmod.save_stackweb_config(paths, page.page_id, mode="lan", port=30000 + n, allowed_cidrs=tuple(nets(n + 200)))
+    return lab.svc()
+
+
+@pytest.mark.parametrize("long_cidrs", [False, True], ids=["m7-one-network", "m9-32-networks"])
+def test_a_full_64_radio_list_applies_within_every_bound(tmp_path, monkeypatch, long_cidrs):
+    # red on 085034cf (evidence-caps-v1/m7): 256 endpoint rows / 226 ingress were refused over the 128 / 32 caps
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    svc = _full_list(lab, long_cidrs)
+    cand = svc.firewall_candidate()
+    assert (len(cand["endpoints"]), len(cand["proxy_ingress"])) == (256, 226)
+    assert fw.validate_candidate(cand) == [] and fh.validate_candidate(cand) == []
+    assert len(json.dumps(cand).encode()) <= fh.MAX_CANDIDATE_BYTES
+    assert lab.apply() == fh.EXIT_OK
+    assert os.path.getsize(fw.SNAPSHOT_DEST) <= fw.MAX_SNAPSHOT_BYTES
+    assert lab.svc()._fw_applied_candidate() is not None                 # its reader reads it back
+    assert _gate(lab.svc(), "kiss", "r64")[0]
+
+
+@pytest.mark.parametrize("key, cap", [("endpoints", "MAX_ENDPOINTS"), ("proxy_ingress", "MAX_PROXY_INGRESS")])
+def test_one_row_over_a_cap_is_refused_by_name_on_both_sides(key, cap):
+    row = (lambda i: _ep(id=f"x{i}.tcp-1", port=1 + i)) if key == "endpoints" else \
+        (lambda i: {"proto": "tcp", "family": "ipv4", "addr": "*", "port": 1 + i, "allow_cidrs": []})
+    at = _candidate(**{key: [row(i) for i in range(getattr(fw, cap))]})
+    over = _candidate(**{key: [row(i) for i in range(getattr(fw, cap) + 1)]})
+    assert fw.validate_candidate(at) == [] and fh.validate_candidate(at) == []
+    assert fw.validate_candidate(over) == [f"{key}: too many entries (max {getattr(fw, cap)})"]
+    assert fh.validate_candidate(over) == [f"{key}: too many entries"]
+
+
+def test_the_bounds_are_one_value_on_both_sides():
+    assert (fw.MAX_ENDPOINTS, fw.MAX_PROXY_INGRESS, fw.MAX_SNAPSHOT_BYTES) == \
+        (fh.MAX_ENDPOINTS, fh.MAX_PROXY_INGRESS, fh.MAX_SNAPSHOT_BYTES) == (512, 512, 8 * 1024 * 1024)
+    assert fh.MAX_CANDIDATE_BYTES == 1024 * 1024
+
+
+def test_a_snapshot_over_the_bound_is_refused_before_any_live_change(tmp_path, monkeypatch, capsys):
+    lab = _box(tmp_path, monkeypatch)
+    before = {p: open(p).read() for p in (fw.SNAPSHOT_DEST, fw.RECEIPT_PATH)}
+    lab.radios((R1, R2, R3))
+    monkeypatch.setattr(fh, "MAX_SNAPSHOT_BYTES", len(json.dumps(lab.snapshot(), sort_keys=True)) + 1)
+    sysx = _Sys()
+    assert lab.apply(sysx) == fh.EXIT_CANDIDATE
+    assert "over MAX_SNAPSHOT_BYTES" in capsys.readouterr().out
+    assert not any(c[:2] == ["nft", "-f"] for c in sysx.calls)            # nothing loaded
+    assert not os.path.exists(fw.JOURNAL_DEST)
+    assert {p: open(p).read() for p in before} == before                  # the applied evidence is untouched
