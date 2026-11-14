@@ -405,19 +405,21 @@ def radio_list_lines(svc) -> list:
 
 
 def _usb_port_text(row, model, found) -> str:
-    """The port a USB radio's stick is on now (stick_port), or why not, never a guess: an unreadable listing, an
-    unreadable serial on a stick of the row's model, two sticks with its serial, or not attached."""
+    """The port a USB radio's stick is on now (stick_port), or why not, never a guess: an unreadable listing, two
+    sticks with its serial, an unreadable serial on a stick of the row's model, or not attached."""
     from . import usb_access
     port, why = stick_port(row.usb_serial, row.usb_port, found)
     if port:
         return port
     if found.listing is not usb_access.Probe.PRESENT:
         return "USB list unreadable"
+    if why.startswith("more than one stick"):
+        return why
     ids = (model.usb["vid"], model.usb["pid"]) if model.usb else None
     if row.usb_serial and any(d.serial.state is usb_access.Probe.UNKNOWN and (d.vid.value.lower(), d.pid.value.lower()) == ids
                               for d in found.devices):
         return "serial unreadable"
-    return why if why.startswith("more than one stick") else "not attached"
+    return "not attached"
 
 
 def hardware_view(svc) -> dict:
