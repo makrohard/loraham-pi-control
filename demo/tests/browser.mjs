@@ -37,6 +37,7 @@ const b = await puppeteer.launch({ executablePath: exe, headless: true,
 const page = await b.newPage();
 const errs = [];
 page.on("pageerror", (e) => errs.push(e.message.slice(0, 150)));
+page.on("console", (m) => { const t = m.text(); if (/^(CLICKED FORM|RUN FORMS):/.test(t)) console.log("PAGE", t); });   // DIAGNOSTIC (B4b)
 let rc = 0;
 try {
   step = "line 40: await page.goto(URL, { waitUntil: \"domcontentloaded\", timeout: 60000 }"; console.log("STEP", step);
@@ -66,6 +67,8 @@ try {
       return op && op.value === "start" && t && /kiss/.test(t.value);
     });
     if (!f) throw new Error("kiss start form not found");
+    console.log("CLICKED FORM:", f.outerHTML.replace(/\s+/g, " ").slice(0, 600));   // DIAGNOSTIC (B4b)
+    console.log("RUN FORMS:", [...document.querySelectorAll('form')].filter(x => { const o = x.querySelector('input[name="op"]'); return o && o.value === "start"; }).map(x => x.outerHTML.replace(/\s+/g, " ").slice(0, 300)).join(" || ").slice(0, 2000));
     (f.querySelector('button') || { click() { f.requestSubmit(); } }).click();
   });
 
