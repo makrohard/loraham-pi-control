@@ -175,10 +175,16 @@ class FirewallOpsMixin:
                 out.append({"proto": "tcp", "family": "ipv4", "addr": "*", "port": int(swc.port),
                             "allow_cidrs": [] if ap_managed
                             else _norm_cidrs(swc.allowed_cidrs, "ipv4")})
-        if preopen and ws.remote_exposed:
-            nets = [] if ap_managed else _norm_cidrs(ws.allowed_cidrs, "ipv4")
-            out += [{"proto": "tcp", "family": "ipv4", "addr": "*", "port": port, "allow_cidrs": nets}
-                    for sid, port in self._page_ports().items() if sid not in exposed]
+        nets = _norm_cidrs(ws.allowed_cidrs, "ipv4")
+        if preopen and ws.remote_exposed and (ap_managed or nets):
+            # Fail closed: off an AP box, a console without IPv4 networks (no allowlist, /0, IPv6 only) pre-opens
+            # nothing, so an empty list never reads "any"; nor is the console's or a listener's port pre-opened, even
+            # where a hand-edited page port took one.
+            from . import listeners
+            reserved = {int(ws.port), *listeners.stack_listeners(self)}
+            out += [{"proto": "tcp", "family": "ipv4", "addr": "*", "port": port,
+                     "allow_cidrs": [] if ap_managed else nets}
+                    for sid, port in self._page_ports().items() if sid not in exposed and port not in reserved]
         return out
 
     # ---- status (FW-4): three honest dimensions ---------------------------------------------

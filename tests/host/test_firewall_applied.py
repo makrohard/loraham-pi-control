@@ -644,6 +644,49 @@ def test_page_ports_are_unique_and_stable_and_avoid_the_console_and_every_listen
         assert svc._page_ports() == ports, page
 
 
+@pytest.mark.parametrize("console", [65534, 65535])
+def test_page_ports_never_take_a_taken_port_at_the_top_of_the_range(tmp_path, monkeypatch, console):
+    # G1-FW-A21 B2: red on 8614a8c8, where an exhausted walk clamped every page to 65535 (the console's,
+    # or one shared by all pages); the allocation never returns a taken port
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    cfgmod.save_webserver_config(Paths(runtime_root=lab.root), bind="0.0.0.0", port=console, remote_exposed=True,
+                                 allowed_cidrs=[NET])
+    svc = lab.svc()
+    ports = svc._page_ports()
+    assert len(ports) == len(svc._page_positions()) and len(set(ports.values())) == len(ports)
+    assert console not in ports.values() and all(1024 <= p <= 65535 for p in ports.values())
+
+
+def test_a_hand_edited_page_port_on_a_listener_port_is_never_preopened(tmp_path, monkeypatch):
+    # G1-FW-A21 B2: the save refuses a page port another owner listens on; a hand edit does not, and then the
+    # firewall must not open that listener's port to the console's networks
+    from lhpc.core import listeners
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    _remote_console(lab)
+    svc = lab.svc()
+    owned = sorted(listeners.stack_listeners(svc))[0]
+    cfgmod.save_stackweb_config(svc._paths, "meshcom@r1", mode="local", port=owned)    # no validation: a hand edit
+    svc._invalidate_config()
+    rows = _ingress(svc.firewall_candidate())
+    assert owned not in [p for p, _c in rows]
+    assert (svc._page_ports()["graywolf@r1"], (NET,)) in rows             # anchor: the other pages stay pre-opened
+
+
+@pytest.mark.parametrize("bind, cidrs", [("0.0.0.0", []), ("0.0.0.0", ["0.0.0.0/0"])],
+                         ids=["no-allowlist", "whole-internet"])   # an IPv6-only list: the console's save refuses it
+def test_a_console_without_ipv4_networks_preopens_nothing(tmp_path, monkeypatch, bind, cidrs):
+    # G1-FW-A21 B3: red on 8614a8c8, where the IPv4 filter of such a list left [] and the rows opened every
+    # page to ANY source; an empty list never means "any" off an AP box
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    cfgmod.save_webserver_config(Paths(runtime_root=lab.root), bind=bind, port=8443, remote_exposed=True,
+                                 allowed_cidrs=cidrs)
+    svc = lab.svc()
+    ports = set(svc._page_ports().values())
+    rows = svc.firewall_candidate()["proxy_ingress"]
+    assert [r for r in rows if r["port"] in ports] == []
+    assert [r["port"] for r in rows] == [8443]                            # anchor: the console's own row stays
+
+
 def test_preopened_rows_only_while_the_console_is_remote_and_one_row_per_page(tmp_path, monkeypatch):
     lab = Lab(tmp_path, monkeypatch, (R1, R2))
     svc = lab.svc()
