@@ -1,7 +1,8 @@
 {# U4 (W423): one Stacks submenu level's "page ›" link (its own page, same tab), at the very right of
-   the level's .row-actions overlay, after "logs". `owner` = "controller" or the stack id. #}
+   the level's .row-actions overlay, after "logs". `owner` = "controller" or the stack id. It keeps the
+   radio the view shows (`?radio=`), so the page shows that radio's level. #}
 {% macro page_link(owner, id) -%}
-<a class="pagelink" href="{{ url_for('menu_page', owner=owner, mid=id) }}" title="Open on its own page">page ›</a>
+<a class="pagelink" href="{{ url_for('menu_page', owner=owner, mid=id, radio=request.args.get('radio') or None) }}" title="Open on its own page">page ›</a>
 {%- endmacro %}
 {# The overlay for a level that has no other row action. #}
 {% macro page_actions(owner, id) -%}

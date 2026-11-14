@@ -154,11 +154,11 @@ def test_a_stack_row_page_renders_its_body_inline_and_opened(tmp_path, web):
 
 
 def test_the_page_bar_leads_back_to_the_stacks_row_its_logs_and_the_tree(tmp_path, web):
-    c, _svc = _client(web, tmp_path)
+    c, svc = _client(web, tmp_path)
     doc = parse(_html(c, "/stacks/meshcore/menu/stack-install-meshcore--dependencies"))
     bar = [a["href"] for a in doc.within(doc.find("p", class_="pagebar")[0]).find("a")]
-    assert bar[0] == "/stacks?open=meshcore#stack-install-meshcore--dependencies"
-    assert bar[1].startswith("/logs") and bar[2] == "/stacks/menus"
+    assert bar == ["/stacks?open=meshcore#stack-install-meshcore--dependencies",
+                   "/logs/" + svc.stack("meshcore").main, "/stacks/menus"]       # the row's own logs link
     crumbs = [a["href"] for a in doc.within(_crumbs(doc)).find("a")]
     assert crumbs[2:] == ["/stacks/meshcore/menu/stackrow-meshcore", "/stacks/meshcore/menu/stack-install-meshcore"]
 
@@ -303,7 +303,8 @@ def test_a_refused_save_with_another_owners_return_falls_back_to_stacks(tmp_path
     r = _post(c, csrf, "/stacks/meshcore/webserver", "/stacks/meshtastic/menu/stack-settings-meshtastic", src,
               page="meshcore@r2", mode="public", port="80", scheme="https", access_mode="no-auth",
               cidrs="", confirm_phrase="")
-    assert urlsplit_path(r.headers["Location"]) == "/stacks"            # the view's own Stacks redirect
+    # the K4 fallback: the Stacks page with the action's stack open and its radio (the view names neither)
+    assert r.headers["Location"] == "/stacks?open=meshcore&radio=r2#stack-webserver-meshcore@r2"
     assert parse(_html(c, r.headers["Location"].split("#")[0])).find("p", class_="flash")
 
 
@@ -314,6 +315,14 @@ def _fields(doc, form):
     out.update({s["name"]: (doc.within(s).find("option") or [None])[0].attrs.get("value", "")
                 for s in doc.within(form).find("select") if s.attrs.get("name") and doc.within(s).find("option")})
     return out
+
+
+_NAV = {"open", "cfg", "dp", "inst", "fw", "comp", "wsg", "radio"}
+
+
+def _query(url):
+    q = url.split("#")[0].partition("?")[2]
+    return dict(kv.partition("=")[::2] for kv in q.split("&") if kv)
 
 
 def urlsplit_path(url):
@@ -342,11 +351,11 @@ def test_a_sibling_level_returns_to_the_nearest_ancestor_that_holds_the_form(tmp
     doc = parse(_html(c, own))
     form = [f for f in doc.find("form") if f["action"] == "/stacks/meshcore/config/reset"][0]
     fields = _fields(doc, form)
+    radio = f"?radio={fields['radio']}" if fields.get("radio") else ""     # the radio the form saves (named back)
     r = c.post(form["action"], data=fields)
-    assert r.headers["Location"].split("#")[0].split("?")[0] == own and r.headers["Location"].endswith("#stack-settings-meshcore")
+    assert r.headers["Location"] == own + radio + "#stack-settings-meshcore"
     r = c.post(form["action"], data={**fields, "return": sibling})
-    assert urlsplit_path(r.headers["Location"]) == "/stacks/meshcore/menu/stackrow-meshcore"
-    assert r.headers["Location"].endswith("#stackrow-meshcore")
+    assert r.headers["Location"] == "/stacks/meshcore/menu/stackrow-meshcore" + radio + "#stackrow-meshcore"
 
 
 @pytest.mark.parametrize("page, action, form", [
@@ -390,23 +399,51 @@ def test_every_form_on_a_level_page_returns_to_it(tmp_path, web, radios, page):
         fields = _fields(doc, f)
         assert fields.get("return") == page and fields.get("_csrf"), (page, f["action"])
         r = c.post(f["action"], data=fields)
-        if r.status_code in (302, 303) and urlsplit_path(r.headers["Location"]) in ("/stacks", page.split("?")[0]):
+        if r.status_code in (302, 303) and set(_query(r.headers["Location"])) - _NAV:
+            assert urlsplit_path(r.headers["Location"]) == "/stacks", (page, f["action"])   # one-time data: Stacks
+        elif r.status_code in (302, 303) and urlsplit_path(r.headers["Location"]) in ("/stacks", page.split("?")[0]):
             back = r.headers["Location"].split("#")[0]
-            assert back == page or ("?" not in page and back.startswith(page + "?radio=")), (page, f["action"], back)
+            path, query = urlsplit_path(back), _query(back)
+            assert path == page.split("?")[0], (page, f["action"], back)
+            assert query == _query(page) or (not _query(page) and query in ({}, {"radio": "r1"}, {"radio": "r2"})), \
+                (page, f["action"], back)                            # a page without a radio gets the action's
         elif r.status_code == 200 and "_csrf" in r.get_data(as_text=True):
             assert f'name="return" value="{page.replace("&", "&amp;")}"' in r.get_data(as_text=True), (page, f["action"])
         else:
             assert r.status_code in (200, 302, 303), (page, f["action"], r.status_code)
 
 
-def test_the_client_certificate_download_shows_for_a_local_viewer(tmp_path, web, csrf):
+def test_a_certificate_issue_keeps_the_stacks_page_with_its_one_time_passphrase(tmp_path, web, csrf):
+    """The issue's redirect carries `pw=` (the passphrase the Stacks page shows once): it is kept,
+    and the passphrase shows there; the .p12 fetch shows on the Certificates page for a local viewer."""
     c, _svc = _client(web, tmp_path)
     page = "/stacks/controller/menu/webserver-row--certificates"
-    assert _post(c, csrf, "/webserver/init", page, page).headers["Location"].split("#")[0] == page
+    assert _post(c, csrf, "/webserver/init", page, page).headers["Location"] == page + "#webserver-row--certificates"
     r = _post(c, csrf, "/webserver/cert", page, page, op="issue", label="u4test")
-    assert r.headers["Location"].split("#")[0] == page
+    assert urlsplit_path(r.headers["Location"]) == "/stacks" and "pw" in _query(r.headers["Location"])
+    assert parse(_html(c, r.headers["Location"].split("#")[0])).by_id("one-time-passphrase") is not None
     body = _html(c, page)
     assert "u4test" in body and ".p12" in body
+
+
+def test_a_successful_revoke_returns_to_certificates_though_its_form_is_gone(tmp_path, web, csrf):
+    """G1 round 1 B2: the Revoke form exists only while the certificate is active; after the revoke
+    the POST still comes back to the Certificates page (the level holds the action by its template)."""
+    c, _svc = _client(web, tmp_path)
+    page = "/stacks/controller/menu/webserver-row--certificates"
+    _post(c, csrf, "/webserver/init", page, page)
+    _post(c, csrf, "/webserver/cert", page, page, op="issue", label="u4rev")
+    doc = parse(_html(c, page))
+    form = [f for f in doc.find("form") if doc.within(f).find("input", name="label")
+            and doc.within(f).find("input", name="label")[0]["value"] == "u4rev"
+            and doc.within(f).find("input", name="op")[0]["value"] == "revoke"][0]
+    r = c.post(form["action"], data={**_fields(doc, form), "confirm_phrase": "u4rev"})
+    assert r.headers["Location"] == page + "#webserver-row--certificates"
+    after = parse(_html(c, page))
+    assert not [f for f in after.find("form") if after.within(f).find("input", name="label")
+                and after.within(f).find("input", name="label")[0]["value"] == "u4rev"], "still revocable"
+    assert after.find("p", class_="flash"), "the result shows on the page"
+
 
 
 def test_a_shared_components_action_is_its_own_stacks_and_falls_back(tmp_path, web):
@@ -462,4 +499,54 @@ def test_an_instance_action_returns_only_to_its_own_radios_page(tmp_path, web):
         step = [f for f in confirm.find("form") if f["action"] == "/action"][0]
         assert _fields(confirm, step)["return"] == page                        # the confirm page carries it on
         loc = c.post("/action", data=_fields(confirm, step)).headers["Location"]
-        assert ("radio=r2" in loc) and (loc.startswith(page) if back_here else loc.startswith("/stacks?")), (rid, loc)
+        assert loc == (page + "#stackrow-graywolf" if back_here else "/stacks?open=graywolf&radio=r2#stackrow-graywolf"), (rid, loc)
+
+
+
+def test_a_page_link_keeps_the_radio_the_view_shows_and_edits_that_radio(tmp_path, web):
+    """G1 round 1 B1: the daemon Settings shown for r2 on the Stacks page; its "page ›" opens the
+    r2 page, whose live setting posts to r2 and returns to that page."""
+    c, _svc = _client(web, tmp_path, radios=True)
+    doc = parse(_html(c, "/stacks?open=daemon&cfg=daemon&radio=r2"))
+    link = [a["href"] for a in doc.find("a", class_="pagelink")
+            if a["href"].split("?")[0] == "/stacks/daemon/menu/stack-settings-daemon"]
+    assert link == ["/stacks/daemon/menu/stack-settings-daemon?radio=r2"]
+    page = parse(_html(c, link[0]))
+    live = [f for f in page.find("form", class_="setform")]
+    assert live and {f["action"] for f in live} == {"/radio/r2/set"}, "the page shows r2's live settings"
+    form = live[0]
+    confirm = parse(c.post(form["action"], data=_fields(page, form)).get_data(as_text=True))
+    step = [f for f in confirm.find("form") if f["action"] == "/radio/r2/set"][0]
+    r = c.post(step["action"], data=_fields(confirm, step))
+    assert r.headers["Location"] == link[0] + "#stack-settings-daemon"
+
+
+
+def test_a_radio_less_page_returns_with_the_radio_the_action_ran_on(tmp_path, web):
+    """ERRATA-UI-v5-1 (3): a page without a radio showed its default instance; an instance action
+    picked there comes back to that page with the action's radio named."""
+    c, _svc = _client(web, tmp_path, radios=True)
+    page = "/stacks/graywolf/menu/stackrow-graywolf"
+    doc = parse(_html(c, page))
+    form = [f for f in doc.find("form") if f["action"] == "/action" and doc.within(f).find("option")
+            and doc.within(f).find("input", name="op")[0]["value"] == "stop"][0]
+    confirm = parse(c.post("/action", data={**_fields(doc, form), "target": "graywolf@r2"}).get_data(as_text=True))
+    step = [f for f in confirm.find("form") if f["action"] == "/action"][0]
+    assert c.post("/action", data=_fields(confirm, step)).headers["Location"] == page + "?radio=r2#stackrow-graywolf"
+
+
+def test_a_sibling_components_form_returns_to_the_level_holding_both(tmp_path, web):
+    """The posted form's hidden fields tell sibling levels apart: libch341's Update sent with the
+    radiolib page as `return` comes back to Dependencies (holding both), not to radiolib's page."""
+    c, _svc = _client(web, tmp_path)
+    doc = parse(_html(c, "/stacks/daemon/menu/comp-libch341"))
+    form = [f for f in doc.find("form") if f["action"] == "/action" and doc.within(f).find("input", name="op")
+            and doc.within(f).find("input", name="op")[0]["value"] == "update"][0]
+    sent = {**_fields(doc, form), "return": "/stacks/daemon/menu/comp-radiolib"}
+    r = c.post("/action", data=sent)
+    if r.status_code == 200:                                                   # through its confirm page
+        confirm = parse(r.get_data(as_text=True))
+        step = [f for f in confirm.find("form") if f["action"] == "/action"][0]
+        r = c.post("/action", data=_fields(confirm, step))
+    assert r.headers["Location"] == ("/stacks/daemon/menu/stack-install-daemon--dependencies"
+                                     "#stack-install-daemon--dependencies")

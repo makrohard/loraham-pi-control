@@ -281,7 +281,8 @@ class _FormScan(HTMLParser):
 def _renders_form(html: str, path: str, args, form) -> bool:
     """U4 (E3-1): whether `html` renders the form this POST came from: one posting to `path` (with
     the POST's own query) whose every hidden field, but the CSRF token and `return`, has the posted
-    values. The fields a person fills in are not compared."""
+    values. The fields a person fills in are not compared. Read on the page as it was before the
+    action (`_menu_block_before`)."""
     scan = _FormScan()
     scan.feed(html)
     for action, hidden in scan.forms:
@@ -291,6 +292,11 @@ def _renders_form(html: str, path: str, args, form) -> bool:
         if all(form.getlist(k) == v for k, v in hidden.items() if k not in ("_csrf", "return")):
             return True
     return False
+
+
+# U4: the Stacks redirect's query keys that only navigate; any other (`pw=` one-time passphrase, `bad=`
+# marked fields) carries what the Stacks page shows once, so that redirect is kept.
+_NAV_KEYS = frozenset({"open", "cfg", "dp", "inst", "fw", "comp", "wsg", "radio"})
 
 
 def _row_needs_body(inline: bool, only_sid) -> bool:
@@ -1479,20 +1485,36 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """One level's partial rendered as on the Stacks page (its page shows this, opened)."""
         return render_template(level.template, **{**ctx, **level.vars, "menu_owner": owner, "menu_id": level.id})
 
+    @app.before_request
+    def _menu_block_before():
+        """E3-1 (and gate-1 round 1 B2): BEFORE the view acts, which level holds the posted form, as
+        the sent `return` page showed it; the action may remove or change the form."""
+        ret = request.form.get("return", "") if request.method == "POST" else ""
+        if ret:
+            try:
+                request.environ["lhpc.menu_block"] = _menu_block_of(ret)
+            except Exception:                                              # never break the POST
+                request.environ["lhpc.menu_block"] = None
+
     @app.after_request
     def _menu_return(response):
-        """R3-B1, G2-B4/B5, ERRATA-UI-v5-1 (1)-(3) + -3 E3-1: a POST sent from a level's page returns to
-        the page of the block that holds its form, or of that block's nearest ancestor on the way up
-        from the sent `return` page; same owner and radio as the action. Only when the view
-        redirects to the Stacks page; that redirect (its legacy anchor included) is the fallback."""
+        """R3-B1, G2-B4/B5, ERRATA-UI-v5-1 + -3 E3-1: a POST sent from a level's page returns to the
+        page of the level that holds its form (or that level's nearest ancestor on the way up from
+        the sent page), with the action's owner and radio. Only when the view redirects to the Stacks
+        page with navigation keys only (`_NAV_KEYS`); otherwise its own redirect stays, and a Stacks
+        redirect that names no stack gets the action's `open` and `radio` (the K4 fallback)."""
         ret = request.form.get("return", "") if request.method == "POST" else ""
         if not ret or response.status_code not in (301, 302, 303, 307, 308):
             return response
         loc = urlsplit(response.headers.get("Location", ""))
-        if loc.path != url_for("stacks_overview") or (loc.netloc and loc.netloc != request.host):
+        query = parse_qs(loc.query)
+        if (loc.path != url_for("stacks_overview") or (loc.netloc and loc.netloc != request.host)
+                or set(query) - _NAV_KEYS):
             return response
         try:
-            target = _menu_return_target(ret, parse_qs(loc.query), loc.fragment)
+            block = request.environ.get("lhpc.menu_block")
+            target = (_menu_return_target(block, query, loc.fragment) if block else "") \
+                or _stacks_fallback(query, loc.fragment)
         except Exception:                                                  # never break the POST's answer
             target = ""
         if target:
@@ -1532,32 +1554,63 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return None
         return owner, mid, radio, url_for("menu_page", owner=owner, mid=mid, radio=radio or None)
 
-    def _menu_return_target(ret: str, action_query: dict, dest: str) -> str:
-        """The URL (with its #id) of the level page this POST returns to, else "". The action's owner
-        is the stack its redirect opens (`open`/`cfg`/`dp`/`inst`), else the owner one of whose
-        levels its redirect's #anchor `dest` is; the page's owner must be it. Its radio, when it
-        names one, is the page's (a page without a radio gets it: it showed that radio's
-        instance). The page returned to is the first of `ret`'s level and its ancestors that
-        renders the posted form: the block that holds the form, or a level containing it."""
+    def _menu_block_of(ret: str):
+        """(owner, level id, radio) of the level whose page holds the posted form: the first of the
+        sent page's level and its ancestors whose partial renders a form with this POST's action,
+        query and hidden fields (but the CSRF token and `return`); None if there is none."""
         page = _menu_page_of(ret)
         if page is None:
-            return ""
+            return None
         owner, mid, radio, _url = page
-        named = [v[0] for k in ("open", "cfg", "dp", "inst") for v in [action_query.get(k)] if v]
-        stack_owner = next((n for n in named if service.stack(n) is not None), None)
+        with _as_page_radio(radio):
+            ctx, menus = _owner_menus(owner)
+            for level in reversed(_submenus.chain(menus, mid)):
+                if _renders_form(_level_html(owner, level, ctx), request.path, request.args, request.form):
+                    return owner, level.id, radio
+        return None
+
+    def _action_owner(query: dict) -> str | None:
+        """The stack the action's Stacks redirect opens (`open`/`cfg`/`dp`/`inst`), if any."""
+        named = [v[0] for k in ("open", "cfg", "dp", "inst") for v in [query.get(k)] if v]
+        return next((n for n in named if service.stack(n) is not None), None)
+
+    def _menu_return_target(block, action_query: dict, dest: str) -> str:
+        """The page URL (with its #id) of the level `block` = (owner, id, radio), if the action may
+        return there, else "". The action's owner is the stack its redirect opens, else the owner one
+        of whose levels its #anchor `dest` is; the level's owner must be it. The action's radio, when
+        it names one, is the page's (a page without a radio gets it: it showed that radio's
+        instance)."""
+        owner, level_id, radio = block
+        stack_owner = _action_owner(action_query)
         if stack_owner is not None and stack_owner != owner:
             return ""
         want = (action_query.get("radio") or [""])[0]
         if want and radio and want != radio:
             return ""                                                      # another radio's page
         with _as_page_radio(radio):
-            ctx, menus = _owner_menus(owner)
-            if stack_owner is None and not _submenus.chain(menus, dest):
-                return ""                                                  # not this owner's action
-            for level in reversed(_submenus.chain(menus, mid)):
-                if _renders_form(_level_html(owner, level, ctx), request.path, request.args, request.form):
-                    return url_for("menu_page", owner=owner, mid=level.id, radio=radio or want or None) + "#" + level.id
-        return ""
+            menus = _owner_menus(owner)[1]
+        if stack_owner is None and not _submenus.chain(menus, dest):
+            return ""                                                      # not this owner's action
+        return url_for("menu_page", owner=owner, mid=level_id, radio=radio or want or None) + "#" + level_id
+
+    def _stacks_fallback(query: dict, dest: str) -> str:
+        """K4 / ERRATA-UI-v5-1: a POST from a level page that does not return there lands on the Stacks
+        page with the action's stack open and its radio. A view redirect that names no stack gets
+        `open=<the stack whose level the #anchor is>` and, when it names no radio, the anchor's
+        instance radio (`…@rN`); "" (the view's redirect stays) for a controller or unknown anchor."""
+        owner = _action_owner(query)
+        if owner is not None and query.get("radio"):
+            return ""
+        if owner is None:
+            owner = next((s.id for s in service.stacks() if s.id in dest
+                          and _submenus.chain(_owner_menus(s.id)[1], dest)), None)
+        if owner is None:
+            return ""
+        args = {k: v[0] for k, v in query.items()}
+        args.setdefault("open", owner)
+        if "@" in dest and "radio" not in args:
+            args["radio"] = dest.rsplit("@", 1)[1].split("--")[0]
+        return url_for("stacks_overview", **args) + ("#" + dest if dest else "")
 
     @app.get("/stacks")
     def stacks_overview():
