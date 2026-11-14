@@ -2,6 +2,7 @@
 diffs the USB scan against state/hotplug.json. Driven through GET / and POST /hardware/changes/dismiss with a fake
 scan; asserted on the rendered dashboard and the store."""
 import fcntl
+import html
 import re
 
 import radios_fixture
@@ -38,11 +39,13 @@ def _lines(c) -> list:
     m = re.search(r'<div[^>]*id="hardware-changes".*?</div>', page, re.S)
     if m is None:
         return []
-    return [" ".join(re.sub(r"<[^>]+>", "", x).split()) for x in re.findall(r"<li[^>]*>(.*?)</li>", m.group(0), re.S)]
+    return [" ".join(html.unescape(re.sub(r"<[^>]+>", "", x)).split())
+            for x in re.findall(r"<li[^>]*>(.*?)</li>", m.group(0), re.S)]
 
 
 def _ids(c) -> list:
-    return re.findall(r'name="id" value="(\d+)"', c.get("/").get_data(as_text=True))
+    """Every id the banner's ✕ form posts (an event's digits, a derived line's "u:<identity>")."""
+    return re.findall(r'name="id" value="([^"]+)"', c.get("/").get_data(as_text=True))
 
 
 def _store(tmp_path):
@@ -78,7 +81,7 @@ def test_the_close_hides_it_and_a_new_change_shows_one_line(web, tmp_path, monke
     _lines(c)
     usb.devices = [_dev("1-1.4"), _dev("1-1.3", "CHE1W433")]
     ids = _ids(c)
-    assert len(ids) == 2
+    assert len(_lines(c)) == 2 and "u:serial:CHE1W433" in ids          # the new stick's line carries its twin's id
     r = c.post("/hardware/changes/dismiss", data={"_csrf": csrf(c), "id": ids})
     assert r.status_code in (302, 303)
     assert _lines(c) == []
@@ -110,12 +113,16 @@ def test_a_busy_lock_writes_nothing_and_the_render_still_works(web, tmp_path, mo
     assert len(_lines(c)) == 1                                   # recorded at the next render
 
 
-def test_moved_needs_exactly_one_new_serialless_stick(web, tmp_path, monkeypatch):
+def test_a_lost_port_bound_stick_beside_a_serialless_newcomer_is_uncertain(web, tmp_path, monkeypatch):
+    # G1-B3-PLAN-RE BLOCKING 1: no serial proves it is r3's stick: one uncertain line, and the newcomer's own line
     c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
     _lines(c)
-    usb.devices = [_dev("1-1.2", "26073012"), _dev("1-1.5")]     # r3's port-bound stick on 1-1.5
+    usb.devices = [_dev("1-1.2", "26073012"), _dev("1-1.5")]     # r3's port-bound stick gone; a serial-less one on 1-1.5
     lines = _lines(c)
-    assert len(lines) == 1 and lines[0].endswith("r3 moved from port 1-1.4 to 1-1.5 (no serial): re-bind it"), lines
+    assert not any("moved" in x for x in lines), lines
+    assert any(x.endswith("r3's stick left port 1-1.4; a stick with no serial appeared on port 1-1.5 — re-bind r3 if it "
+                          "is its stick") for x in lines), lines
+    assert any(x == "new stick: no serial on port 1-1.5, not in the hardware list" for x in lines), lines
 
 
 def test_two_new_serialless_sticks_are_no_move(web, tmp_path, monkeypatch):
@@ -240,3 +247,95 @@ def test_the_scan_is_taken_under_the_stores_lock(web, tmp_path, monkeypatch):
     monkeypatch.setattr(usb_access, "scan", scan)
     hotplug.banner(ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
     assert held == [True]
+
+
+
+# ---- A27 (B3): every attached stick no radio holds is named, derived each render; one ✕ quiets it ---------------------
+
+UNLISTED = _dev("1-2", "ABCD1234")                                 # box H's Meshstick shape: attached, in no row
+
+
+def _write_store(tmp_path, seen, events, seq=0):
+    import json
+    _store(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    _store(tmp_path).write_text(json.dumps({"seen": seen, "events": events, "seq": seq}))
+
+
+def test_a_seen_but_never_named_unlisted_stick_is_named(web, tmp_path, monkeypatch):
+    # box H (B3-HOTPLUG-2026-11-14): the stick is in "seen", "events" is [] -> red on b3fc6e60 (no banner)
+    c, _usb = _box(web, tmp_path, monkeypatch, *BOUND, UNLISTED)
+    _write_store(tmp_path, {"serial:26073012": ["1-1.2", "26073012"], "port:1-1.4": ["1-1.4", ""],
+                            "serial:ABCD1234": ["1-2", "ABCD1234"]}, [], 3)
+    assert _lines(c) == ["new stick: serial ABCD1234 on port 1-2, not in the hardware list"]
+    assert 'href="/hardware"' in c.get("/").get_data(as_text=True)
+
+
+def test_the_close_quiets_it_until_it_is_unplugged_or_listed_and_unlisted_again(web, tmp_path, monkeypatch, csrf):
+    # G1-B3-PLAN-RE BLOCKING 3 + RE2 BLOCKING: one ✕ closes the event and its derived twin; listed, then unlisted -> back
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    _lines(c)
+    usb.devices = [*BOUND, UNLISTED]
+    assert len(_lines(c)) == 1                                      # the event and its twin are one line
+    c.post("/hardware/changes/dismiss", data={"_csrf": csrf(c), "id": _ids(c)})
+    assert _lines(c) == [] and _lines(c) == []
+    radios_fixture.write(tmp_path, ROWS + (radios.Radio("r5", "mesh", "meshstick-1262", "868", usb_serial="ABCD1234"),))
+    assert _lines(c) == []                                         # r5 holds it
+    radios_fixture.write(tmp_path, ROWS)                           # r5 removed, the stick still plugged
+    assert _lines(c) == ["new stick: serial ABCD1234 on port 1-2, not in the hardware list"]
+
+
+def test_a_quieted_stick_shows_again_after_a_replug(web, tmp_path, monkeypatch, csrf):
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND, UNLISTED)
+    _lines(c)
+    c.post("/hardware/changes/dismiss", data={"_csrf": csrf(c), "id": _ids(c)})
+    assert _lines(c) == []
+    usb.devices = list(BOUND)
+    assert _lines(c) == []
+    usb.devices = [*BOUND, UNLISTED]
+    assert any(x.endswith("new stick: serial ABCD1234 on port 1-2, not in the hardware list") for x in _lines(c))
+
+
+def test_an_event_stays_until_its_close_when_its_stick_is_unplugged(web, tmp_path, monkeypatch):
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    _lines(c)
+    usb.devices = [*BOUND, UNLISTED]
+    _lines(c)
+    usb.devices = list(BOUND)
+    assert any(x.endswith("new stick: serial ABCD1234 on port 1-2, not in the hardware list") for x in _lines(c))
+
+
+def test_a_moved_unlisted_stick_is_one_line(web, tmp_path, monkeypatch):
+    # G1-B3-PLAN-RE2 NOTE 1: the event names 1-2, the stick is now on 1-6: the same identity, one line
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND)
+    _lines(c)
+    usb.devices = [*BOUND, UNLISTED]
+    _lines(c)
+    usb.devices = [*BOUND, _dev("1-6", "ABCD1234")]
+    assert sum("ABCD1234" in x for x in _lines(c)) == 1
+
+
+def test_an_old_event_without_an_identity_shows_beside_its_twin_and_one_close_closes_both(web, tmp_path, monkeypatch,
+                                                                                            csrf):
+    # his decision (B3 PLAN-v6): no matching of events stored before B3; the CHANGELOG says to close it once
+    c, _usb = _box(web, tmp_path, monkeypatch, *BOUND, UNLISTED)
+    _write_store(tmp_path, {"serial:26073012": ["1-1.2", "26073012"], "port:1-1.4": ["1-1.4", ""],
+                            "serial:ABCD1234": ["1-2", "ABCD1234"]},
+                 [{"id": "1", "at": "22:53Z", "line": "new stick: serial ABCD1234 on port 1-2, not in the hardware list"}], 1)
+    assert len(_lines(c)) == 2
+    c.post("/hardware/changes/dismiss", data={"_csrf": csrf(c), "id": _ids(c)})
+    assert _lines(c) == []
+
+
+def test_a_mixed_banner_closes_whole(web, tmp_path, monkeypatch, csrf):
+    c, usb = _box(web, tmp_path, monkeypatch, *BOUND, UNLISTED)
+    _write_store(tmp_path, {"serial:26073012": ["1-1.2", "26073012"], "port:1-1.4": ["1-1.4", ""],
+                            "serial:ABCD1234": ["1-2", "ABCD1234"]}, [], 3)
+    usb.devices = [BOUND[1], UNLISTED]                             # r2 unplugged: an event beside the derived line
+    assert len(_lines(c)) == 2
+    c.post("/hardware/changes/dismiss", data={"_csrf": csrf(c), "id": _ids(c)})
+    assert _lines(c) == []
+
+
+def test_a_serialless_unlisted_stick_is_named_by_its_port(web, tmp_path, monkeypatch):
+    c, _usb = _box(web, tmp_path, monkeypatch, *BOUND, _dev("1-7"))
+    assert any(x.endswith("new stick: no serial on port 1-7, not in the hardware list") for x in _lines(c))

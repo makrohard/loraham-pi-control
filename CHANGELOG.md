@@ -78,6 +78,8 @@ Upgrading from 0.13.x
   (or `sudo modprobe spi_ch341`).
 - The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
   grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
+- An update adds no USB stick: add your USB sticks on the Hardware page.
+- After the update, dismiss the old hardware warning once if it shows twice.
 - A script calling `lhpc stack <verb> <stack> [--band B]` or `lhpc kill <stack>[@<band>]`: name the instance,
   `<stack>@<rid>` (`lhpc hardware` lists the radios; `daemon --radio rN` still works).
 - Finish or undo an interrupted binary install with 0.13.x before updating (`lhpc install <stack> --source binary --yes`

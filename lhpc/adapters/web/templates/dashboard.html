@@ -34,7 +34,7 @@
     <a href="{{ url_for('hardware_view') }}">Open Hardware</a>
     <form method="post" action="{{ url_for('hardware_changes_dismiss') }}" class="act dismiss" title="Close">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      {% for e in hardware_changes.lines %}<input type="hidden" name="id" value="{{ e.id }}">{% endfor %}
+      {% for e in hardware_changes.lines %}{% for i in e.ids %}<input type="hidden" name="id" value="{{ i }}">{% endfor %}{% endfor %}
       <button type="submit" aria-label="Close the hardware changes">&times;</button>
     </form>
   </div>
