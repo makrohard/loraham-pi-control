@@ -2042,6 +2042,8 @@ main = "meshcom-qemu"
   # opens; a tcp guestfwd connected once at QEMU start and the link never came up). One shared XR password.
   run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin --instance {instance_index} --ports {port:18083}:{port:12323} --xr-redirect 7000:{port:7000}"
   state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
+  # run.sh's one deadline covers provisioning AND the first boot's verify (default 900 s): a Zero needs more (B2a).
+  run_env = { PROVISION_TIMEOUT = "1200" }
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
   # itself and stops exactly that instance afterwards — so auto-install runs it right after the
@@ -2066,12 +2068,14 @@ main = "meshcom-qemu"
   # literal path — no {env} substitution — so it must name the concrete env the build produces).
   build_marker = ".work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/.lhpc-build-complete"
   # MeshCom's callsign is a NODE setting applied over the net-console (12323) and stored in
-  # flash/NVS (survives restarts). Wait for the port, then push `--setcall` — no nc/shell. QEMU
-  # opens 12323 almost immediately, but the firmware needs ~a minute to boot before it accepts a
-  # command, so re-send over a window until it lands (idempotent). `skip_if_param` sends NO
+  # flash/NVS (survives restarts). Wait for the firmware's console line, then push `--setcall` — no
+  # nc/shell. The console may still be slow, and the guest may reboot once more, so re-send over a
+  # window until it lands (idempotent). `skip_if_param` sends NO
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
-    { kind = "tcp_wait", port = "{port:12323}", timeout = 180 },
+    # Ready = the firmware's own line in this guest's current UART log (run.sh moves uart-latest.log at every
+    # (re)boot), not the host forward QEMU opens long before the firmware runs (B2a, his C).
+    { kind = "log_wait", path = "{source}/.run/{instance_index_dir}uart-latest.log", pattern = "Console started on port 2323", timeout = 1300, label = "firmware boot" },
     # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
     # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
     # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call
@@ -2083,11 +2087,12 @@ main = "meshcom-qemu"
     # confirmed, `lhpc status` shows it `unverified` (diagnostic; the start is not failed by it).
     # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the console up only
     # after MINUTES. The stepped `schedule` keeps an 8 s cadence for the first minute (Pi 4/5,
-    # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
-    # uses it up and no attempt starts after it. A console that never answers within the window
+    # warm boots), then 15 s, then a 30 s cap: 904 s, the documented worst Zero boot (14 min) + 60 s,
+    # so a reboot in its first minute still gets the callsign. It is a clock — a slow probe uses it up
+    # and no attempt starts after it. A console that never answers within the window
     # (`on_exhausted = "warn"`) leaves the node running with its callsign unconfirmed (Q-B2-7):
     # the start names it, and `lhpc stack poststart meshcom@rN` re-runs this against the stack.
-    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], on_exhausted = "warn", skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [26, 30]], on_exhausted = "warn", skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The

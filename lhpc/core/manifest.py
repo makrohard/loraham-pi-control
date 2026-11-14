@@ -195,7 +195,7 @@ class ManifestError(Exception):
 _READINESS = {"process", "endpoint", "daemon-band", "manual", "external-systemd",
               "gps-feed"}
 _PRE_KINDS = {"mkdir", "chmod", "symlink"}
-_POST_KINDS = {"delay", "exec", "tcp_wait", "tcp_send"}
+_POST_KINDS = {"delay", "exec", "tcp_wait", "tcp_send", "log_wait"}
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # A require's `module` probe is a TOP-LEVEL python module name only. Dotted names are refused on
 # purpose: `importlib.util.find_spec("parent.child")` IMPORTS the parent package to locate the child,

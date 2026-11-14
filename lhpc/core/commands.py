@@ -633,6 +633,18 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                     d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
                                                    source, band, inst)
             resolved.append(d)
+        elif kind == "log_wait":
+            # B2a: wait for a line in a log file (MeshCom: the firmware's own console announcement); the path is
+            # opened fresh on every poll, so a guest reboot's new log (a moved symlink) is read from its start.
+            from .lifecycle import REQUIRED_POST_TIMEOUT_S
+            pattern, timeout = step.get("pattern"), float(step.get("timeout", 0))
+            if not isinstance(pattern, str) or not pattern:
+                raise CommandError("log_wait: pattern must be a non-empty string")
+            if not 0 < timeout <= REQUIRED_POST_TIMEOUT_S:
+                raise CommandError(f"log_wait: timeout must be > 0 and <= {REQUIRED_POST_TIMEOUT_S:.0f} s")
+            resolved.append({"kind": "log_wait", "path": _paths_subst(str(step["path"]), runtime, source, band, inst),
+                             "pattern": pattern, "timeout": timeout, "label": _post_label(step.get("label") or "log"),
+                             "optional": (bool(step.get("optional")) and not step.get("required")) and not require_all})
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
     # DESCRIPTOR-SAFE sidecar location, validated HERE so the standalone runner never has to trust
@@ -852,10 +864,10 @@ def _main_gone_stop(rest):
     # runner exits 1; only an all-optional remainder stops quietly with 0.
     req = [r for r in rest if r["kind"] != "delay" and not r.get("optional", True)]
     for r in req:
-        _lbl = r.get("label", "exec" if r["kind"] == "exec" else "%s:%s" % (r["host"], r["port"]))
+        _lbl = r.get("label") or ("exec" if r["kind"] == "exec" else "%s:%s" % (r["host"], r["port"]))
         entry = {"kind": r["kind"], "label": _lbl, "outcome": "main-gone", "attempts": 0,
                  "elapsed_s": 0.0, "skipped": True}
-        if r["kind"] != "exec":
+        if r["kind"] in ("tcp_wait", "tcp_send"):
             entry.update(host=r["host"], port=r["port"])
         _record(entry)
     sys.exit(1 if req else 0)
@@ -933,6 +945,37 @@ for _si, s in enumerate(STEPS):
                      "elapsed_s": round(time.time() - t0, 1)})
             if not ok and not s.get("optional", True):
                 sys.exit(1)             # a required endpoint that never appears fails
+        elif k == "log_wait":
+            t0 = time.time()
+            _lbl = s.get("label", "log")
+            if not _main_ok():
+                _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": "main-gone",
+                         "attempts": 0, "elapsed_s": 0.0})
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])
+            end, ok, tries, seen, nxt = t0 + s["timeout"], False, 0, "", t0 + 30
+            while time.time() < end and _main_ok():   # ONE clock: a reboot re-reads, never restarts it
+                tries += 1
+                try:
+                    with open(s["path"], "rb") as f:   # fresh each poll: follows the symlink to the current boot
+                        seen = os.path.basename(os.path.realpath(s["path"]))
+                        ok = s["pattern"].encode() in f.read(1 << 20)
+                except OSError:
+                    pass                          # absent (a guest provisioning): not yet
+                if ok:
+                    break
+                if time.time() >= nxt:
+                    sys.stderr.write("log_wait %s: waiting %d s (%s)\\n" % (_lbl, time.time() - t0, seen or "no log yet"))
+                    nxt += 30
+                time.sleep(2)
+            oc = "ready" if ok else ("timeout" if _main_ok() else "main-gone")
+            _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": oc, "attempts": tries,
+                     "elapsed_s": round(time.time() - t0, 1)})
+            sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, time.time() - t0) if ok else
+                             "log_wait %s: not ready after %d s (log %s)\\n" % (_lbl, time.time() - t0, s["path"]))
+            if not ok and not s.get("optional", True):
+                sys.exit(1)                       # a required line that never appears fails the launcher
         elif k == "tcp_send":
             reps = s.get("repeat", 1)
             sent = 0
