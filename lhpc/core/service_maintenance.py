@@ -134,9 +134,9 @@ class MaintenanceOpsMixin:
         want = sref.sha if sref else stackupdates.pinned_target(
             self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        current = local_sha == want or (sref is not None and stable_lane.is_older(
-            sref, local_sha, stable_lane.local_tags(run, src)))
-        entry["status"] = stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
+        older = local_sha != want and sref is not None and stable_lane.is_older(sref, local_sha, stable_lane.local_tags(run, src))
+        current = local_sha == want or older                       # older None: the checkout's tags not read
+        entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
 
     def update_status(self, comp) -> str:

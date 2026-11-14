@@ -49,18 +49,21 @@ def box(tmp_path, git, make_repo, monkeypatch):
 
     class Box:
         release = "404"
+        fail_local_tags = False
         api_calls: list = []
     b = Box()
     real_run = backends.RealCommandRunner.run
 
     def run(self, argv, timeout, cwd=None, env=None):
+        if b.fail_local_tags and argv[:2] == ["git", "-C"] and argv[3:5] == ["tag", "--points-at"]:
+            return CommandResult(128, "", "fatal: unable to read tags")
         if argv[0] != "curl":
             return real_run(self, argv, timeout, cwd=cwd, env=env)
         b.api_calls.append(argv)
         if b.release in ("404", "429"):
             return CommandResult(0, f'{{"message": "x"}}\n{b.release}', "")
-        if b.release == "{}":                         # a 200 without a tag_name
-            return CommandResult(0, "{}\n200", "")
+        if b.release.startswith("{"):                 # a raw 200 body (no or an unusable tag_name)
+            return CommandResult(0, b.release + "\n200", "")
         return CommandResult(0, json.dumps({"tag_name": b.release}) + "\n200", "")
     monkeypatch.setattr(backends.RealCommandRunner, "run", run)
 
@@ -181,14 +184,15 @@ def test_an_install_from_the_default_branch_head_is_offered_a_new_tag(box, git):
 def test_the_stable_key_table(names, release, expected):
     from lhpc.core import stable_lane         # new in U1: imported here, so the red-before runs the rest
     assert stable_lane.stable_tag(names, release) == expected
-    assert stable_lane.version_key("v1.2") == stable_lane.version_key("v1.2.0") == (1, 2)
+    assert stable_lane.version_of("v1.2") == stable_lane.version_of("v1.2.0") == (1, 2)
 
 
-@pytest.mark.parametrize("name, key", [("v2.8.0.7239fe8", (2, 8)), ("v2.8.0.9", (2, 8, 0, 9)), ("1.8.2-pre", (1, 8, 2)),
-                                       ("v112", (112,)), ("release-2.8.0", None), ("v1.2.0", (1, 2))])
-def test_the_leading_version_is_whole_numeric_segments(name, key):
+@pytest.mark.parametrize("name, key", [("v2.8.0.7239fe8", (2, 8)), ("v2.8.0.9", (2, 8, 0, 9)), ("1.8.2-pre", None),
+                                       ("v112", (112,)), ("release-2.8.0", None), ("v1.2.0", (1, 2)),
+                                       ("v99.0-dev", None), (["v3.0"], None), (None, None)])
+def test_one_strict_version_parser(name, key):
     from lhpc.core import stable_lane
-    assert stable_lane.version_key(name) == key
+    assert stable_lane.version_of(name) == key
 
 
 def test_a_snapshot_tag_on_the_installed_commit_does_not_hide_a_newer_release(box):
@@ -213,10 +217,11 @@ def test_a_snapshot_tag_beside_a_release_only_name_does_not_hide_a_newer_tag(box
     assert box.head() == box.c[2]
 
 
-def test_a_release_answer_without_a_tag_name_is_not_verified(box, capsys):
+@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}', '{"tag_name": "release-3.0"}'])
+def test_a_release_answer_without_a_usable_tag_name_is_not_verified(box, capsys, body):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v2.9.0", box.c[2])
-    box.release = "{}"
+    box.release = body
     box.cli("source-check", "s")
     assert box.status() == su.ERROR                   # RED before: verified, "behind"
     capsys.readouterr()
@@ -238,3 +243,33 @@ def test_a_deleted_upstream_tag_still_blocks_a_downgrade(box, git, capsys):
     assert box.head() == box.c[2]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
+
+
+def test_an_older_plain_tag_beside_a_newer_release_only_name_still_blocks_a_downgrade(box, capsys):
+    box.push_tag("v2.6.0", box.c[1])                   # the installed commit: ["v2.6.0", "v2.8.0.7239fe8"]
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+    box.push_tag("v2.7.1", box.c[2])
+    box.release = "v2.7.1"                             # the latest release moved back below 2.8.0
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.7.1
+    assert "older than the installed commit" in capsys.readouterr().out
+    assert box.head() == box.c[1]
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE
+
+
+def test_an_unreadable_installed_tag_list_refuses_the_update(box, git, capsys):
+    box.push_tag("v3.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    git(box.work, "push", "-q", "origin", "--delete", "v3.0")      # only the checkout still knows v3.0
+    box.push_tag("v2.9", box.c[1])
+    box.release = "v2.9"
+    box.fail_local_tags = True                                     # ... and it cannot be read now
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                                # RED before: up to date read as no tags
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
+    assert "could not be checked — try again later" in capsys.readouterr().out
+    assert box.head() == box.c[2]
