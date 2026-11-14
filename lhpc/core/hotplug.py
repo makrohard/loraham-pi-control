@@ -90,35 +90,44 @@ def baseline(rows) -> dict:
     return out
 
 
+def _new_stick(port: str, serial: str) -> str:
+    return f"new stick: {f'serial {serial}' if serial else 'no serial'} on port {port}, not in the hardware list"
+
+
+def unlisted(seen_now: dict, rows) -> dict:
+    """{ident: (port, serial)} of the sticks attached now that no radio of the list holds (A27)."""
+    return {i: v for i, v in seen_now.items() if not _holder(rows, i)}
+
+
 def changes(seen: dict, now: dict, rows) -> list:
-    """The lines for the step from `seen` to `now` ({ident: (port, serial)}), in port order."""
+    """The (line, identity) pairs for the step from `seen` to `now` ({ident: (port, serial)}), in port order; the
+    identity is set on a "new stick" line only (its derived twin is the same stick)."""
     gone = {i: v for i, v in seen.items() if i not in now}
     came = {i: v for i, v in now.items() if i not in seen}
     lines = []
     moved = set()
     lost = [(i, _holder(rows, i)) for i in gone if i.startswith("port:") and _holder(rows, i)]
     fresh = [i for i in came if i.startswith("port:") and not _holder(rows, i)]
-    if len(lost) == 1 and len(fresh) == 1:                  # a port-bound radio's stick on another port
-        (old, rid), new = lost[0], fresh[0]
-        lines.append((now[new][0], f"{rid} moved from port {seen[old][0]} to {now[new][0]} (no serial): re-bind it"))
+    if len(lost) == 1 and len(fresh) == 1:                  # maybe a port-bound radio's stick on another port: no
+        (old, rid), new = lost[0], fresh[0]                 # serial proves it (G1-B3-PLAN-RE B1)
+        lines.append((now[new][0], f"{rid}'s stick left port {seen[old][0]}; a stick with no serial appeared on port "
+                                   f"{now[new][0]} — re-bind {rid} if it is its stick", ""))
         moved = {old, new}
     for i, (port, serial) in sorted(came.items(), key=lambda kv: kv[1][0]):
         if i in moved:
             continue
         rid = _holder(rows, i)
-        what = f"serial {serial}" if serial else "no serial"
-        lines.append((port, f"{rid} back on port {port}" if rid
-                      else f"new stick: {what} on port {port}, not in the hardware list"))
+        lines.append((port, f"{rid} back on port {port}", "") if rid else (port, _new_stick(port, serial), i))
     for i, (port, serial) in sorted(gone.items(), key=lambda kv: kv[1][0]):
         if i in moved:
             continue
         rid = _holder(rows, i)
         if rid:
-            lines.append((port, f"{rid} unplugged" + (f" (serial {serial})" if serial else f" (port {port})")))
+            lines.append((port, f"{rid} unplugged" + (f" (serial {serial})" if serial else f" (port {port})"), ""))
     for i, (port, _serial) in sorted(now.items(), key=lambda kv: kv[1][0]):
         if i in seen and seen[i][0] and seen[i][0] != port and (rid := _holder(rows, i)):
-            lines.append((port, f"{rid} moved from port {seen[i][0]} to {port}"))
-    return [line for _port, line in lines]
+            lines.append((port, f"{rid} moved from port {seen[i][0]} to {port}", ""))
+    return [(line, ident) for _port, line, ident in lines]
 
 
 def _path(paths):
@@ -137,22 +146,27 @@ def _read(paths) -> dict | None:
     seen = {i: tuple(v) for i, v in data["seen"].items()
             if isinstance(i, str) and isinstance(v, list) and len(v) == 2 and all(isinstance(x, str) for x in v)}
     events = [e for e in data["events"] if isinstance(e, dict) and all(isinstance(e.get(k), str)
-                                                                         for k in ("id", "at", "line"))]
-    return {"seen": seen, "events": events, "seq": data.get("seq") if isinstance(data.get("seq"), int) else 0}
+                                                                         for k in ("id", "at", "line"))
+              and isinstance(e.get("ident", ""), str)]
+    quiet = [i for i in data.get("quiet", []) if isinstance(i, str)] if isinstance(data.get("quiet"), list) else []
+    return {"seen": seen, "events": events, "seq": data.get("seq") if isinstance(data.get("seq"), int) else 0,
+            "quiet": quiet}
 
 
 def _write(paths, state) -> bool:
     try:
         runtime_fs.atomic_write(paths, _path(paths), json.dumps(
             {"seen": {i: list(v) for i, v in state["seen"].items()}, "events": state["events"][-MAX_EVENTS:],
-             "seq": state["seq"]}), 0o600)
+             "seq": state["seq"], "quiet": sorted(state.get("quiet", []))}), 0o600)
         return True
     except (OSError, PathContainmentError):
         return False
 
 
 def banner(svc, scan=None, now=None) -> dict:
-    """The dashboard's banner: {"lines": [{"id", "at", "line"}]} of the changes not yet closed; [] = no banner.
+    """The dashboard's banner: {"lines": [{"id", "at", "line", "ids"}]}: the changes not yet closed, then one line per
+    attached stick no radio holds (A27; hidden when an undismissed event names the same stick, whose ✕ then carries
+    its "u:<identity>" too; `quiet` until it is unplugged or listed); [] = no banner.
     It never raises: it renders on the home page, so a source that fails (the scan, the model table, the hardware
     list) gives no banner this time, never an error page."""
     try:
@@ -166,35 +180,50 @@ def _banner(svc, scan, now) -> dict:
     after a newer one (G1-C9); a busy lock records nothing this time, and a render with nothing to record writes
     nothing. A hardware list that does not read back skips the comparison: its radios cannot be told (G1-C9)."""
     from . import usb_access
+    derived = {}
     try:
         with _locked(svc._paths):
             state_list = radios.load(svc._paths)
             seen_now = (None if state_list.kind == radios.INVALID else
                         observe(usb_access.scan() if scan is None else scan, radio_models.load(), state_list.radios))
-            state = _read(svc._paths) or {"seen": baseline(state_list.radios), "events": [], "seq": 0}
-            rows = state_list.radios
+            state = _read(svc._paths) or {"seen": baseline(state_list.radios), "events": [], "seq": 0, "quiet": []}
+            rows, write = state_list.radios, False
             if seen_now is not None and seen_now != state["seen"]:
                 at = time.strftime("%H:%MZ", time.gmtime(time.time() if now is None else now))
-                for line in changes(state["seen"], seen_now, rows):
+                for line, ident in changes(state["seen"], seen_now, rows):
                     state["seq"] += 1
-                    state["events"].append({"id": str(state["seq"]), "at": at, "line": line})
-                state["seen"] = seen_now
+                    state["events"].append({"id": str(state["seq"]), "at": at, "line": line,
+                                            **({"ident": ident} if ident else {})})
+                state["seen"], write = seen_now, True
+            if seen_now is not None:
+                derived = unlisted(seen_now, rows)
+                quiet = sorted(i for i in state.get("quiet", []) if i in derived)   # gone or listed: shown again later
+                state["quiet"], write = quiet, write or quiet != state.get("quiet", [])
+            if write:
                 _write(svc._paths, state)
     except (Busy, OSError, PathContainmentError):
         state = _read(svc._paths) or {"events": []}         # nothing recorded this time; the render still shows
-    return {"lines": state["events"][-MAX_EVENTS:]}
+    events = state["events"][-MAX_EVENTS:]
+    named = {e.get("ident") for e in events} - {None, ""}
+    lines = [{**e, "ids": [e["id"], *([f"u:{e['ident']}"] if e.get("ident") in derived else [])]} for e in events]
+    lines += [{"id": f"u:{i}", "at": "", "line": _new_stick(*derived[i]), "ids": [f"u:{i}"]}
+              for i in sorted(derived, key=lambda i: derived[i][0]) if i not in named and i not in state.get("quiet", [])]
+    return {"lines": lines}
 
 
 def dismiss(svc, ids) -> bool:
     """The ✕: delete exactly the lines it showed (their ids) from the list. False when the lock is busy or the write
     failed (the lines then stay, shown again)."""
-    ids = {i for i in ids if isinstance(i, str) and i.isdigit()}
+    ids = [i for i in ids if isinstance(i, str)]
+    events = {i for i in ids if i.isdigit()}
+    quiet = {i[2:] for i in ids if i.startswith(("u:serial:", "u:port:"))}   # a derived line: its stick quieted
     try:
         with _locked(svc._paths):
             state = _read(svc._paths)
             if state is None:
                 return True
-            state["events"] = [e for e in state["events"] if e["id"] not in ids]
+            state["events"] = [e for e in state["events"] if e["id"] not in events]
+            state["quiet"] = sorted(set(state["quiet"]) | quiet)
             return _write(svc._paths, state)
     except (Busy, OSError, PathContainmentError):
         return False
