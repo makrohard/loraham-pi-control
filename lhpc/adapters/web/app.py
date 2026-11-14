@@ -50,7 +50,7 @@ from markupsafe import Markup
 from lhpc.adapters.web import submenus as _submenus
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
-from lhpc.core import auto_install_form, web_client
+from lhpc.core import auto_install_form, jobresult, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
 from lhpc.core import instances as _instances
@@ -2066,10 +2066,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """The confirm page's view of a `none_compatible` refusal, read from its typed data only
         (never its text): the newest entry's lagging pairs (none when the commits are not what
         differs)."""
-        pm = plan.data.get("pin_mismatch")
-        if plan.ok or plan.data.get("binary_refusal") != "none_compatible" or not isinstance(pm, dict):
-            return None
-        return {"lagging": [(cid, pair[0], pair[1]) for cid, pair in sorted(pm.items())]}
+        ref = jobresult.refusal_from(plan)
+        return {"lagging": jobresult.lagging(ref)} if ref else None
 
     @app.post("/action")
     def action():

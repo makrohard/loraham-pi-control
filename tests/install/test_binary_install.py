@@ -150,6 +150,14 @@ def test_entry_requires_mandatory_passed_smoke(tmp_path):
         bi.index_entries(idx, "demo")
 
 
+@pytest.mark.parametrize("sha", ["A" * 64, "a" * 63, "g" * 64])
+def test_entry_requires_a_lowercase_hex_sha256(tmp_path, sha):
+    idx = _index(_entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"})))
+    idx["stacks"]["demo"][0].update(sha256=sha, filename=f"demo-{sha}.tar.zst")
+    with pytest.raises(bi.BinaryInstallError, match="malformed sha256"):
+        bi.index_entries(idx, "demo")
+
+
 @pytest.mark.parametrize("inputs", [[], [["demo-main", "0" * 64]], "x"])
 def test_entry_requires_an_inputs_object(tmp_path, inputs):
     idx = _index(_entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"})))

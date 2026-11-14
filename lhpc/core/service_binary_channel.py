@@ -179,8 +179,7 @@ class BinaryChannelMixin:
             return None
         if log in self._task_dismissed_ids():
             return None
-        ref = rec["refusal"]
-        return {"lagging": [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]}
+        return {"lagging": jobresult.lagging(rec["refusal"])}
 
     def binary_capable(self, component_id: str) -> bool:
         """True when a binary artifact CAN provide this component (its stack's spec covers it),

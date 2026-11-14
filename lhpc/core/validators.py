@@ -36,6 +36,14 @@ def is_hex(value, n: int) -> bool:
     return isinstance(value, str) and len(value) == n and all(c in "0123456789abcdef" for c in value)
 
 
+def safe_rel(p) -> bool:
+    """A runtime-root-relative path that cannot escape: normalized, no empty, `.` or `..` segment (the manifest's,
+    the binary index's and the receipt's one rule)."""
+    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
+        return False
+    return all(seg not in ("", ".", "..") for seg in p.split("/"))
+
+
 def _reject_control(s: str, field: str) -> None:
     if "\x00" in s:
         raise ValidationError(f"{field}: NUL byte not allowed")

@@ -149,6 +149,11 @@ def refusal_from(res) -> dict | None:
     return ref if valid_refusal(ref) else None
 
 
+def lagging(ref: dict) -> list:
+    """A typed refusal's lagging commits, by component: [(component, the binary's commit, the pin)]."""
+    return [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]
+
+
 def _read_raw(paths, log: str) -> dict | None:
     """Descriptor-safe read of one marker → validated dict, or None (absent/unsafe-leaf/oversized/malformed)."""
     try:

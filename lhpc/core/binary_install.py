@@ -272,7 +272,7 @@ def _parse_entry(stack_id: str, e: dict) -> IndexEntry:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid ({exc})") from None
-    if len(entry.sha256) != 64 or any(c not in "0123456789abcdef" for c in entry.sha256):
+    if not validators.is_hex(entry.sha256, 64):
         raise BinaryInstallError("binary index entry has a malformed sha256")
     if entry.size <= 0 or entry.size > _ARTIFACT_MAX_BYTES:
         raise BinaryInstallError(f"binary artifact size {entry.size} is out of bounds")
@@ -576,13 +576,6 @@ def validate_and_extract(tar_path, stage_dir, publish_roots) -> list:
 
 # --- crash journal ------------------------------------------------------------------------
 
-def safe_rel(p: str) -> bool:
-    """A runtime-root-relative path that cannot escape (same rule the manifest parser uses)."""
-    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
-        return False
-    return all(seg not in ("", ".", "..") for seg in p.split("/"))
-
-
 def journal_path(paths: Paths):
     return paths.under(*JOURNAL_REL)
 
@@ -615,18 +608,18 @@ def read_journal(paths: Paths):
         return None, "unsafe"
     # Every path in a journal is used to MOVE files — validate them like the manifest does
     # (runtime-root-relative, no escapes) instead of trusting on-disk state.
-    if not all(isinstance(x, str) and safe_rel(x) for x in d["roots"]):
+    if not all(isinstance(x, str) and validators.safe_rel(x) for x in d["roots"]):
         return None, "unsafe"
-    if not all(isinstance(k, str) and safe_rel(k) and isinstance(v, str) and safe_rel(v)
+    if not all(isinstance(k, str) and validators.safe_rel(k) and isinstance(v, str) and validators.safe_rel(v)
                for k, v in d["backups"].items()):
         return None, "unsafe"
     dirs = d.get("dirs", {})
     if not isinstance(dirs, dict) or not all(
-            isinstance(k, str) and safe_rel(k) and isinstance(v, str) and safe_rel(v)
+            isinstance(k, str) and validators.safe_rel(k) and isinstance(v, str) and validators.safe_rel(v)
             for k, v in dirs.items()):
         return None, "unsafe"
     made = d.get("created_dirs", [])
-    if not isinstance(made, list) or not all(isinstance(x, str) and safe_rel(x) for x in made):
+    if not isinstance(made, list) or not all(isinstance(x, str) and validators.safe_rel(x) for x in made):
         return None, "unsafe"
     return d, "valid"
 

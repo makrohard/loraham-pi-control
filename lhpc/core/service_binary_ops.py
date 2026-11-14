@@ -52,7 +52,7 @@ class BinaryOpsMixin:
 
     def _binary_pins(self, stack_id: str) -> dict:
         """{component id: manifest pin_commit} for every covered component — THE comparison
-        set for an artifact's index-v2 components map."""
+        set for an artifact's index components map."""
         st = self.stack(stack_id)
         spec = getattr(st, "binary", None)
         if st is None or spec is None:

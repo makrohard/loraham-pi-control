@@ -50,7 +50,7 @@ class BinaryReceipt:
     artifact_size: int
     filename: str
     url: str
-    components: dict                 # manifest component id -> commit (index-v2 provenance)
+    components: dict                 # manifest component id -> commit (index provenance)
     provenance: dict                 # lhpc_commit/builder_commit/container_digest/target/os/…
     files: tuple[str, ...]           # runtime-root-relative paths the artifact installed
     file_hashes: dict                # path -> sha256 (regular files only)
@@ -81,13 +81,6 @@ def receipt_path(paths: Paths, stack_id: str) -> Path:
     return receipt_dir(paths) / f"{stem}.json"
 
 
-def _safe_rel(p: str) -> bool:
-    """Runtime-root-relative, non-escaping (mirrors the manifest's own path rule)."""
-    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
-        return False
-    return all(seg not in ("", ".", "..") for seg in p.split("/"))
-
-
 def _valid(d: object, stack_id: str) -> bool:
     if not isinstance(d, dict) or d.get("version") != RECEIPT_VERSION:
         return False
@@ -96,8 +89,7 @@ def _valid(d: object, stack_id: str) -> bool:
     for f in ("artifact_sha256", "filename", "url", "probe"):
         if not isinstance(d.get(f), str):
             return False
-    if len(d["artifact_sha256"]) != 64 or not all(c in "0123456789abcdef"
-                                                  for c in d["artifact_sha256"]):
+    if not validators.is_hex(d["artifact_sha256"], 64):
         return False
     size = d.get("artifact_size")
     if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
@@ -106,7 +98,7 @@ def _valid(d: object, stack_id: str) -> bool:
         if not isinstance(d.get(f), dict):
             return False
     od = d.get("owned_dirs", [])
-    if not isinstance(od, list) or not all(isinstance(x, str) and _safe_rel(x) for x in od):
+    if not isinstance(od, list) or not all(isinstance(x, str) and validators.safe_rel(x) for x in od):
         return False
     if len(set(od)) != len(od):
         return False
@@ -116,7 +108,7 @@ def _valid(d: object, stack_id: str) -> bool:
             return False
         # Every listed path is DELETED at retirement — validate containment here so a
         # hand-edited receipt reads UNSAFE instead of reaching the filesystem.
-        if not all(_safe_rel(x) for x in v):
+        if not all(validators.safe_rel(x) for x in v):
             return False
     if not d["files"] or not d["proof_paths"]:
         return False
@@ -128,13 +120,11 @@ def _valid(d: object, stack_id: str) -> bool:
         return False
     if set(d["file_hashes"]) != set(d["files"]):
         return False
-    if not all(isinstance(v, str) and len(v) == 64
-               and all(c in "0123456789abcdef" for c in v)
-               for v in d["file_hashes"].values()):
+    if not all(validators.is_hex(v, 64) for v in d["file_hashes"].values()):
         return False
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in d["components"].items()):
         return False
-    if not all(_safe_rel(k) and isinstance(v, str) for k, v in d["file_hashes"].items()):
+    if not all(validators.safe_rel(k) and isinstance(v, str) for k, v in d["file_hashes"].items()):
         return False
     if not all(isinstance(k, str) and isinstance(v, str)
                for k, v in d["registry_baseline"].items()):

@@ -92,3 +92,13 @@ def test_a_none_compatible_refusal_is_transported_also_when_only_the_inputs_diff
     res = ActionResult(False, "x", data={"binary_failed": True, "binary_refusal": "none_compatible",
                                          "pin_mismatch": {}})
     assert jobresult.refusal_from(res) == {"pin_mismatch": {}}
+
+
+@pytest.mark.needs_session                 # the job marker carries this process's identity
+def test_the_lagging_pairs_are_listed_by_component(tmp_path, monkeypatch):
+    res = ActionResult(False, "Binary install of 'daemon' refused",
+                       data={"binary_failed": True, "binary_refusal": "none_compatible",
+                             "pin_mismatch": {"z-comp": [A, B], "a-comp": [B, A]}})
+    _child(tmp_path, monkeypatch, res)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.binary_install_refusal("daemon") == {"lagging": [("a-comp", B, A), ("z-comp", A, B)]}

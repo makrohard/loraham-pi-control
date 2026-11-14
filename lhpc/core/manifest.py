@@ -17,7 +17,7 @@ import re
 import tomllib
 from pathlib import Path
 
-from . import commands
+from . import commands, validators
 from .assets import asset_path
 from .model import (
     BinarySpec,
@@ -465,14 +465,6 @@ _BINARY_KEYS = frozenset({"index_url", "covers", "publish_roots", "proof_paths",
                           "clone_required", "probes"})
 
 
-def _rel_path_ok(p: str) -> bool:
-    """Runtime-root-relative, normalized, never escaping."""
-    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
-        return False
-    parts = p.split("/")
-    return all(seg not in ("", ".", "..") for seg in parts)
-
-
 def _parse_binary(raw, stack_id: str, components: tuple[Component, ...]) -> BinarySpec:
     """STRICT `[stack.binary]` parse. The declaration is a security surface (it decides what
     an artifact may replace and where downloads come from), so every field is allow-listed
@@ -513,7 +505,7 @@ def _parse_binary(raw, stack_id: str, components: tuple[Component, ...]) -> Bina
             raise ManifestError(
                 f"[{stack_id}.binary].clone_required: {cid!r} must also be in covers")
     for p in (*roots, *proofs):
-        if not _rel_path_ok(p):
+        if not validators.safe_rel(p):
             raise ManifestError(f"[{stack_id}.binary]: unsafe path {p!r}")
     for p in proofs:
         if not any(p == r or p.startswith(r + "/") for r in roots):
@@ -527,7 +519,7 @@ def _parse_binary(raw, stack_id: str, components: tuple[Component, ...]) -> Bina
         if (not isinstance(pr, list) or not pr
                 or not all(isinstance(x, str) and x for x in pr)):
             raise ManifestError(f"[{stack_id}.binary].probes: invalid argv {pr!r}")
-        if not _rel_path_ok(pr[0]):
+        if not validators.safe_rel(pr[0]):
             raise ManifestError(f"[{stack_id}.binary].probes: unsafe binary path {pr[0]!r}")
         probes.append(tuple(pr))
     return BinarySpec(index_url=url, covers=covers, publish_roots=roots,
