@@ -67,16 +67,18 @@ class StatusProber:
 
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
-                 meshcore_node_endpoints: list | None = None, sources: bool = True,
+                 instance_endpoints: dict | None = None, sources: bool = True,
                  cache=None, owned_running: dict | None = None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
         self._paths = paths
         self._profiles = profiles or {}
-        # The MeshCore node's endpoints: each running instance's own mode at its own addresses (instances.
-        # node_endpoints, K8f S4-5); None: the template's in the default mode. Status and start readiness agree.
-        self._node_endpoints = meshcore_node_endpoints
+        # {component id: endpoints}, or a callable giving it from this snapshot's ONE process table: the running
+        # instances' own (instances.status_endpoints, A17; the MeshCore node in its mode, K8f S4-5); not listed: the
+        # template's in the default mode. Status and start readiness agree.
+        self._endpoints_of = instance_endpoints if callable(instance_endpoints) else None
+        self._instance_endpoints = {} if self._endpoints_of else (instance_endpoints or {})
         # {component_id: BinaryReceipt} for components currently provided by a verified
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
@@ -138,6 +140,8 @@ class StatusProber:
             self._cmdlines = self._system.procfs.cmdlines()         # once for every process match
         except Exception:
             self._cmdlines = None
+        if self._endpoints_of is not None:                          # the same table (G1-B1-PLAN-RE N2)
+            self._instance_endpoints = self._endpoints_of(self._cmdlines) if self._cmdlines is not None else {}
         try:
             self._prefetch_sources([c for s in stacks for c in s.components])
             for stack in stacks:
@@ -402,8 +406,9 @@ class StatusProber:
     ) -> tuple[list[EndpointObservation], bool, bool, bool]:
         observations: list[EndpointObservation] = []
         expected_present: list[bool] = []
-        node = comp.id == _meshcore_mode.NODE_ID and self._node_endpoints is not None
-        specs = self._node_endpoints if node else _meshcore_mode.expected_endpoints(comp, _meshcore_mode.DEFAULT_MODE)
+        specs = self._instance_endpoints.get(comp.id)
+        if specs is None:
+            specs = _meshcore_mode.expected_endpoints(comp, _meshcore_mode.DEFAULT_MODE)
         for spec in _radio_start.radio_endpoints(self._paths, specs):
             obs = EndpointObservation(spec=spec)
             if spec.kind == "tcp":

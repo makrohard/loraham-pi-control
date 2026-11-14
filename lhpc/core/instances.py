@@ -563,8 +563,9 @@ def endpoint_statuses(svc, cs, inst) -> list:
     inst = _based(svc, svc.stack_of(cs.component_id), inst)        # G2 NOTE 11: at its saved ports, as a start judges
     if cs.component_id == _mm.NODE_ID:            # K8f S4-5 (DEC-W409ah): its own mode at its own addresses, probed
         return [EndpointObservation(e, *tcp_endpoint_match(svc._system, e.address)) for e in node_endpoints(svc, [inst])]
-    return [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
-            else o for o in cs.endpoints or () for e in endpoints_for([o.spec], inst)]
+    own = [dataclasses.replace(o, spec=e, present=tcp_endpoint_match(svc._system, e.address)[0]) if e.kind == "tcp"
+           else o for o in cs.endpoints or () for e in endpoints_for([o.spec], inst)]
+    return list({(o.spec.kind, o.spec.address): o for o in own}.values())  # several instances' specs, one address
 
 
 def endpoints_for(endpoints, inst) -> list:
@@ -684,6 +685,33 @@ def node_endpoints(svc, insts) -> list:
     comp = svc.stack(_mm.STACK_ID).component(_mm.NODE_ID)
     return [e for inst in insts for e in endpoints_for(_mm.expected_endpoints(comp, svc.meshcore_running_mode(inst)),
                                                        _based(svc, _mm.STACK_ID, inst))]
+
+
+def status_endpoints(svc, table, owned) -> dict:
+    """{component id: the endpoints status probes} (A17, A24; G1-B1-PLAN rounds), from ONE process table `table` and the
+    verified records' pids `owned` ({component: [pid]}): those of the instances the component runs as, each at its own
+    (saved-base) addresses, the MeshCore node in its own mode; plus the template's when an unclaimed pid of it runs (its
+    radio unknown: neither hides the other); a component with no process, in a stack that runs as instances, its running
+    instances' (display only). Not listed: the template's."""
+    from . import meshcore_mode as _mm
+    procs = instance_processes(svc, table)
+    claimed, runs = {(c, p) for _s, _r, c, p in procs}, {}
+    for sid, rid, cid, _pid in procs:
+        runs.setdefault(sid, {}).setdefault(cid, set()).add(rid)
+    out = {}
+    for stack in (svc.stack(sid) for sid in runs):
+        by_comp, every = runs[stack.id], set().union(*runs[stack.id].values())
+        for comp in (c for c in stack.components if c.endpoints):
+            loose = bool(unclaimed_pids(svc, comp, table, procs)) or any((comp.id, p) not in claimed
+                                                                           for p in owned.get(comp.id, ()))
+            rids = by_comp.get(comp.id) or (set() if loose else every)
+            eps = [e for r in sorted(rids, key=lambda x: int(x[1:])) if (i := copy_of(svc, stack.id, r)[0]) is not None
+                   for e in (node_endpoints(svc, [i]) if comp.id == _mm.NODE_ID
+                             else endpoints_for(comp.endpoints, _based(svc, stack.id, i)))]
+            if rids:
+                eps += _mm.expected_endpoints(comp, _mm.DEFAULT_MODE) if loose else []
+                out[comp.id] = list({(e.kind, e.address): e for e in eps}.values())
+    return out
 
 
 def _based(svc, sid, inst):
