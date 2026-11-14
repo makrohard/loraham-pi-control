@@ -825,9 +825,10 @@ class Lifecycle:
         except (OSError, PathContainmentError) as exc:
             return PostStartSchedule(False, f"launcher spawn/log setup failed: {exc}")
         ident = self._capture_identity(pid)
+        rid = getattr(inst, "rid", "") or ""             # its radio, for an instance's booting badge (G1-B1-PLAN N8)
         if self.record_launch(stack, comp, pid, band, ident=ident, role="post", binding=binding,
-                              extra={"post_uid": uid, "result_path": str(result),
-                                     "launcher_path": str(launcher), "log_path": str(log)}):
+                              extra={"post_uid": uid, "result_path": str(result), "launcher_path": str(launcher),
+                                     "log_path": str(log), **({"rid": rid} if rid else {})}):
             # Record durable -> ARM the runner with exactly one byte (it may now act for THIS launch
             # only). An arming FAILURE (exception OR a short/zero write) must NEVER be reported as
             # "scheduled": close the gate and unwind via the identity-safe SIGTERM cessation
