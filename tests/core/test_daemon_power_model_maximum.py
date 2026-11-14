@@ -115,3 +115,33 @@ def test_an_instance_sets_power_saved_before_the_cap_is_sent_as_before(tmp_path)
     assert row["value"] == "17", row
     lines, _tx_ok, _gate = svc._apply_stack_daemon_params("meshcore", "868", "r4")
     assert ("/tmp/loraconf-r4.sock", "SET POWER=17") in fake.sent, (fake.sent, lines)
+
+
+def _public(tmp_path, monkeypatch, capsys, web, rows):
+    """The service on `rows`, and its two public readers of the row notes: the Hardware page's notes (GET /hardware)
+    and the POWER lines of `lhpc hardware` (no USB stick is attached)."""
+    from htmlq import parse
+    from lhpc.adapters.cli import main as cli
+    from lhpc.core import usb_access
+    monkeypatch.setattr(usb_access, "scan", lambda *a, **k: usb_access.Scan(usb_access.Probe.PRESENT, ()))
+    svc, fake = _svc(tmp_path)
+    (tmp_path / "config" / "radios.toml").write_text(radios.render(rows))
+    monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc)
+
+    def page_notes():
+        r = web(service_factory=lambda: svc).get("/hardware", headers={"Host": "localhost:8443"})
+        assert r.status_code == 200
+        return [e.text for e in parse(r.get_data(as_text=True)).find("span", class_="note-bad")]
+
+    def cli_power_lines():
+        assert cli.main(["hardware"]) == 0
+        return [x for x in capsys.readouterr().out.splitlines() if "POWER" in x]
+    return svc, fake, page_notes, cli_power_lines
+
+
+def test_a_granted_plus_20_on_an_sx127x_row_is_no_note(tmp_path, monkeypatch, capsys, web):
+    # second read B2: loraham's maximum is 17, and exactly 20 with the +20 grant on its band stays allowed: no note
+    granted = dataclasses.replace(ROWS[0], high_power=True, high_power_band="433", dp=(("POWER", "20"),))
+    _svc_, _fake, page_notes, cli_power_lines = _public(tmp_path, monkeypatch, capsys, web, (granted, *ROWS[1:]))
+    assert radios.load(_svc_._paths).kind == radios.VALID
+    assert not any("POWER" in n for n in page_notes()) and cli_power_lines() == []
