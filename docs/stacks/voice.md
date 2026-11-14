@@ -29,7 +29,7 @@ airtime, and a MANAGED CAD wait would gap live audio.
 |---|---|---|---|
 | `callsign` | inherits the global operator base callsign while empty | | max 11 characters; `/` and `-` allowed (portable forms such as `N0CALL/P` — use your own call); with neither a local nor a global callsign the start is refused |
 | `freq` | `434.700` | `869.525` | MHz |
-| `sf` | 7 | 7 | a voice packet must spend less time on the air than the audio it carries, or the app marks the mode `[VERBOTEN!]` and will not transmit; with the default `codec_mode` 0 that rules out SF8 and slower at 434.700/BW125, and SF9 and slower at 869.525/BW250 (SF11 needs about 1.25 s for 260 ms of audio) |
+| `sf` | 7 | 7 | a voice packet must spend less time on the air than the audio it carries, or the app marks the mode `[VERBOTEN!]` and will not transmit; with the default `codec_mode` 0 that rules out SF8 and slower at 434.700/BW125, and SF9 and slower at 869.525/BW250 (SF11 at 868 needs about 1.25 s for 260 ms of audio) |
 | `bw` | 125.0 | 250.0 | kHz |
 | `cr` | 5 | 5 | 4/CR |
 | `crc` | 1 | 1 | |
@@ -40,8 +40,9 @@ airtime, and a MANAGED CAD wait would gap live audio.
 | `codec_mode` | 0 | | Codec2 mode index 0–7 |
 | `audio_capture` / `audio_playback` | `default` | | ALSA devices. The terminal client lists up to 16 PCMs (capture-capable or without IOID restriction): with two or more it uses the saved names if both are listed, else asks at start (Enter = default); with one it uses it; with none it keeps the saved names |
 
-Each instance's file holds its radio's band only (`433_*` or `868_*`), and `active_band` (0 = 433,
-1 = 868) is written from that band. Daemon-side radio parameters: [daemon](daemon.md#radio-parameters).
+LHPC writes each instance's file with its radio's band only (`433_*` or `868_*`) and `active_band`
+(0 = 433, 1 = 868) from that band; the app rewrites it with both bands whenever it saves (its config
+dialog, and at every exit). Daemon-side radio parameters: [daemon](daemon.md#radio-parameters).
 
 ## Position (GPS)
 
