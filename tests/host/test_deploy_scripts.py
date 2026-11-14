@@ -238,7 +238,7 @@ def test_install_refuses_symlinked_ancestor(tmp_path):
 
 def _remainder(root: Path):
     """What a default uninstall leaves behind: config, marker, profiles and app data."""
-    for d in ("config", "profiles", "state/graywolf", "state/meshcore"):
+    for d in ("config", "profiles", "state/graywolf", "state/meshcore", "state/meshcom", "state/meshcore-webui"):
         (root / d).mkdir(parents=True)
     (root / "config" / "local.toml").write_text("[operator]\ncallsign='X'\n")
     (root / ".lhpc-root").write_text('{"schema_version":1,"root":"%s"}' % root)
@@ -256,6 +256,7 @@ def test_install_allows_uninstall_remainder(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr        # reused the remainder, installed fresh
     assert (root / "src" / "loraham-pi-control" / ".git").is_dir()
     assert (root / "state" / "graywolf" / "graywolf.db").read_text() == "APP-DATA"
+    assert (root / "state" / "meshcom").is_dir() and (root / "state" / "meshcore-webui").is_dir()   # 0.13's top level
 
 
 @pytest.mark.parametrize("leftover", ["state/locks", "state/registry", "state/loraham"])
@@ -511,6 +512,46 @@ def test_uninstall_default_preserves_config_removes_rest(tmp_path):
     log = (tmp_path / "systemctl.log").read_text()
     # ordered teardown: the .path watcher is disabled BEFORE the console is stopped
     assert log.index("disable lhpc-selfupdate.path") < log.index("stop lhpc-web.service")
+
+
+def _state_roots() -> list:
+    """Every `state_root` the packaged manifest declares (a stack's or a component's data dir)."""
+    import tomllib
+    found = []
+    def walk(o):
+        if isinstance(o, dict):
+            found.extend([o["state_root"]] if o.get("state_root") else [])
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(tomllib.loads((REPO / "lhpc" / "data" / "manifest.example.toml").read_text()))
+    return sorted(set(found))
+
+
+def test_uninstall_default_keeps_every_stacks_data_dir(tmp_path):
+    """A default uninstall keeps every stack's data dir (each manifest `state_root`), the top-level ones a 0.13.x box
+    wrote included (MeshCom's node image, the MeshCore Web UI's data), and an instance's per-radio dir."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    kept = [*_state_roots(), "state/r3"]
+    assert {"state/meshcom", "state/meshcore-webui"} <= set(kept)
+    for d in kept:
+        (root / d).mkdir(parents=True, exist_ok=True)
+        (root / d / "data").write_text("APP-DATA")
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [d for d in kept if not (root / d / "data").is_file()] == []
+
+
+def test_every_manifest_data_dir_is_in_app_data():
+    """APP_DATA (install.sh = uninstall.sh) names every manifest `state_root`, so no stack's data is removed by a default
+    uninstall or refused as a reinstall remainder."""
+    line = next(ln for ln in (REPO / "uninstall.sh").read_text().splitlines() if ln.startswith("APP_DATA="))
+    missing = sorted(set(_state_roots()) - set(line.split('"')[1].split()))
+    assert missing == []
 
 
 def test_uninstall_purge_removes_config_and_root(tmp_path):
