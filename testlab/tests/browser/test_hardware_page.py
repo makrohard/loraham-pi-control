@@ -3,6 +3,8 @@ sends), where a template read cannot tell. The radio detail page runs on the `fl
 two ports to choose, which the lab cannot set up)."""
 from __future__ import annotations
 
+import itertools
+
 
 def _style(page, selector, *props):
     return page.eval_on_selector(selector, "(el, ps) => { const s = getComputedStyle(el); return ps.map(p => s[p]); }",
@@ -43,9 +45,11 @@ def test_without_ports_to_choose_there_is_no_re_bind(flask_page, monkeypatch):
 def test_the_actions_share_one_row_that_wraps_on_a_phone(flask_page, monkeypatch):
     page, _posts = flask_page()
     boxes = page.eval_on_selector_all(".acts > *", "els => els.map(e => { const b = e.getBoundingClientRect(); "
-                                      "return [b.top, b.height, getComputedStyle(e).marginLeft]; })")
-    assert len(boxes) == 3 and all(m == "0px" for _t, _h, m in boxes)              # Re-bind, Detect form, Remove
-    centres = {round(t + h / 2) for t, h, _m in boxes}
+                                      "return [b.top, b.height, getComputedStyle(e).marginLeft, b.left, b.right]; })")
+    assert len(boxes) == 3 and all(b[2] == "0px" for b in boxes)                    # Re-bind, Detect form, Remove
+    assert all(nxt[3] - prev[4] >= 4 for prev, nxt in itertools.pairwise(boxes)), boxes  # spaced, never touching
+    assert max(b[0] for b in boxes) - min(b[0] for b in boxes) <= 1, boxes          # their tops level
+    centres = {round(b[0] + b[1] / 2) for b in boxes}
     assert max(centres) - min(centres) <= 2                                         # one row at 1280 px
     page.set_viewport_size({"width": 360, "height": 800})
     width = page.evaluate("document.documentElement.scrollWidth")

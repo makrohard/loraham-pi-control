@@ -104,7 +104,10 @@ def seeded_rf_logs(lab):
 
 @pytest.fixture()
 def flask_page(browser, tmp_path, monkeypatch):
-    """A factory: a real Chromium page over the console app itself (no lab), for pages the lab cannot set up."""
+    """A factory: a real Chromium page over the console app itself (no lab), for pages the lab cannot set up. Like
+    `page`, it FAILS the test on any JS console error or page error of a page it opened."""
+    errors: list[str] = []
+
     def make(*, choices=True, activity=False, path="/hardware/radio/r3"):
         """A real Chromium page over the console app (no lab): every request of the page is answered by a Flask test
         client on a runtime with a USB radio r3. Returns (page, posts): `posts` collects each POST the page sends."""
@@ -144,6 +147,9 @@ def flask_page(browser, tmp_path, monkeypatch):
         context = browser.new_context(viewport={"width": 1280, "height": 900})
         context.route("http://127.0.0.1:9/**", handle)
         page = context.new_page()
+        page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
         page.goto("http://127.0.0.1:9" + path, wait_until="load")
         return page, posts
-    return make
+    yield make
+    assert not errors, f"JS console errors: {errors}"
