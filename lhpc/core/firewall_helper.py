@@ -1452,10 +1452,13 @@ def op_apply(sysx, candidate_path, *, cleanup=False, etc_dir=ETC_DIR, run_dir=RU
                 if st != "absent" and not (st == "ours" and sysx.run(
                         ["nft", "destroy", "table", TABLE_FAMILY, TABLE_NAME])[0] == 0):
                     undo = f"previous ruleset NOT restored ({st})"
-            _durable_unlink(p["journal"])
+            # The error receipt BEFORE the journal goes: while the journal exists the controller
+            # reads the integration as partial, after it the error receipt; no gate ever sees the
+            # previous verified receipt beside a failed apply.
             write_receipt(sysx, "error", f"apply failed at {verdict}; {undo}",
                           snap["intent_hash"], snap["model_hash"],
                           list_foreign_tables(sysx) or [], run_dir=run_dir)
+            _durable_unlink(p["journal"])
             return EXIT_FAIL
         # PROMOTE: atomic rename staged -> canonical, then fsync the directory.
         os.replace(staged, p["snapshot"])

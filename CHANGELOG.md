@@ -99,6 +99,9 @@ Upgrading from 0.13.x
 - Auto-start ticks are per radio now: tick them again on each radio's Settings page; the old stack-wide ticks are no
   longer read.
 - A Settings reset resets one radio: its own settings and its auto-start ticks.
+- With the managed firewall installed, apply it once after the update, before you reboot
+  (`sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh`): the helper changed and every radio
+  has its own rows.
 
 Fixed
 

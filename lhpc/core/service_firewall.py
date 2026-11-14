@@ -188,7 +188,8 @@ class FirewallOpsMixin:
 
         st = {"installed": installed, "mode": mode,
               "config_ok": False, "boot_ok": False, "live_ok": False,
-              "transitional": False, "foreign": [], "reason": "", "line": "",
+              "transitional": False, "helper_stale": False, "foreign": [], "reason": "",
+              "line": "",
               "level": "warn", "candidate": candidate, "intent_hash": intent}
 
         if not installed:
@@ -217,6 +218,9 @@ class FirewallOpsMixin:
         rules_verified = (fresh and receipt.get("verdict") == "verified"
                           and receipt.get("intent_hash") == intent)
         st["live_ok"] = rules_verified and rev_ok
+        # A fresh verified receipt from another helper build, whatever the saved intent: the
+        # re-apply notice keys on this, not on the pill's reason (`firewall_reapply_notice`).
+        st["helper_stale"] = fresh and receipt.get("verdict") == "verified" and not rev_ok
 
         if st["live_ok"] and st["transitional"]:
             st.update(level="warn", reason="transition",
@@ -255,36 +259,11 @@ class FirewallOpsMixin:
     # ---- receipt read (hardened) ------------------------------------------------------------
 
     def _fw_read_receipt(self, path=None):
-        """Bounded O_NOFOLLOW read + hard checks: regular file, ROOT owner, no group/other
-        write, size bound, JSON shape, protocol match. Any failure => None (never green).
-        A receipt the lhpc user could have forged must not be trusted."""
+        """The receipt (`_read_root_json`) with its exact shape and protocol, or None (never
+        green). A receipt the lhpc user could have forged must not be trusted."""
         path = _fw.RECEIPT_PATH if path is None else path   # late-bound: tests repoint RECEIPT_PATH
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError:
-            return None
-        try:
-            stx = os.fstat(fd)
-            if not stat.S_ISREG(stx.st_mode):
-                return None
-            # `path == RECEIPT_PATH` gates the overflow-uid fallback to the canonical root-only-
-            # writable receipt (an arbitrary caller path must never get that relaxed trust).
-            if not _owner_is_host_root(stx.st_uid, canonical_path=(path == _fw.RECEIPT_PATH)):
-                return None                            # not host-root-owned -> forgeable -> reject
-            if stx.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-                return None
-            if stx.st_size > 64 * 1024:
-                return None
-            raw = os.read(fd, 64 * 1024 + 1)
-        except OSError:
-            return None
-        finally:
-            os.close(fd)
-        try:
-            r = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return None
-        if not isinstance(r, dict) or r.get("protocol") != _fw.PROTOCOL_VERSION:
+        r = _read_root_json(path, 64 * 1024)
+        if r is None or r.get("protocol") != _fw.PROTOCOL_VERSION:
             return None
         # EXACT-SHAPE fail-closed: the receipt must carry EXACTLY the expected fields, each with
         # the right type — a receipt missing a mandatory field OR carrying an unknown one is
@@ -301,6 +280,29 @@ class FirewallOpsMixin:
             if not isinstance(v, typ):
                 return None
         return r
+
+    def _fw_applied_candidate(self):
+        """The applied evidence E of the gates (`_fw_gate_decision`): the candidate of the root-written
+        snapshot the live firewall was applied with and is verified against this boot, or None.
+        Trusted only when the snapshot reads like the receipt (`_read_root_json`), its intent and
+        model hashes recompute to its own and the receipt's, protocol and helper revision are the
+        packaged ones, and the receipt — fresh, verified, read again after the snapshot — is
+        unchanged. A transitional snapshot counts; its rows come from its candidate only, never
+        from the model's preserved old rules."""
+        receipt = self._fw_read_receipt()
+        if not (receipt and self._fw_receipt_fresh(receipt) and receipt["verdict"] == "verified"
+                and receipt["integration_rev"] == _fw.integration_rev()):
+            return None
+        snap = _read_root_json(_fw.SNAPSHOT_DEST, _fw.MAX_SNAPSHOT_BYTES)
+        try:
+            cand = snap["candidate"]
+            ok = (snap["protocol"] == _fw.PROTOCOL_VERSION
+                  and snap["integration_rev"] == _fw.integration_rev()
+                  and _fw.intent_hash(cand) == snap["intent_hash"] == receipt["intent_hash"]
+                  and _fw.model_hash(snap["model"]) == snap["model_hash"] == receipt["model_hash"])
+        except (TypeError, KeyError, ValueError):   # no snapshot, a key missing, an invalid candidate
+            return None
+        return cand if ok and self._fw_read_receipt() == receipt else None
 
     def firewall_log_tail(self, lines=300):
         """(path, tail_lines) of the firewall check log — the GET-safe diagnostic the root
@@ -588,6 +590,40 @@ class FirewallOpsMixin:
 
     # ---- exposure gating (FW-6, plan P1-B) --------------------------------------------------
 
+    def _fw_gate_decision(self, listeners=(), ingress=(), st=None) -> str:
+        """THE decision of every gated operation (stack start/restart, webserver apply and its
+        deferred completion, the network watchdog, the nginx boot gate), behind their own absent /
+        partial / nothing-remote / console-removal branches. `listeners` are the operation's
+        non-loopback launch scopes (`_fw_prospective_stack_scopes`), `ingress` the nginx scopes it
+        binds (`_fw_proxy_ingress`). Returns "" (allowed), "pending" (a saved change needs the apply)
+        or "uncovered" (a listener the applied firewall has no row for).
+
+        Without applied evidence (`_fw_applied_candidate`) the rule is the receipt's: the saved
+        intent applied and live-verified, then every listener modeled exactly. With it, the operation
+        passes when the saved candidate is valid, its mode and extra_allow are the applied ones, and
+        every scope it binds has a row in the applied candidate with the same key (listener: id,
+        proto, family, address, port and band; nginx: proto, family, address, port). Source CIDRs
+        and the direct-access tick follow the applied firewall until the next apply (his word)."""
+        st = self.firewall_status() if st is None else st
+        applied = self._fw_applied_candidate()
+        if applied is None:
+            if not (st.get("config_ok") and st.get("live_ok")):
+                return "pending"
+            modeled = st.get("candidate") or self.firewall_candidate()
+            return "" if all(self._fw_scope_modeled(sc, modeled) for sc in listeners) else "uncovered"
+        saved = st.get("candidate")                   # None: the saved candidate is invalid
+        if not saved or saved["mode"] != applied["mode"] or \
+                _canon_rows(saved["extra_allow"]) != _canon_rows(applied["extra_allow"]):
+            return "pending"
+        if not all(_fw_has_row(sc, applied) for sc in listeners):
+            return "uncovered"
+        rows = {_ingress_key(e) for e in applied["proxy_ingress"]}
+        return "" if all(_ingress_key(sc) in rows for sc in ingress) else "pending"
+
+    def _fw_nginx_decision(self, st=None) -> str:
+        """`_fw_gate_decision` for what nginx binds with the saved config (console + exposed pages)."""
+        return self._fw_gate_decision(ingress=self._fw_proxy_ingress(self.config()), st=st)
+
     def firewall_gate_activation(self, prospective_ports, action_hint="Apply the webserver again"):
         """The receipt gate for any operation that CREATES, WIDENS or MOVES a non-loopback
         listener. `prospective_ports` = the COMPLETE set of TCP ports the pending activation
@@ -600,10 +636,10 @@ class FirewallOpsMixin:
           firewall cannot be trusted to protect one); a loopback-only activation still proceeds,
           since it activates nothing that needs protecting.
         - No prospective non-loopback listener at all -> allowed (exposure-reducing / local).
-        - A remote listener would activate -> allowed ONLY when the firewall is live-verified
-          AND its receipt matches the CURRENT saved intent (config_ok — so a widened CIDR on an
-          already-open port is covered too, since the intent hash changed). A live-but-stale
-          receipt, or one that predates the current intent, does NOT pass. Otherwise refuse.
+        - A remote listener would activate -> allowed when the firewall is live-verified for the
+          CURRENT saved intent (config_ok + live_ok), or when the applied firewall already has a
+          row for every scope nginx binds (`_fw_gate_decision`: a source-CIDR change takes effect
+          with the next apply). Otherwise refuse.
         - EXCEPTION: removing the console's remote ingress, proven against the receipt by
           `_narrowing_is_console_removal_only()` — closing the console must not be blocked because
           some other stack's proxy keeps the prospective set non-empty. When allowed this way the
@@ -633,10 +669,10 @@ class FirewallOpsMixin:
                     self._fw_apply_commands(rendered))
         st = self.firewall_status()
         # config_ok proves the receipt's intent == the CURRENT saved intent (ports AND CIDRs);
-        # live_ok proves that intent is actually loaded this boot. Both are required — a
+        # live_ok proves that intent is actually loaded this boot. Both: nothing to redo — and a
         # port that is already socket-exposed is NOT evidence of firewall protection.
         if st.get("config_ok") and st.get("live_ok"):
-            return True, "", []                            # receipt already matches; nothing to redo
+            return True, "", []
         # From here the saved intent DIFFERS from the receipt, so the apply script no longer embeds
         # it: regenerate before returning on ANY path — otherwise the operator runs a stale
         # firewall-apply.sh that can never satisfy the new intent — including when the LAST remote
@@ -656,6 +692,10 @@ class FirewallOpsMixin:
             # An exposure REDUCTION is never blocked — but say that firewall reconciliation could
             # not be written, or the operator is left with a stale script and no hint why.
             return True, self._render_warning(rendered), ["lhpc firewall --script"]
+        if not self._fw_nginx_decision(st):           # the applied firewall already covers it
+            return (True, "", []) if rendered.ok else (
+                True, f"the firewall scripts could not be regenerated ({rendered.summary}) — "
+                "re-render them before applying the firewall.", ["lhpc firewall --script"])
         return (False,
                 "Firewall changes pending — the remote listener was NOT activated. Apply the "
                 f"firewall first, then {action_hint}."
@@ -686,13 +726,14 @@ class FirewallOpsMixin:
 
     def firewall_reapply_notice(self, st=None):
         """The one "re-apply the firewall before you reboot" notice, or None. It applies exactly
-        when the status reads `update-required`: an LHPC update replaced the packaged helper and the
-        installed one is still the old build, so Live is not green and the next boot's gate starts
-        nginx loopback-only. Read by `lhpc doctor`, `lhpc firewall`, the dashboard and the boot
-        gate. `st` reuses a status the caller already read. GET-safe: no writes."""
+        when a fresh verified receipt carries another helper revision (`helper_stale`), whatever the
+        saved intent: an LHPC update replaced the packaged helper and the installed one is still the
+        old build, so Live is not green and the next boot's gate starts nginx loopback-only. Read by
+        `lhpc doctor`, `lhpc firewall`, the dashboard and the boot gate. `st` reuses a status the
+        caller already read. GET-safe: no writes."""
         if st is None:
             st = self.firewall_status()
-        if st.get("reason") != "update-required":
+        if not st.get("helper_stale"):
             return None
         remote = self._fw_remote_web_exposed()
         why = "the firewall helper changed in an LHPC update and has not been re-applied"
@@ -791,7 +832,7 @@ class FirewallOpsMixin:
             deadline = _t.monotonic() + _fw.BOOT_GATE_WAIT_S
             while True:
                 st = self.firewall_status()
-                if st.get("config_ok") and st.get("live_ok"):
+                if not self._fw_nginx_decision(st):
                     return ActionResult(True,
                                         "firewall verified this boot — remote listener allowed")
                 if _t.monotonic() >= deadline:
@@ -1019,12 +1060,11 @@ class FirewallOpsMixin:
 
     def firewall_gate_stack_start(self, target, band="", *, render=True, op="start", inst=None):
         """Exposure gate for a stack/component START. Absent firewall -> allow (behaviour
-        preserved). Partial -> refuse. No non-loopback scope -> allow. Otherwise the firewall
-        must be live-verified against the current saved intent (config_ok+live_ok) AND every
-        prospective non-loopback scope must EXACTLY match a modeled candidate scope (full
-        proto/family/addr/port/band/CIDR) — a wrong-band remote scope or a saved listener the
-        applied firewall does not model is refused, so a listener never binds non-loopback
-        without a verified drop/allow. Returns (allowed, message, commands).
+        preserved). Partial -> refuse. No non-loopback scope -> allow. Otherwise
+        `_fw_gate_decision` over the launch scopes: a wrong-band remote scope or a listener the
+        applied firewall has no row for is refused, so a listener never binds non-loopback
+        without a verified drop/allow. Returns (allowed, message, commands); a refusal's commands
+        name the apply script only when this call re-rendered it (`_fw_apply_commands`).
 
         `render=False` is the PLAN's call: same decision, no apply-script write — so its commands
         re-render the script first (the one on disk may predate the saved listener). `op="restart"`
@@ -1051,26 +1091,26 @@ class FirewallOpsMixin:
         if not scopes:
             return True, "", []                            # nothing non-loopback -> nothing to gate
         st = self.firewall_status()
-        if not (st.get("config_ok") and st.get("live_ok")):
-            if render:
-                self.firewall_render()                     # keep the apply script current (mutation path)
+        why = self._fw_gate_decision(listeners=scopes, st=st)
+        # Keep the apply script current (mutation path) on a refusal and on a pass while the saved
+        # intent differs from the applied one; the plan's dry run writes nothing.
+        rendered = (self.firewall_render() if render and (why or not (st.get("config_ok")
+                                                                      and st.get("live_ok")))
+                    else None)
+        if not why:
+            return True, "", []
+        cmds = (self._fw_apply_commands(rendered) if rendered is not None
+                else [*rerender, *self._fw_apply_lines()])
+        if why == "pending":
             return (False,
                     _msg("Firewall changes pending",
                          f"the listener was NOT started. Apply the firewall first, then start "
                          f"'{target}' again.",
-                         f"Apply the firewall first, then restart '{target}'."),
-                    [*rerender, *self._fw_apply_lines()])
-        modeled = st.get("candidate") or self.firewall_candidate()
-        for sc in scopes:
-            if not self._fw_scope_modeled(sc, modeled):
-                if render:
-                    self.firewall_render()
-                return (False,
-                        _msg("The saved listener is not covered by the applied firewall",
-                             "apply the firewall, then start.",
-                             f"Apply the firewall first, then restart '{target}'."),
-                        [*rerender, f"sudo bash {base}"])
-        return True, "", []
+                         f"Apply the firewall first, then restart '{target}'."), cmds)
+        return (False,
+                _msg("The saved listener is not covered by the applied firewall",
+                     "apply the firewall, then start.",
+                     f"Apply the firewall first, then restart '{target}'."), cmds)
 
     # ---- settings view + configure (FW-7) ---------------------------------------------------
 
@@ -1303,7 +1343,7 @@ def _own_cgroup_text():
 
 # The lhpc-owned user units whose sandbox unmaps host root (an unprivileged user unit cannot get a
 # mount namespace without a user namespace, so a root-owned receipt reads as the overflow uid there).
-# EVERY unit that consults the receipt must be listed, or its verdict silently inverts:
+# EVERY unit that consults the receipt or the snapshot must be listed, or its verdict silently inverts:
 #   * lhpc-web.service       — renders firewall status in the console
 #   * lhpc-nginx.service     — ExecStartPre boot gate: may a remote listener bind this boot?
 #   * lhpc-boot-restore.service — restarts stacks through the gated start(), whose FW-R8 exposure
@@ -1343,7 +1383,7 @@ def _owner_is_host_root(st_uid, *, canonical_path):
     unit cannot get a mount namespace without a user namespace — so host root is unmapped and a root
     receipt shows the overflow (nobody) uid. Overflow identifies ANY unmapped owner, not uniquely
     root, so it is accepted ONLY under a positively-proven managed context: the exact single-user
-    same-ID map (host 0 unmapped) AND the canonical receipt path AND our cgroup being one of lhpc's
+    same-ID map (host 0 unmapped) AND the canonical receipt or snapshot path AND our cgroup being one of lhpc's
     own units (`_MANAGED_SANDBOXED_UNITS`: the console, and the nginx front-end whose ExecStartPre
     gate decides whether a remote listener may bind). Anything else fails closed.
 
@@ -1372,6 +1412,35 @@ def _owner_is_host_root(st_uid, *, canonical_path):
     host0_mapped = any(h <= 0 < h + c for (_n, h, c) in uid_map)
     return (ns_start == host_start and count == 1 and not host0_mapped
             and st_uid == _overflow_uid() and _in_managed_lhpc_unit())
+
+
+def _read_root_json(path, max_bytes):
+    """A JSON object from a root-written lhpc file, or None: a bounded O_NOFOLLOW read of a regular
+    file owned by host root (`_owner_is_host_root`; its sandbox trust only for the canonical receipt
+    and snapshot paths, never a caller's path), with no group/other write, at most `max_bytes`."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        stx = os.fstat(fd)
+        if not stat.S_ISREG(stx.st_mode):
+            return None
+        canonical = path in (_fw.RECEIPT_PATH, _fw.SNAPSHOT_DEST)
+        if not _owner_is_host_root(stx.st_uid, canonical_path=canonical):
+            return None                                # not host-root-owned -> forgeable -> reject
+        if stx.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or stx.st_size > max_bytes:
+            return None
+        raw = os.read(fd, max_bytes + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        r = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return r if isinstance(r, dict) else None
 
 
 def _fw_allowed_unauth_ports(candidate):
@@ -1494,6 +1563,25 @@ def _safe_id(text):
     import re
     t = re.sub(r"[^a-z0-9._-]", "-", text.lower())
     return t[:128] or "ep"
+
+
+def _ingress_key(scope):
+    return (scope["proto"], scope["family"], scope["addr"], scope["port"])
+
+
+def _canon_rows(rows):
+    """A list of candidate rows as an order-free comparable value."""
+    return sorted(json.dumps(r, sort_keys=True) for r in rows)
+
+
+def _fw_has_row(sc, candidate) -> bool:
+    """True iff launch scope `sc` has a row in `candidate` with the same key: endpoint id, proto,
+    family, address, port and band (a band-agnostic row serves every band). Its CIDRs and tick are
+    the applied firewall's. An unmapped listener never has one."""
+    if sc.get("_unmapped"):
+        return False
+    return any(e["id"] == sc["id"] and (not e.get("band") or e["band"] == sc["band"])
+               and _ingress_key(e) == _ingress_key(sc) for e in candidate["endpoints"])
 
 
 def _cidrs_covered(launch_cidrs, model_cidrs) -> bool:

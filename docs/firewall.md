@@ -197,13 +197,21 @@ table inet lhpc {
 ## Scope and deliberate limitations
 
 The gate covers the console, each stack proxy **and stack starts/restarts**, whatever the install
-channel. A start is allowed only when the listener's complete scope (protocol, address family,
-bind address, port, band, source CIDRs) matches a modeled scope the live receipt vouches for:
+channel. It decides on the **applied** firewall (the helper's snapshot, vouched for by the live
+receipt of this boot): one apply per hardware. A start passes when its listener has an applied row
+with the same protocol, address family, bind address, port and band; a Webserver Apply (and the boot
+gate) when the console and every exposed page have one. So after a radio is added, the other
+radios' stacks still start and the console stays remote over a reboot. Source CIDRs and the
+direct-access tick follow the applied firewall: a narrowing, widening, tick or untick takes effect
+with the next apply, and the dashboard says *Changes pending* until then. Refused until the apply:
 
-- a saved bind/port/CIDR change not yet applied: *"Firewall changes pending — the listener was NOT
-  started. Apply the firewall first, then start '<target>' again."*
-- a scope the applied firewall does not model (e.g. a non-default-band listener): *"The saved
-  listener is not covered by the applied firewall — apply the firewall, then start."*
+- a mode change, an `extra_allow` edit or an invalid saved configuration: *"Firewall changes
+  pending — the listener was NOT started. Apply the firewall first, then start '<target>' again."*
+- a listener with no applied row (a newly added radio's, a changed bind address, family or port, a
+  loopback listener bound to the network): *"The saved listener is not covered by the applied
+  firewall — apply the firewall, then start."*
+
+A radio removed without an apply keeps its rows until the next apply.
 
 A restart refused by the gate says *restart was not performed; the running stack was left up* with
 the same reason; the dry run (`lhpc stack start <id>` / `lhpc stack restart <id>` without `--yes`)

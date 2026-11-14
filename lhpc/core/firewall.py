@@ -36,6 +36,10 @@ FRESH_WINDOW_S = 200
 # current-boot receipt before falling back to a loopback-only listener.
 BOOT_GATE_WAIT_S = 20
 
+# Bound of the root-written snapshot (/etc/lhpc/firewall.snapshot.json) the controller reads as the
+# applied evidence of its gates (service_firewall `_fw_applied_candidate`).
+MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+
 # Bounded collections: the helper treats the candidate as untrusted data, so every list the
 # unprivileged side controls has a hard cap (schema-rejected above it, never truncated).
 MAX_ENDPOINTS = 128
@@ -344,6 +348,13 @@ def intent_hash(cand: dict) -> str:
     if errors:
         raise ValueError("invalid candidate: " + "; ".join(errors[:5]))
     return hashlib.sha256(canonical_intent(cand).encode("utf-8")).hexdigest()
+
+
+def model_hash(model: dict) -> str:
+    """sha256 of the helper's canonical model (firewall_helper.model_hash, drift-tested): the
+    controller recomputes it over a snapshot's model before trusting that snapshot."""
+    return hashlib.sha256(json.dumps(model, sort_keys=True, separators=(",", ":"))
+                          .encode("utf-8")).hexdigest()
 
 
 # --- root artifact renderers (FW-3) ----------------------------------------------------------

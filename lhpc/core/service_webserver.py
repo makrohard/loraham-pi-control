@@ -247,8 +247,8 @@ class WebserverOpsMixin:
 
     @invalidates_snapshot
     def webserver_apply_complete_pending(self):
-        """Watchdog completion of a gate-deferred Apply: once the firewall is verified against the
-        CURRENT intent, run the apply the operator already confirmed. Returns that ActionResult,
+        """Watchdog completion of a gate-deferred Apply: once the firewall covers what nginx binds
+        (`_fw_nginx_decision`), run the apply the operator already confirmed. Returns that ActionResult,
         or None when nothing is pending or the firewall is not ready yet. Completes ONLY the
         policy that was deferred: if the desired config changed since, the marker is discharged
         and that config waits for its own Apply. The apply itself clears the marker once the
@@ -258,8 +258,7 @@ class WebserverOpsMixin:
         if self._ws_apply_pending_policy() != self._ws_policy_now():
             self._ws_apply_pending_clear()
             return None
-        st = self.firewall_status()
-        if not (st.get("config_ok") and st.get("live_ok")):
+        if self._fw_nginx_decision():                  # the firewall does not cover it yet
             return None
         return self.webserver_apply()
 

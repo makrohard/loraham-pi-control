@@ -341,8 +341,10 @@ def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
 
 def _status_reads(svc, monkeypatch, reason):
     # Stubbed: the firewall status (the root-written receipt under /run and the units under /etc
-    # cannot be set up here); `reason` is what it reads after the advance.
-    monkeypatch.setattr(svc, "firewall_status", lambda: {"reason": reason})
+    # cannot be set up here); `reason` is what it reads after the advance ("update-required": a fresh
+    # verified receipt of the old helper, `helper_stale`).
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"reason": reason, "helper_stale": reason == "update-required"})
 
 
 @pytest.mark.parametrize("reason, remote", [("update-required", True),

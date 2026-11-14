@@ -1155,18 +1155,16 @@ class NetworkOpsMixin:
             # complete a console apply that waited for the operator's firewall step
             try:
                 outcome = (view or {}).get("outcome") or {}
-                if outcome.get("console") == "pending":
-                    fst = self.firewall_status()
-                    if fst.get("config_ok") and fst.get("live_ok"):
-                        res = self.webserver_apply()
-                        if res.ok:
-                            outcome["console"] = "applied"
-                            outcome["console_detail"] = "completed by the watchdog"
-                            outcome.pop("firewall_cmd", None)
-                            runtime_fs.atomic_write(self._paths,
-                                                    self._net_outcome_path(),
-                                                    json.dumps(outcome), 0o600)
-                            self._net_view_invalidate()
+                if outcome.get("console") == "pending" and not self._fw_nginx_decision():
+                    res = self.webserver_apply()
+                    if res.ok:
+                        outcome["console"] = "applied"
+                        outcome["console_detail"] = "completed by the watchdog"
+                        outcome.pop("firewall_cmd", None)
+                        runtime_fs.atomic_write(self._paths,
+                                                self._net_outcome_path(),
+                                                json.dumps(outcome), 0o600)
+                        self._net_view_invalidate()
             except Exception:
                 pass
             stack, err = self._net_op_lock("network-watchdog", pref.get("ssid", ""))
