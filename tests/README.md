@@ -124,8 +124,8 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
     least what it adds; a budget is raised only with `# <item id>: <reason>` on its line. Lowering a
     budget is free; the test enforces fixed caps and never lowers one by itself.
 
-**Exemptions.** `tools/check_houserules.py` counts a WARN pattern's hit on a test line unless the line carries
-the tag of that pattern's rule with a reason, `# rule-<n>: <reason>`: source-read is rule 1, network rule 4,
+**Exemptions.** `tools/check_houserules.py` counts a WARN pattern's hit on a test line unless the line's comment
+carries the tag of that pattern's rule with a reason, `# rule-<n>: <reason>`: source-read is rule 1, network rule 4,
 startswith rule 10. A wrong or unknown rule number or an empty reason exempts nothing, and one tag exempts only
 its own pattern. The older `# rule-1 exception` exempts `inspect.getsource` and source-read only; `assert True`
 has no exemption. The checker lists every exemption in its patterns row. An exemption never hides a failing or

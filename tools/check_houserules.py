@@ -24,11 +24,13 @@ from __future__ import annotations
 import argparse
 import ast
 import fnmatch
+import io
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 import tomllib
 
 LAYERS = (
@@ -63,8 +65,9 @@ WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"'
                  "sleep": re.compile(r"time\.sleep\("),           # outside WALLCLOCK_DIRS only: inside, the HARD row
                  "startswith": re.compile(r"assert .*\.startswith\("),
                  "network": re.compile(r"\b(requests\.|urllib\.request|socket\.create_connection)")}
-# An exemption is judged per pattern hit: a hit is exempt only when its line carries the tag of that pattern's rule
-# (tests/README.md "The rules") with a reason, `# rule-<n>: <reason>`. A wrong or unknown rule number or an empty
+# An exemption is judged per pattern hit: a hit is exempt only when its line's comment (a real Python comment, read
+# with tokenize: never a string's text) carries the tag of that pattern's rule (tests/README.md "The rules") with a
+# reason, `# rule-<n>: <reason>`. A wrong or unknown rule number or an empty
 # reason exempts nothing, and one tag exempts only its own pattern. The legacy `# rule-1 exception` exempts getsource
 # and source-read only; `assert True` and the textual sleep take no tag. Every exemption is listed in the row.
 PATTERN_RULE = {"source-read": 1, "network": 4, "startswith": 10}
@@ -335,11 +338,23 @@ def wallclock_lines(src: str, added: set[int]) -> list[int]:
     return sorted(hits)
 
 
+def comments(src: str | None) -> dict[int, str]:
+    """Line number -> its comment, from tokenize; {} for a file that does not tokenize, so nothing in it is exempt."""
+    out = {}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src or "").readline):
+            if tok.type == tokenize.COMMENT:
+                out[tok.start[0]] = tok.string
+    except (tokenize.TokenError, SyntaxError):
+        return {}
+    return out
+
+
 def exemption(pattern: str, text: str) -> str | None:
-    """`rule-<n> (<reason>)` when the line's tag exempts this pattern's hit on it, else None (the hit counts)."""
+    """`rule-<n> (<reason>)` when the line's comment exempts this pattern's hit on it, else None (the hit counts)."""
     rule = PATTERN_RULE.get(pattern)
     for m in RULE_TAG.finditer(text):
-        if rule is not None and int(m["n"]) == rule and m["reason"].strip():
+        if rule is not None and m["n"] == str(rule) and m["reason"].strip():  # as text: any other number is a hit
             return f"rule-{rule} ({m['reason'].strip()})"
     if pattern in LEGACY_PATTERNS and EXEMPT in text:
         return f"rule-1 ({text.split(EXEMPT, 1)[1].strip(' :') or 'legacy tag'})"
@@ -408,14 +423,16 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # patterns
     in_tests = [(p, n, t) for p, n, t in added if is_test_file(p) or layer_of(p)]
     counts = dict.fromkeys((*HARD_PATTERNS, *WARN_PATTERNS), 0)
-    exempt = []
+    exempt, notes = [], {}
     for p, n, text in in_tests:
+        if p not in notes:
+            notes[p] = comments(show(head, p)) if p.endswith(".py") else {}
         for k, rx in (*HARD_PATTERNS.items(), *WARN_PATTERNS.items()):
             if k == "sleep" and p.startswith(WALLCLOCK_DIRS):
                 continue                    # the wallclock row judges a sleep there (HARD), not this textual WARN
             if not rx.search(text):
                 continue
-            reason = exemption(k, text)
+            reason = exemption(k, notes[p].get(n, ""))
             if reason:
                 exempt.append(f"{p}:{n} {reason}")
             else:

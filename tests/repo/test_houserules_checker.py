@@ -823,3 +823,30 @@ def test_a_failing_git_call_in_the_fixture_names_gits_reason(repo):
     with pytest.raises(Exception) as exc:
         _git(repo, "show", "no-such-rev")
     assert reason in str(exc.value), str(exc.value)
+
+
+# G1-TCT0 B1: a tag is read from the line's real comment, never from a string's text.
+@pytest.mark.parametrize("body, pattern", [
+    (f'    assert v{STW}"# rule-10: example")', "startswith"),
+    (f'    r = {NET}get("# rule-4: local")', "network"),
+], ids=["startswith", "network"])
+def test_a_tag_inside_a_string_exempts_nothing(repo, body, pattern):
+    """Red before at the parent 41524ef3: the tag in the string exempted the hit (0 and listed)."""
+    rc, line = _patterns(repo, body)
+    assert rc == 0 and line.split()[-1] == "WARN" and f"{pattern} 1" in line, line
+    assert "exempt" not in line, line
+
+
+def test_a_file_that_does_not_tokenize_exempts_nothing(repo):
+    """Fails closed: without its comments read, no tag applies. Red before at the parent: the tag exempted the hit."""
+    rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  # rule-10: a log sentence\n    x = """unterminated')
+    assert line.split()[-1] == "WARN" and "startswith 1" in line, line
+    assert "exempt" not in line, line
+
+
+def test_an_oversized_rule_number_is_a_hit(repo):
+    """G1-TCT0 NOTE 1: a rule number past int()'s digit limit counts the hit. Red before at the parent: int() raised
+    ValueError (a traceback, no patterns row)."""
+    rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  # rule-' + "1" * 5000 + ": a reason")
+    assert rc == 0 and line.split()[-1] == "WARN" and "startswith 1" in line, line
+    assert "exempt" not in line, line
