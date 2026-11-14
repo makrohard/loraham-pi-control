@@ -101,9 +101,9 @@ def test_an_instances_page_shows_its_own_value_of_every_field(box):
     assert 'value="433.900"' not in _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
 
 
-def test_an_instances_save_writes_its_own_file_and_its_auto_start_is_global(web, tmp_path, csrf):
-    # K6 / 13.12.1: the instance's save writes its own settings (rf_log included) to its own file; auto-start and
-    # the remotes are global, offered on its page too, and stored in the stack's kiss.toml
+def test_an_instances_save_writes_its_own_file_with_its_auto_start_ticks(web, tmp_path, csrf):
+    # K6 + Q-09 C: the instance's save writes its own settings (rf_log included) and its auto-start ticks to its own
+    # file; the remotes stay global, offered on its page too
     radios_fixture.write(tmp_path, (*ROWS, radios.Radio("r2", "c", "meshstick-1262", "868", usb_serial="MSTICK01")))
     c = web()
     token = csrf(c, "/stacks?cfg=kiss")
@@ -114,9 +114,9 @@ def test_an_instances_save_writes_its_own_file_and_its_auto_start_is_global(web,
     assert r.status_code == 302
     own = _stored(tmp_path, "kiss@r3.toml")
     assert own.get("__r__loraham-kiss-tnc__kiss_port", own.get("kiss_port")) in (8003, "8003")
-    assert not any(k[:10] == "autostart_" for k in own)
-    # 13.12.1: auto-start is global, from every instance's page: the stack's kiss.toml, never a per-band file
-    assert _stored(tmp_path, "kiss.toml") == {"autostart_loraham-kiss-serial": "on"}
+    assert own.get("autostart_loraham-kiss-serial") == "on"
+    # one tick per radio: the stack's kiss.toml gains none, and no per-band file appears
+    assert not any(k[:10] == "autostart_" for k in _stored(tmp_path, "kiss.toml"))
     assert not (tmp_path / "config" / "stacks" / "kiss@433.toml").exists()
 
 

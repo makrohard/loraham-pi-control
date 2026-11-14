@@ -96,7 +96,7 @@ the source and each stack's Settings carries its `use_gps`.
 A source you *named* that cannot be used (a malformed `[gps]` section, an unresolvable `nmea`
 device) refuses the start; `auto` finding no gpsd, or `off`, starts without position.
 
-The switch is stored **once per stack, band-less** (like autostart), so a band change keeps it.
+The switch is stored with each radio's own settings, like its auto-start ticks.
 It cannot be set for a single start, and neither it nor the source can change while a stack using
 them runs ([refusals](#refusals-you-may-hit)).
 

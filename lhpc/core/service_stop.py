@@ -664,7 +664,7 @@ class StopOpsMixin:
         # (the CLI, an unconfirmed web click) leaves them running across the restart — the
         # same decision the apply takes, never a `[stop]` the stop leg will not perform.
         _will_stop = self._restart_stops_dependents(target, cascade)
-        _opt = self._running_optional_components(target) if self.stack(target) else []
+        _opt = self._running_optional_components(target, inst) if self.stack(target) else []
         data["optional_restarted"] = list(_opt)
         details = [*[(f"  [stop] {d}" if _will_stop else
                       f"  [running dependent] {d}: left running across this restart "
@@ -716,7 +716,7 @@ class StopOpsMixin:
         _daemon = bool(_sid and self.stack(_sid) and self.stack(_sid).main == self.DAEMON_ID)
         return cascade or _daemon
 
-    def _running_optional_components(self, target: str) -> list[str]:
+    def _running_optional_components(self, target: str, inst=None) -> list[str]:
         """Ids of the stack's OPTIONAL service components currently running/degraded that a stack
         start does NOT raise on its own — so a restart must bring them back by name.
 
@@ -727,7 +727,7 @@ class StopOpsMixin:
         if s is None:
             return []
         up = (RunState.RUNNING, RunState.DEGRADED)
-        planned = {c.id for _, c in (self._run_order(s.id) or [])}
+        planned = {c.id for _, c in (self._run_order(s.id, inst) or [])}   # its radio's ticks (Q-09 C)
         for ss in self.build_snapshot().stacks:
             if ss.stack.id == s.id:
                 return [c.id for c in s.components

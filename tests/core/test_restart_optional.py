@@ -82,7 +82,7 @@ def test_restart_reraises_only_what_the_stack_start_did_not_bring_back(tmp_path,
 def test_the_plan_lists_running_optional_components(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     T = type(svc)
-    monkeypatch.setattr(T, "_running_optional_components", lambda self, t: ["meshchat"])
+    monkeypatch.setattr(T, "_running_optional_components", lambda self, t, inst=None: ["meshchat"])
     res = svc.restart("reticulum", apply=False)
     assert res.ok
     assert res.data["optional_restarted"] == ["meshchat"]

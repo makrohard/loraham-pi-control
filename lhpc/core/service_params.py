@@ -785,10 +785,10 @@ class ParamsConfigMixin:
         if s is not None and s.main == self.DAEMON_ID:
             comps = []
         cfg = self.config()
-        # K8f S4-1 (D1 B1, D3 N4): `<stack>@<rid>`'s view is its own in every part; autostart: the global file (K6)
+        # K8f S4-1 (D1 B1, D3 N4): `<stack>@<rid>`'s view is its own in every part, its auto-start ticks too (Q-09 C)
         inst = _instances.copy_of(self, self._owner_stack_id(target) or target, rid)[0] if rid else None
         cfg_band = self._config_band(target, band, inst)
-        stored = self._stack_config_cached(target, "", None)
+        stored = self._stack_config_cached(target, "", inst)
         live = {cid: st.run_state for ss in self.build_snapshot().stacks
                 for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
@@ -962,7 +962,6 @@ class ParamsConfigMixin:
             targets.append(("local", local_path, _render_local, 0o600))
         inst = _instances.saved_inst(self, sid, self._config_band(target, band), inst)   # K6: a band caller's: its band's
         cfg_band = self._config_band(target, band, inst)                 # G1-K6C N5: the instance's band's defaults
-        own = _instances.own_rid(inst)                      # its own file, all of it
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
         # could disagree (an identity no-op said "Restart the stack to apply" while
@@ -989,11 +988,11 @@ class ParamsConfigMixin:
         # saving a local value IDENTICAL to the global silently un-save it — breaking
         # the documented migration (set the SSID per stack, then change the global to
         # its base) whenever the global equalled the value being localized.
-        stack_set, stack_remove, bandless_set, bandless_remove, switched = config_save.plan_store(
+        stack_set, stack_remove, switched = config_save.plan_store(
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
                                    else self._param_default_canon(ch.param, cfg_band, band, inst)),
-            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, split=bool(own))
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid)
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
@@ -1061,15 +1060,6 @@ class ParamsConfigMixin:
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, inst), _render_stack, 0o644))
-        if bandless_set or bandless_remove:
-            # SECOND transactional target: autostart flags land in the band-less file.
-            def _render_auto(pth, tgt=sid, setv=bandless_set, rmv=bandless_remove):
-                _gps_recheck(pth)
-                merged = config_save.overlay(
-                    _load_runtime_toml(pth, _stack_config_path(pth, tgt)), setv, rmv)
-                return render_stack_config(tgt, merged)
-            targets.append(("stack", _stack_config_path(self._paths, sid),
-                            _render_auto, 0o644))
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
         # journal kind "state", pre-image journaled): a restart/build-mode param changed while
         # the stack is RUNNING means the running processes no longer match the saved config.

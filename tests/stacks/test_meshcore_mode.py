@@ -7,12 +7,18 @@ import stat
 
 import pytest
 
+from lhpc.core import instances
 from lhpc.core import meshcore_identity as mi
 from lhpc.core import meshcore_mode as mm
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
 from lhpc.core.status import StatusProber
+
+
+def _saved_order(svc, sid):
+    """The run order of the radio a bare save writes to (its auto-start ticks are that radio's own, Q-09 C)."""
+    return [c.id for _s, c in svc._run_order(sid, instances.saved_inst(svc, sid, svc._config_band(sid, ""), None))]
 
 
 def _svc(tmp_path, listeners=()):
@@ -127,10 +133,10 @@ def test_companion_clients_are_refused_and_not_seeded_without_a_companion(tmp_pa
     svc = _svc(tmp_path)
     assert svc.save_config(mm.STACK_ID, {"autostart_meshcore-webui": "on"}).ok
     svc._invalidate_config()
-    assert "meshcore-webui" in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
+    assert "meshcore-webui" in _saved_order(svc, mm.STACK_ID)
     assert svc._meshcore_mode_refusal("meshcore-webui") is None
     _set_mode(svc, "repeater")
-    assert "meshcore-webui" not in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
+    assert "meshcore-webui" not in _saved_order(svc, mm.STACK_ID)
     for client in mm.CLIENT_IDS:
         r = svc._meshcore_mode_refusal(client)
         assert r is not None and "repeater-only" in r.summary
@@ -389,7 +395,7 @@ def test_the_cli_is_never_an_auto_start_choice(tmp_path):
     assert {o["id"] for o in listed if o["startable"]} == {"meshcore-webui"}   # ... no tick
     assert svc.save_config(mm.STACK_ID, {"autostart_meshcore-cli": "on", "autostart_meshcore-webui": "on"}).ok
     svc._invalidate_config()
-    order = [c.id for _s, c in svc._run_order(mm.STACK_ID)]
+    order = _saved_order(svc, mm.STACK_ID)
     assert "meshcore-webui" in order and "meshcore-cli" not in order
     assert svc._run_order("meshcore-cli"), "an explicit run by name is still possible"
 
@@ -448,7 +454,7 @@ def test_an_interactive_service_keeps_its_settings_tick(tmp_path):
     assert svc.optional_role(nomadnet) == "tickable"          # planned, printed as MANUAL_REQUIRED
     assert svc.save_config("reticulum", {"autostart_nomadnet": "on"}).ok
     svc._invalidate_config()
-    assert "nomadnet" in [c.id for _s, c in svc._run_order("reticulum")]   # planned (MANUAL_REQUIRED)
+    assert "nomadnet" in _saved_order(svc, "reticulum")   # planned (MANUAL_REQUIRED)
 
 
 def test_the_running_mode_is_read_once_per_request_and_again_after_a_render(tmp_path, monkeypatch):

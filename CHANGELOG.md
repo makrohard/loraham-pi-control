@@ -88,6 +88,8 @@ Upgrading from 0.13.x
   a port refused only by base arithmetic (or its r64 projection) saves; one another instance listens on is refused.
 - MeshCom mesh password: "enabled" means every meshcom instance names it (one at least); the web client's status
   names each meshtastic instance whose own web_root serves another directory.
+- Auto-start ticks are per radio now: tick them again on each radio's Settings page; the old stack-wide ticks are no
+  longer read.
 
 Fixed
 
