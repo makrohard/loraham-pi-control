@@ -12,36 +12,7 @@
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>
     {% endif %}
-    {% if view.rows %}
-    <table class="hwlist" id="hw-list">
-      <thead><tr><th>Radio</th><th>Model</th><th>Band</th><th>Stick</th><th>State</th><th></th></tr></thead>
-      <tbody>
-      {% for r in view.rows %}
-        <tr class="hwrow{{ '' if r.enabled else ' off' }}" data-rid="{{ r.rid }}">
-          <td><a class="idlink" href="{{ url_for('hardware_radio', rid=r.rid) }}">{{ r.rid }}<span class="det">details ›</span></a>
-            <span class="muted">{{ r.name }}</span></td>
-          <td>{{ models[r.model].label if r.model in models else r.model }}</td>
-          <td>{{ r.band }} MHz</td>
-          <td>{% if r.transport == "spi" %}HAT (SPI){% elif r.usb_serial %}serial {{ r.usb_serial }}{% elif r.usb_port %}port {{ r.usb_port }}{% else %}—{% endif %}</td>
-          <td>{% if r.enabled %}<span class="state-on">enabled</span>{% else %}disabled{% endif %} {{ daemon_badge(r) }}
-            {% for p in r.problems %}<span class="note-bad">⚠ {{ p }}</span>{% endfor %}
-            {% if hp[r.rid].warn %}<span class="note-bad">⚠ +20 dBm permission enabled on {{ r.rid }} ({{ r.band }} MHz)</span>{% endif %}
-            {% if hp[r.rid].mismatch %}<span class="note-bad">⚠ high-power switch: {{ hp[r.rid].mismatch }}</span>{% endif %}</td>
-          <td class="act">
-            <form method="post" action="{{ url_for('hardware_enabled') }}" class="inline">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="rid" value="{{ r.rid }}">
-              <input type="hidden" name="enabled" value="{{ 'off' if r.enabled else 'on' }}">
-              <button type="submit">{{ 'Disable' if r.enabled else 'Enable' }}</button>
-            </form></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <p class="muted">No radio in the hardware list.</p>
-    {% endif %}
-    <p><a class="button" href="{{ url_for('hardware_add_page') }}" id="hw-add">Add Hardware</a></p>
+    {% include "_hw_list.html" %}
     <p class="muted" id="hardware-shared-band">Two radios on one band each run their own daemon: address one by its radio id
       (<code>lhpc stack stop daemon@rN</code>).</p>
     {% if view.copybox %}
