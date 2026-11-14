@@ -201,8 +201,8 @@ Three things are not regenerable; a default `uninstall.sh` keeps them (plus `bac
 - **App data under `state/`** — the stacks' databases, identities and message stores:
   `state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet
   state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`),
-  and each instance's own under `state/<rid>/`: `graywolf`, `meshcom`, `meshcore`, `meshtasticd`,
-  `openhop`.
+  and each instance's own under `state/<rid>/`: `graywolf`, `meshcom`, `meshcore`, `meshcore-webui`,
+  `meshtasticd`, `openhop`.
   Never back up `state/` or a `state/<rid>/` wholesale — the other entries of `state/` are
   process ownership, jobs, locks and registries, those of `state/<rid>/` (`gps/`,
   `loraham_kiss`, `meshcore-cli.lock`) an instance's GPS feed state, KISS link and lock; none
@@ -219,7 +219,7 @@ skipped:
 
 ```bash
 cd ~/loraham-pi-control          # or: cd "$LHPC_RUNTIME_ROOT"
-inst=$(ls -d state/r[1-9]*/{graywolf,meshcom,meshcore,meshtasticd,openhop} 2>/dev/null)
+inst=$(ls -d state/r[1-9]*/{graywolf,meshcom,meshcore,meshcore-webui,meshtasticd,openhop} 2>/dev/null)
 tar -czpf ~/lhpc-backup-$(date +%F).tgz --ignore-failed-read config profiles \
     state/graywolf state/meshcore state/openhop state/meshtasticd \
     state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat $inst
