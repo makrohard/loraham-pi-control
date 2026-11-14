@@ -115,6 +115,7 @@ Fixed
 - Hardware: Add Hardware and a radio's Remove show as buttons (they rendered as plain links).
 - Hardware: a radio's Re-bind, Detect and Remove sit on one row (wrapping on a phone); Remove, and the remove
   confirm's button, are red; a Remove refused while the radio runs looks disabled.
+- Daemon Settings: the repository section is headed "Repositories" (no per-band wording).
 
 ## 0.13.8
 

@@ -172,7 +172,7 @@
       </section>
     {% endif %}
 
-    {% if view.live_band %}<details class="advcfg"><summary>Repository &amp; RadioLib (applies to both bands)</summary>{% endif %}
+    {% if view.live_band %}<details class="advcfg"><summary>Repositories</summary>{% endif %}
     <form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
