@@ -22,8 +22,9 @@ the clock and its own chat node. Everything else is set in openHop, the upstream
 
 ## Where the settings live
 
-openHop keeps its configuration in its own file, `<runtime>/state/openhop/config.yaml` (0600, in
-a 0700 directory). Its dashboard and Glass save there as upstream does.
+openHop keeps its configuration in its own file, one per instance:
+`<runtime>/state/<rid>/openhop/config.yaml` (0600, in a 0700 directory). Its dashboard and Glass
+save there as upstream does.
 At every start LHPC reads that file with upstream's own loader, puts its values over the keys
 it owns, and writes the file back with a block on top:
 
@@ -85,7 +86,7 @@ callsign, or a dashboard password outside LHPC's rule, set in openHop is kept, a
 as a `[warning]` line, e.g. "Repeater name equals the operator callsign (set in openHop)". A start is refused only when
 openHop could not run with it: an empty name, an unknown behaviour, a password that is empty or
 not text, a duty cycle per minute openHop's own airtime code cannot compute with, an identity
-that is not a key, or a file openHop's own loader cannot read. openHop at its pinned version (85fc14a6)
+that is not a key, or a file openHop's own loader cannot read. openHop at its pinned version
 cannot run with these; LHPC Settings asks for 1-100 % (its input range, not one of them).
 
 **Duty cycle.** LHPC's `airtime` (%) is openHop's `duty_cycle.max_airtime_per_minute`
@@ -126,7 +127,7 @@ notices apply. Its chat with LHPC's chat node uses the companion slot (below).
 
 Enable Glass in openHop (dashboard or the file: `glass.enabled`, `base_url`, `api_token`,
 `verify_tls`), the upstream way. LHPC owns only the certificate folder
-(`state/openhop/glass`). Glass may adopt the repeater, push transport keys and policies, change
+(`state/<rid>/openhop/glass`). Glass may adopt the repeater, push transport keys and policies, change
 the behaviour (`set_mode`), run diagnostics and renew certificates. A radio change or an update
 of an LHPC-owned value is refused. **Glass's config export gives Glass the whole file, keys and
 passwords included.**
@@ -148,7 +149,7 @@ need that.
 
 ## Restart
 
-openHop's restart (dashboard, CLI `reboot`, Glass) runs LHPC's own `lhpc stack restart meshcore`,
+openHop's restart (dashboard, CLI `reboot`, Glass) runs LHPC's own `lhpc stack restart meshcore@<rid>`,
 so a "restart to apply" works and LHPC's view of the stack stays right.
 
 ## The companion slot
