@@ -169,8 +169,8 @@ try:
     svc.stop("graywolf", apply=True)
     svc.start("graywolf", apply=True, band="868")
     assert svc._band("graywolf") == "868" and svc._band("kiss") == "868", "KISS must move to 868"
-    # dry run reasons about the SELECTED band, and running_band exposes it to the dashboard
-    assert svc.running_band("graywolf", "") == "868" and svc._effective_band("graywolf", "") == "868"
+    # dry run reasons about the SELECTED band, and launch_band exposes it to the dashboard
+    assert svc.launch_band("graywolf", "") == "868" and svc._effective_band("graywolf", "") == "868"
     # dashboard PLACEMENT: graywolf + kiss render under the 868 card, not 433
     html = c.get("/").get_data(as_text=True)
     i8 = html.find('data-radio-band="868"')
@@ -192,10 +192,10 @@ try:
     svc.seed_all_installed()
     svc._set_dbands(set())
     assert svc.start("graywolf", apply=True, band="433").ok
-    _page = _action(op="start", target="meshcom").get_data(as_text=True)
+    _page = _action(op="start", target="meshcom@r1").get_data(as_text=True)
     assert 'name="stop_owners"' in _page, "route: the takeover must be confirmed first"
     assert svc.stack_running("graywolf") and not svc.stack_running("meshcom")
-    _action(op="start", target="meshcom", confirmed="yes", stop_owners="yes")
+    _action(op="start", target="meshcom@r1", confirmed="yes", stop_owners="yes")
     assert svc.stack_running("meshcom") and not svc.stack_running("graywolf")
     R["route_takeover"] = "web start of meshcom asks before stopping graywolf on 433"
     # the same contract on the RESTART path: a restart of graywolf onto 433 while meshcom holds it

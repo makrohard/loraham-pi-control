@@ -331,14 +331,14 @@ class DemoService(ControllerService):
             b = bands[0] if bands else None
         return b or ""
 
-    def running_band(self, stack_id: str, default: str = "") -> str:
-        """Override the inherited band marker (the demo never writes real markers): the band a
-        RUNNING stack occupies is the one recorded in the model. This is what the dashboard's
-        _effective_band reads to PLACE the stack under a radio, so it must agree with the band
-        our lifecycle used (else graywolf shows under 433 while the daemon is up on 868)."""
+    def _launch_bands_of(self, stack_id: str) -> set:
+        """Override the core's launch bands (the demo writes no instance records): a RUNNING
+        stack's band is the one recorded in the model. launch_band and the dashboard's
+        _effective_band read this to PLACE the stack under a radio, so it must agree with the
+        band our lifecycle used (else graywolf shows under 433 while the daemon is up on 868)."""
         d = self._d(self._sid(stack_id))
         rb = d.get("band")
-        return rb if (d.get("running") and rb in ("433", "868")) else default
+        return {rb} if (d.get("running") and rb in ("433", "868")) else set()
 
     def _band_owners(self, sid, band=None) -> list:
         """Running stacks that COMPETE for `band` (default: the target's band) — the ones a
