@@ -1838,8 +1838,9 @@ class MaintenanceOpsMixin:
             items = [(s, c) for s, c in all_items if self._stack_scope_keeps(c, required)]
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
 
-        def sel_of(c) -> str:          # U2: a bare update (`stack_lane` ""): each source on its own recorded selector
-            return source or source_registry.recorded_selector(self._paths, c.source.path)
+        # U2: each source's selector, read ONCE for the whole operation (gate, plan, details); a bare update ("") keeps
+        # each source on its own recorded one.
+        sel = {c.source.path: source or source_registry.recorded_selector(self._paths, c.source.path) for _, c in items}
         if ctx_err:
             return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}",
                                 details=["  nothing to run here — this is an lhpc defect (the "
@@ -1848,7 +1849,7 @@ class MaintenanceOpsMixin:
         # U1: an installed stable source moves only to a verified, not older target (read once, before the locks).
         stable_refs, refused = {}, []
         for _, c in items:
-            if sel_of(c) == "stable" and not c.source.artifact and source_fs.source_present(
+            if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                     self._paths, src := self._paths.resolve_source(c.source.path)):
                 ref = stable_refs[c.source.path] = stable_lane.resolve(self._system.runner.run, self._effective_remote(c))
                 head = self._system.runner.run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
@@ -1866,7 +1867,7 @@ class MaintenanceOpsMixin:
             for _, c in items:
                 fresh = self.update_status(c)
                 details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
-                               f"{sel_of(c)} version from {c.source.remote or 'local checkout'}")
+                               f"{sel[c.source.path]} version from {c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",
                 details=details,
@@ -1932,7 +1933,7 @@ class MaintenanceOpsMixin:
                                                  "sets one remote for every component of that "
                                                  "checkout ([remotes] in config/local.toml), "
                                                  "then retries"])
-                groups, plan_conflicts = self._plan_source_groups(items, lambda _sid, c: sel_of(c),
+                groups, plan_conflicts = self._plan_source_groups(items, lambda _sid, c: sel[c.source.path],
                                                                   exact_pin=exact_pin, stable_refs=stable_refs)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "

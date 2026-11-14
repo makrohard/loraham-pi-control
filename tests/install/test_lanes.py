@@ -378,3 +378,45 @@ def test_a_bare_update_of_a_mixed_stack_keeps_the_stable_sources_release_gate(bo
     assert box.cli("update", "s", "--yes") != 0
     assert "lib: releases could not be checked — try again later" in capsys.readouterr().out
     assert (box.head(), box.head(LIB)) == (box.c[2], box.c[0])
+
+
+def test_a_source_without_a_valid_record_is_planned_on_the_pin_beside_a_dev_source(box, capsys):
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    source_registry.record_path(Paths(runtime_root=box.rt), LIB).unlink()   # lib: its record is gone
+    capsys.readouterr()
+    assert box.cli("update", "s") == 0                                     # the plan, per source
+    lanes = {ln.split(":")[0].strip(): ln for ln in capsys.readouterr().out.splitlines() if "this update fetches" in ln}
+    assert "fetches the dev version" in lanes["app"]
+    assert "fetches the pinned version" in lanes["lib"]                   # RED before: lib followed app onto dev
+
+
+def test_a_selector_changed_after_the_release_check_does_not_reach_the_plan(box, monkeypatch):
+    import dataclasses
+
+    from lhpc.core import stable_lane
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
+    tip = box.advance()
+    box.push_tag("v2.9.0", box.c[2])
+    real, real_update, applying = stable_lane.resolve, ControllerService.update, []
+    paths = Paths(runtime_root=box.rt)
+
+    def update(self, *a, **k):
+        applying[:] = [k.get("apply", False)]
+        return real_update(self, *a, **k)
+
+    def racing(run, remote):
+        """During the APPLY's release check of lib another update records app as stable; later checks fail."""
+        ref = real(run, remote)
+        if applying == [True] and source_registry.read_record(paths, REL).selector == "dev":
+            source_registry.write_record(paths, dataclasses.replace(source_registry.read_record(paths, REL),
+                                                                    selector="stable"))
+            box.release = "429"
+        return ref
+    monkeypatch.setattr(ControllerService, "update", update)
+    monkeypatch.setattr(stable_lane, "resolve", racing)
+    assert box.cli("update", "s", "--yes") == 0       # RED before: app re-read as stable mid-operation
+    assert box.head() == tip                          # app on the dev lane this operation verified
+    assert box.head(LIB) == box.c[2]

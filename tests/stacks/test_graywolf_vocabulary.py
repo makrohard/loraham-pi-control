@@ -87,4 +87,4 @@ def test_a_bare_update_is_binary(tmp_path):
     assert _svc(tmp_path / "b", installed="0.14.12").stack_lane("graywolf") == "binary"
     svc = _svc(tmp_path / "c", installed="0.16.0")
     assert svc.stack_lane("graywolf") == "binary"
-    assert svc.stack_lane("kiss") == "pinned"
+    assert svc.stack_lane("kiss") == ""          # not binary: each source on its own record (none: pinned)
