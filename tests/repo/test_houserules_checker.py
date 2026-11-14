@@ -850,3 +850,27 @@ def test_an_oversized_rule_number_is_a_hit(repo):
     rc, line = _patterns(repo, f'    assert "a b"{STW}"a")  # rule-' + "1" * 5000 + ": a reason")
     assert rc == 0 and line.split()[-1] == "WARN" and "startswith 1" in line, line
     assert "exempt" not in line, line
+
+
+# Second read MINOR 1: the fixed map, whole. Each pattern with a new-form tag of each rule; only its own rule exempts.
+HIT_LINES = {"assert-True": "    assert " + "True",
+             "getsource": "    inspect = __import__('inspect'); assert inspect." + "getsource(len)",
+             "source-read": "    assert " + SRC,
+             "startswith": f'    assert "a b"{STW}"a")',
+             "network": f"    assert {NET}get(URL)"}
+OWN_RULE = {"source-read": 1, "network": 4, "startswith": 10}
+
+
+@pytest.mark.parametrize("pattern", sorted(HIT_LINES))
+@pytest.mark.parametrize("rule", [1, 4, 10])
+def test_the_rule_map_exempts_each_pattern_by_its_own_rule_only(repo, pattern, rule):
+    """A pin of the map (source-read 1, network 4, startswith 10; assert True and getsource none): passes at the
+    parent 7a7fa719 too; its mutants are a pattern added to the map or moved to another rule."""
+    rc, line = _patterns(repo, f"{HIT_LINES[pattern]}  # rule-{rule}: pin")
+    if OWN_RULE.get(pattern) == rule:
+        assert rc == 0 and line.split()[-1] == "OK" and f" {pattern} 0" in line, line
+        assert f"1 exempt: tests/core/test_ok.py:5 rule-{rule} (pin)" in line, line
+    else:
+        hard = pattern in ("assert-True", "getsource")
+        assert (rc, line.split()[-1]) == ((1, "HARD") if hard else (0, "WARN")) and f" {pattern} 1" in line, line
+        assert "exempt" not in line, line
