@@ -30,6 +30,10 @@
         8579,
         8580,
         8582,
+        8446,
+        8449,
+        8450,
+        8451,
         5133,
         8921
     ],
@@ -88,6 +92,22 @@
         },
         "8582": {
             "label": "stackweb proxy meshcore-meshcore-node@r2 (8444 + kind + 133 x (n - 1))",
+            "visibility": "private"
+        },
+        "8446": {
+            "label": "stackweb proxy (a page saved on the old positional default)",
+            "visibility": "private"
+        },
+        "8449": {
+            "label": "stackweb proxy (a page saved on the old positional default)",
+            "visibility": "private"
+        },
+        "8450": {
+            "label": "stackweb proxy (a page saved on the old positional default)",
+            "visibility": "private"
+        },
+        "8451": {
+            "label": "stackweb proxy (a page saved on the old positional default)",
             "visibility": "private"
         },
         "5133": {
