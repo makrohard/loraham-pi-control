@@ -18,7 +18,7 @@ Which source commit or artifact lhpc may install, and what it records about it.
 |---|---|---|---|
 | `pinned` | Known working | The newest operator-confirmed known-working composition entry for the stack, else the manifest pin (labelled `fallback`). `HEAD` must equal that commit either way. | ✅ (immutable) |
 | `dev` | Development | The configured development branch tip; an unobtainable branch is a typed "selector unavailable", never another ref. | ❌ mutable |
-| `stable` | Latest stable | Git-only: the newest tag whose WHOLE name is an optional `v` and dot-separated numbers (`v112`, `v1.2`, `1.5.2`), else the default-branch HEAD. Build-suffixed (`v2.8.0.7239fe8`) and prerelease (`1.8.2-pre`) tags are ignored. Local and remote resolution use the same rule; the resolved commit is recorded. | ❌ mutable |
+| `stable` | Latest stable | The newer of two candidates by leading version (`v1.2` = `v1.2.0`; a tie goes to the plain tag): the newest tag whose WHOLE name is an optional `v` and dot-separated numbers (`v112`, `v1.2`, `1.5.2`), and on a GitHub remote the tag of its latest release (`releases/latest`, so `v2.8.0.7239fe8` counts only as a release); neither: the default-branch HEAD. One resolver for install, update and the freshness check. An update of an installed stable source runs only when every source was read and the target is not older than the installed tag; otherwise it is refused and the check reads "could not check". | ❌ mutable |
 
 Without `--source`, install and `auto-install` (and so the image builder) use the stack's default
 channel (a bare `update` keeps the installed channel): the published **binary** where there is one for this platform, else

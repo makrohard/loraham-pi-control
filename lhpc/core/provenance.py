@@ -54,37 +54,6 @@ def load_trusted_signers(config) -> tuple[list[str], list[str]]:
     return out, diags
 
 
-# The "release" form the Latest-stable selector looks for: a tag whose WHOLE name is a version —
-# an optional `v`, then dot-separated numbers, so `v112`, `v1.2` and `1.5.2` all qualify and a
-# single number is a version like any other. Anchored on purpose: everything after the numbers
-# must be nothing. A build-suffixed tag (`v2.8.0.7239fe8`, `v4.35p.08.29`) or a prerelease
-# (`1.8.2-pre`) is a snapshot of a development line, not a release; matching only its numeric
-# prefix used to make the two resolution paths — the local clone and the remote freeze — pick
-# DIFFERENT commits for the same selector.
-STABLE_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
-
-
-def stable_version_tag(names) -> str:
-    """The newest version-shaped tag in `names`, or "" when none is version-shaped.
-
-    Version-shaped means the WHOLE name is `[v]N[.N…]`: `v112`, `v1.2` and `1.5.2` qualify;
-    `v2.8.0.7239fe8` (a build suffix) and `1.8.2-pre` (a prerelease) do not.
-
-    ONE rule for both `stable` resolution paths: the caller that finds nothing here stays on the
-    default-branch HEAD. Ordering is by numeric version, not by tag date, so an old release branch
-    tagged today cannot outrank a newer release.
-    """
-    best, best_name = None, ""
-    for name in names:
-        m = STABLE_TAG_RE.match((name or "").strip())
-        if not m:
-            continue
-        key = tuple(int(x) for x in m.group(1).split("."))
-        if best is None or key > best:
-            best, best_name = key, name.strip()
-    return best_name
-
-
 PINNED_VERIFIED = "pinned-verified"
 SIGNATURE_VERIFIED = "signature-verified"
 SIGNATURE_UNAVAILABLE = "signature-unavailable"
@@ -150,13 +119,13 @@ def evaluate(runner, dest: str, spec, source: str,
         if head.returncode != 0 or not head.stdout.strip():
             return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
                                     "no verifiable immutable identity (not a Git "
-                                    "checkout) — refusing under a frozen auto-install plan")
+                                    "checkout) — refusing under a planned commit")
         if head.stdout.strip() != expected_commit:
             return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
                                     f"HEAD {head.stdout.strip()[:9]} differs from the "
-                                    f"auto-install-frozen commit {expected_commit[:9]} — "
+                                    f"planned commit {expected_commit[:9]} — "
                                     "refusing (frozen plan is authoritative)")
-        frozen_note = (f"; exact auto-install-frozen commit {expected_commit[:9]} verified")
+        frozen_note = (f"; exact planned commit {expected_commit[:9]} verified")
     if getattr(spec, "artifact", False):
         # A declared single-file/artifact-style source: EVERY selector resolves to the same
         # declared artifact (the maintainer's default branch) — truthfully labelled, never

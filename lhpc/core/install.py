@@ -24,7 +24,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import provenance
 from .assets import asset_text
 from .best_effort import best_effort, stderr_line
 from .config import Config
@@ -361,7 +360,7 @@ class Installer:
         """Install a component's source. `source` selects the version:
           * "pinned" (default) — the stack's compatible known-working composition entry, else the manifest pin;
           * "dev"    — newest commit on the configured branch;
-          * "stable" — the newest version-shaped tag, else the default-branch HEAD.
+          * "stable" — the commit the plan resolved (`stable_ref`): newest version tag or latest release.
         Clones from the remote; a local checkout under `[install].adopt_search_root` is used only
         when that is configured and provably satisfies the selector.
         Never alters the local source; refuses to overwrite unless forced.
@@ -2554,19 +2553,6 @@ class Installer:
             self._close_journal(jh)
 
 
-    def _resolve_stable_tag(self, dest: str) -> str:
-        """Git-only Latest-stable tag selection in a FULL clone at `dest`: the newest
-        VERSION-SHAPED tag — a tag whose WHOLE name is a version, `v112` and `v1.2` and `1.5.2`
-        but not `v2.8.0.7239fe8` or `1.8.2-pre` (`provenance.stable_version_tag`) — else "", and
-        the caller stays on the default-branch HEAD. The remote freeze path (`service_maintenance._frozen_ref`) applies
-        the SAME rule to `git ls-remote --tags`, so one selector resolves to one commit however
-        the operator reaches it."""
-        run = self.system.runner.run
-        tags = run(["git", "-C", dest, "tag", "--list"], 10.0)
-        names = [t.strip() for t in (tags.stdout or "").splitlines() if t.strip()] \
-            if tags.returncode == 0 else []
-        return provenance.stable_version_tag(names)
-
     # Slow-box budgets. A Pi 5 clones RadioLib (94k objects, 114 MB) in ~15 s and checks the
     # pin out in <1 s; a Zero 2W over Wi-Fi is roughly an order of magnitude slower on both, and
     # a checkout that writes the whole worktree to an SD card is not a 30-second operation. Both
@@ -2666,6 +2652,10 @@ class Installer:
                 argv += ["--branch", spec.branch]
             argv += [remote, str(dest)]
             ok = clone(argv, timeout=self._CLONE_TIMEOUT_S).returncode == 0 and dest.exists()
+        elif source == "stable":
+            # Latest stable is resolved by the plan (`stable_ref`) and arrives as `expected_pin`; without it the
+            # remote could not be read: no clone (the local fallback may still satisfy it).
+            ok = False
         else:
             # full clone so an arbitrary tag/commit can be checked out
             if clone(["git", "clone", remote, str(dest)],
@@ -2686,20 +2676,6 @@ class Installer:
                             head = step(["git", "-C", str(dest), "rev-parse", "HEAD"], 15.0,
                                         "rev-parse")
                             ok = head.returncode == 0 and head.stdout.strip() == pin
-                elif source == "stable":
-                    # Latest stable, GIT-ONLY: the newest version-shaped tag ("release"),
-                    # else the default-branch HEAD (latest main commit). The resolved commit
-                    # is recorded by the ownership registry either way.
-                    tag = self._resolve_stable_tag(str(dest))
-                    if not tag:
-                        ok = True                      # no tags at all -> default-branch HEAD
-                    else:
-                        ok = step(["git", "-C", str(dest), "checkout", tag],
-                                  self._CHECKOUT_TIMEOUT_S, f"checkout {tag}").returncode == 0
-                        if ok:
-                            chk = step(["git", "-C", str(dest), "describe", "--tags",
-                                        "--exact-match"], 15.0, "describe")
-                            ok = chk.returncode == 0 and chk.stdout.strip() == tag
                 else:                       # dev
                     ref = spec.branch or ""
                     ok = (not ref or

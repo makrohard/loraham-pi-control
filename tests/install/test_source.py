@@ -1349,46 +1349,6 @@ def test_update_refuses_a_changed_upstream_source(tmp_path, case, git, make_repo
     assert not inst._journal_path(dest).exists()
 
 
-def _tagged_repo(git, make_repo, path: Path):
-    """A repo with: version tags v0.9.0 < v1.2.0 (v1.2.0 on an OLDER commit than a
-    non-version tag 'nightly' that is NEWEST by date) + a final untagged commit."""
-    make_repo(path)
-    git(path, "tag", "v0.9.0")
-    (path / "file.txt").write_text("two\n")
-    git(path, "add", "-A"); git(path, "commit", "-qm", "two")
-    git(path, "tag", "v1.2.0")
-    (path / "file.txt").write_text("three\n")
-    git(path, "add", "-A"); git(path, "commit", "-qm", "three")
-    git(path, "tag", "nightly")                       # newest by date, NOT version-shaped
-    (path / "file.txt").write_text("four\n")
-    git(path, "add", "-A"); git(path, "commit", "-qm", "four")
-
-
-def test_stable_resolves_newest_version_tag(tmp_path, git, make_repo, installer):
-    _tagged_repo(git, make_repo, tmp_path / "repo")
-    inst = installer(_comp())
-    tag = inst._resolve_stable_tag(str(tmp_path / "repo"))
-    assert tag == "v1.2.0"                             # version tag beats newer-dated 'nightly'
-
-
-@pytest.mark.parametrize("tags", [["alpha", "beta"], []], ids=["only-non-version-tags", "no-tags"])
-def test_stable_ignores_non_version_tags_and_stays_on_head(tmp_path, git, make_repo, installer, tags):
-    # only NON-version tags, or no tags at all -> "" (the caller stays on the default-branch HEAD).
-    # A build-suffixed or code-named tag is a snapshot, not a release, and the remote freeze path
-    # cannot see tag dates at all, so BOTH paths ignore it rather than disagreeing about it.
-    repo = tmp_path / "r1"
-    make_repo(repo)
-    for n, tag in enumerate(tags):
-        if n:
-            # a DISTINCT, later committer date so `-creatordate` ordering is deterministic
-            (repo / "file.txt").write_text("2\n")
-            git(repo, "add", "-A")
-            git(repo, "commit", "-qm", "2", env={"GIT_COMMITTER_DATE": "2030-01-01T00:00:00",
-                                                 "GIT_AUTHOR_DATE": "2030-01-01T00:00:00"})
-        git(repo, "tag", tag)
-    assert installer(_comp())._resolve_stable_tag(str(repo)) == ""
-
-
 @pytest.mark.parametrize("name, shapes, expected", [
     # (upstream, its tag shapes, the release the rule must pick — "" means default-branch HEAD)
     ("loraham-daemon", ["v0.4.0", "v112"], "v112"),         # a bare numeric version IS a version
@@ -1400,27 +1360,10 @@ def test_stable_ignores_non_version_tags_and_stays_on_head(tmp_path, git, make_r
     ("meshcom-firmware", ["v4.35p.08.29", "v4.35s"], ""),
     ("no-tags-at-all", [], ""),
 ], ids=lambda v: v if isinstance(v, str) and not v.startswith("v") and "." not in v else None)
-def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path, git, make_repo, installer,
-                                                                  name, shapes, expected):
-    """One selector, one commit, whichever PRODUCTION path the operator reaches it through.
-
-    `lhpc install --source stable` resolves in a full clone (Installer._resolve_stable_tag);
-    `lhpc auto-install --source stable` resolves remotely (ControllerService._frozen_ref over
-    `git ls-remote --tags`). They once carried different regexes AND different fallbacks, so the
-    same word installed different commits of one component. This drives BOTH production
-    functions — not the shared helper — over the tag shapes each pinned upstream actually
-    publishes, and asserts they land on the same commit.
-    """
-    # LOCAL path: a real repo carrying those tags.
-    repo = tmp_path / "up"
-    make_repo(repo)
-    for tag in shapes:
-        git(repo, "tag", tag)
-    local_tag = installer(_comp())._resolve_stable_tag(str(repo))
-    assert local_tag == expected, f"{name}: local picked {local_tag!r}, expected {expected!r}"
-
-    # REMOTE path: the same tag names over a faked `ls-remote`, each ANNOTATED so the
-    # peeled commit is what must be selected (the plain tag object sha must not be).
+def test_stable_resolves_the_real_manifest_tag_shapes(tmp_path, name, shapes, expected):
+    """The stable lane's one resolver (`stable_ref`, through `_frozen_ref`) over the tag shapes each pinned upstream
+    actually publishes, each tag ANNOTATED so the peeled commit is what must be selected. No release is read here
+    (the fake answers no API call): a build-suffixed tag counts only as a release (tests/install/test_lanes.py)."""
     head_sha = "9" * 40
     lines, peel = [], {}
     for i, tag in enumerate(shapes):
@@ -1432,17 +1375,8 @@ def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path, git, 
         ("git", "ls-remote", DAEMON_REMOTE, "HEAD"): CR(0, f"{head_sha}\tHEAD\n", "")})
     comp_remote = svc.stack("daemon").component("loraham-daemon")
     (fz, why) = svc._frozen_ref(comp_remote, "stable")
-    assert why == "", f"{name}: frozen resolution failed: {why}"
-    remote_sha = fz[0]
-    expected_remote = peel[expected] if expected else head_sha
-    assert remote_sha == expected_remote, (
-        f"{name}: remote picked {remote_sha!r}, expected {expected_remote!r}")
-
-    # the two production paths agree on WHICH tag (their shas differ only because the
-    # fixtures are different repositories)
-    picked_remote = next((t for t, sha in peel.items() if sha == remote_sha), "")
-    assert picked_remote == local_tag, (
-        f"{name}: stable diverges — local {local_tag!r} vs remote {picked_remote!r}")
+    assert why == "", f"{name}: resolution failed: {why}"
+    assert fz[0] == (peel[expected] if expected else head_sha), f"{name}: picked {fz[0]!r}"
 
 
 @pytest.mark.parametrize("sel", ["pinned", "dev", "stable"])
