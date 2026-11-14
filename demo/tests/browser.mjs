@@ -8,6 +8,7 @@ import puppeteer from "puppeteer-core";
 const URL = process.env.DEMO_URL;
 if (!URL) { console.error("set DEMO_URL"); process.exit(2); }
 const exe = process.env.CHROME || "/usr/bin/google-chrome";
+let step = "launch";   // DIAGNOSTIC (B4b): the wait that is running, printed on failure
 
 const ready = (p) => p.waitForFunction(
   () => { const a = document.getElementById("app"); return a && !a.hidden && a.innerText.length > 80; },
@@ -23,6 +24,7 @@ async function openKiss(p) {
       x => x.getAttribute('href') === '/stacks' || x.textContent.trim() === 'Apps');
     if (!a) throw new Error("Apps link not found"); a.click();
   });
+  step = "line 26: await p.waitForFunction(() => !!document.getElementById(\"stackrow-kiss"; console.log("STEP", step);
   await p.waitForFunction(() => !!document.getElementById("stackrow-kiss"), { timeout: 30000 });
   await p.evaluate(() => {
     const d = document.getElementById("stackrow-kiss");
@@ -37,7 +39,9 @@ const errs = [];
 page.on("pageerror", (e) => errs.push(e.message.slice(0, 150)));
 let rc = 0;
 try {
+  step = "line 40: await page.goto(URL, { waitUntil: \"domcontentloaded\", timeout: 60000 }"; console.log("STEP", step);
   await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+  step = "line 41: await ready(page);"; console.log("STEP", step);
   await ready(page);
   const dash = await page.evaluate(() => document.getElementById("app").innerText);
   if (!/LoRaHAM Pi Control/.test(dash)) throw new Error("dashboard did not render");
@@ -52,7 +56,9 @@ try {
   // page; only a consequential choice asks), so clicking the row's Start IS the start. The stack
   // body ALWAYS shows start+stop, so neither is a running signal; the authoritative running check
   // is the DASHBOARD DAEMON PANEL going READY (a stack owns its band's daemon).
+  step = "line 55: await openKiss(page);"; console.log("STEP", step);
   await openKiss(page);
+  step = "line 56: await hasOp(page, \"start\");"; console.log("STEP", step);
   await hasOp(page, "start");
   await page.evaluate(() => {
     const f = [...document.querySelectorAll('form')].find((f) => {
@@ -72,11 +78,13 @@ try {
   }, { timeout: 30000 });
 
   // start worked <=> the 433 daemon panel is now READY (kiss owns 433)
+  step = "line 75: await daemonReady();"; console.log("STEP", step);
   await daemonReady();
   console.log("OK: start kiss -> 433 daemon live (READY) on the dashboard");
 
   // RX-TX Monitor is LIVE: the demo's boot.js poller reads /api/daemon/433 from the bridge
   // every tick and fills the rd-* cells (the real dash.js can't run under the Pyodide bridge).
+  step = "line 80: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const val = (id, re) => { const el = document.getElementById(id);
       return el && re.test((el.textContent || "").trim()); };
@@ -102,6 +110,7 @@ try {
     const box = document.getElementById("sysbox");
     if (box && !box.open) (box.querySelector("summary") || box).click();
   });
+  step = "line 105: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const hasNum = (id) => { const el = document.getElementById(id);
       return el && /[0-9]/.test((el.textContent || "")); };   // "…"/"?" placeholders have no digit
@@ -118,12 +127,14 @@ try {
   }, { timeout: 30000 });
   console.log("OK: System box live — values, gauge bars, per-core CPU bars, and sparklines");
   // Time pill: the demo box is synced (timesyncd), so the product logic shows green "NTP".
+  step = "line 121: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const p = document.getElementById("sys-time-pill");
     return p && p.textContent === "NTP" && p.classList.contains("pill-ok");
   }, { timeout: 30000 });
   console.log("OK: Time pill shows green NTP");
   // GPS row in the System box: the simulated receiver's fix, linked to the GPS Monitor.
+  step = "line 127: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const v = ((document.getElementById("sys-gps-val") || {}).textContent || "").trim();
     const p = document.getElementById("sys-gps-state");
@@ -135,6 +146,7 @@ try {
   if (gpsHref !== "/stacks?open=gps#gps-row") throw new Error("GPS row link: " + gpsHref);
   console.log("OK: System box GNSS row shows the simulated 3D fix as a green pill and links to the GPS Monitor");
   // Wi-Fi pill on the network line: the simulated signal, coloured by the approved bands.
+  step = "line 138: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const p = document.getElementById("sys-wifi-pill");
     return p && /^-\d+ dBm$/.test(p.textContent) && /pill-(ok|warn|bad)/.test(p.className);
@@ -150,6 +162,7 @@ try {
       (x) => x.getAttribute('href') === '/stacks' || x.textContent.trim() === 'Apps');
     if (!a) throw new Error("Apps link not found"); a.click();
   });
+  step = "line 153: await page.waitForFunction(() => !!document.getElementById(\"gps-monito"; console.log("STEP", step);
   await page.waitForFunction(() => !!document.getElementById("gps-monitor"), { timeout: 30000 });
   await page.evaluate(() => {
     for (const id of ["gps-row", "gps-monitor"]) {
@@ -157,11 +170,13 @@ try {
       if (d && !d.open) (d.querySelector("summary") || d).click();
     }
   });
+  step = "line 160: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const t = (id) => ((document.getElementById(id) || {}).textContent || "").trim();
     return !/loading/i.test(t("gps-mon-state")) && /\d/.test(t("gps-mon-lat")) && / of \d/.test(t("gps-mon-sats"));
   }, { timeout: 30000 });
   await page.evaluate(() => document.getElementById("gps-sky-btn").click());
+  step = "line 165: await page.waitForFunction(() => {"; console.log("STEP", step);
   await page.waitForFunction(() => {
     const w = document.getElementById("gps-sky-wrap"), svg = document.getElementById("gps-sky");
     return w && !w.hidden && svg && svg.querySelectorAll("circle").length > 4;   // 4 rings + satellites
@@ -169,12 +184,22 @@ try {
   console.log("OK: GPS Monitor shows the simulated fix and the Skyview draws its satellites");
 
   // persistence across reload: kiss still running -> 433 still READY
+  step = "line 172: await page.reload({ waitUntil: \"domcontentloaded\" });"; console.log("STEP", step);
   await page.reload({ waitUntil: "domcontentloaded" });
+  step = "line 173: await ready(page);"; console.log("STEP", step);
   await ready(page);
+  step = "line 174: await daemonReady();"; console.log("STEP", step);
   await daemonReady();
   console.log("OK: running state persisted across reload (433 still READY)");
 } catch (e) {
   console.error("FAIL:", e.message, "| pageerrors:", JSON.stringify(errs.slice(0, 5)));
+  console.error("FAIL AT:", step);
+  try {
+    const st = await page.evaluate(() => ({ url: location.href,
+      app: ((document.getElementById("app") || {}).innerText || "").slice(0, 1500),
+      rows: [...document.querySelectorAll('[id^="stackrow-"]')].map(d => d.id).join(" ") }));
+    console.error("FAIL URL:", st.url, "\nFAIL ROWS:", st.rows, "\nFAIL APP:", st.app);
+  } catch (e2) { console.error("FAIL STATE unreadable:", e2.message); }
   rc = 1;
 }
 await b.close();
