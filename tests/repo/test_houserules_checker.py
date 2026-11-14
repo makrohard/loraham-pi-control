@@ -32,8 +32,11 @@ TSL = "time." + SL    # nor the base program's textual sleep pattern
 def _git(repo, *args, author="makrohard"):
     # An exported GIT_AUTHOR_*/GIT_COMMITTER_* overrides `-c user.name`: the fixture's identity is the one given.
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
-    subprocess.run(["git", "-c", f"user.name={author}", "-c", "user.email=dev@example.invalid",
-                    "-c", "commit.gpgsign=false", *args], cwd=repo, env=env, check=True, capture_output=True)
+    r = subprocess.run(["git", "-c", f"user.name={author}", "-c", "user.email=dev@example.invalid",
+                        "-c", "commit.gpgsign=false", *args], cwd=repo, env=env, check=False, capture_output=True,
+                       text=True)
+    if r.returncode:                    # F9: git's own reason, not only its exit status
+        raise RuntimeError(f"git {' '.join(args)}: exit {r.returncode}: {r.stderr.strip()}")
 
 
 def _write(repo, files):
@@ -809,3 +812,14 @@ def test_the_row_lists_every_exemption_as_place_rule_and_reason(repo):
     assert line == (f"patterns     getsource 0 assert-True 0 source-read 0 {SL} 0 startswith 0 network 0; 2 exempt: "
                     "tests/core/test_ok.py:5 rule-10 (a log sentence); tests/core/test_ok.py:6 rule-4 (lab-local server)"
                     "   OK")
+
+
+def test_a_failing_git_call_in_the_fixture_names_gits_reason(repo):
+    """F9: a fixture git call that fails raises with git's stderr. Red before at the parent: CalledProcessError named
+    only the exit status (128), so the reason of a CI-only failure was lost."""
+    reason = subprocess.run(["git", "show", "no-such-rev"], cwd=repo, capture_output=True, text=True,
+                            check=False).stderr.strip()
+    assert reason, "git printed no reason"
+    with pytest.raises(Exception) as exc:
+        _git(repo, "show", "no-such-rev")
+    assert reason in str(exc.value), str(exc.value)
