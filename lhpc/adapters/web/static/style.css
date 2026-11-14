@@ -790,15 +790,17 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .hwlist .act { position: relative; z-index: 1; }
 .hwlist .off { color: var(--muted); }
 /* Phones: a LIST table reflows per row (`hwlist-reflow`): one block per radio, id + name and the model across,
-   band and stick on one line, then the state, the row's Disable/Enable top right. Wide config tables keep the
-   generic phone rule above (they scroll inside their own box). */
+   band and stick on one line, then the state, the row's Disable/Enable top right; a long serial wraps inside its
+   cell. Wide config tables keep the generic phone rule above (they scroll inside their own box). */
 @media (max-width: 860px) {
   table.hwlist-reflow { display: block; overflow: visible; }
-  .hwlist-reflow thead { display: none; }
+  /* the header row is hidden from the eye only: it stays in the accessibility tree (the column names of each cell) */
+  .hwlist-reflow thead { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+                         overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .hwlist-reflow tbody { display: block; }
   .hwlist-reflow tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: .5rem; padding: .5rem .2rem;
                       border-bottom: 1px solid var(--line); }
-  .hwlist.hwlist-reflow td { display: block; border: 0; padding: .05rem 0; min-width: 0; }
+  .hwlist.hwlist-reflow td { display: block; border: 0; padding: .05rem 0; min-width: 0; overflow-wrap: anywhere; }
   .hwlist-reflow td:nth-child(1), .hwlist-reflow td:nth-child(2), .hwlist-reflow td:nth-child(5) { grid-column: 1 / 3; }
   .hwlist-reflow td:nth-child(3), .hwlist-reflow td:nth-child(4) { color: var(--muted); }
   .hwlist-reflow td.act { grid-column: 3; grid-row: 1 / span 2; align-self: start; }

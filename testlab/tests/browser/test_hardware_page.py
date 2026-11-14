@@ -23,6 +23,23 @@ def test_add_hardware_is_a_button_link_that_opens_add_hardware(page):
 
 
 
+def test_a_long_usb_serial_wraps_inside_its_radio_block_on_a_phone(flask_page, tmp_path):
+    # An unbroken 40-character serial stays inside its cell at 390 px (wrapped, not cut off or sticking out), and the
+    # page does not scroll sideways.
+    from lhpc.core import radios
+    serial = "0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ"
+    page, _posts = flask_page(path="/hardware")
+    (tmp_path / "config" / "radios.toml").write_text(radios.render((
+        radios.Radio("r1", "low", "loraham", "433"),
+        radios.Radio("r3", "mstick", "meshstick-1262", "868", usb_serial=serial))))
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("http://127.0.0.1:9/hardware", wait_until="load")
+    assert serial in page.text_content("#hw-list tr[data-rid='r3']")
+    assert page.evaluate("() => { const c = document.querySelector(\"#hw-list tr[data-rid='r3'] td:nth-child(4)\");"
+                         " return c.scrollWidth - c.clientWidth; }") <= 1
+    assert page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth") <= 1
+
+
 def test_re_bind_on_the_action_row_still_sends_its_form(flask_page, monkeypatch):
     # A19, G1 BLOCKING 1: the moved Re-bind submits ITS form: the chosen port, the radio and the token reach /hardware/bind.
     from urllib.parse import parse_qs

@@ -87,28 +87,39 @@ def test_the_stacks_row_headers_have_one_grid_track_per_field(page):
 _HW_ROWS = """() => [...document.querySelectorAll('#hw-list tr.hwrow')].map(r => {
     const b = r.querySelector('td.act button').getBoundingClientRect(), row = r.getBoundingClientRect();
     return {rid: r.dataset.rid, cells: [...r.cells].every(c => { const x = c.getBoundingClientRect();
-                                                                return x.left >= 0 && x.right <= innerWidth; }),
+                                                                return x.width > 0 && x.left >= 0 && x.right <= innerWidth; }),
             button: b.width > 0 && b.left >= 0 && b.right <= innerWidth,
             top_right: b.top - row.top < 24 && row.right - b.right < 24};   // the mock: Disable on the first line, right
 })"""
 
 
+def _column_headers(page):
+    """The column headers Chromium's accessibility tree exposes for the page (what a screen reader is given),
+    lower-cased: the header's CSS text-transform reaches the accessible name."""
+    nodes = page.context.new_cdp_session(page).send("Accessibility.getFullAXTree")["nodes"]
+    return [n["name"]["value"].lower() for n in nodes
+            if not n.get("ignored") and n.get("role", {}).get("value") == "columnheader" and n.get("name", {}).get("value")]
+
+
 def test_the_hardware_list_reflows_per_row_on_a_phone(page):
     """At 390 px each radio is one block: every cell and its Disable/Enable sit inside the viewport,
-    and the list does not scroll inside its box. Desktop keeps the table; another wide table (the
-    Auto-install list) still scrolls inside its own box."""
+    the list does not scroll inside its box, and the column names stay for assistive technology. Desktop
+    keeps the table; another wide table (the Auto-install list) still scrolls inside its own box."""
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.goto(page.lab_base + "/hardware", wait_until="networkidle").ok
     assert page.evaluate(_HW_ROWS) == [{"rid": rid, "cells": True, "button": True, "top_right": True}
                                       for rid in ("r1", "r2")]
     assert page.evaluate("() => { const t = document.getElementById('hw-list');"
                          " return t.scrollWidth - t.clientWidth; }") <= 1
-    assert not page.locator("#hw-list thead").is_visible()
+    # the header row is hidden from the eye, and its column names stay in the accessibility tree
+    assert page.evaluate("() => document.querySelector('#hw-list thead').getBoundingClientRect().width") <= 1
+    assert _column_headers(page) == ["radio", "model", "band", "stick", "state"]
     assert page.goto(page.lab_base + "/auto-install", wait_until="networkidle").ok
     assert page.evaluate("() => getComputedStyle(document.getElementById('ai-select')).overflowX") == "auto"
     page.set_viewport_size({"width": 1280, "height": 900})
     page.goto(page.lab_base + "/hardware", wait_until="networkidle")
     assert page.locator("#hw-list thead").is_visible()
+    assert _column_headers(page) == ["radio", "model", "band", "stick", "state"]
 
 
 def _auto_install_rows(page):
