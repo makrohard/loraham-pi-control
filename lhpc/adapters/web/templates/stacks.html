@@ -64,10 +64,7 @@
              is demonstrably up whenever it serves this page — without claiming a managed run-state, so
              the truthfulness invariant (no badge-running on the controller row) is preserved. #}
           <span class="col-status"><span class="badge badge-ok">console up</span></span>
-          <span class="col-source"><span class="pill">src: {{ 'match' if controller.identity and controller.identity.status == 'ok'
-                                     else (controller.identity.status if controller.identity else 'unchecked') }}</span></span>
           <span class="col-version"><span class="pill mono">v{{ controller.version }}</span></span>
-          <span class="col-head">{% if controller.head_short %}<span class="pill mono" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}</span>
           <span class="col-extra">
             {% if controller.identity is none %}<span class="pill">identity unchecked</span>
             {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>

@@ -1,6 +1,7 @@
-"""The stack row's 'Update' link and the head pill, rendered from the CACHED source-check
-verdict: a behind DEPENDENCY opens its own #comp-<id> subsection, a behind MAIN opens the
-stack's Install section and paints the head pill yellow; a stale or empty cache shows neither.
+"""The stack row's 'Update' link, rendered from the CACHED source-check verdict: a behind
+DEPENDENCY opens its own #comp-<id> subsection, a behind MAIN opens the stack's Install section;
+a stale or empty cache shows no link. The row header carries no commit pill (its absence is
+pinned in test_stacks_page_source_state.py).
 The first three cases fake freshness at the cached-verdict seam (`_fake_freshness`); the
 render cases below drive the real seam with a recorded verdict and a probed head."""
 
@@ -114,42 +115,38 @@ def _seed(tmp_path, entries, now=1000):
 
 
 def _page(web, tmp_path, cmds, dirs):
-    body = web(system=FakeSystem(commands=cmds, paths=_fs_paths(*dirs)).system).get("/stacks").get_data(as_text=True)
-    return htmlq.parse(body)
+    r = web(system=FakeSystem(commands=cmds, paths=_fs_paths(*dirs)).system).get("/stacks")
+    assert r.status_code == 200                       # an absent link on an error page proves nothing
+    doc = htmlq.parse(r.get_data(as_text=True))
+    assert doc.by_id("stackrow-daemon")               # the row the link would sit beside is there
+    return doc
 
 
-def _head_behind(doc):
-    """The stack head pill that says a main source is behind: the pill's `title` attribute is the
-    typed marker (the yellow class is its styling). Only the seeded daemon can carry it here."""
-    return doc.find("span", title="behind its remote")
-
-
-def test_main_behind_paints_head_yellow_and_shows_the_link(web, tmp_path):
+def test_main_behind_shows_the_link_to_install(web, tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
     doc = _page(web, tmp_path, _git_src(ds, A), [ds])
-    assert _head_behind(doc) and "@" + A[:9] in doc.text        # the main's head pill is yellow
-    assert len(doc.find("a", class_="update-link")) == 1         # one link, in the row-actions overlay
+    links = doc.find("a", class_="update-link")
+    assert len(links) == 1                                       # one link, in the row-actions overlay
+    assert links[0]["href"].endswith("#stack-install-daemon")
 
 
-def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(web, tmp_path):
-    # The @head pill IS the main's commit — it must not go yellow because radiolib is stale.
+def test_only_a_dependency_behind_shows_the_link(web, tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     rl = _repo(tmp_path, "src/RadioLib")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A),
                      "radiolib": _entry_for(su.BEHIND, B)})
     doc = _page(web, tmp_path, {**_git_src(ds, A), **_git_src(rl, B)}, [ds, rl])
     assert doc.find("a", class_="update-link")                   # any component behind -> link (overlay)
-    assert not _head_behind(doc)                                 # but the main's head (summary) stays grey
 
 
 @pytest.mark.parametrize("cached", [None, su.UP_TO_DATE], ids=["never-checked", "up-to-date"])
-def test_nothing_behind_shows_neither_link_nor_yellow_head(web, tmp_path, cached):
+def test_nothing_behind_shows_no_link(web, tmp_path, cached):
     ds = _repo(tmp_path, "src/loraham-daemon")
     if cached is not None:
         _seed(tmp_path, {"loraham-daemon": _entry_for(cached, A)})
     doc = _page(web, tmp_path, _git_src(ds, A), [ds])
-    assert not doc.find("a", class_="update-link") and not _head_behind(doc)
+    assert not doc.find("a", class_="update-link")
 
 
 @pytest.mark.parametrize("status", [su.BEHIND, su.UP_TO_DATE])
@@ -159,5 +156,4 @@ def test_stale_cache_renders_unchecked_not_a_stale_verdict(web, tmp_path, status
     _seed(tmp_path, {"loraham-daemon": _entry_for(status, A)})
     doc = _page(web, tmp_path, _git_src(ds, B), [ds])
     assert not doc.find("a", class_="update-link")               # no stale nagging
-    assert not _head_behind(doc)                                 # no stale yellow
     assert "unchecked" in doc.text                               # the Install panel says so
