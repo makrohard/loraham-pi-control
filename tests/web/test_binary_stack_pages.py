@@ -1,5 +1,5 @@
 """The console's view of a stack installed from a prebuilt binary artifact: its row says so
-(the `src:` and version pills carry the artifact's provenance), it is never offered as "not
+(its version pill carries the artifact's provenance), it is never offered as "not
 installed", and the MeshCom password page explains why the mesh password cannot be managed there.
 
 A binary install is faked at the receipt — the same seam the service reads — so no artifact is
@@ -52,7 +52,6 @@ def _install_banners(row, stack):
 
 def test_the_row_pills_carry_the_artifact_provenance(web, binary_box):
     row = _row(web(service_factory=lambda: binary_box("daemon")), "daemon")
-    assert [p.text for p in _pills(row, "src:")] == ["src: binary"]
     version = _pills(row, "binary@")
     assert len(version) == 1                                   # ONE version pill in the row
     assert version[0].text == "binary@" + SHA[:9]
@@ -65,7 +64,7 @@ def test_a_binary_stack_is_not_offered_as_not_installed(web, binary_box):
     assert _install_banners(_row(web(service_factory=lambda: binary_box()), "daemon"), "daemon"), \
         "without any install the banner is expected — or this test could not find it at all"
     row = _row(web(service_factory=lambda: binary_box("daemon")), "daemon")
-    assert [p.text for p in _pills(row, "src:")] == ["src: binary"]
+    assert [p.text for p in _pills(row, "binary@")] == ["binary@" + SHA[:9]]   # the binary install is there
     assert _install_banners(row, "daemon") == []
 
 

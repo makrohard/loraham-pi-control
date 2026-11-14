@@ -102,3 +102,28 @@ def test_source_check_is_not_an_action_op():
     # It mutates nothing but the cache marker; it must not enter the lifecycle dispatch.
     assert "source-check" not in ControllerService.WEB_ACTIONS
     assert "check" not in ControllerService.WEB_ACTIONS
+
+
+@pytest.mark.parametrize("row_id, extra", [("controller-row", ["identity unchecked"]), ("stackrow-daemon", [])])
+def test_row_headers_carry_the_version_but_no_source_state_or_commit(web, tmp_path, row_id, extra):
+    # The row header shows what is installed (the version pill) and, while a source is behind, the
+    # Update link; it shows no `src:` state and no commit (`@<sha>` / `@<source head>`), so a
+    # behind main source raises the Update link only, never a yellow head pill.
+    from lhpc.core import selfupdate
+    from lhpc.version import __version__
+    ds = _repo(tmp_path, "src/loraham-daemon")
+    su.record(Paths(runtime_root=tmp_path), {"loraham-daemon": _entry_for(su.BEHIND, A)}, now=1000)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path),
+                           {"schema_version": 1, "checked_at": 1, "upstream": {},
+                            "local": {"is_git": True, "head": "c" * 40, "head_short": "c" * 9,
+                                      "branch": "main"}})
+    r = web(system=FakeSystem(commands=_git_src(ds, A), paths=_fs_paths(ds)).system).get("/stacks")
+    assert r.status_code == 200
+    doc = htmlq.parse(r.get_data(as_text=True))
+    version = "v" + __version__ if row_id == "controller-row" else "v111a"
+    head = doc.within(doc.within(doc.by_id(row_id)).find("summary")[0])
+    # Exactly the version pill (the anchor) and the row's own extras: no `src:` pill, no `@` commit.
+    assert [p.text.strip() for p in head.find("span", class_="pill")] == [version, *extra]
+    assert not head.find("span", title="behind its remote")
+    links = [a["href"] for a in doc.find("a", class_="update-link")]
+    assert any("stack-install-daemon" in (h or "") for h in links), links  # the anchor: Update stays
