@@ -201,12 +201,12 @@ class BootRestoreOpsMixin:
             main = next((c for c in st.components if c.id == st.main), None)
             if main is None:
                 continue
-            declared = instances.stack_bands(st)      # the manifest's (S2): restore_plan judges each radio by rid
+            declared = () if (fixed := instances.fixed_band(st)) else instances.stack_bands(st)   # S2: judged by rid
             metas[st.id] = StackMeta(
                 stack_id=st.id, main=st.main,
                 interactive_main=bool(getattr(main, "interactive", False)),
                 declared_bands=declared,
-                fixed_band="" if declared else (main.band or ""),
+                fixed_band=fixed or ("" if declared else (main.band or "")),
                 restorable_parts=tuple(c.id for c in st.components
                                        if c.id != st.main and self.optional_role(c) == "tickable"
                                        and not getattr(c, "interactive", False)))
