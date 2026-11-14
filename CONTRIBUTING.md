@@ -38,7 +38,7 @@ more on every PR: [what CI enforces](docs/maintenance.md#what-ci-enforces).
 
 | gate | command |
 |---|---|
-| unit + contract suite | `python -m pytest -q -p no:cacheprovider tests` (variants and why `python -m`: [tests/README](tests/README.md#how-to-run)). `-n` (`pytest-xdist`, not a dev dependency) is a local convenience, never release evidence |
+| unit + contract suite | `python -m pytest -q -p no:cacheprovider tests` (variants and why `python -m`: [tests/README](tests/README.md#how-to-run)). CI's test job runs the suite with `-n auto --dist loadfile` (`pytest-xdist`, a dev dependency) |
 | lint, frozen ruleset | `ruff check lhpc testlab` and `ruff check tests --select F,E9` |
 | security | `bandit -q -r lhpc -lll` |
 | testlab unit lane | `python -m pytest -q testlab/tests/unit` — the simulator itself; the acceptance and browser lanes are opt-in, see [testlab](docs/testlab.md) |

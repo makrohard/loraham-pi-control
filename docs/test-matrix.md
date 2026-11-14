@@ -71,8 +71,7 @@ t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows not
 ## Matrix
 
 Order: light stacks first, heavy compiles last, MeshCom from source very last. A stack sharing
-an earlier row's source (chat and voice share the daemon's) is still purged and reinstalled on
-its own.
+an earlier row's repository (chat, the daemon's) is still purged and reinstalled on its own.
 
 | # | stack | channel | build | start | evidence |
 |---|---|---|---|---|---|
