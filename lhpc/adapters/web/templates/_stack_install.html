@@ -1,0 +1,99 @@
+{% from "_menu.html" import page_actions -%}
+{% from "_macros.html" import banner, hmac_actions, freshness_pill, stack_actions, update_lhpc_first, restart_note -%}
+<details class="advcfg" id="stack-install-{{ g.stack.id }}"
+    {%- if request.args.get('inst') == g.stack.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
+    <summary>Install</summary>
+    <div class="body">
+      {# First-position flag: MeshCom link running WITHOUT client authentication. #}
+      {% if g.hmac_enabled is not none and not g.hmac_enabled %}
+        <p class="depnote depnote-warn"><span class="ver ver-yellow">HMAC Password disabled</span>
+          — the meshcom bridge/firmware run without client authentication.</p>
+      {% endif %}
+      {% if g.pin_override %}
+        {# A3: installed over the pin check, while that exact acceptance is still in force. #}
+        <div class="depnote depnote-warn" id="pin-override-{{ g.stack.id }}"><span class="ver ver-yellow">Installed over the pin check</span> —
+          {% for cid, pair in g.pin_override|dictsort %}<code>{{ cid }}</code> built from <code>{{ pair[0][:9] }}</code>, this LHPC pins <code>{{ pair[1][:9] }}</code>{% if not loop.last %}; {% endif %}{% endfor %}.
+          It may not work with this LHPC. {{ update_lhpc_first(selfupdate.update_available) }}</div>
+      {% endif %}
+      {% if g.pin_refusal %}
+        {# The last console install was refused: no published binary was built for this LHPC (the job's typed refusal). #}
+        <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
+          {{ update_lhpc_first(selfupdate.update_available) }} —
+          the install was refused: {% if g.pin_refusal.lagging %}the published binary was built from other commits than this LHPC pins.{% else %}no published binary was built for this box with this LHPC's pins and build inputs.{% endif %}
+            <form method="post" action="{{ url_for('action') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+              <input type="hidden" name="op" value="install">
+              <input type="hidden" name="target" value="{{ g.stack.id }}">
+              <input type="hidden" name="source" value="binary">
+              <button type="submit">Install again</button>
+            </form></div>
+      {% endif %}
+      {% if g.installed and g.has_source %}
+        {# Cached verdict for the MAIN component, resolved against its current head. Never green
+           unless a real check produced it against exactly this commit. #}
+        <p>Installed version: {{ freshness_pill(g.update_main) }}
+          {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
+          {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
+      {% elif g.has_source %}
+        {% call(part) banner('warn', title='Not installed yet') %}{% if part == 'body' %}The source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Install &rarr;</a>{% endif %}{% endcall %}
+      {% endif %}
+      {% if g.needs_build_deps %}
+        {# A build DEPENDENCY (e.g. RadioLib) is not built — the link opens ITS Dependencies card
+           (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
+        {% call(part) banner('bad', title=g.needs_build_deps|join(', ') ~ ' not built') %}{% if part == 'body' %}Build this dependency first.{% else %}<a href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0] }}">Build &rarr;</a>{% endif %}{% endcall %}
+      {% elif g.needs_build %}
+        {% call(part) banner('warn', title='Build needed') %}{% if part == 'body' %}{{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
+      {% endif %}
+      {% if g.hardware_block %}
+        <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio hardware</span> —
+          {{ g.hardware_block }}
+          <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">configure &rarr;</a></div>
+      {% elif g.radio_block %}
+        <div class="depnote depnote-warn"><span class="ver ver-yellow">Hardware list</span> —
+          this stack {{ g.radio_block }}</div>
+      {% endif %}
+      {% if g.restart_required %}
+        <div class="depnote depnote-warn">
+          {{ restart_note(g.restart_required) }}
+          <form method="post" action="{{ url_for('action') }}" class="act">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+            <input type="hidden" name="op" value="restart">
+            <input type="hidden" name="target" value="{{ g.restart_required.stack or g.stack.id }}">
+            <button type="submit" class="warnbtn">Restart now</button>
+          </form>
+        </div>
+      {% endif %}
+      {% if g.kw_offer %}
+        <div class="depnote depnote-warn">
+          This stack started healthy with a source composition that is not yet recorded as known
+          working ({{ g.kw_offer.components|join(', ') }}).
+          <form method="post" class="act" action="{{ url_for('known_working_confirm', stack_id=g.stack.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+            <button type="submit" class="warnbtn">Confirm this stack as working</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on, page_radio) }}
+
+      {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
+      {% if g.hmac_enabled is not none %}
+        {{ hmac_actions(g.stack.id) }}
+      {% endif %}
+
+      {# ----- Dependencies (collapsed): full per-component card + actions + Info evidence ----- #}
+      {% if g.deps %}
+        {# the ids that open Dependencies (?comp=) are read in _stack_deps.html #}
+        <div class="stackrow-wrap">
+        {% include "_stack_deps.html" %}
+        {{ page_actions(g.stack.id, 'stack-install-' ~ g.stack.id ~ '--dependencies') }}
+        </div>
+      {% endif %}
+
+      {# ----- System dependencies (collapsed): apt deps + build deps + runtime ordering ----- #}
+      <div class="stackrow-wrap">
+      {% include "_stack_sysdeps.html" %}
+      {{ page_actions(g.stack.id, 'stack-install-' ~ g.stack.id ~ '--system-dependencies') }}
+      </div>
+    </div>
+  </details>

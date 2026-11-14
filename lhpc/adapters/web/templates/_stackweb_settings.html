@@ -1,0 +1,71 @@
+{% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) -%}
+<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--settings" open>
+      <summary>Settings</summary>
+      <div class="body">
+        {% if sw.cfg.scheme == 'http' %}
+          <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
+            presented during the TLS handshake, so <code>http</code> cannot authenticate anyone —
+            the access mode must be <code>no-auth</code>.</p>
+        {% endif %}
+        <form method="post" action="{{ url_for('stack_web_configure', stack_id=g.stack.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+          <input type="hidden" name="page" value="{{ sw.page_id }}">
+          <section class="cfgsec">
+            <table class="paramgrid dptab">
+              <tr>
+                <th>Access</th>
+                <td><select name="mode" aria-label="Access">
+                  {% for m in sw.modes %}
+                    <option value="{{ m }}"{% if sw.cfg.mode == m %} selected{% endif %}>
+                      {% if m == 'local' %}local only (loopback)
+                      {% elif m == 'lan' %}LAN (allowed CIDRs){% else %}public (0.0.0.0/0){% endif %}</option>
+                  {% endfor %}
+                </select></td>
+                <td class="dphelp muted">Who may reach the proxy</td>
+              </tr>
+              <tr>
+                <th>Port</th>
+                {# Pre-filled with the stable default (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447, reticulum 8448) so enabling actually
+                   writes a port — a BLANK port silently saves as 0 (not proxied). #}
+                <td><input name="port" type="number" min="0" max="65535"
+                     value="{{ sw.cfg.port or sw.suggested_port }}" autocomplete="off"></td>
+                <td class="dphelp muted">{% if sw.suggested_port %}default {{ sw.suggested_port }}{% else %}{{ sw.suggested_note }}{% endif %}; 0 = not proxied; ≥ 1024</td>
+              </tr>
+              <tr>
+                <th>Scheme</th>
+                <td><select name="scheme" class="schemesel" data-authsel="authsel-{{ sw.page_id }}" aria-label="Scheme">
+                  {% for s in sw.schemes %}
+                    <option value="{{ s }}"{% if sw.cfg.scheme == s %} selected{% endif %}>{{ s }}</option>
+                  {% endfor %}
+                </select></td>
+                <td class="dphelp muted">https keeps client-certificate auth possible</td>
+              </tr>
+              <tr>
+                <th>Access mode</th>
+                <td><select name="access_mode" id="authsel-{{ sw.page_id }}" aria-label="Access mode">
+                  {% for m in sw.access_modes %}
+                    <option value="{{ m }}"{% if sw.cfg.access_mode == m %} selected{% endif %}
+                      {%- if sw.cfg.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
+                  {% endfor %}
+                </select></td>
+                <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td>
+              </tr>
+              <tr>
+                <th>Allowed CIDRs</th>
+                <td><input name="cidrs" value="{{ sw.cfg.allowed_cidrs|join(',') }}"
+                     placeholder="192.168.0.0/24" autocomplete="off"></td>
+                <td class="dphelp muted">Required for LAN/public</td>
+              </tr>
+              <tr>
+                <th>Confirm</th>
+                <td><input name="confirm_phrase" autocomplete="off"></td>
+                <td class="dphelp muted">Remote needs <code>enable-remote</code> — or
+                  <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth remote,
+                  or an unencrypted <code>http</code> remote listener</td>
+              </tr>
+            </table>
+          </section>
+          <button type="submit">Apply</button>
+        </form>
+      </div>
+    </details>

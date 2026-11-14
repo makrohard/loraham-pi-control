@@ -1,0 +1,70 @@
+{% from "_menu.html" import page_actions -%}
+{% set _explicit_row = request.args.get('open') or request.args.get('cfg') or request.args.get('dp') or request.args.get('inst') -%}
+<details class="stackrow" id="controller-row"{% if confirm or request.args.get('open') == 'firewall' or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
+        <summary>
+          <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
+          {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
+             is demonstrably up whenever it serves this page — without claiming a managed run-state, so
+             the truthfulness invariant (no badge-running on the controller row) is preserved. #}
+          <span class="col-status"><span class="badge badge-ok">console up</span></span>
+          <span class="col-version"><span class="pill mono">v{{ controller.version }}</span></span>
+          <span class="col-extra">
+            {% if controller.identity is none %}<span class="pill">identity unchecked</span>
+            {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
+            {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
+            {% else %}<span class="pill">not self-hosted</span>{% endif %}
+          </span>
+          {# Same column as the stack rows (grid alignment), same call-to-action: the controller's
+             update lives in its nested Update panel rather than an Install section. #}
+        </summary>
+        <div class="stackrow-body">
+          <div class="stackrow-wrap">
+          {% include "_ctl_update.html" %}
+          {{ page_actions('controller', 'controller-update') }}
+          </div>
+          {# ----- Controller's own system dependencies (styled like a stack's panel) ----- #}
+          <div class="stackrow-wrap">
+          {% include "_ctl_sysdeps.html" %}
+          {{ page_actions('controller', 'controller-system-deps') }}
+          </div>
+          {# ----- Backup secrets: two copy commands, nothing executed here (A5) ----- #}
+          <div class="stackrow-wrap">
+          {% include "_ctl_secrets.html" %}
+          {{ page_actions('controller', 'controller-backup-secrets') }}
+          </div>
+          {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
+          <div class="stackrow-wrap">
+          {% include "_ctl_callsign.html" %}
+          {{ page_actions('controller', 'operator-callsign') }}
+          </div>
+          {% if network_view %}
+            <div class="stackrow-wrap">
+            {% include "_network.html" %}
+            {{ page_actions('controller', 'controller-network') }}
+            </div>
+          {% endif %}
+          {% if ws_mon %}
+          <div class="stackrow-wrap">
+            {% with mon = ws_mon, certs = ws_certs, modes = ws_modes, loopback = ws_loopback %}
+              {% include "_webserver.html" %}
+            {% endwith %}
+          {{ page_actions('controller', 'webserver-row') }}
+          </div>
+          {% endif %}
+          {# Managed Firewall — sibling of Webserver, INSIDE the LHPC controller row #}
+          {% if firewall_view %}
+          <div class="stackrow-wrap">
+          {% include "_firewall.html" %}
+          {{ page_actions('controller', 'firewall-row') }}
+          </div>
+          {% endif %}
+          {# Position (GPS) — sibling of Webserver/Firewall in the controller row #}
+          {% if gps_global %}
+          <div class="stackrow-wrap">
+          {% include "_gps.html" %}
+          {{ page_actions('controller', 'gps-row') }}
+          </div>
+          {% endif %}
+
+        </div>
+      </details>

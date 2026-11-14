@@ -19,11 +19,15 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import logging as _logging
+import re as _re
 import secrets as _secrets
 import sys
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from flask import (
     Flask,
@@ -40,7 +44,9 @@ from flask import (
     url_for,
 )
 from flask import g as _g
+from markupsafe import Markup
 
+from lhpc.adapters.web import submenus as _submenus
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
 from lhpc.core import auto_install_form, web_client
@@ -238,6 +244,53 @@ def _row_inline(sid: str, jobs, restored_open, args) -> bool:
     named = args.get("open") or args.get("cfg") or args.get("dp") or args.get("inst")
     return bool(jobs or (sid in restored_open and (not named or named == sid))
                 or sid in (args.get("open"), args.get("cfg"), args.get("dp"), args.get("inst")))
+
+
+_DETAILS_TAG = _re.compile(r"<details\b[^>]*>")
+
+
+def _open_first_details(html: str) -> str:
+    """U4: a level on its own page renders opened (` open` on its first <details> tag, if not there)."""
+    m = _DETAILS_TAG.search(html)
+    if m is None or _re.search(r"\sopen(?=[\s>])", m.group(0)):
+        return html
+    return html[:m.start()] + m.group(0)[:-1] + " open>" + html[m.end():]
+
+
+class _FormScan(HTMLParser):
+    """The POST forms of a rendered page: (action, {hidden field: [values]})."""
+
+    def __init__(self):
+        super().__init__()
+        self.forms: list = []
+        self._open = False
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "form" and (a.get("method") or "").lower() == "post":
+            self.forms.append((a.get("action") or "", {}))
+            self._open = True
+        elif tag == "input" and self._open and (a.get("type") or "").lower() == "hidden" and a.get("name"):
+            self.forms[-1][1].setdefault(a["name"], []).append(a.get("value") or "")
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._open = False
+
+
+def _renders_form(html: str, path: str, args, form) -> bool:
+    """U4 (E3-1): whether `html` renders the form this POST came from: one posting to `path` (with
+    the POST's own query) whose every hidden field, but the CSRF token and `return`, has the posted
+    values. The fields a person fills in are not compared."""
+    scan = _FormScan()
+    scan.feed(html)
+    for action, hidden in scan.forms:
+        act = urlsplit(action)
+        if act.path != path or parse_qs(act.query) != {k: args.getlist(k) for k in args}:
+            continue
+        if all(form.getlist(k) == v for k, v in hidden.items() if k not in ("_csrf", "return")):
+            return True
+    return False
 
 
 def _row_needs_body(inline: bool, only_sid) -> bool:
@@ -986,7 +1039,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     None)
 
     def _stack_groups(only_sid=None, *, fw_status=None, listeners=None,
-                      restored_open=frozenset()):
+                      restored_open=frozenset(), bodies=False):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail: component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
@@ -995,7 +1048,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         lazy-body partial) — the holistic snapshot/conflicts are still computed, but the ~14 per-stack
         service calls run for just that stack instead of all of them. On the whole page those calls
         run only for the rows rendered inline (`_row_inline`); a closed row carries what its summary
-        and row actions show, and its body comes from the lazy route when it is opened."""
+        and row actions show, and its body comes from the lazy route when it is opened. `bodies` builds
+        every row's body fields (the U4 tree page lists each row's submenus)."""
         from lhpc.core import radio_start as _radio_start
         _live_radios = _radio_start.view_radios(service._paths)        # W3: one read of the enabled radios per render
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
@@ -1119,7 +1173,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                           if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
                 "inline": inline,
             }
-            if _row_needs_body(inline, only_sid):
+            if _row_needs_body(inline or bodies, only_sid):
                 g.update({
                     "hardware_block": service.hardware_block(stack.id),  # "" unless no hardware configured
                     "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
@@ -1232,13 +1286,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             rid = request.args.get("radio")
             if rid == "":
                 abort(make_response("?radio= is empty: name a radio (?radio=rN)", 400))
-            row = next((r for r in _radios_mod.load(service._paths).radios if r.id == rid), None) if rid else None
-            request.environ["lhpc.page_radio"] = ((rid, row.band, "") if row else
-                                                  ("", "", f"{rid} is not a radio of the hardware list") if rid else
-                                                  ("", "", ""))
+            request.environ["lhpc.page_radio"] = _radio_of(rid)
         return request.environ["lhpc.page_radio"]
 
-    def _stacks_context(*, only_sid=None):
+    def _radio_of(rid) -> tuple:
+        """(rid, band, why) of a page radio `rid` (see `_page_radio`)."""
+        row = next((r for r in _radios_mod.load(service._paths).radios if r.id == rid), None) if rid else None
+        return ((rid, row.band, "") if row else
+                ("", "", f"{rid} is not a radio of the hardware list") if rid else ("", "", ""))
+
+    def _stacks_context(*, only_sid=None, bodies=False):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
         with a missing var.
@@ -1250,8 +1307,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # (CLS). One general mechanism: any top-level row id (a stack sid, or "controller-row").
         from urllib.parse import unquote as _unquote
         restored_open = {s for s in _unquote(request.cookies.get("lhpc_open", "")).split(",") if s}
-        groups, snapshot = _stack_groups(only_sid, fw_status=fw_status,
-                                         listeners=listeners, restored_open=restored_open)
+        groups, snapshot = _stack_groups(only_sid, fw_status=fw_status, listeners=listeners,
+                                         restored_open=restored_open, bodies=bodies)
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
@@ -1305,10 +1362,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         }
         return ctx, groups, snapshot
 
-    def _render_stacks(**over):
-        # The Apps page — also the home of the controller's embedded Update UI. All controller data is
-        # cached-only — no live git/network/identity on a GET.
-        ctx, _groups, _snapshot = _stacks_context()
+    def _controller_extras(ctx):
+        """The controller row's own two views, added to a Stacks page context `ctx`."""
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
         # expanding any row; the per-stack Settings carry only their own `use_gps` switch.
@@ -1322,6 +1377,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             ctx.setdefault("network_view", _nv if _nv.get("supported") else None)
         except (OSError, ValueError, AttributeError, KeyError):
             ctx.setdefault("network_view", None)        # never break the page over a view
+
+    def _render_stacks(**over):
+        # The Apps page — also the home of the controller's embedded Update UI. All controller data is
+        # cached-only — no live git/network/identity on a GET.
+        ctx, _groups, _snapshot = _stacks_context()
+        _controller_extras(ctx)
         ctx.update(over)
         new_passphrase = _passphrases.take(request.args.get("pw", "")) if request.args.get("pw") else None
         resp = make_response(render_template("stacks.html", new_passphrase=new_passphrase, **ctx))
@@ -1341,6 +1402,162 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if g is None:
             abort(404)
         return render_template("_stack_body.html", g=g, **ctx)
+
+    # ---- U4 (W423): every Stacks submenu level on its own page, and a tree of them all -------------
+    # The descriptors (lhpc/adapters/web/submenus.py) name each level's id, parent, label and the ONE
+    # partial the Stacks page includes for it; a page renders that partial with the same context.
+
+    def _owner_menus(owner: str):
+        """(Stacks context, descriptor list) of one owner: "controller" or a stack id; (None, []) if
+        unknown. A stack builds only its own row (as its lazy body does); the controller none. Once
+        per request and page radio."""
+        memo = request.environ.setdefault("lhpc.owner_menus", {})
+        key = (owner, _page_radio())
+        if key not in memo:
+            memo[key] = _build_owner_menus(owner)
+        return memo[key]
+
+    def _build_owner_menus(owner: str):
+        if owner == _submenus.CONTROLLER:
+            ctx, _groups, _snapshot = _stacks_context(only_sid=_submenus.CONTROLLER)   # no stack has that id
+            _controller_extras(ctx)
+            return ctx, _submenus.controller_menus(ctx)
+        if service.stack(owner) is None:
+            return None, []
+        ctx, groups, _snapshot = _stacks_context(only_sid=owner)
+        g = next((x for x in groups if x["stack"].id == owner), None)
+        return (ctx, _submenus.stack_menus(g)) if g is not None else (None, [])
+
+    def _menu_url(owner: str, mid: str) -> str:
+        """A level's page URL; it keeps the page's radio (a radio switch stays on the page)."""
+        return url_for("menu_page", owner=owner, mid=mid, radio=request.args.get("radio") or None)
+
+    def _menu_return_field():
+        """The hidden `return` field of a form shown on a level's page, or on a confirm page a POST
+        from one renders ("" elsewhere, e.g. on the Stacks page)."""
+        here = request.environ.get("lhpc.menu_return", "")
+        if not here and request.method == "POST":
+            here = (_menu_page_of(request.form.get("return", "")) or ("", "", "", ""))[3]
+        return Markup('<input type="hidden" name="return" value="%s">') % here if here else ""
+
+    app.jinja_env.globals["menu_return_field"] = _menu_return_field
+
+    @app.get("/stacks/<owner>/menu/<mid>")
+    def menu_page(owner: str, mid: str):
+        """One level opened on its own page: the breadcrumb, a bar back to the Stacks page, then the
+        level's own partial (the same markup as on the Stacks page), opened. Unknown owner, unknown
+        id or an id that is not this owner's (e.g. another stack's component) -> 404."""
+        _page_radio()                                                      # an empty ?radio= is a 400
+        ctx, menus = _owner_menus(owner)
+        path = _submenus.chain(menus, mid)
+        if not path:
+            abort(404)
+        here = path[-1]
+        request.environ["lhpc.menu_return"] = _menu_url(owner, mid)
+        body = _level_html(owner, here, ctx)
+        if owner == _submenus.CONTROLLER:
+            show, logs = url_for("stacks_overview") + "#" + mid, url_for("controller_logs")
+        else:
+            g = path[0].vars["g"]
+            show = url_for("stacks_overview", open=owner, radio=request.args.get("radio") or None) + "#" + mid
+            logs = url_for("logs_view", target=g["main"][0].id) if g["main"] else ""
+        # `body` is the output of Jinja's own autoescaped render of the level's partial, not request text
+        return render_template("menu_page.html", body=Markup(_open_first_details(body)), here=here,  # noqa: S704
+                               crumbs=[(m.label, _menu_url(owner, m.id)) for m in path],
+                               show_url=show, logs_url=logs, **ctx)
+
+    @app.get("/stacks/menus")
+    def menu_tree():
+        """Every Stacks level as one tree (native <details>, no JS); each entry opens its page."""
+        ctx, groups, _snapshot = _stacks_context(bodies=True)
+        _controller_extras(ctx)
+        owners = [(_submenus.CONTROLLER, _submenus.controller_menus(ctx))]
+        owners += [(g["stack"].id, _submenus.stack_menus(g)) for g in groups]
+        return render_template("menu_tree.html", owners=[(o, _submenus.children(m)) for o, m in owners], **ctx)
+
+    def _level_html(owner: str, level, ctx: dict) -> str:
+        """One level's partial rendered as on the Stacks page (its page shows this, opened)."""
+        return render_template(level.template, **{**ctx, **level.vars, "menu_owner": owner, "menu_id": level.id})
+
+    @app.after_request
+    def _menu_return(response):
+        """R3-B1, G2-B4/B5, ERRATA-UI-v5-1 (1)-(3) + -3 E3-1: a POST sent from a level's page returns to
+        the page of the block that holds its form, or of that block's nearest ancestor on the way up
+        from the sent `return` page; same owner and radio as the action. Only when the view
+        redirects to the Stacks page; that redirect (its legacy anchor included) is the fallback."""
+        ret = request.form.get("return", "") if request.method == "POST" else ""
+        if not ret or response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        loc = urlsplit(response.headers.get("Location", ""))
+        if loc.path != url_for("stacks_overview") or (loc.netloc and loc.netloc != request.host):
+            return response
+        try:
+            target = _menu_return_target(ret, parse_qs(loc.query), loc.fragment)
+        except Exception:                                                  # never break the POST's answer
+            target = ""
+        if target:
+            response.headers["Location"] = target
+        return response
+
+    @contextmanager
+    def _as_page_radio(radio: str):
+        """Build and render as the page of `radio` would (a POST has no page radio of its own: the
+        levels of a per-radio Settings exist on that radio's page only)."""
+        saved = request.environ.get("lhpc.page_radio")
+        request.environ["lhpc.page_radio"] = _radio_of(radio)
+        try:
+            yield
+        finally:
+            if saved is None:
+                request.environ.pop("lhpc.page_radio", None)
+            else:
+                request.environ["lhpc.page_radio"] = saved
+
+    def _menu_page_of(ret: str):
+        """(owner, id, radio, URL) of the level page `ret` names, or None: an internal path only (no
+        scheme, host, `//` or backslash, the rule of the Detect `back`), `/stacks/<owner>/menu/<id>`
+        of an id that owner has, and at most a `radio` query."""
+        parts = urlsplit(ret)
+        if parts.scheme or parts.netloc or parts.fragment or "//" in ret or "\\" in ret:
+            return None
+        segs = parts.path.split("/")
+        if len(segs) != 5 or segs[:2] != ["", "stacks"] or segs[3] != "menu":
+            return None
+        query = parse_qs(parts.query, keep_blank_values=True)
+        if set(query) - {"radio"} or any(len(v) != 1 or not v[0] for v in query.values()):
+            return None
+        owner, mid, radio = unquote(segs[2]), unquote(segs[4]), query.get("radio", [""])[0]
+        with _as_page_radio(radio):
+            if not _submenus.chain(_owner_menus(owner)[1], mid):
+                return None
+        return owner, mid, radio, url_for("menu_page", owner=owner, mid=mid, radio=radio or None)
+
+    def _menu_return_target(ret: str, action_query: dict, dest: str) -> str:
+        """The URL (with its #id) of the level page this POST returns to, else "". The action's owner
+        is the stack its redirect opens (`open`/`cfg`/`dp`/`inst`), else the owner one of whose
+        levels its redirect's #anchor `dest` is; the page's owner must be it. Its radio, when it
+        names one, is the page's (a page without a radio gets it: it showed that radio's
+        instance). The page returned to is the first of `ret`'s level and its ancestors that
+        renders the posted form: the block that holds the form, or a level containing it."""
+        page = _menu_page_of(ret)
+        if page is None:
+            return ""
+        owner, mid, radio, _url = page
+        named = [v[0] for k in ("open", "cfg", "dp", "inst") for v in [action_query.get(k)] if v]
+        stack_owner = next((n for n in named if service.stack(n) is not None), None)
+        if stack_owner is not None and stack_owner != owner:
+            return ""
+        want = (action_query.get("radio") or [""])[0]
+        if want and radio and want != radio:
+            return ""                                                      # another radio's page
+        with _as_page_radio(radio):
+            ctx, menus = _owner_menus(owner)
+            if stack_owner is None and not _submenus.chain(menus, dest):
+                return ""                                                  # not this owner's action
+            for level in reversed(_submenus.chain(menus, mid)):
+                if _renders_form(_level_html(owner, level, ctx), request.path, request.args, request.form):
+                    return url_for("menu_page", owner=owner, mid=level.id, radio=radio or want or None) + "#" + level.id
+        return ""
 
     @app.get("/stacks")
     def stacks_overview():

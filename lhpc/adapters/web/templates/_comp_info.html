@@ -1,0 +1,4 @@
+<details class="advcfg" id="comp-{{ comp.id }}--info">
+                    <summary>Info</summary>
+                    <div class="body">{% with comp = comp, st = st, conflicts = g.conflicts, card_id = 'comp-' ~ comp.id ~ '--info' %}{% include "_component_card.html" %}{% endwith %}</div>
+                  </details>

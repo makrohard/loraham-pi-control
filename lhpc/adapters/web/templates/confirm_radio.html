@@ -16,7 +16,7 @@
       {% endif %}
       {% if plan.ok %}
         <form method="post" action="{{ url_for('radio_set', rid=rid) }}">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <input type="hidden" name="key" value="{{ key }}">
           <input type="hidden" name="value" value="{{ value }}">
           <input type="hidden" name="confirmed" value="yes">

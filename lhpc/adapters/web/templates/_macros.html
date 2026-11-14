@@ -1,3 +1,4 @@
+{% from "_menu.html" import page_link %}
 {# One severity class per level, for every banner (persistent notes and action results alike):
    green = success, yellow = warning, red = failure, grey = neutral/info. The FIRST word is the level. #}
 {% macro depnote_classes(level) -%}
@@ -45,7 +46,7 @@
 
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">
-  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
   <input type="hidden" name="op" value="{{ op }}">
   <input type="hidden" name="target" value="{{ target }}">
   <button type="submit">{{ label }}</button>
@@ -57,7 +58,7 @@
 {# `pick`: the page radio to preselect; "?" (a ?radio= the list does not have): no radio until the operator picks one #}
 {% macro instance_btn(op, target, label, run_on=(), rid="", pick="") %}
 <form method="post" action="{{ url_for('action') }}" class="act">
-  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
   <input type="hidden" name="op" value="{{ op }}">
   {% if rid %}<input type="hidden" name="target" value="{{ target }}@{{ rid }}">
   {% else %}<select name="target" aria-label="{{ label }} {{ target }} on radio" required>{% if pick == "?" %}<option value="" selected disabled>radio?</option>{% endif %}{% for r in run_on %}<option value="{{ target }}@{{ r }}"{% if r == pick %} selected{% endif %}>{{ target }}@{{ r }}</option>{% endfor %}</select>{% endif %}
@@ -69,7 +70,7 @@
    /action op: it mutates nothing but the cached status marker, and needs no confirm stage. #}
 {% macro source_check_btn(target) %}
 <form method="post" action="{{ url_for('source_check', target=target) }}" class="act">
-  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
   <button type="submit">Check for updates</button>
 </form>
 {% endmacro %}
@@ -110,12 +111,12 @@
        when upstream is genuinely ahead of the installed version. #}
     {% if upstream %}
       <form method="post" action="{{ url_for('graywolf_upstream_check', target=stack_id) }}" class="act">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <button type="submit">Check upstream</button>
       </form>
       {% if upstream.ahead %}
       <form method="post" action="{{ url_for('graywolf_upstream_update', target=stack_id) }}" class="act">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <button type="submit" class="warnbtn">Update to {{ upstream.latest }}</button>
       </form>
       {% endif %}
@@ -194,6 +195,7 @@
   {% if g.pin_override %}<a class="update-link" href="{{ url_for('self_update_apply') }}"
     title="installed over the pin check — it clears when the pins match">Update LHPC</a>{% endif %}
   {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}" aria-label="{{ g.main[0].id }} logs">logs</a>{% endif %}
+  {{ page_link(g.stack.id, 'stackrow-' ~ g.stack.id) }}
 </div>
 {% endmacro %}
 

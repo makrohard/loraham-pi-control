@@ -1,0 +1,44 @@
+{% from "_macros.html" import cmdbox -%}
+<details class="advcfg" id="stack-install-{{ g.stack.id }}--system-dependencies">
+        <summary>System dependencies</summary>
+        <div class="body">
+          {% if g.system_deps %}
+            <p class="muted">Commands shown are <strong>not executed by LHPC</strong> — run them yourself.</p>
+            <ul class="clean">
+              {% for d in g.system_deps %}
+                <li>
+                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'satisfied' if d.satisfied else 'not found' }}</span>
+                  {{ d.what }}
+                  {% if not d.satisfied and d.install %}
+                    <div class="muted">{{ 'grant it:' if d.runtime else 'install it:' }}</div>{{ cmdbox('dep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install) }}
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="muted">None required for this stack.</p>
+          {% endif %}
+          {% if g.deps_report and g.deps_report.build %}
+            <h3>Build dependencies</h3>
+            <ul class="clean">
+              {% for d in g.deps_report.build %}
+                <li>
+                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'installed' if d.satisfied else 'missing' }}</span>
+                  {{ d.label }} <span class="muted">(needed by {{ d.component }})</span>
+                  {% if not d.satisfied and d.install_cmd %}
+                    <div class="muted">{{ d.note }}:</div>{{ cmdbox('bdep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install_cmd) }}
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if g.deps_report and g.deps_report.runtime %}
+            <h3>Runtime ordering</h3>
+            <ul class="clean">
+              {% for d in g.deps_report.runtime %}
+                <li><span class="pill">{{ d.component }}</span> {{ d.label }} <span class="muted">({{ d.detail }})</span></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+      </details>

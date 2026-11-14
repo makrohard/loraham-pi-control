@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{# U4 (W423): every Stacks submenu level as one tree (native <details>, no JS); each entry opens
+   its own page. `owners`: (owner, {parent id: [levels]}) for the controller row and each stack. #}
+{% block title %}All menus — LoRaHAM Pi Control{% endblock %}
+{% macro branch(owner, kids, pid) %}
+  <ul class="navtree">
+    {% for m in kids.get(pid, []) %}
+      <li>{% if kids.get(m.id) %}<details><summary>{{ m.label }}</summary>
+        <p class="tree-self"><a href="{{ url_for('menu_page', owner=owner, mid=m.id) }}">{{ m.label }} page ›</a></p>
+        {{ branch(owner, kids, m.id) }}</details>
+      {%- else %}<a href="{{ url_for('menu_page', owner=owner, mid=m.id) }}">{{ m.label }}</a>{% endif %}</li>
+    {% endfor %}
+  </ul>
+{% endmacro %}
+{% block content %}
+  <nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
+    <a href="{{ url_for('stacks_overview') }}">Apps</a> › <span class="here">All menus</span></nav>
+  <div class="card"><header><h2>All menus</h2></header>
+    <div class="body">
+      {% for owner, kids in owners %}{{ branch(owner, kids, None) }}{% endfor %}
+    </div></div>
+{% endblock %}

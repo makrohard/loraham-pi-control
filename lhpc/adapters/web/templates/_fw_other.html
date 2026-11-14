@@ -1,0 +1,9 @@
+{% from "_macros.html" import cmdbox -%}
+<details class="fwextra" id="firewall-apply--other-commands">
+            <summary>Other commands (optional — not part of setup)</summary>
+            <p class="muted">Re-run the live verification now (it also runs automatically on a timer):</p>
+            {{ cmdbox('fw-check-cmd', firewall_view.check_cmd) }}
+            <p class="depnote depnote-warn">Remove the managed firewall. This UNDOES the apply above and
+              returns to “setup required” — do not run it as part of setup.</p>
+            {{ cmdbox('fw-reset-cmd', firewall_view.reset_cmd) }}
+          </details>

@@ -271,6 +271,10 @@ exposure: [webserver.md](webserver.md).
   Test / Update / Uninstall / Clean. Interactive (TUI) apps show the command to run yourself
   ([adding-a-stack](adding-a-stack.md#run--readiness)). **Auto-install** installs (or updates),
   builds and optionally tests every stack in one run.
+  Every row and every submenu in it, at any depth, also opens on its own page: **page ›** at the
+  right of its header (after **logs**), same browser tab, with the breadcrumb on top
+  (`/stacks/<stack or controller>/menu/<id>`). A form sent there comes back to that page.
+  **All menus (tree) ›** (`/stacks/menus`) lists every level.
 - **Settings** (per stack, on the Apps page) — where a stack's own configuration changes: run
   params, config-file params and, for daemon clients, the daemon radio parameters. The console also
   changes it on the operator call sign, Hardware (incl. high power) and GPS pages and a stack's mode

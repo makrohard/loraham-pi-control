@@ -1,8 +1,9 @@
+{% from "_menu.html" import page_actions, page_link -%}
 {# Controller-owned Webserver console, rendered INLINE in the /stacks controller row. Same shape as the
    per-stack panels: status pills in the summary, a Settings section (one "Apply" that saves + validates +
    reloads; remote exposure is just bind=0.0.0.0 + CIDRs + the typed confirmation), a Monitor section, and
    the controller-only Certificates section. Requires: mon, modes, certs, loopback. GET is read-only. #}
-{% from "_macros.html" import depnote_classes, webserver_pills, cmdbox, panel_banner %}
+{% from "_macros.html" import webserver_pills %}
 <details class="advcfg ws-comp" id="webserver-row">
   <summary>Webserver (HTTPS / mTLS)
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
@@ -18,278 +19,28 @@
 
   {# ===== LHPC WebGUI (the console's own settings) ===== #}
   <div class="ws-sub-wrap">
-  <details class="advcfg" open>
-    <summary>LHPC WebGUI</summary>
-    <section class="cfgsec">
-      {% if mon.desired.scheme == 'http' %}
-        <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
-          presented during the TLS handshake, so <code>http</code> cannot authenticate anyone — the
-          access mode must be <code>no-auth</code>.</p>
-      {% endif %}
-      {# Single "Apply": saves ALL fields then validates + reloads. remote_exposed follows `bind`
-         (0.0.0.0 → remote); a remote/public/no-auth/http config needs the typed confirmation below. #}
-      <form method="post" action="{{ url_for('webserver_configure') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <table class="paramgrid dptab">
-          <tr><th>Bind</th>
-            <td><input name="bind" value="{{ mon.desired.bind }}" autocomplete="off"></td>
-            <td class="dphelp muted">127.0.0.1 (loopback) or 0.0.0.0 (remote/LAN)</td></tr>
-          <tr><th>Port</th>
-            <td><input name="port" type="number" min="1" max="65535" value="{{ mon.desired.port }}" autocomplete="off"></td>
-            <td class="dphelp muted">HTTPS port (default 8443)</td></tr>
-          <tr><th>Scheme</th>
-            <td><select name="scheme" class="schemesel" data-authsel="ws-authsel" aria-label="Scheme">
-              <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
-              <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
-            </select></td>
-            <td class="dphelp muted">http disables client-certificate auth</td></tr>
-          <tr><th>Access mode</th>
-            <td><select name="access_mode" id="ws-authsel" aria-label="Access mode">
-              {% for m in modes %}
-                <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
-                  {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
-              {% endfor %}
-            </select></td>
-            <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
-          <tr><th>Allowed CIDRs</th>
-            <td><input name="cidrs" value="{{ mon.desired.allowed_cidrs|join(',') }}" placeholder="192.168.0.0/24" autocomplete="off"></td>
-            <td class="dphelp muted">Required when bind is 0.0.0.0 (remote)</td></tr>
-          <tr><th>DNS SANs</th>
-            <td><input name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}" autocomplete="off"></td>
-            <td class="dphelp muted">Hostnames for the server certificate</td></tr>
-          <tr><th>IP SANs</th>
-            <td><input name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}" autocomplete="off"></td>
-            <td class="dphelp muted">LAN IPs for the server certificate (never 0.0.0.0)</td></tr>
-          <tr><th>Confirm</th>
-            <td><input name="confirm_phrase" autocomplete="off"></td>
-            <td class="dphelp muted">Remote (bind 0.0.0.0) needs <code>enable-remote</code> — or
-              <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth, or http remote</td></tr>
-          <tr><th>Accept unverified clock</th>
-            <td><input type="checkbox" name="accept_unverified_clock" value="1"></td>
-            <td class="dphelp muted">Only if this box's clock is not synchronised. Exposure reissues
-              the server certificate, which would be dated from it. Separate from the confirmation
-              above — that one confirms exposure, this one accepts the clock</td></tr>
-        </table>
-        <button type="submit">Apply</button>
-      </form>
-      {# Reset — distinct safety function (loopback defaults + disable every proxy + prove cessation). #}
-      <form method="post" action="{{ url_for('webserver_reset') }}" class="cfgreset">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <input name="confirm_phrase" placeholder="type 'reset'" autocomplete="off">
-        <button type="submit">Reset to defaults</button>
-      </form>
-      <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off; it
-        never deletes CAs, certificates, CRL, revocation history, exports, or the session secret.</p>
-    </section>
-  </details>
+  {% include "_ws_console.html" %}
   {# logs link OUTSIDE the summary (a11y) but overlaid on the header — identical to the main stack rows. #}
-  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a>{{ page_link('controller', 'webserver-row--lhpc-webgui') }}</div>
   </div>
 
   {# ===== Stacks WebGUIs: ONE common policy for every eligible stack web-UI proxy.
      Target-policy form — no per-stack ports here (each stack keeps its own; a missing one
      gets the same suggested default its per-stack panel offers). #}
-  {% set wsg_results = panel_results('ws-stackwebs') %}
-  <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
-    <summary>Stacks WebGUIs</summary>
-    {{ panel_banner(wsg_results) }}
-    <section class="cfgsec">
-      <p class="muted">Applies the selected policy to <strong>every</strong> Stack WebGUI below.
-        Ports remain individual per-stack settings: existing ports are kept, a stack without one
-        gets its normal suggested default. Each stack's own Webserver panel remains available for
-        individual exceptions.</p>
-      {% if ws_stackwebs.stacks %}
-        <p class="muted">Will affect:
-          {% for r in ws_stackwebs.stacks %}<code>{{ r.sid }}</code> {{ r.label }}
-            ({% if r.keeps %}keeps port {{ r.port }}{% else %}gets port {{ r.port }}{% endif %}){{ ", " if not loop.last }}{% endfor %}</p>
-        <form method="post" action="{{ url_for('stack_webs_configure') }}">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <table class="paramgrid dptab">
-            <tr><th>Access</th>
-              <td><select name="mode" aria-label="Access">
-                {# Preselect what the pages already share (the per-stack panel does the same).
-                   Where they differ there is no honest default, so the placeholder below stays
-                   selected and the save is refused until Access is chosen — this form rewrites
-                   every page at once, and `local` as a silent default un-exposes them all. #}
-                {% if not ws_stackwebs.current.mode %}<option value="" selected>— choose —</option>{% endif %}
-                {% for m in ws_stackwebs.modes %}
-                  <option value="{{ m }}"{% if ws_stackwebs.current.mode == m %} selected{% endif %}>{% if m == 'local' %}local only (loopback)
-                    {% elif m == 'lan' %}LAN (allowed CIDRs){% else %}public (0.0.0.0/0){% endif %}</option>
-                {% endfor %}
-              </select></td>
-              <td class="dphelp muted">Who may reach the proxies</td></tr>
-            <tr><th>Scheme</th>
-              <td><select name="scheme" class="schemesel" data-authsel="wsg-authsel" aria-label="Scheme">
-                {% if not ws_stackwebs.current.scheme %}<option value="" selected>— choose —</option>{% endif %}
-                {% for sch in ws_stackwebs.schemes %}<option value="{{ sch }}"{% if ws_stackwebs.current.scheme == sch %} selected{% endif %}>{{ sch }}</option>{% endfor %}
-              </select></td>
-              <td class="dphelp muted">https keeps client-certificate auth possible</td></tr>
-            <tr><th>Access mode</th>
-              <td><select name="access_mode" id="wsg-authsel" aria-label="Access mode">
-                {% if not ws_stackwebs.current.access_mode %}<option value="" selected>— choose —</option>{% endif %}
-                {% for m in ws_stackwebs.access_modes %}<option value="{{ m }}"{% if ws_stackwebs.current.access_mode == m %} selected{% endif %}>{{ m }}</option>{% endfor %}
-              </select></td>
-              <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
-            <tr><th>Allowed CIDRs</th>
-              <td><input name="cidrs" value="{{ ws_stackwebs.current.cidrs }}" placeholder="192.168.0.0/24" autocomplete="off"></td>
-              <td class="dphelp muted">Required for LAN/public</td></tr>
-            <tr><th>Confirm</th>
-              <td><input name="confirm_phrase" autocomplete="off"></td>
-              <td class="dphelp muted">Remote needs <code>enable-remote</code> — or
-                <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth remote,
-                or an unencrypted <code>http</code> remote listener</td></tr>
-          </table>
-          <button type="submit">Apply to all Stack WebGUIs</button>
-        </form>
-      {% else %}
-        <p class="muted">No installed stack currently exposes a web UI.</p>
-      {% endif %}
-    </section>
-  </details>
+  <div class="stackrow-wrap">
+  {% include "_ws_stackwebs.html" %}
+  {{ page_actions('controller', 'ws-stackwebs') }}
+  </div>
 
   {# ===== Monitor ===== #}
   <div class="ws-sub-wrap">
-  <details class="advcfg">
-    <summary>Monitor</summary>
-    <section class="cfgsec">
-      {% for w in mon.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
-      <ul class="kv">
-        <li>Local IP address: <code>{{ mon.local_ip or 'unknown' }}</code>
-          {% if mon.local_ip %}<span class="muted">→ https://{{ mon.local_ip }}:{{ mon.desired.port }}/ (remote)</span>{% endif %}</li>
-        <li>Bind (desired): <code>{{ mon.desired.bind }}:{{ mon.desired.port }}</code></li>
-        <li>Access mode: <code>{{ mon.desired.access_mode }}</code></li>
-        <li>Remote exposure (desired): <code>{{ mon.desired.remote_exposed }}</code></li>
-        <li>Allowed CIDRs: <code>{{ mon.desired.allowed_cidrs|join(', ') or '(none)' }}</code></li>
-        <li>Effective remote listener (proven):
-          <code>{{ mon.effective.remote_listener if mon.effective else 'unknown' }}</code></li>
-        <li>Last verified: <code>{{ mon.last_verified or 'never' }}</code></li>
-        <li>PKI:
-          server-CA {{ 'present' if mon.pki.server_ca.present else 'absent' }} ·
-          client-CA {{ 'present' if mon.pki.client_ca.present else 'absent' }} ·
-          server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
-          CRL {{ 'present' if mon.pki.crl_present else 'absent' }}{% if mon.pki.provisional %} ·
-          <strong>provisional</strong> (created without a verified clock){% endif %}</li>
-        {% if mon.pki.index_problem %}
-        <li><strong>Client-certificate list: repair needed</strong> (issuing and revoking are refused;
-          the CRL is renewed as it is): <code>{{ mon.pki.index_problem }}</code></li>
-        {% endif %}
-        {% if mon.pki.server_cert.expiry_text %}
-        <li>Server certificate: <code>{{ mon.pki.server_cert.expiry_text }}</code></li>
-        {% endif %}
-      </ul>
-      <h3>System dependencies</h3>
-      <ul class="kv sysdeps">
-        {% for d in mon.system_deps %}
-        <li>{{ d.name }}: <code>{{ d.status }}</code> — {{ d.purpose }}
-          {% if d.status != 'present' %}· install: <code>{{ d.install }}</code>{% endif %}</li>
-        {% endfor %}
-      </ul>
-      <form method="post" action="{{ url_for('webserver_verify') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <button type="submit">Verify now</button>
-      </form>
-    </section>
-  </details>
-  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  {% include "_ws_monitor.html" %}
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a>{{ page_link('controller', 'webserver-row--monitor') }}</div>
   </div>
 
   {# ===== Certificates (controller-only; unchanged) ===== #}
   <div class="ws-sub-wrap">
-  <details class="advcfg">
-    <summary>Certificates</summary>
-    <section class="cfgsec">
-      <form method="post" action="{{ url_for('webserver_init') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label for="ws-init-confirm">Initialize PKI</label>
-          <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
-          <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
-          <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock); such a server certificate is over the Apple 825-day cap while it is provisional.</p>
-        <button type="submit">Initialize / recreate PKI</button>
-      </form>
-      <form method="post" action="{{ url_for('webserver_tls_renew') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <p class="setting"><label for="ws-tls-clock">Accept unverified clock</label>
-            <input id="ws-tls-clock" type="checkbox" name="accept_unverified_clock" value="1">
-            <span class="muted">Only if this box's clock is not synchronised. Certificates will be dated from it. Not the same as confirming a destructive change.</span></p>
-        <button type="submit">Renew server certificate</button>
-      </form>
-      {% if ws_fetch and ws_fetch.ca and mon.pki.server_ca.present %}
-        {# Fetch the SERVER TRUST to a Linux PC — the address is the one THIS session reached
-           the console at (10.42.0.1 in AP mode), so the command works as pasted. #}
-        <p class="muted">Fetch the server trust (CA) to your PC, then import it as a trusted
-          certificate:</p>
-        {{ cmdbox('ws-fetch-ca', ws_fetch.ca) }}
-      {% endif %}
-      {% if mon.pki.server_ca.present %}
-        {# Public material, so a plain download is safe — and it is the path a PHONE can use. #}
-        <p class="muted"><a href="{{ url_for('webserver_ca_download') }}" download>Download
-          ca.crt</a> — for browsers and phones (public certificate, contains no key).</p>
-      {% endif %}
-      <form method="post" action="{{ url_for('webserver_cert') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <input type="hidden" name="op" value="issue">
-        <p class="setting"><label for="ws-issue-label">Issue client cert</label>
-          <input id="ws-issue-label" name="label" placeholder="laptop">
-          <span class="muted">Device label; prints a one-time bundle passphrase</span></p>
-        <p class="setting"><label for="ws-issue-clock">Accept unverified clock</label>
-          <input id="ws-issue-clock" type="checkbox" name="accept_unverified_clock" value="1">
-          <span class="muted">Only if this box's clock is not synchronised. The certificate will be
-            dated from it. Not the same as confirming a destructive change.</span></p>
-        <button type="submit">Issue</button>
-      </form>
-      {% if not loopback %}
-        <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
-          only from a loopback session. You may still manage existing certificates.</p>
-      {% endif %}
-      {% if ws_fetch and not ws_fetch.p12 and certs %}
-        {# An issued cert with no STORED export rendered nothing here, and
-           "nothing" reads as broken. Say why, and what creates a fetchable bundle. #}
-        <p class="muted">No stored <code>.p12</code> export to fetch — a bundle exists only until
-          it is downloaded/discarded. <em>Issue</em> a new certificate to get a fetch command
-          here; an existing label is rotated from the CLI (<code>lhpc webserver cert reissue</code>).</p>
-      {% endif %}
-      {% if ws_fetch and ws_fetch.p12 %}
-        {# Fetch an issued USER CERT (.p12) to a Linux PC over ssh — the sanctioned remote path
-           (the browser download above stays loopback-only). Import asks for the one-time
-           passphrase printed when the certificate was issued. #}
-        <p class="muted">Fetch an issued client certificate (.p12) to your PC — the import asks
-          for the one-time passphrase from the issue step:</p>
-        {% for label, cmd in ws_fetch.p12 | dictsort %}
-          {{ cmdbox('ws-fetch-p12-' ~ label, cmd) }}
-        {% endfor %}
-      {% endif %}
-      <table class="certs">
-        <tr><th>Label</th><th>State</th><th>Serial</th><th>Expires</th><th>Actions</th></tr>
-        {% for c in certs %}
-        <tr>
-          <td>{{ c.label }}</td><td>{{ c.state }}</td>
-          <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}{% if c.expiry_mark %} <strong>{{ c.expiry_mark }}</strong>{% endif %}</td>
-          <td>
-            {% if c.state == 'active' %}
-              <form method="post" action="{{ url_for('webserver_cert') }}" class="inline">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="op" value="revoke">
-                <input type="hidden" name="label" value="{{ c.label }}">
-                <input name="confirm_phrase" placeholder="type '{{ c.label }}'" size="10" autocomplete="off">
-                {# Revocation rebuilds the CRL from this clock, so it is gated like issuance. The
-                   typed label confirms the DESTRUCTION; this confirms the CLOCK. #}
-                <label class="muted" title="Only if this box's clock is not synchronised — the CRL
-                  will be dated from it"><input type="checkbox" name="accept_unverified_clock"
-                  value="1"> unverified clock</label>
-                <button type="submit">Revoke</button>
-              </form>
-              {% if c.export and loopback %}
-                <a href="{{ url_for('webserver_cert_download', label=c.label) }}">Download .p12</a>
-              {% endif %}
-            {% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5">(no client certificates)</td></tr>
-        {% endfor %}
-      </table>
-    </section>
-  </details>
-  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  {% include "_ws_certs.html" %}
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a>{{ page_link('controller', 'webserver-row--certificates') }}</div>
   </div>
 </details>

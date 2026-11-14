@@ -12,7 +12,7 @@
       <p>Nothing was saved yet — neither these settings nor the certificate. Applying replaces the
         certificate and keeps its key when one exists; browsers that trust this box's server CA keep trusting it.</p>
       <form method="post" action="{{ url_for('webserver_configure') }}" class="act">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         {% for k, v in echo %}<input type="hidden" name="{{ k }}" value="{{ v }}">
         {% endfor %}<input type="hidden" name="replacement_digest" value="{{ digest }}">
         <button type="submit" class="warnbtn">Apply and replace the certificate</button>

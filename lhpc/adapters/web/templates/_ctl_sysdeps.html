@@ -1,0 +1,32 @@
+{% from "_macros.html" import cmdbox -%}
+<details class="advcfg" id="controller-system-deps">
+            <summary>System dependencies</summary>
+            <div class="body">
+              <p class="muted">LHPC's own runtime dependencies. Commands shown are
+                <strong>not executed by LHPC</strong> — run them yourself.</p>
+              {% for grp in controller_system_deps %}
+                {% set gi = loop.index0 %}
+                <h3>{{ grp.title }}</h3>
+                <ul class="clean">
+                  {% for d in grp.deps %}
+                    <li>
+                      {% if d.satisfied %}
+                        <span class="badge badge-running">satisfied</span>
+                      {% elif d.required %}
+                        <span class="badge badge-failed">not found</span>
+                      {% else %}
+                        <span class="badge badge-not-installed">not installed</span>
+                      {% endif %}
+                      {{ d.what }}
+                      <span class="muted">· {{ 'required' if d.required else 'optional' }} — {{ d.purpose }}</span>
+                      {% if not d.satisfied and d.install %}
+                        <div class="muted">install it:</div>{{ cmdbox('ctrl-dep-' ~ gi ~ '-' ~ loop.index0, d.install) }}
+                      {% elif not d.satisfied and d.note %}
+                        <div class="muted">{{ d.note }}</div>
+                      {% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endfor %}
+            </div>
+          </details>

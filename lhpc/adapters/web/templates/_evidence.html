@@ -1,0 +1,4 @@
+<details{% if card_id %} id="{{ card_id }}--evidence"{% endif %}>
+    <summary>Evidence ({{ st.evidence|length }})</summary>
+    <ul class="clean mono">{% for k, v in st.evidence.items() %}<li>{{ k }} = {{ v }}</li>{% endfor %}</ul>
+  </details>

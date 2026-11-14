@@ -1,0 +1,34 @@
+<details class="advcfg" id="stack-settings-{{ stack.id }}--{{ radio.rid }}-live">
+              <summary>Live radio settings</summary>
+              <p class="muted">Applied immediately to the running daemon via its config socket
+                (non-RF tuning; enabling a TX mode does not itself transmit). Live RSSI / CAD /
+                RX-TX monitoring is on the <a href="{{ url_for('dashboard') }}">dashboard</a>.</p>
+            <div class="settingsgrid">
+              {% for key, spec in view.live_settings.items() %}
+                <div class="setcell">
+                  <span class="setkey">{{ key }}</span>
+                  <form method="post" action="{{ url_for('radio_set', rid=radio.rid) }}" class="setform">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+                    <input type="hidden" name="key" value="{{ key }}">
+                    {% set cur = radio.status.get(key) or radio.config.get(key) %}
+                    {% if spec.type == 'enum' %}
+                      <select name="value" aria-label="{{ key }}">
+                        {% for ch in spec.choices %}
+                          <option value="{{ ch }}" {% if cur==ch %}selected{% endif %}>{{ ch }}</option>
+                        {% endfor %}
+                      </select>
+                    {% elif spec.type == 'int' %}
+                      <input type="number" name="value" value="{{ cur or spec.min }}"
+                             min="{{ spec.min }}" max="{{ spec.max }}" required>
+                      <span class="muted">{{ spec.min }}..{{ spec.max }}</span>
+                    {% else %}
+                      <input type="text" name="value" value="{{ cur or '' }}"
+                             autocomplete="off" required>
+                      <span class="muted">{{ spec.hint }}</span>
+                    {% endif %}
+                    <button type="submit">Apply</button>
+                  </form>
+                </div>
+              {% endfor %}
+            </div>
+            </details>

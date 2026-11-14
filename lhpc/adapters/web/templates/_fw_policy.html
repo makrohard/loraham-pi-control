@@ -1,0 +1,35 @@
+<details class="advcfg" id="firewall-row--policy" open>
+        <summary>Policy</summary>
+        <section class="cfgsec">
+        <table class="paramgrid">
+          <tr><th>Mode</th><td>{{ 'Secure default — default-drop, only allowed ports pass'
+              if firewall_view.mode == 'secure-default'
+              else 'Compatibility — only unwanted stack ports blocked (no default-drop)' }}</td></tr>
+          <tr><th>Verified this boot</th><td>
+            Config {{ '✓' if firewall_view.status.config_ok else '✗' }} ·
+            Boot {{ '✓' if firewall_view.status.boot_ok else '✗' }} ·
+            Live {{ '✓' if firewall_view.status.live_ok else '✗' }}
+            {% if not firewall_view.status.installed %} · <span class="ver ver-red">not set up</span>{% endif %}
+          </td></tr>
+          <tr><th>Direct access allowed</th><td>
+            {% set allowed = firewall_view.endpoints | selectattr('selected') | list %}
+            {% if allowed %}{% for e in allowed %}<span class="pill {{ 'pill-warn' if e.auth == 'none' else 'pill-ok' }}"
+                title="{{ 'unauthenticated — reachable without a password' if e.auth == 'none' else 'authenticated' }}">{{ e.proto }}/{{ e.port }}{% if e.auth == 'none' %} · unauthenticated{% endif %}</span> {% endfor %}
+            {% else %}<span class="muted">none — no listener is opened directly</span>{% endif %}</td></tr>
+          <tr><th>Blocked (default-drop)</th><td>
+            {% set blocked = firewall_view.endpoints | rejectattr('selected') | list %}
+            {% if blocked %}{% for e in blocked %}<span class="pill">{{ e.proto }}/{{ e.port }}</span> {% endfor %}
+            {% else %}<span class="muted">—</span>{% endif %}</td></tr>
+          <tr><th>SSH ports allowed</th><td>{% if firewall_view.ssh_ports %}{{ firewall_view.ssh_ports | join(', ') }}
+            {% else %}<span class="muted">auto-detected from the running sshd</span>{% endif %}</td></tr>
+          <tr><th>Proxy ingress (nginx)</th><td>
+            {% if firewall_view.proxy_ingress %}{% for p in firewall_view.proxy_ingress %}<span class="pill">{{ p.proto }}/{{ p.port }} @ {{ p.addr }}</span> {% endfor %}
+            {% else %}<span class="muted">none exposed</span>{% endif %}
+            {% for c in firewall_view.port_conflicts %}<p class="depnote depnote-warn">{{ c }}</p>{% endfor %}</td></tr>
+          <tr><th>Access-Point rules</th><td>{% if firewall_view.ap.enabled %}enabled — {{ firewall_view.ap.interface or 'wlan0' }} / {{ firewall_view.ap.cidr }}
+            {% else %}<span class="muted">off</span>{% endif %}</td></tr>
+        </table>
+        <p class="muted">The raw live ruleset is root-owned; the console cannot read it, so the state
+          above is the configured policy plus the root-written verification (Config/Boot/Live).</p>
+        </section>
+      </details>

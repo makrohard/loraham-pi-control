@@ -45,7 +45,7 @@
         the checkout, and <strong>start the console again automatically</strong>. The next page is
         static — when the console is back, use its &ldquo;Return to the console&rdquo; link.</p>
       <form method="post" action="{{ url_for('self_update_apply') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <input type="hidden" name="confirmed" value="yes">
         {% if confirm.dirty or confirm.diverged %}
           <p class="depnote depnote-warn">
@@ -112,17 +112,17 @@
   {% if not confirm %}
     <div class="actrow">
       <form method="post" action="{{ url_for('self_update_check') }}" class="act">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <button type="submit">Check for updates</button>
       </form>
       {% if st.update_available and not jobs and updater and updater.status == 'ok' %}
         <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <button type="submit">Update now</button>
         </form>
       {% elif st.update_available and not jobs and updater and updater.fixable %}
         <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <button type="submit">Repair &amp; update</button>
         </form>
       {% endif %}

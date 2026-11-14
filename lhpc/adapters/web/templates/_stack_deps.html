@@ -1,0 +1,13 @@
+{% from "_menu.html" import page_actions -%}
+{% set _dep_ids = g.deps|map(attribute='0')|map(attribute='id')|list -%}
+<details class="advcfg" id="stack-install-{{ g.stack.id }}--dependencies"{% if request.args.get('comp') in _dep_ids %} open{% endif %}>
+          <summary>Dependencies</summary>
+          <div class="body">
+            {% for comp, st in g.deps %}
+              <div class="stackrow-wrap">
+              {% include "_stack_comp.html" %}
+              {{ page_actions(g.stack.id, 'comp-' ~ comp.id) }}
+              </div>
+            {% endfor %}
+          </div>
+        </details>

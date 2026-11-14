@@ -1,3 +1,4 @@
+{% from "_menu.html" import page_actions -%}
 {# Pure per-component INFOBOX (status + declared resources + runtime deps + endpoints + evidence).
    No header, no action buttons — the caller supplies the wrapping <details>/<summary> and (for
    dependency components) the action bar. Requires: comp, st.  #}
@@ -55,10 +56,10 @@
 {% endif %}
 
 {% if st.evidence %}
-  <details>
-    <summary>Evidence ({{ st.evidence|length }})</summary>
-    <ul class="clean mono">{% for k, v in st.evidence.items() %}<li>{{ k }} = {{ v }}</li>{% endfor %}</ul>
-  </details>
+  <div class="stackrow-wrap">
+  {% include "_evidence.html" %}
+  {{ page_actions(g.stack.id, card_id ~ '--evidence') }}
+  </div>
 {% endif %}
 
 {% if comp.note %}<p class="muted">{{ comp.note }}</p>{% endif %}

@@ -1,6 +1,6 @@
 {# Per-stack row body on /stacks — the collapsible sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, instance_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first, restart_note %}
+{% from "_menu.html" import page_actions %}{% from "_macros.html" import cmdbox %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -9,7 +9,7 @@
      restart-required like any other setting, never a per-start value. #}
   {% if g.meshcore_mode %}
     <form method="post" action="{{ url_for('stack_mode_save', stack_id=g.stack.id) }}" class="actrow" id="stack-mode-{{ g.stack.id }}">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
       {% if g.meshcore_rid %}<input type="hidden" name="radio" value="{{ g.meshcore_rid }}">{% endif %}
       <label>Mode
         <select name="mode" aria-label="Mode">
@@ -44,233 +44,40 @@
      force-opens it against a stale sessionStorage map, and data-force-scroll makes stacks_state.js
      scroll here  — the reason lives in the banners below, not only in the top
      flash, which scrolls out of view. #}
-  <details class="advcfg" id="stack-install-{{ g.stack.id }}"
-    {%- if request.args.get('inst') == g.stack.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
-    <summary>Install</summary>
-    <div class="body">
-      {# First-position flag: MeshCom link running WITHOUT client authentication. #}
-      {% if g.hmac_enabled is not none and not g.hmac_enabled %}
-        <p class="depnote depnote-warn"><span class="ver ver-yellow">HMAC Password disabled</span>
-          — the meshcom bridge/firmware run without client authentication.</p>
-      {% endif %}
-      {% if g.pin_override %}
-        {# A3: installed over the pin check, while that exact acceptance is still in force. #}
-        <div class="depnote depnote-warn" id="pin-override-{{ g.stack.id }}"><span class="ver ver-yellow">Installed over the pin check</span> —
-          {% for cid, pair in g.pin_override|dictsort %}<code>{{ cid }}</code> built from <code>{{ pair[0][:9] }}</code>, this LHPC pins <code>{{ pair[1][:9] }}</code>{% if not loop.last %}; {% endif %}{% endfor %}.
-          It may not work with this LHPC. {{ update_lhpc_first(selfupdate.update_available) }}</div>
-      {% endif %}
-      {% if g.pin_refusal %}
-        {# The last console install was refused: no published binary was built for this LHPC (the job's typed refusal). #}
-        <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
-          {{ update_lhpc_first(selfupdate.update_available) }} —
-          the install was refused: {% if g.pin_refusal.lagging %}the published binary was built from other commits than this LHPC pins.{% else %}no published binary was built for this box with this LHPC's pins and build inputs.{% endif %}
-            <form method="post" action="{{ url_for('action') }}" class="act">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="op" value="install">
-              <input type="hidden" name="target" value="{{ g.stack.id }}">
-              <input type="hidden" name="source" value="binary">
-              <button type="submit">Install again</button>
-            </form></div>
-      {% endif %}
-      {% if g.installed and g.has_source %}
-        {# Cached verdict for the MAIN component, resolved against its current head. Never green
-           unless a real check produced it against exactly this commit. #}
-        <p>Installed version: {{ freshness_pill(g.update_main) }}
-          {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
-          {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
-      {% elif g.has_source %}
-        {% call(part) banner('warn', title='Not installed yet') %}{% if part == 'body' %}The source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Install &rarr;</a>{% endif %}{% endcall %}
-      {% endif %}
-      {% if g.needs_build_deps %}
-        {# A build DEPENDENCY (e.g. RadioLib) is not built — the link opens ITS Dependencies card
-           (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
-        {% call(part) banner('bad', title=g.needs_build_deps|join(', ') ~ ' not built') %}{% if part == 'body' %}Build this dependency first.{% else %}<a href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0] }}">Build &rarr;</a>{% endif %}{% endcall %}
-      {% elif g.needs_build %}
-        {% call(part) banner('warn', title='Build needed') %}{% if part == 'body' %}{{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
-      {% endif %}
-      {% if g.hardware_block %}
-        <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio hardware</span> —
-          {{ g.hardware_block }}
-          <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">configure &rarr;</a></div>
-      {% elif g.radio_block %}
-        <div class="depnote depnote-warn"><span class="ver ver-yellow">Hardware list</span> —
-          this stack {{ g.radio_block }}</div>
-      {% endif %}
-      {% if g.restart_required %}
-        <div class="depnote depnote-warn">
-          {{ restart_note(g.restart_required) }}
-          <form method="post" action="{{ url_for('action') }}" class="act">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-            <input type="hidden" name="op" value="restart">
-            <input type="hidden" name="target" value="{{ g.restart_required.stack or g.stack.id }}">
-            <button type="submit" class="warnbtn">Restart now</button>
-          </form>
-        </div>
-      {% endif %}
-      {% if g.kw_offer %}
-        <div class="depnote depnote-warn">
-          This stack started healthy with a source composition that is not yet recorded as known
-          working ({{ g.kw_offer.components|join(', ') }}).
-          <form method="post" class="act" action="{{ url_for('known_working_confirm', stack_id=g.stack.id) }}">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-            <button type="submit" class="warnbtn">Confirm this stack as working</button>
-          </form>
-        </div>
-      {% endif %}
-
-      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on, page_radio) }}
-
-      {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
-      {% if g.hmac_enabled is not none %}
-        {{ hmac_actions(g.stack.id) }}
-      {% endif %}
-
-      {# ----- Dependencies (collapsed): full per-component card + actions + Info evidence ----- #}
-      {% if g.deps %}
-        {% set _dep_ids = g.deps|map(attribute='0')|map(attribute='id')|list %}
-        <details class="advcfg"{% if request.args.get('comp') in _dep_ids %} open{% endif %}>
-          <summary>Dependencies</summary>
-          <div class="body">
-            {% for comp, st in g.deps %}
-              <details class="advcfg" id="comp-{{ comp.id }}"
-                {%- if request.args.get('comp') == comp.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
-                <summary>{{ comp.id }}
-                  <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
-                  {% if comp.kind.value == 'library' and comp.source %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
-                  {% elif comp.optional and comp.kind.value != 'library' %}<span class="pill">optional</span>{% endif %}
-                  <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
-                  {% if st.evidence.get('gps.fix') == 'no-fix' %}<span class="ver ver-yellow" data-state="no-fix" title="{{ st.evidence.get('gps.feed', '') }}">no fix yet</span>{% endif %}
-                  {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
-                     owned by its own stack's row, so it has no entry here. #}
-                  {% if comp.id in g.update_states and comp.source and comp.source.remote %}
-                    {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}</summary>
-                <div class="body">
-                  <div class="actbar">
-                    {# logs link lives in the body (not the summary) so no interactive element is nested
-                       inside the summary toggle (a11y). #}
-                    <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
-                    {% if comp.kind.value == 'service' %}
-                      {{ instance_btn('start', comp.id, 'Start', g.run_on, "", page_radio) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on, "", page_radio) }}
-                      {# The operator's hard stop of this component only (A §2.12): a confirm page
-                         that names its processes first. #}
-                      {% if comp.process and comp.id in g.stack.components|map(attribute='id')|list %}
-                        <a class="act" href="{{ url_for('kill_page', sid=g.stack.id, component=comp.id, radio=page_radio) if page_radio else url_for('kill_page', sid=g.stack.id, component=comp.id) }}"><button type="button">Kill</button></a>
-                      {% endif %}
-                    {% endif %}
-                    {# Source: `update` on a component clones its source when missing (adopt_source)
-                       and refreshes it when present — one button covers first-install and update. #}
-                    {% if comp.source %}
-                      {{ action_btn('update', comp.id,
-                                    'Update' if st.source_state.value in ('match', 'differs', 'dirty') else 'Install') }}
-                    {% endif %}
-                    {% if comp.build_steps %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
-                    {% if comp.test_argv %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
-                    {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
-                    {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', radio=g.view.radio or None, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
-                    {# Last button: per-component remote freshness probe. #}
-                    {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
-                  </div>
-                  {% if comp.id == 'meshtastic-web' and g.web_client %}{% set wc = g.web_client %}
-                    {# Item 12: switch the web client's line (binary / stable / dev) from here. Switch opens the
-                       plan page (the exact version, or why not); nothing is installed before Confirm. #}
-                    <form method="post" action="{{ url_for('action') }}" class="act" id="webclient-line">
-                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                      <input type="hidden" name="op" value="update">
-                      <input type="hidden" name="target" value="meshtastic-web">
-                      <p>Web client: {% if wc.installed %}<span class="pill mono">{{ wc.installed }}</span> — {{ wc.line }}
-                        {%- if wc.state == 'behind' %} <span class="ver ver-yellow" data-state="behind">behind the pin {{ wc.pin }}</span>{% endif %}
-                        {%- if wc.unproven %} <span class="ver ver-yellow" data-state="unproven">unproven for this meshtasticd</span>{% endif %}
-                        {%- else %}<span class="pill">not installed</span>{% endif %}</p>
-                      <label>line
-                        <select name="source" aria-label="Web client line">
-                          {% for o in wc.options %}<option value="{{ o.line }}"{% if o.line == (wc.line or 'binary') %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.label }}{% if o.disabled %} — {{ o.disabled }}{% endif %}</option>{% endfor %}
-                        </select>
-                      </label>
-                      <button type="submit">Switch</button>
-                    </form>
-                  {% endif %}
-                  <details class="advcfg">
-                    <summary>Info</summary>
-                    <div class="body">{% with comp = comp, st = st, conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}</div>
-                  </details>
-                </div>
-              </details>
-            {% endfor %}
-          </div>
-        </details>
-      {% endif %}
-
-      {# ----- System dependencies (collapsed): apt deps + build deps + runtime ordering ----- #}
-      <details class="advcfg">
-        <summary>System dependencies</summary>
-        <div class="body">
-          {% if g.system_deps %}
-            <p class="muted">Commands shown are <strong>not executed by LHPC</strong> — run them yourself.</p>
-            <ul class="clean">
-              {% for d in g.system_deps %}
-                <li>
-                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'satisfied' if d.satisfied else 'not found' }}</span>
-                  {{ d.what }}
-                  {% if not d.satisfied and d.install %}
-                    <div class="muted">{{ 'grant it:' if d.runtime else 'install it:' }}</div>{{ cmdbox('dep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install) }}
-                  {% endif %}
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <p class="muted">None required for this stack.</p>
-          {% endif %}
-          {% if g.deps_report and g.deps_report.build %}
-            <h3>Build dependencies</h3>
-            <ul class="clean">
-              {% for d in g.deps_report.build %}
-                <li>
-                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'installed' if d.satisfied else 'missing' }}</span>
-                  {{ d.label }} <span class="muted">(needed by {{ d.component }})</span>
-                  {% if not d.satisfied and d.install_cmd %}
-                    <div class="muted">{{ d.note }}:</div>{{ cmdbox('bdep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install_cmd) }}
-                  {% endif %}
-                </li>
-              {% endfor %}
-            </ul>
-          {% endif %}
-          {% if g.deps_report and g.deps_report.runtime %}
-            <h3>Runtime ordering</h3>
-            <ul class="clean">
-              {% for d in g.deps_report.runtime %}
-                <li><span class="pill">{{ d.component }}</span> {{ d.label }} <span class="muted">({{ d.detail }})</span></li>
-              {% endfor %}
-            </ul>
-          {% endif %}
-        </div>
-      </details>
-    </div>
-  </details>
+  <div class="stackrow-wrap">
+  {% include "_stack_install.html" %}
+  {{ page_actions(g.stack.id, 'stack-install-' ~ g.stack.id) }}
+  </div>
 
   {% if g.stack.id == "daemon" %}
     {# W251/W245: the daemon's entries read Install, Hardware, Settings, Info; Hardware is its own page #}
-    <details class="advcfg" id="stack-hardware-daemon">
-      <summary>Hardware</summary>
-      <div class="body"><p><a href="{{ url_for('hardware_view') }}">Open Hardware ›</a> the radios: add a stick or a HAT,
-        bind, problems, Detect, remove.</p></div>
-    </details>
+    <div class="stackrow-wrap">
+    {% include "_stack_hardware.html" %}
+    {{ page_actions(g.stack.id, 'stack-hardware-daemon') }}
+    </div>
   {% endif %}
 
   {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts; the daemon's comes last (W251) ===== #}
-  {% if g.main and g.stack.id != "daemon" %}{% include "_stack_info.html" %}{% endif %}
+  {% if g.main and g.stack.id != "daemon" %}<div class="stackrow-wrap">{% include "_stack_info.html" %}{{ page_actions(g.stack.id, 'stack-info-' ~ g.stack.id) }}</div>{% endif %}
 
   {# ===== Settings (existing partial — reused, not duplicated) ===== #}
   {% with stack = g.stack, view = g.view, config_groups = g.config_groups, settings_id = 'stack-settings-' ~ g.stack.id %}
+    <div class="stackrow-wrap">
     {% include "_stack_settings.html" %}
+    {{ page_actions(g.stack.id, 'stack-settings-' ~ g.stack.id) }}
+    </div>
   {% endwith %}
 
   {# ===== Daemon parameters (the partial supplies its own collapsible header) ===== #}
   {% if g.daemon_params %}
     {% with stack_id = g.stack.id, daemon_params = g.daemon_params %}
+      <div class="stackrow-wrap">
       {% include "_daemon_params.html" %}
+      {{ page_actions(g.stack.id, 'stack-daemon-params-' ~ g.stack.id) }}
+      </div>
     {% endwith %}
   {% endif %}
-  {% if g.main and g.stack.id == "daemon" %}{% include "_stack_info.html" %}{% endif %}
+  {% if g.main and g.stack.id == "daemon" %}<div class="stackrow-wrap">{% include "_stack_info.html" %}{{ page_actions(g.stack.id, 'stack-info-' ~ g.stack.id) }}</div>{% endif %}
 
   {# ===== Password — for a stack whose manifest declares where its app (or LHPC) stores its
      web-UI password, and for MeshCom's HMAC password. The stored VALUE is shown here, on the
@@ -278,47 +85,18 @@
      no marker, log, flash or JSON. A stored file that is not 0600, not a regular file, or
      malformed shows the reason instead of a value. ===== #}
   {% for c in g.ui_creds_list %}
-    <details class="advcfg" id="stack-password-{{ c.component_id }}">
-      <summary>Password{% if g.ui_creds_list|length > 1 %} — {{ c.name }}{% endif %}{% if c.instance %} — {{ c.instance }}{% endif %}</summary>
-      <div class="body">
-        {% if c.hmac %}
-          <p>{{ c.name }} authenticates its mesh clients with the <strong>HMAC password</strong>
-            (<code>config/secrets/xr_pw</code>, baked into the firmware at build).</p>
-          {% if not c.enabled %}
-            <p class="depnote depnote-warn">{% if c.reason %}{{ c.reason }}{% else %}HMAC password
-              not enabled — Enable it first (HMAC Password actions above).{% endif %}</p>
-          {% elif c.value is not none %}
-            {{ secretbox('uipw-' ~ c.component_id, c.value) }}
-            <p class="muted">Change password: <strong>Renew</strong> (HMAC Password actions above;
-              Disable / Enable remove or restore it). Editing the file by hand would leave the
-              firmware and the bridge out of step.</p>
-          {% elif c.reason %}
-            <p class="depnote depnote-warn">{{ c.reason }}</p>
-          {% else %}
-            <p class="depnote depnote-warn">HMAC password file not found — Renew it (HMAC Password
-              actions above).</p>
-          {% endif %}
-        {% else %}
-          <p>{{ c.name }} signs in as <strong>{{ c.user }}</strong>.</p>
-          {% if c.value is not none %}
-            {{ secretbox('uipw-' ~ c.component_id, c.value) }}
-            <p class="muted">Edit stored password file (on the box):</p>
-            {{ cmdbox('uipwedit-' ~ c.component_id, c.edit_command) }}
-          {% elif c.reason %}
-            <p class="depnote depnote-warn">{{ c.reason }}</p>
-          {% else %}
-            <p class="depnote depnote-warn">Password not created yet —
-              {% if g.meshcore_mode %}start a repeater mode first{% else %}start the stack first{% endif %}.</p>
-          {% endif %}
-          {% if c.note %}<p class="muted">{{ c.note }}</p>{% endif %}
-        {% endif %}
-      </div>
-    </details>
+    <div class="stackrow-wrap">
+    {% include "_stack_password.html" %}
+    {{ page_actions(g.stack.id, 'stack-password-' ~ c.component_id) }}
+    </div>
   {% endfor %}
 
   {# ===== Webserver — LAST sub-section(s), one per proxied page: each component whose manifest
      declares a client http/https endpoint. Same level and styling as Install / Info / Settings. ===== #}
   {% for stack_web in g.stack_webs %}
+    <div class="stackrow-wrap">
     {% include "_stackweb.html" %}
+    {{ page_actions(g.stack.id, 'stack-webserver-' ~ stack_web.page_id) }}
+    </div>
   {% endfor %}
 </div>

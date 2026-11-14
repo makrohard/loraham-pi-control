@@ -33,7 +33,7 @@
     {% if nv.authorized and nv.ap_cidr %}
       {# NA: the AP's IPv4 subnet, one setting; the change needs its confirm phrase (as `lhpc network`). #}
       <form method="post" action="{{ url_for('network_action', op='ap-cidr') }}" class="act" id="network-ap-cidr">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <label>AP subnet <input type="text" name="ap_cidr" value="{{ nv.ap_cidr }}" size="18"
                spellcheck="false" autocomplete="off"></label>
         <label>type <code>{{ nv.ap_cidr_confirm }}</code> <input type="text" name="confirm_phrase" value="" size="16"
@@ -43,7 +43,7 @@
     {% endif %}
     {% if nv.authorized and nv.mode == 'client' %}
       <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <button type="submit" class="act">Back to AP mode…</button>
       </form>
     {% endif %}
@@ -94,18 +94,18 @@
                 <th>{{ c.name }}{% if c.preferred %} <span class="pill pill-ok">preferred</span>{% endif %}</th>
                 <td>
                   <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
                     <button type="submit" class="act" aria-label="Reconnect to {{ c.name }}">Reconnect…</button>
                   </form>
                   <form method="post" action="{{ url_for('network_action', op='prefer') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
                     <input type="hidden" name="on" value="{{ '0' if c.preferred else '1' }}">
                     <button type="submit" class="act" aria-label="{{ 'Stop preferring' if c.preferred else 'Prefer' }} {{ c.name }}">{{ 'Stop preferring' if c.preferred else 'Prefer' }}</button>
                   </form>
                   <form method="post" action="{{ url_for('network_action', op='forget') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
                     <button type="submit" class="act" aria-label="Forget {{ c.name }}">Forget</button>
                   </form>
@@ -116,7 +116,7 @@
           </table>
           {% if nv.preferred and nv.mode == 'ap' %}
             <form method="post" action="{{ url_for('network_action', op='retry') }}" class="act">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
               <button type="submit" class="act">Retry {{ nv.preferred.ssid }} now</button>
             </form>
           {% endif %}
@@ -132,7 +132,7 @@
         {# The password is asked on the CONFIRM page, never here — it must ride exactly one
            request (AUDIT: an echoed hidden field put it into the browser DOM/cache). #}
         <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <input type="text" name="ssid" autocomplete="off" required
                  aria-label="Network name (SSID)" placeholder="network name (SSID)">
           <label><input type="checkbox" name="allow_console" value="1" checked
@@ -142,7 +142,7 @@
         </form>
         {% if nv.mode != 'ap' %}
         <form method="post" action="{{ url_for('network_action', op='scan') }}" class="act">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <button type="submit" class="act">Scan for networks</button>
         </form>
         {% endif %}
@@ -153,7 +153,7 @@
                 <th>{{ s.ssid }}</th>
                 <td>
                   <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
-                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="ssid" value="{{ s.ssid }}">
                     <label><input type="checkbox" name="allow_console" value="1" checked
                                   aria-label="Allow console from the joined network">

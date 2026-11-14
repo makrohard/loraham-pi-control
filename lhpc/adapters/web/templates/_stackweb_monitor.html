@@ -1,0 +1,25 @@
+{% from "_macros.html" import depnote_classes %}{% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) -%}
+<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--monitor">
+      <summary>Monitor</summary>
+      <div class="body">
+        {# Same remote-exposure/auth/listener warnings as the controller console (identical wording). #}
+        {% for w in sw.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
+        <p class="summary">Reverse-proxies <code>{{ sw.upstream_scheme }}://{{ sw.upstream_address }}</code>
+          through nginx, reusing the console's client certificate.
+          {% if sw.cfg.enabled or sw.pending_disable %}
+            {% if sw.pending_disable %}<strong>Disabled in the saved settings — still served until Apply.</strong>{% endif %}
+            {% if sw.listen_scope == 'exposed' %}
+              <strong>Currently listening on port {{ live_port }} on all interfaces</strong> — reachable from the LAN now.
+            {% elif sw.listen_scope == 'loopback' %}
+              <strong>Currently listening on <code>127.0.0.1:{{ live_port }}</code> only</strong> — loopback, not reachable remotely.
+            {% else %}
+              <strong>Port {{ sw.cfg.port }} is not listening</strong> — nginx is not running or Apply has not been run.
+            {% endif %}
+          {% else %}
+            Set a port ({% if sw.suggested_port %}suggested <code>{{ sw.suggested_port }}</code>{% else %}{{ sw.suggested_note }}{% endif %}) in Settings to enable the proxy.
+          {% endif %}</p>
+        {% if sw.urls %}
+          <ul class="kv">{% for u in sw.urls %}<li><code>{{ u }}</code></li>{% endfor %}</ul>
+        {% endif %}
+      </div>
+    </details>

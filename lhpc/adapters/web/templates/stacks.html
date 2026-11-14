@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import stack_actions, stack_summary, stack_row_actions, cmdbox %}
+{% from "_macros.html" import stack_actions, stack_row_actions, cmdbox %}{% from "_menu.html" import page_link %}
 {% block title %}stacks — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
@@ -42,6 +42,7 @@
       <div class="body">{% for c in observed_conflicts %}<p class="conflict">{{ c.message }}</p>{% endfor %}</div></div>
   {% endif %}
 
+  <p class="pagebar"><a href="{{ url_for('menu_tree') }}">All menus (tree) ›</a></p>
   <div class="card">
     <div class="body stacklist">
       {% if controller %}
@@ -54,127 +55,15 @@
       {# An EXPLICIT row target (?open/?cfg/?dp/?inst) preserves the single-main-row model: when one
          is present, the cookie-remembered open rows are NOT restored (only the target renders open) —
          otherwise a link to another row would paint two open main rows at first load. #}
-      {% set _explicit_row = request.args.get('open') or request.args.get('cfg') or request.args.get('dp') or request.args.get('inst') %}
+      {# an explicit row target (?open/?cfg/?dp/?inst) is read in _controller_row.html #}
       <div class="stackrow-wrap">
-      <details class="stackrow" id="controller-row"{% if confirm or request.args.get('open') == 'firewall' or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
-        <summary>
-          <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
-          {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
-             is demonstrably up whenever it serves this page — without claiming a managed run-state, so
-             the truthfulness invariant (no badge-running on the controller row) is preserved. #}
-          <span class="col-status"><span class="badge badge-ok">console up</span></span>
-          <span class="col-version"><span class="pill mono">v{{ controller.version }}</span></span>
-          <span class="col-extra">
-            {% if controller.identity is none %}<span class="pill">identity unchecked</span>
-            {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
-            {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
-            {% else %}<span class="pill">not self-hosted</span>{% endif %}
-          </span>
-          {# Same column as the stack rows (grid alignment), same call-to-action: the controller's
-             update lives in its nested Update panel rather than an Install section. #}
-        </summary>
-        <div class="stackrow-body">
-          <details class="advcfg" id="controller-update"{% if confirm %} open{% endif %}>
-            <summary>Update</summary>
-            <div class="body">
-              <p class="muted">LHPC's own checkout — managed only here (Update / Webserver), never
-                installed/built/started like a stack.</p>
-              {% include "_update.html" %}
-            </div>
-          </details>
-          {# ----- Controller's own system dependencies (styled like a stack's panel) ----- #}
-          <details class="advcfg" id="controller-system-deps">
-            <summary>System dependencies</summary>
-            <div class="body">
-              <p class="muted">LHPC's own runtime dependencies. Commands shown are
-                <strong>not executed by LHPC</strong> — run them yourself.</p>
-              {% for grp in controller_system_deps %}
-                {% set gi = loop.index0 %}
-                <h3>{{ grp.title }}</h3>
-                <ul class="clean">
-                  {% for d in grp.deps %}
-                    <li>
-                      {% if d.satisfied %}
-                        <span class="badge badge-running">satisfied</span>
-                      {% elif d.required %}
-                        <span class="badge badge-failed">not found</span>
-                      {% else %}
-                        <span class="badge badge-not-installed">not installed</span>
-                      {% endif %}
-                      {{ d.what }}
-                      <span class="muted">· {{ 'required' if d.required else 'optional' }} — {{ d.purpose }}</span>
-                      {% if not d.satisfied and d.install %}
-                        <div class="muted">install it:</div>{{ cmdbox('ctrl-dep-' ~ gi ~ '-' ~ loop.index0, d.install) }}
-                      {% elif not d.satisfied and d.note %}
-                        <div class="muted">{{ d.note }}</div>
-                      {% endif %}
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% endfor %}
-            </div>
-          </details>
-          {# ----- Backup secrets: two copy commands, nothing executed here (A5) ----- #}
-          <details class="advcfg" id="controller-backup-secrets">
-            <summary>Backup secrets</summary>
-            <div class="body">
-              <p class="muted">Commands are not executed by LHPC — run them yourself in a shell on this box.</p>
-              {{ cmdbox('ctrl-secrets-backup', 'lhpc secrets backup') }}
-              {{ cmdbox('ctrl-secrets-restore', 'lhpc secrets restore $HOME/lhpc-secrets-HOSTNAME-YYYYMMDDTHHMMSSZ.tar') }}
-            </div>
-          </details>
-          {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
-          <details class="advcfg" id="operator-callsign">
-            <summary>Global operator callsign{% if operator_callsign %} <span class="pill mono">{{ operator_callsign }}</span>{% else %} <span class="pill">not set</span>{% endif %}</summary>
-            <div class="body">
-              {% if operator_callsign_legacy %}
-                <p class="depnote depnote-warn"><strong>Not a base callsign.</strong>
-                  <code>{{ operator_callsign }}</code> is not a bare base callsign — licensed
-                  stacks can no longer inherit it. Move the SSID/suffix to the stack(s) that
-                  need it and save your base callsign here
-                  {% if operator_callsign_suggestion %}(e.g. <code>{{ operator_callsign_suggestion }}</code>){% else %}(your bare base callsign){% endif %}.</p>
-              {% endif %}
-              <p class="muted"><strong>Optional.</strong> Your bare base amateur callsign —
-                prefix, digit, then 1–3 letters, 3–6 characters total (e.g.
-                <code>G0ABC</code>) — no SSID, no <code>/P</code>.
-                Licensed stacks (chat,
-                Voice, Graywolf, MeshCom) inherit it only while their own callsign field is empty;
-                a per-stack callsign overrides it and may carry that stack's SSID or portable
-                form. Non-licensed stacks (Meshtastic, MeshCore) never inherit it — they need
-                their own local node names.</p>
-              <form method="post" action="{{ url_for('operator_callsign_save') }}">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <table class="paramgrid dptab">
-                  <tr><th>Base callsign</th>
-                    <td><input type="text" name="callsign" value="{{ operator_callsign }}"
-                               placeholder="your base callsign (empty = unset)" autocomplete="off"></td>
-                    <td class="dphelp muted">digit-bearing base, 3–6 letters/digits;
-                      empty clears it</td></tr>
-                </table>
-                <button type="submit">Save</button>
-              </form>
-            </div>
-          </details>
-          {% if network_view %}
-            {% include "_network.html" %}
-          {% endif %}
-          {% if ws_mon %}
-            {% with mon = ws_mon, certs = ws_certs, modes = ws_modes, loopback = ws_loopback %}
-              {% include "_webserver.html" %}
-            {% endwith %}
-          {% endif %}
-          {# Managed Firewall — sibling of Webserver, INSIDE the LHPC controller row #}
-          {% include "_firewall.html" %}
-          {# Position (GPS) — sibling of Webserver/Firewall in the controller row #}
-          {% include "_gps.html" %}
-
-        </div>
-      </details>
+      {% include "_controller_row.html" %}
       {# Action links OUTSIDE the summary (a11y) but overlaid on the row. #}
       <div class="row-actions">
         {% if controller.update_available %}<a class="update-link"
           href="{{ url_for('stacks_overview') }}#controller-update">Update</a>{% endif %}
         <a class="logslink" href="{{ url_for('controller_logs') }}" aria-label="controller logs">logs</a>
+        {{ page_link('controller', 'controller-row') }}
       </div>
       </div>
       {% endif %}
@@ -182,22 +71,9 @@
       {% for g in groups %}
         {# `restored_open` (from the lhpc_open cookie) makes a remembered-open row render inline+open at
            first paint, so re-opening it on reload causes no layout shift — same effect as a ?open= row. #}
-        {% set _forced = g.inline %}{# the forced-open rule: app.py `_row_inline` #}
+        {# the row's forced-open rule (app.py `_row_inline`) is `g.inline`, read in _stack_row.html #}
         <div class="stackrow-wrap">
-          <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
-            <summary>{{ stack_summary(g) }}</summary>
-            {# The body (settings/source/config forms) is heavy. Render it inline only when the row is
-               already open (a link/flow forced it); otherwise defer it to a fetch on first expand
-               (stacklazy.js). No-JS / fetch failure falls back to the ?open= link, which renders it
-               server-side — so the settings are always reachable. #}
-            {% if _forced %}
-              {% include "_stack_body.html" %}
-            {% else %}
-              <div class="lazy-body" data-body-url="{{ url_for('stack_body', sid=g.stack.id, radio=request.args.get('radio') or None) }}">
-                <noscript><p class="muted"><a href="{{ url_for('stacks_overview', open=g.stack.id) }}#stackrow-{{ g.stack.id }}">Open {{ g.stack.name }}</a></p></noscript>
-              </div>
-            {% endif %}
-          </details>
+          {% include "_stack_row.html" %}
           {# Action links OUTSIDE the summary (a11y) but overlaid on the row (see .row-actions). #}
           {{ stack_row_actions(g) }}
         </div>

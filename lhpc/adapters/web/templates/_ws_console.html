@@ -1,0 +1,64 @@
+<details class="advcfg" id="webserver-row--lhpc-webgui" open>
+    <summary>LHPC WebGUI</summary>
+    <section class="cfgsec">
+      {% if mon.desired.scheme == 'http' %}
+        <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
+          presented during the TLS handshake, so <code>http</code> cannot authenticate anyone — the
+          access mode must be <code>no-auth</code>.</p>
+      {% endif %}
+      {# Single "Apply": saves ALL fields then validates + reloads. remote_exposed follows `bind`
+         (0.0.0.0 → remote); a remote/public/no-auth/http config needs the typed confirmation below. #}
+      <form method="post" action="{{ url_for('webserver_configure') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+        <table class="paramgrid dptab">
+          <tr><th>Bind</th>
+            <td><input name="bind" value="{{ mon.desired.bind }}" autocomplete="off"></td>
+            <td class="dphelp muted">127.0.0.1 (loopback) or 0.0.0.0 (remote/LAN)</td></tr>
+          <tr><th>Port</th>
+            <td><input name="port" type="number" min="1" max="65535" value="{{ mon.desired.port }}" autocomplete="off"></td>
+            <td class="dphelp muted">HTTPS port (default 8443)</td></tr>
+          <tr><th>Scheme</th>
+            <td><select name="scheme" class="schemesel" data-authsel="ws-authsel" aria-label="Scheme">
+              <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
+              <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
+            </select></td>
+            <td class="dphelp muted">http disables client-certificate auth</td></tr>
+          <tr><th>Access mode</th>
+            <td><select name="access_mode" id="ws-authsel" aria-label="Access mode">
+              {% for m in modes %}
+                <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
+                  {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select></td>
+            <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
+          <tr><th>Allowed CIDRs</th>
+            <td><input name="cidrs" value="{{ mon.desired.allowed_cidrs|join(',') }}" placeholder="192.168.0.0/24" autocomplete="off"></td>
+            <td class="dphelp muted">Required when bind is 0.0.0.0 (remote)</td></tr>
+          <tr><th>DNS SANs</th>
+            <td><input name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}" autocomplete="off"></td>
+            <td class="dphelp muted">Hostnames for the server certificate</td></tr>
+          <tr><th>IP SANs</th>
+            <td><input name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}" autocomplete="off"></td>
+            <td class="dphelp muted">LAN IPs for the server certificate (never 0.0.0.0)</td></tr>
+          <tr><th>Confirm</th>
+            <td><input name="confirm_phrase" autocomplete="off"></td>
+            <td class="dphelp muted">Remote (bind 0.0.0.0) needs <code>enable-remote</code> — or
+              <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth, or http remote</td></tr>
+          <tr><th>Accept unverified clock</th>
+            <td><input type="checkbox" name="accept_unverified_clock" value="1"></td>
+            <td class="dphelp muted">Only if this box's clock is not synchronised. Exposure reissues
+              the server certificate, which would be dated from it. Separate from the confirmation
+              above — that one confirms exposure, this one accepts the clock</td></tr>
+        </table>
+        <button type="submit">Apply</button>
+      </form>
+      {# Reset — distinct safety function (loopback defaults + disable every proxy + prove cessation). #}
+      <form method="post" action="{{ url_for('webserver_reset') }}" class="cfgreset">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+        <input name="confirm_phrase" placeholder="type 'reset'" autocomplete="off">
+        <button type="submit">Reset to defaults</button>
+      </form>
+      <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off; it
+        never deletes CAs, certificates, CRL, revocation history, exports, or the session secret.</p>
+    </section>
+  </details>

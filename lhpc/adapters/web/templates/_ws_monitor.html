@@ -1,0 +1,42 @@
+{% from "_macros.html" import depnote_classes -%}
+<details class="advcfg" id="webserver-row--monitor">
+    <summary>Monitor</summary>
+    <section class="cfgsec">
+      {% for w in mon.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
+      <ul class="kv">
+        <li>Local IP address: <code>{{ mon.local_ip or 'unknown' }}</code>
+          {% if mon.local_ip %}<span class="muted">→ https://{{ mon.local_ip }}:{{ mon.desired.port }}/ (remote)</span>{% endif %}</li>
+        <li>Bind (desired): <code>{{ mon.desired.bind }}:{{ mon.desired.port }}</code></li>
+        <li>Access mode: <code>{{ mon.desired.access_mode }}</code></li>
+        <li>Remote exposure (desired): <code>{{ mon.desired.remote_exposed }}</code></li>
+        <li>Allowed CIDRs: <code>{{ mon.desired.allowed_cidrs|join(', ') or '(none)' }}</code></li>
+        <li>Effective remote listener (proven):
+          <code>{{ mon.effective.remote_listener if mon.effective else 'unknown' }}</code></li>
+        <li>Last verified: <code>{{ mon.last_verified or 'never' }}</code></li>
+        <li>PKI:
+          server-CA {{ 'present' if mon.pki.server_ca.present else 'absent' }} ·
+          client-CA {{ 'present' if mon.pki.client_ca.present else 'absent' }} ·
+          server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
+          CRL {{ 'present' if mon.pki.crl_present else 'absent' }}{% if mon.pki.provisional %} ·
+          <strong>provisional</strong> (created without a verified clock){% endif %}</li>
+        {% if mon.pki.index_problem %}
+        <li><strong>Client-certificate list: repair needed</strong> (issuing and revoking are refused;
+          the CRL is renewed as it is): <code>{{ mon.pki.index_problem }}</code></li>
+        {% endif %}
+        {% if mon.pki.server_cert.expiry_text %}
+        <li>Server certificate: <code>{{ mon.pki.server_cert.expiry_text }}</code></li>
+        {% endif %}
+      </ul>
+      <h3>System dependencies</h3>
+      <ul class="kv sysdeps">
+        {% for d in mon.system_deps %}
+        <li>{{ d.name }}: <code>{{ d.status }}</code> — {{ d.purpose }}
+          {% if d.status != 'present' %}· install: <code>{{ d.install }}</code>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('webserver_verify') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+        <button type="submit">Verify now</button>
+      </form>
+    </section>
+  </details>

@@ -1,0 +1,6 @@
+{# live_port_of(sw): the port to NAME wherever we describe or link the live proxy. After a saved-but-unapplied port
+   move the running nginx still holds the OLD socket, so `live_port` is the one that answers and
+   `cfg.port` is a socket nobody is listening on yet. Same rule as the dashboard row. With NOTHING
+   live (`absent`), the desired port is the right thing to name — there is no listener to contradict
+   it. The Settings FORM input stays on `cfg.port`: that field edits desired config. #}
+{% macro live_port_of(sw) %}{{ sw.live_port if sw.listen_scope != 'absent' else sw.cfg.port }}{% endmacro %}

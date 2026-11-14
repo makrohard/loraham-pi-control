@@ -1,0 +1,101 @@
+{% from "_macros.html" import instance_btn -%}
+<form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+      {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
+
+      {% if config_groups %}
+        <section class="cfgsec">
+          <table class="paramgrid dptab">
+            {% for g in config_groups %}
+              {# A rule before EVERY heading but the first (visual separation of the groups); the
+                 service's rule flags still bracket the dependency components at the end. #}
+              {% if g.rule_before or not loop.first %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
+              <tr class="spgroup"><th colspan="3">{{ g.name }}</th></tr>
+              {% for r in g.rows %}
+                <tr class="{% if r.advanced %}advrow{% endif %}{% if r.field in _bad %} field-bad{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
+                  <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
+                  <td>
+                    {% if r.kind == 'flag' %}
+                      <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}>
+                    {% elif r.choices %}
+                      <select name="{{ r.field }}" aria-label="{{ r.name }}">
+                        {% for ch in r.choices %}
+                          <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>
+                        {% endfor %}
+                      </select>
+                    {% elif r.kind in ('int','float') %}
+                      <input type="number" name="{{ r.field }}" value="{{ r.value }}"
+                             {% if r.min is not none %}min="{{ r.min }}"{% endif %}
+                             {% if r.max is not none %}max="{{ r.max }}"{% endif %} step="any"
+                             autocomplete="off" placeholder="{{ r.default }}">
+                    {% else %}
+                      <input type="text" name="{{ r.field }}" value="{{ r.value }}" autocomplete="off"
+                             placeholder="{{ r.identity_hint or r.default }}">
+                    {% endif %}
+                  </td>
+                  <td class="dphelp muted">{{ r.label }}{% if r.identity_note %}<br><em>{{ r.identity_note }}</em>{% endif %}</td>
+                </tr>
+              {% endfor %}
+              {% if g.rule_after %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      {% if view.sources %}{# 13.12.1: the remotes are global, on every instance's page; the auto-start ticks are the radio's own (Q-09 C) #}
+        <section class="cfgsec">
+          <h3>Source remotes (GitHub)</h3>
+          <p class="muted">Override per component where install/update clones from.
+            Blank reverts to the manifest default. Stored locally only.</p>
+          <table class="paramgrid">
+            {% for src in view.sources %}
+              <tr><th>{{ src.name }}{% if src.overridden %} <span class="pill">override</span>{% endif %}</th>
+                <td><input type="text" name="remote_{{ src.id }}" value="{{ src.remote }}"
+                     placeholder="{{ src.default }}" autocomplete="off" class="wide"></td></tr>
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      {% if view.optional %}
+        <section class="cfgsec">
+          <h3>Optional components</h3>
+          <p class="muted">Tick to auto-start with the stack; otherwise run them on demand below.</p>
+          <table class="paramgrid">
+            {% for opt in view.optional %}
+              <tr>
+                <th>{{ opt.name }}
+                  <span class="badge badge-{{ 'running' if opt.running else 'stopped' }}">{{ 'running' if opt.running else 'stopped' }}</span>
+                </th>
+                <td>{% if opt.startable %}<label><input type="checkbox" name="c_autostart_{{ opt.id }}" value="on"
+                     {% if opt.autostart %}checked{% endif %}> auto-start</label>
+                    {% else %}<span class="muted">run on demand in a terminal (its launch line is shown on the Dashboard); not spawned by the controller</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      <button type="submit">Save configuration</button>
+    </form>
+
+    <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act cfgreset">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+      {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
+      <button type="submit">Reset to defaults</button>
+    </form>
+
+    {% if view.optional %}
+      <section class="cfgsec">
+        <h3>Run an optional component now</h3>
+        <div class="actrow">
+          {% for opt in view.optional %}
+            <span class="actgroup">
+              <span class="grouplabel">{{ opt.name }}</span>
+              {{ instance_btn('start', opt.id, 'Run', g.run_on, view.radio) }}
+              {{ instance_btn('stop', opt.id, 'Stop', g.run_on, view.radio) }}
+            </span>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}

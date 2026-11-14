@@ -1,0 +1,65 @@
+{% from "_menu.html" import page_actions -%}
+{% from "_macros.html" import action_btn, instance_btn, source_check_btn, freshness_pill -%}
+<details class="advcfg" id="comp-{{ comp.id }}"
+                {%- if request.args.get('comp') == comp.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
+                <summary>{{ comp.id }}
+                  <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
+                  {% if comp.kind.value == 'library' and comp.source %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
+                  {% elif comp.optional and comp.kind.value != 'library' %}<span class="pill">optional</span>{% endif %}
+                  <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+                  {% if st.evidence.get('gps.fix') == 'no-fix' %}<span class="ver ver-yellow" data-state="no-fix" title="{{ st.evidence.get('gps.feed', '') }}">no fix yet</span>{% endif %}
+                  {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
+                     owned by its own stack's row, so it has no entry here. #}
+                  {% if comp.id in g.update_states and comp.source and comp.source.remote %}
+                    {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}</summary>
+                <div class="body">
+                  <div class="actbar">
+                    {# logs link lives in the body (not the summary) so no interactive element is nested
+                       inside the summary toggle (a11y). #}
+                    <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
+                    {% if comp.kind.value == 'service' %}
+                      {{ instance_btn('start', comp.id, 'Start', g.run_on, "", page_radio) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on, "", page_radio) }}
+                      {# The operator's hard stop of this component only (A §2.12): a confirm page
+                         that names its processes first. #}
+                      {% if comp.process and comp.id in g.stack.components|map(attribute='id')|list %}
+                        <a class="act" href="{{ url_for('kill_page', sid=g.stack.id, component=comp.id, radio=page_radio) if page_radio else url_for('kill_page', sid=g.stack.id, component=comp.id) }}"><button type="button">Kill</button></a>
+                      {% endif %}
+                    {% endif %}
+                    {# Source: `update` on a component clones its source when missing (adopt_source)
+                       and refreshes it when present — one button covers first-install and update. #}
+                    {% if comp.source %}
+                      {{ action_btn('update', comp.id,
+                                    'Update' if st.source_state.value in ('match', 'differs', 'dirty') else 'Install') }}
+                    {% endif %}
+                    {% if comp.build_steps %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
+                    {% if comp.test_argv %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
+                    {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
+                    {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', radio=g.view.radio or None, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
+                    {# Last button: per-component remote freshness probe. #}
+                    {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
+                  </div>
+                  {% if comp.id == 'meshtastic-web' and g.web_client %}{% set wc = g.web_client %}
+                    {# Item 12: switch the web client's line (binary / stable / dev) from here. Switch opens the
+                       plan page (the exact version, or why not); nothing is installed before Confirm. #}
+                    <form method="post" action="{{ url_for('action') }}" class="act" id="webclient-line">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+                      <input type="hidden" name="op" value="update">
+                      <input type="hidden" name="target" value="meshtastic-web">
+                      <p>Web client: {% if wc.installed %}<span class="pill mono">{{ wc.installed }}</span> — {{ wc.line }}
+                        {%- if wc.state == 'behind' %} <span class="ver ver-yellow" data-state="behind">behind the pin {{ wc.pin }}</span>{% endif %}
+                        {%- if wc.unproven %} <span class="ver ver-yellow" data-state="unproven">unproven for this meshtasticd</span>{% endif %}
+                        {%- else %}<span class="pill">not installed</span>{% endif %}</p>
+                      <label>line
+                        <select name="source" aria-label="Web client line">
+                          {% for o in wc.options %}<option value="{{ o.line }}"{% if o.line == (wc.line or 'binary') %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.label }}{% if o.disabled %} — {{ o.disabled }}{% endif %}</option>{% endfor %}
+                        </select>
+                      </label>
+                      <button type="submit">Switch</button>
+                    </form>
+                  {% endif %}
+                  <div class="stackrow-wrap">
+                  {% include "_comp_info.html" %}
+                  {{ page_actions(g.stack.id, 'comp-' ~ comp.id ~ '--info') }}
+                  </div>
+                </div>
+              </details>

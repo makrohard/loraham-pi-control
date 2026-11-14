@@ -1,0 +1,15 @@
+{% from "_macros.html" import stack_summary -%}
+<details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if g.inline %} open data-force-open="1"{% endif %}>
+            <summary>{{ stack_summary(g) }}</summary>
+            {# The body (settings/source/config forms) is heavy. Render it inline only when the row is
+               already open (a link/flow forced it); otherwise defer it to a fetch on first expand
+               (stacklazy.js). No-JS / fetch failure falls back to the ?open= link, which renders it
+               server-side — so the settings are always reachable. #}
+            {% if g.inline %}
+              {% include "_stack_body.html" %}
+            {% else %}
+              <div class="lazy-body" data-body-url="{{ url_for('stack_body', sid=g.stack.id, radio=request.args.get('radio') or None) }}">
+                <noscript><p class="muted"><a href="{{ url_for('stacks_overview', open=g.stack.id) }}#stackrow-{{ g.stack.id }}">Open {{ g.stack.name }}</a></p></noscript>
+              </div>
+            {% endif %}
+          </details>

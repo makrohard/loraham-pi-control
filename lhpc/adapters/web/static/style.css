@@ -809,3 +809,16 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .note-bad { display: block; color: var(--bad); font-size: .88rem; }
 .crumbs { font-size: .9rem; margin: 0 0 .8rem; color: var(--muted); }
 .crumbs .here { color: var(--ink); font-weight: 600; }
+
+/* U4 (W423): "page ›" opens a Stacks level on its own page. It sits in the level's .row-actions
+   overlay (after "logs"), so every summary carrying one keeps the room free on its right. The top
+   rows keep their wider padding (.stacklist .stackrow > summary above). */
+.stackrow-wrap > details > summary, .ws-sub-wrap > details > summary { padding-right: 7.5rem; }
+.pagelink { font-size: .82rem; white-space: nowrap; }
+.pagebar { font-size: .9rem; margin: 0 0 .8rem; }
+.navtree { list-style: none; margin: 0; padding-left: 1.1rem; }
+.card .body > .navtree { padding-left: 0; }
+.navtree li { margin: .15rem 0; }
+.navtree summary { cursor: pointer; font-weight: 600; padding: .25rem 0; }
+.navtree .tree-self { margin: 0 0 .1rem 1.1rem; font-size: .85rem; }
+.navtree a { display: inline-block; padding: .25rem 0; }

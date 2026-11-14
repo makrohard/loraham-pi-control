@@ -45,7 +45,7 @@
         {# W203: a confirmed stop (and clean, uninstall, …) runs inside this POST, so the page would sit
            unchanged until it ends. confirm.js disables the button and shows its busy label on submit. #}
         <form method="post" action="{{ url_for('action') }}" data-busy-form>
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <input type="hidden" name="op" value="{{ op }}">
           {# W2: an instance's start, stop or restart posts `<stack>@<rid>`, never a band or a second rid #}
           <input type="hidden" name="target" value="{{ target }}{% if rid %}@{{ rid }}{% endif %}">
@@ -130,7 +130,7 @@
              source channel here instead of being sent to the CLI (settled decision: an explicit
              "build from source instead?", never a silent fallback). #}
           <form method="post" action="/action">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
             <input type="hidden" name="op" value="{{ op }}">
             <input type="hidden" name="target" value="{{ target }}">
             {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
