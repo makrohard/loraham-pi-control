@@ -259,6 +259,15 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
            border: 1px solid var(--brand); color: var(--brand); text-decoration: none; font-size: .9rem; }
 .btnlink:hover, a.button:hover { background: var(--bg); }
 a.button { margin-left: 0; }   /* A10: a page's own button link (Add Hardware, Remove) starts its line */
+/* A19: a radio's actions on one row (wraps on a phone); the row's gap spaces them */
+.acts { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.acts > * { margin-left: 0; }
+/* A19: a removing action in the danger colour; the hover is tinted (white on --bad fails 4.5:1 in dark mode) */
+a.button.danger, button.danger:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+a.button.danger:hover, button.danger:not(:disabled):hover { background: var(--badge-bad-bg); color: var(--bad);
+                                                            border-color: var(--bad); }
+button.danger:disabled, button.danger:disabled:hover { opacity: .55; cursor: not-allowed;
+                                                       background: var(--surface); color: var(--muted); border-color: var(--line); }
 .iface { font-size: .8rem; margin-left: .4rem; padding: .05rem .4rem; border-radius: 6px;
          background: var(--bg); border: 1px solid var(--line); }
 a.iface { text-decoration: none; color: var(--brand); }

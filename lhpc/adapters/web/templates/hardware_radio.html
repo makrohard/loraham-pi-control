@@ -33,10 +33,10 @@
             {{ c.label }}{% if c.why %} — {{ c.why }}{% endif %}</label></li>
         {% endfor %}
         </ul>
-        <button type="submit">Re-bind</button>
       </form>
     {% endif %}
-    <div class="acts">
+    <div class="acts">{# A19: Re-bind, Detect and Remove on one row; Re-bind stays its form's (form=) #}
+      {% if r.choices and r.choices.items %}<button type="submit" form="hw-rebind">Re-bind</button>{% endif %}
       <form method="post" action="{{ url_for('hardware_detect') }}" class="inline" id="detect-{{ r.rid }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         {{ hidden([("kind", "radio"), ("rid", r.rid), ("back", url_for('hardware_radio', rid=r.rid))]) }}
