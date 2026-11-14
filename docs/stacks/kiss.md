@@ -9,7 +9,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | Source / pin | `src/loraham-kiss-tnc` ← `makrohard/loraham-kiss-tnc` |
 | Run | `./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example` + the params below as flags (`--kiss-port`, `--bind`, `--kiss-host`, `--rx-freq`, `--tx-freq`, `--data-socket`, `--conf-socket`, `--rx-only`, `--verbose`, `--rflog`) |
 | Endpoints | KISS over TCP `127.0.0.1:8001` on r1, + 133 per further radio (no auth — `--bind` is the only gate) · serial PTY `<runtime>/state/<rid>/loraham_kiss` (`socat PTY,link=… TCP:127.0.0.1:<port>`) |
-| Resources | `tcp.port.<port>` exclusive · `loraham.daemon-socket.433` consumer · `serial.loraham-kiss-<rid>` exclusive (PTY) |
+| Resources | `tcp.port.<port>` exclusive · `loraham.daemon-socket.{radio:<band>}` consumer (its radio) · `serial.loraham-kiss-<rid>` exclusive (PTY) |
 | Depends on | `loraham-daemon`, `requires_daemon_tx = MANAGED` |
 | Install channel | source only — `bash build.sh` |
 
@@ -29,7 +29,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | `kiss_bind` | `127.0.0.1` | allow-list — a LAN CIDR or `0.0.0.0/0` exposes the listener (no auth); drives the managed firewall |
 | `kiss_host` | `127.0.0.1` | bind host (advanced) |
 | `data_socket` / `conf_socket` | `/tmp/loraf-<rid>.sock` / `/tmp/loraconf-<rid>.sock` | advanced; the instance's radio |
-| `rx_only` | off | `lhpc config kiss rx_only on` — the TNC never transmits; visible in its argv and read by `lhpc status` |
+| `rx_only` | off | `lhpc config kiss@<rid> rx_only on` — the TNC never transmits; visible in its argv and read by `lhpc status` |
 | `verbose` | off | |
 | `rf_log` | on | RF log `logs/<rid>/rf-kiss.log`: RX frames with RSSI/SNR, TX frames after the daemon's result (`ok`, or `unconfirmed` when the confirmation was lost), the TNC2 text where the frame carries it. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 
