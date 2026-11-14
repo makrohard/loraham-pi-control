@@ -175,6 +175,6 @@ expected to be gone afterwards (not yet verified).
 
 ## Backup, restore, purge
 
-The secrets backup includes `state/openhop`: the config file with the identity and passwords,
+The secrets backup includes `state/openhop` and each listed instance's `state/<rid>/openhop`: the config file with the identity and passwords,
 `policy.yaml`, Glass certificates, plugins and the databases. The GPS file is on tmpfs and is not
 in it. `lhpc clean meshcore --purge` removes the folder; a reinstall is then a new repeater.
