@@ -200,23 +200,29 @@ Three things are not regenerable; a default `uninstall.sh` keeps them (plus `bac
 - **`profiles/`** — your confirmed known-working compositions.
 - **App data under `state/`** — the stacks' databases, identities and message stores:
   `state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet
-  state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`).
-  Never back up `state/` wholesale — its other entries are process ownership, jobs, locks and
-  registries that must not be restored onto a different run.
+  state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`),
+  and each instance's own under `state/<rid>/`: `graywolf`, `meshcom`, `meshcore`, `meshtasticd`,
+  `openhop`.
+  Never back up `state/` or a `state/<rid>/` wholesale — the other entries of `state/` are
+  process ownership, jobs, locks and registries, those of `state/<rid>/` (`gps/`,
+  `loraham_kiss`, `meshcore-cli.lock`) an instance's GPS feed state, KISS link and lock; none
+  may be restored onto a different run.
 
 `uninstall.sh` writes the `.lhpc-uninstalling` guard (no new tasks), refuses on active or
 unprovable jobs or any UNKNOWN component, stops clients before the shared daemon and verifies
 they stopped; if it cannot prove that, it removes the guard and deletes nothing. It stops and
 removes only canonical units of the same root (this version's or another release's).
 
-**Full backup.** With every stack stopped (`lhpc stack stop <stack>`), as the LHPC user; `-p`
-keeps the `0600` modes, and missing app-data directories are skipped:
+**Full backup.** With every stack stopped (`lhpc stack stop <stack>@<rid>` for each running
+instance), as the LHPC user; `-p` keeps the `0600` modes, and missing app-data directories are
+skipped:
 
 ```bash
 cd ~/loraham-pi-control          # or: cd "$LHPC_RUNTIME_ROOT"
+inst=$(ls -d state/r[1-9]*/{graywolf,meshcom,meshcore,meshtasticd,openhop} 2>/dev/null)
 tar -czpf ~/lhpc-backup-$(date +%F).tgz --ignore-failed-read config profiles \
     state/graywolf state/meshcore state/openhop state/meshtasticd \
-    state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat
+    state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat $inst
 chmod 600 ~/lhpc-backup-*.tgz
 ```
 
