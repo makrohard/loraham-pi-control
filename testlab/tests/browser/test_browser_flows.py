@@ -258,6 +258,38 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
     assert len(navigations) == 2, f"reloaded more than once: {navigations}"
 
 
+_TASK_ROWS = """() => [...document.querySelectorAll('#task-banner > [data-key]')].map(r => ({
+    key: r.dataset.key, cls: r.className, label: r.querySelector('.bnr-title').textContent,
+    x: !r.querySelector(':scope > .dismiss').hidden && r.firstElementChild.classList.contains('dismiss'),
+    recover: !!r.querySelector('.bnr-links > .ti-recover:not([hidden])'),
+    view: r.querySelector('.bnr-links > .ti-view').getAttribute('href')}))"""
+
+
+def test_a_task_row_appears_in_the_banner_shape_and_follows_its_state(page):
+    """The job banner (K4): a task the feed adds later is the same banner shape as every other one: the label its
+    title, view (and Recover) in the bottom row, the ✕ first so it sits top right. A state change updates the SAME
+    row: an unsafe job gets its ✕ and its Recover."""
+    import json
+    feed = {"tasks": []}
+    page.clock.install()
+    page.route("**/api/tasks*", lambda route: route.fulfill(status=200, content_type="application/json",
+                                                             body=json.dumps(feed)))
+    page.goto(page.lab_base + "/stacks", wait_until="networkidle")
+    assert page.evaluate(_TASK_ROWS) == []
+    task = {"kind": "job", "op": "install", "state": "running", "run_id": "r7", "attempt_id": "a7",
+            "label": "install kiss", "href": "/logs/kiss"}
+    feed["tasks"] = [task]
+    page.clock.run_for(15000)                                  # the slow poll fetches the new task
+    page.wait_for_function("() => document.querySelectorAll('#task-banner > [data-key]').length === 1")
+    [row] = page.evaluate(_TASK_ROWS)
+    assert row == {"key": "job-r7", "cls": "depnote taskitem taskitem-running", "label": "install kiss",
+                   "x": False, "recover": False, "view": "/logs/kiss"}, row
+    feed["tasks"] = [dict(task, state="unsafe")]
+    page.clock.run_for(2000)                                   # running: the fast poll
+    page.wait_for_function("() => document.querySelector('#task-banner > .taskitem-unsafe')")
+    assert page.evaluate(_TASK_ROWS) == [dict(row, cls="depnote taskitem taskitem-unsafe", x=True, recover=True)]
+
+
 def _row_times(page):
     """Which seeded record each rendered row is, top to bottom, by its time cell — read from the
     DOM by the header's position, whether the column is shown or not."""

@@ -1,20 +1,5 @@
-{# Canonical flash colouring: map a category/level to exactly one severity class —
-   green = success, yellow = warning, red = failure, grey = neutral/info — so every message is
-   coloured consistently regardless of which category string a route used. The FIRST token is the
-   severity; any remaining tokens are preserved verbatim as extra classes. #}
-{% macro flash_classes(category) -%}
-{%- set parts = ((category or '')|string).split() -%}
-{%- set sev = parts[0]|lower if parts else '' -%}
-{%- if sev in ('ok', 'success', 'good') -%}flash-ok
-{%- elif sev in ('warn', 'warning') -%}flash-warn
-{%- elif sev in ('err', 'error', 'bad', 'danger', 'fail', 'failed', 'critical') -%}flash-bad
-{%- else -%}flash-info
-{%- endif -%}
-{{- (' ' ~ parts[1:]|join(' ')) if parts[1:] else '' -}}
-{%- endmacro %}
-
-{# Same severity mapping as flash_classes, but for PERSISTENT (GET-rendered) callout notes — the
-   `depnote` channel is kept distinct from the action-flash `flash-*` channel. #}
+{# One severity class per level, for every banner (persistent notes and action results alike):
+   green = success, yellow = warning, red = failure, grey = neutral/info. The FIRST word is the level. #}
 {% macro depnote_classes(level) -%}
 {%- set sev = ((level or '')|string).split()[0]|lower if (level or '')|string else '' -%}
 {%- if sev in ('ok', 'success', 'good') -%}depnote-ok
@@ -24,15 +9,30 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# A status banner with an optional right-aligned "View →" link — shares the theme-aware task-banner style
-   so every green/yellow/red banner looks identical. `sev` in ok|warn|bad. Use for informational banners
-   whose next-action lives elsewhere (View → opens that stack's Install/Setup section on Stacks). #}
-{% macro banner(sev, href='', view='View') %}
-<div class="taskitem taskitem-{{ sev }}">
-  <span class="ti-label">{{ caller() }}</span>
-  {%- if href %}<a class="ti-view" href="{{ href }}">{{ view }} &rarr;</a>{% endif -%}
+{# THE banner (K4, MOCK-BANNER-v2): box per severity › the optional ✕ (top right) › title › text or list › ONE
+   bottom row of links and buttons. `sev` is a level (depnote_classes). `x` is the ✕ form's action (none: no ✕),
+   `x_fields` its hidden (name, value) pairs, `x_label` its accessible name. The caller is asked twice:
+   caller('body') for the text or list, caller('links') for the bottom row (left empty: no row). #}
+{% macro banner(sev, title='', id='', x='', x_fields=(), x_label='Close', extra='') %}
+<div class="depnote {{ depnote_classes(sev) }}{{ ' ' ~ extra if extra }}"{% if id %} id="{{ id }}"{% endif %}>
+  {%- if x %}
+  <form method="post" action="{{ x }}" class="act dismiss" title="Close">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    {%- for name, value in x_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <button type="submit" aria-label="{{ x_label }}">&times;</button>
+  </form>
+  {%- endif %}
+  {%- if title %}<strong class="bnr-title">{{ title }}</strong>{% endif %}
+  {{- caller('body') }}
+  {%- set links = caller('links') %}{% if links | trim %}<div class="bnr-links">{{ links }}</div>{% endif %}
 </div>
 {% endmacro %}
+
+{# The action results addressed to one panel (`rs` = panel_results(<its id>), K4): ONE banner at the control, its
+   first result the title and the others one line each, in the first result's severity. #}
+{% macro panel_banner(rs) %}{% if rs %}
+{% call(part) banner(rs[0][0], title=rs[0][1], extra='panel-result') %}{% if part == 'body' and rs | length > 1 %}<ul>{% for sev, msg in rs[1:] %}<li>{{ msg }}</li>{% endfor %}</ul>{% endif %}{% endcall %}
+{% endif %}{% endmacro %}
 
 {# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
    address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all

@@ -53,57 +53,44 @@
   {% include "_task_banner.html" %}
   {% if attention %}
   {# W272/W273: one banner, one line per important condition, each linked to its row; one ✕ for the set #}
-  <div class="depnote depnote-warn" id="needs-attention">
-    {% if attention | rejectattr('sticky') | list %}
-    <form method="post" action="{{ url_for('attention_dismiss') }}" class="act dismiss" title="Close">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="set" value="{{ attention_set }}">
-      <button type="submit" aria-label="Close the attention list">&times;</button>
-    </form>
-    {% endif %}
-    <strong>Needs attention</strong>
+  {% call(part) banner('warn', title='Needs attention', id='needs-attention',
+                       x=url_for('attention_dismiss') if attention | rejectattr('sticky') | list else '',
+                       x_fields=[('set', attention_set)], x_label='Close the attention list') %}
+    {%- if part == 'body' %}
     <ul>{% for c in attention %}<li data-attention="{{ c.key }}"><a href="
       {%- if c.kind == 'radio' %}{{ url_for('hardware_radio', rid=c.ref) }}
       {%- elif c.kind == 'stack' %}{{ url_for('stacks_overview', open=c.ref) }}#stackrow-{{ c.ref }}
       {%- elif c.kind == 'usb' %}{{ url_for('hardware_view') }}#usb-setup
       {%- else %}{{ c.ref or url_for('dashboard') }}{% endif %}">{{ c.line }}</a></li>{% endfor %}</ul>
-  </div>
+    {%- endif %}
+  {% endcall %}
   {% endif %}
   {% if hardware_changes and hardware_changes.lines %}
-  <div class="depnote depnote-warn" id="hardware-changes">
-    <form method="post" action="{{ url_for('hardware_changes_dismiss') }}" class="act dismiss" title="Close">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      {% for e in hardware_changes.lines %}{% for i in e.ids %}<input type="hidden" name="id" value="{{ i }}">{% endfor %}{% endfor %}
-      <button type="submit" aria-label="Close the hardware changes">&times;</button>
-    </form>
-    <strong>Radio hardware changed</strong> (since you last closed this)
+  {# B3 (#7): each line carries its ids (its event id and a derived "u:<identity>"); the ✕ posts all of them #}
+  {% set hw_ids = [] %}{% for e in hardware_changes.lines %}{% for i in e.ids %}{% set _ = hw_ids.append(('id', i)) %}{% endfor %}{% endfor %}
+  {% call(part) banner('warn', title='Radio hardware changed', id='hardware-changes', x=url_for('hardware_changes_dismiss'),
+                       x_fields=hw_ids, x_label='Close the hardware changes') %}
+    {%- if part == 'body' %}(since you last closed this)
     <ul>{% for e in hardware_changes.lines %}<li data-change="{{ e.id }}">{{ e.at }} {{ e.line }}</li>{% endfor %}</ul>
-    <a href="{{ url_for('hardware_view') }}">Open Hardware</a>
-  </div>
+    {%- else %}<a href="{{ url_for('hardware_view') }}">Open Hardware</a>{% endif %}
+  {% endcall %}
   {% endif %}
   {% if welcome and welcome.fresh and not welcome_dismissed %}
-  <div class="depnote depnote-ok">
-    {# Onboarding hint, not a fault: dismissable so it does not sit on the dashboard forever. A16: the ✕ first, top right. #}
-    <form method="post" action="{{ url_for('welcome_dismiss') }}" class="act dismiss" title="Dismiss">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <button type="submit" aria-label="Dismiss the welcome note">&times;</button>
-    </form>
-    <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
-    guided run:
-    <a href="{{ url_for('auto_install_page') }}"><button type="button">Install and Build
-      all Stacks</button></a>
-  </div>
+  {# Onboarding hint, not a fault: dismissable so it does not sit on the dashboard forever. #}
+  {% call(part) banner('ok', title='Welcome!', x=url_for('welcome_dismiss'), x_label='Dismiss the welcome note') %}
+    {%- if part == 'body' %}Nothing is installed yet — set up all LoRaHAM stacks in one guided run.
+    {%- else %}<a href="{{ url_for('auto_install_page') }}"><button type="button">Install and Build
+      all Stacks</button></a>{% endif %}
+  {% endcall %}
   {% elif welcome and not welcome.fresh %}
-  <div class="depnote depnote-warn">
-    Nothing is installed, but the runtime state needs attention before a fresh install:
-    {{ welcome.recovery }}
-  </div>
+  {% call(part) banner('warn') %}{% if part == 'body' %}Nothing is installed, but the runtime state needs attention
+    before a fresh install: {{ welcome.recovery }}{% endif %}{% endcall %}
   {% endif %}
   {% if restart_required %}
     {# Durable restart-required flags: yellow, explicit — the action restarts the stack at once (a confirm page appears only when a dependent or another stack's owner would be stopped). #}
-    <div class="depnote depnote-warn">
-      <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
-      running stack{{ 's' if restart_required|length > 1 }}:
+    {% call(part) banner('warn', title='Restart required') %}
+      {%- if part == 'body' %}Saved settings differ from the running stack{{ 's' if restart_required|length > 1 }}.
+      {%- else %}
       {% for sid in restart_required %}
         {# W325, W2: every instance (`<stack>@<rid>`) gets the same button; /action restarts exactly it #}
         <form method="post" action="{{ url_for('action') }}" class="act">
@@ -114,29 +101,34 @@
           <button type="submit" class="warnbtn">Restart {{ sid }} now</button>
         </form>
       {% endfor %}
-    </div>
+      {%- endif %}
+    {% endcall %}
   {% endif %}
   {% if fw_reapply %}
     {# Before the reboot, not after it: a stale firewall helper makes the next boot start the
        console loopback-only (fail-closed). #}
-    <p class="depnote depnote-warn" id="fw-reapply-notice">{{ fw_reapply.text }} Run:
+    {% call(part) banner('warn', id='fw-reapply-notice') %}
+      {%- if part == 'body' %}{{ fw_reapply.text }} Run:
       {% for c in fw_reapply.commands %}<code>{{ c }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
-      — <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall panel</a></p>
+      {%- else %}<a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall panel</a>{% endif %}
+    {% endcall %}
   {% endif %}
   {% if maintenance_failing %}
     {# The console's maintenance pass (`lhpc doctor` lists every task): a failed task is never healthy. #}
-    <p class="depnote depnote-warn" id="maintenance-notice">Maintenance failed:
-      {% for task, at, msg in maintenance_failing %}<code>{{ task }}</code>{% if at %} at {{ at }}{% endif %} — {{ msg }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% call(part) banner('warn', id='maintenance-notice', title='Maintenance failed') %}
+      {%- if part == 'body' %}<ul>{% for task, at, msg in maintenance_failing %}<li><code>{{ task }}</code>{% if at %} at {{ at }}{% endif %} — {{ msg }}</li>{% endfor %}</ul>{% endif %}
+    {% endcall %}
   {% endif %}
   {% if not hardware_configured and radios_listed %}
     {# DEC-W384cl: the per-band card's "add or enable a radio" hint, as one truthful line: radios, none enabled #}
-    {% call banner('warn', url_for('hardware_view'), 'Open Hardware') %}
-      <strong>Radios are set up, but none is enabled.</strong> No daemon starts on a disabled radio: enable one on the
-      Hardware page.
+    {% call(part) banner('warn', title='Radios are set up, but none is enabled.') %}
+      {%- if part == 'body' %}No daemon starts on a disabled radio: enable one on the Hardware page.
+      {%- else %}<a href="{{ url_for('hardware_view') }}">Open Hardware &rarr;</a>{% endif %}
     {% endcall %}
   {% elif not hardware_configured %}
-    {% call banner('warn', url_for('hardware_add_page'), 'Open Hardware') %}
-      <strong>No radio hardware is set up yet.</strong> No daemon can start until it is (Apps › Daemon › Hardware).
+    {% call(part) banner('warn', title='No radio hardware is set up yet.') %}
+      {%- if part == 'body' %}No daemon can start until it is (Apps › Daemon › Hardware).
+      {%- else %}<a href="{{ url_for('hardware_add_page') }}">Open Hardware &rarr;</a>{% endif %}
     {% endcall %}
   {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
@@ -321,7 +313,7 @@
                            hiding it behind an install/build blocker just removes the one thing
                            they can act on. #}
                         {% if c.blocker %}
-                          {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ c.blocker }}{% endcall %}
+                          {% call(part) banner('warn') %}{% if part == 'body' %}{{ c.blocker }}{% else %}<a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}">View &rarr;</a>{% endif %}{% endcall %}
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
                         {# K8f S4-3: this card's radio's own command; the box id is the card's (copy.js copies by id) #}
@@ -373,7 +365,7 @@
                       <button type="submit" aria-label="Dismiss {{ s.name }}">&times;</button>
                     </form></p>
                   {% if s.blocker %}
-                    {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
+                    {% call(part) banner('warn') %}{% if part == 'body' %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% else %}<a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}">View &rarr;</a>{% endif %}{% endcall %}
                   {% endif %}
                   <p class="muted">Run local in a terminal (daemon is ensured):</p>
                   {{ cmdbox('cmd-' ~ s.id ~ '-' ~ key, (s.commands or {}).get(r.rid, '')) }}

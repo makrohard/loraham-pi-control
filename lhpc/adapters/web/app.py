@@ -30,6 +30,7 @@ from flask import (
     Response,
     abort,
     flash,
+    get_flashed_messages,
     jsonify,
     make_response,
     redirect,
@@ -38,6 +39,7 @@ from flask import (
     session,
     url_for,
 )
+from flask import g as _g
 
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
@@ -280,6 +282,32 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return bool(sent) and _secrets.compare_digest(sent, session.get("_csrf", ""))
 
     app.jinja_env.globals["csrf_token"] = _csrf_token
+
+    # K4: an action result may name the panel it belongs to, `flash(text, "<severity> @<panel id>")`. The
+    # flashes are read once per request into (severity, destination, text); a panel takes its own with
+    # panel_results(<id>), and base.html shows every entry that no panel of this page took, so a result
+    # whose panel is not on the page still shows (at the top). Without `@` an entry is global, as before.
+    def _flash_entries() -> list:
+        if "flash_entries" not in _g:
+            _g.flash_entries, _g.flash_taken = [], set()
+            for cat, msg in get_flashed_messages(with_categories=True):
+                words = str(cat).split()
+                dest = next((w[1:] for w in words if w.startswith("@")), "")
+                _g.flash_entries.append((" ".join(w for w in words if not w.startswith("@")), dest, msg))
+        return _g.flash_entries
+
+    def _panel_results(dest: str) -> list:
+        """(severity, text) of the results addressed to the panel `dest`, in flash order."""
+        entries = _flash_entries()
+        _g.flash_taken.add(dest)
+        return [(sev, msg) for sev, d, msg in entries if d == dest]
+
+    def _page_results() -> list:
+        """(severity, text) of the results no panel took: the global ones and any whose panel is absent."""
+        entries = _flash_entries()
+        return [(sev, msg) for sev, d, msg in entries if not d or d not in _g.flash_taken]
+
+    app.jinja_env.globals.update(panel_results=_panel_results, page_results=_page_results)
 
     @app.context_processor
     def _inject_selfupdate():
@@ -2610,11 +2638,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             cidrs=cidrs if "cidrs" in f else None,
             confirm=phrase in ("enable-remote", "enable-remote-danger"),
             confirm_public=(phrase == "enable-remote-danger"))
-        flash(r.summary, "ok" if r.ok else "err")
+        # K4 (ERRATA-UI-v5-3 E3-1): the result belongs to the block that holds this form, the page's proxy Settings
+        # (`stack-webserver-<page>--settings`); it shows there, on the Stacks page of that stack and radio (the panel is
+        # server-rendered there, so the anchor resolves without JS); NOT ?cfg, which opens the stack's Settings.
+        block = "stack-webserver-" + page_id + "--settings"
+        flash(r.summary, ("ok" if r.ok else "err") + " @" + block)
         for d in r.details:
-            flash(d, "warn" if r.ok else "err")
-        # Anchor the webserver panel itself (NOT ?cfg, which opens Settings).
-        return redirect(url_for("stacks_overview") + "#stack-webserver-" + page_id)
+            flash(d, ("warn" if r.ok else "err") + " @" + block)
+        return redirect(url_for("stacks_overview", open=stack_id, radio=page_id.partition("@")[2])
+                        + "#stack-webserver-" + page_id)
 
     @app.post("/webserver/stacks")
     def stack_webs_configure():
@@ -2634,10 +2666,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             cidrs=[x.strip() for x in f.get("cidrs", "").split(",") if x.strip()],
             confirm=phrase in ("enable-remote", "enable-remote-danger"),
             confirm_public=(phrase == "enable-remote-danger"))
-        flash(r.summary, "ok" if r.ok else "err")
+        # K4: ONE banner at the bulk form: the summary its title, each refused or noted item one line.
+        flash(r.summary, ("ok" if r.ok else "err") + " @ws-stackwebs")
         for d in r.details:
-            flash(d, "warn" if r.ok else "err")
-        return redirect(url_for("stacks_overview") + "?wsg=1#webserver-row")
+            flash(d, ("warn" if r.ok else "err") + " @ws-stackwebs")
+        return redirect(url_for("stacks_overview", wsg=1) + "#ws-stackwebs")
 
     @app.route("/webserver/reset", methods=["POST"])
     def webserver_reset():

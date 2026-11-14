@@ -5,7 +5,7 @@
  * ✕ (dismiss); an `unsafe` JOB gets a Recover button — both POST (CSRF) to /api/tasks/{dismiss,recover}.
  * A running start/restart job also marks its stack ("starting…" badge on the Apps row / Dashboard card,
  * from the item's `stack`), and when such a job turns terminal the page reloads ONCE so the
- * server-rendered state becomes current. CSP-safe: createElement / textContent / setAttribute only. */
+ * server-rendered state becomes current. CSP-safe: template clones / textContent / setAttribute only. */
 (function () {
   "use strict";
   var banner = document.getElementById("task-banner");
@@ -105,6 +105,11 @@
     return e;
   }
 
+  // Every row is a clone of the server's inert <template> row (_task_banner.html): this script builds no row
+  // markup of its own; it fills the fields and toggles the ✕ (failed, or unsafe of every kind: UX, X5) and
+  // Recover (an unsafe JOB) with `hidden`. The ✕ only hides the item (X8).
+  var template = document.getElementById("task-row-template");
+
   function render(tasks) {
     tasks = tasks || [];
     markStarting(tasks);
@@ -112,7 +117,7 @@
     var wanted = {};
     tasks.forEach(function (t) { wanted[keyOf(t)] = true; });
     Array.prototype.slice.call(banner.children).forEach(function (c) {
-      if (!wanted[c.getAttribute("data-key")]) banner.removeChild(c);
+      if (!wanted[c.getAttribute("data-key")]) c.remove();
     });
     tasks.forEach(function (t) {
       var key = keyOf(t), row = null, i;
@@ -120,44 +125,38 @@
         if (banner.children[i].getAttribute("data-key") === key) { row = banner.children[i]; break; }
       }
       if (!row) {
-        row = el("div", null);
-        row.setAttribute("data-key", key);
-        row.appendChild(el("span", "ti-label"));
-        row.appendChild(el("span", "ti-state"));
-        row.appendChild(el("span", "ti-hint"));
-        row.appendChild(el("a", "ti-view", "view →"));
+        if (!template) return;                      // no template on this page: nothing to clone
+        row = template.content.firstElementChild.cloneNode(true);
         banner.appendChild(row);
       }
-      row.className = "taskitem taskitem-" + t.state;
+      row.setAttribute("data-key", key);
+      row.setAttribute("data-kind", t.kind || "");
+      row.setAttribute("data-run", t.run_id || "");
+      row.setAttribute("data-attempt", t.attempt_id || "");
+      row.className = "depnote taskitem taskitem-" + t.state;
       row.querySelector(".ti-label").textContent = t.label || "";
       row.querySelector(".ti-state").textContent = LABELS[t.state] || t.state || "";
       var hint = row.querySelector(".ti-hint");
-      if (hint) {                                   // defensive: a server row may omit it
-        hint.textContent = t.hint || "";
-        // Toggle the SAME class the server renders, not an inline style: one mechanism, and
-        // nothing here re-introduces the style attribute the CSP blocks.
-        hint.classList.toggle("is-empty", !t.hint);
-      }
+      hint.textContent = t.hint || "";
+      // Toggle the SAME class the server renders, not an inline style: one mechanism, and
+      // nothing here re-introduces the style attribute the CSP blocks.
+      hint.classList.toggle("is-empty", !t.hint);
       row.querySelector(".ti-view").setAttribute("href", t.href || "#");
-
-      // Recover for an unsafe JOB; the ✕ (dismiss) for failed and for an unsafe item of every kind (UX, X5),
-      // beside Recover. Rebuild the trailing controls on a state change. The ✕ only hides the item (X8).
-      row.querySelectorAll(".ti-close, .ti-recover").forEach(function (b) { row.removeChild(b); });
-      if (t.state === "unsafe" && t.kind === "job") {
-        var rec = el("button", "ti-recover", "Recover"); rec.setAttribute("type", "button");
-        rec.addEventListener("click", function () { post("/api/tasks/recover", t).then(tick); });
-        row.appendChild(rec);
-      }
-      if (t.state === "unsafe" || (t.state === "failed" && !t.no_dismiss)) {
-        var x = el("button", "ti-close", "×"); x.setAttribute("type", "button"); x.title = "Dismiss";
-        x.setAttribute("aria-label", "Dismiss");
-        x.addEventListener("click", function () {
-          post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) row.parentNode && banner.removeChild(row); });
-        });
-        row.appendChild(x);
-      }
+      row.querySelector(".dismiss").hidden = !(t.state === "unsafe" || (t.state === "failed" && !t.no_dismiss));
+      row.querySelector(".ti-recover").hidden = !(t.state === "unsafe" && t.kind === "job");
     });
   }
+
+  // One listener for every row's ✕ and Recover, server-rendered or cloned: the row's data-* name its task.
+  banner.addEventListener("click", function (e) {
+    var b = e.target.closest(".ti-close, .ti-recover");
+    if (!b) return;
+    var row = b.closest("[data-key]");
+    var t = {kind: row.getAttribute("data-kind"), run_id: row.getAttribute("data-run"),
+             attempt_id: row.getAttribute("data-attempt")};
+    if (b.classList.contains("ti-recover")) post("/api/tasks/recover", t).then(tick);
+    else post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) row.remove(); });
+  });
 
   // Two speeds, because the feed is rarely interesting. FAST only while something is RUNNING;
   // everything else — an empty feed, or one holding only terminal items — polls slowly. That

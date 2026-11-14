@@ -22,9 +22,9 @@ def test_build_dependency_banner_warns_radiolib_first(tmp_path, web):
     (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)
     assert svc.unbuilt_build_deps("daemon") == ["radiolib"]              # the typed state
     doc = htmlq.parse(web(service_factory=lambda: svc).get("/stacks?open=daemon").get_data(as_text=True))
-    banners = [b for b in doc.find("div", class_="taskitem-bad") if "radiolib" in doc.within(b).text]
+    banners = [b for b in doc.find("div", class_="depnote-bad") if "radiolib" in doc.within(b).text]
     assert len(banners) == 1, "exactly one severe banner names the unbuilt dependency"
-    link = doc.within(banners[0]).find("a", class_="ti-view")[0]["href"]
+    link = doc.within(doc.within(banners[0]).find("div", class_="bnr-links")[0]).find("a")[0]["href"]
     assert "comp=radiolib" in link and link.endswith("#comp-radiolib")  # opens RadioLib's own card
 
 

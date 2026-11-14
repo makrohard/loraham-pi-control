@@ -2121,6 +2121,27 @@ def test_webserver_panel_renders_both_webgui_subpanels(tmp_path, web):
         assert _controls(bulk, field), field
 
 
+def test_a_refused_bulk_policy_is_one_banner_at_its_form_one_line_per_page(tmp_path, web, csrf):
+    c, svc = _app(web, tmp_path)
+    pages = sorted(svc.stack_web_eligible())
+    r = c.post("/webserver/stacks", data={"_csrf": csrf(c), "mode": "lan", "scheme": "https",
+                                          "access_mode": "local-open-remote-auth"})   # lan without a CIDR
+    assert r.status_code == 302
+    page = c.get("/stacks")                     # not the redirect's ?wsg=1: the results alone must open the form
+    assert page.status_code == 200
+    doc = parse(page.get_data(as_text=True))
+    assert doc.by_id("ws-stackwebs").has_attr("open")                # visible without JS
+    bulk = doc.within(doc.by_id("ws-stackwebs"))
+    [banner] = bulk.find("div", class_="panel-result")
+    assert "depnote-bad" in banner.classes
+    assert "unmet requirement(s):" in bulk.within(banner).find("strong", class_="bnr-title")[0].text
+    named = {li.text.strip().lstrip("- ").split(":")[0] for li in bulk.within(banner).find("li")}
+    assert named == set(pages)                                       # one line per refused page
+    assert doc.find("p", class_="flash") == []                       # nothing of it at the top
+    assert not load_config(Paths(runtime_root=tmp_path)).stackweb   # nothing was saved
+    assert r.headers["Location"].endswith("#ws-stackwebs")           # the redirect lands on the form
+
+
 def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch, web, csrf):
     c, svc = _app(web, tmp_path)
     seen = {}

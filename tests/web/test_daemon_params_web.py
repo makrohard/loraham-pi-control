@@ -234,7 +234,8 @@ def test_apply_live_failure_flashes_warning(web, csrf):
     r = c.post("/stacks/daemon/daemon-params/apply",
                data={"_csrf": tok, "radio": "r1", "dp_CADIDLE": "40"})              # W3: the radio's apply
     body = c.get(r.headers["Location"]).get_data(as_text=True)
-    assert "flash-warn" in body and "flash-ok" not in body
+    flashes = [p.classes for p in parse(body).find("p", class_="flash")]
+    assert any("depnote-warn" in c for c in flashes) and not any("depnote-ok" in c for c in flashes)
 
 
 def test_saved_override_persists_after_failed_apply(tmp_path):

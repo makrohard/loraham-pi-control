@@ -79,14 +79,14 @@
           {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
           {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
       {% elif g.has_source %}
-        {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Install') %}<strong>Not installed yet:</strong> the source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% endcall %}
+        {% call(part) banner('warn', title='Not installed yet') %}{% if part == 'body' %}The source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Install &rarr;</a>{% endif %}{% endcall %}
       {% endif %}
       {% if g.needs_build_deps %}
         {# A build DEPENDENCY (e.g. RadioLib) is not built — the link opens ITS Dependencies card
            (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
-        {% call banner('bad', url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0], 'Build') %}<strong>{{ g.needs_build_deps|join(', ') }}</strong> not built — build this dependency first.{% endcall %}
+        {% call(part) banner('bad', title=g.needs_build_deps|join(', ') ~ ' not built') %}{% if part == 'body' %}Build this dependency first.{% else %}<a href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0] }}">Build &rarr;</a>{% endif %}{% endcall %}
       {% elif g.needs_build %}
-        {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Build') %}<strong>Build needed:</strong> {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% endcall %}
+        {% call(part) banner('warn', title='Build needed') %}{% if part == 'body' %}{{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
       {% endif %}
       {% if g.hardware_block %}
         <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio hardware</span> —

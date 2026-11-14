@@ -3,6 +3,7 @@ of showing them silently empty: the console's banner on every page and the first
 service's status, which the CLI renders), one text (radio_start.NO_LIST_TEXT)."""
 import pytest
 import radios_fixture
+from htmlq import parse
 
 from lhpc.core import radio_start
 from lhpc.core.paths import Paths
@@ -27,9 +28,8 @@ def test_status_names_the_missing_hardware_list_first_and_drops_it_with_a_list(t
 
 @pytest.mark.no_default_hardware
 def test_every_console_page_shows_the_banner_without_a_list_and_none_with_one(web, tmp_path):
-    shown = TEXT.replace("<", "&lt;").replace(">", "&gt;")                 # as the page renders it (autoescape)
     for url in ("/", "/stacks"):
-        page = web().get(url).get_data(as_text=True)
-        assert f'<p class="depnote depnote-warn" id="no-list-notice">{shown}.</p>' in page, url
+        notice = parse(web().get(url).get_data(as_text=True)).by_id("no-list-notice")
+        assert notice is not None and notice.has_class("depnote-warn") and notice.text == f"{TEXT}.", url
     radios_fixture.write(tmp_path)
     assert 'id="no-list-notice"' not in web().get("/").get_data(as_text=True)

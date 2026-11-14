@@ -2121,8 +2121,23 @@ def _manual_required_svc(tmp_path, monkeypatch, summary):
 
 def _flash_classes(body, needle):
     """The class tokens of the action-flash <p> carrying `needle` (persistent page banners use the
-    separate `depnote-*` channel, so this reliably targets the real action flash)."""
+    are not `p.flash`, so this reliably targets the real action flash; its colour is its `depnote-*` class)."""
     return next(p.classes for p in parse(body).find("p", class_="flash") if needle in p.text)
+
+
+def test_a_result_whose_panel_is_not_on_the_page_still_shows_on_top(web):
+    # K4: a result names the block it belongs to; when that block is not on the page it lands, it is shown with
+    # the page's own results at the top (never lost), in its severity, and only once.
+    c = web()
+    with c.session_transaction() as sess:
+        sess["_flashes"] = [("err @stack-webserver-nope@r9--settings", "a result for a block not on this page"),
+                            ("ok", "an ordinary result")]
+    r = c.get("/stacks")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert [(p.text.strip(), "depnote-bad" in p.classes) for p in parse(body).find("p", class_="flash")] == [
+        ("a result for a block not on this page", True), ("an ordinary result", False)]
+    assert body.count("a result for a block not on this page") == 1
 
 
 def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch, web, csrf):
@@ -2136,7 +2151,7 @@ def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch, we
                                    "confirmed": "yes"}, follow_redirects=True).data.decode()
     assert "kill 16720" in body
     cls = _flash_classes(body, "is NOT fully verified")
-    assert "flash-warn" in cls and "flash-ok" not in cls
+    assert "depnote-warn" in cls and "depnote-ok" not in cls
 
 
 _SYSTEMD_MUTATIONS = ("start", "stop", "restart", "reload", "enable", "disable", "mask",
@@ -3033,5 +3048,5 @@ def test_an_inline_update_whose_build_job_is_refused_ends_as_the_clis_failed_bui
                                    "source": "pinned", "confirmed": "yes"},
                   follow_redirects=True).data.decode()
     cls = _flash_classes(body, "needs-rebuild")
-    assert "flash-bad" in cls and "flash-ok" not in cls and "flash-warn" not in cls
+    assert "depnote-bad" in cls and "depnote-ok" not in cls and "depnote-warn" not in cls
     assert "lhpc build kiss --yes" in body and "an uninstall is pending" in body

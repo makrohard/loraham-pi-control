@@ -67,9 +67,16 @@ def _items(body, kind=None, state=None):
     return out
 
 
+def _shown(els):
+    """The controls a row OFFERS: every row carries the ✕ and Recover (one row shape, K4); `hidden` ones are not
+    offered (the ✕ is hidden on its `.dismiss` wrapper, Recover on itself)."""
+    return [e for e in els if not e.has_attr("hidden")]
+
+
 def _controls(item_scope):
-    return {"dismiss": item_scope.find("button", class_="ti-close"),
-            "recover": item_scope.find("button", class_="ti-recover"),
+    return {"dismiss": [b for s in _shown(item_scope.find("span", class_="dismiss"))
+                        for b in item_scope.within(s).find("button", class_="ti-close")],
+            "recover": _shown(item_scope.find("button", class_="ti-recover")),
             "view": item_scope.find("a", class_="ti-view")}
 
 

@@ -206,11 +206,7 @@ pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid
 .endpoint-bad { color: var(--idle); }
 
 /* Flash messages + daemon monitor ------------------------------------- */
-.flash { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; transition: opacity .6s ease; }
-.flash-ok { background: var(--flash-ok-bg); border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
-.flash-warn { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
-.flash-bad { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
-.flash-info { background: var(--flash-info-bg); border: 1px solid var(--flash-info-border); color: var(--flash-info-ink); }   /* neutral (details) */
+.flash { transition: opacity .6s ease; }
 /* Persistent (GET-rendered) callout notes — same look as a flash, but a distinct channel from the
    action-flash `.flash*` rules above (which are reserved for one-off action outcomes). Reuses the
    same --flash-* tokens, so it stays theme-correct. Persistent notes never fade (no `-hide`). */
@@ -310,6 +306,11 @@ a.iface { text-decoration: none; color: var(--brand); }
 /* A16, the approved banner concept (MOCK-BANNER-v2): a banner's ✕ on the banner's own colour, no box of its own */
 .depnote > .dismiss button { background: transparent; color: inherit; border-color: transparent; font-size: 1.1rem; }
 .depnote > .dismiss button:hover { background: transparent; color: inherit; border-color: currentColor; }
+/* K4 banner parts: the title on its own line, a list indented, ONE bottom row for links and buttons */
+.depnote .bnr-title { display: block; margin-bottom: .15rem; }
+.depnote ul { margin: .2rem 0 .3rem 1.1rem; padding: 0; }
+.depnote .bnr-links { margin: .3rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem .9rem; align-items: center; }
+.depnote .bnr-links form.act { margin: 0; }
 .startform { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .actline { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .3rem 0; }
 .actline .grouplabel { min-width: 3.5rem; }
@@ -534,33 +535,20 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 /* a little breathing room after the System dependencies list, before "Verify now" */
 .ws-comp .sysdeps { margin-bottom: 1em; }
 
-/* ---- Running-task indicator banner (Dash + Stacks) ---- */
-.taskbanner { display: flex; flex-direction: column; gap: .4rem; }
+/* ---- Running-task indicator banner (Dash + Stacks): each task is a banner of the one shape (K4) ---- */
+.taskbanner { display: flex; flex-direction: column; }
 .taskbanner:empty { display: none; }
-.taskitem { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
-            padding: .55rem .8rem; border-radius: 8px; border: 1px solid var(--line);
-            margin-bottom: .3rem; font-size: .92rem; }
-.taskitem .ti-label { font-weight: 600; }
 .taskitem .ti-state { font-variant: small-caps; }
 .taskitem .ti-hint  { color: var(--muted); font-size: .85em; }
 /* Hides the hint when a task has none. A CLASS, not style="display:none" — the CSP sets no
    'unsafe-inline', so style-src-attr blocks inline style attributes. taskbanner.js toggles
    this same class when it refreshes a row. */
 .taskitem .ti-hint.is-empty { display: none; }
-.taskitem .ti-view  { margin-left: auto; white-space: nowrap; }
-.taskitem .ti-recover { white-space: nowrap; }
-/* View is always rendered, so the ✕/Recover control sits just right of View (both pinned right). */
-.taskitem .ti-view + .ti-recover, .taskitem .ti-view + .ti-close { margin-left: .2rem; }
-.taskitem .ti-close {
-  background: transparent; border: 0; color: inherit; cursor: pointer; font-size: 1rem;
-  line-height: 1; padding: 0 .2rem; opacity: .7;
-}
-.taskitem .ti-close:hover { opacity: 1; }
-/* Colours share the theme-aware --flash-* tokens (identical palette to .depnote/.flash), so the banner
+/* Colours share the theme-aware --flash-* tokens (identical palette to .depnote), so the banner
    matches every other status banner AND follows the in-app data-theme toggle (not just OS preference). */
-.taskitem-running, .taskitem-warn { background: var(--flash-warn-bg); border-color: var(--flash-warn-border); color: var(--flash-warn-ink); }
-.taskitem-done,    .taskitem-ok   { background: var(--flash-ok-bg);   border-color: var(--flash-ok-border);   color: var(--flash-ok-ink); }
-.taskitem-failed, .taskitem-unsafe, .taskitem-bad { background: var(--flash-bad-bg); border-color: var(--flash-bad-border); color: var(--flash-bad-ink); }
+.taskitem-running { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
+.taskitem-done    { background: var(--flash-ok-bg);   border: 1px solid var(--flash-ok-border);   color: var(--flash-ok-ink); }
+.taskitem-failed, .taskitem-unsafe { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
 /* Each sub-section (Settings/Monitor/Certificates) anchors a "logs" overlay on its header, laid out
    EXACTLY like the main stack rows: the .row-actions overlay is a sibling OUTSIDE the <summary> (a11y),
    positioned over the header's right edge and visible whether the section is open or collapsed. */

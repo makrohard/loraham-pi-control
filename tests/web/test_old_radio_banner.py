@@ -11,7 +11,7 @@ def _notice(page: str) -> str:
     start = page.find('id="old-radio-notice">')
     if start < 0:
         return ""
-    body = page[start + len('id="old-radio-notice">'):page.index("</p>", start)]
+    body = page[start + len('id="old-radio-notice">'):page.index("</div>", start)]
     return " ".join(body.replace("<code>", "").replace("</code>", "").split())
 
 

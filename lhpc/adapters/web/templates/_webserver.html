@@ -2,7 +2,7 @@
    per-stack panels: status pills in the summary, a Settings section (one "Apply" that saves + validates +
    reloads; remote exposure is just bind=0.0.0.0 + CIDRs + the typed confirmation), a Monitor section, and
    the controller-only Certificates section. Requires: mon, modes, certs, loopback. GET is read-only. #}
-{% from "_macros.html" import depnote_classes, webserver_pills, cmdbox %}
+{% from "_macros.html" import depnote_classes, webserver_pills, cmdbox, panel_banner %}
 <details class="advcfg ws-comp" id="webserver-row">
   <summary>Webserver (HTTPS / mTLS)
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
@@ -89,8 +89,10 @@
   {# ===== Stacks WebGUIs: ONE common policy for every eligible stack web-UI proxy.
      Target-policy form — no per-stack ports here (each stack keeps its own; a missing one
      gets the same suggested default its per-stack panel offers). #}
-  <details class="advcfg" id="ws-stackwebs"{% if wsg_open %} open{% endif %}>
+  {% set wsg_results = panel_results('ws-stackwebs') %}
+  <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
     <summary>Stacks WebGUIs</summary>
+    {{ panel_banner(wsg_results) }}
     <section class="cfgsec">
       <p class="muted">Applies the selected policy to <strong>every</strong> Stack WebGUI below.
         Ports remain individual per-stack settings: existing ports are kept, a stack without one

@@ -21,49 +21,54 @@
     </div>
   </header>
   <main class="wrap">
-    {% from "_macros.html" import flash_classes %}
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, msg in messages %}
-        <p class="flash {{ flash_classes(category) }}">{{ msg }}</p>
-      {% endfor %}
-    {% endwith %}
+    {% from "_macros.html" import banner, depnote_classes %}
+    {# The page body renders FIRST: its panels take the action results addressed to them (K4), and the top
+       shows every result none took. The body is placed below the notices, as before. #}
+    {% set _content = self.content() %}
+    {% for sev, msg in page_results() %}
+      <p class="depnote {{ depnote_classes(sev) }} flash">{{ msg }}</p>
+    {% endfor %}
     {% if new_passphrase %}
-      <p class="flash {{ flash_classes('ok') }}">One-time passphrase (record it now; it is not shown again):
+      <p class="depnote depnote-ok flash">One-time passphrase (record it now; it is not shown again):
         <code id="one-time-passphrase">{{ new_passphrase }}</code></p>
     {% endif %}
     {# Persistent: the disk-space warning while the worst filesystem is low or critical. #}
     {% if disk_notice %}
-      <p class="depnote {{ 'depnote-bad' if disk_notice.level == 'critical' else 'depnote-warn' }}"
-         id="disk-notice">Disk space {{ 'CRITICAL' if disk_notice.level == 'critical' else 'low' }}:
-        {{ disk_notice.figure }}. <a href="/#sysbox">Dashboard → System</a> (open it) shows the
-        filesystems; free space before installing or building.</p>
+      {% call(part) banner('bad' if disk_notice.level == 'critical' else 'warn', id='disk-notice',
+                           title='Disk space ' ~ ('CRITICAL' if disk_notice.level == 'critical' else 'low')) %}
+        {%- if part == 'body' %}{{ disk_notice.figure }}. Free space before installing or building.
+        {%- else %}<a href="/#sysbox">Dashboard → System</a> (open it) shows the filesystems{% endif %}
+      {% endcall %}
     {% endif %}
     {# DEC-W384g: no hardware list, so no stack has an instance; the pages are empty for that reason. #}
     {% if no_list_notice %}
-      <p class="depnote depnote-warn" id="no-list-notice">{{ no_list_notice }}.</p>
+      {% call(part) banner('warn', id='no-list-notice') %}{% if part == 'body' %}{{ no_list_notice }}.{% endif %}{% endcall %}
     {% endif %}
     {# W12 (stage L5): an old [radio] configuration and no hardware list; nothing was converted. #}
     {% if old_radio_notice %}
-      <p class="depnote depnote-warn" id="old-radio-notice">{{ old_radio_notice }}. Run
-        <code>lhpc hardware</code> to set up the radios.</p>
+      {% call(part) banner('warn', id='old-radio-notice') %}{% if part == 'body' %}{{ old_radio_notice }}. Run
+        <code>lhpc hardware</code> to set up the radios.{% endif %}{% endcall %}
     {% endif %}
     {# Persistent (not a one-off flash): a Webserver Apply the firewall gate deferred stays
        announced on EVERY page until the firewall is applied and verified, with the click path. #}
     {% if ws_apply_pending %}
-      <p class="depnote depnote-warn" id="fw-pending-notice">A Webserver Apply is waiting for the
-        firewall — the new listeners stay off until it runs.
-        <a href="{{ url_for('stacks_overview', open='firewall', fw='apply') }}#firewall-apply">Open
-        Firewall → Apply &amp; commands</a> and run the lines shown there; the Apply completes on its
-        own once the firewall is verified.</p>
+      {% call(part) banner('warn', id='fw-pending-notice', title='A Webserver Apply is waiting for the firewall') %}
+        {%- if part == 'body' %}The new listeners stay off until it runs. Run the lines shown under Firewall → Apply
+        &amp; commands; the Apply completes on its own once the firewall is verified.
+        {%- else %}<a href="{{ url_for('stacks_overview', open='firewall', fw='apply') }}#firewall-apply">Open
+        Firewall → Apply &amp; commands</a>{% endif %}
+      {% endcall %}
     {% endif %}
     {# CO-14: a self-update left the stack proxies on the previous release's render. #}
     {% if ws_render_pending is not none %}
-      <p class="depnote depnote-warn" id="ws-render-notice">Apply needed: {{ ws_render_pending
-        or "the update has not re-rendered the stack proxies yet" }}.
-        <a href="{{ url_for('stacks_overview') }}#webserver-row">Open Webserver</a> and press
-        Apply.</p>
+      {% call(part) banner('warn', id='ws-render-notice') %}
+        {%- if part == 'body' %}Apply needed: {{ ws_render_pending or "the update has not re-rendered the stack proxies yet" }}.
+        Open Webserver and press Apply.
+        {%- else %}<a href="{{ url_for('stacks_overview') }}#webserver-row">Open Webserver</a>{% endif %}
+      {% endcall %}
     {% endif %}
-    {% block content %}{% endblock %}
+    {{ _content }}
+    {% if false %}{% block content %}{% endblock %}{% endif %}
   </main>
   <footer class="site-footer">
     {# Footer brand link — same destination as the header "Home" button (the Dashboard). The project

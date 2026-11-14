@@ -172,7 +172,7 @@ def _rows(tmp_path, load=radios.load):
 def _flash(page):
     import html
     import re
-    return [html.unescape(m).strip() for m in re.findall(r'class="flash[^"]*"[^>]*>(.*?)<', page, re.S)]
+    return [html.unescape(m).strip() for m in re.findall(r'class="[^"]*\bflash\b[^"]*"[^>]*>(.*?)<', page, re.S)]
 
 
 # ---- two writers of this process ------------------------------------------------------------------------

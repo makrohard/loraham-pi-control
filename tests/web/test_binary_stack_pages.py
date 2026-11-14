@@ -45,9 +45,9 @@ def _pills(row, prefix):
 
 def _install_banners(row, stack):
     """The "not installed" banner: the warning whose link opens the stack's Install section."""
-    return [b for b in row.find("div", class_="taskitem-warn")
+    return [b for b in row.find("div", class_="depnote-warn")
             if any((a["href"] or "").endswith(f"#stack-install-{stack}")
-                   for a in row.within(b).find("a", class_="ti-view"))]
+                   for links in row.within(b).find("div", class_="bnr-links") for a in row.within(links).find("a"))]
 
 
 def test_the_row_pills_carry_the_artifact_provenance(web, binary_box):

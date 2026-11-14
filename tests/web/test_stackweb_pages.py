@@ -351,6 +351,45 @@ def test_the_route_saves_the_named_page_and_refuses_a_foreign_one(tmp_path, web,
     assert _stackweb(tmp_path)["two@r1"].port == 8445
 
 
+def _panel_banners(doc, panel_id):
+    """The result banners rendered INSIDE one panel, as (classes, title, lines)."""
+    scope = doc.within(doc.by_id(panel_id))
+    return [(b.classes, scope.within(b).find("strong", class_="bnr-title")[0].text.strip(),
+             [li.text.strip() for li in scope.within(b).find("li")])
+            for b in scope.find("div", class_="panel-result")]
+
+
+def _top_flashes(doc):
+    return [p.text.strip() for p in doc.find("p", class_="flash")]
+
+
+def test_a_refused_page_save_shows_once_at_its_panel_and_an_ordinary_warning_stays_on_top(tmp_path, web, csrf):
+    svc = _svc(tmp_path)
+    client = web(service_factory=lambda: svc)
+    form = {"_csrf": csrf(client), "mode": "local", "scheme": "https", "access_mode": "local-open-remote-auth"}
+    first = client.post("/stacks/two/webserver", data={**form, "page": "two@r1", "port": "8446"})
+    assert first.status_code == 302 and client.get(first.headers["Location"]).status_code == 200   # shown, gone
+    r = client.post("/stacks/two/webserver", data={**form, "page": "two-b@r1", "port": "8446"})   # the same port
+    assert r.status_code == 302
+    with client.session_transaction() as sess:                  # a result no panel owns, in the same response
+        sess["_flashes"] = [*sess.get("_flashes", []), ("warn", "an ordinary warning")]
+    page = client.get(r.headers["Location"])
+    assert page.status_code == 200
+    doc = parse(page.get_data(as_text=True))
+    [(classes, title, lines)] = _panel_banners(doc, "stack-webserver-two-b@r1")
+    assert "depnote-bad" in classes and "cannot configure 'two-b@r1'" in title   # the refusal, at its control
+    assert any("8446" in line for line in lines), lines                     # its reason, one line each
+    assert doc.text.count(title) == 1                                       # and only there
+    assert _top_flashes(doc) == ["an ordinary warning"]                      # the other result stays on top
+    assert _panel_banners(doc, "stack-webserver-two@r1") == []               # the neighbour panel is untouched
+    # the panel holding the result renders open (no JS needed to see it); the neighbour stays closed
+    assert doc.by_id("stack-webserver-two-b@r1").has_attr("open")
+    assert not doc.by_id("stack-webserver-two@r1").has_attr("open")
+    # the redirect names that stack and radio (its panel is server-rendered there) and the panel's anchor
+    assert "open=two" in r.headers["Location"] and "radio=r1" in r.headers["Location"]
+    assert r.headers["Location"].endswith("#stack-webserver-two-b@r1")
+
+
 @pytest.mark.no_default_hardware
 def test_a_bare_page_without_a_hardware_list_says_so_and_saves_nothing(tmp_path, web, csrf):
     from lhpc.core import radio_start
