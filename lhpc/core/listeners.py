@@ -87,6 +87,29 @@ def nginx_listeners(svc) -> dict[int, list[str]]:
     return dict(out)
 
 
+def owner_map(svc, overrides: dict | None = None) -> dict[int, list[str]]:
+    """THE occupied-port map (B1b): every stack listener (`stack_listeners`, with a save's `overrides`) and the
+    console and every saved web page (`nginx_listeners`), {port: [owner]}."""
+    out: dict[int, list[str]] = defaultdict(list)
+    for src in (stack_listeners(svc, overrides), nginx_listeners(svc)):
+        for port, owners in src.items():
+            out[port].extend(owners)
+    return dict(out)
+
+
+def listener_owners(owners: dict, port: int) -> list[str]:
+    """The stack listeners among `port`'s owners in an `owner_map`: the console and the web pages (labels "the …",
+    `nginx_listeners`) have their own checks, so a page's own saved port never refuses that page."""
+    return [o for o in owners.get(port, ()) if not o.startswith("the ")]
+
+
+def free_port(owners: dict, start: int, also=()) -> int | None:
+    """The lowest port >= `start` (and >= 1024) in no `owner_map` entry and not in `also` (ports the same operation
+    assigns), or None when none is free up to 65535."""
+    taken = set(also)
+    return next((p for p in range(max(start, PORT_MIN), PORT_MAX + 1) if p not in owners and p not in taken), None)
+
+
 def param_conflicts(svc, changes, inst=None) -> list[str]:
     """The refusals for a stack config save of instance `inst` (the one the save writes; None without a hardware
     list): each changed port param whose base, or whose port on its instance's radio, is outside 1024..65535 (W409s:
@@ -96,10 +119,7 @@ def param_conflicts(svc, changes, inst=None) -> list[str]:
     overrides = {(ch.comp.id, ch.param.name, rid): str(ch.value) for ch in changes if ch.kind == "r"}
     if not overrides:
         return []
-    taken: dict[int, list[str]] = defaultdict(list)
-    for src in (stack_listeners(svc, overrides), nginx_listeners(svc)):
-        for port, owners in src.items():
-            taken[port].extend(owners)
+    taken = owner_map(svc, overrides)
     problems = []
     for cid, name, _rid in overrides:
         st = svc.stack(svc.stack_of(cid) or "")

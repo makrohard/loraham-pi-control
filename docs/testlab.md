@@ -56,8 +56,8 @@ voice's terminal variant are interactive TUIs LHPC never auto-spawns.
 builds every stack, and the console starts on **8770** (forwarded privately); a restart re-runs
 the idempotent start script. Stack UIs: graywolf **8080**, meshcom **18083**, meshcore (it runs as meshcore@r2, the lab list's
 868 radio) Web UI **8921** (Companion TCP **5133**), meshtastic **9080** (a plain-HTTP socat bridge to
-meshtasticd's self-signed `:9443`, which the Codespace proxy 502s on). **8444–8451** are
-forwarded for stack proxy pages (the lab list's r1 and r2), which you create on the Webserver page.
+meshtasticd's self-signed `:9443`, which the Codespace proxy 502s on). **8444, 8445, 8447, 8448, 8577, 8579,
+8580, 8582** are forwarded for stack proxy pages (the lab list's r1 and r2), which you create on the Webserver page.
 
 **Any container/box:**
 

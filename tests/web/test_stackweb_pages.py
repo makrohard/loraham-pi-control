@@ -9,7 +9,7 @@ import pytest
 
 from lhpc.adapters.cli.main import main
 from lhpc.core import config as cfgmod
-from lhpc.core import webserver
+from lhpc.core import service_webserver, webserver
 from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
@@ -219,9 +219,10 @@ readiness = "endpoint"
         load_manifest(m)
 
 
-def test_proxies_render_in_manifest_order_while_ports_position_by_id(tmp_path):
-    # `zeta` is declared FIRST but sorts LAST: nginx/applied order follows the manifest, the
-    # port suggestion follows the id order — two rules, one owner each.
+def test_proxies_render_in_manifest_order_while_ports_follow_the_kind_table(tmp_path, monkeypatch):
+    # `zeta` is declared FIRST but sorts LAST: nginx/applied order follows the manifest, the walk order follows the
+    # id order, and a port follows its kind's index (B1b: 8444 + k on r1) — three rules, one owner each.
+    monkeypatch.setattr(service_webserver, "PAGE_KINDS", ("solo", "two", "two-b", "zeta"))
     text = _TWO_PAGES.replace('[[stack]]\nid = "solo"', '[[stack]]\nid = "zeta"\nname = "Zeta"\nmain = "z"\n[[stack.component]]\nid = "z"\nname = "Z"\nkind = "service"\nrun = "true"\nreadiness = "endpoint"\n  [[stack.component.endpoint]]\n  kind = "tcp"\n  address = "127.0.0.1:18800"\n  ready = true\n  role = "listener"\n  client = true\n  scheme = "http"\n\n[[stack]]\nid = "solo"', 1)
     m = tmp_path / "order.toml"
     m.write_text(text)
@@ -230,8 +231,7 @@ def test_proxies_render_in_manifest_order_while_ports_position_by_id(tmp_path):
                             paths=Paths(runtime_root=tmp_path))
     assert svc.stack_web_eligible() == ["zeta@r1", "solo@r1", "two@r1", "two-b@r1"]      # manifest order
     assert svc._page_positions() == ["solo@r1", "two@r1", "zeta@r1", "two-b@r1"]        # id order, firsts first
-    console = svc.config().webserver.port
-    assert svc._default_stack_web_port("zeta@r1", console) == console + 3
+    assert svc.stack_web_view("zeta@r1")["suggested_port"] == 8444 + 3
     for pid, port in (("zeta@r1", 9001), ("solo@r1", 9002)):
         assert svc.stack_web_configure(pid, port=port).ok
     assert [p.swc.stack_id for p in svc._stack_web_proxies()] == ["zeta@r1", "solo@r1"]
@@ -239,18 +239,18 @@ def test_proxies_render_in_manifest_order_while_ports_position_by_id(tmp_path):
 
 # --- ports, config keys, nginx -----------------------------------------------------------------
 
-def test_second_page_gets_the_next_position_and_never_shifts_the_first_pages(tmp_path):
+def test_a_second_page_gets_its_own_kind_s_port_and_never_shifts_the_first_pages(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_webserver, "PAGE_KINDS", ("solo", "two", "two-b"))
     svc = _svc(tmp_path)
-    console = svc.config().webserver.port
-    assert svc._default_stack_web_port("solo@r1", console) == console + 1
-    assert svc._default_stack_web_port("two@r1", console) == console + 2
-    assert svc._default_stack_web_port("two-b@r1", console) == console + 3
+    suggested = lambda pid: svc.stack_web_view(pid)["suggested_port"]     # noqa: E731
+    assert (suggested("solo@r1"), suggested("two@r1"), suggested("two-b@r1")) == (8444, 8445, 8446)   # 8444 + k
     # saving the first page's port does not move the second page's suggestion
-    assert svc.stack_web_configure("two@r1", port=console + 2).ok
-    assert svc._default_stack_web_port("two-b@r1", console) == console + 3
+    assert svc.stack_web_configure("two@r1", port=8445).ok
+    svc._invalidate_config()
+    assert suggested("two-b@r1") == 8446
     # the bulk candidate walk assigns the same unique ports, in the same order
-    assert [(sid, port) for sid, port, _ in svc._stack_webs_candidates()] == [
-        ("solo@r1", console + 1), ("two@r1", console + 2), ("two-b@r1", console + 3)]
+    assert [(sid, port) for sid, port, _, _ in svc._stack_webs_candidates()] == [
+        ("solo@r1", 8444), ("two@r1", 8445), ("two-b@r1", 8446)]
     rows = svc.stack_webs_overview()["stacks"]
     assert [(r["sid"], r["label"]) for r in rows] == [
         ("solo@r1", "Solo @r1"), ("two@r1", "Two Pages @r1"), ("two-b@r1", "Two Pages · Dashboard @r1")]
@@ -365,7 +365,8 @@ def test_a_bare_page_without_a_hardware_list_says_so_and_saves_nothing(tmp_path,
     assert not _stackweb(tmp_path)
 
 
-def test_the_bulk_policy_covers_every_page(tmp_path):
+def test_the_bulk_policy_covers_every_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_webserver, "PAGE_KINDS", ("solo", "two", "two-b"))    # the synthetic kinds' indices
     svc = _svc(tmp_path)
     r = svc.stack_webs_configure_apply(mode="local", scheme="https",
                                        access_mode="local-open-remote-auth", cidrs=[])

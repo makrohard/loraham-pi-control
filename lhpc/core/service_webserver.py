@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses as _dc
 
 from . import commands, instances
+from . import listeners as _listener_inv
 from . import openhop_store as _openhop_store
 from .paths import PathContainmentError
 from .service_base import ActionResult
@@ -18,6 +19,11 @@ from .snapshot_memo import invalidates_snapshot
 _RESTART_WATCH_WAIT_S = 15.0
 _RESTART_WATCH_POLL_S = 0.5
 
+
+# B1b: a web page's default proxy port is PAGE_PORT_BASE + k + 133 x (n - 1) on radio rN (commands.rid_port), k = its
+# kind's index here. A new kind is APPENDED, never inserted, so no index moves (tests/repo pins every manifest kind).
+PAGE_PORT_BASE = 8444
+PAGE_KINDS = ("graywolf", "meshcom", "meshcore", "meshtastic", "reticulum", "meshcore-meshcore-node")
 
 CERT_UNREADABLE = "installed certificate unreadable; not replaced"
 KEY_UNREADABLE = "server key unreadable; not replaced (the way out: lhpc webserver tls-renew)"
@@ -806,7 +812,7 @@ class WebserverOpsMixin:
         ws = self.config().webserver
         used = {c.port for sid, c in self.config().stackweb.items()
                 if sid != page_id and c.enabled}
-        suggested = swc.port or self._default_stack_web_port(page_id, ws.port)
+        suggested, suggested_note = (swc.port, "") if swc.port else self._default_stack_web_port(page_id)
         try:
             upstream_port = int(str(address).rsplit(":", 1)[1])
         except (IndexError, ValueError):
@@ -854,7 +860,7 @@ class WebserverOpsMixin:
             "mode_note": self.page_mode_note(page),
             "cfg": swc, "upstream_address": address,
             "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
-            "upstream_scope": scope, "suggested_port": suggested,
+            "upstream_scope": scope, "suggested_port": suggested, "suggested_note": suggested_note,
             "modes": STACKWEB_MODES, "access_modes": WEBSERVER_ACCESS_MODES,
             "schemes": WEBSERVER_SCHEMES, "plan": plan,
             # The port that ANSWERS, so a saved-but-unapplied move never advertises a dead URL.
@@ -1167,35 +1173,25 @@ class WebserverOpsMixin:
             return row(port, "exposed", "warn", "LAN", "restricted_noauth")
         return row(port, "exposed", "bad", "public", "review")
 
-    def _default_stack_web_port(self, page_id: str, console_port: int,
-                                extra_taken=()) -> int:
-        """A STABLE per-page default port: `console_port + 1 + position`, where position is the
-        page's index in `_page_positions()` — radio by radio, each radio's stacks' first pages sorted by id, then its
-        further pages (so a stack growing a second page shifts nobody else). The default list (r1 433, r2 868), console
-        8443: graywolf@r1 8444, meshcom@r1 8445, meshtastic@r1 8446, reticulum@r1 8447, graywolf@r2 8448, meshcore@r2
-        8449, meshtastic@r2 8450, meshcore-meshcore-node@r2 8451 — deterministically and without colliding.
+    def _owner_map(self) -> dict:
+        """listeners.owner_map, once per request (a config write clears it, `_request_memo`)."""
+        return self._request_memo(("owner-map",), lambda: _listener_inv.owner_map(self))
 
-        A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
-        no port key, so a fresh deployment's rendered nginx stays unchanged.
-
-        Positional stability holds only while the eligible SET does not change. Adding a stack
-        whose id sorts earlier shifts everyone after it, and on an upgraded box the shifted
-        suggestion can land on a port another stack has already SAVED — the prefill would then be
-        refused at Apply ("already used by another stack's web UI"), i.e. a one-click default that
-        cannot be accepted. So ports already claimed by another stack are skipped: the positional
-        value is the starting point, not the answer."""
-        positions = self._page_positions()
-        pos = positions.index(page_id) if page_id in positions else 0
-        saved = self.config().stackweb
-        taken = {int(cfg.port) for sid, cfg in saved.items()
-                 if sid != page_id and getattr(cfg, "port", 0)}
-        taken |= {int(p) for p in extra_taken}      # bulk path: candidates assigned so far
-        port = min(max(console_port, 1023) + 1 + pos, 65535)
-        while port in taken or port == console_port:
-            if port >= 65535:
-                return 65535
-            port += 1
-        return port
+    def _default_stack_web_port(self, page_id: str, extra_taken=()) -> tuple:
+        """(port, why): an UNSAVED page's default proxy port (B1b): PAGE_PORT_BASE + k + 133 x (n - 1), k = its kind's
+        PAGE_KINDS index, n = its radio's number (no radio: 1), by `commands.rid_port` (a radio above r64 is refused by
+        name); taken (a listener, the console, a saved page: `_owner_map`; or a port this walk assigned, `extra_taken`)
+        -> the next free port upward. (None, why) for a kind without an index, a radio above r64 or no free port up to
+        65535, never a fallback number. Only WRITTEN when the operator saves; a saved port is never moved."""
+        kind, _, rid = page_id.partition("@")
+        if kind not in PAGE_KINDS:
+            return None, f"{page_id}: page kind {kind} has no port index (PAGE_KINDS)"
+        try:
+            derived = commands.rid_port(PAGE_PORT_BASE + PAGE_KINDS.index(kind), rid)
+        except commands.CommandError as exc:
+            return None, f"{page_id}: {exc}"
+        port = _listener_inv.free_port(self._owner_map(), derived, extra_taken)
+        return (port, "") if port else (None, f"{page_id}: no free port at or above {derived}")
 
     @staticmethod
     def _exposure_missing(plan, *, confirm, confirm_public, cidr_flag) -> list:
@@ -1273,7 +1269,7 @@ class WebserverOpsMixin:
             scheme=current.scheme if scheme is None else scheme,
             access_mode=current.access_mode if access_mode is None else access_mode,
             allowed_cidrs=current.allowed_cidrs if cidrs is None else tuple(cidrs))
-        plan = _ws.plan_stack_exposure(probe, ws.port, used, self)
+        plan = _ws.plan_stack_exposure(probe, ws.port, used, self._owner_map())
         missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
                                          cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
         if missing:
@@ -1308,18 +1304,18 @@ class WebserverOpsMixin:
         (kept), else the same suggested default the per-stack panel offers, candidate-aware so
         the assigned set stays unique. The form's overview and the bulk Apply both consume
         this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
-        Returns [(page_id, port, keeps)] in `_page_positions()` order (stacks' first pages
-        first)."""
-        ws = self.config().webserver
+        Returns [(page_id, port, keeps, why)] in `_page_positions()` order (stacks' first pages
+        first); port None with `why` when a page gets no default (`_default_stack_web_port`)."""
         cfgs = self.config().stackweb
         out, assigned = [], []
         for sid in self._page_positions():
             swc = cfgs.get(sid)
-            port = int(getattr(swc, "port", 0) or 0)
+            port, why = int(getattr(swc, "port", 0) or 0), ""
             if not port:
-                port = self._default_stack_web_port(sid, ws.port, extra_taken=assigned)
-                assigned.append(port)
-            out.append((sid, port, bool(getattr(swc, "port", 0))))
+                port, why = self._default_stack_web_port(sid, extra_taken=assigned)
+                if port:
+                    assigned.append(port)
+            out.append((sid, port, bool(getattr(swc, "port", 0)), why))
         return out
 
     def _stack_webs_common(self) -> dict:
@@ -1344,7 +1340,7 @@ class WebserverOpsMixin:
         from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
         pages = {p.page_id: p for p in self.web_pages()}
         return {"stacks": [{"sid": sid, "port": port, "keeps": keeps, "label": pages[sid].label}
-                           for sid, port, keeps in self._stack_webs_candidates()],
+                           for sid, port, keeps, _why in self._stack_webs_candidates()],
                 "modes": STACKWEB_MODES, "current": self._stack_webs_common(),
                 "access_modes": WEBSERVER_ACCESS_MODES, "schemes": WEBSERVER_SCHEMES}
 
@@ -1392,7 +1388,11 @@ class WebserverOpsMixin:
                 cfgs = self.config().stackweb
                 keeps_port = {}
                 candidates: dict = {}
-                for sid, port, keeps in self._stack_webs_candidates():
+                walk = self._stack_webs_candidates()       # B1b: a page without a port refuses BEFORE the set
+                if unported := [why for _sid, port, _keeps, why in walk if not port]:
+                    return ActionResult(False, "cannot configure the stack web UIs — unmet requirement(s):",
+                                        details=[f"  - {why}" for why in unported])
+                for sid, port, keeps, _why in walk:
                     keeps_port[sid] = keeps
                     candidates[sid] = StackWebConfig(stack_id=sid, mode=mode, port=port,
                                                      scheme=scheme, access_mode=access_mode,
@@ -1407,7 +1407,7 @@ class WebserverOpsMixin:
                 for sid, probe in candidates.items():
                     others = saved_other | {c.port for o, c in candidates.items()
                                             if o != sid and c.enabled}
-                    plan = _ws.plan_stack_exposure(probe, ws.port, others, self)
+                    plan = _ws.plan_stack_exposure(probe, ws.port, others, self._owner_map())
                     missing = self._exposure_missing(
                         plan, confirm=confirm, confirm_public=confirm_public,
                         cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")

@@ -151,12 +151,12 @@ lhpc webserver apply
   (like `lan`; `--cidr 0.0.0.0/0` admits everyone). `local` needs no confirm phrase, even with
   `no-auth` or `http`. Non-`local` needs `--confirm-phrase enable-remote`; there a public range,
   `no-auth` or an `http` `--scheme` need `enable-remote-danger`.
-- `--port`: `0` = not proxied (omitted: the saved port is kept). The console suggests console port + 1 + the page's
-  position, radio by radio (each radio's first pages sorted by id, then its further pages; a page is
-  `<page>@<rid>`; a box with r1 on 433 and r2 on 868: graywolf@r1 `8444`, meshcom@r1 `8445`, meshtastic@r1
-  `8446`, reticulum@r1 `8447`, graywolf@r2 `8448`, meshcore@r2 `8449`, meshtastic@r2 `8450`,
-  meshcore-meshcore-node@r2 `8451`), skipping ports already saved;
-  any free port ≥ 1024 works.
+- `--port`: `0` = not proxied (omitted: the saved port is kept). An unsaved page `<page>@rN` is suggested
+  8444 + its kind's index + 133 × (N − 1), the kinds graywolf 0, meshcom 1, meshcore 2, meshtastic 3, reticulum 4,
+  meshcore-meshcore-node 5 (r1 on 433, r2 on 868: graywolf@r1 `8444`, meshcom@r1 `8445`, meshtastic@r1 `8447`,
+  reticulum@r1 `8448`, graywolf@r2 `8577`, meshcore@r2 `8579`, meshtastic@r2 `8580`, meshcore-meshcore-node@r2
+  `8582`); a taken port moves it to the next free one, and none free is refused by name. A saved port never
+  moves; any free port ≥ 1024 works.
 - `--access-mode` (alias `--auth`) takes the console's values and the same client certificates.
   Pass it explicitly: a page whose stored policy is `no-auth` otherwise refuses with *elevated
   confirmation required*.

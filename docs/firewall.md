@@ -35,7 +35,7 @@ else is needed.
 | 4242 | Reticulum client access | loopback (bind locked) | source allow-list (`rns_allow`), no app auth | already safe (bind locked to loopback) |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
-| 8444 and up, one per proxied page (r1 433 + r2 868: 8444–8451) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
+| 8444 + kind + 133 × (N − 1), one per proxied page `<page>@rN` (r1 433 + r2 868: 8444–8448, 8577–8582) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 
 <sup>†</sup> `auth: none` while meshcom is installed from the [binary channel](provenance.md)
 ([why](stacks/meshcom.md)); the direct-access checkbox then carries the unauthenticated-exposure
