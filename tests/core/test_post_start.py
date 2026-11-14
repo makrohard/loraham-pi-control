@@ -594,11 +594,11 @@ def test_meshcom_empty_call_refuses_to_render_the_required_setcall():
 
 
 def test_meshcom_saved_call_schedules_retrying_setcall():
-    # The shipped step uses the STEPPED schedule [[8,8],[6,15],[22,30]] = 36 attempts over a
-    # ~13 min window (Zero-2W QEMU/TCG cold boot takes minutes; the old 168 s window expired
-    # with zero sends and the node ran with the default callsign — live finding).
+    # The shipped step uses the STEPPED schedule [[8,8],[6,15],[26,30]] = 40 attempts over 904 s
+    # (B2a: the documented worst Zero-2W boot + 60 s, so a guest reboot in the window's first minute
+    # still gets its callsign; the old 168 s window expired with zero sends — live finding).
     script, _ = _meshcom_launcher("XX0XXA")
-    assert "setcall XX0XXA" in script and "'repeat': 36" in script
+    assert "setcall XX0XXA" in script and "'repeat': 40" in script
     assert "'label': 'callsign'" in script
     # The value form: the node's reported call is compared with ours, never a substring.
     step = [st for st in _rendered_steps(script) if st.get("label") == "callsign"][0]

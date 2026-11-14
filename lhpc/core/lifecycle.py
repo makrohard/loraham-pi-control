@@ -152,9 +152,9 @@ class TxTestPlan:
 # ONE conservative outer bound for a synchronous required post-start run. The inner executor is
 # already bounded — finite retry counts, bounded socket operations, bounded tcp_wait, a 120 s cap
 # per exec — so this only has to be comfortably larger than the longest supported declared
-# sequence (MeshCom's stepped ~13-minute cold-boot window). A per-manifest calculator was tried
-# and removed: it was a second, disagreeing model of the executor's timing.
-REQUIRED_POST_TIMEOUT_S = 1800.0
+# sequence: MeshCom's firmware-boot wait (1300 s) plus its callsign window (904 s) plus one attempt (~64 s) = 2268 s
+# (B2a). A per-manifest calculator was tried and removed: it was a second, disagreeing model of the executor's timing.
+REQUIRED_POST_TIMEOUT_S = 2400.0
 
 
 @dataclass
