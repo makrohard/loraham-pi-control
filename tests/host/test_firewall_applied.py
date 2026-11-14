@@ -166,7 +166,8 @@ def test_a_configured_radios_stack_starts_after_another_radio_is_added(tmp_path,
     svc = lab.svc()
     assert not svc.firewall_status()["config_ok"]                       # the saved intent differs: r3's rows
     for rid in ("r1", "r2"):
-        res = _start(svc, "meshtastic", rid)
+        assert _gate(svc, "meshtastic", rid) == (True, "", [])            # the gate itself allows it
+        res = _start(svc, "meshtastic", rid)                              # and the public plan is not refused by it
         assert (res.data or {}).get("firewall_gate") != "pending", res.summary
     ok, msg, cmds = _gate(svc, "meshtastic", "r3")                        # r3 waits for its own apply
     assert not ok and msg.startswith("The saved listener is not covered by the applied firewall"), msg
@@ -303,6 +304,42 @@ def test_an_unmapped_listener_never_has_a_row():
     row = {k: sc[k] for k in ("id", "proto", "family", "addr", "port", "band")}
     assert not sf._fw_has_row(sc, {"endpoints": [row]})
     assert sf._fw_has_row({**sc, "_unmapped": False}, {"endpoints": [row]})     # anchor: the same key matches
+
+
+def test_a_band_agnostic_row_never_covers_a_band_whose_scope_diverged(tmp_path, monkeypatch):
+    # G1-FW-A21 B1 (dropped on this proof): an applied row with band="" exists only while the scope is the same on
+    # every band. Here kiss is applied with one scope on both radios' bands (433: r1, 868: r2), every row band="";
+    # then the 868 band's saved scope diverges (its port): that band's listener has no applied row and is REFUSED
+    # until the next apply, while the unchanged 433 band still starts.
+    lab = Lab(tmp_path, monkeypatch, (R1, R2))
+    for rid in ("r1", "r2"):
+        _kiss(lab.svc(), {"kiss_host": "0.0.0.0", "kiss_port": "9001"}, rid=rid)
+    assert lab.apply() == fh.EXIT_OK
+    kiss = [e for e in lab.snapshot()["candidate"]["endpoints"] if e["id"].startswith("loraham-kiss-tnc")]
+    assert len(kiss) == 2 and {e["band"] for e in kiss} == {""}         # the band-agnostic rows are in play
+    svc = lab.svc()
+    assert _gate(svc, "kiss", "r2")[0]                                    # anchor: before the divergence it passes
+    _kiss(svc, {"kiss_port": "9002"}, rid="r2")
+    ok, msg, _cmds = _gate(svc, "kiss", "r2")
+    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert _gate(svc, "kiss", "r1")[0]
+    assert lab.apply() == fh.EXIT_OK and _gate(lab.svc(), "kiss", "r2")[0]   # its apply covers it
+
+
+def test_the_templates_band_agnostic_row_covers_no_diverged_band():
+    # The same proof for the template (no radio): the row builder writes band="" only for one scope on every band;
+    # a band whose port diverged does not match that row, a CIDR-only divergence does (his word: CIDRs follow the apply).
+    import types
+    stk = types.SimpleNamespace(id="kiss", components=())
+
+    def scope(port, cidrs=()):
+        return {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": port,
+                "allow_cidrs": list(cidrs), "deny": False, "auth": "none", "loopback": False}
+    applied = {"endpoints": fw.endpoint_rows(stk, ("433", "868"), lambda band, inst: scope(9001), set())}
+    assert [e["band"] for e in applied["endpoints"]] == [""]
+    launch = {k: v for k, v in scope(9002).items() if k in ("id", "proto", "family", "addr", "port")}
+    assert not sf._fw_has_row({**launch, "band": "868"}, applied)
+    assert sf._fw_has_row({**launch, "port": 9001, "band": "868", "allow_cidrs": ["10.0.0.0/8"]}, applied)
 
 
 def test_a_band_labelled_row_serves_its_own_band_only():

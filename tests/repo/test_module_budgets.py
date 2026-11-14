@@ -29,7 +29,7 @@ BUDGETS = {
     "service_boot_restore.py": (674, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source); K8f S4-4a: a radio's daemon item fails by name (G1-K8F-S4-4A B1/B2)
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
-    "service_firewall.py": (1622, 19),  # A21: one gate decision on the applied firewall (the snapshot evidence reader), pre-opened page rows
+    "service_firewall.py": (1624, 19),  # A21: one gate decision on the applied firewall (the snapshot evidence reader), pre-opened page rows
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1019, 17),  # K7: the apply restarts every running instance (one shared secret, DEC-W384v)
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py

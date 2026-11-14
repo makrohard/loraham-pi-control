@@ -1595,8 +1595,10 @@ def _canon_rows(rows):
 
 def _fw_has_row(sc, candidate) -> bool:
     """True iff launch scope `sc` has a row in `candidate` with the same key: endpoint id, proto,
-    family, address, port and band (a band-agnostic row serves every band). Its CIDRs and tick are
-    the applied firewall's. An unmapped listener never has one."""
+    family, address, port and band (a band-agnostic row serves every band: `fw.endpoint_rows` writes
+    band="" only while the scope is the same on every band, so a band whose scope diverged has another
+    port, address or family and no row). Its CIDRs and tick are the applied firewall's. An unmapped
+    listener never has one."""
     if sc.get("_unmapped"):
         return False
     return any(e["id"] == sc["id"] and (not e.get("band") or e["band"] == sc["band"])
