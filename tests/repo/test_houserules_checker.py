@@ -164,6 +164,10 @@ RELEASE_SECTION = {   # one CHANGELOG-only commit with three bullets: (its CHANG
     "new-top-section-with-heading": (CHANGELOG.replace("## Unreleased\n", "## 0.2.0\n\n- a\n- b\n- c\n\n"
                                                        "## Unreleased\n"), {}, (), "OK"),
     "beside-another-file": (CHANGELOG.replace("## Unreleased\n", TOP), {"notes.txt": "x\n"}, (), "HARD"),
+    # the other file's added lines (4, 5) lie at the top section's line numbers (3 to 8): only the file test refuses
+    "beside-a-file-at-the-top-lines": (CHANGELOG.replace("## Unreleased\n", TOP),
+                                       {"lhpc/core/service_x.py": BASE["lhpc/core/service_x.py"]
+                                        + "    def b(self):\n        pass\n"}, (), "HARD"),
     "older-section": (CHANGELOG + "- a\n- b\n- c\n", {}, ("--correction",), "HARD"),
     "beside-a-deleted-file": (CHANGELOG.replace("## Unreleased\n", TOP), {"docs/b.md": None}, (), "HARD"),
     "new-section-below-the-top": (CHANGELOG.replace("## 0.1.0\n", "- a\n- b\n- c\n## 0.1.1\n## 0.1.0\n"), {}, (),
