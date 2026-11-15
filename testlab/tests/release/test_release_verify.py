@@ -231,8 +231,9 @@ def test_release_voice_terminal(env, svc, headless_box):
     _start(env, "daemon", timeout=300, attribute=False)
     _start(env, "voice", timeout=300)
     cli = next(c for c in svc.stack("voice").components if c.id == "loraham-voice-cli")
+    inst = instances.copy_of(svc, "voice", named(env, "voice").partition("@")[2])[0]      # the instance it started
     try:
-        pty_readiness(svc.manual_start_command(cli), env, VOICE_CLI_DRAWS, stack="voice")
+        pty_readiness(svc.manual_start_command(cli, inst), env, VOICE_CLI_DRAWS, stack="voice")
     finally:
         stop(env, "voice")
         stop(env, "daemon")
@@ -336,8 +337,9 @@ def test_release_meshcore_cli(env, svc):
     assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
     comp = next(c for c in svc.stack("meshcore").components if c.id == "meshcore-cli")
+    inst = instances.copy_of(svc, "meshcore", named(env, "meshcore").partition("@")[2])[0]   # its companion's port
     try:
-        pty_readiness(svc.manual_start_command(comp), env, MESHCLI_DRAWS, ready_timeout=90,
+        pty_readiness(svc.manual_start_command(comp, inst), env, MESHCLI_DRAWS, ready_timeout=90,
                       stack="meshcore")
     finally:
         stop(env, "meshcore")
