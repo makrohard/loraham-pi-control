@@ -239,7 +239,8 @@ in full, the line links to it. The mark after a rule says what enforces it:
 - **D3** The injected `System` before a patched private ([rule 9](#the-rules)).
 - **D4** A fake keeps the real signature ([rule 11](#the-rules)). **test**
 - **D5** No sibling-test imports, no `sys.path` edits, no browser import in `tests/` ([rule 7](#the-rules)).
-  **test** for an import of a test module or a browser in a `tests/` module
+  **test** for an `import` or an absolute `from` whose root is `tests`, a `test_…` module, `playwright`,
+  `selenium` or `pyppeteer`, in a `tests/` module other than `conftest.py`
 - **D6** No network in a test. **CI WARN** for `requests.`, `urllib.request` or `socket.create_connection`
 - **D7** A suite that uses git never runs under `git rebase --exec` or with an inherited `GIT_*` environment.
 
@@ -297,7 +298,7 @@ What a machine enforces today. The checker's other rows (changelog, docs, attrib
 | checker `markers` row | a new test that builds a venv, runs `pip install` or loops on `monotonic`, without `slow` (F3) | CI WARN |
 | checker `wallclock` row | a real clock on an added line without `wallclock` (C1) | CI HARD |
 | checker `modules` row | the service family over a budget, or grown without a budget raise that carries its reason ([rule 13](#the-rules)) | CI HARD |
-| `repo/test_suite_hygiene.py` | in a `tests/` module other than `conftest.py`: an import of a test module or a browser (D5); in `lhpc`, `testlab`, `tests`, `deploy`, `docs` or `.github`: a citation of a plan or code-report file the repository does not ship | test |
+| `repo/test_suite_hygiene.py` | in a `tests/` module other than `conftest.py`: an `import` or an absolute `from` whose root is `tests`, a `test_…` module, `playwright`, `selenium` or `pyppeteer` (D5) | test |
 | `tests/conftest.py`, `pyproject.toml` | a fake called in a way the real signature refuses (D4); an unknown marker (F1); an unhandled exception in a test's thread (C8) | test |
 | ruff | `ruff check lhpc testlab`; `ruff check tests --select F,E9` | CI |
 
