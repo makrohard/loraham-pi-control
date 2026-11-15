@@ -621,6 +621,8 @@ def test_k7_one_running_instance_on_r1_is_exactly_the_old_command(cli_box, captu
 @pytest.mark.parametrize("argv, field, pointer", [
     (["--set", "lora.region", "EU_868"], "lora.region", "lhpc config meshtastic@r2 region <value>"),
     (["--set-owner", "Name"], "set-owner", "lhpc config meshtastic@r2 node_name <value>"),
+    (["--set-owner-short", "NM"], "set-owner-short", "lhpc config meshtastic@r2 node_short <value>"),
+    (["--set-ham", "N0CALL"], "set-ham", "lhpc config meshtastic@r2 node_name <value>   (ham mode is not LHPC-managed)"),
 ])
 def test_an_owned_setting_points_at_the_instance_the_operator_named(tmp_path, monkeypatch, capsys, argv, field, pointer):
     # `lhpc meshtastic@r2 …`: the pointer names meshtastic@r2. A bare `lhpc config meshtastic …` is refused with two
