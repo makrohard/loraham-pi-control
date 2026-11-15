@@ -1,20 +1,23 @@
 """MeshChat announces itself once at every start (the maintainer's 0.14.0 word "A").
 
 LHPC writes nothing into MeshChat: MeshChat's own post-start step makes its Announce button's call,
-`GET /api/v1/announce` (meshchat.py:1189-1192, answer {"message": "announcing"}). The start-path
-tests run `lhpc stack start meshchat@r2` through the CLI: the real service start, the real Lifecycle
-with a real (sleeping) process for each launch, the real post-start scheduling and detached runner,
-against a fake MeshChat on loopback that records the call. The service reads a copy of the shipped
-manifest in which only the step's `--api` port is the fake's (MeshChat's 8790 may be taken on the
-test host); the box reports MeshChat's 8790 listener and the node's ready file. A failed announce is logged and never fails the start.
+`GET /api/v1/announce` (meshchat.py:1189-1192, answer {"message": "announcing"}), bounded as a whole by
+ONE wall-clock deadline (a real-time interval timer in the script). The script tests run the script as
+the post-start runner does, as its own process (the timer needs its main thread), each under a
+subprocess timeout so a regression fails fast instead of holding the run. The start-path tests run
+`lhpc stack start meshchat@r2` through the CLI: the real service start, the real Lifecycle with a real
+(sleeping) process for each launch, the real post-start scheduling and detached runner, against a fake
+MeshChat on loopback that records the call. The service reads a copy of the shipped manifest in which
+only the step's `--api` port (and, for the trickle case, its `--timeout`) is the fake's; the box reports
+MeshChat's 8790 listener and the node's ready file. A failed announce is logged and never fails the start.
 """
 
-import importlib.util
 import json
 import socket
 import subprocess
+import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
 
 import pytest
 
@@ -29,52 +32,67 @@ from lhpc.core.services import ControllerService
 from seams import seed_framing_driver
 
 _SCRIPT = repo_paths.REPO / "lhpc" / "data" / "scripts" / "meshchat-announce.py"
+_OK = b'{"message": "announcing"}'
 
 
-def _load():
-    spec = importlib.util.spec_from_file_location("meshchat_announce", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _response(code=200, body=_OK, length=None, chunked=False):
+    """MeshChat's answer as bytes, and where its header block ends."""
+    if chunked:
+        head = f"HTTP/1.1 {code} OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".encode()
+        return head + f"{len(body):x}\r\n".encode() + body + b"\r\n0\r\n\r\n", len(head)
+    n = len(body) if length is None else length
+    head = f"HTTP/1.1 {code} OK\r\nContent-Length: {n}\r\nConnection: close\r\n\r\n".encode()
+    return head + body, len(head)
 
 
 class FakeMeshChat:
-    """MeshChat's announce route over real HTTP; records every call."""
+    """MeshChat's announce route on a loopback socket; records every request path. `drip` sends the
+    answer from `drip_from` on one byte every `drip` seconds: "status" (from the first byte),
+    "headers" (after the status line), "body" (after the header block); `chunked` frames the body."""
 
-    def __init__(self, code=200, body=b'{"message": "announcing"}', length=None, drip=0.0):
+    def __init__(self, code=200, body=_OK, length=None, chunked=False, drip=0.0, drip_from="body"):
         self.calls, self.called, self.stop = [], threading.Event(), threading.Event()
-        fake = self
+        self.data, end_of_head = _response(code, body, length, chunked)
+        self.cut = {"status": 0, "headers": self.data.index(b"\r\n") + 2, "body": end_of_head}[drip_from] if drip else len(self.data)
+        self.drip = drip
+        self.srv = socket.socket()
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(8)
+        self.srv.settimeout(0.2)
+        self.api = f"127.0.0.1:{self.srv.getsockname()[1]}"
+        threading.Thread(target=self._serve, daemon=True).start()
 
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *_a):
-                pass
+    def _serve(self):
+        while not self.stop.is_set():
+            try:
+                conn, _a = self.srv.accept()
+            except (TimeoutError, OSError):
+                continue
+            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
 
-            def do_GET(self):
-                fake.calls.append(self.path)
-                self.send_response(code)
-                self.send_header("Content-Length", str(len(body) if length is None else length))
-                self.end_headers()
-                fake.called.set()
-                if not drip:
-                    self.wfile.write(body)
+    def _answer(self, conn):
+        with conn:
+            req = b""
+            while b"\r\n\r\n" not in req:
+                got = conn.recv(4096)
+                if not got:
                     return
-                for i in range(len(body)):                 # one byte every `drip` seconds
-                    if fake.stop.wait(drip):
+                req += got
+            self.calls.append(req.split(b" ", 2)[1].decode())
+            self.called.set()
+            try:
+                conn.sendall(self.data[:self.cut])
+                for i in range(self.cut, len(self.data)):  # one byte every `drip` seconds
+                    if self.stop.wait(self.drip):
                         return
-                    try:
-                        self.wfile.write(body[i:i + 1])
-                        self.wfile.flush()
-                    except OSError:
-                        return
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.api = f"127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+                    conn.sendall(self.data[i:i + 1])
+            except OSError:
+                return
 
     def close(self):
         self.stop.set()
-        self.server.shutdown()
-        self.server.server_close()
+        self.srv.close()
 
 
 @pytest.fixture
@@ -89,133 +107,102 @@ def meshchat():
         f.close()
 
 
-def _bounded(fn, seconds=20.0):
-    """Run `fn` in a daemon thread and fail if it has not returned within `seconds`: a regression of
-    the announce's bound fails this test fast instead of holding the run (no timeout plugin here)."""
-    box = {}
-
-    def go():
-        try:
-            box["value"] = fn()
-        except BaseException as exc:                  # re-raised in the test's own thread
-            box["error"] = exc
-    t = threading.Thread(target=go, daemon=True)
-    t.start()
-    t.join(seconds)
-    assert not t.is_alive(), f"did not return within {seconds:g} s"
-    if "error" in box:
-        raise box["error"]
-    return box.get("value")
+def _script(api, timeout="5"):
+    """The script as the runner runs it: its own process, here under a 30 s subprocess timeout (a
+    regression of the bound fails the test instead of holding the run). -> (rc, output, seconds)."""
+    t0 = time.monotonic()                            # wallclock: measures the script's real bound
+    p = subprocess.run([sys.executable, str(_SCRIPT), "--api", api, "--timeout", timeout],
+                       capture_output=True, text=True, timeout=30)
+    return p.returncode, p.stdout + p.stderr, time.monotonic() - t0  # wallclock: the real bound
 
 
-def _run(api, capsys, timeout="5"):
-    rc = _bounded(lambda: _load().main(["--api", api, "--timeout", timeout]))
-    out = capsys.readouterr()
-    return rc, out.out + out.err
+def _free_port():
+    with socket.socket() as s:                       # bound, closed: nothing listens there
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
-# --- the script ---
+# --- the script, as its own process ---
 
-def test_the_announce_is_the_buttons_call_and_its_answer_is_checked(meshchat, capsys):
+def test_the_announce_is_the_buttons_call_and_its_answer_is_checked(meshchat):
     fake = meshchat()
-    rc, out = _run(fake.api, capsys)
-    assert (rc, fake.calls) == (0, ["/api/v1/announce"]) and "announced" in out
+    rc, out, _s = _script(fake.api)
+    assert (rc, fake.calls) == (0, ["/api/v1/announce"]) and "announced" in out, out
 
 
 @pytest.mark.parametrize("kw,why", [
     pytest.param({"code": 500, "body": b"{}"}, "HTTP 500", id="http-500"),
     pytest.param({"body": b"<html>"}, "not JSON", id="not-json"),
     pytest.param({"body": b'{"message": "nope"}'}, "did not confirm", id="wrong-answer"),
-    pytest.param({"length": 200}, "IncompleteRead", id="body-cut-short"),     # the body ends before its length
+    pytest.param({"length": 200}, "IncompleteRead", id="body-cut-short"),      # the body ends before its length
+    pytest.param({"length": 70000}, "larger than 65536 bytes", id="body-too-large"),
 ])
-def test_an_announce_it_cannot_confirm_fails_by_name(meshchat, capsys, kw, why):
-    rc, out = _run(meshchat(**kw).api, capsys)
-    assert rc == 1 and why in out and "not announced" in out
+def test_an_announce_it_cannot_confirm_fails_by_name(meshchat, kw, why):
+    rc, out, _s = _script(meshchat(**kw).api)
+    assert rc == 1 and why in out and "not announced" in out, out
 
 
-def test_a_meshchat_that_never_listens_fails_within_the_bound():
-    """Only a refused connection is retried, and only until the deadline (clock injected)."""
-    mod = _load()
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    now, pauses = [0.0], []
-
-    def pause(seconds):
-        pauses.append(seconds)
-        now[0] += seconds
-    with pytest.raises(mod.Failure, match="did not answer"):
-        _bounded(lambda: mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: now[0], pause=pause))
-    assert 1 <= len(pauses) <= 6
+@pytest.mark.wallclock("the bound is the script's real deadline")
+def test_a_meshchat_that_never_listens_ends_by_the_deadline():
+    """Only a refused connect is retried, until the one deadline."""
+    rc, out, secs = _script(f"127.0.0.1:{_free_port()}", timeout="1")
+    assert rc == 1 and "announce timed out" in out and secs < 4, (out, secs)
 
 
-def test_the_pause_after_a_refused_connect_never_passes_the_deadline():
-    """Refused, refused, refused with 2.5 s in all: the pauses are 1, 1 and the 0.5 s left (re-round
-    note 2), never a full second past the deadline (clock injected)."""
-    mod = _load()
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    now, pauses = [0.0], []
-
-    def pause(seconds):
-        pauses.append(seconds)
-        now[0] += seconds
-    with pytest.raises(mod.Failure, match="did not answer"):
-        _bounded(lambda: mod.announce(f"127.0.0.1:{port}", 2.5, clock=lambda: now[0], pause=pause))
-    assert pauses == [1.0, 1.0, 0.5]
-
-
+@pytest.mark.wallclock("a dropped connection fails at once, well inside the deadline")
 def test_an_error_other_than_refused_is_not_retried():
-    """A MeshChat that accepts and drops the connection is not "not listening yet": it fails at
-    once, with no pause (only a refused connection waits for the bound)."""
-    mod = _load()
+    """A MeshChat that accepts and drops the connection is not "not listening yet": it fails at once."""
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
-    port = srv.getsockname()[1]
 
     def drop():
         conn, _a = srv.accept()
         conn.close()
     t = threading.Thread(target=drop, daemon=True)
     t.start()
-    pauses = []
     try:
-        with pytest.raises(mod.Failure, match="GET /api/v1/announce"):
-            _bounded(lambda: mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: 0.0, pause=pauses.append))
+        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout="10")
     finally:
         t.join(5)
         srv.close()
-    assert pauses == []
+    assert rc == 1 and "GET /api/v1/announce" in out and secs < 5, (out, secs)
 
 
-@pytest.mark.wallclock("a stalled server: the bound is the real socket timeout, capped by the time left")
-def test_a_meshchat_that_accepts_and_never_answers_ends_within_the_whole_bound():
-    """A server that accepts the connection and never answers: the attempt's socket timeout is the
-    time left (here 1 s), not a fixed 10 s, so the announce ends by its overall deadline."""
-    mod = _load()
+@pytest.mark.wallclock("a stalled server: the bound is the script's real deadline")
+def test_a_meshchat_that_accepts_and_never_answers_ends_by_the_deadline():
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)                                      # accepted by the kernel; nobody ever reads
     try:
-        with pytest.raises(mod.Failure, match="timed out|did not answer"):
-            _bounded(lambda: mod.announce(f"127.0.0.1:{srv.getsockname()[1]}", 1.0), seconds=8.0)
+        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout="1")
     finally:
         srv.close()
+    assert rc == 1 and "announce timed out" in out and secs < 4, (out, secs)
 
 
-@pytest.mark.wallclock("a trickling answer: the bound is the real deadline across the body read")
-def test_an_answer_that_trickles_in_ends_by_the_overall_deadline(meshchat):
-    """Valid headers, then one body byte every 0.3 s: every read completes in time, so only a deadline
-    checked across the whole read ends it — by the 1 s bound, not after the body (G1 re-round)."""
-    import time
-    mod = _load()
-    fake = meshchat(drip=0.3)
-    t0 = time.monotonic()
-    with pytest.raises(mod.Failure, match="did not answer|timed out"):
-        _bounded(lambda: mod.announce(fake.api, 1.0), seconds=8.0)
-    assert time.monotonic() - t0 < 2.5
+@pytest.mark.wallclock("a trickling answer: the bound is the script's real deadline")
+@pytest.mark.parametrize("kw", [
+    pytest.param({"drip_from": "status"}, id="status-line"),
+    pytest.param({"drip_from": "headers"}, id="headers"),
+    pytest.param({"drip_from": "body"}, id="body"),
+    pytest.param({"drip_from": "body", "chunked": True}, id="chunked"),
+])
+def test_an_answer_that_trickles_in_ends_by_the_deadline(meshchat, kw):
+    """One byte every 0.3 s from the status line, the headers, the body or the chunk framing on:
+    every read completes in time, only the one deadline ends it — by its 1 s (code re-rounds 1, 2)."""
+    rc, out, secs = _script(meshchat(drip=0.3, **kw).api, timeout="1")
+    assert rc == 1 and "announce timed out" in out and secs < 3, (out, secs)
+
+
+def test_a_chunked_answer_in_time_is_read_whole(meshchat):
+    rc, out, _s = _script(meshchat(chunked=True).api)
+    assert rc == 0 and "announced" in out, out
+
+
+def test_a_timeout_of_zero_is_refused():
+    rc, out, _s = _script("127.0.0.1:1", timeout="0")
+    assert rc == 2 and "--timeout must be > 0" in out
 
 
 # --- the real manifest step through the real post-start runner ---
@@ -314,10 +301,10 @@ def test_a_failed_announce_is_logged_and_never_fails_the_start(meshchat, box):
 @pytest.mark.needs_session
 @pytest.mark.wallclock("a trickling answer through the real runner: its bound is the step's real deadline")
 def test_a_trickling_meshchat_ends_the_step_by_its_bound_and_the_start_stands(meshchat, box):
-    """The re-round's case through `lhpc stack start`: MeshChat answers one byte every 0.3 s; the step
-    (its --timeout set to 2 s in the copied manifest) ends `failed` rc 1 by its bound, the failure is
-    in the post-start log, and the start exits 0."""
-    fake = meshchat(drip=0.3)
+    """The re-rounds' case through `lhpc stack start`: MeshChat sends its headers one byte every 0.3 s;
+    the step (its --timeout 2 s in the copied manifest) ends `failed` rc 1 by its bound, "announce timed
+    out" is in the post-start log, and the start exits 0."""
+    fake = meshchat(drip=0.3, drip_from="headers")
     rc, out, svc = box(fake, step_timeout="2")
     assert rc == 0, out
     assert fake.called.wait(30)
@@ -325,4 +312,4 @@ def test_a_trickling_meshchat_ends_the_step_by_its_bound_and_the_start_stands(me
     assert (step["label"], step["outcome"], step["rc"]) == ("announce", "failed", 1)
     assert step["elapsed_s"] < 6.0, step
     (rec,) = svc._lifecycle().owned_records("meshchat", role="post")
-    assert "not announced" in open(rec["log_path"]).read()
+    assert "not announced — announce timed out" in open(rec["log_path"]).read()
