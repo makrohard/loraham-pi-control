@@ -266,7 +266,8 @@ in full, the line links to it. The mark after a rule says what enforces it:
   that must be there).
 - **E6** No test is weakened (fewer rows, extra stubs, a narrowed setup), deleted or skipped to go green; a
   narrowing that is needed is listed with its reason.
-- **E7** `needs_git_checkout` skips in a source export and fails under CI.
+- **E7** `needs_git_checkout` skips in a source export and fails under CI; the browser lane skips without
+  Chromium and fails without it under CI. **test** for the browser lane
 
 ### F. Markers
 

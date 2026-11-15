@@ -159,7 +159,8 @@ about half an hour.
   not effects — those are the named acceptance tests and LHPC's in-process web suite).
 - **browser** drives headless Chromium (no virtual display) against the running console: the
   system box under controlled `/api/system` responses, the Apps page's lazy bodies, the GPS
-  panel, a 390 px phone viewport.
+  panel, a 390 px phone viewport. Without a usable Playwright and Chromium it skips with the
+  reason; under `CI`, which provides them, it fails instead.
 - **release** is the evidence a pin release needs. On a fresh lab root with no known-working
   records it installs every stack on its default channel (published binary, else the pin),
   builds, starts and verifies it by its own state (port, client tool, node info); interactive

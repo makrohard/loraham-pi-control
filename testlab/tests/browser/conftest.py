@@ -1,6 +1,8 @@
 """Browser lane: headless Chromium (Playwright) over the same real lab server the
 acceptance lane uses. Doubly gated — LHPC_BROWSER=1 AND a usable playwright+chromium —
-so the default lane and boxes without the browser skip with a reason, never fail."""
+so the default lane and boxes without the browser skip with a reason. Under CI (`CI` set)
+the lane, once asked for with LHPC_BROWSER=1, FAILS without them: CI provides Chromium, so
+its absence there is a broken lane, not a reason to skip (test rule E7)."""
 from __future__ import annotations
 
 import os
@@ -29,14 +31,26 @@ def _browser_ready() -> str:
     return ""
 
 
+_CI_BROKEN = pytest.StashKey[str]()
+
+
 def pytest_collection_modifyitems(config, items):
     reason = _browser_ready()
     if not reason:
+        return
+    if os.environ.get("CI") and os.environ.get("LHPC_BROWSER") == "1":
+        config.stash[_CI_BROKEN] = reason          # failed per test below: a collection-hook failure aborts the whole run
         return
     skip = pytest.mark.skip(reason=reason)
     for item in items:
         if "tests/browser" in str(item.fspath).replace("\\", "/"):
             item.add_marker(skip)
+
+
+def pytest_runtest_setup(item):
+    reason = item.config.stash.get(_CI_BROKEN, "")
+    if reason:
+        pytest.fail(f"browser lane under CI: {reason}; CI must provide Chromium (test rule E7)", pytrace=False)
 
 
 @pytest.fixture(scope="session")
