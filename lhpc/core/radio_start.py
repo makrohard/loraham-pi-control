@@ -1203,10 +1203,10 @@ def link_kinds(c) -> dict:
 def component_row(svc, c, *, state: str, note: str, interfaces: list, commands: dict) -> dict:
     """One component row of Home's cards (K1, E3-4): the one schema for an instance's rows and the band entries'
     (an orphan's) rows. The caller passes what its scope reads: the instance's or the band's state, note and client
-    interfaces, and the run commands of the cards the row shows on (an interactive part's only)."""
-    from .model import ComponentKind
-    return {"id": c.id, "name": c.name, "optional": c.optional,
-            "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
+    interfaces, and the run commands of the cards the row shows on (an interactive part's only). `runnable`: the card
+    may offer the part's own Run, by the operator surfaces' one rule (optional_role): never a library or firmware, a
+    production GPS feed (its position plan starts it) or a test fixture (run deliberately, by name)."""
+    return {"id": c.id, "name": c.name, "optional": c.optional, "runnable": svc.optional_role(c) != "hidden",
             # Interactive components (GUI/CLI/REPL) are run by the operator, never by lhpc: the command to copy.
             "interactive": c.interactive, "commands": commands if c.interactive else {},
             "blocker": svc.install_blocker(c) if c.interactive else "",

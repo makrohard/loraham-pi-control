@@ -311,3 +311,52 @@ def test_an_orphan_keeps_its_state_stop_and_note_and_gets_no_run(tmp_path, web):
     assert block.find("p", id="noinst-r1-meshcom")                                          # its note
     assert {op for op, _t in _forms(block)} == {"stop"}                                     # Stop only, no Run
     assert ("stop", "meshcom@r1") in _forms(block)
+
+
+def test_the_card_offers_no_run_for_a_gps_feed_or_a_test_fixture(tmp_path, web):
+    # second read N1/N2: the row's Run follows the operator surfaces' one rule (optional_role): a production GPS feed
+    # (its position plan starts it; MeshCom's GPS init is one-shot at boot) and a `test_fixture` (MeshCom's synthetic
+    # NMEA relay) get none. red-before (f43418d1): Run meshcom-gps@r3, meshcom-gps-relay@r3, meshcore-gps@r4
+    mc = _block(web, _svc(tmp_path), LOCAL, "r3")
+    for cid in ("meshcom-gps", "meshcom-gps-relay"):
+        row = _row(mc, cid)
+        assert row.find("span", class_="badge-stopped") and _forms(row) == [], (cid, _forms(row))
+    core = _mc_block(web, _mc(tmp_path / "b", {"r4": ["meshcore-node"]}, ports=[MC_NODE["r4"]]), "r4")
+    assert _row(core, "meshcore-gps").find("span", class_="badge-stopped") and _forms(_row(core, "meshcore-gps")) == []
+    assert _forms(_row(core, "meshcore-webui")) == [("start", "meshcore-webui@r4")]     # an optional service keeps it
+
+
+def _orphan_meshcom(tmp_path, web):
+    """An unclaimed MeshCom on 433 (no launch record or argv names a radio): its QEMU node with its web listener up and
+    its GPS feed running; the meshcom block of card r1."""
+    from radios_fixture import RADIOS
+    radios_fixture.write(tmp_path, RADIOS)
+    svc = ControllerService(system=FakeSystem(
+        cmdlines_data={2000: ["qemu-system-xtensa", "-nographic"],
+                       2001: ["python3", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom"]},
+        listeners=[Listener("ipv4", "127.0.0.1", 18083, 1)]).system, paths=Paths(runtime_root=tmp_path))
+    r = web(service_factory=lambda: svc).get("/", headers=LOCAL)
+    assert r.status_code == 200
+    doc = parse(r.get_data(as_text=True))
+    (card,) = [doc.within(d) for d in doc.find("div", class_="radio-col", **{"data-radio-rid": "r1"})]
+    (block,) = [card.within(d) for d in card.find("div", class_="runstack")
+                if card.within(d).find("p", **{"data-stack": "meshcom"})]
+    return block
+
+
+def test_an_orphans_running_part_has_its_stop_on_its_rows_first_line(tmp_path, web):
+    # second read M1 (mutant X2: the Stop rendered after the row instead of on its line 1 survived)
+    row = _row(_orphan_meshcom(tmp_path, web), "meshcom-gps")
+    (head,) = [row.within(d) for d in row.find("div", class_="chead")]
+    (act,) = [head.within(s) for s in head.find("span", class_="cact")]
+    assert row.find("span", class_="badge-degraded") or row.find("span", class_="badge-running")
+    assert _forms(act) == [("stop", "meshcom-gps@r1")] and _forms(row) == _forms(act)
+
+
+def test_an_orphan_with_a_working_web_link_shows_it_in_its_head_and_offers_no_run(tmp_path, web):
+    # layout B's head link for every running entry (accepted for orphans): it adds no action; the orphan Run stays
+    # withdrawn
+    block = _orphan_meshcom(tmp_path, web)
+    assert _hrefs(block, "headlink") == ["http://127.0.0.1:18083"] and "Web UI ↗" in block.text
+    assert _hrefs(_row(block, "meshcom-qemu"), "iface-web") == ["http://127.0.0.1:18083"]   # the row's own link
+    assert {op for op, _t in _forms(block)} == {"stop"}

@@ -287,7 +287,7 @@
                 <ul class="complist cgrid">{% for c in s.components %}
                   {% call(part) comp_row(c, s, s.rid) %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded', 'booting') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ '@' ~ s.rid, 'Stop') }}
-                    {% elif c.state == 'stopped' and c.optional and c.runnable and not c.interactive %}{{ comp_act('start', c.id ~ '@' ~ s.rid, 'Run') }}{% endif %}
+                    {% elif c.state == 'stopped' and c.runnable and not c.interactive %}{{ comp_act('start', c.id ~ '@' ~ s.rid, 'Run') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded', 'booting') %}{{ interactive_cmd(c, s, s.rid, 'runi-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(s.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
                 <p class="actrow">{% for op in ("stop", "restart") %}
                   <form method="post" action="{{ url_for('action') }}" class="act">
