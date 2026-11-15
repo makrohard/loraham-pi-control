@@ -104,6 +104,13 @@ def _dead_or_zombie(pid: int) -> bool:
         return True                                       # /proc gone -> dead
 
 
+def _ready_line(p, bound: float = 10.0) -> bytes:
+    """The next line of `p`'s stdout, or a loud failure when none is readable within `bound` (a child that died
+    before its marker, or hangs, must not block the test)."""
+    assert select.select([p.stdout], [], [], bound)[0], f"no line from the child within {bound} s"
+    return p.stdout.readline()
+
+
 def _wait_ended(pid: int, bound: float = 5.0) -> None:
     """Wait on `pid`'s pidfd until it has ended (a zombie counts) or `bound` passes: the wait returns at the exit
     itself, it never polls. The caller still asserts the end."""
@@ -153,10 +160,10 @@ def test_proctree_valid_token_kills_term_ignoring_child():
          "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"  # leader ignores TERM
          "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
          "time.sleep(60)\n"],
-        stdout=subprocess.PIPE, start_new_session=True)
+        stdout=subprocess.PIPE, bufsize=0, start_new_session=True)  # unbuffered: _ready_line reads the pipe itself
     token = proctree.capture_session_token(p.pid)         # FULL typed token at spawn
     assert token and token.sid == p.pid and token.pgid == p.pid
-    assert p.stdout.readline() == b"ready\n"             # the child runs and the leader ignores TERM
+    assert _ready_line(p) == b"ready\n"                 # the child runs and the leader ignores TERM
     res = proctree.terminate_session(token, os.getpid())  # TERM ignored -> escalates to KILL
     try:
         p.wait(timeout=2)
@@ -257,11 +264,11 @@ def test_proctree_kills_setpgrp_descendant_in_session():
         "sys.stdout.write(str(child.pid) + '\\n'); sys.stdout.flush()\n"
         "time.sleep(60)\n"
     )
-    p = subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.PIPE,
+    p = subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.PIPE, bufsize=0,
                          start_new_session=True)
     try:
         token = proctree.capture_session_token(p.pid)
-        lines = {p.stdout.readline().strip(), p.stdout.readline().strip()}  # the pid and the descendant's line,
+        lines = {_ready_line(p).strip(), _ready_line(p).strip()}  # the pid and the descendant's line,
         assert b"ignoring" in lines                                         # in either order: it ignores TERM
         child_pid = int((lines - {b"ignoring"}).pop())
         res = proctree.terminate_session(token, os.getpid())
@@ -290,11 +297,11 @@ def test_setsid_descendant_is_outside_proven_ownership():
             " 'import os,sys,time; os.setsid(); sys.stdout.write(\"setsid\\\\n\"); sys.stdout.flush(); time.sleep(30)'])\n"
             "sys.stdout.write(str(c.pid) + '\\n'); sys.stdout.flush()\n"
             "time.sleep(30)\n")
-    p = subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.PIPE,
+    p = subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.PIPE, bufsize=0,
                          start_new_session=True)
     child = None
     try:
-        lines = {p.stdout.readline().strip(), p.stdout.readline().strip()}  # the pid and the grandchild's line,
+        lines = {_ready_line(p).strip(), _ready_line(p).strip()}  # the pid and the grandchild's line,
         assert b"setsid" in lines                                           # in either order: its setsid() landed
         child = int((lines - {b"setsid"}).pop())
         assert os.getsid(child) != p.pid                        # p was spawned start_new_session -> sid == p.pid

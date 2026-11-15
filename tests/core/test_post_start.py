@@ -989,10 +989,15 @@ def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_main_zombie(tmp_path):
     import os
+    import select
     import subprocess
     z = subprocess.Popen(["true"])                                   # exits immediately -> zombie
     try:
-        os.waitid(os.P_PID, z.pid, os.WEXITED | os.WNOWAIT)          # until it has exited; it stays unreaped
+        fd = os.pidfd_open(z.pid)                                    # readable once it has exited; nothing reaps it
+        try:
+            assert select.select([fd], [], [], 10.0)[0], "the child did not exit within 10 s"
+        finally:
+            os.close(fd)
         with open("/proc/%d/stat" % z.pid, "rb") as f:
             rest = f.read().rsplit(b") ", 1)[1].split()
         assert rest and rest[0] == b"Z"                              # confirmed zombie

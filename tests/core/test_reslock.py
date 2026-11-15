@@ -292,10 +292,11 @@ def test_same_process_claim_retries_while_ownership_is_unpublished(tmp_path, mon
 @pytest.mark.wallclock("a real holder process in its own interpreter; its flock is polled, bounded at 10 s (the "
                        "admission wait itself is on the fake clock)")
 def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch, fake_clock):
-    """An UNIDENTIFIABLE holder must not become a five-second stall: it is retried only for the
-    short publication grace and then surfaces the typed ResourceBusy. Proven with a lock held by a
-    real external process whose owner record never appears. The admission's own wait is on the fake
-    clock: each of its polls advances it and never blocks, so `waited` is exactly what it waited."""
+    """An UNIDENTIFIABLE holder must not become a five-second stall: it is an external conflict and
+    surfaces the typed ResourceBusy at once (service_admission._acquire_key: the old timing-based grace is
+    gone). Proven with a lock held by a real external process whose owner record never appears. The
+    admission's own wait is on the fake clock: each of its polls advances it and never blocks, so
+    `waited` is exactly what it waited: nothing."""
     import contextlib, time, types
     import multiprocessing as mp
     import pytest as _pytest
@@ -321,7 +322,7 @@ def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch
                 svc._acquire_key(st, key, "start", "kiss")
         waited = fake_clock.monotonic() - started
         # bounded by the grace, nowhere near the same-process budget
-        assert waited < svc._SELF_LOCK_WAIT_S / 2, f"waited {waited:.2f}s — grace not bounded"
+        assert waited == 0.0, f"waited {waited:.2f}s for an external holder — it must fail fast"
     finally:
         proc.terminate(); proc.join(10)
         if proc.is_alive():
