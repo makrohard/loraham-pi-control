@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import shlex
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -260,13 +261,20 @@ def _copybox_refused(reason, path="") -> Copybox:
 
 
 def _holds(target: Path, data: bytes) -> bool:
-    """B6-D: True when `target` (never through a link) holds exactly `data`; any doubt is False. O_NONBLOCK: a FIFO
-    there reads empty instead of hanging the page."""
+    """B6-D: True only when `target` is a regular file (never through a link) holding exactly `data`; anything else
+    differs and is rewritten. O_NONBLOCK: a FIFO there never hangs the open; the fd is closed on every path."""
     try:
-        with open(os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as f:
-            return f.read(len(data) + 1) == data
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        return os.read(fd, len(data) + 1) == data          # a regular file: one read, one byte past the text
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def _write_atomic(target: Path, data: bytes) -> None:

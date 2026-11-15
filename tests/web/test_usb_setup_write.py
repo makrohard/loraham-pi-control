@@ -69,9 +69,10 @@ def test_a_missing_or_changed_setup_file_is_rewritten_by_a_page(web, tmp_path, m
         f.unlink()
     else:
         f.write_bytes(good + b"echo tampered\n")
-    assert c.get(route).status_code == 200
-    assert f.read_bytes() == good
+    later = c.get(route)
+    assert later.status_code == 200 and f.read_bytes() == good
     assert _offered_sha(page) == hashlib.sha256(good).hexdigest()
+    assert route != "/hardware" or _offered_sha(later.get_data(as_text=True)) == hashlib.sha256(good).hexdigest()
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -95,21 +96,61 @@ def test_a_failed_setup_write_renders_the_page_without_the_line_and_is_logged(we
     assert [rec.getMessage() for rec in caplog.records if rec.name == "lhpc.usb"] == [f"USB setup: {reason}"]
 
 
-@pytest.mark.parametrize("kind", ["symlink", "fifo"])
-def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path, monkeypatch, kind):
-    # never read through a link (a link to the right text is not the file), never hang on a FIFO
+
+def _fds():
+    return len(os.listdir("/proc/self/fd"))
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "fifo-holding-the-text"])
+def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path, monkeypatch, route, kind):
+    # G1-B6D B2 + NOTE 3: only a regular file holds the text; a link (even to the right text) and a FIFO (even one
+    # with exactly the text queued by a writer) differ and are replaced by the file
     c = _box(web, tmp_path, monkeypatch)
-    page = c.get("/hardware").get_data(as_text=True)
+    assert c.get("/hardware").status_code == 200                          # the file as today's page writes it
     f = _setup_file(tmp_path)
     good = f.read_bytes()
+    assert len(good) < 65536                                              # fits a pipe's buffer
     f.unlink()
-    elsewhere = tmp_path / "elsewhere.sh"
+    elsewhere, writer = tmp_path / "elsewhere.sh", None
     if kind == "symlink":
         elsewhere.write_bytes(good)
         f.symlink_to(elsewhere)
     else:
         os.mkfifo(f)
-    assert c.get("/hardware").status_code == 200
+        if kind == "fifo-holding-the-text":
+            writer = os.open(f, os.O_RDWR | os.O_NONBLOCK)
+            assert os.write(writer, good) == len(good)
+    try:
+        later = c.get(route)
+    finally:
+        if writer is not None:
+            os.close(writer)
+    assert later.status_code == 200
     assert not f.is_symlink() and f.is_file() and f.read_bytes() == good
-    assert kind == "fifo" or elsewhere.read_bytes() == good                       # the link's target is untouched
-    assert _offered_sha(page) == hashlib.sha256(good).hexdigest()
+    assert kind != "symlink" or elsewhere.read_bytes() == good                   # the link's target is untouched
+    assert route != "/hardware" or _offered_sha(later.get_data(as_text=True)) == hashlib.sha256(good).hexdigest()
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_a_directory_at_the_setup_path_leaks_no_fd_and_is_refused_by_name(web, tmp_path, monkeypatch, caplog, route):
+    # G1-B6D B1: a directory there is no file; its write is refused and logged, the page stays up, and no GET leaks a
+    # descriptor (EMFILE would break every page)
+    c = _box(web, tmp_path, monkeypatch)
+    assert c.get("/hardware").status_code == 200                          # the file as today's page writes it
+    f = _setup_file(tmp_path)
+    f.unlink()
+    f.mkdir()
+    assert c.get(route).status_code == 200                                # warm-up: lazily opened fds settle
+    before = _fds()
+    caplog.clear()                                                        # the warm-up's own line
+    with caplog.at_level(logging.WARNING):
+        pages = [c.get(route) for _ in range(3)]
+    assert _fds() == before
+    assert [p.status_code for p in pages] == [200] * 3 and f.is_dir()
+    assert all('id="usb-copybox"' not in p.get_data(as_text=True) for p in pages)
+    logged = [rec.getMessage() for rec in caplog.records if rec.name == "lhpc.usb"]
+    path, temp = re.escape(str(f)), re.escape(str(f.parent / ".usb-setup.sh.")) + "[a-z0-9_]{8}"   # mkstemp's name
+    want = (rf"USB setup: {path} could not be written \(IsADirectoryError: \[Errno 21\] Is a directory: "
+            rf"'{temp}' -> '{path}'\)")
+    assert len(logged) == 3 and all(re.fullmatch(want, m) for m in logged), logged
