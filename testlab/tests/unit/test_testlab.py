@@ -455,7 +455,6 @@ def _conf(sockdir, band, cmd: bytes) -> str:
     return out
 
 
-@pytest.mark.slow
 def test_fake_daemon_conf_lines_satisfy_daemon_control(fake_daemon, tmp_path):
     """Every GET reply is one line of non-empty KEY=VALUE tokens (lhpc's _query fails
     closed on bare/duplicate tokens); SET grammar answers OK/ERR per the v112 daemon."""
@@ -482,7 +481,6 @@ def test_fake_daemon_conf_lines_satisfy_daemon_control(fake_daemon, tmp_path):
     assert _conf(sockdir, "433", b"SET CADWAIT=10") == "ERR INVALID\n"
 
 
-@pytest.mark.slow
 def test_fake_daemon_serves_its_radios_sockets_with_an_id(fake_daemon, tmp_path):
     """Stage L5 (0.14.0, REL14-D26): started as lhpc starts a radio's daemon (`--radio 433 --id r1`), the fake
     serves that radio's three sockets and names itself in STATUS (ID=r1 BOUND=-, the real daemon's contract),
@@ -514,7 +512,6 @@ def test_fake_daemon_exits_when_its_rf_log_cannot_be_opened(tmp_path):
     assert out.stderr.strip() == f"cannot open RF log {path}: No such file or directory"
 
 
-@pytest.mark.slow
 def test_fake_daemon_opens_its_rf_log_and_serves(fake_daemon, tmp_path):
     path = tmp_path / "logs" / "r1" / "rf-daemon.log"
     path.parent.mkdir(parents=True)
@@ -576,7 +573,6 @@ def _queue_rx(root, band, name, rec, paused=None):
     os.replace(tmp, qdir / name)
 
 
-@pytest.mark.slow
 def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     """Framed 0x02 TX -> TX_RESULT 0x04 (status/flags/seq, only after SET TXRESULT=1),
     TXOK visible in GET STATS; queued RX arrives as one 0x01 frame with the 4-byte
@@ -659,7 +655,6 @@ def test_fake_daemon_air_carries_a_transmission_to_the_other_clients_only(fake_d
         _frame(a)
 
 
-@pytest.mark.slow
 def test_fake_daemon_radio_failed_refuses_tx(fake_daemon, tmp_path):
     import socket as _s
     import struct as _st
