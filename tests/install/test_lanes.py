@@ -253,7 +253,7 @@ def test_a_snapshot_tag_beside_a_release_only_name_does_not_hide_a_newer_tag(box
     assert box.head() == box.c[2]
 
 
-@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}', '{"tag_name": ""}'])   # a non-version name: NO_VERSION
+@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}', '{"tag_name": ""}'])   # no usable tag name
 def test_a_release_answer_without_a_usable_tag_name_is_not_verified(box, capsys, body):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v2.9.0", box.c[2])
@@ -615,29 +615,6 @@ def test_one_source_path_is_resolved_once_per_gate(box):
     assert len(box.api_calls) == 1 and list(refs) == [REL] and refused == []   # RED before: 2 calls
 
 
-# ---- a stable lane without version-shaped releases (MeshCom's `v4.40a.11.14`) ----------------------------------
-
-NO_VERSION = "up/app publishes no version-shaped releases; use --source pinned or dev"
-
-
-def test_a_stable_install_of_a_source_without_version_shaped_releases_is_refused(box, capsys):
-    box.release = "v4.40a.11.14"                      # the upstream's latest release does not parse
-    capsys.readouterr()
-    assert box.cli("install", "s", "--source", "stable", "--yes") != 0   # RED before: installed unverified
-    assert NO_VERSION in capsys.readouterr().out
-    assert not (box.dest / ".git").exists()
-
-
-def test_a_stable_update_of_a_source_without_version_shaped_releases_names_pinned_or_dev(box, capsys):
-    assert box.cli("install", "s", "--source", "pinned", "--yes") == 0
-    box.release = "v4.40a.11.14"
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    out = capsys.readouterr().out
-    assert NO_VERSION in out and "try again later" not in out   # RED before: "could not be checked — try again later"
-    assert (box.head(), box.selector()) == (box.c[0], "pinned")
-
-
 def test_control_a_release_less_source_still_installs_its_default_branch_head(box, git):
     git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
     box.release = "404"                               # no release at all: the default-branch HEAD (L6)
@@ -899,3 +876,74 @@ def test_the_real_manifest_tag_shapes_resolve_on_their_history(box, git, shapes,
         git(box.work, "push", "-q", "origin", name)
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     assert box.head() == (box.c[2] if expected is None else box.c[expected])
+
+
+# ---- MESHCOM-STABLE slice B: the release of any name (MeshCom's `v4.40a.11.14`) -------------------------------
+
+def _meshcom_tags(box, git, *pairs):
+    """Tag each (name, commit index) annotated on main and push it; the fixture's own tags go first."""
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    for name, i in pairs:
+        git(box.work, "tag", "-a", "-m", name, name, box.c[i])
+        git(box.work, "push", "-q", "origin", name)
+
+
+def test_a_release_without_a_version_shape_is_the_stable_target(box, git):
+    _meshcom_tags(box, git, ("v4.40a.11.07", 0), ("v4.40a.11.14", 1))
+    box.release = "v4.40a.11.14"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    assert box.head() == box.c[1]
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE
+
+
+def test_a_dated_build_after_the_installed_one_is_a_stable_update(box, git):
+    _meshcom_tags(box, git, ("v4.40a.11.07", 0), ("v4.40a.11.14", 1))
+    box.release = "v4.40a.11.07"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    assert box.head() == box.c[0]
+    box.release = "v4.40a.11.14"
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[1]
+
+
+def test_dated_builds_across_a_new_year_follow_the_history_not_the_date(box, git, capsys):
+    _meshcom_tags(box, git, ("v4.40a.12.30", 0), ("v4.40a.01.05", 1))   # 01.05 is the NEWER build
+    box.release = "v4.40a.12.30"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    box.release = "v4.40a.01.05"
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[1]
+    box.release = "v4.40a.12.30"                      # the marker moved back
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0
+    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    assert box.head() == box.c[1]
+
+
+def test_a_switch_from_pinned_onto_a_release_without_a_version_shape(box, git):
+    _meshcom_tags(box, git, ("v4.40a.11.14", 1))
+    assert box.cli("install", "s", "--source", "pinned", "--yes") == 0   # the pin: c1
+    box.release = "v4.40a.11.14"
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    assert (box.head(), box.selector()) == (box.c[1], "stable")
+
+
+@pytest.mark.parametrize("where, expected", [("future", "v5.0"), ("past", "v4.40a.11.14"), ("beside", "v4.40a.11.14")])
+def test_a_version_tag_beside_a_release_without_a_version_shape_is_placed_by_history(box, git, where, expected):
+    _meshcom_tags(box, git, ("v4.40a.11.14", 1))
+    at = {"future": box.c[2], "past": box.c[0], "beside": box.side(box.c[0])}[where]
+    git(box.work, "tag", "-a", "-m", "v5.0", "v5.0", at)
+    git(box.work, "push", "-q", "origin", "v5.0")
+    box.release = "v4.40a.11.14"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    assert box.head() == (at if expected == "v5.0" else box.c[1])
+
+
+def test_a_release_named_by_a_word_is_the_upstreams_statement(box, git):
+    _meshcom_tags(box, git, ("v2.7.0", 0), ("release-2.8.0", 1))
+    box.release = "release-2.8.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
+    assert box.head() == box.c[1]

@@ -5,8 +5,8 @@ The history: one bare, treeless mirror per remote (`history_dir`), fetched on ev
 all branches and tags, deleted refs pruned). A commit is PUBLISHED when a current branch or tag of the mirror reaches it;
 an object the mirror still holds after a force-push is not. Every ancestry answer is true, false or unknown (`_is`).
 
-Target (`resolve`): the release R (GitHub `releases/latest`, no drafts, no prereleases) when its name is a version, and
-the plain version-shaped tags (the WHOLE name an optional `v` and one to three numbers) in R's future; no release: every
+Target (`resolve`): the release R (GitHub `releases/latest`, no drafts, no prereleases) whatever its name (MeshCom's
+`v4.40a.11.14`: slice B), and the plain version-shaped tags (the WHOLE name an optional `v` and one to three numbers) in R's future; no release: every
 plain tag. The target is the candidate commit all others lead to; candidates that are not one line of history refuse
 by name. Tags in R's past or beside R's line are not successors of the release and never the target. No candidate:
 the default-branch HEAD. VERIFIED when every applicable source was read (the mirror; on GitHub also the releases API,
@@ -31,7 +31,6 @@ _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Z
                                r"(?:\.git)?/?$")
 
 FINAL_HINT = "use --source pinned or dev"            # every refusal no retry changes ends with it (`is_final`)
-NO_VERSION = f"publishes no version-shaped releases; {FINAL_HINT}"
 TRY_LATER = "releases could not be checked — try again later"
 
 
@@ -66,7 +65,7 @@ class StableRef(NamedTuple):
 
     @property
     def key(self):
-        """The target's version (None = the default-branch HEAD)."""
+        """The target's version (None = the default-branch HEAD, or a release whose name is not a version)."""
         return version_of(self.name) if self.name else None
 
     def frozen(self) -> tuple:
@@ -153,9 +152,7 @@ def resolve(run, remote: str, paths) -> StableRef:
                 tag = json.loads(body).get("tag_name")
             except (ValueError, AttributeError):
                 tag = None
-            if isinstance(tag, str) and tag and not version_of(tag):        # MeshCom's `v4.40a.11.14`: plan B
-                return StableRef(why=f"{gh[1]}/{gh[2]} {NO_VERSION}")
-            release = tag if version_of(tag) else ""
+            release = tag if isinstance(tag, str) else ""        # any name: the upstream's statement (MeshCom)
             verified = release in commits                         # unparseable, or not in the tag list yet: no answer
             release = release if verified else ""
         elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
@@ -236,7 +233,7 @@ def update_gate(run, paths, items, source: str, remote_of):
     U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan (per source path), refused the
     per-source refusal lines. ONE target per remote: two paths that share a remote read it once. Within the stable lane
     no move goes back or sideways (`classify`); an explicit switch onto it (the source recorded another lane) is the
-    user's choice and may go back, but only to a verified release target the history places. The plan runs it without
+    user's choice and may go back, but only to a verified release or tag the history places. The plan runs it without
     locks; the apply runs it ONCE, under its locks."""
     from . import source_fs, source_registry
     sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
@@ -250,7 +247,7 @@ def update_gate(run, paths, items, source: str, remote_of):
             installed = (head.stdout or "").strip() if head.returncode == 0 else ""
             older, why = classify(run, installed, ref)
             if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
-                if older is not None and ref.key is None:                           # a resolved release only
+                if older is not None and not ref.name:                              # a release or tag target only
                     older = None
                 why = update_refusal(ref, installed, None if older is None else False, why)
             else:                                                                   # within the lane: forward only
