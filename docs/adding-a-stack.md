@@ -77,8 +77,10 @@ Every component executes [**shell-free**](architecture.md#safety-model):
   manifest load; there is no shell fallback.
 - **Instance tokens**, anywhere in an argv token, env value, pre/post step or param default:
   `{port:BASE}` is the instance's port (BASE + 133 × (n − 1) on rN, BASE on r1), `{port_of:STACK:BASE}`
-  the port of STACK's instance on the same radio, and `{instance_dir}` a per-radio path level (`<rid>/`;
-  empty only in the manifest's template values).
+  the port of STACK's instance on the same radio, `{instance_dir}` a per-radio path level (`<rid>/`;
+  empty only in the manifest's template values), `{instance_suffix}` a per-radio file name in a shared
+  directory (`-<rid>`), `{instance_index}` / `{instance_index_dir}` a helper's own instance number and run
+  directory (`N − 1` / `<N − 1>/` on rN; `0` / empty on r1) and `{rid}` the radio id.
 
 ### Build
 
@@ -136,7 +138,7 @@ A `ready = true` endpoint gates start/stop verification (TCP ones must be loopba
 ```toml
     [[stack.component.endpoint]]
     kind = "tcp"                 # tcp | unix | path
-    address = "127.0.0.1:7000"
+    address = "127.0.0.1:{port:7000}"
     ready = true
     role = "listener"
     description = "MeshCom firmware client port."
@@ -161,7 +163,7 @@ every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
     name = "port"
     kind = "int"
     arg = "--port"
-    default = "7000"
+    default = "{port:7000}"
     label = "Control TCP port (= firmware XR_PORT)"
 ```
 
@@ -184,7 +186,7 @@ every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
 
 ```toml
     [[stack.component.resource]]
-    key = "tcp.port.7000"
+    key = "tcp.port.{port:7000}"
     kind = "tcp-port"
     mode = "exclusive"           # exclusive | provider | consumer | cooperative | requirement
 ```
@@ -195,9 +197,9 @@ every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
 lhpc install meshcom --source pinned --yes   # adopt + verify every component's source at its pin
 lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe), optional
-lhpc stack start meshcom     # start in order; verify readiness per component
-lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints confirmed gone
-lhpc update meshcom --yes    # binary stays binary, source goes to its pin
+lhpc stack start meshcom@<rid>  # start in order; verify readiness per component
+lhpc stack stop meshcom@<rid>   # identity-verified stop (SIGTERM only), endpoints confirmed gone
+lhpc update meshcom --yes    # binary stays binary, a source keeps the lane it was installed from
 ```
 
 The web console has the same actions per stack.
@@ -205,9 +207,9 @@ The web console has the same actions per stack.
 ## Add a new stack
 
 1. Copy a similar `[[stack]]` block and rename `id` / `name` / `main`.
-2. Give each component the sections above, plus `requires_daemon_tx` and `band`
-   ([TX safety](operations.md#tx-safety)).
-3. `lhpc install <id> --check` → `lhpc install <id> --source pinned --yes` → `lhpc build <id>` → `lhpc stack start <id>`; read the typed
+2. Give each component the sections above, plus `requires_daemon_tx` and `band` (and `bands = ["433", "868"]`
+   for one that may run on either band; [TX safety](operations.md#tx-safety)).
+3. `lhpc install <id> --check` → `lhpc install <id> --source pinned --yes` → `lhpc build <id>` → `lhpc stack start <id>@<rid>`; read the typed
    outcomes.
 
 ## Maintain an existing stack
