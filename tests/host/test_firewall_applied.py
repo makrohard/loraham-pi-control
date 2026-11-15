@@ -299,11 +299,29 @@ def test_a_policy_the_applied_firewall_does_not_carry_waits_for_its_apply(tmp_pa
     assert not r.ok and "Firewall changes pending" in r.summary and applied == [1]
 
 
-def test_an_unmapped_listener_never_has_a_row():
+@pytest.fixture
+def decide(tmp_path, monkeypatch):
+    """The ONE gate decision over one launch scope, with `applied` rows as the applied evidence and `saved` rows as the
+    saved candidate: the behaviour, not the row helper's signature (G1-FW-A21-RE2 NOTE)."""
+    (tmp_path / "config").mkdir(exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    def cand(rows):
+        return {"schema": fw.CANDIDATE_SCHEMA, "mode": "secure-default", "endpoints": rows, "proxy_ingress": [],
+                "ssh_ports": [], "ap": {"enabled": False, "interface": "", "cidr": ""}, "extra_allow": []}
+
+    def run(sc, applied, saved):
+        monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: cand(applied))
+        return svc._fw_gate_decision(listeners=[sc], st={"candidate": cand(saved), "config_ok": False,
+                                                         "live_ok": False}) == ""
+    return run
+
+
+def test_an_unmapped_listener_never_has_a_row(decide):
     sc = {"id": "x.tcp-1", "proto": "tcp", "family": "dual", "addr": "*", "port": 1, "band": "", "_unmapped": True}
     row = {k: sc[k] for k in ("id", "proto", "family", "addr", "port", "band")}
-    assert not sf._fw_has_row(sc, {"endpoints": [row]}, {"endpoints": [row]})
-    assert sf._fw_has_row({**sc, "_unmapped": False}, {"endpoints": [row]}, {"endpoints": [row]})   # anchor
+    assert not decide(sc, [row], [row])
+    assert decide({**sc, "_unmapped": False}, [row], [row])   # anchor
 
 
 def test_a_band_agnostic_row_never_covers_a_band_whose_scope_diverged(tmp_path, monkeypatch):
@@ -356,7 +374,7 @@ BASE_SCOPE = {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4", "addr"
 @pytest.mark.parametrize("field, value, covered", [
     ("port", 9002, False), ("addr", "192.0.2.7", False), ("family", "dual", False), ("auth", "password", False),
     ("deny", True, False), ("allow_cidrs", ["10.0.0.0/8"], True)])
-def test_the_templates_band_agnostic_row_covers_no_band_whose_scope_diverged(field, value, covered):
+def test_the_templates_band_agnostic_row_covers_no_band_whose_scope_diverged(decide, field, value, covered):
     # G1-FW-A21 B1 (strict, the coordinator's DEC): applied with one scope on both bands (one row band=""), then ONE
     # field of the 868 band's scope changes: through the real row builder the 868 band now has its own row, which equals
     # no applied row: refused until its apply. Only the source CIDRs follow the applied firewall (his word).
@@ -369,20 +387,20 @@ def test_the_templates_band_agnostic_row_covers_no_band_whose_scope_diverged(fie
     def launch(band):
         e = next(r for r in saved["endpoints"] if r["band"] in (band, ""))
         return {k: e[k] for k in ("id", "proto", "family", "addr", "port")} | {"band": band}
-    assert sf._fw_has_row(launch("868"), applied, saved) is covered
-    assert sf._fw_has_row(launch("433"), applied, saved)                  # the other band still starts
+    assert decide(launch("868"), applied["endpoints"], saved["endpoints"]) is covered
+    assert decide(launch("433"), applied["endpoints"], saved["endpoints"])                  # the other band still starts
 
 
-def test_another_instances_row_at_the_same_port_is_no_row():
+def test_another_instances_row_at_the_same_port_is_no_row(decide):
     # second read X13: the key names the endpoint id; another instance's row with the same proto/family/address/port/
     # band never serves a newcomer at that port (it would carry the old instance's CIDRs and tick)
     sc = {"id": "loraham-kiss-tnc-r3.tcp-8001", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 9001, "band": ""}
     row = {**sc, "id": "loraham-kiss-tnc-r1.tcp-8001"}
-    assert not sf._fw_has_row(sc, {"endpoints": [row]}, {"endpoints": [row, {**sc}]})
-    assert sf._fw_has_row(sc, {"endpoints": [row, {**sc}]}, {"endpoints": [row, {**sc}]})   # anchor: its own id
+    assert not decide(sc, [row], [row, {**sc}])
+    assert decide(sc, [row, {**sc}], [row, {**sc}])   # anchor: its own id
 
 
-def test_an_applied_row_covers_a_band_only_with_its_identical_scope():
+def test_an_applied_row_covers_a_band_only_with_its_identical_scope(decide):
     # strict (G1-FW-A21 B1): the band LABEL is not compared (nft holds the scope's rule, not the band's); every field
     # the row carries is, except the CIDRs and the tick that follow the apply
     sc = {"id": "a.tcp-1", "proto": "tcp", "family": "ipv4", "addr": "*", "port": 1, "band": "433"}
@@ -390,11 +408,11 @@ def test_an_applied_row_covers_a_band_only_with_its_identical_scope():
            "deny_default": False, "auth": "none"}
     for band in ("433", ""):
         saved = {"endpoints": [{**row, "band": band}]}
-        assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868"}]}, saved)
-        assert sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868", "allow_cidrs": ["10.0.0.0/8"],
-                                                  "selected": True}]}, saved)
+        assert decide(sc, [{**row, "band": "868"}], saved["endpoints"])
+        assert decide(sc, [{**row, "band": "868", "allow_cidrs": ["10.0.0.0/8"], "selected": True}],
+                      saved["endpoints"])
         for field, value in (("auth", "password"), ("deny_default", True)):
-            assert not sf._fw_has_row(sc, {"endpoints": [{**row, "band": "868", field: value}]}, saved)
+            assert not decide(sc, [{**row, "band": "868", field: value}], saved["endpoints"])
 
 
 @pytest.mark.parametrize("bind", ["192.168.178.5", "::"])
@@ -953,12 +971,15 @@ def test_a_fifo_at_the_snapshot_or_the_receipt_never_hangs_a_gate(tmp_path, monk
     t = threading.Thread(target=lambda: out.append(_gate(lab.svc(), "meshtastic", "r1")), daemon=True)
     t.start()
     t.join(30)
-    try:                                                                  # release a reader stuck in open() (red run)
-        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
-    except OSError:
-        pass
-    assert out, "the gate hung on a FIFO"
-    assert not out[0][0]                                                  # not a regular file: no evidence, refused
+    try:
+        hung = t.is_alive()                                               # judged BEFORE any writer can release it
+        assert not hung and out, "the gate hung on a FIFO"
+        assert not out[0][0]                                              # not a regular file: no evidence, refused
+    finally:                                                              # then release a reader stuck in open()
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+        except OSError:
+            pass
 
 
 def test_a_snapshot_that_grew_after_its_fstat_is_not_evidence(tmp_path, monkeypatch):
