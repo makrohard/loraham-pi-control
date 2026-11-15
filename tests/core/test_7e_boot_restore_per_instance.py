@@ -232,3 +232,44 @@ def test_an_instance_whose_radio_moved_band_after_the_plan_is_not_started_there(
     [item] = _journal(tmp_path)["items"]
     assert (item["state"], item["result"]["summary"]) == (
         "failed", "kiss@r3: r3 is on 868 MHz now, not 433 MHz: start it by hand")
+
+
+def _owned(tmp_path):
+    return sorted(p.name for p in (tmp_path / "state" / "owned").glob("*.json"))
+
+
+def test_a_skipped_instance_is_not_restored_by_a_later_boot(tmp_path, monkeypatch):
+    """A skip retires its evidence. Box H: meshcom@r3's records from boot cb1a1bbf were skipped at the next boot and
+    restored by the boot after that, from records two boots old. Here kiss@r3 is skipped (its radio is disabled);
+    re-enabled, a later boot must not start it from those records."""
+    disabled = radios.Radio("r3", "rfm", "ch341-rfm98pw-433", "433", enabled=False, usb_serial="CHE1W433")
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT868, disabled], starts)
+    _record(tmp_path, rid="r2", band="868", pid=999951, at=1000)
+    r3 = _record(tmp_path, rid="r3", band="433", pid=999952, at=1001)
+    assert svc.boot_restore_run().ok
+    assert starts == [("kiss", "868", "r2")] and _skips(tmp_path) == [("kiss@r3", "radio r3 is disabled")]
+
+    (tmp_path / "config" / "radios.toml").write_text(radios.render((HAT868, USB433)))     # r3 enabled again
+    monkeypatch.setattr(sbr, "current_boot_id", lambda: "NEXTBOOT")
+    assert svc.boot_restore_run().ok
+    assert starts == [("kiss", "868", "r2")], starts                   # nothing more: no kiss@r3 from old records
+    assert f"{r3['launch_id']}.json" not in _owned(tmp_path)                # its skip retired the record
+
+
+def test_an_unreadable_intents_skip_keeps_its_evidence_for_a_later_boot(tmp_path, monkeypatch):
+    """The one skip that is retried: with the stop intents unreadable no stack can be shown to be free of a stop, so
+    nothing is restored, and a boot that can read them again restores from the same records."""
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
+    rec = _record(tmp_path, rid="r3", band="433", pid=999961, at=1000)
+    monkeypatch.setattr(ControllerService, "_stop_intent_stacks", lambda self: None)
+    assert svc.boot_restore_run().ok
+    assert starts == [] and _skips(tmp_path) == [("kiss@r3", sbr.BootRestoreOpsMixin.INTENTS_UNREADABLE_REASON)]
+    assert f"{rec['launch_id']}.json" in _owned(tmp_path)
+
+    monkeypatch.undo()
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
+    monkeypatch.setattr(sbr, "current_boot_id", lambda: "NEXTBOOT")
+    assert svc.boot_restore_run().ok
+    assert starts == [("kiss", "433", "r3")], starts

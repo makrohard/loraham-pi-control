@@ -32,7 +32,7 @@ from .snapshot_memo import invalidates_snapshot
 
 class BootRestoreOpsMixin:
     DAEMON_STACK_ID = "daemon"
-        # ONE string: written at classification, matched only in _prune_intent_skips.
+        # ONE string: written at classification, shown in the journal's skipped list.
     INTENT_SKIP_REASON = ("operator stop intent stands — stopped after the recorded launch, "
                           "not restored")
     # Never pruned: the evidence must survive for a boot that can read the intents again.
@@ -360,14 +360,14 @@ class BootRestoreOpsMixin:
             journal["finished_at"] = time.time()
             if not boot_restore.write_journal(self._paths, journal):
                 return ActionResult(False, "Boot restore: journal unwritable.", details=note)
-            self._prune_intent_skips(journal)
+            self._prune_skips(journal)
             n = len(plan.skipped)
             return ActionResult(True, "Boot restore: nothing to restore"
                                       + (f" ({n} skipped — see the log)." if n else "."),
                                 details=note, data={"driver_completed": True})
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.", details=note)
-        self._prune_intent_skips(journal)
+        self._prune_skips(journal)
 
         integrity_failure = ""
         for item in journal["items"]:
@@ -425,15 +425,14 @@ class BootRestoreOpsMixin:
         ident = procident.proc_identity(os.getpid()) or {}
         return ident.get("starttime", 0)
 
-    def _prune_intent_skips(self, journal, write: bool = True) -> None:
-        """Prune intent-skipped leftovers and persist the results — AFTER the journal is
-        durable (pruning first left destruction unrecorded on a crash or an
-        unwritable journal; the disabled path documents the same journal-first order). They
-        are dead prior-boot records of a stack the operator stopped; leaving them would
-        re-classify them on every boot."""
+    def _prune_skips(self, journal, write: bool = True) -> None:
+        """Prune every skipped item's leftovers but the unreadable-intents ones, and persist the results — AFTER the
+        journal is durable (pruning first left destruction unrecorded on a crash or an unwritable journal; the
+        disabled path documents the same journal-first order). They are dead prior-boot records: left, a later boot
+        restored the stack from an OLDER boot (a plan skip), or re-classified a stopped one on every boot."""
         touched = False
         for _sk in journal.get("skipped", ()):
-            if _sk.get("reason") == self.INTENT_SKIP_REASON and "prune" not in _sk:
+            if _sk.get("reason") != self.INTENTS_UNREADABLE_REASON and "prune" not in _sk:
                 _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
                 touched = True
         if touched and write:
@@ -472,7 +471,7 @@ class BootRestoreOpsMixin:
             it["prune"] = self._boot_prune_evidence(it["evidence_ids"])
         # write=False: the checked write on the next line is the durable one — the helper
         # writing too was a back-to-back double serialization on SD-card boxes.
-        self._prune_intent_skips(journal, write=False)
+        self._prune_skips(journal, write=False)
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.")
         retired = sum(len(i["evidence_ids"]) for i in items)
