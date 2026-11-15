@@ -40,7 +40,7 @@ gotchas on a Pi. Open work: [backlog.md](backlog.md); the release-matrix procedu
     (`tests/repo/test_unit_templates_frozen.py`; the procedure: *Changing a unit* below).
 - `pin-validation`: every pinned source has a rule in the release bot's policy, and every pin is
   an ancestor of its live branch with its referenced scripts present
-- `meshcore-host`: LHPC's own tests for `lhpc/data/meshcore_host` (not collected by `pytest -q`)
+- `meshcore-host`: LHPC's own tests for `lhpc/data/meshcore_host` (not collected by `python -m pytest -q`)
   and the MeshCore RF-log decoder, against the manifest-pinned openHop core installed unmodified
 - `rfdecode-meshtastic`, `rfdecode-reticulum`: the other two RF-log decoders against the
   manifest-pinned `meshtastic` package and Reticulum/LXMF/driver checkouts
@@ -59,7 +59,7 @@ No external project's own test suite runs in CI, apart from meshcom-qemu-raspi's
 
 - **A coverage threshold.** Coverage is published, not gated (no `--cov-fail-under`); a drop is
   judged in review. Touch `lhpc/` and run it locally ([tests/README.md](../tests/README.md#how-to-run)).
-- **The contract lane** (`pytest -m contract`, ~20 s) runs inside the suite but is no separate gate;
+- **The contract lane** (`python -m pytest -m contract`, ~20 s) runs inside the suite but is no separate gate;
   use it as a pre-flight.
 - **Docs formatting.** Tests pin only a `### ` section in `cli.md` per CLI verb and the two
   READMEs' dependency list and hardware table (`tests/cli/test_cli.py::test_docs_cli_lists_every_command`,
@@ -397,7 +397,7 @@ build trees of stacks installed from binaries, the PlatformIO caches, old job lo
 used 4.5 G of a 29 G root filesystem (2026-09-28).
 
 **The test suite.** Give pytest a dedicated basetemp and remove exactly that path afterwards
-(`pytest --basetemp="$HOME/pt-lhpc"`, then `rm -rf -- "$HOME/pt-lhpc"`): the default lands on the
+(`python -m pytest --basetemp="$HOME/pt-lhpc"`, then `rm -rf -- "$HOME/pt-lhpc"`): the default lands on the
 `/tmp` tmpfs (208 MB on a Zero 2W), which the full suite fills (ENOSPC). Run under `setsid` or the
 `needs_session` tests skip (boot-restore/ownership coverage); install `zstd` or the `requires_zstd`
 tests skip; don't run as root or the `needs_nonroot` tests skip

@@ -105,11 +105,11 @@ so).
 
 ```sh
 python -m pytest -q testlab/tests                # unit lane; the opt-in lanes skip
-LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real executable
-LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
-LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
+LHPC_ACCEPTANCE=1 python -m pytest testlab/tests/acceptance -q   # real server + real executable
+LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
+LHPC_RELEASE_VERIFY=1 python -m pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
 LHPC_SLOW_BUILD=1 SLOW_CPUS=0.25 SLOW_MEM=416m SLOW_WRITE_IOPS=120 SLOW_READ_IOPS=1200 \
-  pytest testlab/tests/slowbuild -q             # slow-build lane: only inside the throttled container
+  python -m pytest testlab/tests/slowbuild -q   # slow-build lane: only inside the throttled container
 ```
 
 **From a worktree, prefix these with `PYTHONPATH=$PWD:$PWD/testlab`** (or re-run

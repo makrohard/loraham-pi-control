@@ -231,5 +231,5 @@ The manifest is validated at load: a bad readiness policy, command, endpoint, pa
 ```bash
 python -m compileall -q lhpc
 python -c "from lhpc.core.manifest import load_manifest; print(len(load_manifest()), 'stacks OK')"
-pytest -q tests/stacks/test_manifest_validation.py tests/stacks/test_manifest_model.py tests/stacks/test_manifest_graph.py
+python -m pytest -q tests/stacks/test_manifest_validation.py tests/stacks/test_manifest_model.py tests/stacks/test_manifest_graph.py
 ```
