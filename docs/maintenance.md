@@ -133,26 +133,26 @@ repositories.
 
 ## Docs and CHANGELOG
 
-These rules hold for every `.md` in the repository and for `CHANGELOG.md`, whoever writes them.
+The standing rules for the docs and `CHANGELOG.md`; they bind every contributor, human or AI.
 
-| # | rule | what it asks |
-|---|---|---|
-| 1 | Short | Only what the reader needs to do the task. No history ("used to", "since 0.x"): the CHANGELOG and git own it, [live-tests](live-tests/) own dated evidence. A rationale is no longer than its rule; a one-line why that stops a known mistake stays. |
-| 2 | Once | One fact, one page; elsewhere one line and a link, never a paraphrase. |
-| 3 | True | Every sentence is true of the code and no stronger than the mechanism: checked against a file:line, or removed. Numbers are measured. Page and CLI literals come from a rendered page. A model-table value is LHPC's support, not a vendor fact. A change that makes a sentence untrue fixes it in the same commit. |
-| 4 | Frames | When two docs disagree on a figure, name whose frame each is; change no number without a code line. |
-| 5 | Proven commands | A command given to outsiders is proven on two distinct environments, one of them a real host. |
-| 6 | Structure | Every doc has a `## Contents` list and clear sections; tables for state and catalogs; a code block for every typed command. [cli.md](cli.md) has one `### <verb>` per verb. [docs/README.md](README.md) is the map, not a summary. README.md keeps its design: an opening paragraph, two "way in" call-outs, `<details>` blocks, two badges. |
-| 7 | MAINTAINING.md | One line and a link per step; where it disagrees with the linked doc, the linked doc is right. |
-| 8 | CHANGELOG entries | One or two lines each, in the operator's words. The why, measurements and history go to the docs or the commit. Tooling and test changes get no entry. A released section is not corrected for a minor inaccuracy. |
-| 9 | CHANGELOG sections | A change adds no CHANGELOG line: each release's section is written once, before its tag. A major or minor section holds the major changes only, with no back and forth, and keeps its upgrade steps. |
-| 10 | Upgrade steps | Before 1.0.0, an upgrade problem is a step under "Upgrading from …" in the CHANGELOG, never one-time migration code. |
-| 11 | Names | No Co-Authored-By or AI attribution; no tool, assistant or run names in committed text. The maintainer's name and email appear in copyright files only. No secrets, addresses, call signs, node ids or box names. English, except README.de.md. |
-| 12 | Special files | README.de.md is a full translation of README.md, worked last, and lands with its English change. Live-test records stay (at most a one-line release header). Not edited by a docs pass: the vendored rnode-flasher README, released CHANGELOG sections, licence texts, `code-review/`. |
-| 13 | Plans and reports | Plans, reports and item notes follow rules 1, 2 and 6. |
-| 14 | Docs changes | A docs change changes no behaviour or policy: a sentence that needs code becomes a code finding. Parallel editors work on disjoint files. Each change is read for lost facts, contradictions, the reader and policy, and reviewed before it lands. When the work does not fit, stop with a report the next editor can resume from. A user-facing element the code still has is never dropped from the docs. |
-| 15 | Gates | Before a docs commit: the house-rules check (above), `tests/repo` (the README drift tests) and every other test that reads a doc or the CHANGELOG (the cli sections: `tests/cli/test_cli.py`), ruff, and a link, anchor and Contents check. |
-| 16 | Per release | Each release gets a docs pass over what it changed. |
+| # | rule |
+|---|---|
+| R1 | **Short:** only what the reader needs to do the task. No history ("used to", "since 0.x"): the CHANGELOG and git own it, and live-tests own the dated evidence. A rationale is no longer than its rule (a one-line "why" that stops a known mistake stays) |
+| R2 | **Once, in the right spot:** one fact, one owner page; elsewhere one line plus a link, never a paraphrase. |
+| R3 | **True:** every sentence is true of the code at the base and no stronger than the mechanism; verified (file:line) or removed. Numbers are measured. Page and CLI literals come from a rendered page. A model-table value is LHPC's support, not a vendor fact. A change that makes a sentence untrue fixes it in the same commit |
+| R4 | **Frames:** when two docs disagree on a figure, name whose frame each is; change no number without a code line |
+| R5 | **Proven commands:** a command given to outsiders is proven on two distinct environments, one a real host |
+| R6 | **Structure:** every real doc has a `## Contents` TOC and clear sections; tables for state and catalogs; a code block for every typed command. cli.md has one `### <verb>` per verb. docs/README.md is the map, not a summary. README.md keeps its design: an opening paragraph, two "ways in" call-outs, `<details>` blocks, two badges |
+| R7 | **MAINTAINING.md:** one line plus a link per step; where it disagrees with a linked doc, the linked doc is right |
+| R8 | **CHANGELOG entries:** one or two lines in the operator's words. The why, measurements and history go to the docs or the commit. Tooling and test changes get no entry. Released sections are not corrected for a minor inaccuracy |
+| R9 | **Upgrade steps:** before 1.0.0, an upgrade problem is a step under "Upgrading from …" in the CHANGELOG, never one-time migration code |
+| R10 | **Major and minor sections:** major changes only, no history back and forth; written once before the tag, upgrade steps kept |
+| R11 | **Names:** no Co-Authored-By or AI attribution; no tool, agent or session names in committed text. The maintainer's name and email appear in copyright files only. No secrets, addresses, call signs, node ids or box names. English, except the German README |
+| R12 | **Special files:** README.de.md is a full translation, worked last, and lands together with its English twin. Live-test records stay (at most a one-line release header). Out of scope: the vendored rnode-flasher README, released CHANGELOG sections, licence texts |
+| R13 | **Run docs** (item READMEs, read-ins, plans) follow R1, R2 and R6 |
+| R14 | **Docs-run method:** no behaviour or policy change (a sentence that needs code becomes a code finding); editors on disjoint files; four lenses (fact loss, contradictions, the reader, policy); a gate-1 review (an independent review of the diff before it lands); stop with a resumable report when it does not fit; never drop a user-facing element the code still has |
+| R15 | **Gates before a docs commit:** check_houserules, the README drift tests, the cli section test, a link + anchor + TOC check, every test that reads docs, ruff |
+| R16 | **Per release:** a docs pass for what the release changed |
 
 ## Branches and releases
 
