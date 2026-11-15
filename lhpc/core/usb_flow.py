@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import logging
 import os
 import re
 import shlex
@@ -258,6 +259,16 @@ def _copybox_refused(reason, path="") -> Copybox:
     return Copybox("refused", path, "", "", reason)
 
 
+def _holds(target: Path, data: bytes) -> bool:
+    """B6-D: True when `target` (never through a link) holds exactly `data`; any doubt is False. O_NONBLOCK: a FIFO
+    there reads empty instead of hanging the page."""
+    try:
+        with open(os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as f:
+            return f.read(len(data) + 1) == data
+    except OSError:
+        return False
+
+
 def _write_atomic(target: Path, data: bytes) -> None:
     """`data` to a temp file in the target's directory, mode 0644, fsync, renamed into place; OSError on
     failure, with the temp file removed."""
@@ -281,8 +292,9 @@ def _write_atomic(target: Path, data: bytes) -> None:
 
 
 def copybox(paths, user, models) -> Copybox:
-    """Write the standalone block to `<runtime>/state/usb-setup/usb-setup.sh` and give the one copybox line that
-    checks its sha256 before it runs it. A refusal carries an empty line. Never raises for the file system."""
+    """Write the standalone block to `<runtime>/state/usb-setup/usb-setup.sh` when it is missing or differs (B6-D)
+    and give the one copybox line that checks its sha256 before it runs it. A refusal carries an empty line. Never
+    raises for the file system; a failed write is logged."""
     if not _account_ok(user):
         return _copybox_refused(f"{user} is not a usable account name")
     try:
@@ -301,9 +313,12 @@ def copybox(paths, user, models) -> Copybox:
         target.parent.mkdir(parents=True, exist_ok=True)
         if not paths.contains(target):
             return _copybox_refused(f"the setup file {path} lies outside the runtime root")
-        _write_atomic(target, data)
+        if not _holds(target, data):
+            _write_atomic(target, data)
     except OSError as exc:
-        return _copybox_refused(f"{path} could not be written ({type(exc).__name__}: {exc})")
+        reason = f"{path} could not be written ({type(exc).__name__}: {exc})"
+        logging.getLogger("lhpc.usb").warning("USB setup: %s", reason)
+        return _copybox_refused(reason)
     sha = hashlib.sha256(data).hexdigest()
     body = (f't=$(mktemp) && cp "{path}" "$t" && echo "{sha}  $t" | sha256sum -c - && bash "$t"; '
             f'rc=$?; rm -f "$t"; exit "$rc"')

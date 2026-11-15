@@ -2554,7 +2554,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def hardware_view():
         """B5: the Hardware section — each radio of the hardware list, its daemon on its own socket, the USB
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
-        it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
+        it writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic) only when it is
+        missing or differs (B6-D)."""
         from lhpc.core import radio_start
         return render_template("hardware.html", **_hw_list_ctx(radio_start.hardware_view(service)))
 
