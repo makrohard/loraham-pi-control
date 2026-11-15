@@ -122,7 +122,7 @@
     {% endcall %}
   {% endif %}
   {% if not hardware_configured and radios_listed %}
-    {# DEC-W384cl: the per-band card's "add or enable a radio" hint, as one truthful line: radios, none enabled #}
+    {# DEC-W384cl: the radio card's "add or enable a radio" hint, as one truthful line: radios, none enabled #}
     {% call(part) banner('warn', title='Radios are set up, but none is enabled.') %}
       {%- if part == 'body' %}No daemon starts on a disabled radio: enable one on the Hardware page.
       {%- else %}<a href="{{ url_for('hardware_view') }}">Open Hardware &rarr;</a>{% endif %}
@@ -247,8 +247,8 @@
               <pre class="next feed" id="rd-feed-{{ key }}">(loading RX/TX activity…)</pre>
             </details>
           {% else %}
-            {# This column is about THIS band only — the daemon runs as an
-               independent instance per band, so don't reference the other band. #}
+            {# This column is about THIS radio only — the daemon runs as an
+               independent instance per radio, so don't reference another radio. #}
             {% if not r.daemon.installed %}
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>

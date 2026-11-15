@@ -793,7 +793,7 @@ def test_an_invalid_saved_run_param_refuses_plan_apply_and_restart_before_the_st
     # a valid value passes the same seam
     _seed_raw(svc, "kiss", {"tx_freq": "434.500"})
     assert svc._saved_launch_refusal("kiss", "", "start") is None
-    # the daemon's stored file is NOT a launch input (its argv is rebuilt per band at spawn): a
+    # the daemon's stored file is NOT a launch input (its argv is rebuilt per radio at spawn): a
     # stale key there (a `radio` choice the manifest no longer has) refuses no client start
     _seed_raw(svc, "daemon", {"radio": "both"})
     assert svc._saved_launch_refusal("kiss", "", "start") is None

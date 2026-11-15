@@ -314,8 +314,8 @@ class StopOpsMixin:
                 details.append(f"  [manual_required] {comp.id}: stop it as root: "
                                f"sudo systemctl stop {comp.units[0].name}")
                 continue
-            # The daemon is multi-instance (one process per band). A per-band stop
-            # signals ONLY the owned instance(s) serving that band. Record-driven +
+            # The daemon is multi-instance (one process per radio). A per-band stop signals ONLY the
+            # owned instance(s) serving that band (with the instance's rid, that radio's alone). Record-driven +
             # identity-verified inside Lifecycle.stop, which returns a typed result.
             if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone

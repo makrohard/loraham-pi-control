@@ -749,7 +749,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("--lines", type=int, default=200, help="Tail length")
 
     # RF logs read the same registry as the web UI (lhpc/core/rflog.py): graywolf maps to the
-    # kiss TNC's file, the daemon has one file per band, nothing else is reachable here.
+    # kiss TNC's file, the daemon has one file per radio (`<rid>/rf-daemon.log`), nothing else is reachable here.
     p_rf = sub.add_parser("rflog", help="Show or clear a stack's RF log (what its radio heard and sent)")
     p_rf.add_argument("surface", nargs="?", default="",
                       help="daemon | graywolf | meshcom | meshtastic | meshcore | reticulum")

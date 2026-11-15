@@ -25,7 +25,7 @@ def test_single_daemon_with_radio_run_param():
     comps = _index(load_manifest())
     d = comps["loraham-daemon"]
     radio = next(p for p in d.run_params if p.name == "radio")
-    # `--radio both` was removed: lhpc runs one process per band, so the daemon offers only 433/868.
+    # `--radio both` was removed: lhpc runs one process per radio, so the daemon offers only 433/868.
     assert radio.choices == ("433", "868") and radio.default == "433"
     # the daemon's `debug` flag has no setter (its only one was the retired start
     # page) — a knob the capability model advertises must be settable, so it is gone.

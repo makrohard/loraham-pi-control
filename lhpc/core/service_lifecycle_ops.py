@@ -1962,15 +1962,15 @@ class LifecycleOpsMixin:
 
     def _ensure_daemon(self, life, stack, comp, running, radio, start_sid, *,
                        requested_target: str = "", start_scope: str = "", rid: str = ""):
-        """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
+        """Ensure the daemon is up FOR EACH NEEDED RADIO (`rid`, else each enabled radio of the bands) first.
 
-        "Running" means the band's CONF socket is reachable, not merely that a
-        daemon process exists. The daemon is MULTI-INSTANCE (independent process +
-        lock per band), so a daemon serving only the OTHER band does not block us —
-        we just start a separate instance for the band we need:
-          * serving the band      -> just SET the needed TX mode (no restart);
-          * not serving the band   -> start a daemon instance with --radio <band>
-            (works alongside an instance already serving the other band).
+        "Running" means the radio's CONF socket is reachable, not merely that a
+        daemon process exists. The daemon is MULTI-INSTANCE (one independent process
+        per radio, with its own sockets), so a daemon serving another radio does not
+        block us — we just start a separate instance for each radio we need:
+          * serving the radio      -> just SET the needed TX mode (no restart);
+          * not serving the radio  -> start its instance with --radio <band> --id <rid>
+            (works alongside the instances already serving other radios).
         """
         # Defense-in-depth: never launch the daemon with no hardware configured (the start-path gate
         # already refuses, but a daemon-only/internal caller must fail closed here too).
@@ -1980,14 +1980,14 @@ class LifecycleOpsMixin:
                 else "no enabled radio in the hardware list"
             return [f"  [BLOCKED] daemon: {why} (lhpc hardware)"], False, ""
         # Bands this start must make ready — always explicit single band(s) clamped to the active mode
-        # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
-        # band is spawned as an explicit `--radio <band>` process below.
+        # (M-1): lhpc never serves an excluded band; it spawns one process per radio of those bands, each
+        # an explicit `--radio <band> --id <rid>` process below.
         needed, owned = self._daemon_arbitrated_bands(radio)
         units, why = radio_start.daemon_units(self, needed, rid)      # item 16: `rid` alone, else each radio
         if why:
             return [f"  [BLOCKED] daemon: {why}"], False, ""
         views = {u: daemon_control.read_view(self._system, radio_start.daemon_key(self, u[1] or u[0])) for u in units}
-        # Classify each band from CONF readiness AND process topology. A CONF socket that is
+        # Classify each radio from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
         #   READY (retain) | reachable-not-READY (fail) | CONF-down-but-process-claims-it (fail, do
         #   NOT relaunch/SET) | truly absent (safe to launch).
@@ -2034,16 +2034,16 @@ class LifecycleOpsMixin:
             if (_why := self.install_blocker(comp)):
                 lines.append(f"  [BLOCKED] daemon: {_why}")
                 return lines, False, ""
-            # Start ONE per-band instance for EACH missing band — lhpc NEVER launches `--radio
+            # Start ONE instance for EACH missing radio — lhpc NEVER launches `--radio
             # both` (a mode the operator may still start manually); it runs an independent
-            # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
+            # `--radio <band> --id <rid>` per radio. The TX mode is applied LIVE once the socket is up.
             # I5 (A §1): one at a time, each READY or failed before the next; a failure stops no other.
             for u in absent:
                 if not radio_start.ensure_radio(self, life, stack, comp, u, lab[u], lines,
                                                 requested_target=requested_target, start_scope=start_scope):
                     failed.add(u)
-        # Apply, once per band that is now READY (retained, or started and verified above; the
-        # failed bands were reported above and are skipped).
+        # Apply, once per radio that is now READY (retained, or started and verified above; the
+        # failed radios were reported above and are skipped).
         for u in units:
             b = u[0]
             if u in not_ready or u in claimed_down or u in failed:

@@ -132,7 +132,7 @@ class AdmissionOpsMixin:
             # owns, so this single source of truth for the conflict set + lock set matches what the
             # daemon will actually serve (it starts the free band(s), not the owned one).
             # An EMPTY requested radio means "serve every active band after direct-owner
-            # arbitration" (one process per band) — exactly what _ensure_daemon launches. NEVER
+            # arbitration" (one process per radio of those bands) — exactly what _ensure_daemon launches. NEVER
             # fall back to the saved/manifest default of the daemon's `radio` run param: its
             # manifest default is a single band, which UNDER-LOCKED a dual-band serve-all start
             # (locked 433 while both bands were launched). Enforced by

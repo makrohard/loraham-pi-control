@@ -14,7 +14,7 @@
       <section class="cfgsec">
         {# DEC-W57: the board setup is the Hardware page's (Add Hardware's HAT row; `lhpc hardware <setup>` stays). #}
         {% if view.high_power %}
-          {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-band control, not
+          {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-radio control, not
              a generic run-param row — this page renders none of the daemon's run params. Saved
              intent beside what the RUNNING daemon reports; the two can differ until a restart. #}
           <div class="stackrow-wrap">

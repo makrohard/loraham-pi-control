@@ -1,7 +1,7 @@
 """Radio HARDWARE setup — the enumerated multi-hardware model that supersedes the old band-only
 radio mode. Covers: the setup catalog + config, the v112 daemon argv (one process per radio, `--hw`,
 no band-suffixed flags), the refuse-to-start gate when unconfigured, the LED probe, and the retained
-invariants (one process per band, stray disclosure, stop/uninstall never gated)."""
+invariants (one single-band process per radio, stray disclosure, stop/uninstall never gated)."""
 
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def test_start_refuses_absent_band_stack_after_configured(tmp_path):
     assert not r.ok and "the hardware list has radios on 433 only" in r.summary
 
 
-# ---- retained invariants: one process per band, serve-bands never 'both' ------------------------
+# ---- retained invariants: one single-band process per radio, serve-bands never 'both' -----------
 
 @pytest.mark.contract
 @pytest.mark.parametrize("rows,raw,bands", [
