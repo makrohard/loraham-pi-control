@@ -10,6 +10,7 @@ a sentence or an equivalent JavaScript rewrite changed.
 - [The rules](#the-rules)
 - [Markers](#markers)
 - [How to run](#how-to-run)
+- [Rules by area](#rules-by-area)
 
 ## What each layer proves
 
@@ -170,3 +171,146 @@ Give the full suite a dedicated basetemp and delete exactly that path —
 [why](../docs/maintenance.md#running-on-a-pi). The lab lanes are opt-in:
 [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes). Chromium is needed only for
 the browser lane; never install it to run `tests/`, and never on a release box.
+
+## Rules by area
+
+Every rule of this suite in one list, with an id (A1 … I5) a review can cite. Where a section above states a rule
+in full, the line links to it. The mark after a rule says what enforces it:
+
+- **CI HARD**: checked by CI with `tools/check_houserules.py` over the pushed range; a hit fails the job.
+- **CI WARN**: checked by CI with the same tool; the review judges each hit, and an exemption needs its tag
+  ([Exemptions](#the-rules)).
+- **test**: a test of the suite or the pytest configuration fails.
+- No mark: the review checks it.
+
+### A. Placement
+
+- **A1** A test goes by the behaviour it protects, into the folder a maintainer looks in when changing it
+  ([Where a new test goes](#where-a-new-test-goes)).
+- **A2** Never in a file named after when or how a defect was found: no round or item id in a file name.
+- **A3** A new or renamed test file sits in a layer folder, a `testlab/tests/` lane or one of the two in-package
+  suites. **CI HARD**
+- **A4** `testlab/tests/unit` tests the simulator itself, `acceptance` the real server and executable, `browser`
+  the console in headless Chromium, `release` a release's evidence, `slowbuild` the throttled target.
+- **A5** Test the cheapest stable seam that proves the behaviour; a browser test that re-proves core logic is
+  misplaced.
+- **A6** One canonical owner per behaviour ([rule 3](#the-rules)).
+- **A7** `golden/` is the one place that names coordinator steps (`ORDER_SEAMS`); each case's docstring opens
+  with `intended:` or `known defect <id>:`.
+- **A8** A transaction another run must recover is also driven through `interrupts.py`.
+
+### B. What a test asserts
+
+- **B1** Behaviour, not implementation ([rule 1](#the-rules)). **CI HARD** for `inspect.getsource`, **CI WARN**
+  for a read of production `.py`/`.js`/`.css`
+- **B2** Exact only where exactness is the contract; a sentence never decides ([rule 2](#the-rules)).
+- **B3** Structural HTML queries ([rule 5](#the-rules)).
+- **B4** Browser behaviour in a real browser, waiting on observable state ([rule 6](#the-rules)).
+- **B5** A decision-bearing value is compared whole, never by its prefix; a sentence or a log line is replaced
+  by the typed field ([rule 10](#the-rules)). **CI WARN** for `assert ….startswith(`
+- **B6** Coverage is diagnostic: no test is added or kept only because it covers lines.
+
+### C. Determinism and time
+
+- **C1** A real clock in a test (`time.time`, `time.monotonic`, `time.sleep`, a `sleep N` child or fake-script
+  body) carries `@pytest.mark.wallclock("reason")`, a helper line outside a test `# wallclock: <reason>`;
+  everything else takes the `fake_clock` fixture ([Markers](#markers)). **CI HARD**
+- **C2** No sleep as synchronisation: a wait ends on an event (a refused `flock`, a marker, a successful
+  connect).
+- **C3** A server is ready when `connect()` succeeds or it writes its own ready marker; a socket file is not
+  readiness.
+- **C4** A test is never re-run because it failed, and no retry wraps an assertion.
+- **C5** A transfer (a download, a clone, a package fetch) is not our code: it is fetched before the lane (a
+  mirror) or retried with backoff around the transfer only; still failing, it reports `EXTERNAL-UNAVAILABLE`,
+  never a regression ([testlab](../docs/testlab.md#running-the-verification-lanes)).
+- **C6** An intermittent failure: first the facts, then the change that brought it, then its mechanism, named
+  with the observation that confirms it; the fix goes where the change lives, and no mitigation comes before the
+  mechanism. A red outside one's own change is checked against the fixes already on `dev` before anyone calls it
+  flaky.
+- **C7** A red run stays red until a cause and a fix answer it; it is not re-run to green.
+- **C8** An unhandled exception in a test's thread fails the test (`pyproject.toml`). **test**
+- **C9** An AF_UNIX socket path comes from `short_tmp_path` or a short basetemp; the suite also passes with a
+  long basetemp.
+
+### D. Isolation
+
+- **D1** No ambient host or repository dependency ([rule 4](#the-rules)). **test** (`repo/test_suite_hygiene.py`:
+  a process on the host is invisible to the suite)
+- **D2** Autouse fixtures isolate the host, and say so ([rule 8](#the-rules)).
+- **D3** The injected `System` before a patched private ([rule 9](#the-rules)).
+- **D4** A fake keeps the real signature ([rule 11](#the-rules)). **test**
+- **D5** No sibling-test imports, no `sys.path` edits, no browser import in `tests/` ([rule 7](#the-rules)).
+  **test** for the two imports
+- **D6** No network in a test; a line that talks to the lab's own local server carries `# rule-4: <reason>`.
+  **CI WARN**
+- **D7** A suite that uses git never runs under `git rebase --exec` or with an inherited `GIT_*` environment.
+
+### E. A test must be able to fail
+
+- **E1** No `assert True`, no conditional body that can do nothing, no skip that hides what CI supports; a
+  relied-on `ActionResult` is asserted ([rule 10](#the-rules)). **CI HARD** for `assert True`
+- **E2** A regression test is red before its fix, run against the fix's parent and stated in the commit
+  ([rule 12](#the-rules)). **CI WARN** for a commit that adds a test without "red-before" in its message
+- **E3** The red-before runs through the unchanged public caller; a `TypeError` from a changed signature is no
+  red-before.
+- **E4** Mutation check: with each check under test removed, a test fails; every mutant runs with a fresh
+  bytecode cache (`PYTHONPYCACHEPREFIX=$(mktemp -d)`).
+- **E5** An absence assertion carries an anchor: the same response shows a present sibling (a 200 and an element
+  that must be there).
+- **E6** No test is weakened (fewer rows, extra stubs, a narrowed setup), deleted or skipped to go green; a
+  narrowing that is needed is listed with its reason.
+- **E7** `needs_git_checkout` skips in a source export and fails under CI. **test**
+
+### F. Markers
+
+- **F1** Every marker is declared in `pyproject.toml`; `--strict-markers` rejects a typo. **test**
+- **F2** `contract` and `safety(id)` as defined in [Markers](#markers).
+- **F3** `slow` marks a test that spends less than half its wall time on CPU; `-m 'not slow'` excludes it.
+  **CI WARN** for a new test that builds a venv, runs `pip install` or loops on `monotonic` without it
+- **F4** `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
+  `no_default_display` state an environment need or an opt-out.
+
+### G. Lanes and how to run
+
+- **G1** `python -m pytest`, never the console script; a full run gets a dedicated basetemp, deleted exactly
+  afterwards ([How to run](#how-to-run)).
+- **G2** A full suite is `tests` and `testlab/tests`.
+- **G3** The lab lanes are opt-in (`LHPC_ACCEPTANCE`, `LHPC_BROWSER`, `LHPC_RELEASE_VERIFY`, `LHPC_SLOW_BUILD`)
+  and run from the checkout under test with `PYTHONPATH=$PWD:$PWD/testlab`
+  ([testlab](../docs/testlab.md#running-the-verification-lanes)).
+- **G4** Chromium only for the browser lane: never to run `tests/`, never on a release box.
+- **G5** On one machine the unit suite and the acceptance, browser and lab lanes run one after the other, never
+  side by side (one lock file for all of them).
+- **G6** Every full, acceptance, browser or lab run keeps its whole output in a log file of that run, not only
+  its tail.
+- **G7** CI on the candidate's own commit is the authority; local runs serve the red-before and focused checks.
+
+### H. Mechanical checks
+
+What a machine enforces today. The checker's other rows (changelog, docs, attribution) are not test rules.
+
+| check | fails on | severity |
+|---|---|---|
+| checker `tests` row | a new or renamed test file outside the layer folders (A3) | CI HARD |
+| checker `tests` row | a commit that adds a test without "red-before" in its message (E2) | CI WARN |
+| checker `patterns` row | `inspect.getsource(`, `assert True` (B1, E1) | CI HARD |
+| checker `patterns` row | a read of production `.py`/`.js`/`.css` (B1), `assert ….startswith(` (B5), a network call (D6), each unless its line carries its rule tag; `time.sleep(` in the in-package suites, without an exemption | CI WARN |
+| checker `markers` row | a new test that builds a venv, runs `pip install` or loops on `monotonic`, without `slow` (F3) | CI WARN |
+| checker `wallclock` row | a real clock on an added line without `wallclock` (C1) | CI HARD |
+| checker `modules` row | the service family's budgets ([rule 13](#the-rules)) | CI HARD / CI WARN |
+| `repo/test_suite_hygiene.py` | a sibling-test import, a browser import in `tests/`, a host process the suite can see, a cited plan file the repository does not ship | test |
+| `repo/test_fake_signatures.py`, `pyproject.toml` | a fake off the real signature (D4); an unknown marker (F1); an unhandled thread exception (C8) | test |
+| ruff | `ruff check lhpc testlab`; `ruff check tests --select F,E9` | CI |
+
+CI runs the checker from the floor commit in `.github/workflows/ci.yml` (`HR_FLOOR`) over the pushed range.
+
+### I. How a cleanup is done
+
+- **I1** Every finding is checked against the code before any change and sorted fix-now, when-touching or
+  dropped, each with its file:line and a drop with its reason.
+- **I2** A test cleanup commits tests only, one commit per part; a finding that needs production code is listed
+  for the maintainer, not fixed in it.
+- **I3** A move is a pure rename: `git mv`, content unchanged in the move commit.
+- **I4** The simplest change that removes the finding: no new mechanism, option or retry.
+- **I5** A cleanup plan opens with these rules and is reviewed before any code; each commit or slice gets its own
+  review.
