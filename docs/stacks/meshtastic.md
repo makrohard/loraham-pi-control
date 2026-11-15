@@ -86,9 +86,9 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 
 - Transport selectors (`--host`, `--tcp`/`-t`, `--port`/`--serial`/`-s`, `--ble`/`-b`,
   `--ble-scan`) are refused: the connection is fixed to the local node.
-- LHPC-owned local settings are refused with a pointer: region → `lhpc config meshtastic region`;
-  owner name/short (incl. `--set-ham`) → `node_name` / `node_short`; GPS mode and fixed position →
-  `lhpc gps`. A remote `--dest` is unrestricted.
+- LHPC-owned local settings are refused with a pointer to their LHPC setting: region
+  (`lhpc config meshtastic@<rid> region <value>`); owner name/short (incl. `--set-ham`) → `node_name` /
+  `node_short`; GPS mode and fixed position → `lhpc gps`. A remote `--dest` is unrestricted.
 - `--configure`/`--import-config` and the channel-URL setters (`--seturl`/`--ch-set-url`/
   `--ch-add-url`) run, then LHPC re-asserts and verifies region/name/GPS; if it cannot, the
   command exits non-zero and names `lhpc stack poststart meshtastic@<rid>`.
