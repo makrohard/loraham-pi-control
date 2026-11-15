@@ -1,11 +1,10 @@
 """One effective remote per shared source path: a checkout is ONE clone with ONE origin.
 Saves atomically propagate a remote to every consumer (disclosed); conflicting submissions
-are rejected; legacy divergent configuration blocks update/uninstall/clean/known-working
-confirmation with a typed result and zero source mutation."""
+are rejected; legacy divergent configuration blocks update/uninstall/clean with a typed result and zero source mutation."""
 
 import time
 
-from lhpc.core import known_working, source_registry
+from lhpc.core import source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -109,23 +108,6 @@ def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
     assert not res2.ok
     assert any("conflicting effective remotes" in d for d in res2.details)
     assert dest.exists()
-
-
-def test_confirm_known_working_blocked_by_conflicting_shared_remotes(tmp_path):
-    _write_conflicting_overrides(tmp_path)
-    paths = Paths(runtime_root=tmp_path)
-    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
-    entries = {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "dev", "remote": _URL_A,
-                                    "source_rel": "src/loraham-kiss-tnc", "strategy": ""}}
-    assert known_working.write_candidate(paths, "kiss", entries, "433")
-    assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", _URL_A, "dev", "a" * 40, time.time(), "",
-        ("loraham-kiss-tnc", "loraham-kiss-serial")))
-    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc", "--config", "X"]})  # kiss RUNNING
-    res = svc.confirm_known_working("kiss")
-    assert not res.ok
-    assert "conflicting effective remotes" in res.summary
-    assert known_working.load(paths, "kiss") == []                     # nothing recorded
 
 
 def test_coherent_shared_remote_update_reaches_adoption(tmp_path):

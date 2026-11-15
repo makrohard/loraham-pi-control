@@ -16,7 +16,7 @@ Which source commit or artifact lhpc may install, and what it records about it.
 
 | `--source` | Web label | Meaning | Production-safe? |
 |---|---|---|---|
-| `pinned` | Known working | The newest operator-confirmed known-working composition entry for the stack, else the manifest pin (labelled `fallback`). `HEAD` must equal that commit either way. | ✅ (immutable) |
+| `pinned` | Known working | The manifest pin. `HEAD` must equal it. | ✅ (immutable) |
 | `dev` | Development | The configured development branch tip; an unobtainable branch is a typed "selector unavailable", never another ref. | ❌ mutable |
 | `stable` | Latest stable | The upstream's history decides, never a comparison of version numbers. On a GitHub remote the tag of its latest release (`releases/latest`) whatever its name (`v2.8.0.7239fe8`, MeshCom's dated build `v4.40a.11.14`) and the version tags in its future (the WHOLE name an optional `v` and one to three numbers: `v1.2`, `1.5.2`); no release: every version tag. The target is the newest of them in history; tags in the release's past or beside its line (an older numbering such as `v112`, a maintenance branch) never are; candidates that are not one line of history refuse by name; neither: the default-branch HEAD. One resolver for install, update and the freshness check, and one read per remote: lhpc keeps a small history copy of each upstream under `state/stable-history/` (commits and tags, no files). An update of an installed stable source runs only when every source was read and the installed commit is published (a current branch or tag of the upstream reaches it) and in the target's past; a target in its past reads "not newer"; a target beside it, an unpublished commit (a local commit, a rewritten upstream) or anything that cannot be read is refused and the check reads "could not check". An explicit `--source stable` from another lane may go back to an older release (your choice), but only to one the history places. | ❌ mutable |
 
@@ -146,7 +146,7 @@ other saved value is the operator's.
 
 `lhpc.core.provenance.evaluate()` reports one of:
 
-- **`pinned-verified`**: `HEAD` is exactly the pin (or known-working) commit.
+- **`pinned-verified`**: `HEAD` is exactly the pin (or the planned) commit.
 - **`signature-verified`**: pin verified **and** signed by a configured trusted signer.
 - **`signature-unavailable`**: pin verified, signers configured, but no valid trusted signature: refused.
 - **`mutable-dev` / `mutable-stable`**: explicit mutable selection (not production-safe).

@@ -55,7 +55,7 @@ def test_boot_restore_records_no_override_note(tmp_path, monkeypatch, binary_rec
     meta = br.StackMeta(stack_id="daemon", main="loraham-daemon", interactive_main=False,
                         declared_bands=(), fixed_band="")
     ev = br.Evidence(launch_id="D1", stack="daemon", component="loraham-daemon", band="433", launched_at=1000.0)
-    [item] = br.derive_plan([ev], {"daemon": meta}, {}, "daemon").items
+    [item] = br.derive_plan([ev], {"daemon": meta}, "daemon").items
     item["state"] = "attempting"
     journal = br.new_journal(boot_id="b", pid=1, process_start_time=1, items=[item])
     monkeypatch.setattr(type(svc), "_boot_start_ok", lambda res: True)

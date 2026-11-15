@@ -271,7 +271,7 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/RadioLib"
-    # `--source pinned` adopts this pin (a known-working composition entry overrides it); a bare install takes the binary channel above where published, else `pinned` — docs/cli.md § install.
+    # `--source pinned` adopts this pin; a bare install takes the binary channel above where published, else `pinned` — docs/cli.md § install.
     pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
     pin_tag = "7.7.1-57-g187ef247"
     remote = "https://github.com/jgromes/RadioLib"
@@ -844,8 +844,7 @@ main = "loraham-kiss-tnc"
     [stack.component.process]
     instance_arg = ["--data-socket", "{param:data_socket}"]   # A §2.3: this instance's exact argv token pair
     # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens): with
-    # a wrong name probe_process never matches the running TNC, status reads "stopped" and
-    # known-working refuses to confirm it.
+    # a wrong name probe_process never matches the running TNC and status reads "stopped".
     exec_name = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]

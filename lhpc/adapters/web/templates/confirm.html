@@ -55,7 +55,7 @@
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}
             <p class="depnote depnote-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's
-              sources, per-stack configuration, logs, known-working history and saved state,
+              sources, per-stack configuration, logs and saved state,
               and its identities and keys: a reinstall is a new node, and peers must forget the
               old one. Retained diagnostics are gone. Uninstall keeps all of that.
               config/local.toml, config/secrets.toml and other stacks are untouched.
@@ -94,8 +94,7 @@
             </label>
             <span class="muted">Binary = download a prebuilt, sha256-verified artifact built
               from the pinned commits (minutes instead of hours; build and host tests then need
-              a source channel) · Known working = last operator-confirmed composition (falls back
-              to the manifest pin) · Development = configured branch tip · Latest stable =
+              a source channel) · Known working = the manifest pin · Development = configured branch tip · Latest stable =
               newest release tag, else newest tag, else the default branch</span>
             <br>
           {% endif %}

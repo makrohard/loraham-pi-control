@@ -1,13 +1,13 @@
 """M7 — Clean all: DESTRUCTIVE per-stack purge behind strong confirmation. Removes
 LHPC-owned sources (ownership-verified, shared-refcounted, dirty allowed), per-stack
-config, markers, known-working history, logs (never an active job's), and registry
+config, markers, logs (never an active job's), and registry
 records. Never follows symlinks; local.toml/secrets/other stacks untouched."""
 
 import json
 
 import pytest
 
-from lhpc.core import known_working, source_registry
+from lhpc.core import source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -71,10 +71,6 @@ def _seed_kiss(tmp_path):
     (tmp_path / "logs" / "start-loraham-kiss-serial.prev").write_text("not a log")   # bare .prev: kept
     (tmp_path / "logs" / "web-restart-loraham-kiss-serial.log").write_text("log")
     (tmp_path / "logs" / "start-loraham-chat.log").write_text("other stack")
-    known_working.record(paths, "kiss",
-                         {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "pinned",
-                                               "remote": "", "source_rel": "src/loraham-kiss-tnc"}},
-                         {"confirmed_at": 1.0})
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
     (d / "kiss.json").write_text(json.dumps({"version": 1, "stack": "kiss"}))
@@ -164,7 +160,6 @@ def test_clean_removes_exact_set_and_preserves_the_rest(tmp_path):
     assert (tmp_path / "logs" / "start-loraham-kiss-serial.prev").exists()
     assert not (tmp_path / "logs" / "web-restart-loraham-kiss-serial.log").exists()
     assert not (tmp_path / "state" / "restart-required" / "kiss.json").exists()
-    assert known_working.load(paths, "kiss") == []                        # history gone
     assert source_registry.read_record(paths, "src/loraham-kiss-tnc") is None
     # PRESERVED: operator config, other stacks' logs
     assert (tmp_path / "config" / "local.toml").exists()

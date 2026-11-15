@@ -27,7 +27,7 @@ STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc
             "final:clear-restart-marker:kiss@r1"]                         # K5: per instance
 START_LEG = ["recheck:start", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
              "verify:endpoints:loraham-kiss-tnc", "verify:post-start",    # K4b: no per-stack band marker
-             "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",
+             "final:clear-restart-marker:kiss@r1",
              "final:clear-stop-intent:kiss@r1"]
 NOTHING = {"added": [], "removed": [], "changed": []}
 

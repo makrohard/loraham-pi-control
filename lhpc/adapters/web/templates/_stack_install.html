@@ -65,16 +65,6 @@
           </form>
         </div>
       {% endif %}
-      {% if g.kw_offer %}
-        <div class="depnote depnote-warn">
-          This stack started healthy with a source composition that is not yet recorded as known
-          working ({{ g.kw_offer.components|join(', ') }}).
-          <form method="post" class="act" action="{{ url_for('known_working_confirm', stack_id=g.stack.id) }}">
-            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-            <button type="submit" class="warnbtn">Confirm this stack as working</button>
-          </form>
-        </div>
-      {% endif %}
 
       {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream, g.run_on, page_radio) }}
 

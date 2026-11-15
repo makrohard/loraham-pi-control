@@ -1,10 +1,7 @@
 """Golden: T-R1's L3 part (A §2.3, PROOF §1) — at L3 each band is its own instance, so what a
 stack's start, a config save while it runs, and its stop on 433 write never names its 868
-instance: the ownership record, the running, stop-intent, known-working (last-start candidate)
-and restart-required markers and the start log carry 433 or no band. The box is the golden
-`kiss_box` (kiss over a daemon serving 433). The box's sources have no registry records, so the
-start's composition is given (a stub of `_stack_composition_entries` only); the candidate is
-written by the start's own code."""
+instance: the ownership record, the running, stop-intent and restart-required markers and the start log carry 433 or no band. The box is the golden
+`kiss_box` (kiss over a daemon serving 433)."""
 
 import json
 import re
@@ -12,7 +9,6 @@ import types
 
 import pytest
 
-from lhpc.core.services import ControllerService
 
 pytestmark = pytest.mark.needs_session
 
@@ -51,16 +47,9 @@ def test_the_clean_check_names_each_868_socket_spelling_in_a_touched_file(tmp_pa
     _clean(box, run)                                       # 433's own socket passes
 
 
-def _band(box, rel):
-    return json.loads((box.root / rel).read_text()).get("band", "")
-
-
-def test_a_stack_on_433_never_names_its_868_instance(kiss_box, run_op, monkeypatch):
+def test_a_stack_on_433_never_names_its_868_instance(kiss_box, run_op):
     """intended: the start, a save while running, and the stop of kiss on 433 touch only 433's
     or band-less state."""
-    entry = {"commit": "a" * 40, "selector": "pinned", "remote": "r", "source_rel": "src/x"}
-    monkeypatch.setattr(ControllerService, "_stack_composition_entries",
-                        lambda self, sid: {"loraham-kiss-tnc": entry})
     box = kiss_box()
     start = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert start.res.ok, start.res.summary
@@ -70,8 +59,6 @@ def test_a_stack_on_433_never_names_its_868_instance(kiss_box, run_op, monkeypat
     assert recs and all(json.loads(r.read_text())["band"] == "433" for r in recs)
     assert not (box.root / "state" / "running" / "kiss.band").exists()      # K4b: no per-stack band marker
     assert all(json.loads(r.read_text())["rid"] == "r1" for r in recs)      # the instance: kiss@r1, 433's
-    assert "state/last-start/kiss.json" in _touched(start)                  # known-working
-    assert _band(box, "state/last-start/kiss.json") == "433"
     save = run_op(box.root, lambda: box.svc.save_config_bundle("kiss", values={"tx_freq": "433.800"},
                                                                band="433"))
     assert save.res.ok, save.res.summary

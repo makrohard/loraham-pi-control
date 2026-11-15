@@ -393,26 +393,12 @@ class StopOpsMixin:
         ok = applied_ok(results) if results else True
         summary = (f"Stop applied for '{target}'." if ok else
                    f"Stop for '{target}' is NOT fully verified — see details.")
-        # A VERIFIED stack stop retires the last-start candidate (the running state it
-        # captured no longer exists, so the confirm-known-working offer must disappear) and
-        # clears the restart-required flag (the stale processes are gone; the next start uses
-        # the saved config). A per-band daemon stop counts only when the process table, read
+        # A VERIFIED stack stop clears the restart-required flag (the stale processes are
+        # gone; the next start uses the saved config). A per-band daemon stop counts only when the process table, read
         # after the stop, shows no daemon: another instance still runs the old config, and an
         # unreadable table proves nothing.
         _whole = not _daemon_band_stop or _daemon_presence(self._system.procfs.cmdlines()) == "none"
         if ok and apply and self.stack(target) is not None and _whole:
-            from . import known_working
-            # A candidate-clear failure is reported, never swallowed: a still-present candidate
-            # marker keeps the "confirm this stack as working" offer eligible for a stack that
-            # was just stopped (`read_candidate` does not check liveness), so the operator could
-            # confirm a no-longer-running composition. A failed clear downgrades the stop to
-            # NOT-fully-verified.
-            cleared, why = known_working.clear_candidate_checked(self._paths, target)
-            if not cleared:
-                ok = False
-                summary = (f"Stop for '{target}' applied but the known-working candidate "
-                           f"could not be retired — see details.")
-                details = [*list(details), f"  [candidate] not cleared: {why}"]
             for k in instances.marker_keys(self, target, inst):            # the copy's own, a radio daemon's own
                 _rr.clear_marker(self._paths, k)
         return ActionResult(ok, summary, details=details, results=tuple(results),

@@ -180,7 +180,6 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "interactive_shown": "read-only",
     "is_built": "read-only",
     "is_installed": "read-only",
-    "known_working_offer": "read-only",
     "legacy_gps_values": "read-only",
     "list_stacks": "read-only",
     "listener_scopes": "read-only",

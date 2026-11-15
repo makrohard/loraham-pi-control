@@ -87,8 +87,8 @@ What to run in each situation and what you will see. The channels themselves:
 | situation | run | what you see |
 |---|---|---|
 | first install | `lhpc install <stack> --yes`, then on the source channel `lhpc build <stack> --yes`; or `lhpc auto-install --yes` for every stack (install and build) | the plan, then the install on the stack's default channel: the published binary where there is one for this platform, else `pinned` |
-| keep current on the installed lane | `lhpc self-update --apply`, then `lhpc update <stack> --yes` | each source stays on the lane it was installed from (`dev`, `stable`; on `pinned` your newest known-working composition for the stack, else the release's manifest pin) — and the stack is built again when the new sources need it (in the console, as a build job with its live log). A binary-installed stack updates to the published binary; one already installed and intact is not downloaded again |
-| follow development | `lhpc update <stack> --source dev --yes` | the branch tip; when adopting it fails, the update retries once at the known-working (else manifest-pin) commit and says *FELL BACK* |
+| keep current on the installed lane | `lhpc self-update --apply`, then `lhpc update <stack> --yes` | each source stays on the lane it was installed from (`dev`, `stable`; on `pinned` the release's manifest pin) — and the stack is built again when the new sources need it (in the console, as a build job with its live log). A binary-installed stack updates to the published binary; one already installed and intact is not downloaded again |
+| follow development | `lhpc update <stack> --source dev --yes` | the branch tip; when adopting it fails, the update retries once at the manifest pin and says *FELL BACK* |
 | follow stable | `lhpc update <stack> --source stable --yes` | the newer of the newest plain version tag and the latest GitHub release, else the default branch's head; refused while the releases cannot be checked ([provenance](provenance.md#selections)) |
 | binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | the newest published binary, offered only when newer than the installed one; none that covers this lhpc is refused, and `Next:` offers `lhpc self-update --apply` and the source install |
 | a fetched release (graywolf) | `lhpc update graywolf --source stable --yes` for the newest release; `lhpc update graywolf --source binary --yes` for the pinned one, which its build fetches (also a bare update; the newest release needs `--source stable` every time); `pinned`/`dev` are refused (no compiled lane) | the release fetched and checked against its checksums, then a restart if the stack was running |
@@ -145,7 +145,7 @@ refresh it skipped; `--apply` cannot resume it without the record), for stale un
 `lhpc self-update --repair-integration`. These are resolved by hand.
 
 Back to known-working from a broken `dev` or `stable` follow: `lhpc update <stack> --source pinned
---yes` for a source install — your newest known-working commit, else the manifest pin (`lhpc
+--yes` for a source install — the manifest pin (`lhpc
 install` keeps an installed source as it is and points there); a binary install goes back by
 `lhpc install <stack> --source pinned --yes`.
 
@@ -198,7 +198,7 @@ Three things are not regenerable; a default `uninstall.sh` keeps them (plus `bac
 
 - **`config/`** — every setting: `local.toml`, `stacks/*.toml`, `secrets.toml` (`0600`),
   `secrets/`, and the webserver PKI (`tls/` — CAs, certificates, private keys, CRL).
-- **`profiles/`** — your confirmed known-working compositions.
+- **`profiles/`** — not read since 0.14.0 (a 0.13.x known-working store; safe to remove).
 - **App data under `state/`** — the stacks' databases, identities and message stores:
   `state/graywolf state/meshcom state/meshcore state/meshcore-webui state/openhop state/meshtasticd
   state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in
@@ -242,7 +242,7 @@ systemctl --user start lhpc-web.service lhpc-nginx.service
 ```
 
 Sources are not in the backup: re-adopt them with `lhpc install` (or `lhpc auto-install`); the
-restored `config/` and known-working records drive the rebuild.
+restored `config/` drives the rebuild.
 
 **Secrets only** (`lhpc secrets`, [synopsis](cli.md#secrets)): one plain tar of `config/tls/`,
 `config/secrets/`, `config/secrets.toml` and each stack's declared state folder.

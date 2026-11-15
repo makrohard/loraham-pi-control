@@ -533,21 +533,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         `fresh=True` FORCES a recompute (and refreshes the cache) for the authoritative rechecks UNDER
         the operation locks (a concurrent op could have changed state since this op's cached read).
         `sources=False` (the polls, which read run states only) runs no git: this request's snapshot if
-        cached, else one that is never cached, its sources only missing/not-a-repo/binary/unknown.
-
-        Confirmed-working = a component's clean source HEAD appears in an OPERATOR-CONFIRMED stored
-        known-working composition of its stack (file reads only)."""
+        cached, else one that is never cached, its sources only missing/not-a-repo/binary/unknown."""
         cached = getattr(self._snapshot_state, "cache", None)
         if cached is not None and not fresh:
             return cached
-        from . import known_working, source_cache
-        confirmed: dict = {}
-        for s in self.stacks():
-            comps = known_working.load(self._paths, s.id)
-            for comp in comps:
-                for cid, entry in comp["entries"].items():
-                    if entry.get("commit"):
-                        confirmed.setdefault(cid, set()).add(entry["commit"])
+        from . import source_cache
         # Components currently provided by a verified binary artifact — the ONE receipt read
         # per snapshot (cheap four-state, no hashing), passed to the prober so a binary stack
         # reports artifact provenance instead of "no git checkout".
@@ -561,7 +551,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         owned = self._lifecycle().owned_running()
-        snap = StatusProber(self._system, self._paths, confirmed, binary_cover=binary_cover, owned_running=owned,
+        snap = StatusProber(self._system, self._paths, binary_cover=binary_cover, owned_running=owned,
                             sources=sources, cache=None if fresh else source_cache.SHARED,
                             instance_endpoints=lambda t: instances.status_endpoints(self, t, owned)).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
@@ -1564,7 +1554,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # ONE adoption per coherent source GROUP: each shared path is installed exactly once
         # (deterministic first declarer), never opportunistically re-attempted through
         # whichever consumer is encountered next.
-        # ONE immutable plan for the whole install: known-working frozen per stack, one
+        # ONE immutable plan for the whole install: one
         # adoption per shared source group, incompatible resolutions blocked up front.
         install_items = [(st, c) for st in self.stacks()
                          if not stack_id or st.id == stack_id
@@ -1732,15 +1722,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         _pre_absent = source_fs.leaf_kind(self._paths, dest) == "absent"
                     except PathContainmentError:
                         _pre_absent = False
-                st_of = next((st2 for st2 in self.stacks()
-                              if any(c2.id == comp.id for c2 in st2.components)), None)
                 # Announce the clone log BEFORE the (possibly minutes-long, off-TTY-silent)
                 # adoption — same copy-pasteable watch line the auto-install run emits.
                 if comp.source:
                     extra_out.append(f"  [log] {comp.id} -> tail -f "
                                      f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                 result = self._adopt_dev_fallback(
-                    inst, st_of, comp, selector, resolved,
+                    inst, comp, selector, resolved,
                     # A switch REPLACES a checkout that is at the wrong commit: the same forced
                     # adoption `lhpc update` uses (capture -> verify identity -> dirty check ->
                     # candidate -> atomic swap). Nothing binary-specific.
@@ -1770,7 +1758,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                             # believes auth is on.
                             hmac_err = f"{sid}: {self._hmac_redact(hr.summary)}"
                             break
-            retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
             res = self._plan_result(plan, applied=True, next_apply=None)
             # ---- THE switch commit point ------------------------------------------------
             # The binary retirement becomes final ONLY when the WHOLE switch succeeded: every
@@ -1796,10 +1783,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if hmac_err:
                 return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
                                     f"({hmac_err}); fix and re-run before starting the meshcom link.",
-                                    details=_switch_note + list(res.details) + extra_out,
-                                    next_commands=res.next_commands)
-            if not retire_ok:
-                return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
                                     details=_switch_note + list(res.details) + extra_out,
                                     next_commands=res.next_commands)
             if _retire_note:

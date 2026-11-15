@@ -147,11 +147,11 @@ def evaluate(runner, dest: str, spec, source: str,
         return ProvenanceResult(MUTABLE_STABLE, True, False,
                                 "explicit mutable stable branch — NOT production-safe"
                                 + frozen_note)
-    # 'pinned' — the "Known working" selector: the expected commit is the newest
-    # operator-confirmed composition entry when the caller resolved one (`expected_commit`),
-    # else the manifest pin. Either way HEAD must equal it EXACTLY.
+    # 'pinned' — the "Known working" selector: the manifest pin, or the exact commit the caller
+    # planned (`expected_commit`: the dev fallback's and the binary channel's manifest pin). Either
+    # way HEAD must equal it EXACTLY.
     pin = expected_commit or (getattr(spec, "pin_commit", "") if spec else "")
-    label = "known-working commit" if expected_commit else "pinned commit"
+    label = "planned commit" if expected_commit else "pinned commit"
     if not pin:
         return ProvenanceResult(UNVERIFIED_BLOCKED, False, False,
                                 "no configured pin commit — not production-safe; choose "
@@ -163,8 +163,8 @@ def evaluate(runner, dest: str, spec, source: str,
     if not trusted_fingerprints:
         return ProvenanceResult(PINNED_VERIFIED, True, True,
                                 f"at {label} {pin[:12]} (no trusted signer configured)")
-    # Signature verification anchors to the MANIFEST pin's tag/commit only — an
-    # operator-confirmed composition commit has no configured signed ref.
+    # Signature verification anchors to the MANIFEST pin's tag/commit only — a planned
+    # commit is checked by its own signature.
     tag = "" if expected_commit else (getattr(spec, "pin_tag", "") if spec else "")
     if tag:
         # A tag's signature covers the pin only when the tag points AT the pin. A tag on another

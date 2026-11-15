@@ -316,8 +316,8 @@ predating pin).
    the binary is published, installs of that stack take the newest one already published.
 5. **Images**: tag `loraham-images` only after every moved binary is published; a stale index
    fails the image build.
-6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build`), smoke, then
-   `lhpc known-working <stack>`; for a full pass, the [release test matrix](test-matrix.md).
+6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build`), smoke; for a
+   full pass, the [release test matrix](test-matrix.md).
 
 The [release bot](https://github.com/makrohard/lhpc-release-bot) does steps 1–5 for the pins it
 may move, with the release-verification lane in place of step 6.

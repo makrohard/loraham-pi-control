@@ -712,7 +712,7 @@ class BinaryOpsMixin:
                                 + ", ".join(dirty.tracked[:3]))
                 continue
             # The selector's commit, resolved by the EXISTING mechanisms: the plan's frozen
-            # known-working commit, else the manifest pin for `pinned`, else `_frozen_ref`
+            # commit, else the manifest pin for `pinned`, else `_frozen_ref`
             # (bounded ls-remote) for dev/stable/artifact.
             want = resolved[0] if resolved and resolved[0] else ""
             if not want and sel == "pinned" and comp.source is not None \

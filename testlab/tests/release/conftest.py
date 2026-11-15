@@ -63,8 +63,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def lab(tmp_path_factory):
-    """A FRESH lab root: no operator known-working records, so `pinned` resolves to the
-    candidate manifest pin and nothing carries over from a previous run."""
+    """A FRESH lab root: `pinned` resolves to the candidate manifest pin and nothing carries
+    over from a previous run."""
     root = Path(tmp_path_factory.mktemp("release") / "runtime")
     server = LabServer(root)
     server.init_and_reset()

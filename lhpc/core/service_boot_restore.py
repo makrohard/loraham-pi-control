@@ -20,8 +20,8 @@ import os
 import time
 from pathlib import Path
 
-from . import boot_restore, instances, known_working, radios, runtime_fs, updater_units
-from .boot_restore import Evidence, MarkerView, StackMeta
+from . import boot_restore, instances, radios, updater_units
+from .boot_restore import Evidence, StackMeta
 from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
 from .outcomes import Outcome, manual_required_only
@@ -65,31 +65,6 @@ class BootRestoreOpsMixin:
         if not updater_units.boot_restore_runs(verdict):
             return False, f"lhpc-web.service is not canonical ({verdict})"
         return True, updater_units.COMPATIBLE_NOTE if verdict == updater_units.COMPATIBLE else ""
-
-    # ---- evidence classification ---------------------------------------------------------------
-
-    def _boot_marker_view(self, stack_id: str) -> MarkerView:
-        """Tri-state read of the last-start candidate (K6, 13.12.5: no per-stack band marker is read)."""
-        ls_state, ls_band, ls_at = "absent", "", 0.0
-        cpath = known_working.candidate_path(self._paths, stack_id)
-        try:
-            state = runtime_fs.probe_exists(cpath)[0]
-            if state == "unknown":              # cannot prove it absent: evidence unreadable
-                ls_state = "unsafe"
-            elif state == "present":
-                cand = known_working.read_candidate(self._paths, stack_id)
-                started = cand.get("started_at") if cand else None
-                if (cand is None or not isinstance(started, (int, float))
-                        or isinstance(started, bool) or started != started  # NaN guard: NaN != NaN  # noqa: PLR0124
-                        or started in (float("inf"), float("-inf"))):
-                    ls_state = "unsafe"
-                else:
-                    ls_state = "valid"
-                    ls_band = str(cand.get("band") or "")
-                    ls_at = float(started)
-        except (OSError, PathContainmentError):
-            ls_state = "unsafe"
-        return MarkerView(last_start_state=ls_state, last_start_band=ls_band, last_start_at=ls_at)
 
     # ---- operator stop intent -------------------------------------------------------------
     #
@@ -344,9 +319,7 @@ class BootRestoreOpsMixin:
         note = [f"  {web_reason}"] if web_reason else []
 
         metas = self._boot_stack_metas()
-        markers = {sid: self._boot_marker_view(sid) for sid in
-                   {e.stack for e in evidence}}
-        plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
+        plan = boot_restore.derive_plan(evidence, metas, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
         boot_restore.radio_filter(plan, radios.load(self._paths))   # D14/D15, 7e
 

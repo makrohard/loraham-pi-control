@@ -1501,20 +1501,6 @@ def test_unsafe_registry_blocks_uninstall_and_clean(tmp_path, op):
     assert dest.exists()
 
 
-def test_unsafe_registry_blocks_known_working_confirmation(tmp_path):
-    from lhpc.core import known_working
-    paths = Paths(runtime_root=tmp_path)
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    _mk_unsafe_registry(paths, "src/LoRaHAM_Daemon", "malformed")
-    entries = {"loraham-chat": {"commit": "a" * 40, "selector": "dev", "remote": "",
-                                "source_rel": "src/LoRaHAM_Daemon", "strategy": ""}}
-    assert known_working.write_candidate(paths, "chat", entries, "433")
-    svc = ControllerService(system=FakeSystem(cmdlines_data={5: ["loraham_chat"]}).system,
-                            paths=paths)
-    assert not svc.confirm_known_working("chat").ok
-    assert known_working.load(paths, "chat") == []
-
-
 def test_a_path_never_touched_reads_absent_not_unsafe(tmp_path):
     # SAFELY ABSENT (as opposed to unsafe) is still reported for a path never touched
     state, rec, _why = source_registry.record_state(Paths(runtime_root=tmp_path), "src/never-touched")
@@ -5208,11 +5194,18 @@ def test_an_unlistable_subdirectory_counts_as_held(tmp_path):
 def test_an_incomplete_update_still_names_the_build_its_activated_sources_need(tmp_path, git,
                                                                                make_repo,
                                                                                monkeypatch):
-    """A source was activated but the update did not converge (here: its stale candidates could
-    not be retired): it is INCOMPLETE, builds nothing, and still names the stack the activated
+    """A source was activated but the update did not converge (here: the replaced tree was dirty, the
+    new source is active): it is INCOMPLETE, builds nothing, and still names the stack the activated
     source left unbuilt, with its command — before, only a converged update checked."""
     svc = _built_svc(tmp_path, git, make_repo)
-    monkeypatch.setattr(type(svc), "_retire_candidates_for_paths", lambda self, paths, out: False)
+    real = type(svc)._adopt_dev_fallback
+
+    def adopt(self, *a, **k):
+        r = real(self, *a, **k)
+        assert r.status == "done", r.detail
+        r.status, r.detail = "failed", "prior-dirty: the replaced tree had local changes (kept aside)"
+        return r
+    monkeypatch.setattr(type(svc), "_adopt_dev_fallback", adopt)
     res = svc.update("s", apply=True, source="dev")
     assert not res.ok and res.data.get("needs_build") == ["s"], (res.summary, res.data)
     assert "  [build needed] s: lhpc build s --yes" in res.details

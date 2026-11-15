@@ -208,21 +208,11 @@ def test_cleared_on_verified_stop_and_next_start_hint(tmp_path):
 
 
 def _seed_daemon_pending(tmp_path):
-    """A change pending on 868 (restart marker) and a known-working candidate for the daemon."""
-    from lhpc.core import known_working
+    """A change pending on 868 (restart marker) for the daemon."""
     from lhpc.core import restart_required as rr
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
     (d / "daemon.json").write_text(rr.merged_payload(None, "daemon", ["hipower_868"], "868", now=1.0))
-    assert known_working.write_candidate(
-        Paths(runtime_root=tmp_path), "daemon",
-        {"loraham-daemon": {"commit": "a" * 40, "selector": "pinned", "remote": "r",
-                            "source_rel": "src/x"}}, "433")
-
-
-def _candidate(tmp_path):
-    from lhpc.core import known_working
-    return known_working.read_candidate(Paths(runtime_root=tmp_path), "daemon")
 
 
 class _StoppedLife:
@@ -249,16 +239,16 @@ def test_a_single_band_daemon_stop_keeps_the_marker_when_the_process_view_is_ind
     assert svc.radio_bands() == ("433", "868")
     _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
-    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
+    assert _marker(tmp_path, "daemon") is not None
     assert svc.stop("daemon", apply=True).ok                         # a whole-daemon stop clears it
-    assert _marker(tmp_path, "daemon") is None and _candidate(tmp_path) is None
+    assert _marker(tmp_path, "daemon") is None
 
 
 def test_a_single_band_daemon_stop_clears_when_no_instance_remains(tmp_path):
     svc = _svc(tmp_path, cmdlines={1: ["init"]})
     _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
-    assert _marker(tmp_path, "daemon") is None and _candidate(tmp_path) is None
+    assert _marker(tmp_path, "daemon") is None
 
 
 def test_a_single_band_daemon_stop_keeps_while_another_instance_runs(tmp_path, monkeypatch):
@@ -267,7 +257,7 @@ def test_a_single_band_daemon_stop_keeps_while_another_instance_runs(tmp_path, m
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: _StoppedLife())
     _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
-    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
+    assert _marker(tmp_path, "daemon") is not None
 
 
 _ODD_DAEMONS = (
@@ -286,7 +276,7 @@ def test_a_single_band_daemon_stop_keeps_while_a_daemon_with_unknown_or_malforme
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: _StoppedLife())
     _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
-    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
+    assert _marker(tmp_path, "daemon") is not None
 
 
 def test_daemon_presence_is_tri_state():

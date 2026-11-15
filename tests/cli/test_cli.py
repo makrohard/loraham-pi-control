@@ -535,7 +535,7 @@ def test_config_ambiguous_param_refuses_without_mutating(monkeypatch):
 
 
 # --------------------------------------------------------------------------------------------------
-# restart, source-check, known-working, and the broken-hint regression guard
+# restart, source-check, and the broken-hint regression guard
 # --------------------------------------------------------------------------------------------------
 
 @pytest.mark.contract
@@ -750,16 +750,12 @@ def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
     assert calls[-1] == ("poststart", "meshcom", True)       # plan, then applied
 
 
-def test_source_check_and_known_working_dispatch(monkeypatch, capsys):
+def test_source_check_dispatch(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "source_check",
                         lambda self, t="": ActionResult(True, "sources checked"))
-    monkeypatch.setattr(ControllerService, "confirm_known_working",
-                        lambda self, s: ActionResult(True, "recorded known-working"))
     assert main(["source-check"]) == 0
     assert "sources checked" in capsys.readouterr().out
-    assert main(["known-working", "meshcom"]) == 0
-    assert "recorded known-working" in capsys.readouterr().out
 
 
 def test_identity_hint_points_at_a_real_command(tmp_path, monkeypatch):

@@ -358,7 +358,7 @@ class Installer:
                      source: str = "pinned", pinned_expected: tuple | None = None,
                      locked: bool = False) -> PlanAction:
         """Install a component's source. `source` selects the version:
-          * "pinned" (default) — the stack's compatible known-working composition entry, else the manifest pin;
+          * "pinned" (default) — the manifest pin;
           * "dev"    — newest commit on the configured branch;
           * "stable" — the commit the plan resolved (`stable_ref`): newest version tag or latest release.
         Clones from the remote; a local checkout under `[install].adopt_search_root` is used only
@@ -511,29 +511,6 @@ class Installer:
             if prior is not None:
                 prior.close()
 
-    def _pinned_expected(self, comp) -> tuple:
-        """What the 'Known working' (pinned) selector must resolve this component to:
-        `(commit, label)`. Resolution is STACK-LEVEL: the single newest COMPLETE composition
-        compatible with the current manifest/config identity (`compatible_composition`)
-        supplies the commit for EVERY component of the stack; when none qualifies, every
-        component takes `("", "fallback…")` — the manifest pin, clearly labelled, never a
-        mix of known-working and fallback commits."""
-        from . import known_working
-        spec = comp.source
-        if spec is None or spec.artifact:
-            return "", ""
-        stack = next((s for s in self.stacks for c in s.components if c.id == comp.id), None)
-        entries = None
-        if stack is not None:
-            entries = known_working.compatible_composition(
-                self.paths, stack,
-                lambda c: self.config.remotes.get(c.id) or (c.source.remote if c.source
-                                                            else "") or "")
-        if entries and comp.id in entries:
-            return (entries[comp.id]["commit"],
-                    "known working (operator-confirmed composition)")
-        return "", "fallback: manifest pin — no compatible known-working record"
-
     def _stage_and_activate(self, comp: Component, source: str, action: PlanAction,
                             dest: Path, spec, local: Path | None,
                             had_prior: bool = False, prior=None,
@@ -552,17 +529,11 @@ class Installer:
         from . import provenance, source_fs
         staging = dest.with_name(f".{dest.name}.candidate-{os.getpid()}-{_time.monotonic_ns()}")
         trusted, signer_diags = provenance.load_trusted_signers(self.config)
-        # 'Known working' resolution: a FROZEN per-operation plan value when the caller
-        # planned the whole install/update up front (`pinned_expected`) — a concurrent
-        # operator confirmation cannot alter an already-planned operation — else resolved
-        # here (single-component adoption).
         if pinned_expected is not None and pinned_expected[0]:
-            # FROZEN plan identity (auto-install): one exact immutable commit resolved at plan
-            # time — used verbatim for EVERY selector; no second selector lookup here.
+            # FROZEN plan identity (auto-install, the dev fallback, the binary channel's exact pin): one
+            # exact immutable commit resolved at plan time — used verbatim for EVERY selector; no second
+            # selector lookup here. Otherwise 'pinned' is the manifest pin (`spec.pin_commit`).
             expected, kw_label = pinned_expected
-        elif source == "pinned":
-            expected, kw_label = (pinned_expected if pinned_expected is not None
-                                  else self._pinned_expected(comp))
         else:
             expected, kw_label = "", ""
         try:
@@ -900,8 +871,8 @@ class Installer:
         the requested version — fail closed:
           * an ARTIFACT source is the same declared artifact for every selector — any local
             copy of it satisfies (there are no version semantics to prove);
-          * `pinned` REQUIRES an exact expected commit (the known-working composition entry
-            when one exists, else the configured manifest pin) AND HEAD == it;
+          * `pinned` REQUIRES an exact expected commit (the configured manifest pin) AND
+            HEAD == it;
           * `stable` REQUIRES a configured tag AND the checkout is exactly at that tag
             ("newest" cannot be proven offline — documented conservative fallback);
           * `dev` requires the configured branch if one is set; with no branch this is the
@@ -2662,10 +2633,9 @@ class Installer:
                      timeout=self._CLONE_TIMEOUT_S).returncode == 0 \
                     and dest.exists():
                 if source == "pinned":
-                    # 'Known working' REQUIRES an exact expected commit — the newest
-                    # operator-confirmed composition entry when one exists, else the manifest
-                    # pin — and must resolve EXACTLY to it; never a silent adoption of the
-                    # default branch.
+                    # 'Known working' REQUIRES an exact expected commit — the planned one,
+                    # else the manifest pin — and must resolve EXACTLY to it; never a silent
+                    # adoption of the default branch.
                     pin = expected_pin or spec.pin_commit
                     if not pin:
                         ok = False
@@ -2705,7 +2675,7 @@ class Installer:
         action.status = "done"
         action.detail = f"{source_desc}: {probe.state.value} (version {version}) [provenance: {post.status}]"
         if source == "pinned" and kw_label:
-            # 'Known working' truthfulness: composition-resolved vs manifest-pin FALLBACK.
+            # 'Known working' truthfulness: why the planned commit is the one (e.g. the dev fallback).
             action.detail += f" [{kw_label}]"
         if signer_diags:
             action.detail += " | signer-config: " + "; ".join(signer_diags)

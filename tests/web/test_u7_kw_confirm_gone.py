@@ -1,8 +1,6 @@
 """U7 (plan v6, D3): the "Confirm this stack as working" button and its route are gone; the stack page
 still renders. Red at 912c37d5: the route answered the POST (a redirect), the body offered the button."""
 
-import time
-
 from lhpc.core import source_registry
 from lhpc.core.paths import Paths
 
@@ -16,10 +14,10 @@ def _running_chat_with_an_old_marker(tmp_path):
                                 "source_rel": "src/LoRaHAM_Daemon"}}
     m = tmp_path / "state" / "last-start" / "chat.json"
     m.parent.mkdir(parents=True, exist_ok=True)
-    m.write_text(json.dumps({"version": 1, "stack": "chat", "band": "433", "started_at": time.time(),
+    m.write_text(json.dumps({"version": 1, "stack": "chat", "band": "433", "started_at": 1000.0,
                              "entries": entries, "hash": "f" * 64}))
     assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", ("loraham-chat",)))
+        "src/LoRaHAM_Daemon", "", "dev", commit, 1000.0, "", ("loraham-chat",)))
 
 
 def test_the_confirm_route_is_gone_while_the_stack_page_renders(tmp_path, web, csrf):

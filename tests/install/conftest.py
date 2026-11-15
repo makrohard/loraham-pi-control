@@ -197,7 +197,7 @@ def stub_adopt(monkeypatch):
     def _stub(svc, *, fail_paths=(), record=True):
         seen = []
 
-        def _adopt(self, inst, st, comp, selector, resolved, force=False, locked=False):
+        def _adopt(self, inst, comp, selector, resolved, force=False, locked=False):
             path = comp.source.path
             seen.append((path, selector, force))
             if path in fail_paths:

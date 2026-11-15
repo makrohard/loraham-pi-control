@@ -168,7 +168,7 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
                     components: tuple = (), handle=None) -> tuple:
     """THE authoritative CURRENT ownership-and-identity proof for an EXISTING managed source
     leaf — required (under the applicable source lock) before every destructive action
-    (update overwrite, uninstall, clean) and before a known-working confirmation. A valid
+    (update overwrite, uninstall, clean). A valid
     registry file alone is NOT sufficient: the leaf must match it NOW, with a POSITIVE
     identity proof. Returns `(record, "verified")` or `(None, typed-reason)` —
     the caller must fail closed.
@@ -253,8 +253,8 @@ def _head(system, dest: Path) -> str:
 
 
 def norm_remote(url: str) -> str:
-    """Public alias of the remote normalizer (shared-remote coherence + known-working
-    composition compatibility use the same comparison)."""
+    """Public alias of the remote normalizer (shared-remote coherence uses the same
+    comparison)."""
     return _norm_remote(url)
 
 

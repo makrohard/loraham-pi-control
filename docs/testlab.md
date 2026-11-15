@@ -162,8 +162,8 @@ about half an hour.
   system box under controlled `/api/system` responses, the Apps page's lazy bodies, the GPS
   panel, a 390 px phone viewport. Without a usable Playwright and Chromium it skips with the
   reason; under `CI`, which provides them, it fails instead.
-- **release** is the evidence a pin release needs. On a fresh lab root with no known-working
-  records it installs every stack on its default channel (published binary, else the pin),
+- **release** is the evidence a pin release needs. On a fresh lab root it installs every stack
+  on its default channel (published binary, else the pin),
   builds, starts and verifies it by its own state (port, client tool, node info); interactive
   components must draw, stay up and exit on a real terminal, GUI ones run where LHPC's GUI
   predicate allows. It ends by re-proving every managed checkout with the production identity

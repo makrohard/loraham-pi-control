@@ -2,8 +2,6 @@
 retire. The kiss box's source carries an ownership-registry record, so the start can name the commit it
 ran. Red at 912c37d5: the start wrote state/last-start/kiss.json."""
 
-import time
-
 import pytest
 
 from lhpc.core import source_registry
@@ -18,7 +16,7 @@ def test_a_kiss_start_writes_no_last_start_marker(kiss_box, run_op):
     for c in stack.components:
         if c.source is not None:
             assert source_registry.write_record(box.svc._paths, source_registry.RegistryRecord(
-                c.source.path, "", "pinned", "a" * 40, time.time(), "", (c.id,)))
+                c.source.path, "", "pinned", "a" * 40, 1000.0, "", (c.id,)))
     start = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert start.res.ok, start.res.summary
     touched = start.files["added"] + start.files["changed"]

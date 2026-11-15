@@ -1744,80 +1744,6 @@ def test_last_apply_outcome_renders_from_cache(tmp_path, web):
     assert "Last update run:" in body and "Local uncommitted changes present." in body
 
 
-# --- M4: "Confirm this stack as working" (operator-confirmed known-working) ------------------
-
-def _seed_kw_offer(tmp_path, commit="a" * 40):
-    import time as _t
-    from lhpc.core import known_working, source_registry
-    from lhpc.core.paths import Paths
-    paths = Paths(runtime_root=tmp_path)
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
-    entries = {"loraham-chat": {"commit": commit, "selector": "dev", "remote": "",
-                                "source_rel": "src/LoRaHAM_Daemon"}}
-    assert known_working.write_candidate(paths, "chat", entries, "433")
-    assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "",
-        ("loraham-chat",)))
-    return paths, entries
-
-
-def _kw_bound_app(web, tmp_path, commit="a" * 40, cmdlines=None):
-    """A client whose service answers the identity git queries by REALPATH — the
-    handle-bound POST confirmation queries the captured leaf's fd-pinned path."""
-    import os as _os
-    from lhpc.core.probes.backends import CommandResult, FakeSystem
-    svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
-                            paths=Paths(runtime_root=tmp_path))
-    real_run = svc._system.runner.run
-    dest_real = _os.path.realpath(str(tmp_path / "src" / "LoRaHAM_Daemon"))
-    def run(argv, timeout, *a, **k):
-        argv = list(argv)
-        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
-                and _os.path.realpath(argv[2]) == dest_real):
-            if argv[3:] == ["config", "--get", "remote.origin.url"]:
-                return CommandResult(
-                    0, "https://github.com/makrohard/LoRaHAM_Daemon.git\n", "")
-            if argv[3:] == ["rev-parse", "HEAD"]:
-                return CommandResult(0, commit + "\n", "")
-        return real_run(argv, timeout, *a, **k)
-    svc._system.runner.run = run
-    return web(service_factory=lambda: svc)
-
-
-def test_confirm_working_button_renders_when_offer_valid(tmp_path, web):
-    _seed_kw_offer(tmp_path)
-    c = web(cmdlines={555: ["loraham_chat"]})
-    body = c.get("/stacks?open=chat").get_data(as_text=True)   # confirm-working offer lives in the lazy body
-    assert "Confirm this stack as working" in body
-    assert "known-working/confirm" in body
-
-
-def test_confirm_working_button_hidden_when_stopped_or_recorded(tmp_path, web):
-    from lhpc.core import known_working
-    paths, entries = _seed_kw_offer(tmp_path)
-    # stopped -> hidden
-    c = web()
-    assert "Confirm this stack as working" not in c.get("/stacks").get_data(as_text=True)
-    # running but already recorded -> hidden
-    known_working.record(paths, "chat", entries, {"confirmed_at": 1.0})
-    c2 = web(cmdlines={555: ["loraham_chat"]})
-    assert "Confirm this stack as working" not in c2.get("/stacks").get_data(as_text=True)
-
-
-def test_confirm_working_post_records_and_hides_button(tmp_path, web, csrf):
-    from lhpc.core import known_working
-    from lhpc.core.paths import Paths
-    _seed_kw_offer(tmp_path)
-    c = _kw_bound_app(web, tmp_path, cmdlines={555: ["loraham_chat"]})
-    tok = csrf(c)
-    assert c.post("/stacks/chat/known-working/confirm").status_code == 400   # CSRF enforced
-    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
-    assert r.status_code in (302, 303)
-    assert known_working.load(Paths(runtime_root=tmp_path), "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
-    assert "Confirm this stack as working" not in c.get("/stacks").get_data(as_text=True)
-    assert c.post("/stacks/nope/known-working/confirm", data={"_csrf": tok}).status_code == 404
-
-
 # --- M6: restart-required yellow chip + Restart now action -----------------------------------
 
 def _flag_restart(tmp_path, sid="chat@r1"):
@@ -1906,18 +1832,6 @@ def test_clean_confirm_text_match_purges(tmp_path, web, csrf):
                                 "confirmed": "yes", "confirm_text": "kiss"})
     assert r.status_code in (302, 303)
     assert not (tmp_path / "src" / "loraham-kiss-tnc").exists()      # purged
-
-
-def test_confirm_working_post_refuses_drifted_tree(tmp_path, web, csrf):
-    from lhpc.core import known_working
-    from lhpc.core.paths import Paths
-    _seed_kw_offer(tmp_path)
-    c = _kw_bound_app(web, tmp_path, commit="b" * 40,
-                      cmdlines={555: ["loraham_chat"]})                   # HEAD drifted
-    tok = csrf(c)
-    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
-    assert r.status_code in (302, 303)                                    # flashed refusal
-    assert known_working.load(Paths(runtime_root=tmp_path), "chat") == [] # nothing recorded
 
 
 # --- M2 final: live-finding fixes (meshcore blank config, daemon activity feed) ---------------

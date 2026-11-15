@@ -1,4 +1,4 @@
-"""Source update / uninstall / clean / known-working / source-check / upstream release tracking operations.
+"""Source update / uninstall / clean / source-check / upstream release tracking operations.
 
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
@@ -132,8 +132,7 @@ class MaintenanceOpsMixin:
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = loc.stdout.strip()
         _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
-        want = sref.sha if sref else stackupdates.pinned_target(          # the lane's target for THIS checkout
-            self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
+        want = sref.sha if sref else stackupdates.pinned_target(self._paths, comp) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
@@ -308,8 +307,8 @@ class MaintenanceOpsMixin:
     def _shared_remote_conflict(self, source_path: str) -> str | None:
         """A source path is ONE checkout and must have ONE effective remote. Returns a typed
         detail when the current consumers' normalized effective remotes diverge (e.g. a
-        a hand-edited per-component override) — destructive operations and known-working
-        confirmation must fail closed on it, with zero source mutation."""
+        a hand-edited per-component override) — destructive operations must fail closed on
+        it, with zero source mutation."""
         seen: dict = {}
         for c in self._path_declarers(source_path):
             seen.setdefault(source_registry.norm_remote(self._effective_remote(c)),
@@ -321,41 +320,22 @@ class MaintenanceOpsMixin:
         return (f"conflicting effective remotes for shared source {source_path!r} "
                 f"({parts}) — set ONE remote for all of its components before mutating it")
 
-    def _retire_candidates_for_paths(self, paths_mutated, out: list) -> bool:
-        """After a source belonging to a stack was changed/removed, retire that stack's
-        `last-start` candidate marker (an older composition must not remain eligible for a
-        later confirmation). Returns False — the operation is INCOMPLETE — when a present
-        marker could not be cleared; the failure is recorded as durable evidence in `out`."""
-        from . import known_working
-        if not paths_mutated:
-            return True
-        affected = sorted({st.id for st in self.stacks()
-                           for c in st.components
-                           if c.source and c.source.path in set(paths_mutated)})
-        ok = True
-        for sid in affected:
-            cleared, why = known_working.clear_candidate_checked(self._paths, sid)
-            if not cleared:
-                out.append(f"  [fail] {why}")
-                ok = False
-        return ok
-
     def _op_seam(self, point: str) -> None:
         """DETERMINISTIC TEST SEAM for operation serialization — a no-op hook fired at
         defined points of applied update/uninstall/clean (e.g. after preflight, after the
         locks are held, between source groups). Tests monkeypatch it to inject concurrent
         events; it carries no production behaviour."""
 
-    def _adopt_dev_fallback(self, inst, st, comp, source: str, resolved, force: bool,
+    def _adopt_dev_fallback(self, inst, comp, source: str, resolved, force: bool,
                             locked: bool):
         """Adopt with the DEFAULT policy: on a FAILED `dev` adoption, retry ONCE at the
-        known-working (else manifest-pin) identity — DISCLOSED in the action detail,
-        never silent. Non-dev selectors and fallback-less failures return unchanged."""
+        manifest pin — DISCLOSED in the action detail, never silent. Non-dev selectors and
+        fallback-less failures return unchanged."""
         a = inst.adopt_source(comp, force=force, source=source,
                               pinned_expected=resolved, locked=locked)
         if a.status != "failed" or source != "dev":
             return a
-        fb = self._kw_fallback_expected(st, comp)
+        fb = self._dev_fallback_expected(comp)
         if not fb[0]:
             return a
         a2 = inst.adopt_source(comp, force=force, source="pinned",
@@ -364,23 +344,14 @@ class MaintenanceOpsMixin:
             a2.detail = (f"dev unreachable ({a.detail}) — FELL BACK to "
                          f"{fb[1]}: {a2.detail}")
         else:
-            a2.detail = (f"dev failed ({a.detail}); known-working fallback also "
+            a2.detail = (f"dev failed ({a.detail}); manifest-pin fallback also "
                          f"failed: {a2.detail}")
         return a2
 
-    def _kw_fallback_expected(self, stack, comp) -> tuple:
-        """DISCLOSED fallback identity when `dev` is unreachable: the stack's newest
-        compatible known-working composition entry, else the manifest pin. ("", "")
-        when neither exists (the dev refusal then stands — never a silent substitute)."""
-        from . import known_working
-        try:
-            entries = known_working.compatible_composition(
-                self._paths, stack, self._effective_remote)
-        except Exception:
-            entries = None
-        if entries and comp.id in entries and entries[comp.id].get("commit"):
-            return (entries[comp.id]["commit"],
-                    "fallback: known-working (dev unreachable)")
+    @staticmethod
+    def _dev_fallback_expected(comp) -> tuple:
+        """DISCLOSED fallback identity when `dev` is unreachable: the manifest pin. ("", "")
+        when there is none (the dev refusal then stands — never a silent substitute)."""
         if comp.source.pin_commit:
             return (comp.source.pin_commit, "fallback: manifest pin (dev unreachable)")
         return ("", "")
@@ -418,39 +389,23 @@ class MaintenanceOpsMixin:
                             stable_refs: dict | None = None) -> tuple:
         """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
 
-          * known-working is resolved ONCE per affected stack from one complete compatible
-            composition (never re-computed while iterating; a concurrent confirmation
-            cannot alter this operation);
           * components are grouped by shared source path; every targeted consumer of a path
-            must resolve to the SAME source identity — artifact form, normalized
-            effective remote, and (for 'pinned') the same frozen commit/fallback;
+            must resolve to the SAME source identity — selector, artifact form and
+            normalized effective remote ('pinned' is the manifest pin);
           * incompatible resolutions block BEFORE any candidate/source/registry/config
             mutation.
 
         Returns (groups, error): groups = ordered [(path, comp, selector, (expected, label))].
         `selector` is the per-stack Version choice carried through to adoption."""
-        from . import known_working, source_registry
+        from . import source_registry
         # `source`: one selector OR `source_of(stack_id, comp)` (auto-install per stack; a bare update per source). The
         # SELECTOR is part of the source identity: stacks sharing a path with different selectors conflict.
         _sel = source if callable(source) else (lambda _sid, _comp, _s=source: _s)
-        compositions: dict = {}
-        for st in {s.id: s for s, _ in items}.values():
-            if any(_sel(st.id, c) == "pinned" for s, c in items if s.id == st.id):
-                compositions[st.id] = known_working.compatible_composition(
-                    self._paths, st, self._effective_remote)
         by_path: dict = {}
         for st, comp in items:
             spec = comp.source
             sel = _sel(st.id, comp)
-            if sel != "pinned" or spec.artifact:
-                resolved = ("", "")
-            else:
-                entries = compositions.get(st.id)
-                if entries and comp.id in entries:
-                    resolved = (entries[comp.id]["commit"],
-                                "known working (operator-confirmed composition)")
-                else:
-                    resolved = ("", "fallback: manifest pin — no compatible known-working record")
+            resolved = ("", "")                           # pinned: the adoption checks out the manifest pin
             ident = (sel, bool(spec.artifact),
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
@@ -464,22 +419,22 @@ class MaintenanceOpsMixin:
                 who = ", ".join(f"{st.id}/{c.id} ({sel})" for st, c, sel, _, _ in members)
                 conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
                                  "resolve to incompatible source identities (selector/"
-                                 "remote/known-working) — resolve or re-confirm before installing/updating")
+                                 "remote) — resolve before installing/updating")
                 continue
             st, comp, sel, _, resolved = members[0]
             # A stable group is resolved here also unfrozen (U1): install and update take the lane's one target.
             if (freeze or sel == "stable") and not resolved[0] and (sel != "pinned" or comp.source.artifact):
                 # FROZEN selector resolution (auto-install plan): one exact immutable commit per group, resolved HERE —
-                # adoption never looks again. ARTIFACT sources freeze their default-branch HEAD for EVERY selector (they
-                # never use known-working entries), keyed by path, never the release. A path the gate read takes ITS
+                # adoption never looks again. ARTIFACT sources freeze their default-branch HEAD for EVERY selector (an
+                # artifact has no pin), keyed by path, never the release. A path the gate read takes ITS
                 # target (maybe a release fallback); any other stable path the remote's ONE target.
                 once = ("stable", self._effective_remote(comp)) if sel == "stable" and not comp.source.artifact and path not in (stable_refs or {}) else path
                 (fz, why) = frozen_cache.get(once) or frozen_cache.setdefault(once, self._frozen_ref(comp, sel))
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
-                    # known-working composition (then the manifest pin) when dev is
-                    # unreachable — never a silent substitute, never pinned-by-default.
-                    fb = self._kw_fallback_expected(st, comp)
+                    # manifest pin when dev is unreachable — never a silent substitute,
+                    # never pinned-by-default.
+                    fb = self._dev_fallback_expected(comp)
                     if sel == "dev" and fb[0]:
                         resolved = fb
                     elif freeze or stable_lane.is_final(why):   # unfrozen, unreadable: the local fallback decides
@@ -1519,229 +1474,6 @@ class MaintenanceOpsMixin:
                                 data=dict(refusal.data))
         return refusal
 
-    # ---- known-working compositions (operator-confirmed) -------------------
-
-    def _stack_composition_entries(self, stack_id: str) -> dict | None:
-        """The stack's CURRENT coherent composition from the ownership registry (one entry per
-        source component), with a local `git rev-parse` fallback for a pre-registry adoption.
-        Returns None when any source component cannot be resolved — a PARTIAL composition is
-        never captured (coherence over coverage); an OPTIONAL component whose source was never
-        adopted here (skipped GUI sidecar) is simply not part of it. Mutation-context only (may
-        run local git)."""
-        stack = self.stack(stack_id)
-        if stack is None:
-            return None
-        entries: dict = {}
-        for c in stack.components:
-            if c.source is None:
-                continue
-            rel = c.source.path
-            rec = source_registry.read_record(self._paths, rel)
-            if rec is None and c.optional and not source_fs.source_present(
-                    self._paths, self._paths.resolve_source(rel)):
-                # An OPTIONAL component whose source was never adopted on this box (a GUI
-                # sidecar skipped on a headless install) is not part of what runs here, so it
-                # is not part of the composition either — otherwise a Lite box could never
-                # confirm the stack. An adopted-but-unprovable source still refuses below.
-                continue
-            if rec is None or not rec.resolved_commit:
-                return None                              # unprovable component -> no composition
-            entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
-                             "remote": rec.remote, "source_rel": rel}
-        return entries or None
-
-    def _capture_start_composition(self, stack_id: str, band: str) -> None:
-        """Persist the last-start candidate marker after a healthy stack start (best effort —
-        a capture failure never degrades the start result; the confirm button simply does not
-        appear)."""
-        from . import known_working
-        entries = self._stack_composition_entries(stack_id)
-        if entries:
-            known_working.write_candidate(self._paths, stack_id, entries, band or "")
-
-    @staticmethod
-    def _manual_only_stack(stack) -> bool:
-        """True when LHPC cannot start ANY component of this stack (each is interactive or
-        externally supervised) — no lhpc start ⇒ no last-start candidate can ever exist, so
-        the known-working offer/confirm may rest on the live probe + ownership registry
-        instead ."""
-        return not any(c.run_argv and not c.interactive for c in stack.components)
-
-    def _registry_candidate(self, stack) -> dict | None:
-        """A PROBE-BASIS candidate for a manual-only stack, synthesized from the ownership
-        registry (FILE READS ONLY — GET-safe; never git). Same shape as a last-start
-        candidate; `started_at` 0 states truthfully that no LHPC start produced it. Returns
-        None when any source component lacks a registry-proven commit — a partial
-        composition is never offered (coherence over coverage, like the start capture)."""
-        from . import known_working, source_registry
-        entries: dict = {}
-        for c in stack.components:
-            if c.source is None:
-                continue
-            rec = source_registry.read_record(self._paths, c.source.path)
-            if rec is None or not rec.resolved_commit:
-                return None
-            entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
-                             "remote": rec.remote, "source_rel": c.source.path}
-        if not entries:
-            return None
-        return {"hash": known_working.composition_hash(entries), "entries": entries,
-                "started_at": 0, "band": ""}
-
-    def known_working_offer(self, stack_id: str, snapshot=None) -> dict | None:
-        """The 'Confirm this stack as working' offer for the stack page (FILE READS ONLY —
-        no git, GET-safe). Present only when ALL hold: a last-start candidate exists (for a
-        manual-only stack: a registry-synthesized probe-basis candidate); the stack is
-        currently RUNNING (per the supplied/probed snapshot); every candidate entry still
-        equals the CURRENT ownership-registry commit (the sources were not swapped since
-        that start); and the composition is not already recorded."""
-        from . import known_working, source_registry
-        cand = known_working.read_candidate(self._paths, stack_id)
-        if cand is None:
-            stack = self.stack(stack_id)
-            if stack is None or not self._manual_only_stack(stack):
-                return None
-            cand = self._registry_candidate(stack)
-        if cand is None:
-            return None
-        if cand["hash"] in known_working.hashes(self._paths, stack_id):
-            return None                                  # already recorded -> no button
-        snap = snapshot or self.build_snapshot()
-        up = (RunState.RUNNING, RunState.DEGRADED)
-        stack_running = any(
-            st.run_state in up
-            for ss in snap.stacks if ss.stack.id == stack_id
-            for st in ss.components.values())
-        if not stack_running:
-            return None
-        for entry in cand["entries"].values():
-            rec = source_registry.read_record(self._paths, entry.get("source_rel", ""))
-            if rec is None or rec.resolved_commit != entry.get("commit"):
-                return None                              # sources changed since that start
-        return {"hash": cand["hash"], "started_at": cand.get("started_at", 0),
-                "band": cand.get("band", ""), "components": sorted(cand["entries"])}
-
-    @invalidates_snapshot
-    def confirm_known_working(self, stack_id: str) -> ActionResult:
-        """OPERATOR ACTION: record the last-start candidate composition as known-working
-        (dedupe, keep the newest three). For a MANUAL-ONLY stack (no lhpc-startable
-        component, e.g. chat) there is never a start candidate: the composition is instead
-        synthesized from the ownership registry and accepted only while the probe shows the
-        stack RUNNING. Re-validates everything the offer validated —
-        AND, under the stack's SOURCE LOCKS, re-proves every component's CURRENT ownership +
-        identity (leaf kind, HEAD, origin) against its registry record: a manually changed
-        tree is a typed refusal, never a fabricated record."""
-        from . import known_working, reslock, source_registry
-        stack = self.stack(stack_id)
-        if stack is None:
-            return self._unknown_stack(stack_id)
-        cand = known_working.read_candidate(self._paths, stack_id)
-        probe_basis = False
-        if cand is None:
-            if not any(c.source and not self.binary_covers(c.id) for c in stack.components):
-                # Binary install or fetched release: nothing LHPC built, so there is no source
-                # composition to record — the offer never appears for such a stack, by design.
-                return ActionResult(False, f"'{stack_id}' has no source composition to record "
-                                    "(binary install or fetched release) — nothing to confirm.")
-            if not self._manual_only_stack(stack):
-                return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — start the stack first.")
-            # Manual-only stack: LHPC can never record a healthy start for it. Rest the
-            # confirmation on the live probe (running NOW) + the ownership registry; the
-            # handle-bound identity revalidation below is IDENTICAL to the candidate path.
-            cand = self._registry_candidate(stack)
-            if cand is None:
-                return ActionResult(False, f"Cannot confirm '{stack_id}': its sources are "
-                                    "not registry-proven — (re)install the stack first.")
-            probe_basis = True
-        offer = self.known_working_offer(stack_id)
-        if offer is None:
-            if cand["hash"] in known_working.hashes(self._paths, stack_id):
-                return ActionResult(True, f"'{stack_id}' is already recorded as known working.")
-            if probe_basis:
-                return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not "
-                                    "running — start it from its dashboard card, then re-confirm.")
-            return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not running "
-                                "or its sources changed since that start — start it again and re-confirm.")
-        # SOURCE-LOCKED identity revalidation: nothing may be recorded as known working while
-        # any of its trees drifted from LHPC's registry truth. Runs under the same source-
-        # operation boundary update/uninstall/clean use.
-        consumers = self._source_consumers()
-        src_paths = sorted({e.get("source_rel", "") for e in cand["entries"].values()
-                            if e.get("source_rel")})
-        comp_by_path = {c.source.path: c for c in stack.components if c.source}
-        handles: dict = {}
-        try:
-            with self._source_operation_guard(src_paths or [stack_id], op="confirm"):
-                # HANDLE-BOUND confirmation: every candidate source leaf is captured
-                # no-follow; ownership/origin/HEAD identity and the candidate-marker
-                # commit are verified AGAINST THOSE HANDLES; the same handles are re-proven
-                # immediately before the composition record is written. Any replacement,
-                # mismatch, or capture failure writes NOTHING.
-                for cid, entry in sorted(cand["entries"].items()):
-                    rel = entry.get("source_rel", "")
-                    comp = comp_by_path.get(rel)
-                    if comp is None:
-                        return ActionResult(False, f"Cannot confirm '{stack_id}': candidate "
-                                            f"entry {cid} names an unknown source {rel!r}.")
-                    conflict = self._shared_remote_conflict(rel)
-                    if conflict:
-                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
-                                            f"working: {conflict}")
-                    dest = self._paths.resolve_source(rel)
-                    try:
-                        handles[rel] = source_fs.capture_leaf(self._paths, dest)
-                    except (OSError, PathContainmentError) as exc:
-                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
-                                            f"working: {rel}: leaf not capturable ({exc}).")
-                    rec, why = source_registry.verify_identity(
-                        self._paths, self._system, self.config(), comp, dest,
-                        components=tuple(sorted(consumers.get(rel, {comp.id}))),
-                        handle=handles[rel])
-                    if rec is None:
-                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
-                                            f"working: {rel}: {why}")
-                    if rec.resolved_commit and rec.resolved_commit != entry.get("commit"):
-                        return ActionResult(False, f"Cannot confirm '{stack_id}': {cid} no "
-                                            "longer matches the composition captured at start "
-                                            "— start the stack again and re-confirm.")
-                # RE-PROVE every captured handle immediately before persisting.
-                source_fs.race_seam("pre-confirm-record", stack_id)
-                for rel, h in handles.items():
-                    if not source_fs.verify_leaf_path(self._paths,
-                                                      self._paths.resolve_source(rel), h):
-                        return ActionResult(False, f"Cannot confirm '{stack_id}': {rel} was "
-                                            "concurrently replaced — nothing recorded.")
-                validated = {"started_at": cand.get("started_at", 0),
-                             "band": cand.get("band", ""),
-                             "confirmed_at": time.time(),
-                             "evidence": ("probe-verified running manual-start stack + "
-                                          "operator confirmation" if probe_basis else
-                                          "healthy verified stack start + operator confirmation")}
-                ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
-                                               validated)
-        except AdmissionRefused as _adm:
-            return admission_refusal(_adm)
-        except SourceTxnBlocked as blocked:
-            return ActionResult(False, f"Cannot confirm '{stack_id}': {blocked}")
-        except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot confirm '{stack_id}': another source "
-                                f"operation is in progress ({busy}).")
-        finally:
-            for h in handles.values():
-                h.close()
-        if not ok:
-            return ActionResult(False, f"Could not record '{stack_id}' as known working: {msg}")
-        # The registry's SELECTOR is the adoption's selector, not proof of how the commit was fetched
-        # (a frozen auto-install may fall back from an unreachable dev and keep the selector). Name
-        # it as the selector, and say when the commit is the manifest pin.
-        pins = {c.id: c.source.pin_commit for c in stack.components if c.source is not None}
-        return ActionResult(True, f"Recorded '{stack_id}' as a known-working composition "
-                            f"({msg}).",
-                            details=[f"  {cid}: {e['commit'][:12]} (selector {e['selector'] or '?'}"
-                                     + ("; the manifest pin" if e["commit"] == pins.get(cid) else "")
-                                     + ")"
-                                     for cid, e in sorted(cand["entries"].items())])
-
     def _stack_scope_keeps(self, c, required: set) -> bool:
         """Does a stack-wide (or "all") pass include component `c`? Every required one; a
         hard build dependency (`required`: the ids non-optional components `build_requires`,
@@ -1757,8 +1489,8 @@ class MaintenanceOpsMixin:
                source: str = "", auto_install_ctx=None,
                build: bool = True) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`, "" = each source's recorded one:
-        dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
-        manifest-pin) identity, disclosed. A stack (or "all") updates its required sources,
+        dev/stable/pinned); a failed `dev` adoption retries once at the manifest pin,
+        disclosed. A stack (or "all") updates its required sources,
         its hard build dependencies, and the optional components that are INSTALLED; an
         optional one never installed is skipped unless targeted directly.
 
@@ -1880,7 +1612,7 @@ class MaintenanceOpsMixin:
         from . import reslock
         # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->
         # source-txn index/recovery -> ALL affected source-path locks (one outer guard,
-        # held through plan + every group mutation + candidate retirement) -> FRESH
+        # held through plan + every group mutation) -> FRESH
         # runtime-state recheck -> plan -> mutate. A concurrent Start contends on the
         # same source locks; a concurrent config/remote save waits on config-stable.
         try:
@@ -1932,9 +1664,8 @@ class MaintenanceOpsMixin:
                                         details=[*(f"  {c}" for c in plan_conflicts),
                                                  "  nothing to run here — the stacks sharing "
                                                  "that checkout ask for different versions; the "
-                                                 "box's operator updates them with one --source "
-                                                 "or re-confirms known-working on each, then "
-                                                 "retries"])
+                                                 "box's operator updates them with one --source, "
+                                                 "then retries"])
                 # An update REPLACES the source tree, and the MeshCore identity may still
                 # live only in the template inside it. Copy it out now — after every
                 # refusal check, with all locks held, before the first mutation.
@@ -1949,27 +1680,20 @@ class MaintenanceOpsMixin:
                 inst = self._installer()
                 out, ok = [], True
                 mutated_paths = []
-                stacks_by_comp = {c2.id: st2 for st2 in self.stacks()
-                                  for c2 in st2.components}
                 for path, c, selector, resolved in groups:
                     r = self._adopt_dev_fallback(
-                        inst, stacks_by_comp.get(c.id), c, selector, resolved,
+                        inst, c, selector, resolved,
                         force=True, locked=True)
                     out.append(f"  [{r.status}] {c.id}: {r.detail}")
                     if r.status == "failed":
                         ok = False                    # incl. prior-dirty: NEVER success
                         if r.detail.startswith(("prior-dirty:", "prior-in-use:")):
-                            # the NEW source IS active (record coherent) — its stacks'
-                            # stale candidates must still be retired truthfully
+                            # the NEW source IS active (record coherent) — its stacks
+                            # are checked for a build like any updated source
                             mutated_paths.append(path)
                     elif r.status == "done":
                         mutated_paths.append(path)
                     self._op_seam("update-between-groups")
-                # Candidate retirement BEFORE the source locks release: a new healthy
-                # Start (which needs these locks) cannot write a fresh marker between
-                # the source mutation and this retirement — only stale pre-update
-                # markers are retired. A clear failure is a truthful INCOMPLETE.
-                ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
@@ -2452,8 +2176,8 @@ class MaintenanceOpsMixin:
         # source-txn index/recovery -> ALL of the target's source-path locks (including
         # paths KEPT because they are shared — a Start of the target stack needs those
         # locks, so holding them serializes against it) -> FRESH running recheck ->
-        # fresh remove/keep/orphan classification -> destructive work -> candidate
-        # retirement — all before any lock is released. A concurrent remote/config save
+        # fresh remove/keep/orphan classification -> destructive work — all before any
+        # lock is released. A concurrent remote/config save
         # waits on config-stable; nothing here uses a stale configuration snapshot.
         self._op_seam("uninstall-preflight")
         all_paths = sorted({c.source.path for _, c in items})
@@ -2464,7 +2188,7 @@ class MaintenanceOpsMixin:
                 self._op_seam("uninstall-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
                 # slipped in after the preflight refuses with ZERO mutation (no source,
-                # config, log, marker, known-working, or registry change).
+                # config, log, marker, or registry change).
                 snap = self.build_snapshot(fresh=True)     # UNDER locks: never a cached read
                 running = sorted(cid for ss in snap.stacks
                                  for cid, st in ss.components.items()
@@ -2494,7 +2218,6 @@ class MaintenanceOpsMixin:
                 if _id_err:
                     return ActionResult(False, f"Refusing to uninstall '{target or 'all'}': "
                                                f"{_id_err}")
-                removed_paths = []
                 for path, c in to_remove.items():
                     removed, lines = self._remove_source_leaf(path, c, consumers, inst,
                                                               allow_dirty=False)
@@ -2502,7 +2225,6 @@ class MaintenanceOpsMixin:
                     if not removed:
                         ok = False
                         continue
-                    removed_paths.append(path)
                     if not source_registry.remove_record(self._paths, path):
                         # Registry-record removal is REQUIRED cleanup: its failure makes the
                         # uninstall INCOMPLETE (truthful), and the orphan record is retried by
@@ -2520,9 +2242,6 @@ class MaintenanceOpsMixin:
                         out.append(f"  [fail] {path}: orphaned ownership record could not "
                                    "be removed")
                         ok = False
-                # a removed source retires the affected stacks' last-start candidates —
-                # an older composition must not stay eligible for later confirmation
-                ok = self._retire_candidates_for_paths(removed_paths, out) and ok
                 # KEPT shared paths: durably record this stack's departure so the LAST
                 # sharer's uninstall removes the leaf (live membership, not manifest).
                 ok = self._depart_kept_paths(kept, target_ids, out) and ok
@@ -2548,7 +2267,7 @@ class MaintenanceOpsMixin:
         stack — sources (still ownership-verified + shared-refcounted; DIRTY allowed here,
         this is the explicit escape hatch), config/stacks/<sid>*, its generated config files and launcher links,
         its saved state (`state_root`) and its own secrets (`secret_files`: node identities,
-        so a reinstall is a NEW node), state markers, known-working store, its components'
+        so a reinstall is a NEW node), state markers, its components'
         logs + job logs (never an active job's), and registry records.
         Gates: a STACK target only; refused while anything runs; `apply` additionally requires
         `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets.toml,
@@ -2556,7 +2275,7 @@ class MaintenanceOpsMixin:
         removal is descriptor-anchored/no-follow."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
-        from . import known_working, reslock, source_fs, source_registry
+        from . import reslock, source_fs, source_registry
         stack = self.stack(target)
         if stack is None:
             return self._unknown_stack(target)
@@ -2624,10 +2343,8 @@ class MaintenanceOpsMixin:
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
         markers = [*self._interactive_markers(sid),           # K7: every instance's marker
                    self._paths.under("state", "running", f"{sid}.band"),     # a 0.13 band marker: delete-only (G1-K8A 9)
-                   known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),   # K5: and each instance's, also a removed radio's
                    *sorted(restart_required.marker_path(self._paths, sid).parent.glob(f"{sid}@r*.json")),
-                   known_working.store_path(self._paths, sid),
                    # a clean that promises a fresh slate must not leave a stale operator stop
                    # intent behind (its own or an instance's, 7e) for the reinstall to inherit.
                    self._stop_intent_path(sid), *sorted(self._paths.under("state", "stop-intent").glob(f"{sid}@r*.json"))]
@@ -2648,7 +2365,7 @@ class MaintenanceOpsMixin:
         details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
         details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
                     "  [remove] its components' post-start launchers + results in state/post",
-                    "  [remove] state markers, known-working history, ownership records",
+                    "  [remove] state markers, ownership records",
                     "  (config/local.toml, config/secrets.toml, files the stack does not declare "
                     "and other stacks are untouched)"]
         if not apply:
@@ -2680,7 +2397,7 @@ class MaintenanceOpsMixin:
                 self._op_seam("clean-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
                 # slipped in after the preflight refuses with ZERO mutation — no
-                # source, config, log, marker, known-working, or registry cleanup.
+                # source, config, log, marker, or registry cleanup.
                 snap = self.build_snapshot(fresh=True)   # UNDER locks: never a cached read
                 running = sorted(cid for ss in snap.stacks
                                  for cid, st in ss.components.items()
@@ -2731,7 +2448,6 @@ class MaintenanceOpsMixin:
                 # lock; dirty TRACKED/UNTRACKED changes are allowed (explicit purge), but
                 # a drifted commit/remote/leaf-type still refuses (not LHPC's anymore).
                 inst = self._installer()
-                removed_paths = []
                 for path, _ in src_remove:
                     comp = next(c for c in stack.components
                                 if c.source and c.source.path == path)
@@ -2741,12 +2457,10 @@ class MaintenanceOpsMixin:
                     if not removed:
                         ok = False
                         continue
-                    removed_paths.append(path)
                     if not source_registry.remove_record(self._paths, path):
                         out.append(f"  [fail] {path}: source removed, but the ownership "
                                    "record could not be dropped — re-run clean to retry")
                         ok = False
-                ok = self._retire_candidates_for_paths(removed_paths, out) and ok
                 ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
                 # Build trees a source-less component owns (a fetched package) and saved state:
                 # removed descriptor-anchored (the parent walked no-follow, the tree recursed
@@ -2799,14 +2513,14 @@ class MaintenanceOpsMixin:
                     except (OSError, PathContainmentError) as exc:
                         out.append(f"  [fail] config/stacks/{name}: {exc}")
                         ok = False
-                # 3) markers + known-working history (no-follow unlink; missing = done)
+                # 3) markers (no-follow unlink; missing = done)
                 for m in markers:
                     try:
                         runtime_fs.unlink(self._paths, m)
                     except (OSError, PathContainmentError) as exc:
                         out.append(f"  [fail] {m.name}: {exc}")
                         ok = False
-                out.append("  [removed] state markers + known-working history")
+                out.append("  [removed] state markers")
                 # 4) logs (never an active job's — live evidence is preserved)
                 protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
                 protected = {f"{n}.log" for n in protected} | protected

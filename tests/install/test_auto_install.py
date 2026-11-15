@@ -548,17 +548,6 @@ def test_blocked_rows_without_fail_are_not_success(tmp_path, monkeypatch):
 
 
 @pytest.mark.needs_session
-def test_candidate_cleanup_failure_downgrades_run(tmp_path, monkeypatch):
-    _happy_ops(monkeypatch)
-    monkeypatch.setattr(ControllerService, "_retire_candidates_for_paths",
-                        lambda self, paths, out: False)
-    svc = _svc(tmp_path)
-    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
-    assert not r.ok
-    assert svc.auto_install_status()["state"] == "completed-with-failures"
-
-
-@pytest.mark.needs_session
 def test_lease_clear_failure_is_durable_incomplete(tmp_path, monkeypatch):
     # A failed lease clear after an otherwise clean run: ok=False, the marker is a durable
     # completed-with-failures naming the cleanup, and a new run is BLOCKED.
@@ -1252,24 +1241,6 @@ def test_rebind_write_failure_yields_orphan_risk(tmp_path, monkeypatch):
     assert svc.auto_install_ack(confirm_orphan=True).ok                  # confirmed path works
 
 
-@pytest.mark.needs_session
-def test_tx_refusal_after_successful_daemon_flips_row(tmp_path, monkeypatch):
-    # Candidate-marker cleanup failure makes TX ineligible AFTER the daemon completed its
-    # host work: the row must NOT stay `success`; host-test evidence is preserved.
-    svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(ControllerService, "_retire_candidates_for_paths",
-                        lambda self, paths, out: False)
-    r = svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None)
-    st = svc.auto_install_status()
-    assert lifecycle == []                                       # no start, no transmit
-    drow = next(x for x in st["stacks"] if x["id"] == "daemon")
-    assert drow["status"] == "fail"                              # never success w/ refused TX
-    assert "TX" in drow["detail"] and "refused" in drow["detail"].lower()
-    assert drow["tests"] == {"ran": True, "ok": True, "detail": "passed"}  # evidence kept
-    assert st["tx_phase"]["status"] == "fail"
-    assert st["state"] == "completed-with-failures" and not r.ok
-
-
 def _ls_remote_fakes(sha_by_ref):
     """FakeSystem `commands` map builder is awkward for dynamic argv — use a runner wrap."""
     def bind(svc):
@@ -1744,34 +1715,25 @@ def test_optional_secret_file_form(tmp_path):
                            str(tmp_path), str(tmp_path / "src"), "")
 
 
-# --- default policy: latest dev with DISCLOSED known-working fallback -------------------------
+# --- default policy: latest dev with a DISCLOSED manifest-pin fallback ------------------------
 
-def test_freeze_dev_failure_falls_back_to_known_working(tmp_path, monkeypatch):
-    # dev resolution unreachable -> the group freezes at the stack's known-working
-    # composition commit (disclosed label), NOT a whole-run refusal.
-    from lhpc.core import known_working
-    paths = Paths(runtime_root=tmp_path)
+def test_freeze_dev_failure_falls_back_to_the_manifest_pin(tmp_path):
+    # dev resolution unreachable -> the group freezes at the manifest pin (disclosed label),
+    # NOT a whole-run refusal.
     svc = _svc(tmp_path)                                         # ls-remote fails (Fake)
-    st0 = next(s0 for s0 in svc.stacks() if s0.id == "kiss")
-    next(c for c in st0.components if c.id == "loraham-kiss-tnc")
-    entries = {c.id: {"commit": "d" * 40, "selector": "dev",
-                      "remote": svc._effective_remote(c),
-                      "source_rel": c.source.path, "strategy": ""}
-               for c in st0.components if c.source}
-    known_working.record(paths, "kiss", entries, {"confirmed_at": 1.0})
     st = next(s for s in svc.stacks() if s.id == "kiss")
     items = [(st, c) for c in st.components if c.source]
     groups, conflicts = svc._plan_source_groups(items, "dev", freeze=True)
     assert conflicts is None
     path, comp, selector, resolved = groups[0]
     assert selector == "dev"
-    assert resolved[0] == "d" * 40                               # KW fallback commit
-    assert "fallback: known-working" in resolved[1]              # disclosed
+    assert resolved == (comp.source.pin_commit, "fallback: manifest pin (dev unreachable)")
+    assert resolved[0]                                           # the manifest has a pin
 
 
 def test_freeze_dev_failure_without_fallback_still_refuses(tmp_path, monkeypatch):
-    monkeypatch.setattr(ControllerService, "_kw_fallback_expected",
-                        lambda self, st, c: ("", ""))
+    monkeypatch.setattr(ControllerService, "_dev_fallback_expected",
+                        staticmethod(lambda c: ("", "")))
     svc = _svc(tmp_path)
     st = next(s for s in svc.stacks() if s.id == "kiss")
     items = [(st, c) for c in st.components if c.source]
@@ -1780,8 +1742,8 @@ def test_freeze_dev_failure_without_fallback_still_refuses(tmp_path, monkeypatch
 
 
 def test_adopt_dev_failure_falls_back_disclosed(tmp_path, monkeypatch):
-    # A failed dev adoption retries ONCE at the fallback identity, with the fallback
-    # disclosed in the detail; a non-dev failure is untouched.
+    # A failed dev adoption retries ONCE at the manifest pin, with the fallback disclosed in
+    # the detail; a non-dev failure is untouched.
     calls = []
     def adopt(self, comp, force=False, source="pinned", pinned_expected=None,
               locked=False):
@@ -1790,19 +1752,15 @@ def test_adopt_dev_failure_falls_back_disclosed(tmp_path, monkeypatch):
             return PlanAction("adopt", "", "x", status="failed", detail="clone failed")
         return PlanAction("adopt", "", "x", status="done", detail="exact checkout ok")
     monkeypatch.setattr(Installer, "adopt_source", adopt)
-    monkeypatch.setattr(ControllerService, "_kw_fallback_expected",
-                        lambda self, st, c: ("e" * 40, "fallback: known-working "
-                                             "(dev unreachable)"))
     svc = _svc(tmp_path)
     st = next(s for s in svc.stacks() if s.id == "kiss")
     comp = next(c for c in st.components if c.id == "loraham-kiss-tnc")
     inst = svc._installer()
-    a = svc._adopt_dev_fallback(inst, st, comp, "dev", ("", ""), force=False,
-                                locked=False)
+    a = svc._adopt_dev_fallback(inst, comp, "dev", ("", ""), force=False, locked=False)
     assert a.status == "done"
-    assert "FELL BACK" in a.detail and "known-working" in a.detail
+    assert "FELL BACK to fallback: manifest pin (dev unreachable)" in a.detail
     assert calls[0][0] == "dev" and calls[1][0] == "pinned"
-    assert calls[1][1][0] == "e" * 40                            # exact fallback commit
+    assert calls[1][1][0] == comp.source.pin_commit              # exact fallback commit
 
 
 # ---- Part B: cooperative operator Abort ------------------------------------------------------

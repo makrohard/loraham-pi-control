@@ -257,7 +257,7 @@ _KNOWN_MUTATORS = (
     # the known undecorated mutators (build marker, receipts/files, config/params, markers)
     "graywolf_upstream_update", "binary_install", "binary_retire", "reset_config",
     "save_stack_config", "save_daemon_params", "reset_daemon_params", "daemon_set",
-    "save_component_remote", "confirm_known_working", "boot_restore_run", "set_high_power",
+    "save_component_remote", "boot_restore_run", "set_high_power",
     "set_gps", "set_rflog", "set_rflog_all",
 )
 

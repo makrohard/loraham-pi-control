@@ -293,29 +293,6 @@ def test_load_config_ignores_symlinked_local_toml(tmp_path):
     assert cfg.diagnostics                          # surfaced as a diagnostic, not a crash
 
 
-def test_known_working_store_skips_symlinked_leaf(tmp_path):
-    import os
-    from lhpc.core import known_working
-    from lhpc.core.paths import Paths
-    paths = Paths(runtime_root=tmp_path)
-    sp = known_working.store_path(paths, "s"); sp.parent.mkdir(parents=True)
-    outside = tmp_path / "evil.json"
-    outside.write_text('{"version": 1, "compositions": []}')
-    os.symlink(outside, sp)                         # symlinked store leaf
-    assert known_working.load(paths, "s") == []     # contributes nothing
-
-
-def test_known_working_symlinked_dir_is_empty(tmp_path):
-    import os
-    from lhpc.core import known_working
-    from lhpc.core.paths import Paths
-    rt = tmp_path / "rt"; rt.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir()
-    (outside / "known-working").mkdir()
-    os.symlink(outside, rt / "profiles")            # profiles/ -> outside the runtime root
-    assert known_working.load(Paths(runtime_root=rt), "s") == []
-
-
 def _seed_stack_toml(paths, stack_id, raw, band="", inst=None):
     from lhpc.core.config import _stack_config_path
     p = _stack_config_path(paths, stack_id, inst)
@@ -1234,20 +1211,6 @@ def test_save_operator_config_refuses_symlinked_local(tmp_path):
     with pytest.raises((OSError, PathContainmentError, cfgmod.ConfigError)):
         cfgmod.save_operator_config(paths, "N0CALL")
     assert outside.read_text() == ""                            # never written through
-
-
-def test_known_working_record_is_contained(tmp_path):
-    import os
-    from lhpc.core import known_working
-    paths = Paths(runtime_root=tmp_path)
-    sp = known_working.store_path(paths, "s"); sp.parent.mkdir(parents=True)
-    outside = tmp_path / "p.json"; outside.write_text("orig")
-    os.symlink(outside, sp)                          # symlinked store leaf
-    ok, msg = known_working.record(
-        paths, "s", {"c": {"commit": "a" * 40, "selector": "dev", "remote": "",
-                           "source_rel": "src/c"}}, {"confirmed_at": 1.0})
-    assert not ok                                    # refused, never through the symlink
-    assert outside.read_text() == "orig"
 
 
 def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):

@@ -1199,22 +1199,6 @@ def test_update_source_binary_refuses_the_all_target(tmp_path, monkeypatch):
     assert not res.ok and "ONE stack at a time" in res.summary
 
 
-def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, monkeypatch, binary_receipt, stub_adopt):
-    """The transaction must be resolved on the ADOPTION outcome, before any later early return.
-    A still-open journal would make the next binary operation roll the old artifact back OVER
-    the freshly installed sources."""
-    svc = _svc(tmp_path, monkeypatch)
-    binary_receipt(svc)
-    stub_adopt(svc)
-    monkeypatch.setattr(ControllerService, "_retire_candidates_for_paths",
-                        lambda *a, **k: False)                   # a LATER step fails
-    res = svc.install("daemon", apply=True, source="pinned")
-    assert not res.ok and "candidate cleanup INCOMPLETE" in res.summary
-    assert res.next_commands, res                # the install's own next steps are kept
-    assert bi.read_journal(svc._paths)[1] == "absent"             # committed, not left open
-    assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
-
-
 def test_failed_set_aside_removes_what_the_switch_already_adopted(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     """A later group's set-aside failing mid-switch must undo the checkouts the switch already
     adopted for earlier groups BEFORE the binary comes back, as every other failed switch does."""
@@ -1642,16 +1626,16 @@ def test_inside_an_auto_install_run_a_clean_clone_at_an_older_pin_is_moved_to_th
 
 
 def _older_known_working(svc, commit="7" * 40):
-    """An operator-confirmed meshcom composition from the PREVIOUS release: same components,
-    paths and remotes as today, every commit an older one — compatible, so the ordinary
-    'pinned' selector resolves to it instead of the manifest pin."""
-    from lhpc.core import known_working
+    """A meshcom known-working store an older LHPC left (0.13.x format, written raw): same
+    components, paths and remotes as today, every commit an older one. U7: nothing reads it."""
     st = svc.stack("meshcom")
     entries = {c.id: {"commit": commit, "selector": "pinned",
                       "remote": svc._effective_remote(c), "source_rel": c.source.path}
                for c in st.components if c.source is not None}
-    assert known_working.record(svc._paths, "meshcom", entries, {"confirmed_at": 1.0})[0]
-    assert known_working.compatible_composition(svc._paths, st, svc._effective_remote) == entries
+    store = svc._paths.under("profiles", "known-working", "meshcom.json")
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text(json.dumps({"version": 1, "compositions": [
+        {"hash": "f" * 64, "entries": entries, "validated": {"confirmed_at": 1.0}}]}))
     return commit
 
 
@@ -1675,9 +1659,8 @@ def _record_adoption_target(monkeypatch, svc, seen, recs=None):
 
 def test_a_stale_clone_moves_to_the_manifest_pin_not_an_older_known_working(tmp_path, monkeypatch, stub_pipeline):
     """The artifact is checked against the MANIFEST pins, so its clone_required checkout must
-    go to `pin_commit`. The ordinary 'pinned' selector prefers a compatible known-working
-    composition: with the previous release confirmed, the move re-adopted THAT commit and the
-    exact-pin check then refused (auditor, b906f3c)."""
+    go to `pin_commit` (auditor, b906f3c: an older known-working record was re-adopted and the
+    exact-pin check then refused; U7: such a store is no longer read)."""
     from lhpc.core.install import DirtyReport
     svc = _svc(tmp_path, monkeypatch)
     comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
@@ -1717,15 +1700,15 @@ def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_worki
     assert not inst._staged_clone_path(dest, staging).exists()      # removed when staging ends
 
 
-def test_an_ordinary_pinned_update_still_resolves_known_working(tmp_path, monkeypatch):
-    """The fix is private to the binary channel: `lhpc update meshcom-qemu --source pinned`
-    keeps the known-working meaning."""
+def test_an_ordinary_pinned_update_takes_the_manifest_pin_over_an_old_store(tmp_path, monkeypatch):
+    """`lhpc update meshcom-qemu --source pinned` plans no commit: the adoption checks out the
+    manifest pin itself (U7), never the old store's."""
     svc = _svc(tmp_path, monkeypatch)
-    old = _older_known_working(svc)
+    _older_known_working(svc)
     seen = []
     _record_adoption_target(monkeypatch, svc, seen)
     assert not svc.update("meshcom-qemu", apply=True, source="pinned").ok  # stopped at staging
-    assert seen and all(c == old for _cid, c in seen), seen
+    assert seen and all(c == "" for _cid, c in seen), seen
 
 
 def test_cli_venv_provisioning_times_every_step(tmp_path, monkeypatch, capsys):

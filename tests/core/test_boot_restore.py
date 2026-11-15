@@ -275,7 +275,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
 
 from lhpc.core import boot_restore as br  # noqa: E402
 from lhpc.core import service_boot_restore as sbr  # noqa: E402
-from lhpc.core.boot_restore import Evidence, MarkerView, StackMeta  # noqa: E402
+from lhpc.core.boot_restore import Evidence, StackMeta  # noqa: E402
 from lhpc.core.service_base import ActionResult  # noqa: E402
 
 
@@ -437,7 +437,7 @@ def test_planner_one_item_and_daemon_last():
         [_ev(),
          _ev(launch_id="D1", stack="daemon", component="loraham-daemon", band="868"),
          _ev(launch_id="D2", stack="daemon", component="loraham-daemon", band="433")],
-        metas, {}, "daemon")
+        metas, "daemon")
     assert [i["kind"] for i in plan.items] == ["stack", "daemon-reconcile"]
     assert plan.items[0]["target"] == "kiss" and plan.items[0]["band"] == "433"
     assert plan.items[1]["bands"] == ["433", "868"]
@@ -446,7 +446,7 @@ def test_planner_one_item_and_daemon_last():
 
 def test_planner_component_scope_never_widens():
     plan = br.derive_plan([_ev(start_scope="component", requested_target="loraham-kiss-tnc")],
-                          {"kiss": _KISS}, {}, "daemon")
+                          {"kiss": _KISS}, "daemon")
     assert not plan.items
     assert "never widened" in plan.skipped[0]["reason"]
 
@@ -455,7 +455,7 @@ def test_planner_unknown_and_missing_main_skip():
     plan = br.derive_plan(
         [_ev(stack="removed-stack"),
          _ev(launch_id="L3", stack="kiss", component="not-the-main")],
-        {"kiss": _KISS}, {}, "daemon")
+        {"kiss": _KISS}, "daemon")
     assert not plan.items
     reasons = {s["stack"]: s["reason"] for s in plan.skipped}
     assert "unknown stack" in reasons["removed-stack"]     # e.g. a stack the manifest dropped
@@ -473,7 +473,7 @@ def test_planner_restores_an_interactive_main_from_the_daemon_its_start_ensured(
     # chat's main is never spawned: its start left only the daemon's record, under the stack.
     plan = br.derive_plan(
         [_ev(launch_id="L2", stack="chat", component="loraham-daemon", requested_target="chat")],
-        _CHAT_METAS, {}, "daemon")
+        _CHAT_METAS, "daemon")
     assert plan.skipped == []
     assert [(i["kind"], i["target"], i["band"]) for i in plan.items] == [("stack", "chat", "433")]
 
@@ -482,43 +482,36 @@ def test_planner_restores_an_interactive_main_from_no_other_record():
     # Fail closed: a record of another component under the stack is not a start of chat.
     plan = br.derive_plan(
         [_ev(launch_id="L2", stack="chat", component="not-the-main", requested_target="chat")],
-        _CHAT_METAS, {}, "daemon")
+        _CHAT_METAS, "daemon")
     assert plan.items == []
     assert "no main-component evidence" in plan.skipped[0]["reason"]
 
 
 def test_planner_conflicting_bands_on_two_records_skip():
     plan = br.derive_plan([_ev(), _ev(launch_id="L2", band="868", launched_at=1001.0)],
-                          {"kiss": _SWITCH}, {}, "daemon")
+                          {"kiss": _SWITCH}, "daemon")
     assert not plan.items and "different bands" in plan.skipped[0]["reason"]
 
 
-@pytest.mark.parametrize("ev_band,mk,expect_band,why_part", [
-    # ownership authoritative, the last-start marker agrees (K6, 13.12.5: no running-band marker is read)
-    ("433", MarkerView(last_start_state="valid", last_start_band="433", last_start_at=5.0), "433", ""),
-    # valid last-start DISAGREES -> ambiguity
-    ("433", MarkerView(last_start_state="valid", last_start_band="868", last_start_at=5.0),
-     "", "disagree"),
-    # empty record band: the one valid marker supplies the candidate
-    ("", MarkerView(last_start_state="valid", last_start_band="868", last_start_at=5.0), "868", ""),
-    # an unsafe source blocks
-    ("433", MarkerView(last_start_state="unsafe"), "", "unsafe band marker"),
+@pytest.mark.parametrize("ev_band,expect_band,why_part", [
+    # the ownership record's band (K6, 13.12.5 and U7: no marker is read)
+    ("433", "433", ""),
     # switchable with NO band source: never guess
-    ("", MarkerView(), "", "no valid band source"),
+    ("", "", "no valid band source"),
     # recorded band not declared by the stack
-    ("999", MarkerView(), "", "not declared"),
+    ("999", "", "not declared"),
 ])
-def test_planner_band_matrix_switchable(ev_band, mk, expect_band, why_part):
-    band, why = br._band_candidates(_ev(band=ev_band), _SWITCH, mk)
+def test_planner_band_matrix_switchable(ev_band, expect_band, why_part):
+    band, why = br._band_candidates(_ev(band=ev_band), _SWITCH)
     assert band == expect_band
     assert why_part in why
 
 
 def test_planner_fixed_band_rules():
     # fixed-band stack: manifest band rules; recorded band must be empty or equal
-    assert br._band_candidates(_ev(band=""), _KISS, MarkerView()) == ("433", "")
-    assert br._band_candidates(_ev(band="433"), _KISS, MarkerView()) == ("433", "")
-    band, why = br._band_candidates(_ev(band="868"), _KISS, MarkerView())
+    assert br._band_candidates(_ev(band=""), _KISS) == ("433", "")
+    assert br._band_candidates(_ev(band="433"), _KISS) == ("433", "")
+    band, why = br._band_candidates(_ev(band="868"), _KISS)
     assert band == "" and "contradicts manifest band" in why
 
 
@@ -530,10 +523,9 @@ def test_planner_orders_by_start_time():
         [_ev(launched_at=2000.0),
          _ev(launch_id="M1", stack="meshcom", component="meshcom-qemu", launched_at=1500.0,
              requested_target="meshcom")],
-        metas, {"meshcom": MarkerView(last_start_state="valid", last_start_band="433",
-                                      last_start_at=2500.0)}, "daemon")
-    # meshcom's last-start (2500) beats kiss's launched_at (2000) -> kiss first
-    assert [i["target"] for i in plan.items] == ["kiss", "meshcom"]
+        metas, "daemon")
+    # U7: the records' launched_at decides (meshcom 1500 before kiss 2000)
+    assert [i["target"] for i in plan.items] == ["meshcom", "kiss"]
 
 
 # --- driver -------------------------------------------------------------------------------------
@@ -1750,21 +1742,21 @@ def _webui_ev(launch_id="W1"):
 
 
 def test_parts_the_plan_names_a_part_started_on_its_own():
-    plan = br.derive_plan([_mc_ev(), _webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    plan = br.derive_plan([_mc_ev(), _webui_ev()], {"meshcore": _MESHCORE}, "daemon")
     assert len(plan.items) == 1 and plan.items[0]["components"] == ["meshcore-webui"]
     assert sorted(plan.items[0]["evidence_ids"]) == ["M1", "W1"]    # consumed with the item
 
 
 def test_parts_a_stopped_part_left_no_record_and_is_not_named():
-    plan = br.derive_plan([_mc_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    plan = br.derive_plan([_mc_ev()], {"meshcore": _MESHCORE}, "daemon")
     assert plan.items[0]["components"] == []
 
 
 def test_parts_a_part_alone_never_widens_to_its_stack():
-    plan = br.derive_plan([_webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    plan = br.derive_plan([_webui_ev()], {"meshcore": _MESHCORE}, "daemon")
     assert not plan.items and plan.skipped[0]["reason"] == "no main-component evidence"
     node_alone = _mc_ev(start_scope="component", requested_target="meshcore-node")
-    plan = br.derive_plan([node_alone, _webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    plan = br.derive_plan([node_alone, _webui_ev()], {"meshcore": _MESHCORE}, "daemon")
     assert not plan.items and "never widened" in plan.skipped[0]["reason"]
 
 
@@ -1776,9 +1768,9 @@ def test_parts_only_eligible_parts_and_each_once(tmp_path):
                      requested_target="meshcom-gps-relay")
     main = Evidence(launch_id="Q1", stack="meshcom", component=metas["meshcom"].main, band="433",
                     launched_at=1000.0, start_scope="stack", requested_target="meshcom")
-    plan = br.derive_plan([main, relay], metas, {}, "daemon")
+    plan = br.derive_plan([main, relay], metas, "daemon")
     assert plan.items[0]["components"] == []                        # the fixture is never replayed
-    plan = br.derive_plan([_mc_ev(), _webui_ev("W1"), _webui_ev("W2")], metas, {}, "daemon")
+    plan = br.derive_plan([_mc_ev(), _webui_ev("W1"), _webui_ev("W2")], metas, "daemon")
     assert plan.items[0]["components"] == ["meshcore-webui"]        # two records, one start
 
 
@@ -2065,22 +2057,6 @@ def test_a_disabled_second_radio_of_the_band_does_not_block_the_restore(tmp_path
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     assert svc.boot_restore_run().ok
     assert calls == [{"target": "kiss", "band": "433"}]
-
-
-def test_k6_an_old_band_marker_file_is_never_read_by_boot_restore(tmp_path):
-    # 13.12.5: a 0.13.x state/running/<sid>.band (valid or garbled) is no band source: the view has none, and it
-    # never makes a restore ambiguous or unsafe
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    for text in ("868", "garbled\x00"):
-        leaf = tmp_path / "state" / "running" / "kiss.band"
-        leaf.parent.mkdir(parents=True, exist_ok=True)
-        leaf.write_text(text)
-        view = svc._boot_marker_view("kiss")
-        assert not hasattr(view, "running_band_state") and view.last_start_state == "absent"
-        assert br._band_candidates(_ev(band="433"), _SWITCH, view) == ("433", "")
 
 
 def test_boot_restore_starts_only_the_unserved_radios_daemon(tmp_path, monkeypatch):

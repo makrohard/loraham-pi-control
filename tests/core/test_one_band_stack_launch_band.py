@@ -135,22 +135,18 @@ def test_a_one_band_stacks_metas_and_a_selectable_one_band_stack(tmp_path, monke
     meta = svc._boot_stack_metas()["meshcom"]
     ev = boot_restore.Evidence(launch_id="x", stack="meshcom", component=st.main, band="", launched_at=1.0, rid="r1",
                                start_scope="stack", requested_target="meshcom")
-    assert boot_restore._band_candidates(ev, meta, boot_restore.MarkerView()) == \
+    assert boot_restore._band_candidates(ev, meta) == \
         ("", "no valid band source for a band-switchable stack")
 
 
-@pytest.mark.parametrize("ev_band, marker_band", [
-    ("", "868"),                                          # a band-less record + a marker naming another band
-    ("868", ""),                                          # a record of another band
-])
-def test_a_one_band_stacks_contradicting_band_evidence_is_refused(tmp_path, ev_band, marker_band):
+def test_a_one_band_stacks_contradicting_band_evidence_is_refused(tmp_path):
     meta = _svc(tmp_path)._boot_stack_metas()["meshcom"]
-    ev = boot_restore.Evidence(launch_id="x", stack="meshcom", component="meshcom-qemu", band=ev_band,
+    ev = boot_restore.Evidence(launch_id="x", stack="meshcom", component="meshcom-qemu", band="868",
                                launched_at=1.0, rid="", start_scope="stack", requested_target="meshcom")
-    mk = boot_restore.MarkerView(last_start_state="valid", last_start_band=marker_band, last_start_at=1.0) \
-        if marker_band else boot_restore.MarkerView()
-    band, reason = boot_restore._band_candidates(ev, meta, mk)
+    band, reason = boot_restore._band_candidates(ev, meta)              # a record of another band
     assert band == "" and "868" in reason, (band, reason)
+    # a band-less record takes the manifest band (B2's one-band rule; U7: no marker is read)
+    assert boot_restore._band_candidates(dataclasses.replace(ev, band=""), meta) == ("433", "")
 
 
 def test_two_records_on_two_bands_still_tell_no_band(tmp_path):

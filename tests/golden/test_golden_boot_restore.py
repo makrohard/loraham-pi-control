@@ -50,7 +50,7 @@ def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     assert run.phases == DRIVER + ["journal:running[kiss@r1=pending]"] + START_LOCKS + [
         "journal:running[kiss@r1=attempting]", "recheck:preflight", "mutate:feed-floor:433",
         "mutate:spawn:loraham-kiss-tnc", "verify:endpoints:loraham-kiss-tnc", "verify:post-start",
-        "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",          # K4b: no band marker
+        "final:clear-restart-marker:kiss@r1",          # K4b: no band marker
         "final:clear-stop-intent:kiss@r1", "journal:running[kiss@r1=succeeded]",
         "journal:done[kiss@r1=succeeded]"]
     state, items, j = _journal(box.root)

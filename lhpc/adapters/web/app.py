@@ -1048,7 +1048,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       restored_open=frozenset(), bodies=False):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail: component statuses/evidence, system+build+runtime
-        dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
+        dependency diagnosis, needs-build, daemon parameters, restart-required
         and stack-scoped conflicts — all read-only, GET-safe. Every view is the stack's instance's (G4-web: the page
         radio's, else `_shown_instance`), never a band's. `only_sid` limits the heavy per-stack build to ONE row (the
         lazy-body partial) — the holistic snapshot/conflicts are still computed, but the ~14 per-stack
@@ -1217,7 +1217,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "needs_build_deps": [c for c in service.unbuilt_build_deps(stack.id)
                                          if dict(_sr[0]).get(c, "").startswith("not built")],
                     "daemon_params": service.daemon_params_view(stack.id, rid=_dp_rid(stack.id, _live_radios, _inst)),
-                    "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
                     # K5: any instance's marker, with that instance's own button; not twice beside its settings view
@@ -1869,16 +1868,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Redirects to the stack's row on the /stacks overview. Unknown stack -> 404.
         if service.build_snapshot().stack(stack_id) is None:
             abort(404)
-        return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
-
-    @app.post("/stacks/<stack_id>/known-working/confirm")
-    def known_working_confirm(stack_id: str):
-        if not _csrf_ok():
-            abort(400)
-        if service.stack(stack_id) is None:
-            abort(404)
-        res = service.confirm_known_working(stack_id)
-        flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
 
     @app.post("/interactive/<stack_id>/dismiss")

@@ -5,13 +5,12 @@
 safety decision uses; an error it cannot read past is "unknown", never "absent"."""
 
 import errno
-import json
 import os
 import stat
 
 import pytest
 
-from lhpc.core import binary_receipt as brx, boot_restore, config as cfgmod, known_working, runtime_fs
+from lhpc.core import binary_receipt as brx, boot_restore, config as cfgmod, runtime_fs
 from lhpc.core.config import Config
 from lhpc.core.install import Installer
 from lhpc.core.paths import Paths
@@ -148,19 +147,6 @@ def _retire_keeps_the_receipt_for_an_owned_dir(tmp_path, monkeypatch, fail, rest
     assert (venv / "bin" / "python3").read_bytes() == b"x"
 
 
-def _boot_marker_unsafe(which):
-    def case(tmp_path, monkeypatch, fail, restore, binary_receipt):
-        svc = _svc(tmp_path, monkeypatch)
-        leaf = known_working.candidate_path(svc._paths, "kiss")      # K6: the last-start marker (no band marker)
-        leaf.parent.mkdir(parents=True)
-        leaf.write_text(json.dumps({"band": "433", "started_at": 1.0}))
-        fail(leaf)
-        view = svc._boot_marker_view("kiss")
-        state = view.last_start_state
-        assert state == "unsafe"
-    return case
-
-
 def _boot_journal_unsafe(tmp_path, monkeypatch, fail, restore, binary_receipt):
     paths = Paths(runtime_root=tmp_path)
     jp = boot_restore.journal_path(paths)
@@ -187,7 +173,6 @@ SITES = {
     "switch-artifact-only": _switch_does_not_take_an_unlisted_tree,
     "retire-still-present": _retire_keeps_the_receipt_for_a_file,
     "retire-owned-dir": _retire_keeps_the_receipt_for_an_owned_dir,
-    "boot-last-start": _boot_marker_unsafe("last-start"),
     "boot-journal": _boot_journal_unsafe,
     "config-journal": _config_journal_blocks,
 }

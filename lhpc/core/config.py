@@ -1,15 +1,14 @@
 """Layered configuration.
 
-Five concerns, kept strictly separate (see docs/operations.md):
+Four concerns, kept strictly separate (see docs/operations.md):
 
   1. tracked defaults        lhpc/data/defaults.toml        (shipped package data)
-  2. known-working compositions  runtime profiles/known-working/ (operator-confirmed)
-  3. local operator overrides <runtime>/config/local.toml   (git-ignored, operator settings + callsign)
-  4. local secrets           <runtime>/config/secrets.toml  (git-ignored, mode 0600)
-  5. generated runtime state  <runtime>/state/              (never sole source of truth)
+  2. local operator overrides <runtime>/config/local.toml   (git-ignored, operator settings + callsign)
+  3. local secrets           <runtime>/config/secrets.toml  (git-ignored, mode 0600)
+  4. generated runtime state  <runtime>/state/              (never sole source of truth)
 
-This module loads and merges layers 1+3 into an effective `Config`, and reads
-secrets (layer 4) separately and lazily. It never writes secrets and never emits
+This module loads and merges layers 1+2 into an effective `Config`, and reads
+secrets (layer 3) separately and lazily. It never writes secrets and never emits
 them in status output. Callsign and other operator identity live ONLY in the
 runtime-local layer, never in the tracked repo.
 """

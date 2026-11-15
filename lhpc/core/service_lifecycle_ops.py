@@ -1540,7 +1540,7 @@ class LifecycleOpsMixin:
 
     def _finalize_start(self, prep, run, failed, required_manual) -> ActionResult:
         """PHASE 5 FINALIZE: the summary from the verdict; on a successful STACK start the
-        last-start candidate composition and the restart-required marker — cleared only when this
+        restart-required marker — cleared only when this
         launch satisfied it (unchanged since `execute` read it, and no component of the stack
         kept running its old configuration); the position note; the SPI warning once the new
         side came up."""
@@ -1554,11 +1554,8 @@ class LifecycleOpsMixin:
                        f"{', '.join(required_manual)} — see the dashboard.")
         else:
             summary = f"Run applied for '{target}'."
-        # HEALTHY STACK START: persist the last-start CANDIDATE composition (durable, written here in the
-        # mutation path so GET pages never need git). It is NOT a known-working record — the operator confirms
-        # it ("Confirm this stack as working"). It also satisfies any restart-required flag (saved config runs).
+        # HEALTHY STACK START: it satisfies any restart-required flag (saved config runs).
         if ok and prep.target_is_stack:
-            self._capture_start_composition(target, prep.cfg_band)
             # Clear ONLY a marker this launch actually satisfied. Two ways it can fail to:
             #   * CREATED or CHANGED while the required post-start ran unguarded — it describes
             #     configuration this launch never applied;
@@ -2160,7 +2157,7 @@ class LifecycleOpsMixin:
         # RNode framing needs the driver that implements it. A driver built before the switch
         # existed ignores the unknown key and starts BARE — the box would look up and talk to
         # nobody. So the switch requires the BUILT driver's framing module (what runs, not what
-        # the manifest names: a known-working composition may still hold the old driver).
+        # the manifest names: the installed checkout may still hold the old driver).
         if (any(c.id == _ri.NODE_ID for _stack, c in order)
                 and _ri.enabled(self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID,
                                                        _ri.RNODE_FRAMING, cfg_band, inst) or "")

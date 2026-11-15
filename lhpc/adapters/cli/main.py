@@ -38,11 +38,10 @@ _TOPICS = {
         "current owner and the stop/status commands to resolve it."
     ),
     "profiles": (
-        "Known-working compositions: after a healthy stack start, confirm it\n"
-        "('Confirm this stack as working' on the stack page). The newest three\n"
-        "operator-confirmed compositions (exact commits per component) are kept\n"
-        "per stack; the 'Known working' install/update selector resolves to the\n"
-        "newest one, falling back to the manifest pin (clearly labelled)."
+        "Source versions: the 'Known working' install/update selector\n"
+        "(--source pinned) is this LHPC's manifest pin for each source;\n"
+        "'Development' (--source dev) follows the configured branch and\n"
+        "'Latest stable' (--source stable) the newest release or version tag."
     ),
 }
 
@@ -909,10 +908,6 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Check managed sources for available upstream updates (read-only)")
     p_sc.add_argument("target", nargs="?", default="", help="Limit to one stack/component")
 
-    p_kw = sub.add_parser("known-working",
-                          help="Record a running stack's current commits as a known-good composition")
-    p_kw.add_argument("stack", help="Stack id")
-
     p_sec = sub.add_parser("secrets", help="Back up or restore the box's certificates, secrets and "
                                            "stack identities (one plain file)")
     sec_sub = p_sec.add_subparsers(dest="secrets_cmd")
@@ -1754,8 +1749,6 @@ def _run(argv: list[str] | None = None) -> int:
             yes=args.yes)
     if args.command == "source-check":
         return _render(svc.source_check(args.target))
-    if args.command == "known-working":
-        return _render(svc.confirm_known_working(args.stack))
     if args.command == "self-update":
         if args.run_service:
             # Unit plumbing (non-interactive) — mode is read from the claimed request marker.

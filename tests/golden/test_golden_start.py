@@ -5,8 +5,8 @@ real process, and its ready endpoint is the real loopback listener that process 
 opens), read from the kernel's TCP table. Phases: admission → the config-stability guard and
 the operation locks (sorted) → the authoritative identity recheck → the preflight (firewall gate,
 config ambiguity, band owners) → the daemon feed-floor reset → spawn + ownership record →
-endpoint/post-start verification → finalization (running band, known-working candidate,
-restart-required marker, stop intent).
+endpoint/post-start verification → finalization (running band, restart-required marker,
+stop intent).
 """
 
 import pytest
@@ -25,7 +25,7 @@ KISS_LOCKS = [
 RECHECK = ["recheck:start", "recheck:identity"]
 KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
             "verify:endpoints:loraham-kiss-tnc", "verify:post-start",        # K4b: no running-band marker
-            "final:known-working:kiss", "final:clear-restart-marker:kiss@r1",   # markers per instance
+            "final:clear-restart-marker:kiss@r1",   # markers per instance
             "final:clear-stop-intent:kiss@r1"]
 PLAN = {"ok": True, "summary": "Run plan for 'kiss@r1': 2 component(s) in order.",   # K4b: the instance named
         "data_keys": ["blockers", "changes", "commands"],

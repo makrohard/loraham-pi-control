@@ -14,7 +14,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
   `uninstall`, `clean`, `daemon --set`) print a **dry-run plan** and apply only after a `[y/N]`
   confirmation, or at once with `--yes`.
 - Setting commands (`config <stack> <param> <value>`, `hardware`, `gps`, `autostart on|off`,
-  `firewall`, `webserver`, `known-working`) apply at once.
+  `firewall`, `webserver`) apply at once.
 - Read-only commands (`list`, `status`, `explain`, `doctor`, `config <stack>`) change nothing;
   `source-check` writes only its cache, `state/stackupdates.json`.
 - Exit codes: `0` success, `1` a command error (`ERR`), `2` a usage error.
@@ -25,7 +25,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
 - [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [network](#network) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
-- [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
+- [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
 - [secrets](#secrets) · [self-update](#self-update) · [help](#help)
@@ -385,9 +385,6 @@ identities, keys, passwords LHPC minted), logs and history. `--purge` is require
 be stopped. A reinstall is a new node; peers that knew the old one must forget it.
 `config/local.toml`, `config/secrets.toml`, undeclared files (chat's `lorachat.log`) and other
 stacks stay.
-
-### known-working
-`lhpc known-working <stack>` — record a running stack's current commits as a known-good composition.
 
 ---
 

@@ -99,13 +99,21 @@ def test_boot_restore_reads_no_last_start_marker(tmp_path, monkeypatch):
     868: the marker supplies no band, so the skip says there is no band source. Red at 912c37d5: the
     marker's band made an item, which the radio filter then dropped as a band item from before 0.14.0."""
     import lhpc.core.service_boot_restore as sbr
-    from tests.core.test_boot_restore import _rec, _write_record
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(sbr, "current_boot_id", lambda: "CURBOOT")
     monkeypatch.setattr(ControllerService, "_web_integration_proven", lambda self: (True, ""))
     monkeypatch.setattr(ControllerService, "boot_restore_enabled", lambda self: (True, ""))
-    _write_record(tmp_path, _rec(boot_id="OLDBOOT"))           # kiss, band "", no radio
+    owned = tmp_path / "state" / "owned"                     # a schema-v1 kiss record: band "", no radio
+    owned.mkdir(parents=True)
+    (owned / "c__x__999999.json").write_text(json.dumps({
+        "launch_id": "c__x__999999", "stack": "kiss", "component": "loraham-kiss-tnc", "band": "",
+        "pid": 999999, "role": "", "launched_at": 1000, "starttime": "123", "pgid": 999999,
+        "sid": 999999, "version": 1, "requested_target": "kiss", "start_scope": "stack",
+        "boot_id": "OLDBOOT"}))
     _old_marker(tmp_path, "kiss", "868")
+    band = tmp_path / "state" / "running" / "kiss.band"      # and a 0.13.x running-band marker (K6)
+    band.parent.mkdir(parents=True)
+    band.write_text("868")
     res = svc.boot_restore_run()
     assert res.ok, res.summary
     journal = json.loads((tmp_path / "state" / "boot-restore.json").read_text())

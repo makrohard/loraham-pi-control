@@ -70,7 +70,7 @@ class BinaryChannelMixin:
         """The channel a bare `install` uses (`update`: `stack_lane`). Binary WHERE
         AVAILABLE (a fresh Pi should not compile for hours), else `pinned` — not the branch tip —
         because a default install must land on a composition this release actually proved: the
-        operator's newest known-working entry, else the manifest pin. The image builder runs the
+        manifest pin. The image builder runs the
         same bare `auto-install`, so a fresh image ships the release's pins instead of whatever
         upstream happened to push that morning. `dev` stays available, as an explicit selector."""
         ok, _why = self.binary_available(stack_id)

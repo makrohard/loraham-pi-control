@@ -1,7 +1,7 @@
 """Core data model shared by every adapter.
 
 These dataclasses describe stacks, components, resource claims, probe targets,
-observed status and confirmed-working profiles: per-band daemons,
+observed status and source profiles: per-band daemons,
 provider/consumer/cooperative resource semantics, structured probe targets and
 evidence-backed status.
 """
@@ -58,7 +58,6 @@ class TxState(str, Enum):
 class ProfileState(str, Enum):
     """Lifecycle state of a component's source/build/validation."""
 
-    CONFIRMED_WORKING = "confirmed-working"
     INSTALLED_UNVALIDATED = "installed-unvalidated"
     CANDIDATE_AVAILABLE = "candidate-available"
     LOCALLY_MODIFIED = "locally-modified"

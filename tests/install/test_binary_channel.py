@@ -1477,21 +1477,6 @@ def test_start_gate_uses_the_shared_classifier(tmp_path, monkeypatch, binary_rec
     assert out[1].install == plain.install                                  # untouched
 
 
-def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(tmp_path, monkeypatch, binary_receipt):
-    # A binary-installed stack has no source composition, so the offer never appears; the CLI
-    # confirm must say that, not "start the stack first" to an operator who just started it.
-    svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    binary_receipt(svc)
-    res = svc.confirm_known_working("daemon")
-    assert not res.ok and "no source composition" in res.summary
-    # graywolf is a fetched release: no source at all, the same answer
-    res = svc.confirm_known_working("graywolf")
-    assert not res.ok and "no source composition" in res.summary
-    # a source-built stack keeps the start-first refusal
-    res = svc.confirm_known_working("kiss")
-    assert not res.ok and "No healthy start" in res.summary
-
-
 # --- an artifact can be behind without any commit moving ---------------------------------------
 # The Meshtastic web client and CLI are manifest VALUES compiled into the artifact, not component
 # pins. The commit comparison says "current" about an artifact that is demonstrably older, so the

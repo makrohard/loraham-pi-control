@@ -65,7 +65,7 @@ class Snapshot:
 class StatusProber:
     """Bounded, read-only status assessment for components and snapshots."""
 
-    def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
+    def __init__(self, system: System, paths: Paths,
                  binary_cover: dict | None = None,
                  instance_endpoints: dict | None = None, sources: bool = True,
                  cache=None, owned_running: dict | None = None) -> None:
@@ -73,7 +73,6 @@ class StatusProber:
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
         self._paths = paths
-        self._profiles = profiles or {}
         # {component id: endpoints}, or a callable giving it from this snapshot's ONE process table: the running
         # instances' own (instances.status_endpoints, A17; the MeshCore node in its mode, K8f S4-5); not listed: the
         # template's in the default mode. Status and start readiness agree.
@@ -184,7 +183,7 @@ class StatusProber:
         status.source_state = src.state
         status.source_version = src.version
         status.source_head = src.head
-        status.profile_state = self._profile_state(comp, src)
+        status.profile_state = _profile_from_source(src.state)
 
         # Libraries/firmware have no run state. Oneshots normally don't either —
         # EXCEPT interactive apps (meshtastic-cli, meshcore-cli), which are long-running
@@ -307,18 +306,6 @@ class StatusProber:
         for key, fut in futures.items():
             if fut.exception() is None:
                 self._source_probes[key] = fut.result()
-
-    def _profile_state(self, comp: Component, src) -> ProfileState:
-        # confirmed-working only when the CLEAN source's HEAD appears in an operator-confirmed
-        # known-working composition of its stack (`self._profiles` = {comp_id: {commits}},
-        # built by `build_snapshot` from the known-working store). MATCH (at the pin) and
-        # DIFFERS (clean at another exact commit, e.g. a confirmed stable update) both
-        # qualify; a DIRTY tree is never confirmed.
-        commits = self._profiles.get(comp.id) or ()
-        if (src.head and src.head in commits
-                and src.state in (SourceState.MATCH, SourceState.DIFFERS)):
-            return ProfileState.CONFIRMED_WORKING
-        return _profile_from_source(src.state)
 
     def _gps_feed_ready(self, comp, pids=None) -> tuple[bool, str]:
         """(healthy, note) of `_gps_feed_verdict`."""

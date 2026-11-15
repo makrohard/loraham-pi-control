@@ -6,10 +6,9 @@ leaves `pending` — there are no parallel plan/attempted/results structures. A 
 must BLOCK automatic restoration (and gate-based evidence retirement), never look empty.
 
 The PLANNER is deterministic and service-free: it consumes evidence records that a service-side
-classifier has already validated (liveness, current-boot, manifest membership) plus marker data,
-and produces plan items. Band policy: the ownership record's band is authoritative; the last-start
-marker is a consistency check (K6, 13.12.5: no running-band marker is read; a disagreement between two
-valid sources is a typed ambiguity — never a silent preference, never a fallback to another TX band).
+classifier has already validated (liveness, current-boot, manifest membership) and produces plan
+items. Band policy: the ownership record's band, else the manifest's fixed band; no marker is read
+(K6, 13.12.5: no running-band marker; U7: no last-start marker) — never a fallback to another TX band.
 """
 
 from __future__ import annotations
@@ -286,55 +285,34 @@ class StackMeta:
     restorable_parts: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class MarkerView:
-    """Tri-state marker reads for one stack: state is "absent" | "valid" | "unsafe"."""
-    last_start_state: str = "absent"
-    last_start_band: str = ""
-    last_start_at: float = 0.0           # finite when last_start_state == "valid"
-
-
 @dataclass
 class Plan:
     items: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)    # {stack, reason, evidence_ids}
 
 
-def _band_candidates(ev: Evidence, meta: StackMeta, mk: MarkerView) -> tuple[str, str]:
+def _band_candidates(ev: Evidence, meta: StackMeta) -> tuple[str, str]:
     """Resolve the band for one stack item -> (band, "") or ("", ambiguity_reason).
 
-    The ownership record's band is authoritative; valid markers are CONSISTENCY checks. Markers
-    SUPPLY the candidate only for a record whose own band is empty. Any unsafe source
-    blocks; any two valid disagreeing sources block. Never fall back to another band."""
-    if mk.last_start_state == "unsafe":
-        return "", "unsafe band marker"
-    sources = []
-    if ev.band:
-        sources.append(("ownership", ev.band))
-    if mk.last_start_state == "valid" and mk.last_start_band:
-        sources.append(("last-start", mk.last_start_band))
-    values = {b for _, b in sources}
-    if len(values) > 1:
-        return "", "band sources disagree (" + ", ".join(f"{n}={b}" for n, b in sources) + ")"
+    The ownership record's band, else a fixed-band stack's manifest band. Never fall back to
+    another band."""
+    band = ev.band
     if meta.fixed_band and not meta.declared_bands:
-        # Fixed-band stack: manifest band rules; any recorded band must agree.
-        if values and values != {meta.fixed_band}:
-            return "", f"recorded band {values.pop()!r} contradicts manifest band {meta.fixed_band!r}"
+        # Fixed-band stack: manifest band rules; a recorded band must agree.
+        if band and band != meta.fixed_band:
+            return "", f"recorded band {band!r} contradicts manifest band {meta.fixed_band!r}"
         return meta.fixed_band, ""
-    if not values:
+    if not band:
         return "", "no valid band source for a band-switchable stack"
-    band = values.pop()
     if meta.declared_bands and band not in meta.declared_bands:
         return "", f"recorded band {band!r} not declared by the stack"
     return band, ""
 
 
-def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
-                markers: dict[str, MarkerView], daemon_stack_id: str) -> Plan:
+def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta], daemon_stack_id: str) -> Plan:
     """Deterministic plan from CLASSIFIED evidence. One non-daemon item per instance key (7e, K4b: `<stack>@<rid>`);
-    conflicts are typed ambiguities. An instance's band is its record's (the per-stack band markers are read only
-    for a record without a radio, which radio_filter then drops). Daemon evidence collapses into ONE `daemon-reconcile`
-    item, LAST."""
+    conflicts are typed ambiguities. An instance's band is its record's; items run in the order of their records'
+    `launched_at`. Daemon evidence collapses into ONE `daemon-reconcile` item, LAST."""
     plan = Plan()
     by_stack: dict[str, list[Evidence]] = {}
     for ev in evidence:
@@ -390,20 +368,17 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
                                  "evidence_ids": ev_ids})
             continue
         ev0 = scoped[0]
-        mk = markers.get(stack_id, MarkerView()) if key == stack_id else MarkerView()   # a record without a radio
-        band, why = _band_candidates(ev0, meta, mk)
+        band, why = _band_candidates(ev0, meta)
         if why:
             plan.skipped.append({"stack": key, "reason": f"band ambiguity: {why}",
                                  "evidence_ids": ev_ids})
             continue
-        order_key = mk.last_start_at if (mk.last_start_state == "valid"
-                                         and mk.last_start_at > 0) else ev0.launched_at
         # The stack's eligible parts that ran on their OWN (a component-scoped start of that part
         # itself): started after the stack, as the operator did. A stopped part left no record.
         parts = sorted({e.component for e in evs
                         if e.start_scope == "component" and e.requested_target == e.component
                         and e.component in meta.restorable_parts and e.component != meta.main})
-        orderable.append((order_key, key,
+        orderable.append((ev0.launched_at, key,
                           new_item(secrets.token_hex(6), "stack", target=key,
                                    band=band, evidence_ids=tuple(ev_ids),
                                    components=tuple(parts), rid=ev0.rid)))

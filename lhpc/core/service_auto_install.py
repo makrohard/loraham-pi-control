@@ -1217,7 +1217,6 @@ class AutoInstallOpsMixin:
                 _, edges = self._auto_install_scope_edges()
                 processed: dict = {}             # path -> (ok, detail)
                 failed_stacks: set = set()
-                mutated: list = []
                 inst = self._installer()
                 for st, w in scope:
                     if _auto_install_abort.requested():
@@ -1339,7 +1338,7 @@ class AutoInstallOpsMixin:
                                 emit(f"  [log] {comp.id} -> tail -f "
                                      f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                                 a = self._adopt_dev_fallback(
-                                    inst, st, comp, selector, resolved,
+                                    inst, comp, selector, resolved,
                                     force=(action == "update"), locked=True)
                                 emit(f"  [{a.status}] {path}: {a.detail}")
                                 # every non-failed adopt outcome is OK: done (mutated),
@@ -1347,8 +1346,6 @@ class AutoInstallOpsMixin:
                                 # "failed" fails.
                                 processed[path] = (a.status != "failed",
                                                    f"{action}: {a.detail}")
-                                if a.status == "done" and action == "update":
-                                    mutated.append(path)
                         p_ok, p_detail = processed[path]
                         if not p_ok:
                             ok = False
@@ -1452,16 +1449,9 @@ class AutoInstallOpsMixin:
                         continue
                     r["status"] = "success"
                     bw()
-                # candidate retirement for updated groups BEFORE the boundary releases
-                extra: list = []
-                if not self._retire_candidates_for_paths(mutated, extra):
-                    for line in extra:
-                        emit(line)
-                    marker["error"] = "candidate-marker cleanup incomplete"
                 # DISCLOSED TX phase (the only start this run performs) — ELIGIBLE
                 # only when not already refused at admission, the daemon row is
-                # `success`, its required host test PASSED, and required cleanup is
-                # complete. Otherwise: no daemon start, no transmission — a truthful
+                # `success` and its required host test PASSED. Otherwise: no daemon start, no transmission — a truthful
                 # refusal with an actionable detail.
                 if tx and marker["tx_phase"]["status"] == "pending":
                     drow = next((r0 for r0 in marker["stacks"]
@@ -1474,8 +1464,6 @@ class AutoInstallOpsMixin:
                     elif not (drow["tests"].get("ran") and drow["tests"].get("ok")):
                         reason = ("the daemon host test did not pass "
                                   f"({drow['tests'].get('detail', 'not run')})")
-                    elif marker["error"]:
-                        reason = f"required cleanup incomplete ({marker['error']})"
                     if reason:
                         marker["tx_phase"] = {"status": "fail",
                                               "detail": "TX refused (no daemon start, "
