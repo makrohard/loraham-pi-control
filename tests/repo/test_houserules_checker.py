@@ -88,8 +88,8 @@ def _test(body):
 
 
 HARD = {
-    "changelog-three-bullets": ({"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n",
-                                 "## Unreleased\n\n- a\n- b\n- c\n")}, RED, "changelog"),
+    "changelog-three-bullets": ({"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n",   # with a file beside it
+                                 "## Unreleased\n\n- a\n- b\n- c\n"), "notes.txt": "neutral\n"}, RED, "changelog"),
     "changelog-below-top": ({"CHANGELOG.md": CHANGELOG + "- late\n"}, RED, "changelog"),
     "changelog-bullet-over-two-lines": ({"CHANGELOG.md": CHANGELOG.replace(   # the maintainer's "one or two lines"
         "## Unreleased\n", "## Unreleased\n\n- a\n  b\n  c\n")}, RED, "changelog"),
@@ -153,9 +153,101 @@ def test_changelog_bullets_are_counted_per_commit(repo, per_commit, verdict):
     for n, count in enumerate(per_commit):
         entries += [f"- item {n} line {k}" for k in range(count)]
         text = CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n" + "\n".join(entries) + "\n")
-        _commit(repo, {"CHANGELOG.md": text})
+        _commit(repo, {"CHANGELOG.md": text, f"notes{n}.txt": "item\n"})    # an item: its change and its bullets
     rc, rows = _run(repo)
     assert (rc, rows["changelog"]) == (int(verdict == "HARD"), verdict)
+
+
+TOP = "## Unreleased\n\n- a\n- b\n- c\n"
+RELEASE_SECTION = {   # one CHANGELOG-only commit with three bullets: (its CHANGELOG, extra files, options, verdict)
+    "top-section": (CHANGELOG.replace("## Unreleased\n", TOP), {}, (), "OK"),
+    "new-top-section-with-heading": (CHANGELOG.replace("## Unreleased\n", "## 0.2.0\n\n- a\n- b\n- c\n\n"
+                                                       "## Unreleased\n"), {}, (), "OK"),
+    "beside-another-file": (CHANGELOG.replace("## Unreleased\n", TOP), {"notes.txt": "x\n"}, (), "HARD"),
+    "older-section": (CHANGELOG + "- a\n- b\n- c\n", {}, ("--correction",), "HARD"),
+    "beside-a-deleted-file": (CHANGELOG.replace("## Unreleased\n", TOP), {"docs/b.md": None}, (), "HARD"),
+    "new-section-below-the-top": (CHANGELOG.replace("## 0.1.0\n", "- a\n- b\n- c\n## 0.1.1\n## 0.1.0\n"), {}, (),
+                                  "HARD"),                     # its last added line is the second heading
+    "above-the-top-heading": (CHANGELOG.replace("# Changelog\n", "# Changelog\n- a\n- b\n- c\n"), {}, (), "HARD"),
+    "no-version-heading": ("# Changelog\n\n- a\n- b\n- c\n", {}, (), "HARD"),
+    "an-older-section-line-deleted": (CHANGELOG.replace("## Unreleased\n", TOP).replace("- old entry\n", ""), {}, (),
+                                      "HARD"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(RELEASE_SECTION))
+def test_the_release_section_commit_is_not_capped(repo, case):
+    """The release's CHANGELOG section is written once, before the tag (docs/maintenance.md): a commit that changes
+    only CHANGELOG.md, every added line inside its top section, is not held to two bullets; any other commit is.
+    Red before: top-section and new-top-section-with-heading HARD (the cap held every commit); an-older-section-
+    line-deleted OK (only the added lines were judged)."""
+    text, extra, options, verdict = RELEASE_SECTION[case]
+    _commit(repo, {"CHANGELOG.md": text, **extra})
+    rc, rows = _run(repo, *options)
+    assert (rc, rows["changelog"]) == (int(verdict == "HARD"), verdict)
+
+
+@pytest.mark.parametrize("side", [{"notes.txt": "x\n"},                                  # another file
+                                  {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n")}],
+                         ids=["brings-in-a-file", "brings-in-a-bullet"])
+def test_a_merge_is_never_a_release_section_commit(repo, side):
+    """A merge that brings in a side commit and adds bullets itself: git's combined diff names CHANGELOG.md only.
+    Against its first parent it changes the other file too, or (a bullet brought in) only CHANGELOG.md with three
+    bullets: a merge is never exempt, and its bullets count. Red before: OK."""
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, side)
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", TOP)})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_deletion_from_a_parent_without_a_version_section_is_not_exempt(repo):
+    """The parent has no `## ` heading, so a deleted line lies inside no top section: the commit that writes the
+    first section over it is capped. Red before: OK (only the added lines were judged)."""
+    _commit(repo, {"CHANGELOG.md": "# Changelog\n\nintro\n"})
+    _commit(repo, {"CHANGELOG.md": "# Changelog\n\n## 0.2.0\n\n- a\n- b\n- c\n"})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_rename_into_changelog_is_not_a_release_section_commit(repo):
+    """CHANGELOG.md moved away, then moved back with three bullets: with rename detection the second commit names
+    CHANGELOG.md only; without it, it adds CHANGELOG.md and deletes the other path. Red before: OK."""
+    _commit(repo, {"CHANGELOG.md": None, "old.md": CHANGELOG})
+    _commit(repo, {"old.md": None, "CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", TOP)})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+TOP_ONE = {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n"), "notes.txt": "x\n"}
+
+
+def test_a_pure_rename_into_changelog_counts_the_bullets_it_brings(repo):
+    """A file with three bullets renamed, unchanged, into CHANGELOG.md: with rename detection its diff adds no line
+    and the cap counted none; renames off, the commit adds the whole file and its three bullets count. Red with
+    `--no-renames` dropped from own_diff: OK."""
+    _commit(repo, {"CHANGELOG.md": None, "old.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n- b\n")})
+    _commit(repo, {"old.md": None, "CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n- b\n")})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+@pytest.mark.parametrize("before, text", [({}, CHANGELOG.replace("- old entry\n", "")),
+                                          (TOP_ONE, CHANGELOG),       # an item's bullet, then that bullet deleted
+                                          ({}, "# Changelog\n")],
+                         ids=["older-section-deletion", "top-section-deletion", "every-heading-deleted"])
+def test_a_commit_without_an_added_bullet_is_not_a_release_section_commit(repo, before, text):
+    """It adds no bullet, so the cap passes it anyway; it is not named as exempt either. Red before: the row
+    said "1 release-section commit(s) not capped"."""
+    if before:
+        _commit(repo, before)
+    _commit(repo, {"CHANGELOG.md": text})
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False)
+    row = next(line for line in p.stdout.splitlines() if line.startswith("changelog"))
+    assert p.returncode == 0 and "release-section" not in row
 
 
 def test_a_bullet_grown_over_two_commits_past_two_lines_fails(repo):

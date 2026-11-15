@@ -272,6 +272,52 @@ def changelog_bullets(added: list, second: int) -> tuple[list[int], bool]:
     return bullets, below
 
 
+def own_diff(sha: str, *args: str) -> str:
+    """The commit's own change, against its first parent, renames off (a merge's combined diff hides what it brings
+    in; a root commit: against nothing)."""
+    parents = git("rev-list", "--parents", "-n", "1", sha).split()[1:]
+    if not parents:
+        return git("show", "--no-renames", "--format=", *args, sha)
+    return git("diff", "--no-renames", *args, parents[0], sha)
+
+
+def deleted_lines(diff: str) -> list[int]:
+    """The old line number of every deleted line in a `--unified=0` diff."""
+    out, n, hunk = [], 0, False
+    for line in diff.splitlines():
+        if line.startswith("diff --git"):
+            hunk = False
+        elif line.startswith("@@"):
+            n, hunk = int(re.search(r"-(\d+)", line).group(1)), True
+        elif hunk and line.startswith("-"):
+            out.append(n)
+            n += 1
+    return out
+
+
+def top_section(rev: str) -> tuple[int, int] | None:
+    """CHANGELOG's top `## ` section at `rev`: (its heading's line, the line after its end); None without a heading."""
+    lines = (show(rev, CHANGELOG) or "").splitlines()
+    heads = [i + 1 for i, line in enumerate(lines) if line.startswith("## ")]
+    return (heads[0], heads[1] if len(heads) > 1 else len(lines) + 1) if heads else None
+
+
+def release_section_commit(sha: str) -> bool:
+    """Whether commit `sha` writes the release's section, written once before the tag, which the cap of two bullets
+    per commit does not hold: not a merge, it modifies CHANGELOG alone, adds at least one bullet, and every added
+    line lies inside its top `## ` section, every deleted one inside its parent's. Any other commit is held to it."""
+    if len(git("rev-list", "--parents", "-n", "1", sha).split()) != 2:      # a merge or a root commit
+        return False
+    if own_diff(sha, "--name-status").splitlines() != [f"M\t{CHANGELOG}"]:
+        return False
+    new, old = top_section(sha), top_section(f"{sha}^1")
+    diff = own_diff(sha, "--unified=0")
+    added = added_lines(diff)
+    return (new is not None and any(t.startswith("- ") for _, _, t in added)
+            and all(new[0] <= n < new[1] for _, n, _ in added)
+            and all(old is not None and old[0] <= n < old[1] for n in deleted_lines(diff)))
+
+
 def marks_of(fn) -> dict[str, str | None]:
     """The pytest marks a function's decorators apply, from their AST (G1-TR1-C B2): `@pytest.mark.<name>` or
     `@mark.<name>`, bare or called; the value is the first argument when it is a non-blank string, else None.
@@ -378,19 +424,22 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
                      + (f"; relaxes {', '.join(loose)}" if loose else ""),
                      "WARN" if changed == {".houserules.toml"} and not loose else "HARD"))
 
-    # changelog: the count per commit (one item each); each bullet's length and place over the range, against
-    # <head>'s sections, so a bullet grown over two commits is still one bullet
+    # changelog: the count per commit (one item each, against its first parent), except a release-section commit;
+    # each bullet's length and place over the range, against <head>'s sections, so a bullet grown over two commits
+    # is still one bullet
     second, top = changelog_sections(head)
     bullets, below = changelog_bullets(added, second)
-    most = max((len(changelog_bullets(added_lines(git("show", "--unified=0", "--format=", sha)), second)[0])
-                for sha, _, _ in commits), default=0) if CHANGELOG else 0
+    release = {sha for sha, _, _ in commits if release_section_commit(sha)}
+    most = max((len(changelog_bullets(added_lines(own_diff(sha, "--unified=0")), second)[0])
+                for sha, _, _ in commits if sha not in release), default=0) if CHANGELOG else 0
     long_bullet = any(b > 2 for b in bullets)
     # `--correction`: an item that only corrects a released section says so, and its bullets
     # below the top section are shown (WARN), not refused.
     v = ("HARD" if most > 2 or long_bullet or (below and not correction)
          else "WARN" if below else "OK")
     rows.append(("changelog", f"+{len(bullets)} bullets, at most {most} in a commit (limit 2 per commit, each "
-                              f"≤ 2 lines; longest {max(bullets, default=0)}), top section {top} lines", v))
+                              f"≤ 2 lines; longest {max(bullets, default=0)}), top section {top} lines"
+                              + (f"; {len(release)} release-section commit(s) not capped" if release else ""), v))
 
     # docs
     docs = sorted(p for p in changed if (p.startswith("docs/") and p.endswith(".md")) or p == "README.md")
