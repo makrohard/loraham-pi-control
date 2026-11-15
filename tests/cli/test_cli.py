@@ -1463,6 +1463,8 @@ def test_dec_w384ci_the_proxy_help_names_the_forms_the_proxy_takes(tmp_path, cap
 @pytest.mark.parametrize("state, selector, remedy", [
     ("differs", "pinned", "lhpc update reticulum"),   # off the pin it follows: the update moves it back and builds
     ("differs", "dev", "lhpc build reticulum"),       # a chosen dev checkout: an update would fetch the lane's tip
+    ("differs", "stable", "lhpc build reticulum"),    # a chosen stable checkout: the same
+    ("differs", None, "lhpc build reticulum"),        # no ownership record: whose selection it is cannot be told
     ("match", "pinned", "lhpc build reticulum"),      # at its pin: the build is enough
     ("dirty", "pinned", "lhpc build reticulum"),      # local edits: never an update over them
 ])
@@ -1476,7 +1478,7 @@ def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_sele
     from lhpc.core.paths import Paths
     run = box((R1, R2_868))
     rel = next(s for s in load_manifest() if s.id == "reticulum").component("rns").source.path
-    assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
+    assert selector is None or source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
         rel, "", selector, "", 1.0, "", ("rns",)))   # adopted_at: any time; it is not read
     monkeypatch.setattr(ControllerService, "is_built", lambda self, c: c.id != "rns")
     real = ControllerService.build_snapshot
