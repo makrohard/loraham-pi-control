@@ -1,4 +1,4 @@
-"""`lhpc install --source binary` / `lhpc update` with no published binary built for this LHPC: the
+"""`lhpc install --source binary` / `lhpc update` with no published binary this LHPC can install: the
 refusal names self-update first and source second; `--accept-pin-mismatch` is gone (decision D1)."""
 from __future__ import annotations
 
@@ -21,14 +21,14 @@ def box(monkeypatch, tmp_path, capsys):
 
 
 def _published(monkeypatch, stack, cid, commit):
-    """The index serves `stack` with `cid` built from `commit`; everything else at the pins.
+    """The index serves `stack` without `cid` (U9: a covered component it does not name; `commit` unused).
     A download fails the test, so each case here is shown to stop before one."""
     def _entry(idx, sid):
         svc = ControllerService()
         pins = svc._binary_pins(sid)
         return bi.IndexEntry(stack=sid, filename=f"{sid}-{'a' * 64}.tar.zst",
                              url="https://example.invalid/x", sha256="a" * 64, size=10,
-                             components={**pins, cid: commit}, runtime_deps=(),
+                             components={k: v for k, v in pins.items() if k != cid}, runtime_deps=(),
                              target="aarch64-trixie",
                              provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
     monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})

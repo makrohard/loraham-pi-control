@@ -1,4 +1,4 @@
-"""P1.15: no published binary built for this lhpc (`none_compatible`) names self-update first,
+"""P1.15: no published binary this lhpc can install (`none_compatible`) names self-update first,
 source second, and nothing else."""
 import pytest
 
@@ -13,28 +13,23 @@ def _svc_with_index(tmp_path, monkeypatch, error):
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     monkeypatch.setattr(bi, "require_zstd", lambda: None)
     monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entries",
-                        lambda idx, sid: [type("E", (), {"sha256": "a" * 64,
-                                                          "target": "aarch64-trixie",
-                                                          "components": {}})()])
-    monkeypatch.setattr(bi, "check_target", lambda e, t: None)
+    monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [])
 
-    def _pins(entry, pins):
+    def _newest(entries, target, covers):
         raise error
-    monkeypatch.setattr(bi, "check_pins", _pins)
+    monkeypatch.setattr(bi, "newest_entry", _newest)
     return svc
 
 
 @pytest.mark.parametrize("apply", [False, True])
-def test_a_pin_mismatch_names_self_update_first_then_source(tmp_path, monkeypatch, apply):
+def test_none_compatible_names_self_update_first_then_source(tmp_path, monkeypatch, apply):
     svc = _svc_with_index(tmp_path, monkeypatch, bi.BinaryNoneCompatible(
-        "the newest published binary was built from different commits than this lhpc pins (x)",
-        mismatch={"loraham-daemon": ("1" * 40, "2" * 40)}))
+        "no published binary covers radiolib yet: install from source"))
     r = svc.binary_install("daemon", apply=apply)
-    assert not r.ok and "different commits" in r.summary
+    assert not r.ok and "covers radiolib" in r.summary
     assert r.next_commands == ["lhpc self-update --apply",
                                "lhpc install daemon --source pinned --yes"]
-    assert r.data.get("pin_mismatch") == {"loraham-daemon": ["1" * 40, "2" * 40]}
+    assert r.data.get("pin_mismatch") == {}
     assert r.data.get("binary_refusal") == "none_compatible"
     assert r.details[0].strip().startswith("1. Update LHPC first")
     assert r.details[1].strip().startswith("2. Or build from source")
@@ -45,10 +40,3 @@ def test_other_refusals_keep_the_source_offer_only(tmp_path, monkeypatch):
     r = svc.binary_install("daemon", apply=False)
     assert not r.ok and r.next_commands == ["lhpc install daemon --source pinned --yes"]
     assert "pin_mismatch" not in r.data and "binary_refusal" not in r.data
-
-
-def test_check_pins_raises_the_typed_mismatch():
-    class _E:
-        components = {"a": "1" * 40}
-    with pytest.raises(bi.BinaryNoneCompatible):
-        bi.check_pins(_E(), {"a": "2" * 40})

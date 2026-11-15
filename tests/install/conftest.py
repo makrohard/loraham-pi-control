@@ -160,7 +160,7 @@ def stub_pipeline(monkeypatch):
                 stack=sid, filename=f"{sid}-{'a' * 64}.tar.zst",
                 url=f"https://example.invalid/{sid}-{'a' * 64}.tar.zst", sha256="a" * 64,
                 size=10, components=dict(svc._binary_pins(sid)), runtime_deps=(),
-                target=svc.binary_target(),
+                target=svc.binary_target(), published_at="2026-11-10T00:00:00Z",
                 provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
 
         def _reached(*a, **k):

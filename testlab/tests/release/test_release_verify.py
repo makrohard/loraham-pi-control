@@ -80,13 +80,12 @@ def test_release_lane_reports_exactly_the_required_cases():
 
 
 def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(tmp_path):
-    """Every stack with a binary channel in the REAL packaged manifest has a published entry
-    compatible with the candidate (built for the candidate's pins and inputs; `lhpc_commit` is not
-    compared, so a bootstrap entry of the same composition passes): the `select_compatible` a
-    box's install runs, against the index the manifest names. The daemon is the lab's fixture in
-    the cases below, so this is where its entry is checked. None compatible (`none_compatible`) is
-    red: the release would leave its boxes without a binary. Runs before the installs, so a gap
-    fails in seconds.
+    """Every stack with a binary channel in the REAL packaged manifest has a published entry the
+    candidate installs: the `newest_entry` a box's install runs (U9: the newest entry for this target
+    that covers the candidate's binary spec, at any commits), against the index the manifest names.
+    The daemon is the lab's fixture in the cases below, so this is where its entry is checked. None
+    (`none_compatible`) is red: the release would leave its boxes without a binary. Runs before the
+    installs, so a gap fails in seconds.
     """
     from lhpc.core import binary_install as bi
     from lhpc.core.paths import Paths
@@ -103,15 +102,13 @@ def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(t
             continue
         try:
             entries = bi.index_entries(bi.fetch_index(spec.index_url), stack.id)
-            entry, _newer = bi.select_compatible(
-                entries, target, svc._binary_pins(stack.id),
-                bi.input_digests(stack, spec.covers, svc.build_inputs_text))
+            entry = bi.newest_entry(entries, target, spec.covers)
         except bi.BinaryInstallError as exc:
             refused.append(f"{stack.id}: {exc.message}")
             continue
         chosen.append(f"{stack.id}: {entry.filename}")
-    print("binaries compatible with the candidate: " + (", ".join(chosen) or "none"))
-    assert not refused, "no published binary compatible with the candidate:\n  " + "\n  ".join(refused)
+    print("binaries the candidate installs: " + (", ".join(chosen) or "none"))
+    assert not refused, "no published binary the candidate installs:\n  " + "\n  ".join(refused)
     assert chosen, "the packaged manifest names no binary stack — the check proved nothing"
 
 def _artifact_intact(svc, stack: str) -> None:

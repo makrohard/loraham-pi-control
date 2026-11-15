@@ -679,7 +679,8 @@ def binary_receipt():
     """`binary_receipt(svc, stack="daemon", *, commits=None, extra_files=(), provenance=None,
     sha="ab"*32, probe="ok") -> BinaryReceipt`: a completed binary install of `stack` on `svc`'s
     box — the artifact's proof-path files (plus `extra_files`) laid down as `b"ELF"`, and a
-    receipt written whose components are the manifest pins (or `commits`). The snapshot is
+    receipt written whose components are the manifest pins (or `commits`), published (U9 `is_newer`)
+    before the stub entries' `published_at`. The snapshot is
     invalidated so the service sees it. Re-write a `dataclasses.replace`d copy for a variant."""
     import hashlib
 
@@ -698,7 +699,8 @@ def binary_receipt():
             stack=stack, artifact_sha256=sha, artifact_size=9,
             filename=f"{stack}-{sha}.tar.zst", url="https://example.invalid/a.tar.zst",
             components=dict(commits) if commits is not None else dict(svc._binary_pins(stack)),
-            provenance=dict(provenance or {}), files=tuple(files),
+            provenance=dict(provenance if provenance is not None else {"published_at": "2026-11-01T00:00:00Z"}),
+            files=tuple(files),
             file_hashes={rel: digest for rel in files}, proof_paths=tuple(spec.proof_paths),
             registry_baseline={}, probe=probe)
         assert brx.write_receipt(svc._paths, rec)

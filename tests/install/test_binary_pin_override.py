@@ -46,35 +46,6 @@ def _never_download(*a, **k):
 
 # ---- gate 1: the one map, the typed refusal ------------------------------------------------------
 
-def test_check_pins_raises_the_structured_mismatch():
-    entry = type("E", (), {})()
-    entry.components = {"x": A, "y": B}
-    with pytest.raises(bi.BinaryNoneCompatible) as ei:
-        bi.check_pins(entry, {"x": C, "y": B})
-    assert ei.value.mismatch == {"x": (A, C)}          # only the lagging pair, (binary, pin)
-
-
-@pytest.mark.parametrize("apply", [False, True])
-@pytest.mark.parametrize("op", ["install", "update"])
-@pytest.mark.parametrize("stack,cid", [("daemon", None), ("meshcom", "meshcom-qemu")])
-def test_none_compatible_is_one_typed_refusal_self_update_first(tmp_path, monkeypatch, stub_pipeline,
-                                                                apply, op, stack, cid):
-    """Every stack, clone_required or not, gets the same two ways and no third: nothing is
-    installed over the pin check, nothing is downloaded, no receipt is written."""
-    svc = _svc(tmp_path, monkeypatch)
-    cid = cid or _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entries", _lagging_entry(svc, stack, cid, A, stub_pipeline,
-                                                          download=_never_download))
-    r = (svc.install if op == "install" else svc.update)(stack, apply=apply, source="binary")
-    assert not r.ok and r.data["binary_refusal"] == "none_compatible"
-    assert r.data["pin_mismatch"] == {cid: [A, svc._binary_pins(stack)[cid]]}
-    assert r.next_commands == ["lhpc self-update --apply",
-                               f"lhpc install {stack} --source pinned --yes"]
-    assert [d.strip()[:2] for d in r.details[:2]] == ["1.", "2."]
-    assert not any("accept-pin-mismatch" in x for x in [r.summary, *r.details, *r.next_commands])
-    assert not (tmp_path / "state" / "binary").exists()
-
-
 def test_the_manifest_clone_required_list_is_meshcom_qemu_only(tmp_path, monkeypatch):
     """The receipt reader's B1 rule reads the spec, not a name; a new clone_required entry shows up here."""
     svc = _svc(tmp_path, monkeypatch)
@@ -86,7 +57,7 @@ def test_the_manifest_clone_required_list_is_meshcom_qemu_only(tmp_path, monkeyp
 # ---- B2: a malformed commit is refused, not reported as a mismatch -------------------------------
 
 @pytest.mark.parametrize("bad", ["abc123", "A" * 40, "g" * 40])
-@pytest.mark.parametrize("side", ["binary", "pin"])
+@pytest.mark.parametrize("side", ["binary"])        # U9: pins are not compared, a pin is never read
 @pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("op", ["install", "update"])
 def test_malformed_commit_refused_before_download(tmp_path, monkeypatch, stub_pipeline, bad, side,
@@ -130,7 +101,6 @@ def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatc
     binary_receipt(svc, commits={**pins, lib: A}, probe="loraham_daemon 0.9.0")
     assert svc.binary_active_override("daemon") == {}                  # no acceptance at all
     assert svc.install_blocker(daemon) == ""
-    assert svc.binary_freshness("daemon")["behind"] == [lib]           # still shown as behind
     spawned = []
     monkeypatch.setattr(type(svc._lifecycle()), "start",
                         lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(
@@ -172,7 +142,6 @@ def test_a_covered_component_off_its_pin_does_not_block_the_start(short_tmp_path
     binary_receipt(svc, "meshcom", commits={**pins, lagging: A})
     assert stack.component(lagging).kind.value == kind
     assert svc.install_blocker(stack.component("meshcom-qemu")) == ""
-    assert svc.binary_freshness("meshcom")["behind"] == [lagging]      # still shown as behind
     # Everything outside the gate is stubbed: the daemon is ready, the host has the packages,
     # a launched bridge is ready; the spawn records the component and QEMU's launch "fails".
     monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True, ""))

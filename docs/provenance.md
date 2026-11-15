@@ -74,12 +74,13 @@ artifact** instead of a source build:
 
 - trust anchor: **HTTPS + sha256 + size**, checked **before** anything is unpacked;
 - the index (`index-v3.json`) keeps, per stack, the newest artifact of every published
-  composition, newest first; lhpc installs the first one whose per-component commits equal its
-  **manifest pins** and whose build-input digests equal the ones it computes itself. When that is
-  not the newest and an entry for this platform built for another LHPC was published after it
-  (`published_at`, not the list position), the plan adds "a binary built for another LHPC was published
-  later (lhpc self-update --apply, if that LHPC is newer)". None built for this lhpc is one refusal: self-update first, the source channel second;
-  nothing is installed over the pin check;
+  composition, newest first; lhpc installs the newest entry for this platform by `published_at`
+  (equal stamps: the list order), proven or not, at whatever commits it was built from. It must name
+  every component this lhpc's binary spec covers ("no published binary covers <component> yet:
+  install from source", one refusal: self-update first, the source channel second); an extra one is
+  accepted. An update offers it only when it was published after the installed one, so a binary the
+  publisher withdrew stays installed and is never replaced by an older one; `lhpc source-check`
+  reads the same target (it reads the index; "could not check" when the index cannot be read);
 - it must match this platform and record a passed mandatory builder smoke test;
 - the install is recorded in `state/binary/<stack>.json` and shown as `binary@<sha>` by
   `lhpc status --versions`.

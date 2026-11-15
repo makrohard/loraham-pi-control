@@ -1522,50 +1522,6 @@ def _manifest_with_a_newer_cli(tmp_path, moved):
     return path
 
 
-def test_an_artifact_matching_the_manifest_is_current(tmp_path, monkeypatch, binary_receipt):
-    svc = _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
-    assert svc.binary_freshness("meshtastic") == {"state": "current", "behind": []}
-
-
-def test_an_artifact_built_before_a_cli_bump_is_behind(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
-    """No component commit moved, so the pin comparison alone would call this current and the
-    box would never be offered the newer artifact."""
-    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)       # marker written at the manifest's web-client value
-    svc = ControllerService(manifest_path=_manifest_with_a_newer_cli(tmp_path, manifest_with_moved_input),
-                            system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    fresh = svc.binary_freshness("meshtastic")
-    assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
-
-
-def test_an_artifact_built_before_a_shipped_script_changed_is_behind(tmp_path, monkeypatch, binary_receipt):
-    """0.7.0: the build steps consume lhpc-shipped scripts, recorded beside the marker by digest.
-    An update that changes one leaves the artifact stale with every pin and value unchanged."""
-    import shutil
-    from lhpc.core import assets
-    data = tmp_path / "data" / "scripts"
-    data.mkdir(parents=True)
-    for rel in ("scripts/meshtastic-link-gate.sh", "scripts/meshtastic-web-assets.sh"):
-        shutil.copy(assets.asset_path(rel), data)
-    monkeypatch.setattr(assets, "asset_path", lambda name: tmp_path / "data" / name)
-    assets.clear_digest_cache()
-    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)       # marker + sidecar at today's digests
-    (data / "meshtastic-link-gate.sh").write_text("#!/bin/sh\n# a different gate\n")
-    assets.clear_digest_cache()
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    fresh = svc.binary_freshness("meshtastic")
-    assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
-
-
-def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
-    from lhpc.core import binary_install as bi
-    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
-    svc = ControllerService(manifest_path=_manifest_with_a_newer_cli(tmp_path, manifest_with_moved_input),
-                            system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(bi, "_http_get",
-                        lambda *a, **k: pytest.fail("freshness must not fetch"))
-    assert svc.binary_freshness("meshtastic")["state"] == "behind"
-
-
 def test_the_remedy_for_a_covered_component_is_a_reinstall_not_a_build(tmp_path, monkeypatch, binary_receipt):
     """`lhpc build` is refused on the binary channel, so offering it to a box whose artifact is
     stale is a dead end: the console said "run: lhpc build meshtastic" and that command refuses."""

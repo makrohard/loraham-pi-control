@@ -313,7 +313,7 @@ predating pin).
    **build-binary** → `stack`, `lhpc_ref = <that SHA>`, `source_commit` blank, `smoke_test = true`.
    The builder rejects a binary whose `components` differ from the manifest pins, so the pin lands
    first. The meshcom firmware is not bit-reproducible (a new sha per build is expected). Until
-   the binary is published, installs of that stack refuse it and offer source.
+   the binary is published, installs of that stack take the newest one already published.
 5. **Images**: tag `loraham-images` only after every moved binary is published; a stale index
    fails the image build.
 6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build`), smoke, then

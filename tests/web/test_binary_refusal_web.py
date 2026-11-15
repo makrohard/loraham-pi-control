@@ -17,7 +17,8 @@ A, B = "a" * 40, "b" * 40
 
 @pytest.fixture
 def published(monkeypatch):
-    """`published(stack, cid, commit)`: the index serves `stack` with `cid` built from `commit`.
+    """`published(stack, cid, commit)`: the index serves `stack` without `cid` (U9: a covered component
+    it does not name, so no published binary covers this lhpc; `commit` is unused).
     A download fails the test, so these console plans are shown to stop before one."""
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
 
@@ -26,7 +27,7 @@ def published(monkeypatch):
             pins = ControllerService()._binary_pins(sid)
             return bi.IndexEntry(stack=sid, filename=f"{sid}-{'a' * 64}.tar.zst",
                                  url="https://example.invalid/x", sha256="a" * 64, size=10,
-                                 components={**pins, cid: commit}, runtime_deps=(),
+                                 components={k: v for k, v in pins.items() if k != cid}, runtime_deps=(),
                                  target="aarch64-trixie",
                                  provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
         monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})

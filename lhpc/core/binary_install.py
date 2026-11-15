@@ -320,15 +320,9 @@ def _utc_stamp(v) -> bool:
 
 
 class BinaryNoneCompatible(BinaryInstallError):
-    """No published binary was built for this lhpc: (index-v3) none published or none for this
-    target, the newest entry's commits differ from the pins, or every entry's build inputs differ.
-    The caller names the ways out in order: self-update first, source second. `mismatch` is
-    {component id: (binary commit, pin)} of the newest entry for this target, empty when the
-    commits are not what differs; nothing parses the message."""
-
-    def __init__(self, message: str, *, mismatch: dict):
-        super().__init__(message)
-        self.mismatch = dict(mismatch)
+    """No published binary this lhpc can install (index-v3): none for this target, or the newest one does not
+    cover every component this lhpc's binary spec covers. The caller names the ways out in order: self-update
+    first, source second; nothing parses the message."""
 
 
 class BinaryNonePaired(BinaryInstallError):
@@ -336,84 +330,34 @@ class BinaryNonePaired(BinaryInstallError):
     (`select_web`): the one typed refusal; an unreachable or malformed index stays plain."""
 
 
-def check_pins(entry: IndexEntry, pins: dict) -> None:
-    """THE acceptance gate: the index components map must match the manifest pins for EVERY
-    covered component. `built_from` is never consulted (display only). A lagging pair whose
-    binary commit or pin is not a full lowercase commit id is a plain refusal, not a mismatch:
-    a malformed index (or pin) is not a version lag, and is refused as such. A covered component
-    the entry does not record is another composition (an older lhpc covered less): typed, too."""
-    missing = [cid for cid in pins if cid not in entry.components]
-    if missing:
-        raise BinaryNoneCompatible(
-            "the published binary does not record commits for " + ", ".join(sorted(missing)) +
-            " (built for an lhpc that did not cover them), and no other one was built for this lhpc",
-            mismatch={})
-    lagging = {cid: (entry.components[cid], want)
-               for cid, want in pins.items() if entry.components[cid] != want}
-    for cid, (got, want) in sorted(lagging.items()):
-        if not validators.is_hex(got, 40):
-            raise BinaryInstallError(
-                f"the published binary records a malformed commit for {cid} — refusing")
-        if not validators.is_hex(want, 40):
-            raise BinaryInstallError(
-                f"this lhpc's manifest pin for {cid} is not a full commit id — refusing")
-    if lagging:
-        detail = "; ".join(f"{cid}: binary {got[:9]}, pin {want[:9]}"
-                           for cid, (got, want) in sorted(lagging.items()))
-        raise BinaryNoneCompatible(
-            f"the newest published binary was built from different commits than this lhpc pins "
-            f"({detail}), and no older one was built for this lhpc", mismatch=lagging)
-
-
-def input_digests(stack, covers, inputs_text) -> dict:
-    """{component: sha256 of the build-input sidecar this lhpc would write} for each covered component
-    that records build inputs — what an index-v3 entry's `inputs` must equal exactly."""
-    try:
-        return {c.id: hashlib.sha256(inputs_text(c).encode("utf-8")).hexdigest()
-                for c in stack.components if c.id in covers and (c.build_inputs or c.asset_inputs)}
-    except OSError as exc:                       # a packaged asset this lhpc cannot read
-        raise BinaryInstallError(f"this lhpc's build inputs cannot be read ({exc})") from None
-
-
-def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
-    """THE choice: the FIRST entry (newest first) built for this lhpc — its target, its commit for every
-    covered component and (index-v3) its build-input digests exactly this lhpc's. Returns (entry,
-    newer_published): an entry for this target and another lhpc was published after the chosen one
-    (by `published_at`, never by list position). None compatible is always `BinaryNoneCompatible`, naming what differs for the
-    newest entry for this target (nothing for it, its pins, then inputs); the commits are never
-    accepted "close enough". Only another target or a lagging commit skips an entry; a malformed one
-    refuses the index (`check_pins`), and a malformed covered commit in ANY entry refuses it before one
-    is chosen or skipped."""
+def newest_entry(entries: list, target: str, covers) -> IndexEntry:
+    """THE binary lane's target (plan R2, D9), for install AND freshness: the newest entry for `target` by
+    `published_at`, proven or not; equal stamps keep the index order (newest first). No commit or build-input
+    equality: the entry must name every component in `covers` (an extra one is accepted, another lhpc's wider
+    spec), else the typed refusal. A malformed covered commit in ANY entry refuses the index: a clone_required
+    checkout follows the entry's commit. An entry the publisher withdrew is simply not listed."""
     for e in entries:
-        bad = sorted(cid for cid in pins
-                     if cid in e.components and not validators.is_hex(e.components[cid], 40))
+        bad = sorted(c for c in covers if c in e.components and not validators.is_hex(e.components[c], 40))
         if bad:
-            raise BinaryInstallError(
-                f"the published binary records a malformed commit for {', '.join(bad)} — refusing")
-
-    def fits(e):
-        try:
-            check_target(e, target)                # raises only for another target
-            check_pins(e, pins)
-        except BinaryNoneCompatible:               # a lagging commit, not a malformed entry
-            return False
-        except BinaryInstallError:
-            if e.target == target:                 # malformed: refuse the index, never skip
-                raise
-            return False
-        return e.inputs is None or e.inputs == inputs
-    for e in entries:
-        if fits(e):
-            return e, any(o.target == target and o.published_at and e.published_at
-                          and o.published_at > e.published_at
-                          and o.provenance.get("lhpc_commit") != e.provenance.get("lhpc_commit")
-                          for o in entries)
+            raise BinaryInstallError(f"the published binary records a malformed commit for {', '.join(bad)} — refusing")
     mine = [e for e in entries if e.target == target]
     if not mine:
-        raise BinaryNoneCompatible(f"no binary is published for {target!r}", mismatch={})
-    check_pins(mine[0], pins)
-    raise BinaryNoneCompatible("no published binary was built with this lhpc's build inputs "
-                               f"({', '.join(sorted(inputs)) or 'none'})", mismatch={})
+        raise BinaryNoneCompatible(f"no binary is published for {target!r}")
+    best = max(mine, key=lambda e: e.published_at or "")       # max keeps the first of equal stamps
+    missing = sorted(set(covers) - set(best.components))
+    if missing:
+        raise BinaryNoneCompatible(f"no published binary covers {', '.join(missing)} yet: install from source")
+    return best
+
+
+def is_newer(entry: IndexEntry, rec) -> bool:
+    """`entry` is offered over the installed receipt `rec` only when it was published later (D10: a withdrawn
+    installed binary stays, never replaced by an older one). A receipt written before its entry's `published_at`
+    was recorded falls back to its install time."""
+    installed = rec.provenance.get("published_at")
+    if not _utc_stamp(installed):
+        installed = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at))
+    return (entry.published_at or "") > installed
 
 
 def select_web(entries: list, channel: str, daemon_commit: str) -> IndexEntry:
@@ -844,12 +788,12 @@ def run_probe(paths: Paths, argv) -> str:
 def build_receipt(paths: Paths, stack_id: str, entry: IndexEntry, files, proof_paths,
                   registry_baseline: dict, probe: str, owned_dirs=()):
     """Build the receipt for a completed transaction. Every listed file gets a hash (the
-    receipt validator requires the two sets to match exactly)."""
+    receipt validator requires the two sets to match exactly); `published_at` is recorded for `is_newer`."""
     from . import binary_receipt as brx
     hashes = {rel: brx.sha256_file(paths, rel) for rel in files}
     return brx.BinaryReceipt(
         stack=stack_id, artifact_sha256=entry.sha256, artifact_size=entry.size,
         filename=entry.filename, url=entry.url, components=dict(entry.components),
-        provenance=dict(entry.provenance), files=tuple(files), file_hashes=hashes,
+        provenance={**entry.provenance, "published_at": entry.published_at}, files=tuple(files), file_hashes=hashes,
         proof_paths=tuple(proof_paths), registry_baseline=dict(registry_baseline),
         probe=probe, owned_dirs=tuple(owned_dirs))

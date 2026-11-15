@@ -64,10 +64,11 @@ On the binary channel:
 - **Switching to source is transactional** — a dirty, foreign or wrong-remote checkout refuses the
   switch with the artifact untouched.
 - **No binary rollback**: going back means installing from source.
-- **Each LHPC finds its own binaries**: the index keeps the newest artifact of every published
-  composition, and lhpc installs the newest one built for its pins and build inputs. None built for
-  it: self-update first, else install from source ([provenance](provenance.md#the-binary-channel)).
-- **meshcom keeps its pinned clone** (its run scripts live there), and **meshtastic provisions its
+- **The newest binary**: lhpc installs the newest published entry for its platform, proven or not,
+  whatever commits it was built from, when it names every component lhpc's binary spec covers. An
+  update offers it only when it is newer than the installed one; a withdrawn installed binary stays.
+  None for this box: self-update first, else install from source ([provenance](provenance.md#the-binary-channel)).
+- **meshcom keeps its clone at the binary's commit** (its run scripts live there), and **meshtastic provisions its
   CLI virtualenv locally** after extraction (it embeds absolute paths); lhpc owns that virtualenv
   as a whole directory.
 - **A broken binary install is named by `lhpc doctor`**: if the artifact's files disappear,
@@ -89,7 +90,7 @@ What to run in each situation and what you will see. The channels themselves:
 | keep current on the installed lane | `lhpc self-update --apply`, then `lhpc update <stack> --yes` | each source stays on the lane it was installed from (`dev`, `stable`; on `pinned` your newest known-working composition for the stack, else the release's manifest pin) — and the stack is built again when the new sources need it (in the console, as a build job with its live log). A binary-installed stack updates to the published binary; one already installed and intact is not downloaded again |
 | follow development | `lhpc update <stack> --source dev --yes` | the branch tip; when adopting it fails, the update retries once at the known-working (else manifest-pin) commit and says *FELL BACK* |
 | follow stable | `lhpc update <stack> --source stable --yes` | the newer of the newest plain version tag and the latest GitHub release, else the default branch's head; refused while the releases cannot be checked ([provenance](provenance.md#selections)) |
-| binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | a published binary built from other commits than this lhpc's pins is refused; `Next:` offers `lhpc self-update --apply` and the source install |
+| binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | the newest published binary, offered only when newer than the installed one; none that covers this lhpc is refused, and `Next:` offers `lhpc self-update --apply` and the source install |
 | a fetched release (graywolf) | `lhpc update graywolf --source stable --yes` for the newest release; `lhpc update graywolf --source binary --yes` for the pinned one, which its build fetches (also a bare update; the newest release needs `--source stable` every time); `pinned`/`dev` are refused (no compiled lane) | the release fetched and checked against its checksums, then a restart if the stack was running |
 | back to known-working after a failed update | [what happens when an update fails](#what-happens-when-an-update-fails) | *Update INCOMPLETE* with the failed source's line |
 | an update was refused | the commands under `Next:`, or, where there is none, a *nothing to run here* line naming what has to be fixed on the box. That holds for every refusal `lhpc update`, `lhpc update graywolf --source stable`, `lhpc build`, `lhpc self-update` and `lhpc install` give straight away (a repository test reads each one); where the step depends on a cause lhpc cannot tell apart, the line names each cause with its step. The same holds for a task refused because an uninstall, a self-update or a reboot is pending or the update state cannot be read (every command), a failed build, a graywolf update whose restart failed, and the MeshCore plugin-manager refusal (`sudo reboot`). An *Update INCOMPLETE* result is not a refusal: its per-source lines say what failed | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry. A busy lock: wait for the operation it names, then run the same command again |

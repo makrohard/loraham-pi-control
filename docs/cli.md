@@ -135,9 +135,8 @@ operation: [operations](operations.md#install-channels).
 - A failed binary install asks whether to build from source; it never falls back silently.
 - `--check` — dry run: the plan plus missing mandatory system dependencies (the apply refuses
   until they are installed). Never prompts or applies.
-- The binary channel installs the newest published binary built for this lhpc's pins; when a
-  binary for another LHPC was published after it, the plan says so and names `lhpc self-update --apply`
-  ([provenance](provenance.md#the-binary-channel)).
+- The binary channel installs the newest published binary for this box, whatever commits it was
+  built from ([provenance](provenance.md#the-binary-channel)).
 
 ### auto-install
 `lhpc auto-install [--source binary|pinned|dev|stable] [--tests] [--tx] [--status]
@@ -362,8 +361,9 @@ is a host test too; it runs against the pinned upstream in the built environment
 — update a stack/component. Which command for which situation:
 [keeping stacks current](operations.md#keeping-stacks-current).
 
-- When no published binary was built for this lhpc's pins, the update refuses and names the ways
-  forward (self-update, then a source build); cancelling keeps the working binary.
+- The update installs a published binary only when it is newer than the installed one; when none
+  covers this lhpc's components, it refuses and names the ways forward (self-update, then a source
+  build); cancelling keeps the working binary.
 - Switching channels is an `install`, and the CLI says so.
 - Without `--source` the update keeps the installed lane, per source
   ([keeping stacks current](operations.md#keeping-stacks-current)).

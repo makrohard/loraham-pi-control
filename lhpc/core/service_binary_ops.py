@@ -43,7 +43,6 @@ from .snapshot_memo import invalidates_snapshot
 CLI_VENV_TIMEOUT_S = 900.0
 
 
-_NEWER_NOTE = "  a binary built for another LHPC was published later (lhpc self-update --apply, if that LHPC is newer)"
 
 
 class BinaryOpsMixin:
@@ -101,8 +100,8 @@ class BinaryOpsMixin:
     @invalidates_snapshot
     def _binary_install(self, stack_id: str, apply: bool = False, *,
                         locked: bool = False) -> ActionResult:
-        """Install `stack_id` from the newest published artifact built for this lhpc
-        (`bi.select_compatible`); none built for it is ONE typed refusal (`none_compatible`). Every
+        """Install `stack_id` from the newest published artifact for this box (`bi.newest_entry`, plan R2), when
+        it is newer than the installed one; none that covers this lhpc is ONE typed refusal (`none_compatible`). Every
         refusal offers the source channel explicitly. The APPLY path holds a source install's
         boundary (task admission + the covered source paths), so a concurrent install/update/
         uninstall of the stack cannot interleave with the publish; `locked=True` means an OUTER
@@ -116,8 +115,7 @@ class BinaryOpsMixin:
         try:
             bi.require_zstd()
             entries = bi.index_entries(bi.fetch_index(spec.index_url), stack_id)
-            entry, newer = bi.select_compatible(entries, self.binary_target(), self._binary_pins(
-                stack_id), bi.input_digests(self.stack(stack_id), spec.covers, self.build_inputs_text))
+            entry = bi.newest_entry(entries, self.binary_target(), spec.covers)
         except bi.BinaryNoneCompatible as exc:
             return self._binary_none_compatible(stack_id, exc, src_cmd)
         except bi.BinaryInstallError as exc:
@@ -127,8 +125,6 @@ class BinaryOpsMixin:
                                          f"  Staying on the binary keeps {stack_id} exactly as it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
-        _newer_data = {"newer_published": True} if newer else {}
-        _newer = [_NEWER_NOTE] if newer else []
         missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
         if missing:
             # lhpc never installs system packages itself — name the exact command.
@@ -141,38 +137,38 @@ class BinaryOpsMixin:
                 data={"binary_failed": True, "missing_runtime_deps": missing})
 
         if (not apply and bi.read_journal(self._paths)[1] == "absent"
-                and self._binary_installed_is(stack_id, entry)):
+                and (_have := self._binary_installed_is(stack_id, entry))):
             # A HINT for the plan only: the apply decides under its locks, after recovery.
-            return self._binary_already_installed(stack_id, entry, [], _newer)
+            return self._binary_already_installed(stack_id, entry, _have, [])
         size_mb = entry.size / (1024 * 1024)
         if not apply:
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
                                                     for k, v in sorted(entry.components.items())),
-                       "  replaces: " + ", ".join(spec.publish_roots), *_newer]
+                       "  replaces: " + ", ".join(spec.publish_roots)]
             if spec.clone_required:
                 details.append("  keeps the pinned source clone for: "
                                + ", ".join(spec.clone_required))
             return ActionResult(True, f"Binary install plan for '{stack_id}'.", details=details,
                                 next_commands=[f"lhpc install {stack_id} --yes"],
-                                data={"changes": 1, "channel": "binary", **_newer_data})
+                                data={"changes": 1, "channel": "binary"})
 
-        # A clean clone_required checkout of OURS at an OLDER pin (the upgrade case: the new
-        # controller pins a newer run-script commit) is moved through the real source update
-        # first — the step an operator had to run by hand. A dirty, foreign or unproven tree is
+        # A clean clone_required checkout of OURS at another commit than the binary's (U9: the
+        # checkout follows the binary, a newer one ships newer run scripts) is moved through the
+        # real source update first — the step an operator had to run by hand. A dirty, foreign or unproven tree is
         # left alone and refused below, exactly as before. Top-level calls only: an outer
         # boundary (`locked`, the auto-install run) keeps the refusal.
         moved_notes: list[str] = []
         if not locked:
-            for cid in self._stale_clean_clones(stack_id, spec):
-                r = self.update(cid, apply=True, source="pinned", exact_pin=True)
+            for cid in self._stale_clean_clones(stack_id, spec, entry):
+                r = self.update(cid, apply=True, source="pinned", exact_commits=dict(entry.components))
                 if not r.ok:
                     return ActionResult(False, f"Binary install of '{stack_id}' blocked: moving "
-                                               f"{cid} to its pin failed: {r.summary}",
+                                               f"{cid} to the binary's commit failed: {r.summary}",
                                         details=list(r.details), next_commands=[src_cmd],
                                         data={"binary_failed": True})
-                moved_notes.append(f"  moved {cid} to its pin (run scripts)")
+                moved_notes.append(f"  moved {cid} to the binary's commit (run scripts)")
 
         # LOCK ORDER (mirrors the source ops): admission, then the covered source paths.
         import contextlib as _ctx
@@ -240,10 +236,11 @@ class BinaryOpsMixin:
                     if comp is None or comp.source is None:
                         continue
                     dest = self._paths.resolve_source(comp.source.path)
+                    want = entry.components[cid]            # U9: the commit the binary was built from
                     if dest.is_dir():
                         # PRESENT is not PROVEN: the artifact's binaries run scripts FROM this
-                        # checkout, so a dev/stale/foreign tree would be executed by a supposedly
-                        # pinned install. Require the manifest pin via the ownership verifier.
+                        # checkout, so a dev/stale/foreign tree would be executed by it. Require the
+                        # binary's commit via the ownership verifier.
                         rec, why = source_registry.verify_identity(
                             self._paths, self._system, self.config(), comp, dest,
                             components=(cid,))
@@ -254,7 +251,7 @@ class BinaryOpsMixin:
                                 f"{comp.source.path} checkout is not provably ours ({why}).",
                                 next_commands=[f"lhpc install {stack_id} --source pinned --yes"],
                                 data={"binary_failed": True})
-                        stale = (rec.resolved_commit or "") != comp.source.pin_commit
+                        stale = (rec.resolved_commit or "") != want
                         # AT the pin is not UNMODIFIED: run.sh / gps-relay.py run FROM this tree,
                         # so a locally edited copy would run operator code under a "pinned" install.
                         _dirty = inst.dirty_report(dest, comp.source.path)
@@ -262,10 +259,10 @@ class BinaryOpsMixin:
                             return ActionResult(
                                 False,
                                 f"Binary install of '{stack_id}' blocked: {comp.source.path} is at "
-                                f"{(rec.resolved_commit or '?')[:9]}, the pin is "
-                                f"{comp.source.pin_commit[:9]} — the artifact's run scripts must "
-                                "come from the pinned checkout.",
-                                next_commands=[f"lhpc update {cid} --source pinned --yes"],
+                                f"{(rec.resolved_commit or '?')[:9]}, the binary was built from "
+                                f"{want[:9]} — the artifact's run scripts must come from that "
+                                "checkout.",
+                                next_commands=[f"lhpc install {stack_id} --source binary --yes"],
                                 data={"binary_failed": True})
                         if _dirty:
                             _ch = list(_dirty.tracked) + list(_dirty.untracked)
@@ -289,16 +286,14 @@ class BinaryOpsMixin:
                     _guard_held = locked or (
                         comp.source is not None
                         and comp.source.path in set(self._binary_source_paths(stack_id)))
-                    # The EXACT manifest pin, not the known-working selector: the artifact
-                    # was checked against the manifest pins, and so must its checkout be.
+                    # The binary's EXACT commit, not the known-working selector or the pin (U9).
                     act = inst.adopt_source(
                         comp, source="pinned", locked=_guard_held, force=dest.is_dir(),
-                        pinned_expected=(comp.source.pin_commit,
-                                         "manifest pin (the binary artifact's pin)"))
+                        pinned_expected=(want, "the binary artifact's commit"))
                     if act.status == "failed":
                         return ActionResult(
                             False,
-                            f"Binary install of '{stack_id}' blocked: {cid} needs its pinned source "
+                            f"Binary install of '{stack_id}' blocked: {cid} needs its source "
                             f"checkout (run scripts live there) and it could not be adopted "
                             f"({act.detail}).",
                             next_commands=[src_cmd], data={"binary_failed": True})
@@ -306,8 +301,8 @@ class BinaryOpsMixin:
             clone_notes = moved_notes + clone_notes
             # AUTHORITATIVE "already installed": after recovery, under the locks, with the
             # required clones proven above — an open transaction is never read as installed.
-            if self._binary_installed_is(stack_id, entry):
-                return self._binary_already_installed(stack_id, entry, clone_notes, _newer)
+            if (_have := self._binary_installed_is(stack_id, entry)):
+                return self._binary_already_installed(stack_id, entry, _have, clone_notes)
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
@@ -455,29 +450,35 @@ class BinaryOpsMixin:
             self.invalidate_snapshot()
             return ActionResult(
                 True, f"Installed '{stack_id}' from the published binary ({size_mb:.1f} MB).",
-                details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…", *_newer],
+                details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {instances.named(self, stack_id)}"],
-                data={"channel": "binary", "changes": 1, **_newer_data})
+                data={"channel": "binary", "changes": 1})
 
     @staticmethod
-    def _binary_already_installed(stack_id: str, entry, notes: list, newer=()) -> ActionResult:
+    def _binary_already_installed(stack_id: str, entry, have: str, notes: list) -> ActionResult:
+        older = [] if have == entry.filename else [
+            f"  newest published: {entry.filename} — not newer than the installed one"]
         return ActionResult(True, f"'{stack_id}' already has the published binary "
-                                  f"{entry.filename} installed — nothing to download.",
-                            details=[*notes, *newer], next_commands=[f"lhpc status {stack_id}"],
-                            data={"changes": 1 if notes else 0, "channel": "binary",
-                                  **({"newer_published": True} if newer else {})})
+                                  f"{have} installed — nothing to download.",
+                            details=[*notes, *older], next_commands=[f"lhpc status {stack_id}"],
+                            data={"changes": 1 if notes else 0, "channel": "binary"})
 
-    def _binary_installed_is(self, stack_id: str, entry) -> bool:
-        """The installed artifact IS `entry`: a valid receipt of its sha256 with no recorded
-        pin-mismatch acceptance, every recorded file still hashing as installed."""
+    def _binary_installed_is(self, stack_id: str, entry) -> str:
+        """The installed artifact's file name when there is nothing to install, else "": a valid receipt of
+        `entry` itself with no recorded pin-mismatch acceptance and every recorded file still hashing as
+        installed, or of another binary `entry` is not newer than (D10: a withdrawn installed binary stays)."""
         state, rec, _why = self.binary_receipt_state(stack_id)
-        return (state == "valid" and rec.artifact_sha256 == entry.sha256 and rec.override is None
-                and brx.verify_files(self._paths, rec)[0])
+        if state != "valid":
+            return ""
+        if rec.artifact_sha256 != entry.sha256:
+            return "" if bi.is_newer(entry, rec) else rec.filename
+        ok = rec.override is None and brx.verify_files(self._paths, rec)[0]
+        return rec.filename if ok else ""
 
     @staticmethod
     def _binary_none_compatible(stack_id: str, exc, src_cmd: str) -> ActionResult:
-        """No published binary built for this lhpc: ONE typed refusal (`none_compatible`) with the
-        newest entry's differing commits (`pin_mismatch`), self-update first, source second."""
+        """No published binary this lhpc can install: ONE typed refusal (`none_compatible`), self-update first,
+        source second. `pin_mismatch` stays empty since U9 (no commit comparison)."""
         return ActionResult(
             False, f"Binary install of '{stack_id}' refused: {exc.message}",
             details=["  1. Update LHPC first, then install again (about a minute): lhpc self-update --apply",
@@ -485,11 +486,11 @@ class BinaryOpsMixin:
                      f"  Staying on the binary keeps {stack_id} exactly as it is."],
             next_commands=["lhpc self-update --apply", src_cmd],
             data={"binary_failed": True, "offer_source": True, "binary_refusal": "none_compatible",
-                  "pin_mismatch": {cid: [b, p] for cid, (b, p) in sorted(exc.mismatch.items())}})
+                  "pin_mismatch": {}})
 
-    def _stale_clean_clones(self, stack_id: str, spec) -> list:
+    def _stale_clean_clones(self, stack_id: str, spec, entry) -> list:
         """clone_required components whose checkout is present, provably ours, CLEAN and at a
-        commit other than the pin — the ones a binary install may move to the pin itself."""
+        commit other than `entry`'s — the ones a binary install may move to that commit itself."""
         if not spec.clone_required:
             return []
         st = self.stack(stack_id)
@@ -505,8 +506,8 @@ class BinaryOpsMixin:
                 continue                            # missing: adopted under the locks, as before
             rec, _why = source_registry.verify_identity(
                 self._paths, self._system, self.config(), comp, dest, components=(cid,))
-            if rec is None or (rec.resolved_commit or "") == comp.source.pin_commit:
-                continue                            # unproven (refused later) or already at the pin
+            if rec is None or (rec.resolved_commit or "") == entry.components[cid]:
+                continue                            # unproven (refused later) or already there
             if inst.dirty_report(dest, comp.source.path):
                 continue                            # local changes: refused later, never moved
             out.append(cid)
@@ -984,28 +985,21 @@ class BinaryOpsMixin:
     # ---- freshness -------------------------------------------------------------------------
 
     def binary_freshness(self, stack_id: str) -> dict:
-        """LOCAL, network-free freshness for a binary-installed stack: the receipt's component
-        commits vs the CURRENT manifest pins, plus the build inputs the artifact's own build-input
-        sidecar records. {state: current|behind|n/a, behind: [...]}.
-
-        The sidecar half matters because not every pin is a commit. The Meshtastic web client and
-        CLI are manifest VALUES compiled into the artifact, not component pins, so moving one
-        leaves every commit equal and the comparison above says "current" about an artifact that
-        is demonstrably older than the manifest. The sidecar is the artifact's own record of what
-        it was built from; `is_built` recomputes it from the manifest, and a mismatch is exactly
-        "this artifact is behind". Still local: the sidecar is a file the artifact installed.
-        """
+        """NETWORK (the index read the install makes): the binary lane's verdict from the SAME target the install
+        takes (`bi.newest_entry`, plan R2). {state: current|behind|error|n/a, offer: file name}: `behind` = a newer
+        entry is published; `error` = the index could not be read (could not check). No entry for this box, or a
+        newest one that does not cover this lhpc, offers nothing: the installed binary stays current (D10)."""
         state, rec, _why = self.binary_receipt_state(stack_id)
-        if state != "valid" or rec is None:
-            return {"state": "n/a", "behind": []}
-        pins = self._binary_pins(stack_id)
-        behind = [cid for cid, want in sorted(pins.items())
-                  if rec.components.get(cid) != want]
-        st = self.stack(stack_id)
-        spec = getattr(st, "binary", None)
-        covers = set(spec.covers) if spec is not None else set()
-        behind += [c.id for c in (st.components if st is not None else ())
-                   if c.id in covers and c.id not in behind
-                   and c.build_marker and (c.build_inputs or c.asset_inputs)
-                   and not self.is_built(c)]
-        return {"state": "behind" if behind else "current", "behind": sorted(behind)}
+        spec = self.binary_spec(stack_id)
+        if state != "valid" or rec is None or spec is None:
+            return {"state": "n/a", "offer": ""}
+        try:
+            entry = bi.newest_entry(bi.index_entries(bi.fetch_index(spec.index_url), stack_id),
+                                    self.binary_target(), spec.covers)
+        except bi.BinaryNoneCompatible:
+            return {"state": "current", "offer": ""}
+        except bi.BinaryInstallError:
+            return {"state": "error", "offer": ""}
+        if entry.sha256 != rec.artifact_sha256 and bi.is_newer(entry, rec):
+            return {"state": "behind", "offer": entry.filename}
+        return {"state": "current", "offer": ""}

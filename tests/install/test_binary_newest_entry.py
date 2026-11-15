@@ -1,0 +1,196 @@
+"""U9 (plan v6, D9 + D10): the binary lane's one target is `newest_entry`, the newest index-v3 entry for this
+box's target by `published_at`, proven or not. No commit or build-input equality: the entry must name every
+component this LHPC's binary spec covers (an extra one is accepted), and it is offered only when it is newer
+than the installed receipt's entry. Driven through the public install / update / source-check paths with only
+the HTTP seam stubbed, so the real index parser and selection run."""
+from __future__ import annotations
+
+import json
+import time
+
+from lhpc.core import binary_install as bi, stackupdates
+from lhpc.core.install import Installer
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.services import ControllerService
+
+TARGET = "aarch64-trixie"
+
+
+def _svc(tmp_path, monkeypatch):
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: TARGET)
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def _entry(sid, sha, components, published, target=TARGET):
+    filename = f"{sid}-{sha}.tar.zst"
+    return {"filename": filename, "url": f"https://example.invalid/{filename}", "sha256": sha,
+            "size": 10, "built_from": "b" * 40, "components": dict(components),
+            "lhpc_commit": "c" * 40, "builder_commit": "d" * 40, "target": target,
+            "os": "trixie", "container_digest": "debian@sha256:" + "e" * 64, "runtime_deps": [],
+            "smoke": {"mode": "mandatory", "result": "passed"}, "extract_to": "runtime-root",
+            "inputs": {}, "published_at": published}
+
+
+def _serve(monkeypatch, sid, *entries):
+    index = {"schema": 3, "stacks": {sid: list(entries)}}
+    monkeypatch.setattr(bi, "_http_get", lambda url, max_bytes: json.dumps(index).encode())
+    monkeypatch.setattr(bi, "require_zstd", lambda: None)
+
+
+def _other(svc, sid, commit="f" * 40):
+    """Every covered component at a commit this LHPC does not pin."""
+    return {cid: commit for cid in svc._binary_pins(sid)}
+
+
+def _checked(svc, cid="loraham-daemon"):
+    """The public `lhpc source-check` verdict for one component (its detail line)."""
+    lines = [d for d in svc.source_check("daemon").details if d.split(": ", 1)[0].strip() == cid]
+    assert len(lines) == 1, lines
+    return lines[0].split(": ", 1)[1]
+
+
+def _is(status):
+    return status.replace("_", " ")
+
+
+def _names(plan, sha):
+    return any(f"-{sha}.tar.zst" in d for d in plan.details)
+
+
+def test_an_entry_built_from_other_commits_installs(tmp_path, monkeypatch):
+    # Today: refused, "built from different commits than this lhpc pins". D9: the newest binary, unproven too.
+    svc = _svc(tmp_path, monkeypatch)
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok, plan.summary
+    assert _names(plan, "1" * 64)
+
+
+def test_the_newest_entry_wins_over_an_older_one_at_the_pins(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    _serve(monkeypatch, "daemon",
+           _entry("daemon", "2" * 64, svc._binary_pins("daemon"), "2026-11-09T17:54:53Z"),
+           _entry("daemon", "1" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and _names(plan, "1" * 64) and not _names(plan, "2" * 64)
+
+
+def test_an_entry_missing_a_covered_component_is_the_typed_refusal(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    comps = _other(svc, "daemon")
+    del comps["radiolib"]
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, comps, "2026-11-10T03:51:59Z"))
+    res = svc.install("daemon", apply=False, source="binary")
+    assert not res.ok
+    assert "no published binary covers radiolib yet: install from source" in res.summary
+    assert res.data["binary_refusal"] == "none_compatible"
+    assert "lhpc install daemon --source pinned --yes" in res.next_commands
+
+
+def test_an_entry_naming_an_extra_component_is_accepted(tmp_path, monkeypatch):
+    # As today (control): coverage is a subset check, an extra component is another LHPC's wider spec.
+    svc = _svc(tmp_path, monkeypatch)
+    comps = {**svc._binary_pins("daemon"), "meshstick-tools": "a" * 40}
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, comps, "2026-11-10T03:51:59Z"))
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and _names(plan, "1" * 64)
+
+
+def test_equal_published_at_takes_the_first_listed_entry(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    for first, second in (("3", "4"), ("4", "3")):
+        _serve(monkeypatch, "daemon",
+               _entry("daemon", first * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"),
+               _entry("daemon", second * 64, _other(svc, "daemon", "9" * 40), "2026-11-10T03:51:59Z"))
+        plan = svc.install("daemon", apply=False, source="binary")
+        assert plan.ok and _names(plan, first * 64) and not _names(plan, second * 64)
+
+
+def test_another_targets_newer_entry_is_not_the_target(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    _serve(monkeypatch, "daemon",
+           _entry("daemon", "5" * 64, _other(svc, "daemon"), "2026-11-11T00:00:00Z", target="x86_64-trixie"),
+           _entry("daemon", "1" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and _names(plan, "1" * 64)
+
+
+def _installed(svc, binary_receipt, published):
+    return binary_receipt(svc, sha="1" * 64, commits=_other(svc, "daemon"),
+                          provenance={"published_at": published})
+
+
+def test_a_withdrawn_installed_binary_stays_and_an_older_one_is_not_offered(tmp_path, monkeypatch,
+                                                                             binary_receipt):
+    # D10: the bot withdrew the installed entry; only an older one (at the pins) is left.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "2026-11-10T03:51:59Z")
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, svc._binary_pins("daemon"), "2026-11-09T17:54:53Z"))
+    plan = svc.update("daemon", apply=False, source="binary")
+    assert plan.ok, plan.summary
+    assert plan.data["changes"] == 0 and f"daemon-{'1' * 64}.tar.zst" in plan.summary
+    assert not any("download" in d for d in plan.details)
+    applied = svc.update("daemon", apply=True, source="binary")
+    assert applied.ok and applied.data["changes"] == 0
+    assert svc.binary_receipt_state("daemon")[1].artifact_sha256 == "1" * 64
+    assert _checked(svc) == _is(stackupdates.UP_TO_DATE)
+
+
+def test_a_newer_entry_is_offered_and_read_as_an_update(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "2026-11-09T17:54:53Z")
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    plan = svc.update("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 1 and _names(plan, "2" * 64)
+    assert _checked(svc) == _is(stackupdates.BEHIND)
+
+
+def test_an_unreadable_index_reads_could_not_check(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "2026-11-09T17:54:53Z")
+
+    def down(url, max_bytes):
+        raise bi.BinaryInstallError("download failed: HTTP Error 503")
+    monkeypatch.setattr(bi, "_http_get", down)
+    assert _checked(svc) == _is(stackupdates.ERROR)
+
+
+def test_the_meshcom_checkout_follows_the_entrys_commit_not_the_pin(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    comps = {**_other(svc, "meshcom"), "meshcom-gps-relay": "f" * 40}
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "1" * 64, comps, "2026-11-10T03:51:59Z"))
+    seen = []
+
+    class _Failed:
+        status, detail, provenance = "failed", "STOP-HERE", ""
+
+    def adopt(self, comp, force=False, source="pinned", pinned_expected=None, **kw):
+        seen.append((comp.id, pinned_expected[0] if pinned_expected else None))
+        return _Failed()
+    monkeypatch.setattr(Installer, "adopt_source", adopt)
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "STOP-HERE" in res.summary
+    assert seen == [("meshcom-qemu", "f" * 40)]
+
+
+def test_a_receipt_without_published_at_compares_by_its_install_time(tmp_path, monkeypatch, binary_receipt):
+    # A receipt an older lhpc wrote records no `published_at`: an entry published before the install
+    # is not newer (never an older replacement), one published after it is.
+    svc = _svc(tmp_path, monkeypatch)
+    rec = binary_receipt(svc, sha="1" * 64, provenance={})
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), "2026-01-01T00:00:00Z"))
+    assert svc.update("daemon", apply=False, source="binary").data["changes"] == 0
+    later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at + 60))
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), later))
+    assert svc.update("daemon", apply=False, source="binary").data["changes"] == 1
+
+
+def test_the_clone_move_resolves_to_the_binarys_commit(tmp_path, monkeypatch):
+    # The clean-clone move (`update(..., exact_commits=)`) plans the binary's commit, not the pin.
+    svc = _svc(tmp_path, monkeypatch)
+    st = svc.stack("meshcom")
+    comp = st.component("meshcom-qemu")
+    groups, conflicts = svc._plan_source_groups([(st, comp)], "pinned", exact_commits={comp.id: "f" * 40})
+    assert not conflicts
+    assert [g[3][0] for g in groups] == ["f" * 40]

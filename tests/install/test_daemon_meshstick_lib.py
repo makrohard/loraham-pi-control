@@ -108,8 +108,8 @@ def test_an_entry_that_records_no_libch341_commit_is_another_composition():
                         sha256="0" * 64, size=1, target="aarch64-trixie", runtime_deps=("libc6",),
                         components={k: v for k, v in pins.items() if k != "libch341"},
                         provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
-    with pytest.raises(bi.BinaryNoneCompatible, match="does not record commits for libch341"):
-        bi.check_pins(old, pins)
+    with pytest.raises(bi.BinaryNoneCompatible, match="no published binary covers libch341 yet"):
+        bi.newest_entry([old], "aarch64-trixie", _daemon().binary.covers)
 
 
 def test_missing_libusb_headers_never_block_the_default_adoption(tmp_path, monkeypatch):
@@ -147,14 +147,14 @@ def test_an_archive_without_the_library_is_refused_and_the_previous_install_kept
     sha = {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in arts.items()}
     by_sha = {sha[k]: p.read_bytes() for k, p in arts.items()}
 
-    def entry(k):
+    def entry(k):                       # v2 is published later (U9: offered only when newer)
         fn = f"daemon-{sha[k]}.tar.zst"
         return {"filename": fn, "url": f"https://example.invalid/{fn}", "sha256": sha[k],
                 "size": len(by_sha[sha[k]]), "built_from": "b" * 40, "components": dict(pins),
                 "lhpc_commit": "c" * 40, "builder_commit": "d" * 40, "target": "aarch64-trixie",
                 "os": "trixie", "container_digest": "debian@sha256:" + "e" * 64, "runtime_deps": [],
                 "smoke": {"mode": "mandatory", "result": "passed"}, "extract_to": "runtime-root",
-                "inputs": {}, "published_at": "2026-10-24T08:00:00Z"}
+                "inputs": {}, "published_at": f"2026-10-2{4 + int(k[1])}T08:00:00Z"}
     served = {}
     monkeypatch.setattr(bi, "_http_get", lambda url, max_bytes: json.dumps(served["index"]).encode())
     monkeypatch.setattr(bi, "download_artifact",

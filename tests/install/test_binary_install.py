@@ -175,22 +175,15 @@ def test_non_https_url_refused(monkeypatch):
         bi._http_get("http://example.invalid/index.json", 1024)
 
 
-def test_check_pins_accepts_exact_match(tmp_path):
+def test_newest_entry_accepts_a_covering_entry_at_any_commits(tmp_path):
     e = _entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"}))
-    bi.check_pins(e, {"demo-main": "c" * 40})               # no raise
+    assert bi.newest_entry([e], e.target, {"demo-main"}) is e          # U9: no commit equality
 
 
-def test_check_pins_rejects_lagging_component(tmp_path):
+def test_newest_entry_refuses_a_missing_covered_component(tmp_path):
     e = _entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"}))
-    with pytest.raises(bi.BinaryInstallError, match="different commits"):
-        bi.check_pins(e, {"demo-main": "9" * 40})
-
-
-def test_check_pins_rejects_missing_component(tmp_path):
-    e = _entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"}))
-    with pytest.raises(bi.BinaryNoneCompatible, match="does not record commits") as exc:
-        bi.check_pins(e, {"demo-main": "c" * 40, "demo-lib": "a" * 40})
-    assert exc.value.mismatch == {}                         # another composition, not a lag
+    with pytest.raises(bi.BinaryNoneCompatible, match="no published binary covers demo-lib yet"):
+        bi.newest_entry([e], e.target, {"demo-main", "demo-lib"})
 
 
 def test_check_target_mismatch(tmp_path):
@@ -897,12 +890,12 @@ def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, 
     assert seen["args"] == ("daemon", True)
 
 
-def test_lagging_published_binary_is_refused_with_the_source_offer(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
+def test_a_refused_published_binary_offers_the_source(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
     svc = _svc(tmp_path, monkeypatch)
     binary_receipt(svc)
     stub_pipeline(svc)
-    monkeypatch.setattr(bi, "check_pins", lambda e, p: (_ for _ in ()).throw(
-        bi.BinaryInstallError("published artifact lags the pins")))
+    monkeypatch.setattr(bi, "newest_entry", lambda *a: (_ for _ in ()).throw(
+        bi.BinaryInstallError("the published binary records a malformed commit")))
     res = svc.update("daemon", apply=True, source="binary")
     assert not res.ok and res.data["offer_source"] is True
     assert any("--source pinned" in c for c in res.next_commands)
@@ -928,24 +921,16 @@ def test_update_unaffected_for_source_stacks(tmp_path, monkeypatch, binary_recei
     assert "is an install" not in res.summary
 
 
-def test_freshness_current_and_behind(tmp_path, monkeypatch, binary_receipt):
+def test_freshness_current_and_behind(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
+    # U9: the binary lane's verdict is the install's target (`newest_entry`), never the pins.
     svc = _svc(tmp_path, monkeypatch)
-    assert svc.binary_freshness("daemon") == {"state": "n/a", "behind": []}
-    binary_receipt(svc)
+    stub_pipeline(svc)                                   # the newest entry: "a" * 64, 2026-11-10
+    assert svc.binary_freshness("daemon") == {"state": "n/a", "offer": ""}
+    binary_receipt(svc, sha="a" * 64)
     assert svc.binary_freshness("daemon")["state"] == "current"
     brx.remove_receipt(svc._paths, "daemon")
-    binary_receipt(svc, commits={cid: "9" * 40 for cid in _pins(svc)})
-    f = svc.binary_freshness("daemon")
-    assert f["state"] == "behind" and "loraham-daemon" in f["behind"]
-
-
-def test_freshness_is_local_only(tmp_path, monkeypatch, binary_receipt):
-    # GET-safe: the freshness answer must never touch the network.
-    svc = _svc(tmp_path, monkeypatch)
-    binary_receipt(svc)
-    monkeypatch.setattr(bi, "_http_get",
-                        lambda *a, **k: pytest.fail("freshness must not fetch"))
-    assert svc.binary_freshness("daemon")["state"] == "current"
+    binary_receipt(svc)                                  # another, older artifact
+    assert svc.binary_freshness("daemon") == {"state": "behind", "offer": f"daemon-{'a' * 64}.tar.zst"}
 
 
 def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch, stub_pipeline):
@@ -1060,8 +1045,8 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
     idx = {"schema": 3, "stacks": {"meshcom": [{
         "filename": "meshcom-" + "0" * 64 + ".tar.zst", "url": "https://example.invalid/meshcom.tar.zst",
         "sha256": "0" * 64, "size": 1024, "built_from": "b" * 40,
-        # The index must record a commit for EVERY covered component or the pins-must-match
-        # invariant refuses the entry before adoption is ever reached.
+        # The index must record a commit for EVERY covered component or the coverage check
+        # refuses the entry before adoption is ever reached.
         "components": {c.id: (c.source.pin_commit if c.source else "a" * 40)
                        for c in svc.stack("meshcom").components
                        if c.id in spec.covers},
@@ -1069,7 +1054,7 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
         "smoke": {"mode": "mandatory", "result": "passed"}, "lhpc_commit": "d" * 40,
         "builder_commit": "e" * 40, "container_digest": "debian@sha256:" + "f" * 64,
         "extract_to": "runtime-root", "published_at": "2026-01-01T00:00:00Z",
-        "inputs": _bi.input_digests(svc.stack("meshcom"), spec.covers, svc.build_inputs_text)}]}}
+        "inputs": {}}]}}
     monkeypatch.setattr(_bi, "_http_get",
                         lambda url, max_bytes: _json.dumps(idx).encode())
 
@@ -1495,13 +1480,15 @@ def test_replaced_first_source_is_restored_when_a_later_group_fails(tmp_path, mo
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path, monkeypatch, binary_receipt):
+def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path, monkeypatch, binary_receipt,
+                                                                       stub_pipeline):
     """The binary branch of the freshness probe must record the head it judged (the receipt's
     component commit — the same head the status probe reports), or effective_status() shows
     "unchecked" forever and the console can never render the verdict it just computed."""
     from lhpc.core import stackupdates
     svc = _svc(tmp_path, monkeypatch)
-    binary_receipt(svc)                                 # valid receipt == manifest pins
+    stub_pipeline(svc)
+    binary_receipt(svc, sha="a" * 64)                   # valid receipt == the newest published entry
     comp = svc.stack("daemon").main_component
     entry = svc._update_probe(comp)
     head = svc.binary_receipt_state("daemon")[1].components[comp.id]
@@ -1589,7 +1576,7 @@ def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monk
     stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
     res = svc.binary_install("meshcom", apply=True, locked=locked)
     assert state["updated"] == [] and state["adopted"] == []   # never moved
-    assert not res.ok and "the pin is" in res.summary          # the old refusal, unchanged
+    assert not res.ok and "the binary was built from" in res.summary   # the old refusal, at the binary's commit
 
 
 def test_outside_an_auto_install_run_a_clean_clone_left_at_an_older_pin_is_refused_as_before(
@@ -1602,7 +1589,7 @@ def test_outside_an_auto_install_run_a_clean_clone_left_at_an_older_pin_is_refus
     stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
     res = svc.binary_install("meshcom", apply=True)
     assert state["updated"] == ["meshcom-qemu"] and state["adopted"] == []
-    assert not res.ok and "the pin is" in res.summary
+    assert not res.ok and "the binary was built from" in res.summary
 
 
 def test_inside_an_auto_install_run_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(
