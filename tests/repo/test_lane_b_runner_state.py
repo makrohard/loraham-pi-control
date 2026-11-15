@@ -97,6 +97,7 @@ def _orphan(cmd):
     return int(out.stdout)
 
 
+@pytest.mark.wallclock("a real running process is stopped and shown gone")
 def test_a_well_formed_qemu_pidfile_of_a_running_process_is_stopped(tmp_path):
     # A16 and A19: the process is ended and shown gone.
     pid = _orphan("sleep 300")
@@ -107,6 +108,7 @@ def test_a_well_formed_qemu_pidfile_of_a_running_process_is_stopped(tmp_path):
         subprocess.run(["kill", "-9", str(pid)], capture_output=True, check=False)
 
 
+@pytest.mark.wallclock("a real process group is waited for, then stopped")
 def test_a_sampler_group_published_from_inside_is_stopped(tmp_path):
     # A5, A9: "grp:<id>" names the group; kill -- -id, then pgrep -g shows it empty.
     pid = _orphan("setsid sleep 300")
@@ -163,6 +165,7 @@ def _kill_group_of(pidfile):
         subprocess.run(["kill", "-9", "--", f"-{t[4:]}"], capture_output=True, check=False)
 
 
+@pytest.mark.wallclock("waits for a real held launch to reach the shim")
 def test_the_evidence_step_refuses_while_the_sampler_is_held_before_setsid(tmp_path):
     # G2-1, A3 (event-controlled, replaces the old sleep-1 ordering proof): the sampler's launch is held before
     # setsid ran (a shim waits on a FIFO the test opens later), and the real evidence step runs meanwhile. The

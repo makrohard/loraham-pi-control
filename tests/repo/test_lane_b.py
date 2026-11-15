@@ -156,7 +156,7 @@ def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None, kill_lo
         if writer is not None:
             (ev / "w.txt").unlink(missing_ok=True)
             on_term = f"trap 'echo \"{writer}\" >> {ev}/w.txt; exit 0' TERM"
-            loop = f"{on_term}; echo up >> {ev}/w.txt; while :; do echo tick >> {ev}/w.txt; sleep 0.05; done"
+            loop = f"{on_term}; echo up >> {ev}/w.txt; while :; do echo tick >> {ev}/w.txt; sleep 0.05; done"  # wallclock: a real writer loop for the stop to end
             start = subprocess.run(["bash", "-c", 'setsid bash -c "$1" > /dev/null 2>&1 & echo $!', "_", loop],
                                    capture_output=True, text=True, check=True)
             pgid = int(start.stdout)
@@ -240,6 +240,7 @@ def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pi
 
 
 @pytest.mark.parametrize("slow_start", [False, True])
+@pytest.mark.wallclock("a real sampler process group is started and stopped")
 def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path, slow_start):
     # start_samplers as the job runs it (the guest half stubbed): the pidfile names the sampler's own group, and
     # stop_writer leaves no process of it behind. The group exists only once setsid has run, after start_samplers
@@ -287,7 +288,7 @@ def _samplers_then_evidence(tmp_path, prelude):
     # On exit the script waits for the shim's pid only when it launched a job: a launch is then known
     # for sure, and no launch is known for sure when there is no job.
     script = f"""set -euo pipefail
-trap 'if [ -n "$(jobs -p)" ]; then until [ -s {launched} ]; do sleep 0.01; done; fi' EXIT
+trap 'if [ -n "$(jobs -p)" ]; then until [ -s {launched} ]; do sleep 0.01; done; fi' EXIT  # wallclock: the EXIT trap waits for the real shim's launch
 . {LANE / "guest.sh"}
 g() {{ :; }}; gcp() {{ :; }}
 {prelude}
@@ -298,7 +299,7 @@ start_samplers
     try:
         published = (work / "runner-sampler.pid").exists() and (work / "runner-sampler.pid").read_text().startswith("grp:")
         if pgid is not None and published:          # the sampler's first line: it runs, in its group
-            subprocess.run(["timeout", "30", "bash", "-c", 'until [ -s "$1" ]; do sleep 0.1; done', "_",
+            subprocess.run(["timeout", "30", "bash", "-c", 'until [ -s "$1" ]; do sleep 0.1; done', "_",  # wallclock: waits for a real sampler's first line
                             str(ev / "runner-load.txt")], check=True)
         step = next(s for s in _jobs()["topic"] if "id: evidence" in s)
         p = subprocess.run(["bash", "-e", "-c", _run_block(step)], capture_output=True, text=True, check=False,
