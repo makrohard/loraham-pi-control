@@ -216,7 +216,7 @@ def test_secure_default_baseline_has_dhcp_client_rules_with_ap_disabled():
     m = _resolve()
     matches = {r.get("match") for r in m["rules"]}
     assert "dhcpv4-client" in matches and "dhcpv6-client" in matches
-    assert not any(r.get("match", "").startswith("ap-") for r in m["rules"])
+    assert not any(r.get("match", "").startswith("ap-") for r in m["rules"])    # rule-10: absence over a namespace; no value is compared by its prefix
     assert m["chain"]["policy"] == "drop"
 
 
@@ -686,7 +686,7 @@ def test_units_carry_mandated_settings_and_never_private_network():
         directives = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
         # Host netns is mandatory: no private-network DIRECTIVE may exist (the comment
         # naming the prohibition is fine — only real unit directives count).
-        assert not any(d.startswith(("PrivateNetwork", "NetworkNamespacePath"))
+        assert not any(d.startswith(("PrivateNetwork", "NetworkNamespacePath"))    # rule-10: absence over a namespace; no value is compared by its prefix
                        for d in directives)
         assert "CapabilityBoundingSet=CAP_NET_ADMIN" in text
         assert "NoNewPrivileges=yes" in text
@@ -715,7 +715,7 @@ def test_apply_script_embeds_helper_byte_exact_and_is_valid_bash(tmp_path):
         elif in_heredoc and ln == in_heredoc:
             in_heredoc = False
         elif not in_heredoc:
-            assert not ln.strip().startswith("nft "), ln
+            assert not ln.strip().startswith("nft "), ln    # rule-10: absence over a namespace; no value is compared by its prefix
     assert "systemctl enable lhpc-firewall.service lhpc-firewall-check.timer" in script
     for render in (script, fwm.render_reset_script(), fwm.render_cleanup_script()):
         f = tmp_path / "s.sh"
@@ -753,7 +753,7 @@ def test_integration_rev_ignores_trailing_newline_install_drift(tmp_path):
 
 def test_helper_source_starts_with_shebang():
     from lhpc.core import firewall as fwm
-    assert fwm.helper_source().startswith("#!/usr/bin/python3\n")
+    assert fwm.helper_source().splitlines()[0] == "#!/usr/bin/python3"
 
 
 # --- FW-5: manifest metadata (fail-closed) + derivation --------------------------------------
@@ -1757,7 +1757,7 @@ def test_configure_writes_scripts_atomically(tmp_path):
     base = svc._paths.under("config/files/firewall")
     names = _os.listdir(base)
     assert "firewall-apply.sh" in names
-    assert not any(n.startswith(".tmp-") for n in names)      # no leftover temp files
+    assert not any(n.startswith(".tmp-") for n in names)    # rule-10: absence over a namespace; no value is compared by its prefix; no leftover temp files
     for n in ("firewall-apply.sh", "firewall-reset.sh", "firewall-cleanup.sh"):
         assert _os.access(_os.path.join(base, n), _os.X_OK)   # executable
 

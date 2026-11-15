@@ -119,7 +119,7 @@ def test_meshtastic_omits_reset_busy_even_from_a_stale_base(tmp_path):
     assert "Module: RF95" in out and "CS: 7" in out and "IRQ: 16" in out
     for line in out.splitlines():
         s = line.strip()
-        assert not (s.startswith("Reset:") or s.startswith("Busy:")), f"harmful pin survived: {line!r}"
+        assert not (s.startswith("Reset:") or s.startswith("Busy:")), f"harmful pin survived: {line!r}"    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_meshtastic_exotic_board_can_still_set_reset(tmp_path):
@@ -165,7 +165,7 @@ def test_an_added_key_takes_its_sections_four_space_indent(tmp_path):
     doc = yaml.safe_load(out)                    # parses at all: no mixed indent in `Lora:`
     assert set(doc) == {"Lora", "Logging"} and doc["Logging"] == {"LogLevel": "info"}
     assert doc["Lora"]["Module"] == "RF95" and doc["Lora"]["Reset"] == 18
-    assert all(ln.startswith("    ") for ln in out.split("Lora:\n", 1)[1].split("Logging:", 1)[0]
+    assert all(ln.startswith("    ") for ln in out.split("Lora:\n", 1)[1].split("Logging:", 1)[0]    # rule-10: the YAML block's indentation; the parse above checks the values
                .splitlines())
 
 
@@ -194,7 +194,7 @@ def test_generated_868_from_shipped_base_has_no_reset_busy(tmp_path):
     assert "Module: RF95" in active and "CS: 7" in active and "IRQ: 16" in active
     for line in active.splitlines():
         s = line.strip()
-        assert not (s.startswith("Reset:") or s.startswith("Busy:"))
+        assert not (s.startswith("Reset:") or s.startswith("Busy:"))    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 # --- 2. dep-gate / overview cover the must-not-run check -------------------------------------------
@@ -264,8 +264,8 @@ def test_update_yaml_omit_if_empty_removes_active_key_but_keeps_commented():
     busy = FileParam(name="busy", key="Busy", section="Lora", kind="int", omit_if_empty=True)
     out = update_yaml(base, [reset, busy], {}, lambda s: s)          # unset -> omit
     assert "CS: 7" in out
-    assert not any(ln.strip().startswith("Reset:") for ln in out.splitlines())   # active dropped
-    assert not any(ln.strip().startswith("Busy:") for ln in out.splitlines())
+    assert not any(ln.strip().startswith("Reset:") for ln in out.splitlines())    # rule-10: absence over a namespace; no value is compared by its prefix; active dropped
+    assert not any(ln.strip().startswith("Busy:") for ln in out.splitlines())    # rule-10: absence over a namespace; no value is compared by its prefix
     assert "#  Reset: 22" in out                                    # commented example preserved
 
 
@@ -323,7 +323,7 @@ def test_asset_base_generates_without_any_source(tmp_path):
     text = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     active = text.split("# 433 MHz", 1)[0]
     assert "Module: RF95" in active
-    assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())
+    assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_asset_policy_rejected_for_generated_destination(tmp_path):
@@ -369,7 +369,7 @@ def test_packaged_base_is_the_authoritative_hardware_config(tmp_path):
     generated = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
     active = generated.split("# 433 MHz", 1)[0]
     assert "Module: RF95" in active and "CS: 7" in active and "IRQ: 16" in active
-    assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())
+    assert not any(ln.strip().startswith(("Reset:", "Busy:")) for ln in active.splitlines())    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_web_port_is_the_endpoints_and_never_operator_settable(tmp_path):

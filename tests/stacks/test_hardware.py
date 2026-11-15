@@ -96,7 +96,7 @@ def test_service_helpers(tmp_path):
     assert svc.hardware_setup() == "waveshare-433" and svc.hardware_configured()
     assert svc.radio_bands() == ("433",)                           # the list's one radio decides (S2)
     assert svc.band_active("433") and not svc.band_active("868")
-    assert dict(svc.hw_setups())["loraham"].startswith("LoRaHAM")
+    assert dict(svc.hw_setups())["loraham"].startswith("LoRaHAM")    # rule-10: a display label's lead; the rest names the modules
 
 
 # ---- M0: v112 daemon argv — one process per radio, `--hw`, no band-suffixed flags ---------------

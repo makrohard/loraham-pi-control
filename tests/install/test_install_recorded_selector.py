@@ -31,7 +31,7 @@ def test_a_different_recorded_selector_is_named_with_the_switch_command(tmp_path
 def test_no_note_when_the_selector_already_matches(tmp_path):
     r = _svc_with_kiss(tmp_path, "pinned").install("kiss", apply=False, source="pinned")
     assert not any("installed from" in d for d in r.details)
-    assert not any(c.startswith("lhpc update") for c in r.next_commands)
+    assert not any(c.startswith("lhpc update") for c in r.next_commands)    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_the_applied_install_says_it_too(tmp_path):
@@ -69,5 +69,5 @@ def test_no_note_when_the_recorded_checkout_is_gone(tmp_path):
     (tmp_path / "src" / "loraham-kiss-tnc").rmdir()
     r = svc.install("kiss", apply=False, source="pinned")
     assert not any("installed from" in d for d in r.details)
-    assert not any(c.startswith("lhpc update") for c in r.next_commands)
+    assert not any(c.startswith("lhpc update") for c in r.next_commands)    # rule-10: absence over a namespace; no value is compared by its prefix
     assert int(r.data.get("changes", 0)) > 0                        # the adoption is planned

@@ -30,7 +30,7 @@ def test_the_node_image_is_outside_every_binary_publish_root(tmp_path):
     roots = svc.binary_spec("meshcom").publish_roots
     assert roots
     for root in roots:
-        assert not (node == root or node.startswith(root.rstrip("/") + "/")), root
+        assert not (node == root or node.startswith(root.rstrip("/") + "/")), root    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def _seed_node_image(tmp_path):

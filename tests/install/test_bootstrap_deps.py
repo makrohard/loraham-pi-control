@@ -1206,8 +1206,8 @@ def test_no_unguarded_command_can_abort_before_the_summary(tmp_path):
     for i, line in enumerate(text.splitlines()):
         s = line.strip()
         if s.startswith("systemctl disable"):
-            assert s.endswith("|| true") or line.startswith("\t"), \
-                f"unguarded systemctl disable at line {i + 1}: {line!r}"
+            assert s.endswith("|| true") or line.startswith("\t"), (    # rule-10: a tab-indented continuation line; no value is compared
+                f"unguarded systemctl disable at line {i + 1}: {line!r}")
     # Unit presence is tested PIPELINE-FREE. `systemctl list-unit-files | grep -q '^unit'` inverts
     # under `set -o pipefail` (grep -q exits at the match, systemctl dies of SIGPIPE=141, pipefail
     # makes the pipeline non-zero → the guard takes ELSE on a box where the unit EXISTS). So no
@@ -1546,7 +1546,7 @@ def test_time_source_adds_prefer_and_changes_nothing_else(tmp_path):
     assert got == _STOCK_CHRONY_CONF.replace(
         "pool 2.debian.pool.ntp.org iburst\n", "pool 2.debian.pool.ntp.org iburst prefer\n")
     assert "chrony" in apt and "gpsd" in apt          # they ride the merged transaction
-    assert (r.ts / "10-lhpc-gps.conf").read_text().startswith("# Installed by LoRaHAM Pi Control")
+    assert (r.ts / "10-lhpc-gps.conf").read_text().startswith("# Installed by LoRaHAM Pi Control")    # rule-10: the installed file's header line; its body is checked below
     assert "refclock SHM 0 refid GPS" in (r.ts / "10-lhpc-gps.conf").read_text()
 
 

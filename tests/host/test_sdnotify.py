@@ -43,7 +43,6 @@ def test_payload_is_encoded_utf8_not_the_locale(sock):
     assert sdnotify.notify_status("https://a/ · https://b/") is True
     raw = sock.recv(4096)
     assert raw == "STATUS=https://a/ · https://b/".encode("utf-8")
-    assert raw.decode("utf-8").startswith("STATUS=https://a/ ·")
 
 
 def test_notify_status_prefixes_the_key(sock):

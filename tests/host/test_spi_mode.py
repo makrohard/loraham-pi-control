@@ -89,7 +89,7 @@ def test_the_booted_tree_is_read_from_spi0s_full_cs_gpios_specifiers(tmp_path, k
 ])
 def test_the_mode_is_valid_only_when_file_and_kernel_agree(boot, live, why):
     got = spi_mode.refusal(boot, live)
-    assert (got == "") if not why else got.startswith(why)
+    assert (got == "") if not why else got.startswith(why)    # rule-10: a sentence's opening; the result carries no typed field
 
 
 BASE = """Lora:
@@ -155,12 +155,12 @@ def _start(tmp_path, monkeypatch, boot, live, spi=True):
 
 def test_a_bus_user_is_refused_while_the_boot_file_waits_for_a_reboot(tmp_path, monkeypatch):
     got = _start(tmp_path, monkeypatch, "dtparam=spi=on\n", "soft")
-    assert not got.ok and got.detail.startswith("reboot required")
+    assert not got.ok and got.detail.startswith("reboot required")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_a_bus_user_is_refused_on_a_booted_unsupported_layout(tmp_path, monkeypatch):
     got = _start(tmp_path, monkeypatch, "dtparam=spi=on\n", "unsupported")
-    assert not got.ok and got.detail.startswith("unsupported SPI boot configuration")
+    assert not got.ok and got.detail.startswith("unsupported SPI boot configuration")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_a_component_off_the_bus_is_never_gated(tmp_path, monkeypatch):
@@ -249,7 +249,7 @@ def test_a_daemon_source_checkout_must_contain_the_kernel_cs_commit(tmp_path, mo
                                       lambda c: repo)
     assert bool(why) is refused
     if refused:
-        assert why.startswith("loraham-daemon was built from") and "lhpc update daemon" in why
+        assert why.startswith("loraham-daemon was built from") and "lhpc update daemon" in why    # rule-10: a sentence's opening; the result carries no typed field
 
 
 @pytest.mark.parametrize("verified, built, refused", [
@@ -360,7 +360,7 @@ def test_the_start_gate_refuses_an_old_build_only_with_kernel_chip_selects(tmp_p
     monkeypatch.setattr(spi_mode, "provenance_refusal",
                         lambda *a: calls.append(a) or "rns-lora-interface was built from …")
     got = _start(tmp_path, monkeypatch, "dtparam=spi=on\n", "kernel")
-    assert not got.ok and got.detail.startswith("rns-lora-interface was built from")
+    assert not got.ok and got.detail.startswith("rns-lora-interface was built from")    # rule-10: a sentence's opening; the result carries no typed field
     calls.clear()
     got = _start(tmp_path, monkeypatch, "dtparam=spi=on\ndtoverlay=spi0-0cs\n", "soft")
     assert calls == []                              # soft mode: no provenance check at all

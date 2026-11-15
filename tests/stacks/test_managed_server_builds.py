@@ -181,12 +181,12 @@ def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
         joined = " ".join(argv)
         for priv in ("sudo", "pkexec", "doas", "su "):
             assert priv not in joined, f"{priv!r} in {joined!r}"
-        assert not argv[0].startswith("/usr/sbin/")          # not a root-only binary path
+        assert not argv[0].startswith("/usr/sbin/")    # rule-10: absence over a namespace; no value is compared by its prefix; not a root-only binary path
     # Every artifact it writes lives under the runtime root, which the operator owns.
     assert c.bin == "build/tools/meshtasticd/meshtasticd"
     for s in c.build_steps:
         for tok in s.get("argv", []):
-            assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok
+            assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 # --- a source build of an artifact-capable component proves its own revision BESIDE the marker -----

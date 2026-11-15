@@ -703,12 +703,12 @@ def test_timezone_falls_back_to_etc_timezone(tmp_path):
 def test_timezone_falls_back_to_the_utc_offset(tmp_path):
     """Neither source available: an offset is always computable and never pretends to be a zone."""
     tz = _time_state(tmp_path, _time_fake(tmp_path), None)["tz"]
-    assert tz.startswith("UTC") and ":" in tz, tz
+    assert tz.startswith("UTC") and ":" in tz, tz    # rule-10: a UTC offset of any value; ':' in it is checked too
 
 
 def test_timezone_ignores_a_link_target_that_is_not_a_zone(tmp_path):
     fake = _time_fake(tmp_path, links={"/etc/localtime": "/etc/something-else"})
-    assert _time_state(tmp_path, fake, None)["tz"].startswith("UTC")
+    assert _time_state(tmp_path, fake, None)["tz"].startswith("UTC")    # rule-10: a UTC offset of any value, never a zone name
 
 
 # --- GET-safety: the widened mechanism must not have widened into subprocess ----------------------

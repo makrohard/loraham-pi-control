@@ -125,7 +125,6 @@ def test_a_device_and_its_alias_resolve_to_one_lock_key(tmp_path):
         pytest.skip("no character device available")
     key, err = gps_mod.device_lock_key(real)
     assert key and not err
-    assert key.startswith("serial.dev.")
     st = os.stat(real)
     assert key == f"serial.dev.{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
 
@@ -205,7 +204,7 @@ def test_the_meshcom_feed_waits_for_qemu_instead_of_failing(short_tmp_path):
         conn, _ = srv.accept()
         try:
             assert out.connected is True and out.written > 0
-            assert conn.recv(64).startswith(b"$GPGGA")
+            assert conn.recv(64).startswith(b"$GPGGA")    # rule-10: a stream's first sentence type; the stream runs on
         finally:
             conn.close()
     finally:
@@ -602,7 +601,7 @@ def test_a_direct_receiver_is_an_exclusive_lifecycle_claim(tmp_path):
                {"source": "fixed", "fixed_lat": LAT, "fixed_lon": LON}):
         save_gps(svc._paths, **kw)
         svc._invalidate_config()
-        assert not [k for k in svc._operation_resource_keys("meshtastic") if k.startswith("gps.")]
+        assert not [k for k in svc._operation_resource_keys("meshtastic") if k.startswith("gps.")]    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_ownership_is_checked_against_the_LOCAL_gpsd_not_a_retained_remote_host(tmp_path, monkeypatch):
@@ -1068,7 +1067,7 @@ def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(
     deadline = time.time() + 30.0
     while ready.state != "ready" and time.time() < deadline:
         time.sleep(0.05)
-    assert ready.state == "ready" and out.data.startswith(b"$GPGGA")
+    assert ready.state == "ready" and out.data.startswith(b"$GPGGA")    # rule-10: a stream's first sentence type; the stream runs on
 
     srv.close()                                   # the source goes away
     deadline = time.time() + 6.0
@@ -1103,7 +1102,7 @@ def test_an_unreachable_gpsd_is_reported_as_unreachable_not_as_closed(tmp_path):
     try:
         assert waiting.wait(5.0), "the pump never reached its reconnect back-off"
         assert ready.state == "source-lost"
-        assert ready.detail.startswith("gpsd unreachable"), ready.detail
+        assert ready.detail.startswith("gpsd unreachable"), ready.detail    # rule-10: a sentence's opening; the result carries no typed field
     finally:
         stop.set()
         t.join(timeout=3.0)
@@ -2339,7 +2338,7 @@ def test_reticulum_claims_nothing_when_sideband_is_not_selected(tmp_path):
     order = [c.id for _s, c in (svc._run_order("reticulum") or [])]
     assert "sideband" not in order, "this test is about the run order WITHOUT Sideband"
     assert svc._gps_device_claim("reticulum") == "", f"claimed the receiver for {order}"
-    assert not [k for k in svc._operation_resource_keys("reticulum") if k.startswith("gps.")]
+    assert not [k for k in svc._operation_resource_keys("reticulum") if k.startswith("gps.")]    # rule-10: absence over a namespace; no value is compared by its prefix
     assert svc.gps_block("reticulum") == ("", []), "and it is not gated on GPS either"
 
     # A stack that DOES read a position still claims it.
@@ -2379,8 +2378,8 @@ def test_a_directly_running_reader_keeps_its_receiver_claim(tmp_path):
     _enable(svc2, "reticulum", "meshcom")
     svc2._invalidate_config()
     _snap_with(svc2, {"rns": RunState.RUNNING})
-    assert not [b for b in svc2.run_blockers("meshcom") if b["resource"].startswith("gps.")], \
-        "rns holds no receiver — blocking on it would refuse a perfectly valid start"
+    assert not [b for b in svc2.run_blockers("meshcom") if b["resource"].startswith("gps.")], (    # rule-10: absence over a namespace; no value is compared by its prefix
+        "rns holds no receiver — blocking on it would refuse a perfectly valid start")
 
 
 # ---- READY must mean position, not merely parseable bytes -------------------------------------

@@ -102,7 +102,7 @@ def test_lite_voice_start_ok_does_not_depend_on_the_sidecar_wording(tmp_path, mo
     set_call(svc)
     res = svc.start("voice", apply=True)
     cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.MANUAL_REQUIRED and cli.summary.startswith("reworded: ")
+    assert cli.outcome == Outcome.MANUAL_REQUIRED and cli.summary.startswith("reworded: ")    # rule-10: a sentence's opening; the result carries no typed field
     assert res.ok is True, outcomes(res)
 
 

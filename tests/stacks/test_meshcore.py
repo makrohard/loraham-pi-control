@@ -516,7 +516,7 @@ def test_the_published_key_file_is_never_visible_half_written(tmp_path):
     with pytest.raises(FileExistsError):
         runtime_fs.create_exclusive_bytes(svc_paths, p, b"y" * 64)
     assert p.read_bytes() == b"x" * 64, "the loser must never overwrite the winner"
-    assert not [q for q in p.parent.iterdir() if q.name.startswith(".")], "no temp left behind"
+    assert not [q for q in p.parent.iterdir() if q.name.startswith(".")], "no temp left behind"    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 @pytest.mark.safety("meshcore-position")

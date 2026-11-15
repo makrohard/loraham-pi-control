@@ -694,7 +694,7 @@ def test_the_refresh_leaves_a_newer_releases_units_as_they_are(op_svc, monkeypat
     ok, why = svc._refresh_units_post_update()  # the private IS the seam under test
     assert repaired == []                                       # no in-process write
     assert any("verify-set" in str(a) for a in seen[-1])
-    assert not ok and why.startswith("units of another release — left as they are")
+    assert not ok and why.startswith("units of another release — left as they are")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 @pytest.mark.parametrize("other", ["missing", "modified_ours"])
@@ -1025,7 +1025,7 @@ def test_unsafe_identity_refusal_names_the_remedy_for_its_cause(tmp_path, monkey
     assert reason in res.summary
     if command is None:
         assert res.next_commands == []
-        assert any(d.strip().startswith(NOTHING_TO_RUN.strip()) and "install.sh" in d
+        assert any(d.strip().startswith(NOTHING_TO_RUN.strip()) and "install.sh" in d    # rule-10: a sentence's opening; the result carries no typed field
                    for d in res.details)
     else:
         remote = svc.controller().remote

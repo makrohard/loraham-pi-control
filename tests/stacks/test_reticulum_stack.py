@@ -423,7 +423,7 @@ def test_status_versions_names_a_package_that_differs(tmp_path):
     details = svc.status_versions().details
     line = next(d for d in details if d.strip().startswith("nomadnet "))
     assert line.endswith(" rns=1.5.4 lxmf=1.1.1"), line
-    assert next(d for d in details if d.strip().startswith("sideband ")).endswith(
+    assert next(d for d in details if d.strip().startswith("sideband ")).endswith(    # rule-10: selects a component's line; its versions are compared below
         " rns=- lxmf=-")
     assert "  reticulum: lxmf differs — 1.1.0 (lxmd), 1.1.1 (nomadnet, meshchat)" in details
     assert not any("rns differs" in d for d in details)
@@ -919,7 +919,7 @@ def test_meshchat_is_an_optional_client_that_cannot_own_the_radio():
 def test_meshchat_listens_on_loopback_and_is_proxied():
     m = _comp("meshchat")
     ep = [e for e in m.endpoints if e.ready][0]
-    assert ep.address.startswith("127.0.0.1:"), "nginx is the only public path; it has no auth"
+    assert ep.address.rpartition(":")[0] == "127.0.0.1", "nginx is the only public path; it has no auth"
     assert ep.client and ep.scheme == "http", "client+scheme is what makes it a proxyable page"
     port = ep.address.split(":")[1]
     assert any(r.key == f"tcp.port.{port}" and r.mode is ResourceMode.EXCLUSIVE
@@ -1136,8 +1136,8 @@ def test_the_mode_key_is_mode_and_never_interface_mode():
     from lhpc.core.assets import asset_path
     base = asset_path("bases/reticulum.conf").read_text()
     settings = [ln.strip() for ln in base.splitlines() if not ln.strip().startswith("#")]
-    assert not any(ln.startswith("interface_mode") for ln in settings)
-    assert [ln for ln in settings if ln.startswith("mode = ")] == [
+    assert not any(ln.startswith("interface_mode") for ln in settings)    # rule-10: absence over a namespace; no value is compared by its prefix
+    assert [ln for ln in settings if ln.startswith("mode = ")] == [    # rule-10: selects the `mode = ` lines; the list is compared whole
         "mode = internal", "mode = gateway", "mode = boundary"]
 
 
@@ -1267,7 +1267,7 @@ def test_the_meshchat_pin_is_declared_like_every_other_browser_gui():
     for field in ("kind", "scheme", "client", "ready", "role"):
         assert getattr(a, field) == getattr(b, field), f"{field} differs from the sibling GUI"
     assert a.description and b.description, "the pin's label"
-    assert a.address.startswith("127.0.0.1:") and b.address.startswith("127.0.0.1:")
+    assert a.address.rpartition(":")[0] == "127.0.0.1" and b.address.rpartition(":")[0] == "127.0.0.1"
     assert a.proxy_deny_paths and b.proxy_deny_paths, "both are fronted by the LHPC proxy"
 
 

@@ -137,7 +137,7 @@ def test_port_pin_is_never_an_inert_tcp_anchor(web, tmp_path, monkeypatch):
     # A tcp:// URL has no browser handler; the address is COPYABLE TEXT, never an <a href="tcp://…">.
     for scope, peer in (("loopback", "remote"), ("exposed", "remote"), ("loopback", "loopback")):
         body = _dash_body_h(web, tmp_path, monkeypatch, _port_row(scope), {"X-LHPC-Peer": peer})
-        assert not any(h.startswith("tcp://") for h in _hrefs(body))   # no inert tcp:// link
+        assert not any(h.startswith("tcp://") for h in _hrefs(body))    # rule-10: absence over a namespace; no value is compared by its prefix; no inert tcp:// link
         assert "4403" in body                                          # the address is still shown
 
 
@@ -201,7 +201,7 @@ def test_direct_web_absent_has_no_service_anchor_even_for_local_viewer(web, tmp_
     # for anyone (it's ABSENT, not local-only) — an internal 'listener absent' link instead.
     for peer in ("loopback", "remote"):
         body = _dash_body_h(web, tmp_path, monkeypatch, _direct_row("absent"), {"X-LHPC-Peer": peer})
-        assert not any(h.startswith("http://127.0.0.1:18083") for h in _hrefs(body))
+        assert not any(h.startswith("http://127.0.0.1:18083") for h in _hrefs(body))    # rule-10: absence over a namespace; no value is compared by its prefix
         assert "listener absent" in body
         assert any("/stacks?open=meshcom" in h for h in _hrefs(body))
 

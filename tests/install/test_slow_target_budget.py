@@ -138,7 +138,7 @@ def test_coverage_waives_l4_up_to_the_introducing_release_and_names_it():
     measured = [_entry(component="a", op="build")]
     for version in (stt.PIP_SYNC_SINCE, "0.11.11"):
         waived = _check_coverage(measured, [("a", "build"), PIP], version=version)
-        assert waived and waived[0].startswith("lhpc-selfupdate selfupdate-pip (L4)")
+        assert waived and waived[0].startswith("lhpc-selfupdate selfupdate-pip (L4)")    # rule-10: a sentence's opening; the result carries no typed field
     nxt = stt.PIP_SYNC_SINCE.rsplit(".", 1)
     for version in (f"{nxt[0]}.{int(nxt[1]) + 1}", "1.0.0"):
         with pytest.raises(AssertionError, match="lhpc-selfupdate selfupdate-pip"):
@@ -158,8 +158,8 @@ def test_coverage_lists_only_the_genuinely_unmeasured():
     # One unmeasured pair per line after the header, as `_check_coverage` writes them — read
     # without relying on pytest's rendering (it indents a message's lines and appends `assert`).
     listed = str(red.value).split("with a reason:\n", 1)[1].splitlines()
-    assert [ln.strip() for ln in listed if ln.strip() and not ln.startswith("assert ")] \
-        == ["b clone"]
+    assert ([ln.strip() for ln in listed if ln.strip() and not ln.startswith("assert ")]    # rule-10: filters pytest's own `assert` lines out of a message
+        == ["b clone"])
 
 
 def test_the_introducing_release_is_a_changelog_release():
@@ -187,7 +187,7 @@ def test_an_unreadable_limit_fails_naming_component_and_source():
     with pytest.raises(pytest.fail.Exception) as red:
         _check_budget("build", [], [("meshcore-cli", "build"), ("x", "clone")], read=unreadable)
     msg = str(red.value)
-    assert msg.startswith("build of meshcore-cli: the limit cannot be read — L1 build stall")
+    assert msg.startswith("build of meshcore-cli: the limit cannot be read — L1 build stall")    # rule-10: a sentence's opening; the result carries no typed field
     assert "slow_target._l1_stall" in msg and "lhpc.core.progress.STALL_S" in msg
 
 
@@ -300,7 +300,7 @@ def test_compare_fails_without_a_zero_baseline():
 
 
 def test_compare_fails_without_evidence():
-    assert any(f.startswith("no row C evidence") for f in _cmp([_entry(key="pin:new")], None))
+    assert any(f.startswith("no row C evidence") for f in _cmp([_entry(key="pin:new")], None))    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_a_moved_pin_is_held_to_the_margin_rule_only():
@@ -330,7 +330,7 @@ def test_build_is_budgeted_on_its_quiet_gap():
 def test_calibration_reads_only_calibration_entries():
     """A stack's [[measured]] entries can never stand in for the calibration."""
     fails = stt.calibration_failures([], "sha256:w", {"cpu_s": 1, "io_s": 1, "mem_s": 1})
-    assert fails and fails[0].startswith("uncalibrated: run the Zero row")
+    assert fails and fails[0].startswith("uncalibrated: run the Zero row")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_calibration_fails_a_container_faster_than_the_zero():
@@ -351,8 +351,8 @@ def test_a_non_finite_number_is_malformed_never_compared(bad):
     number must be refused by name before any budget comparison sees it."""
     assert stt.entry_errors(_entry(seconds=1.5)) == []
     assert stt.entry_errors(_entry(op="build", seconds=2.0, quiet_s=0.5)) == []
-    assert any(e.startswith("seconds") for e in stt.entry_errors(_entry(seconds=bad)))
-    assert any(e.startswith("a build entry needs quiet_s")
+    assert any(e.startswith("seconds") for e in stt.entry_errors(_entry(seconds=bad)))    # rule-10: a sentence's opening; the result carries no typed field
+    assert any(e.startswith("a build entry needs quiet_s")    # rule-10: a sentence's opening; the result carries no typed field
                for e in stt.entry_errors(_entry(op="build", seconds=2.0, quiet_s=bad)))
     zero = [{"workload": "sha256:w", "source": "zero2w", "cpu_s": 400.0, "io_s": 90.0,
              "mem_s": 60.0, "date": dt.date(2026, 10, 1)}]

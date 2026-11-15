@@ -54,7 +54,7 @@ def test_boot_restore_unit_canon():
     assert f"ExecStart={VENV}/bin/lhpc autostart --run-service" in boot
     assert f"ConditionPathExists=!{ROOT}/.lhpc-uninstalling" in boot
     # assert on the DIRECTIVE — the template carries an explanatory comment naming it
-    assert not [ln for ln in boot.splitlines() if ln.startswith("MemoryDenyWriteExecute")]
+    assert not [ln for ln in boot.splitlines() if ln.startswith("MemoryDenyWriteExecute")]    # rule-10: absence over a namespace; no value is compared by its prefix
     inaccessible = [ln for ln in boot.splitlines() if ln.startswith("InaccessiblePaths=")]
     assert inaccessible == ["InaccessiblePaths=%t/bus %t/systemd/private"]
 
@@ -107,11 +107,11 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
               "OnSuccess=lhpc-web.service", "OnFailure=lhpc-web.service"):
         assert d in helper
     for t in (web, helper):        # no systemctl in ANY active directive (comments may mention it)
-        assert not any("systemctl" in ln for ln in t.splitlines() if not ln.lstrip().startswith("#"))
+        assert not any("systemctl" in ln for ln in t.splitlines() if not ln.lstrip().startswith("#"))    # rule-10: skips comment lines; no value is compared
     # web: pulls the watcher up + refuses restart mid-uninstall; keeps QEMU W+X (no MDWE)
     assert "Wants=network-online.target lhpc-selfupdate.path" in web
     assert f"ConditionPathExists=!{ROOT}/.lhpc-uninstalling" in web
-    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in web.splitlines())
+    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in web.splitlines())    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 # --- verify() class taxonomy -----------------------------------------------------------------
@@ -393,7 +393,7 @@ def test_nginx_unit_shape():
     assert f"ConditionPathExists={ROOT}/config/nginx/lhpc.conf" in n     # no config -> no start
     assert "ProtectHome=read-only" in n and "ProtectSystem=strict" in n
     # no systemctl in any ACTIVE directive (declarative reloads use `nginx -s reload`)
-    assert not any("systemctl" in ln for ln in n.splitlines() if not ln.lstrip().startswith("#"))
+    assert not any("systemctl" in ln for ln in n.splitlines() if not ln.lstrip().startswith("#"))    # rule-10: skips comment lines; no value is compared
 
 
 def test_nginx_classify_ours_vs_foreign(tmp_path):
@@ -422,7 +422,7 @@ def test_restart_agent_is_declarative_and_sandboxed():
     assert "InaccessiblePaths=%t/bus %t/systemd/private" in t     # the agent needs no bus either
     assert "ExecStart=/v/bin/lhpc webserver --run-restart-service" in t
     # no systemctl in ANY active directive (comments may mention it) — same rule as the helper
-    assert not any("systemctl" in ln for ln in t.splitlines() if not ln.lstrip().startswith("#"))
+    assert not any("systemctl" in ln for ln in t.splitlines() if not ln.lstrip().startswith("#"))    # rule-10: skips comment lines; no value is compared
 
 
 def test_restart_path_unit_watches_the_request_and_documents_startup_recovery():

@@ -184,7 +184,7 @@ def test_summarize_output_collapses_multiline_and_box_drawing():
     out = selfupdate._summarize_output(raw)
     assert "\n" not in out                                     # newlines collapsed
     assert "\x1b" not in out and "─" not in out and "│" not in out   # ANSI + box glyphs stripped
-    assert out.startswith("error: Your local changes")        # readable, first line preserved
+    assert out.startswith("error: Your local changes")    # rule-10: git's own message, first line kept; no typed field; readable, first line preserved
     assert selfupdate._summarize_output("") == ""             # empty -> empty
     assert selfupdate._summarize_output("x" * 500, limit=200).endswith("…")   # bounded
 
@@ -260,7 +260,7 @@ def test_check_upstream_fetch_error_is_sanitized(tmp_path, monkeypatch):
     assert out["ok"] is False
     err = out["error"]
     assert "\n" not in err and "\x1b" not in err and "─" not in err and "│" not in err
-    assert err.startswith("fatal: unable to access remote")
+    assert err.startswith("fatal: unable to access remote")    # rule-10: git's own message; no typed field
     res = selfupdate.apply_update(FakeSystem(commands=cmds).system, gitrepo.runtime_paths(tmp_path))
     assert res["ok"] is False and "\n" not in res["message"] and "─" not in res["message"]
 
@@ -510,7 +510,7 @@ def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_
              "lhpc self-update --repair-integration"]
             if state == "venv-unsynced" else ["lhpc self-update --repair-integration"])
     assert r.ok is False and "state" not in r.data, r.data
-    assert r.summary.startswith("recovery-required: the update was applied"), r.summary
+    assert r.summary.startswith("recovery-required: the update was applied"), r.summary    # rule-10: a sentence's opening; the result carries no typed field
     assert "No space left on device" in r.summary and "abc1234" in r.summary, r.summary
     assert f"no {state} state exists" in r.summary and r.next_commands == cmds, r.summary
     if state == "venv-unsynced":
@@ -600,7 +600,7 @@ def test_a_record_that_cannot_be_cleared_fails_the_step(op_svc, monkeypatch, pat
     monkeypatch.setattr(runtime_fs, "unlink", refused)
     r = (svc.self_update_apply_operator() if path == "apply"
          else svc.self_update_repair_integration(restart=False))
-    assert r.ok is False and r.summary.startswith("recovery-required:"), r.summary
+    assert r.ok is False and r.summary.startswith("recovery-required:"), r.summary    # rule-10: a sentence's opening; the result carries no typed field
     assert "Read-only file system" in r.summary and str(rec) in " ".join(r.details), r
     assert svc.self_update_incomplete()[0] == "units-stale"
 
@@ -978,7 +978,7 @@ def test_an_unreachable_upstream_is_refused_without_the_overwrite(env):
     before = gitrepo.git(w, "rev-parse", "HEAD")
     res = ControllerService(system=env["sys"], paths=env["paths"]).self_update_apply()
     assert not res.ok and res.next_commands == []
-    assert any(d.startswith("  nothing to run here — ") for d in res.details)
+    assert any(d.startswith("  nothing to run here — ") for d in res.details)    # rule-10: a sentence's opening; the result carries no typed field
     assert gitrepo.git(w, "rev-parse", "HEAD") == before
 
 

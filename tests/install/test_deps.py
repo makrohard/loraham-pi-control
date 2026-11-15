@@ -101,7 +101,7 @@ def test_doctor_ends_with_a_copyable_install_block(tmp_path):
     assert hi > next(i for i, ln in enumerate(details) if "observed resource conflicts" in ln)
     block = details[hi + 1:]
     assert any("sudo usermod -aG spi,gpio $USER" in ln for ln in block)   # the grant command, copyable
-    assert not any(ln.strip().startswith(("lhpc install", "lhpc build")) for ln in block)  # no actions
+    assert not any(ln.strip().startswith(("lhpc install", "lhpc build")) for ln in block)    # rule-10: absence over a namespace; no value is compared by its prefix; no actions
 
 
 def test_every_controller_dep_has_a_copyable_install_command(tmp_path):

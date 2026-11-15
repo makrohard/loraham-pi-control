@@ -156,7 +156,7 @@ def test_confirm_page_labels_a_gui_only_warning_as_opt_in(tmp_path):
 def test_auto_install_plan_preflight_lists_blocked_and_advises_abort(tmp_path):
     r = _svc(tmp_path).auto_install(apply=False)              # bare FakeSystem -> header deps missing
     assert r.ok
-    assert any(d.startswith("  [blocked] chat:") for d in r.details)
+    assert any(d.startswith("  [blocked] chat:") for d in r.details)    # rule-10: a sentence's opening; the result carries no typed field
     assert any("will be SKIPPED" in d for d in r.details)
 
 

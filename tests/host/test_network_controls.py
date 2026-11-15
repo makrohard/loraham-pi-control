@@ -1334,8 +1334,7 @@ def test_an_ap_without_the_firewall_ap_rules_is_named_by_doctor_and_the_panel(tm
     gap = svc.network_view()["ap_firewall"]
     assert gap["line"] == line and gap["saved"] is False
     assert gap["commands"][0] == "lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24"
-    assert any(c.startswith("sudo bash ") and c.endswith("firewall-apply.sh")
-               for c in gap["commands"])
+    assert f"sudo bash {svc._paths.under('config/files/firewall/firewall-apply.sh')}" in gap["commands"]
 
 
 def test_back_to_ap_saves_the_ap_rules_and_refuses_until_they_are_live(tmp_path, monkeypatch):
@@ -1347,13 +1346,13 @@ def test_back_to_ap_saves_the_ap_rules_and_refuses_until_they_are_live(tmp_path,
     monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
                         lambda self, argv, log, cwd=None, env=None: spawned.append(argv) or 4242)
     dr = svc.network_ap_now(apply=False)
-    assert any(d.startswith("  [warn] AP profile lhpc-ap present") for d in dr.details)
+    assert any(d.startswith("  [warn] AP profile lhpc-ap present") for d in dr.details)    # rule-10: a sentence's opening; the result carries no typed field
     res = svc.network_ap_now(apply=True)
-    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")
+    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")    # rule-10: a sentence's opening; the result carries no typed field
     assert "saved, not applied (wlan0, 10.42.0.0/24)" in res.summary
     fw = svc.config().firewall
     assert (fw.ap_enabled, fw.ap_interface, fw.ap_cidr) == (True, "wlan0", "10.42.0.0/24")
-    assert any(c.startswith("sudo bash ") for c in res.next_commands)
+    assert f"sudo bash {svc._paths.under('config/files/firewall/firewall-apply.sh')}" in res.next_commands
     assert spawned == [] and not svc._net_pending_path().exists()
 
 
@@ -1402,7 +1401,7 @@ def test_an_unreadable_profile_or_one_without_an_interface_refuses_the_switch(tm
     assert gap is not None and gap["live"] is False and gap["commands"] == []
     assert ("could not be read (nmcli rc 1)" in gap["line"]) == (profile is None)
     res = svc.network_ap_now(apply=True)
-    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")
+    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")    # rule-10: a sentence's opening; the result carries no typed field
     assert svc.config().firewall.ap_enabled is False                # nothing saved on a guess
     assert spawned == [] and not svc._net_pending_path().exists()
 

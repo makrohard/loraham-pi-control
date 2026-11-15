@@ -80,7 +80,7 @@ def test_unit_address_families_cover_stack_children():
 def test_unit_omits_memory_deny_write_execute_for_qemu():
     # The single documented exception: QEMU TCG JIT needs W+X, so MemoryDenyWriteExecute is off.
     active = _active_directives(_UNIT.read_text())
-    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)
+    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_job_runner_forwards_tool_cache_env_to_build_children():
@@ -136,7 +136,7 @@ def test_helper_unit_is_sandboxed_declarative_no_systemctl():
               "InaccessiblePaths=%t/bus %t/systemd/private"):
         assert d in active, d
     assert not any("systemctl" in ln for ln in active)
-    assert not any(ln.startswith("ExecStopPost") for ln in active)
+    assert not any(ln.startswith("ExecStopPost") for ln in active)    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_web_unit_blocks_bus_and_pulls_watcher():

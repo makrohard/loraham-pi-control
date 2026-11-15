@@ -480,12 +480,12 @@ def test_service_template_is_least_privilege_with_runtime_owned_caches():
     t = (REPO / "deploy" / "lhpc-web.service").read_text()
     active = [ln.strip() for ln in t.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     assert "ProtectSystem=strict" in active and "ProtectHome=read-only" in active
-    assert not any(ln.startswith("ProtectSystem=full") for ln in active)
+    assert not any(ln.startswith("ProtectSystem=full") for ln in active)    # rule-10: absence over a namespace; no value is compared by its prefix
     for var in ("PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR"):
         assert f"Environment={var}=%h/loraham-pi-control/build/tool-cache/" in t, var
     # No ACTIVE directive points at an unrelated user-home cache (comments may name them).
     assert not any(p in ln for ln in active for p in ("/.platformio", "/.espressif", "/.cache"))
-    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)   # QEMU W+X exception
+    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)    # rule-10: absence over a namespace; no value is compared by its prefix; QEMU W+X exception
 
 
 # =============================================================================== uninstall.sh
@@ -649,7 +649,7 @@ def test_install_generates_canonical_updater_units(tmp_path):
     assert f"ExecStart={root}/venv/lhpc/bin/lhpc self-update --run-service" in active   # parameter-free
     assert "RefuseManualStart=yes" in active and "MemoryDenyWriteExecute=true" in active
     assert "InaccessiblePaths=%t/bus %t/systemd/private" in active
-    assert not any("systemctl" in ln for ln in active) and not any(ln.startswith("ExecStopPost") for ln in active)
+    assert not any("systemctl" in ln for ln in active) and not any(ln.startswith("ExecStopPost") for ln in active)    # rule-10: absence over a namespace; no value is compared by its prefix
     path_unit = (ud / "lhpc-selfupdate.path").read_text()
     assert f"PathExists={root}/state/selfupdate.request" in path_unit
     assert "Unit=lhpc-selfupdate.service" in path_unit
