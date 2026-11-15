@@ -775,6 +775,7 @@ def test_identity_is_not_saved_when_admission_refuses(tmp_path, monkeypatch):
     assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == "XX0XXA-5"
 
 
+@pytest.mark.slow
 def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_path, monkeypatch):
     # AUDIT-FOUND: restart resolved its band with _effective_band, which takes an interactive marker
     # UNCONDITIONALLY, while the panel and start use _launch_band_hint, which ignores a marker whose
@@ -814,6 +815,7 @@ def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_pat
                                    "callsign", "868") == "XX0XXA/868"   # NOT cleared
 
 
+@pytest.mark.slow
 def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypatch):
     # AUDIT-FOUND: the applied restart resolved its band BEFORE task admission. If another admitted
     # operation started the stack on 868 in that window, the identity was saved on the primary 433

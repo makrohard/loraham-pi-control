@@ -101,12 +101,14 @@ def _rendered(tmp_path, monkeypatch, total_kb, target, op="build"):
     return seen, str(reslock.lock_file_path(svc._paths, LOCK))
 
 
+@pytest.mark.slow
 def test_a_small_box_gives_every_job_of_a_round_the_lock(tmp_path, monkeypatch):
     # T-MS2 (spawn side): every job of the round, the primary first, waits for the one lock.
     seen, lock = _rendered(tmp_path, monkeypatch, ZERO, "meshcore")
     assert seen == [("meshcore-node", lock), ("meshcore-webui", lock), ("meshcore-cli", lock)]
 
 
+@pytest.mark.slow
 def test_a_small_box_gives_a_single_job_the_lock_too(tmp_path, monkeypatch):
     # A one-component Build on a small box waits for a running round as well (rounds serialize
     # across Builds, G1-MEMSAFE-1 F2).
@@ -114,6 +116,7 @@ def test_a_small_box_gives_a_single_job_the_lock_too(tmp_path, monkeypatch):
     assert seen == [("meshcore-cli", lock)]
 
 
+@pytest.mark.slow
 def test_a_small_box_gives_a_console_test_job_the_lock(tmp_path, monkeypatch):
     # The console's Test job takes the same spawn path as a Build (spawn_web_job → _spawn_build →
     # render_build_launcher with the round lock): on a small box it waits for the one lock too.
@@ -121,6 +124,7 @@ def test_a_small_box_gives_a_console_test_job_the_lock(tmp_path, monkeypatch):
     assert seen == [("meshcore-webui", lock)]
 
 
+@pytest.mark.slow
 def test_a_build_whose_meminfo_read_raises_is_serial_not_an_error(tmp_path, monkeypatch):
     # G1-MEMSAFE-2 B1: through the unchanged public path (spawn_web_job), a raising /proc/meminfo
     # read makes the box serial instead of breaking the Build.
@@ -128,6 +132,7 @@ def test_a_build_whose_meminfo_read_raises_is_serial_not_an_error(tmp_path, monk
     assert seen == [("meshcore-node", lock), ("meshcore-webui", lock), ("meshcore-cli", lock)]
 
 
+@pytest.mark.slow
 def test_a_large_box_runs_its_round_in_parallel_as_before(tmp_path, monkeypatch):
     # T-MS3: unchanged behaviour on a large box.
     seen, _lock = _rendered(tmp_path, monkeypatch, T, "meshcore")

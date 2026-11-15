@@ -1175,6 +1175,7 @@ def test_restart_of_a_non_daemon_provider_discloses_its_dependents(tmp_path, mon
     assert "lifecycle.graywolf" in keys_c and "lifecycle.graywolf" not in keys_p
 
 
+@pytest.mark.slow
 def test_restart_cascade_consent_reaches_the_stop_leg(tmp_path, monkeypatch, set_call):
     # AUDIT-FOUND: the confirmation asked "Stop dependents & restart", then the stop leg ran with
     # cascade=False (masked by the daemon, whose stop cascades on its own). A confirmed cascade

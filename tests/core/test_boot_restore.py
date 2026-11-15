@@ -1563,6 +1563,7 @@ def test_boot_restore_run_honors_stop_intent_end_to_end(tmp_path, monkeypatch):
     assert not list((tmp_path / "state" / "owned").glob("*.json"))
 
 
+@pytest.mark.slow
 def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, monkeypatch):
     """REVIEW-FOUND rescoping: only a DIRECT, WHOLE-STACK operator stop tombstones — with or
     without a band (the console stops a client with its band, finding 143). A component-scoped
@@ -1626,6 +1627,7 @@ def test_clean_purge_removes_the_tombstone(tmp_path):
     assert not intent.exists(), "clean --purge must remove the stop tombstone"
 
 
+@pytest.mark.slow
 def test_round2_scoping_regressions(tmp_path, monkeypatch):
     """Round-2 review closures, each its own micro-case:
     (a) a BLOCKED daemon stop whose DEPENDENT went unverified must not tombstone the daemon;

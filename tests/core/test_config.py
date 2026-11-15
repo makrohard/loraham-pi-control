@@ -1473,6 +1473,7 @@ def test_config_guard_held_across_applied_start(tmp_path, monkeypatch, set_call)
     assert _exclusive_available(svc._paths) is True               # released afterwards
 
 
+@pytest.mark.slow
 def test_direct_start_impl_and_restart_impl_hold_config_guard(tmp_path, monkeypatch, set_call):
     from lhpc.core.services import ActionResult
     svc = _guard_svc(tmp_path)
@@ -1511,6 +1512,7 @@ def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, mon
     assert done.is_set() and svc.stack_config("graywolf").get("call") == "DJ0XYZ"
 
 
+@pytest.mark.slow
 def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, monkeypatch):
     from lhpc.core.services import ActionResult
     svc = _guard_svc(tmp_path)

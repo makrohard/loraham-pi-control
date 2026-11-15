@@ -110,6 +110,7 @@ class _Launched(Exception):
     """Raised at the first step after the owner stops: the start went past them."""
 
 
+@pytest.mark.slow
 def test_a_band_owner_on_the_daemon_is_stopped_per_band(tmp_path, monkeypatch):
     # Finding 140: kiss on 433 and meshcore on 868 run on the daemon; a reticulum start (868)
     # with stop_owners must stop meshcore and the daemon on 868 ONLY — a whole-daemon stop took kiss and

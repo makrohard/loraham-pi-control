@@ -403,6 +403,7 @@ def _held_start_svc(tmp_path, monkeypatch):
     return svc, helper, entered, release
 
 
+@pytest.mark.slow
 @pytest.mark.needs_session
 def test_a_save_during_a_start_waits_then_refuses_as_running(tmp_path, monkeypatch):
     import threading
@@ -429,6 +430,7 @@ def test_a_save_during_a_start_waits_then_refuses_as_running(tmp_path, monkeypat
         svc.stop("s", apply=True)
 
 
+@pytest.mark.slow
 @pytest.mark.needs_session
 def test_a_start_during_a_save_waits_for_it(tmp_path, monkeypatch):
     import threading
@@ -615,6 +617,7 @@ def _restart_without_processes(monkeypatch, svc):
     return calls
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("mode", ["repeater", "chat+repeater"])
 @pytest.mark.parametrize("migrated", [False, True])
 def test_a_repeater_restart_ends_ok_with_the_real_config_lock(env, monkeypatch, mode, migrated):
@@ -654,6 +657,7 @@ def test_a_restart_that_would_migrate_under_a_running_node_is_refused_before_the
     assert _legacy_sources(svc) == before                 # gate 2 r2b sweep S5: nothing legacy moved
 
 
+@pytest.mark.slow
 def test_the_cli_restart_of_a_repeater_ends_ok_with_the_real_config_lock(env, monkeypatch, capsys):
     """The same through the CLI entry (`lhpc stack restart meshcore@r2 --yes`, what openHop's restart,
     reboot and Glass restart run)."""

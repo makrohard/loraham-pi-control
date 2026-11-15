@@ -167,6 +167,7 @@ def test_backup_is_refused_while_an_included_stack_runs(tmp_path, monkeypatch):
     assert not (tmp_path / "b.tar").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("held", ["admission", pytest.param("config", marks=pytest.mark.slow),  # timed wait (M0)
                                   "pki"])
 def test_backup_is_refused_while_a_lock_is_held(tmp_path, held):

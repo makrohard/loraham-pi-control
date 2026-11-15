@@ -46,6 +46,7 @@ def _kiss_box(tmp_path, step):
     return ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path), manifest_path=mf)
 
 
+@pytest.mark.slow
 @pytest.mark.needs_session
 def test_a_deaf_console_leaves_the_node_running_and_the_start_names_the_poststart(tmp_path, monkeypatch, set_call,
                                                                                 real_spawn):

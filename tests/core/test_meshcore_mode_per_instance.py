@@ -1,6 +1,7 @@
 """K8f S4-5 (DEC-W409x): the stack-wide MeshCore mode reads go per instance. Two radios on 868: r2 chat, r3 a
 repeater. Status readiness takes each running instance's own-mode endpoints at its own addresses (DEC-W409ah); an
 instance's own view, its stop verification and its Pages notes take its own mode, never the other radio's."""
+import pytest
 import radios_fixture
 
 from lhpc.core import instances, radios
@@ -49,6 +50,7 @@ def test_an_instances_stop_verifies_only_its_own_modes_endpoints(tmp_path):
     assert node and node[0].outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED), (res.summary, res.details)
 
 
+@pytest.mark.slow
 def test_an_instances_stop_still_verifies_its_own_modes_endpoint(tmp_path):
     # the other side (a pin, green before): a listener on r3's own dashboard port 8266 keeps the stop unverified
     svc, _r2, r3 = _box(tmp_path, listeners=[Listener("ipv4", "127.0.0.1", 8266, 72)])
@@ -125,6 +127,7 @@ def test_r1s_stop_in_chat_and_repeater_never_waits_for_r2s_live_companion(tmp_pa
     assert node and node[0].outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED), (res.summary, res.details)
 
 
+@pytest.mark.slow
 def test_a_whole_node_stop_checks_every_saved_instances_own_endpoints(tmp_path):
     # the other path (no instance: the whole component): r2's live Companion keeps the whole node's stop unverified
     svc, _r2, _r3 = _box(tmp_path, listeners=[Listener("ipv4", "127.0.0.1", 5133, 75)])

@@ -308,6 +308,7 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     assert _mode(svc._rflog_decoder_argv(rflog.entry("meshcore"))[0]) == "repeater"
 
 
+@pytest.mark.slow
 def test_one_decoder_at_a_time_per_job(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     marker = tmp_path / "overlap"

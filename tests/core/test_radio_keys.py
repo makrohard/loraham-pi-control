@@ -299,6 +299,7 @@ def test_a_same_radio_holder_is_named_by_the_radio_it_shares(tmp_path, monkeypat
     assert f"lhpc stack stop {holder}" in res.next_commands, res.next_commands
 
 
+@pytest.mark.slow
 def test_yes_stops_only_the_same_radio_holder_never_its_copy_on_another_radio(tmp_path, monkeypatch):
     # `--yes` (stop_owners): meshcom runs on r1 and r2, chat starts on r1. Only meshcom@r1 is stopped; before, the
     # `<rid>` holder was stopped as the bare stack, every meshcom instance (r2's too).

@@ -92,6 +92,7 @@ def test_direct_stop_call_is_locked(tmp_path):
     assert not res.ok and "busy" in res.summary.lower()
 
 
+@pytest.mark.slow
 def test_restart_does_not_self_deadlock(tmp_path):
     # restart holds ONE bundle across its internal stop+start (re-entrant guard): the stop leg
     # must actually RUN under that bundle, not be refused before reaching it.

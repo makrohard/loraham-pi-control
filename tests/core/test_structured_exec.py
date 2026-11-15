@@ -123,6 +123,7 @@ def test_structured_start_records_real_executable_not_shell(tmp_path):
     life.stop(comp)                                            # cleanup
 
 
+@pytest.mark.slow
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 @pytest.mark.wallclock("a real sleeping child is the mismatched leader; its end is a pidfd wait")
 def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
@@ -585,6 +586,7 @@ def _run_value_step(tmp_path, behavior, **kw):
     return r, received, json.loads(rp.read_text())["steps"][0]
 
 
+@pytest.mark.slow
 def test_split_info_reply_with_our_call_sends_nothing(tmp_path):
     # The answer arrives in two chunks with a pause between them (a slow QEMU node): the call is
     # already ours, so NOTHING may be sent. The old reader stopped at the first 0.6 s pause.
@@ -633,6 +635,7 @@ def test_different_call_sends_once_and_acks(tmp_path):
     assert r.returncode == 0 and st["outcome"] == "acked" and st["attempts"] == 1
 
 
+@pytest.mark.slow
 def test_slow_ack_is_seen(tmp_path):
     # The firmware prints the ACK, then saves; on a slow node the ACK comes after a pause the old
     # 0.6 s reader gave up on.
@@ -667,6 +670,7 @@ def test_a_console_that_never_answers_still_fails_a_required_step(tmp_path):
     assert r.returncode != 0 and st["outcome"] == "exhausted"
 
 
+@pytest.mark.slow
 def test_probe_stop_on_keeps_its_meaning():
     # The older substring form still renders and still skips on a match; it now reads across
     # a pause too (same reader).

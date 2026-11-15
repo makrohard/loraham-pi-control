@@ -670,6 +670,7 @@ def _end(child):
         os.kill(child, signal.SIGKILL)
 
 
+@pytest.mark.slow
 def test_a_group_whose_leader_dies_on_sigterm_keeps_its_surviving_member_a_target(tmp_path, clock, procs):
     # G2-B2 F2: the leader exits on SIGTERM, its child ignores it. The group is not gone while a member lives:
     # the child gets the SIGKILL and the kill reports none left only then. Red-before at 30c010a4: the leader's

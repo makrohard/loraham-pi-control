@@ -220,6 +220,7 @@ def test_set_rflog_all_writes_every_owner_once_and_marks_each_running_one(tmp_pa
     assert not bad.ok and bad.data["reason"] == "invalid-choice" and saved == every
 
 
+@pytest.mark.slow
 def test_logging_state_is_on_off_or_mixed(tmp_path):
     svc = _svc(tmp_path)
     assert svc.rflog_logging_state() == "on"                                    # every default

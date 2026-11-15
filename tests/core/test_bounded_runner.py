@@ -117,6 +117,7 @@ def _wait_ended(pid: int, bound: float = 5.0) -> None:
         os.close(fd)
 
 
+@pytest.mark.slow
 def test_timeout_kills_term_ignoring_child_that_outlives_parent(tmp_path, monkeypatch):
     # The parent spawns a child that IGNORES SIGTERM and, on its own SIGTERM, the parent
     # exits immediately — so the leader dies but the child survives in the original session.
@@ -140,6 +141,7 @@ def test_timeout_kills_term_ignoring_child_that_outlives_parent(tmp_path, monkey
     assert _dead_or_zombie(child_pid)                     # TERM-ignoring child was SIGKILLed
 
 
+@pytest.mark.slow
 def test_proctree_valid_token_kills_term_ignoring_child():
     # #13: a VALID token still kills a TERM-ignoring child that outlives its parent.
     import subprocess, sys, os
@@ -240,6 +242,7 @@ def test_runner_surfaces_termination_status_on_timeout():
     assert r.termination == "terminated" and not r.may_still_be_running
 
 
+@pytest.mark.slow
 def test_proctree_kills_setpgrp_descendant_in_session():
     # #12: a descendant that calls setpgrp() (new group, SAME session) and ignores TERM,
     # outliving its leader, is still reached — we signal EVERY group in the private session.
