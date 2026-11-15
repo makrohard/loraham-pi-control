@@ -1115,7 +1115,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
                 # W250: what Home's card showed for a running stack: its RF log (W4: its instance's), its tools' launch lines
                 "rflog": _stack_rflog(stack.id) if rollup[stack.id] in _RUNNING else None,
-                "tools": [(c.id, c.name, service.manual_start_command(c)) for c in stack.components
+                "tools": [(c.id, c.name, service.manual_start_command(c, _inst)) for c in stack.components
                           if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
                 "inline": inline,
             }
