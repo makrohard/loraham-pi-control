@@ -46,7 +46,7 @@ def _lagging(pins):
     return {cid: "f" * 40 for cid in pins}
 
 
-def test_the_newest_entry_built_for_this_lhpc_is_taken_without_a_note(tmp_path, monkeypatch):
+def test_the_newest_of_two_entries_is_taken(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
     _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
@@ -54,7 +54,6 @@ def test_the_newest_entry_built_for_this_lhpc_is_taken_without_a_note(tmp_path, 
         _entry("daemon", "4" * 64, pins, inputs)]}})
     plan = svc.binary_install("daemon", apply=False)
     assert plan.ok and any(f"daemon-{'3' * 64}.tar.zst" in d for d in plan.details)
-    assert not plan.data.get("newer_published")
 
 
 @pytest.mark.parametrize("listed", ["missing", "empty", "other-target"])

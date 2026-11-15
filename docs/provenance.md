@@ -89,8 +89,8 @@ artifact** instead of a source build:
 |---|---|
 | is this checkout the commit it claims? | the ownership record plus its live `HEAD` (`source_registry.verify_identity`) |
 | is this stack installed from an artifact at all? | the receipt's four-state read (`receipt_state`), no hashing |
-| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins, as at install. A start refuses while the started component, or another covered runnable component, is behind its pin without an acceptance in force (one an earlier lhpc recorded with the removed
-`--accept-pin-mismatch`; a new published artifact never updates an installed copy): `lhpc update <stack>`. A covered library or firmware image (the daemon's RadioLib, MeshCom's firmware) never blocks a start; its lag shows in the update status |
+| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins. A start refuses while the started component, or another covered runnable component, is behind its pin (a new published artifact never updates an installed copy; an acceptance an earlier lhpc recorded with the removed
+`--accept-pin-mismatch` is no longer read): `lhpc update <stack>`. A covered library or firmware image (the daemon's RadioLib, MeshCom's firmware) never blocks a start; its lag shows in the update status |
 | are the artifact's FILES still as installed? | `verify_files`, which hashes them |
 
 `verify_files` is an integrity check, not provenance, and time-sensitive: an emulated node writes

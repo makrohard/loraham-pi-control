@@ -2,7 +2,6 @@
 offers the self-update first and the source channel second, and never a way over the pin check
 (`--accept-pin-mismatch` is removed, decision D1); the stack page shows a job's typed refusal and,
 from a receipt an older LHPC wrote, an acceptance still in force."""
-import dataclasses
 
 import pytest
 from htmlq import parse
@@ -152,23 +151,23 @@ def test_stack_page_shows_the_jobs_refusal_without_fetching(web, monkeypatch, tm
     assert not scope.find("input", name="consent") and "--accept-pin-mismatch" not in scope.text
 
 
-def test_stack_page_names_other_build_inputs_when_no_commit_lags(web, tmp_path, update_available):
-    """index-v3's own refusal: every commit matches, the build inputs differ — the banner still
-    leads with Update LHPC first and says what differs."""
+def test_stack_page_names_the_uncovered_case_when_no_commit_lags(web, tmp_path, update_available):
+    """U9's refusal (no published binary covers this LHPC): the banner still leads with Update LHPC
+    first and says what is missing."""
     from lhpc.core.paths import Paths
     update_available(True)
     _failed_install_job(Paths(runtime_root=tmp_path), "meshtastic", {})
     box = _stack_page(web(), "meshtastic").by_id("pin-refusal-meshtastic")
     assert box is not None
     scope = _stack_page(web(), "meshtastic").within(box)
-    assert "Update LHPC first" in scope.text and "build inputs" in scope.text
+    assert "Update LHPC first" in scope.text and "covers this LHPC's components" in scope.text
     assert "other commits" not in scope.text
 
 
-def test_the_pill_and_the_stack_page_warning_while_the_override_is_active(web, tmp_path,
-                                                                          binary_receipt,
-                                                                          monkeypatch,
-                                                                          update_available):
+def test_a_legacy_override_shows_no_pill_and_no_warning(web, tmp_path, binary_receipt, monkeypatch,
+                                                        update_available):
+    # U10a (D6): an override an older lhpc recorded in the receipt is ignored by the console.
+    import json
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     update_available(True)
@@ -176,21 +175,12 @@ def test_the_pill_and_the_stack_page_warning_while_the_override_is_active(web, t
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     cid = _daemon_cid()
     pin = svc._binary_pins("daemon")[cid]
-    rec = binary_receipt(svc, commits={**svc._binary_pins("daemon"), cid: A})
-    ov = {"at": 1, "lhpc_version": "0.11.3", "mismatch": {cid: [A, pin]}}
-    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=ov))
-    c = web()
-    doc = _stack_page(c, "daemon")
-    warn = doc.by_id("pin-override-daemon")
-    assert warn is not None and doc.within(warn).find("a", href="/self-update/apply")
-    pills = [s for s in doc.find("span") if s.text == "over pin check" and s["title"]]
-    links = [a for a in doc.find("a", href="/self-update/apply") if a["title"]]
-    assert pills and links
-    # the pill and the row link promise no more than the code does (gate 2's P4)
-    titles = [el["title"] for el in pills + links]
-    assert all("it clears when the pins match" in t and "updating LHPC clears it" not in t
-               for t in titles)
-    # stale (a normal install wrote the receipt without the override): both are gone
-    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=None))
+    binary_receipt(svc, commits={**svc._binary_pins("daemon"), cid: A})
+    p = brx.receipt_path(svc._paths, "daemon")
+    d = json.loads(p.read_text())
+    d["override"] = {"at": 1, "lhpc_version": "0.11.3", "mismatch": {cid: [A, pin]}}
+    p.write_text(json.dumps(d))
     doc = _stack_page(web(), "daemon")
+    assert doc.by_id("stack-install-daemon") is not None                 # the stack page itself
     assert doc.by_id("pin-override-daemon") is None and "over pin check" not in doc.text
+    assert not [a for a in doc.find("a", href="/self-update/apply") if "pin check" in (a["title"] or "")]

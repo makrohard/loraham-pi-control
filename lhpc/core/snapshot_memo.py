@@ -85,7 +85,6 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "auto_install_welcome": "read-only",
     "band_active": "read-only",
     "band_refusal": "read-only",
-    "binary_active_override": "read-only",
     "binary_artifact_repair": "read-only",
     "binary_available": "read-only",
     "binary_block_reason": "read-only",

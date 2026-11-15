@@ -139,20 +139,6 @@ class BinaryChannelMixin:
             return f"the installed binary predates {comp.id}: lhpc update {sid} or install it from source"
         return ""
 
-    def binary_active_override(self, stack_id: str, rec=None) -> dict:
-        """{cid: [installed, pin]}: the stack's recorded pin-mismatch acceptance that is still in
-        force (`binary_receipt.active_override`), read with the CURRENT pins and clone_required.
-        Empty when there is none or it is stale. Read by itself (`rec` None) it is also empty for a
-        receipt that is not valid; a caller passing `rec` checks the receipt's state first."""
-        if rec is None:
-            state, rec, _why = self.binary_receipt_state(stack_id)
-            if state != "valid":
-                return {}
-        spec = self.binary_spec(stack_id)
-        if spec is None:
-            return {}
-        return brx.active_override(rec, self._binary_pins(stack_id), spec.clone_required)
-
     def binary_install_refusal(self, stack_id: str) -> dict | None:
         """The typed refusal of this stack's last FAILED console install job (no published binary
         built for this lhpc), from its job result only (no index fetch on a GET), while its banner

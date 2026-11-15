@@ -1159,9 +1159,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "meshcore_running_mode": (service.meshcore_running_mode(_view_inst)
                                           if stack.id == _meshcore_mode.STACK_ID else ""),
                 "meshcore_rid": getattr(_view_inst, "rid", "") if stack.id == _meshcore_mode.STACK_ID else "",
-                # A3: an install over the pin check still in force (the pill and the warning), and
-                # the typed pin refusal of the last failed console install job.
-                "pin_override": service.binary_active_override(stack.id),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,

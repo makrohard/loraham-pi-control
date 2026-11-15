@@ -465,15 +465,14 @@ class BinaryOpsMixin:
 
     def _binary_installed_is(self, stack_id: str, entry) -> str:
         """The installed artifact's file name when there is nothing to install, else "": a valid receipt of
-        `entry` itself with no recorded pin-mismatch acceptance and every recorded file still hashing as
-        installed, or of another binary `entry` is not newer than (D10: a withdrawn installed binary stays)."""
+        `entry` itself with every recorded file still hashing as installed, or of another binary `entry` is
+        not newer than (D10: a withdrawn installed binary stays)."""
         state, rec, _why = self.binary_receipt_state(stack_id)
         if state != "valid":
             return ""
         if rec.artifact_sha256 != entry.sha256:
             return "" if bi.is_newer(entry, rec) else rec.filename
-        ok = rec.override is None and brx.verify_files(self._paths, rec)[0]
-        return rec.filename if ok else ""
+        return rec.filename if brx.verify_files(self._paths, rec)[0] else ""
 
     @staticmethod
     def _binary_none_compatible(stack_id: str, exc, src_cmd: str) -> ActionResult:

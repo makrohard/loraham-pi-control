@@ -9,17 +9,11 @@
         <p class="depnote depnote-warn"><span class="ver ver-yellow">HMAC Password disabled</span>
           — the meshcom bridge/firmware run without client authentication.</p>
       {% endif %}
-      {% if g.pin_override %}
-        {# A3: installed over the pin check, while that exact acceptance is still in force. #}
-        <div class="depnote depnote-warn" id="pin-override-{{ g.stack.id }}"><span class="ver ver-yellow">Installed over the pin check</span> —
-          {% for cid, pair in g.pin_override|dictsort %}<code>{{ cid }}</code> built from <code>{{ pair[0][:9] }}</code>, this LHPC pins <code>{{ pair[1][:9] }}</code>{% if not loop.last %}; {% endif %}{% endfor %}.
-          It may not work with this LHPC. {{ update_lhpc_first(selfupdate.update_available) }}</div>
-      {% endif %}
       {% if g.pin_refusal %}
-        {# The last console install was refused: no published binary was built for this LHPC (the job's typed refusal). #}
+        {# The last console install was refused: no published binary this LHPC can install (the job's typed refusal). #}
         <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
           {{ update_lhpc_first(selfupdate.update_available) }} —
-          the install was refused: {% if g.pin_refusal.lagging %}the published binary was built from other commits than this LHPC pins.{% else %}no published binary was built for this box with this LHPC's pins and build inputs.{% endif %}
+          the install was refused: {% if g.pin_refusal.lagging %}the published binary was built from other commits than this LHPC pins.{% else %}no published binary for this box covers this LHPC's components.{% endif %}
             <form method="post" action="{{ url_for('action') }}" class="act">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
               <input type="hidden" name="op" value="install">

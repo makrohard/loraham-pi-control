@@ -890,17 +890,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     if saved and live != saved and rollup[ss.stack.id] in ("running", "degraded"):
                         line += f"  (running: {live} — restart to apply)"
                     details.append(line)
-            _ov = self.binary_active_override(ss.stack.id)       # A3: {} unless in force
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st) + instance_liveness.lines(by_inst.get(comp.id, ())))
                 if comp.id == web_client.COMPONENT and (_wl := web_client.status(self)):
                     details.append(f"    {_wl}")
-                if comp.id in _ov:
-                    _b, _p = _ov[comp.id]
-                    details.append(f"    installed over the pin check: built from {_b[:9]}, "
-                                   f"pins {_p[:9]} (it may not work with this LHPC; "
-                                   "lhpc self-update --apply)")
                 # Terminal post-start outcome (e.g. the MeshCom callsign push: confirmed /
                 # NOT applied + the re-apply command). Fail-soft: status must render even
                 # when a result sidecar is unreadable. Shared loop → the line appears in
@@ -1226,13 +1220,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 _cmd = f"lhpc install {s.id} --yes"
                 details.append(f"    | run yourself: {_cmd}")
                 _add_cmd(_cmd)
-            elif state == "valid" and (_ov := self.binary_active_override(s.id, _rec)):
-                # A3: a warning (informational), shown while the acceptance is still in force.
-                details.append(f"  {s.id}: WARNING installed over the pin check — " + "; ".join(
-                    f"{c} built from {b[:9]}, pins {p[:9]}" for c, (b, p) in sorted(_ov.items()))
-                    + "; it may not work with this LHPC")
-                details.append("    | run yourself: lhpc self-update --apply")
-                _add_cmd("lhpc self-update --apply")
         if (_wl := web_client.status(self)) and "unproven" in _wl:
             details.append(f"  meshtastic: {_wl}")      # a daemon change since the pairing
 
