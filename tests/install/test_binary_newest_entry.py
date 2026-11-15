@@ -12,7 +12,7 @@ from lhpc.core import binary_install as bi, stackupdates
 from lhpc.core.install import Installer
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
-from lhpc.core.services import ControllerService
+from lhpc.core.services import ActionResult, ControllerService
 
 TARGET = "aarch64-trixie"
 
@@ -186,11 +186,31 @@ def test_a_receipt_without_published_at_compares_by_its_install_time(tmp_path, m
     assert svc.update("daemon", apply=False, source="binary").data["changes"] == 1
 
 
-def test_the_clone_move_resolves_to_the_binarys_commit(tmp_path, monkeypatch):
-    # The clean-clone move (`update(..., exact_commits=)`) plans the binary's commit, not the pin.
+def test_a_clean_checkout_at_the_pin_is_moved_to_the_entrys_commit_under_the_locks(tmp_path, monkeypatch):
+    # The clean checkout of ours at another commit is moved by the locked adoption to the binary's commit
+    # (not the pin); no source update runs inside the install.
+    from lhpc.core import source_registry
+    from lhpc.core.install import DirtyReport
     svc = _svc(tmp_path, monkeypatch)
-    st = svc.stack("meshcom")
-    comp = st.component("meshcom-qemu")
-    groups, conflicts = svc._plan_source_groups([(st, comp)], "pinned", exact_commits={comp.id: "f" * 40})
-    assert not conflicts
-    assert [g[3][0] for g in groups] == ["f" * 40]
+    comp = svc.stack("meshcom").component("meshcom-qemu")
+    svc._paths.resolve_source(comp.source.path).mkdir(parents=True)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "1" * 64, _other(svc, "meshcom"), "2026-11-10T03:51:59Z"))
+    seen = []
+
+    class _Rec:
+        resolved_commit = comp.source.pin_commit
+
+    class _Failed:
+        status, detail, provenance = "failed", "STOP-HERE", ""
+
+    def adopt(self, c, force=False, source="pinned", pinned_expected=None, locked=False):
+        seen.append((c.id, force, locked, pinned_expected[0]))
+        return _Failed()
+    monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
+    monkeypatch.setattr(Installer, "dirty_report", lambda self, d, path: DirtyReport())
+    monkeypatch.setattr(Installer, "adopt_source", adopt)
+    monkeypatch.setattr(ControllerService, "update", lambda self, *a, **k: (
+        seen.append("update"), ActionResult(False, "UPDATE-CALLED"))[1])
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "STOP-HERE" in res.summary, res.summary
+    assert seen == [("meshcom-qemu", True, True, "f" * 40)]

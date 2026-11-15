@@ -1513,7 +1513,7 @@ def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch
 
 def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
     """meshcom-qemu's checkout present, proven ours, at an OLDER commit than the pin (the
-    0.9.2 -> 0.10.0 upgrade case); `update` is stubbed to record the call and to move it."""
+    0.9.2 -> 0.10.0 upgrade case); `update` and the adoption are stubbed to record the call and to move it."""
     from lhpc.core.install import DirtyReport
     svc = _svc(tmp_path, monkeypatch)
     comp = next(c for st in svc.stacks() if st.id == "meshcom"
@@ -1526,9 +1526,11 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
         def resolved_commit(self):
             return state["commit"]
 
+    state["dirty"] = dirty
+
     class _FakeInstaller:
         def dirty_report(self, d, path):
-            return DirtyReport(untracked=("notes.txt",)) if dirty else DirtyReport()
+            return DirtyReport(untracked=("notes.txt",)) if state["dirty"] else DirtyReport()
         def adopt_source(self, c, *, force=False, source="pinned", pinned_expected=None,
                          locked=False):
             state["adopted"].append((c.id, source, force, locked, (pinned_expected or ("",))[0]))
@@ -1560,13 +1562,45 @@ def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch
     """Upgrading 0.9.2 -> 0.10.0 left src/meshcom-qemu-raspi at the old pin, and
     `lhpc update meshcom --source binary` refused ("is at 74a3a081f, the pin is 209afe986") until
     the operator ran `lhpc update meshcom-qemu --source pinned` by hand (found on e293). A CLEAN
-    checkout of ours is now moved through that same update first."""
+    checkout of ours is now moved under the install's own locks, by the adoption a missing checkout gets."""
     svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
-    stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
-        bi.BinaryInstallError("stop after the clone check")))
+    stub_pipeline(svc)                                         # stops at DOWNLOAD-REACHED
     res = svc.binary_install("meshcom", apply=True)
-    assert state["updated"] == [("meshcom-qemu", True, "pinned")], res
-    assert "the pin is" not in res.summary, res.summary        # got past the old refusal
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit)], res
+    assert state["updated"] == []                              # no source update inside the install
+    assert "DOWNLOAD-REACHED" in res.summary, res.summary      # past the clone gate
+
+
+def test_a_checkout_made_dirty_before_the_locks_is_refused_and_nothing_moved_before_them(
+        tmp_path, monkeypatch, stub_pipeline):
+    """Barrier (no sleeps): the clone is clean when the install starts and a concurrent operation edits it
+    between the start and the install's locks. Nothing was moved before the locks, and the locked decision
+    (the dirty tree) refuses."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    at_lock = []
+    real_admit = ControllerService._admit
+
+    def _barrier(self, *a, **k):
+        if not at_lock:                                        # the first lock; a nested acquire re-enters it
+            at_lock.append((list(state["updated"]), list(state["adopted"])))
+            state["dirty"] = True                              # the concurrent edit, before the lock
+        return real_admit(self, *a, **k)
+    monkeypatch.setattr(ControllerService, "_admit", _barrier)
+    res = svc.binary_install("meshcom", apply=True)
+    assert at_lock == [([], [])]                               # the lock was reached, nothing moved before it
+    assert state["updated"] == [] and state["adopted"] == []
+    assert not res.ok and "the binary was built from" in res.summary, res.summary
+
+
+def test_a_running_stack_keeps_its_clone(tmp_path, monkeypatch, stub_pipeline):
+    """The checkout holds the scripts the running stack runs: refused under the locks, nothing moved."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    monkeypatch.setattr(ControllerService, "_binary_running_components", lambda self, sid: ["meshcom-qemu"])
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and "component(s) running" in res.summary, res.summary
+    assert state["updated"] == [] and state["adopted"] == []
 
 
 @pytest.mark.parametrize("locked", [False, True])
@@ -1577,19 +1611,6 @@ def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monk
     res = svc.binary_install("meshcom", apply=True, locked=locked)
     assert state["updated"] == [] and state["adopted"] == []   # never moved
     assert not res.ok and "the binary was built from" in res.summary   # the old refusal, at the binary's commit
-
-
-def test_outside_an_auto_install_run_a_clean_clone_left_at_an_older_pin_is_refused_as_before(
-        tmp_path, monkeypatch, stub_pipeline):
-    """The CLI path is unchanged: its own pre-lock update moves the checkout; if that update
-    leaves it where it was, the loop refuses as before and never force-re-adopts it."""
-    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
-    monkeypatch.setattr(ControllerService, "update", lambda self, target="", **kw: (
-        state["updated"].append(target), ActionResult(True, "nothing moved"))[1])
-    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
-    res = svc.binary_install("meshcom", apply=True)
-    assert state["updated"] == ["meshcom-qemu"] and state["adopted"] == []
-    assert not res.ok and "the binary was built from" in res.summary
 
 
 def test_inside_an_auto_install_run_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(

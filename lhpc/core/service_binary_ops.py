@@ -125,28 +125,18 @@ class BinaryOpsMixin:
                                          f"  Staying on the binary keeps {stack_id} exactly as it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
-        # FIRST (D10), before any package is asked for or any clone moved: an installed binary `entry` would not
-        # replace stays as it is. With no open transaction only; otherwise the apply's locks decide, after
-        # recovery (and no clone is moved before them).
-        _settled = bi.read_journal(self._paths)[1] == "absent"
-        _have, _stuck = self._binary_current(stack_id, entry) if _settled else ("", "")
-        if _stuck:
-            return self._binary_changed(stack_id, _stuck, src_cmd)
-        if _have and (not apply or _have != entry.filename):
-            return self._binary_already_installed(stack_id, entry, _have, [])
-        missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
-        if missing:
-            # lhpc never installs system packages itself — name the exact command.
-            return ActionResult(
-                False,
-                f"Binary install of '{stack_id}' needs system packages that are not installed.",
-                details=[f"  missing: {' '.join(missing)}"],
-                next_commands=[f"sudo apt install -y {' '.join(missing)}",
-                               f"lhpc install {stack_id} --yes"],
-                data={"binary_failed": True, "missing_runtime_deps": missing})
-
         size_mb = entry.size / (1024 * 1024)
         if not apply:
+            # PLAN text only (D10 order: the "nothing to install" decision, then the packages). The apply decides
+            # nothing and moves nothing before its locks: it takes them, recovers, then decides (below).
+            _settled = bi.read_journal(self._paths)[1] == "absent"
+            _have, _stuck = self._binary_current(stack_id, entry) if _settled else ("", "")
+            if _stuck:
+                return self._binary_changed(stack_id, _stuck, src_cmd)
+            if _have:
+                return self._binary_already_installed(stack_id, entry, _have, [])
+            if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
+                return _deps
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
@@ -158,22 +148,6 @@ class BinaryOpsMixin:
             return ActionResult(True, f"Binary install plan for '{stack_id}'.", details=details,
                                 next_commands=[f"lhpc install {stack_id} --yes"],
                                 data={"changes": 1, "channel": "binary"})
-
-        # A clean clone_required checkout of OURS at another commit than the binary's (U9: the
-        # checkout follows the binary, a newer one ships newer run scripts) is moved through the
-        # real source update first — the step an operator had to run by hand. A dirty, foreign or unproven tree is
-        # left alone and refused below, exactly as before. Top-level calls only: an outer
-        # boundary (`locked`, the auto-install run) keeps the refusal.
-        moved_notes: list[str] = []
-        if not locked and _settled:
-            for cid in self._stale_clean_clones(stack_id, spec, entry):
-                r = self.update(cid, apply=True, source="pinned", exact_commits=dict(entry.components))
-                if not r.ok:
-                    return ActionResult(False, f"Binary install of '{stack_id}' blocked: moving "
-                                               f"{cid} to the binary's commit failed: {r.summary}",
-                                        details=list(r.details), next_commands=[src_cmd],
-                                        data={"binary_failed": True})
-                moved_notes.append(f"  moved {cid} to the binary's commit (run scripts)")
 
         # LOCK ORDER (mirrors the source ops): admission, then the covered source paths.
         import contextlib as _ctx
@@ -226,18 +200,21 @@ class BinaryOpsMixin:
             # the transaction below, never left behind unowned.
             prev_files = list(_prec.files) if (_prec and _pstate in ("valid", "superseded")) else []
             prev_receipt_raw = brx.read_raw(self._paths, stack_id)
-            # AUTHORITATIVE, under the locks after recovery and before any clone is touched (D10): another
-            # installed binary `entry` is not newer than stays, clones and files untouched.
+            # THE decision, under the locks after recovery and before any clone is touched (D10): another
+            # installed binary `entry` is not newer than stays, clones and files untouched; then the packages.
             _have, _stuck = self._binary_current(stack_id, entry)
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
             if _have and _have != entry.filename:
-                return self._binary_already_installed(stack_id, entry, _have, moved_notes)
+                return self._binary_already_installed(stack_id, entry, _have, [])
+            if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
+                return _deps
             # HYBRID stacks: some covered components still need their PINNED clone, because the
             # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
             # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
-            # then cannot start on a box that never had the checkout (where
-            # an older clone had masked it).
+            # then cannot start on a box that never had the checkout. A clean checkout of ours at
+            # another commit is moved to the binary's commit by the same adoption (U9: the checkout
+            # follows the binary); a dirty, foreign or unproven tree is refused.
             clone_notes = []
             if spec.clone_required:
                 st = self.stack(stack_id)
@@ -267,7 +244,7 @@ class BinaryOpsMixin:
                         # AT the pin is not UNMODIFIED: run.sh / gps-relay.py run FROM this tree,
                         # so a locally edited copy would run operator code under a "pinned" install.
                         _dirty = inst.dirty_report(dest, comp.source.path)
-                        if stale and (_dirty or not locked):   # the CLI moved it before the locks
+                        if stale and _dirty:
                             return ActionResult(
                                 False,
                                 f"Binary install of '{stack_id}' blocked: {comp.source.path} is at "
@@ -284,8 +261,11 @@ class BinaryOpsMixin:
                                 "local changes — the artifact runs scripts from that checkout.",
                                 details=[f"  changed: {c}" for c in _ch[:5]],
                                 next_commands=[src_cmd], data={"binary_failed": True})
-                        if not stale:   # clean: reuse it; in an auto-install run, re-adopt below
+                        if not stale:   # clean and at the binary's commit: reuse it
                             continue
+                    # A running stack runs its scripts from this checkout: refused, nothing moved.
+                    if (_run := self._binary_running_refusal(stack_id)) is not None:
+                        return _run
                     # The source lock for this path may be held by an OUTER boundary (the
                     # auto-install run, `locked=True`) **or** by THIS call's own guard, which
                     # covers every path in `spec.covers` (see the `if not locked:` block above).
@@ -310,7 +290,6 @@ class BinaryOpsMixin:
                             f"({act.detail}).",
                             next_commands=[src_cmd], data={"binary_failed": True})
                     clone_notes.append(f"  adopted pinned source for {cid} (run scripts)")
-            clone_notes = moved_notes + clone_notes
             # AUTHORITATIVE "already installed" (the same artifact): after recovery, under the locks, with
             # the required clones proven above — an open transaction is never read as installed.
             if (_have := self._binary_current(stack_id, entry)[0]):
@@ -339,13 +318,9 @@ class BinaryOpsMixin:
             # AUTHORITATIVE running recheck under the held locks (the source-update pattern):
             # a start that slipped in before the locks must refuse with ZERO mutation — a
             # binary update replaces the executable/firmware the stack is running from.
-            _running = self._binary_running_components(stack_id)
-            if _running:
+            if (_run := self._binary_running_refusal(stack_id)) is not None:
                 shutil.rmtree(tmpdir, ignore_errors=True)   # nothing was opened yet; leave nothing
-                return ActionResult(
-                    False, f"Refusing to install '{stack_id}' from binary: component(s) running.",
-                    details=[f"  running: {', '.join(_running)} — stop them first"],
-                    next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
+                return _run
 
             # OPEN THE TRANSACTION FIRST — before the auth change and before any file moves.
             # The journal carries the previous receipt and the previous mesh-password value, so
@@ -511,30 +486,23 @@ class BinaryOpsMixin:
             data={"binary_failed": True, "offer_source": True, "binary_refusal": "none_compatible",
                   "pin_mismatch": {}})
 
-    def _stale_clean_clones(self, stack_id: str, spec, entry) -> list:
-        """clone_required components whose checkout is present, provably ours, CLEAN and at a
-        commit other than `entry`'s — the ones a binary install may move to that commit itself."""
-        if not spec.clone_required:
-            return []
-        st = self.stack(stack_id)
-        by_id = {c.id: c for c in (st.components if st else ())}
-        inst = self._installer()
-        out = []
-        for cid in spec.clone_required:
-            comp = by_id.get(cid)
-            if comp is None or comp.source is None:
-                continue
-            dest = self._paths.resolve_source(comp.source.path)
-            if not dest.is_dir():
-                continue                            # missing: adopted under the locks, as before
-            rec, _why = source_registry.verify_identity(
-                self._paths, self._system, self.config(), comp, dest, components=(cid,))
-            if rec is None or (rec.resolved_commit or "") == entry.components[cid]:
-                continue                            # unproven (refused later) or already there
-            if inst.dirty_report(dest, comp.source.path):
-                continue                            # local changes: refused later, never moved
-            out.append(cid)
-        return out
+    def _binary_deps_refusal(self, stack_id: str, entry) -> ActionResult | None:
+        """The refusal for `entry`'s missing system packages; lhpc never installs them itself, it names the command."""
+        missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
+        if not missing:
+            return None
+        return ActionResult(False, f"Binary install of '{stack_id}' needs system packages that are not installed.",
+                            details=[f"  missing: {' '.join(missing)}"],
+                            next_commands=[f"sudo apt install -y {' '.join(missing)}", f"lhpc install {stack_id} --yes"],
+                            data={"binary_failed": True, "missing_runtime_deps": missing})
+
+    def _binary_running_refusal(self, stack_id: str) -> ActionResult | None:
+        """The refusal while a component of `stack_id` runs (checked under the held locks, before any change)."""
+        if not (running := self._binary_running_components(stack_id)):
+            return None
+        return ActionResult(False, f"Refusing to install '{stack_id}' from binary: component(s) running.",
+                            details=[f"  running: {', '.join(running)} — stop them first"],
+                            next_commands=[f"lhpc stack stop {k} --yes" for k in instances.stop_keys(self, stack_id)])
 
     def _binary_running_components(self, stack_id: str) -> list:
         """Components of `stack_id` that are RUNNING/DEGRADED right now — the gate every binary

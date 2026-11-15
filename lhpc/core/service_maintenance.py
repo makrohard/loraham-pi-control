@@ -415,7 +415,7 @@ class MaintenanceOpsMixin:
         return stable_lane.resolve(run, remote, self._paths).frozen()    # stable: the lane's one target (U1)
 
     def _plan_source_groups(self, items, source: str, freeze: bool = False,
-                            exact_commits: dict | None = None, stable_refs: dict | None = None) -> tuple:
+                            stable_refs: dict | None = None) -> tuple:
         """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
 
           * known-working is resolved ONCE per affected stack from one complete compatible
@@ -428,11 +428,7 @@ class MaintenanceOpsMixin:
             mutation.
 
         Returns (groups, error): groups = ordered [(path, comp, selector, (expected, label))].
-        `selector` is the per-stack Version choice carried through to adoption.
-
-        `exact_commits` (internal, the binary channel's clone_required move, U9): {component id: commit};
-        'pinned' resolves to the binary's commit for that component, never a known-working entry or the
-        pin — the artifact runs scripts from that checkout, so it must be exactly there."""
+        `selector` is the per-stack Version choice carried through to adoption."""
         from . import known_working, source_registry
         # `source`: one selector OR `source_of(stack_id, comp)` (auto-install per stack; a bare update per source). The
         # SELECTOR is part of the source identity: stacks sharing a path with different selectors conflict.
@@ -448,8 +444,6 @@ class MaintenanceOpsMixin:
             sel = _sel(st.id, comp)
             if sel != "pinned" or spec.artifact:
                 resolved = ("", "")
-            elif exact_commits and comp.id in exact_commits:
-                resolved = (exact_commits[comp.id], "the binary artifact's commit")
             else:
                 entries = compositions.get(st.id)
                 if entries and comp.id in entries:
@@ -1761,19 +1755,18 @@ class MaintenanceOpsMixin:
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "", auto_install_ctx=None,
-               exact_commits: dict | None = None, build: bool = True) -> ActionResult:
+               build: bool = True) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`, "" = each source's recorded one:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
         manifest-pin) identity, disclosed. A stack (or "all") updates its required sources,
         its hard build dependencies, and the optional components that are INSTALLED; an
-        optional one never installed is skipped unless targeted directly. `exact_commits` is
-        internal (the binary channel): 'pinned' means the binary's commit, not known-working.
+        optional one never installed is skipped unless targeted directly.
 
         A stack whose updated sources leave it needing a build is then built by `build()` itself,
         after the update's locks are released, so it can start. `build=False` (the console's
         inline update, which must not hold a request for a build) leaves that to the caller:
-        `data["needs_build"]` names the stacks. Not for the internal callers (`auto_install_ctx`
-        builds itself; `exact_commits` serves a binary artifact, which is not built).
+        `data["needs_build"]` names the stacks. Not for the internal caller (`auto_install_ctx`
+        builds itself).
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
@@ -1931,7 +1924,7 @@ class MaintenanceOpsMixin:
                                                  "checkout ([remotes] in config/local.toml), "
                                                  "then retries"])
                 groups, plan_conflicts = self._plan_source_groups(items, lambda _sid, c: sel[c.source.path],
-                                                                  exact_commits=exact_commits, stable_refs=stable_refs)
+                                                                  stable_refs=stable_refs)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "incompatible source resolutions for a shared "
@@ -1989,9 +1982,9 @@ class MaintenanceOpsMixin:
                                 next_commands=[f"lhpc update {target + ' ' if target else ''}{_src}--yes"])
         needs_build = []
         # Every activated source of a public update is checked, also when another part failed
-        # (auto-install builds itself; the binary channel's exact-pin repin builds nothing): the
-        # stacks it left unbuilt are named, and built only when the whole update converged.
-        if mutated_paths and auto_install_ctx is None and not exact_commits:
+        # (auto-install builds itself): the stacks it left unbuilt are named, and built only when the
+        # whole update converged.
+        if mutated_paths and auto_install_ctx is None:
             self.invalidate_snapshot()                 # the sources changed under this request
             needs_build = [sid for sid in sorted({s.id for s, c in items
                                                   if c.source.path in mutated_paths})

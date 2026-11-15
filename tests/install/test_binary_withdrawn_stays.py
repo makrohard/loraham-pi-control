@@ -172,3 +172,63 @@ def test_after_an_interrupted_transaction_changed_files_are_refused_under_the_lo
     assert not res.ok and f"the installed binary {rec.filename} changed since its install" in res.summary
     assert (tmp_path / rec.files[0]).read_bytes() == b"EDIT"
     assert brx.receipt_state(svc._paths, "daemon")[1].artifact_sha256 == "b" * 64
+
+
+def _before_the_lock(monkeypatch, concurrent):
+    """Barrier (no sleeps): `concurrent()` runs when the apply reaches its first lock, i.e. between the start of the
+    install and its locks, as a transaction of another process would. Returns the list of barrier hits."""
+    hits = []
+    real_admit = ControllerService._admit
+
+    def _barrier(self, *a, **k):
+        if not hits:                             # the first lock; a nested acquire re-enters it
+            hits.append(1)
+            concurrent()
+        return real_admit(self, *a, **k)
+    monkeypatch.setattr(ControllerService, "_admit", _barrier)
+    return hits
+
+
+def test_a_receipt_removed_before_the_locks_gets_the_locked_decision(tmp_path, monkeypatch, binary_receipt):
+    # B installed, only the older A listed: the plan reads "nothing to install". A concurrent retire removes B
+    # before the apply's locks: the locked decision (nothing installed) installs A, not the stale no-op.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "daemon")
+    _serve(monkeypatch, "daemon", _entry("daemon", "a" * 64, "a" * 40, OLDER))
+    assert svc.update("daemon", apply=False, source="binary").data["changes"] == 0
+    hits = _before_the_lock(monkeypatch, lambda: brx.remove_receipt(svc._paths, "daemon"))
+    res = svc.update("daemon", apply=True, source="binary")
+    assert hits == [1] and "DOWNLOAD-REACHED" in res.summary, res.summary
+
+
+def test_a_transaction_opened_before_the_locks_is_recovered_then_decided(tmp_path, monkeypatch, binary_receipt):
+    # B installed with intact files, only the older A listed. Before the apply's locks a concurrent transaction
+    # opens over B and changes a file, then dies: under the locks the recovery runs first, then the decision on
+    # the recovered B (changed files, nothing newer) refuses; the stale snapshot would have read "nothing to do".
+    svc = _svc(tmp_path, monkeypatch)
+    rec = _installed(svc, binary_receipt, "daemon")
+    _serve(monkeypatch, "daemon", _entry("daemon", "a" * 64, "a" * 40, OLDER))
+
+    def _concurrent():
+        bi.open_txn(svc._paths, "daemon", "t" * 16, old_receipt=brx.read_raw(svc._paths, "daemon"), auth={})
+        (tmp_path / rec.files[0]).write_bytes(b"EDIT")
+    hits = _before_the_lock(monkeypatch, _concurrent)
+    res = svc.update("daemon", apply=True, source="binary")
+    assert hits == [1] and not res.ok, res.summary
+    assert f"the installed binary {rec.filename} changed since its install" in res.summary
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert (tmp_path / rec.files[0]).read_bytes() == b"EDIT"
+
+
+def test_a_newer_entrys_missing_packages_are_refused_before_any_download(tmp_path, monkeypatch, binary_receipt):
+    # Control for N3: when the entry WOULD replace B, its missing package is the refusal, in the plan and in
+    # the apply (decided under the locks), with the apt command named and nothing downloaded.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "daemon")
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, pkg: pkg != "libonly-a1")
+    _serve(monkeypatch, "daemon", _entry("daemon", "a" * 64, "a" * 40, NEWER, deps=("libonly-a1",)))
+    for apply in (False, True):
+        res = svc.update("daemon", apply=apply, source="binary")
+        assert not res.ok and "needs system packages" in res.summary, res.summary
+        assert res.data["missing_runtime_deps"] == ["libonly-a1"]
+        assert "sudo apt install -y libonly-a1" in res.next_commands
