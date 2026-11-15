@@ -68,7 +68,7 @@ def _upstream_cache_path(paths, stack_id: str):
 
 class MaintenanceOpsMixin:
 
-    def _update_probe(self, comp) -> dict:
+    def _update_probe(self, comp, stable_target=None) -> dict:
         """NETWORK. Bounded `git ls-remote` freshness probe for ONE component — no fetch, no
         mutation. Returns a `stackupdates` entry: status + the evidence it was computed from.
 
@@ -118,7 +118,7 @@ class MaintenanceOpsMixin:
         run = self._system.runner.run
         rec = source_registry.read_record(self._paths, comp.source.path)
         if rec is not None and rec.selector == "stable" and not comp.source.artifact:
-            sref = stable_lane.resolve(run, remote, self._paths)               # U1: the lane's target, not the branch tip
+            sref = (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: the lane's target, one per remote
             if not (sref.sha and sref.verified):
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
             remote_sha = sref.sha
@@ -204,12 +204,12 @@ class MaintenanceOpsMixin:
             # `optional`, yet an absent RadioLib is a real gap in an installed daemon.
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
             excused = {c.id for c in comps if not self._stack_scope_keeps(c, required)}
-        results, details = {}, []
+        results, details, stable_target = {}, [], stable_lane.resolver(self._system.runner.run, self._paths)
         counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
                   stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
         excused_counts = {stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
         for c in comps:
-            entry = self._update_probe(c)
+            entry = self._update_probe(c, stable_target)
             results[c.id] = entry
             counts[entry["status"]] = counts.get(entry["status"], 0) + 1
             note = entry["status"].replace("_", " ")
@@ -478,9 +478,9 @@ class MaintenanceOpsMixin:
                 # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
                 # selector (incl. 'pinned' — they never use known-working entries): the
                 # plan-time commit IS this run's immutable artifact identity.
-                if path not in frozen_cache:
-                    frozen_cache[path] = self._frozen_ref(comp, sel)
-                (fz, why) = frozen_cache[path]
+                once = ("stable", self._effective_remote(comp)) if sel == "stable" else path   # one per remote
+                (fz, why) = (frozen_cache.get(path) or frozen_cache.get(once)
+                             or frozen_cache.setdefault(once, self._frozen_ref(comp, sel)))
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
                     # known-working composition (then the manifest pin) when dev is

@@ -79,7 +79,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
         if argv[0] != "curl":
             return real_run(self, argv, timeout, cwd=cwd, env=env)
         b.api_calls.append(argv)
-        if b.release in ("404", "429"):
+        if b.release in ("404", "429", "503"):
             return CommandResult(0, f'{{"message": "x"}}\n{b.release}', "")
         if b.release.startswith("{"):                 # a raw 200 body (no or an unusable tag_name)
             return CommandResult(0, b.release + "\n200", "")
@@ -831,6 +831,55 @@ def test_two_paths_of_one_remote_read_one_target_in_one_gate(box):
     assert sorted(refs) == sorted([LIB, REL]) and refs[REL] is refs[LIB] and refused == []
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.head(LIB) == box.c[2]
+
+
+def test_two_paths_of_one_remote_read_one_target_in_one_source_check(box):
+    box.use(GH, lib=True)                             # src/app and src/lib, one remote
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    box.api_calls.clear()
+    box.git_calls.clear()
+    box.cli("source-check", "s")
+    fetches = [a for a in box.git_calls if a[3:4] == ["fetch"]]
+    assert len(box.api_calls) == 1 and len(fetches) == 1      # RED before: 2 API calls, 2 mirror fetches
+    assert box.status("app") == box.status("lib") == su.BEHIND
+
+
+def test_two_paths_of_one_remote_read_one_target_in_one_install(box):
+    box.use(GH, lib=True)
+    box.release = "v2.8.0.7239fe8"
+    box.api_calls.clear()
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert len(box.api_calls) == 1                    # RED before: one releases read per path
+    assert box.head() == box.head(LIB) == box.c[1]
+
+
+def test_a_failed_release_read_never_makes_tags_beside_each_other_a_final_refusal(box, capsys):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v1.0", box.c[1])
+    box.push_tag("v0.9", box.side(box.c[0]))         # a tag beside v1.0's line
+    assert box.cli("install", "s", "--source", "pinned", "--yes") == 0
+    box.release = "503"                               # the releases API fails: only verified facts may refuse
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    out = capsys.readouterr().out
+    assert "try again later" in out and NOT_ONE_LINE not in out      # RED before: the final refusal
+    assert (box.head(), box.selector()) == (box.c[0], "pinned")
+    box.release = "v1.0"                              # the read recovers: the release names the target
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+
+
+def test_one_line_of_many_tags_is_placed_with_one_history_read(box):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    for n in range(8):
+        box.push_tag(f"v1.{n}", box.advance())
+    box.git_calls.clear()
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[-1]
+    reads = [a for a in box.git_calls if "stable-history" in a[2] and a[3] == "merge-base"]
+    assert len(reads) == 1                            # RED before: one read per pair of tagged commits (64)
 
 
 def test_tags_that_are_not_one_line_of_history_refuse_the_stable_lane_by_name(box, capsys):

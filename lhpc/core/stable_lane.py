@@ -6,11 +6,13 @@ all branches and tags, deleted refs pruned). A commit is PUBLISHED when a curren
 an object the mirror still holds after a force-push is not. Every ancestry answer is true, false or unknown (`_is`).
 
 Target (`resolve`): the release R (GitHub `releases/latest`, no drafts, no prereleases) whatever its name (MeshCom's
-`v4.40a.11.14`: slice B), and the plain version-shaped tags (the WHOLE name an optional `v` and one to three numbers) in R's future; no release: every
-plain tag. The target is the candidate commit all others lead to; candidates that are not one line of history refuse
-by name. Tags in R's past or beside R's line are not successors of the release and never the target. No candidate:
-the default-branch HEAD. VERIFIED when every applicable source was read (the mirror; on GitHub also the releases API,
-a 404 meaning "no release"); a failed read, or a release the tags do not show (yet), leaves it DEGRADED.
+`v4.40a.11.14`: slice B), and the plain version-shaped tags (the WHOLE name an optional `v` and one to three
+numbers) in R's future; no release: every plain tag. The target is the candidate commit all others lead to;
+candidates that are not one line of history refuse by name (finally only when the release read is verified; else
+"could not check"). Tags in R's past or beside R's line are not successors of the release and never the target. No
+candidate: the default-branch HEAD. VERIFIED when every applicable source was read (the mirror; on GitHub also the
+releases API, a 404 meaning "no release"); a failed read, or a release the tags do not show (yet), leaves it
+DEGRADED.
 
 Move (`classify`): from the installed commit I to the target S only when I is published and an ancestor of S; S in I's
 past is "not newer"; anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
@@ -54,12 +56,11 @@ def version_of(name):
 
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    upstream's tag names per commit, the winning tag (`name`, "" = the default-branch HEAD) and the history mirror."""
+    winning tag (`name`, "" = the default-branch HEAD) and the history mirror."""
     sha: str = ""
     label: str = ""
     verified: bool = False
     why: str = ""
-    tags: dict | None = None
     name: str = ""
     history: str = ""
 
@@ -138,9 +139,6 @@ def resolve(run, remote: str, paths) -> StableRef:
         parts = line.split()
         if len(parts) >= 2:
             commits[parts[0]] = parts[-1]                    # an annotated tag: its peeled commit
-    tags: dict = {}
-    for n, sha in commits.items():
-        tags.setdefault(sha, []).append(n)
     release, verified = "", True
     if gh := _GITHUB_REMOTE_RE.match(remote):
         api = run(["curl", "-sSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json",
@@ -169,28 +167,39 @@ def resolve(run, remote: str, paths) -> StableRef:
                     line.append(n)
     else:
         line = plain
-    if line:
-        shas = sorted({commits[n] for n in line})
-        tip = []
-        for s in shas:
-            leads = [_is(run, mirror, o, s) for o in shas]
-            if None in leads:
-                return StableRef(why=f"could not read the history of {remote}")
-            if all(leads):
-                tip.append(s)
-        if not tip:
+    if line:                                                  # the tips: the candidates no other one leads to
+        tips = _git(run, mirror, "merge-base", "--independent", *sorted({commits[n] for n in line}))
+        if tips.returncode != 0:
+            return StableRef(why=f"could not read the history of {remote}")
+        tip = tips.stdout.split()
+        if len(tip) != 1:
+            if not verified:                                  # only verified facts refuse for good
+                return StableRef(why=f"{remote}: its version tags are not one line of history and its releases "
+                                     "could not be checked")
             return StableRef(why=f"{remote}: its release and version tags are not one line of history; refused; "
                                  f"{FINAL_HINT}")
         sha = tip[0]
         on_tip = [n for n in line if commits[n] == sha]
         name = release if release in on_tip else max(on_tip, key=lambda n: (version_of(n), n))   # a label, one commit
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", tags, name, str(mirror))
+        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror))
     head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
     if head.returncode != 0 or not head.stdout.strip():
         return StableRef(why=f"could not resolve HEAD on {remote}")
     sha = head.stdout.split()[0]
-    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", tags, "",
-                     str(mirror))
+    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", "", str(mirror))
+
+
+def resolver(run, paths):
+    """`get(remote) -> StableRef`: ONE target per remote for one operation (an update gate, a source-check sweep; the
+    install plan keeps one frozen target per remote itself); two source paths that share a remote read it once and see
+    the same answer."""
+    seen: dict = {}
+
+    def get(remote: str) -> StableRef:
+        if remote not in seen:
+            seen[remote] = resolve(run, remote, paths)
+        return seen[remote]
+    return get
 
 
 def classify(run, installed: str, ref: StableRef) -> tuple[bool | None, str]:
@@ -237,12 +246,11 @@ def update_gate(run, paths, items, source: str, remote_of):
     locks; the apply runs it ONCE, under its locks."""
     from . import source_fs, source_registry
     sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
-    refs, by_remote, refused = {}, {}, []
+    refs, refused, target = {}, [], resolver(run, paths)
     for _, c in items:
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
-            remote = remote_of(c)
-            ref = refs[c.source.path] = by_remote.get(remote) or by_remote.setdefault(remote, resolve(run, remote, paths))
+            ref = refs[c.source.path] = target(remote_of(c))
             head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
             installed = (head.stdout or "").strip() if head.returncode == 0 else ""
             older, why = classify(run, installed, ref)
