@@ -1458,3 +1458,36 @@ def test_dec_w384ci_the_proxy_help_names_the_forms_the_proxy_takes(tmp_path, cap
     ids = [p.page_id for p in svc.web_pages()]
     assert "meshcore@r2" in ids and "meshcore-meshcore-node@r2" in ids
     assert svc.stack_web_configure("meshcore", mode="local").summary == "'meshcore' names no web UI to proxy"
+
+
+@pytest.mark.parametrize("state, selector, remedy", [
+    ("differs", "pinned", "lhpc update reticulum"),   # off the pin it follows: the update moves it back and builds
+    ("differs", "dev", "lhpc build reticulum"),       # a chosen dev checkout: an update would fetch the lane's tip
+    ("match", "pinned", "lhpc build reticulum"),      # at its pin: the build is enough
+    ("dirty", "pinned", "lhpc build reticulum"),      # local edits: never an update over them
+])
+def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_selection(box, tmp_path, monkeypatch,
+                                                                                      state, selector, remedy):
+    # The box role on the Zero: a checkout BEHIND its pin was told `lhpc build`, which rebuilds the old sources.
+    from radios_fixture import R1, R2_868
+    from lhpc.core import source_registry
+    from lhpc.core.manifest import load_manifest
+    from lhpc.core.model import SourceState
+    from lhpc.core.paths import Paths
+    run = box((R1, R2_868))
+    rel = next(s for s in load_manifest() if s.id == "reticulum").component("rns").source.path
+    assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
+        rel, "", selector, "", 1.0, "", ("rns",)))   # adopted_at: any time; it is not read
+    monkeypatch.setattr(ControllerService, "is_built", lambda self, c: c.id != "rns")
+    real = ControllerService.build_snapshot
+
+    def snapshot(self, *a, **k):
+        snap = real(self, *a, **k)
+        for ss in snap.stacks:
+            if "rns" in ss.components:
+                ss.components["rns"].source_state = SourceState(state)
+        return snap
+    monkeypatch.setattr(ControllerService, "build_snapshot", snapshot)
+    rc, out, launches = run("start", "reticulum@r2")
+    assert (rc, launches) == (1, []), out
+    assert f"  [blocked] rns: its sources changed since the last build — rebuild first ({remedy})\n" in out, out

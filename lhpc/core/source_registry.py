@@ -130,6 +130,17 @@ def recorded_selector(paths: Paths, source_rel: str, default: str = "pinned") ->
     return rec.selector if rec is not None else default
 
 
+def stale_build_verb(paths: Paths, stack, comp_id: str, state) -> str:
+    """`update` or `build`, the command a stale build's start block names (`lhpc <verb> <stack>`): a clean checkout off
+    its pin (`state` DIFFERS, the caller's probe) installed from the `pinned` selector is moved back to its pin and
+    built by `lhpc update`; one on `dev` or `stable` (an update would fetch its lane's newer tip), one without a valid
+    record, or one dirty or at its pin is rebuilt as it is (`lhpc build`)."""
+    from .model import SourceState
+    spec = getattr(stack.component(comp_id) if stack is not None and comp_id else None, "source", None)
+    pinned = spec is not None and state == SourceState.DIFFERS and recorded_selector(paths, spec.path, default="") == "pinned"
+    return "update" if pinned else "build"
+
+
 def update_components(paths: Paths, source_rel: str, components) -> bool:
     """Rewrite ONLY the record's live consumer membership (departure decrement / install
     re-join). Refuses an empty membership — the caller removes the leaf+record instead.

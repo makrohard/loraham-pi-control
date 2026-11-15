@@ -1282,7 +1282,7 @@ class LifecycleOpsMixin:
             if comp.build_marker and comp.build_requires and not self.is_built(comp):
                 record(comp, stack, Outcome.BLOCKED,
                        "its sources changed since the last build — rebuild first "
-                       f"({self.build_remedy(stack.id, comp.id)})")
+                       f"({self.build_remedy(stack.id, comp.id, st_index[comp.id].source_state)})")
                 continue
             # A GUI component that cannot run HERE is typed-SKIPPED: either its toolkit is
             # absent (gui_optional on a box bootstrapped without --with-gui — the same

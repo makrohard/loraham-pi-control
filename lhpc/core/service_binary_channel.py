@@ -15,6 +15,7 @@ from __future__ import annotations
 import platform
 
 from . import binary_receipt as brx
+from . import source_registry
 from .model import ComponentKind
 from .web_client import COMPONENT as WEB_CLIENT
 
@@ -238,18 +239,17 @@ class BinaryChannelMixin:
         """The one command that repairs an artifact-managed runtime dependency."""
         return f"lhpc install {self.stack_of(comp_id) or comp_id} --source binary --yes"
 
-    def build_remedy(self, stack_id: str, comp_id: str = "") -> str:
-        """THE command that makes an unbuilt component built — one string, so every refusal
-        that names it agrees.
+    def build_remedy(self, stack_id: str, comp_id: str = "", source_state=None) -> str:
+        """THE command that makes an unbuilt component built — one string, so every refusal that names it agrees.
 
         On the binary channel there is no build: `lhpc build` is refused there, so pointing an
         operator at it is a dead end. A covered component that reads NOT built means the
         installed artifact no longer matches what the manifest describes (its recorded build
-        inputs moved), and the repair is a reinstall of the artifact.
+        inputs moved), and the repair is a reinstall of the artifact. Else `source_registry.stale_build_verb`.
         """
         if comp_id and self.binary_covers(comp_id):
             return self.binary_artifact_repair(comp_id)
-        return f"lhpc build {stack_id}"
+        return f"lhpc {source_registry.stale_build_verb(self._paths, self.stack(stack_id), comp_id, source_state)} {stack_id}"
 
     def _local_gpsd_needed(self) -> bool:
         """Is a gpsd on THIS box actually part of the configured position source?
