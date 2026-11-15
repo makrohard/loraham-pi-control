@@ -30,7 +30,7 @@ remote = "https://github.com/makrohard/loraham-pi-control.git"
 [[stack]]
 id = "daemon"
 name = "LoRaHAM daemon"
-summary = "The LoRaHAM daemon. Owns the radios and exposes the sockets the app stacks use. lhpc launches one --radio <band> process per band (433 and/or 868)."
+summary = "The LoRaHAM daemon. Owns the radios and exposes the sockets the app stacks use. lhpc launches one --radio <band> --id <rid> process per enabled radio of the hardware list (433/868 MHz)."
 main = "loraham-daemon"
 
   # Prebuilt-binary channel (lhpc-binaries, schema-2 index): the artifact replaces the
@@ -51,7 +51,7 @@ main = "loraham-daemon"
   name = "LoRaHAM Daemon"
   kernel_cs_since = "709bb99b273f6dfb28d3c0d13b80f6f8f6e93f78"   # its first commit with kernel chip selects (docs/cli.md#deps)
   kind = "service"
-  purpose = "Device driver for the LoRa radios; provides raw/framed/CONF sockets per band."
+  purpose = "Device driver for the LoRa radios; provides raw/framed/CONF sockets per radio."
   tx_capable = true
   start_order = 0
   build = "loraham_daemon/build.sh"
@@ -60,12 +60,12 @@ main = "loraham-daemon"
   # (start_new_session + redirected stdio), so it runs as the LHPC-owned session
   # leader and stop() can identity-verify it before signalling.
   # v112+ daemon: ONE radio per process. `--radio` is mandatory; `--hw` selects the board preset;
-  # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's band.
-  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi`/`hipower`/`ocp` per band at spawn (see _ensure_daemon).
+  # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's radio.
+  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi`/`hipower`/`ocp` per radio at spawn (see _ensure_daemon).
   # `{hipower}` is a FLAG-kind param: it renders the bare `--high-power` when this radio's row grants
   # the +20 dBm permission and NOTHING when not (daemon 1.2.0; W311: the row, never a band value).
-  # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
-  # the file is per band and named by lhpc — the daemon never derives a path itself.
+  # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per radio like the rest);
+  # the file is per radio (logs/<rid>/rf-daemon.log) and named by lhpc — the daemon never derives a path itself.
   # Structured (shell-free) execution (W7-9: the daemon has no `run` shorthand; run_argv is its only command).
   run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "{param:rflog_path}", "{param:id}", "{param:usb_port}"]
   run_cwd = "{source}"
@@ -97,9 +97,9 @@ main = "loraham-daemon"
     [[stack.component.param]]
     name = "radio"
     kind = "enum"
-    # lhpc always starts one process per band (--radio 433 / 868) — one band per instance,
-    # driven by the global radio mode. This hidden param survives only as the per-instance band value
-    # lhpc injects at spawn; the operator sets the radio mode in the daemon Hardware settings.
+    # lhpc starts one process per enabled radio of the hardware list (config/radios.toml) — one radio per
+    # instance. This hidden param survives only as the band of the instance's radio, which lhpc injects
+    # at spawn; the operator edits the radios on the Hardware page or with `lhpc hardware`.
     choices = ["433", "868"]
     default = "433"
     label = "Radio band"
@@ -176,7 +176,7 @@ main = "loraham-daemon"
     min = 0
     max = 240
     label = "PA over-current limit (this process, mA)"
-    # RF log: what this band's radio heard and sent, one line per frame, kept across restarts.
+    # RF log: what this radio heard and sent, one line per frame, kept across restarts.
     # The daemon's one switch for all its radios — the FILES are per radio (logs/<rid>/rf-daemon.log), the switch is not. The daemon's
     # log page is its only web surface for it (`config_param_fields` is empty here: no Settings form).
     [[stack.component.param]]
@@ -186,7 +186,7 @@ main = "loraham-daemon"
     choices = ["on", "off"]
     default = "on"
     group = "RF-Logs"
-    label = "RF log (what the radio heard and sent; one file per band)"
+    label = "RF log (what the radio heard and sent; one file per radio)"
 
     [stack.component.source]
     path = "src/loraham-daemon"
@@ -747,8 +747,8 @@ main = "loraham-kiss-tnc"
   bin = "loraham-kiss-tnc"
   test = "bash run_tests.sh"
 
-    # CLI overrides of the .conf file (all start-time). Band 868 uses its own
-    # per-band config: set 868 frequencies + the lora868f/loraconf868 sockets there.
+    # CLI overrides of the .conf file (all start-time). The frequencies default per band (below);
+    # the daemon sockets default to the instance's radio (`loraf-{rid}`, `loraconf-{rid}`).
     [[stack.component.param]]
     name = "kiss_port"
     kind = "int"
