@@ -1021,3 +1021,52 @@ def test_the_failed_steps_readable_log_decides(monkeypatch, tmp_path, log_tail, 
         assert calls["build"] == 3
     else:
         assert not _EXTERNAL.search(msg) and calls["build"] == 1
+
+
+# The end of the failed step's own log in lhpc-binaries run 34133564060 (2026-09-07), verbatim:
+# meshtastic's library fetch (`pio pkg install`, build-meshtastic-2.log) met a gateway timeout.
+# PlatformIO's last word is a `PackageException:` line naming the HTTP status.
+PIO_504_TAIL = (
+    "Library Manager: Installing https://github.com/thingsboard/pubsubclient/archive/refs/tags/"
+    "v2.12.1.zip\n"
+    "Downloading 0% 10% 20% 30% 40% 50% 60%\n"
+    "Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%\n"
+    "Library Manager: TBPubSubClient@2.12.1 has been installed!\n"
+    "Library Manager: Installing https://github.com/arduino-libraries/NTPClient/archive/refs/tags/"
+    "3.2.1.zip\n"
+    "PackageException: Got the unrecognized status code '504' when downloaded "
+    "https://github.com/arduino-libraries/NTPClient/archive/refs/tags/3.2.1.zip\n")
+
+
+def _meshtastic_fetch_step_failed(tmp_path, log_tail):
+    """`lhpc build meshtastic`'s typed failure at its PlatformIO fetch step, that step's log
+    holding `log_tail`. The step is found in the manifest, and is not the recipe's own."""
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+    st = next(s for s in load_manifest(default_manifest_path()) if s.id == "meshtastic")
+    comp = next(c for c in st.components if c.id == "meshtastic")
+    i = next(i for i, s in enumerate(comp.build_steps)
+             if str(s["argv"][0]).endswith("/pio") and s["argv"][1:3] == ["pkg", "install"])
+    assert not comp.build_steps[i].get("attributable")
+    log = tmp_path / f"build-{comp.id}-{i}.log"
+    log.write_text(log_tail)
+    return f"  [failed] build {comp.id} (rc 1, log {log})\n"
+
+
+@pytest.mark.parametrize("log_tail, expect", [
+    (PIO_504_TAIL, "external"),
+    # the same shape with a 4xx: the archive is gone, which no wait brings back
+    (PIO_504_TAIL.replace("'504'", "'404'"), "unmarked"),
+], ids=["platformio-504", "platformio-404"])
+def test_a_platformio_fetch_that_met_a_5xx_is_a_transfer(monkeypatch, tmp_path, log_tail, expect):
+    typed = _meshtastic_fetch_step_failed(tmp_path, log_tail)
+    calls = _lhpc(monkeypatch, install=[_Done(0)], build=[_Done(1, typed)])
+    msg = _install_build_message("meshtastic")
+    assert "STACK-REGRESSION" not in msg
+    if expect == "external":
+        assert msg.splitlines()[:2] == [
+            "EXTERNAL-UNAVAILABLE what=build:meshtastic",
+            "PackageException: Got the unrecognized status code '504' when downloaded "
+            "https://github.com/arduino-libraries/NTPClient/archive/refs/tags/3.2.1.zip"]
+        assert calls["build"] == 3                                    # 1 + 2 retries
+    else:
+        assert not _EXTERNAL.search(msg) and calls["build"] == 1

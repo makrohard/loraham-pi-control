@@ -361,16 +361,18 @@ def install_build(env, svc, stack: str, *, build: bool = True,
 # `STACK-REGRESSION` line.
 
 # The DECISIVE line of a failed step: the last error line its own output ends with.
-_DECISIVE = re.compile(r"^\s*(?:\[failed\]|ERR\b|ERROR:|error:|fatal:|curl: \(\d+\))"
-                       r"|download failed")
+_DECISIVE = re.compile(r"^\s*(?:\[failed\]|ERR\b|ERROR:|error:|fatal:|curl: \(\d+\)"
+                       r"|PackageException:)|download failed")
 # A decisive line that says WHY a transfer failed, and the why is the network or the server: a
-# name that does not resolve, a connection refused, reset or timed out, an HTTP 5xx. An HTTP 4xx
+# name that does not resolve, a connection refused, reset or timed out, an HTTP 5xx (PlatformIO
+# names it `status code '504'` in its `PackageException:` line). An HTTP 4xx
 # (a binary not yet published, a repository that is gone) is NOT a transfer: it is never retried.
 _TRANSPORT = re.compile(
     r"Could not resolve host|Failed to connect|Connection (?:refused|reset|timed out)|timed out"
     r"|Temporary failure in name resolution|Name or service not known|Network is unreachable"
     r"|ConnectionError|ReadTimeoutError|ConnectTimeoutError|urlopen error \[Errno"
-    r"|(?:returned error|HTTP [Ee]rror):? 5\d\d|curl: \((?:5|6|7|28|35|52|56)\)")
+    r"|(?:returned error|HTTP [Ee]rror):? 5\d\d|status code '5\d\d'"
+    r"|curl: \((?:5|6|7|28|35|52|56)\)")
 _CURL = re.compile(r"curl: \(\d+\)")
 # pip's outage shape: its retries ran out on a connection error, and only then it reports that
 # no version satisfies the requirement. A version that does not exist has no exhausted retry.
