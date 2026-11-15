@@ -79,14 +79,9 @@ def test_release_lane_reports_exactly_the_required_cases():
 
 
 
-def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(tmp_path):
-    """Every stack with a binary channel in the REAL packaged manifest has a published entry the
-    candidate installs: the `newest_entry` a box's install runs (U9: the newest entry for this target
-    that covers the candidate's binary spec, at any commits), against the index the manifest names.
-    The daemon is the lab's fixture in the cases below, so this is where its entry is checked. None
-    (`none_compatible`) is red: the release would leave its boxes without a binary. Runs before the
-    installs, so a gap fails in seconds.
-    """
+def _binary_stacks(tmp_path):
+    """(service, target, [(stack, spec, entries)]) for every stack with a binary channel in the REAL
+    packaged manifest, its entries read from the index the manifest names."""
     from lhpc.core import binary_install as bi
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
@@ -95,21 +90,55 @@ def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(t
                             paths=Paths(runtime_root=tmp_path))
     target = svc.binary_target()
     assert target, "the release lane runs on an aarch64 box with an os-release codename"
-    chosen, refused = [], []
+    out = []
     for stack in svc.stacks():
         spec = svc.binary_spec(stack.id)
-        if spec is None:
-            continue
+        if spec is not None:
+            out.append((stack, spec, bi.index_entries(bi.fetch_index(spec.index_url), stack.id)))
+    assert out, "the packaged manifest names no binary stack — the check proved nothing"
+    return svc, target, out
+
+
+def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(tmp_path):
+    """Every binary stack has a published entry BUILT AT THE CANDIDATE'S PINS: this target, its commit for
+    every covered component equal to the candidate's manifest pin and its build-input digests equal to the
+    ones the candidate computes (`lhpc_commit` is not compared, so a bootstrap entry of the same composition
+    passes). The release bot publishes one per release; none is red even though a box would install an
+    older one (the check below): the release did not prove its own binary. Runs before the installs, so a
+    gap fails in seconds."""
+    import hashlib
+    svc, target, stacks = _binary_stacks(tmp_path)
+    chosen, refused = [], []
+    for stack, spec, entries in stacks:
+        pins = svc._binary_pins(stack.id)
+        inputs = {c.id: hashlib.sha256(svc.build_inputs_text(c).encode("utf-8")).hexdigest()
+                  for c in stack.components if c.id in spec.covers and (c.build_inputs or c.asset_inputs)}
+        at_pins = [e for e in entries if e.target == target
+                   and all(e.components.get(cid) == pin for cid, pin in pins.items())
+                   and e.inputs == inputs]
+        if at_pins:
+            chosen.append(f"{stack.id}: {at_pins[0].filename}")
+        else:
+            refused.append(f"{stack.id}: no entry for {target} at the candidate's pins and build inputs")
+    print("binaries built at the candidate's pins: " + (", ".join(chosen) or "none"))
+    assert not refused, "no published binary at the candidate's pins:\n  " + "\n  ".join(refused)
+
+
+def test_release_every_binary_stack_has_a_binary_the_candidate_installs(tmp_path):
+    """Every binary stack has an entry the candidate's install takes: `newest_entry` (U9: the newest entry
+    for this target that covers the candidate's binary spec, at any commits). None (`none_compatible`) is
+    red: the release would leave its boxes without a binary."""
+    from lhpc.core import binary_install as bi
+    _svc, target, stacks = _binary_stacks(tmp_path)
+    chosen, refused = [], []
+    for stack, spec, entries in stacks:
         try:
-            entries = bi.index_entries(bi.fetch_index(spec.index_url), stack.id)
-            entry = bi.newest_entry(entries, target, spec.covers)
+            chosen.append(f"{stack.id}: {bi.newest_entry(entries, target, spec.covers).filename}")
         except bi.BinaryInstallError as exc:
             refused.append(f"{stack.id}: {exc.message}")
-            continue
-        chosen.append(f"{stack.id}: {entry.filename}")
     print("binaries the candidate installs: " + (", ".join(chosen) or "none"))
     assert not refused, "no published binary the candidate installs:\n  " + "\n  ".join(refused)
-    assert chosen, "the packaged manifest names no binary stack — the check proved nothing"
+
 
 def _artifact_intact(svc, stack: str) -> None:
     """Every file of the installed artifact still hashes as its receipt records — checked while

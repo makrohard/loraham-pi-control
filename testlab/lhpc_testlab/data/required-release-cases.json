@@ -3,6 +3,7 @@
   "required_cases": [
     "test_release_lane_reports_exactly_the_required_cases",
     "test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate",
+    "test_release_every_binary_stack_has_a_binary_the_candidate_installs",
     "test_release_kiss",
     "test_release_graywolf",
     "test_release_chat",
