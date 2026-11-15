@@ -1183,6 +1183,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if _row_needs_body(inline or bodies, only_sid):
                 g.update({
                     "hardware_block": service.hardware_block(stack.id),  # "" unless no hardware configured
+                    # U5: the daemon row's Hardware submenu shows the hardware list inline, the same view as /hardware
+                    "hw_list": _hw_list_ctx(_radio_start.hardware_view(service)) if stack.id == "daemon" else None,
                     "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
                     # [] for a stack with no web UI -> no Webserver sub-section; else one entry per
                     # proxied PAGE (component with a client http/https endpoint).
@@ -1448,6 +1450,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return Markup('<input type="hidden" name="return" value="%s">') % here if here else ""
 
     app.jinja_env.globals["menu_return_field"] = _menu_return_field
+    app.jinja_env.globals["menu_own_pages"] = _submenus.OWN_PAGES
+    # U5: a page outside the Stacks page names a stack's row as the Stacks crumbs do (its stack's name)
+    app.jinja_env.globals["stack_label"] = lambda sid: s.name if (s := service.stack(sid)) is not None else sid
 
     @app.get("/stacks/<owner>/menu/<mid>")
     def menu_page(owner: str, mid: str):
@@ -1460,6 +1465,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not path:
             abort(404)
         here = path[-1]
+        if here.page:
+            return redirect(url_for(here.page))
         request.environ["lhpc.menu_return"] = _menu_url(owner, mid)
         body = _level_html(owner, here, ctx)
         if owner == _submenus.CONTROLLER:
@@ -1536,12 +1543,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             else:
                 request.environ["lhpc.page_radio"] = saved
 
+    def _internal_url(url: str):
+        """K4's internal-URL parse: the urlsplit parts of a path on this app, or None (a scheme, a
+        host, `//`, a backslash, or a URL urlsplit refuses, e.g. `//[`)."""
+        try:
+            parts = urlsplit(url)
+        except ValueError:                                                 # a malformed authority
+            return None
+        return None if parts.scheme or parts.netloc or "//" in url or "\\" in url else parts
+
     def _menu_page_of(ret: str):
-        """(owner, id, radio, URL) of the level page `ret` names, or None: an internal path only (no
-        scheme, host, `//` or backslash, the rule of the Detect `back`), `/stacks/<owner>/menu/<id>`
-        of an id that owner has, and at most a `radio` query."""
-        parts = urlsplit(ret)
-        if parts.scheme or parts.netloc or parts.fragment or "//" in ret or "\\" in ret:
+        """(owner, id, radio, URL) of the level page `ret` names, or None: an internal path only
+        (_internal_url, no fragment), `/stacks/<owner>/menu/<id>` of an id that owner has, and at
+        most a `radio` query."""
+        parts = _internal_url(ret)
+        if parts is None or parts.fragment:
             return None
         segs = parts.path.split("/")
         if len(segs) != 5 or segs[:2] != ["", "stacks"] or segs[3] != "menu":
@@ -2527,15 +2543,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 
+    def _hw_list_ctx(view: dict) -> dict:
+        """What `_hw_list.html` reads: the list `view`, the models, and each row's +20 dBm state (DEC-W57: a
+        band's state shows in its radios' rows). /hardware and the daemon row's Hardware submenu share it."""
+        from lhpc.core import radio_models
+        return {"view": view, "models": radio_models.load(),
+                "hp": {r["rid"]: service.high_power_state(r["band"], rid=r["rid"]) for r in view["rows"]}}
+
     @app.get("/hardware")
     def hardware_view():
         """B5: the Hardware section — each radio of the hardware list, its daemon on its own socket, the USB
         sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
         it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
-        from lhpc.core import radio_models, radio_start
-        view = radio_start.hardware_view(service)        # DEC-W57: a band's +20 dBm state shows in its radios' rows
-        hp = {r["rid"]: service.high_power_state(r["band"], rid=r["rid"]) for r in view["rows"]}
-        return render_template("hardware.html", view=view, models=radio_models.load(), hp=hp)
+        from lhpc.core import radio_start
+        return render_template("hardware.html", **_hw_list_ctx(radio_start.hardware_view(service)))
 
     @app.get("/hardware/radio/<rid>")
     def hardware_radio(rid: str):
@@ -2587,7 +2608,28 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         from lhpc.core import radio_start
         ok, msg = radio_start.set_enabled(service, request.form.get("rid", ""), request.form.get("enabled") == "on")
         flash(msg, "ok" if ok else "warn")
-        return redirect(url_for("hardware_view"))
+        return redirect(_hardware_back(request.form.get("back", "")) or url_for("hardware_view"))
+
+    def _hardware_back(back: str) -> str:
+        """U5 / E3-6: the page a Hardware form returns to (its `back`), rebuilt, or "" (the caller's default):
+        K4's internal-URL parse, then one of /hardware, /hardware/add, /hardware/radio/<rid> of a listed radio
+        (no query, no fragment), or the daemon row's Stacks page `/stacks?open=daemon[&radio=<listed rid>]
+        #stack-hardware-daemon`."""
+        from lhpc.core import radios
+        parts = _internal_url(back)
+        if parts is None:
+            return ""
+        listed = {r.id for r in radios.load(service._paths).radios}
+        if not parts.query and not parts.fragment:
+            pages = {url_for("hardware_view"), url_for("hardware_add_page")}
+            pages |= {url_for("hardware_radio", rid=rid) for rid in listed}
+            return parts.path if parts.path in pages else ""
+        query = parse_qs(parts.query, keep_blank_values=True)
+        radio = query.pop("radio", [""])
+        if (parts.path != url_for("stacks_overview") or query != {"open": ["daemon"]} or len(radio) != 1
+                or (radio[0] and radio[0] not in listed) or parts.fragment != "stack-hardware-daemon"):
+            return ""
+        return url_for("stacks_overview", open="daemon", radio=radio[0] or None) + "#stack-hardware-daemon"
 
     @app.post("/hardware/detect")
     def hardware_detect():
@@ -2608,9 +2650,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         session["hw_detect"] = {"key": key, "outcome": res.outcome, "line": res.line,      # A18: the probed choice
                                 "picked": {k: f.get(k, "") for k in ("model", "board", "band")}}  # stays shown
-        back = f.get("back", "")              # W257: back to the page Detect was pressed on, a /hardware page only
-        ok_back = back.startswith("/hardware") and "//" not in back and "\\" not in back
-        return redirect((back if ok_back else url_for("hardware_view")) + "#detect-" + key)
+        back = _hardware_back(f.get("back", ""))         # W257: back to the page Detect was pressed on (E3-6)
+        return redirect((back.partition("#")[0] or url_for("hardware_view")) + "#detect-" + key)
 
     @app.post("/hardware/bind")
     def hardware_bind():

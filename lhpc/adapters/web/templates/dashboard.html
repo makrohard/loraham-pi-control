@@ -72,7 +72,7 @@
                        x_fields=hw_ids, x_label='Close the hardware changes') %}
     {%- if part == 'body' %}(since you last closed this)
     <ul>{% for e in hardware_changes.lines %}<li data-change="{{ e.id }}">{{ e.at }} {{ e.line }}</li>{% endfor %}</ul>
-    {%- else %}<a href="{{ url_for('hardware_view') }}">Open Hardware</a>{% endif %}
+    {%- else %}<a href="{{ url_for('stacks_overview', open='daemon') }}#stack-hardware-daemon">Open Hardware</a>{% endif %}
   {% endcall %}
   {% endif %}
   {% if welcome and welcome.fresh and not welcome_dismissed %}

@@ -1,5 +1,13 @@
+{#- U5: the daemon row's Hardware submenu holds the hardware list inline (_hw_list.html, the partial /hardware
+   includes too, from the same view, radio_start.hardware_view; its forms return here). Its page is /hardware
+   (submenus.OWN_PAGES), which shows the USB setup: a link to it shows while the setup is needed. -#}
 <details class="advcfg" id="stack-hardware-daemon">
       <summary>Hardware</summary>
-      <div class="body"><p><a href="{{ url_for('hardware_view') }}">Open Hardware ›</a> the radios: add a stick or a HAT,
-        bind, problems, Detect, remove.</p></div>
+      <div class="body">
+    {%- with view = g.hw_list.view, models = g.hw_list.models, hp = g.hw_list.hp,
+             hw_back = url_for('stacks_overview', open='daemon', radio=request.args.get('radio') or None) ~ '#stack-hardware-daemon' %}
+    {% include "_hw_list.html" %}
+    {% if view.copybox %}<p><a href="{{ url_for('hardware_view') }}#usb-setup" id="hw-usb-setup">USB setup ›</a></p>{% endif %}
+    {%- endwith %}
+      </div>
     </details>

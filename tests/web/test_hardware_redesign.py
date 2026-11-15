@@ -7,6 +7,7 @@ import re
 
 import pytest
 import radios_fixture
+from htmlq import parse
 
 from lhpc.core import radio_daemon, radio_start, radios
 
@@ -112,15 +113,20 @@ def test_the_old_daemon_spawn_detect_is_gone(web, tmp_path, monkeypatch, csrf):
 @pytest.mark.parametrize("url,here", [("/hardware", "Hardware"), ("/hardware/radio/r2", "r2"),
                                       ("/hardware/add", "Add Hardware"), ("/hardware/remove/r2", "Remove r2")])
 def test_each_hardware_page_says_where_it_sits(web, tmp_path, monkeypatch, url, here):
-    # W245: Home › Apps › Daemon › Hardware [› here], each crumb but the last a link.
-    page = _text(_box(web, tmp_path, monkeypatch).get(url).get_data(as_text=True))
+    # W245: Home › Apps › <the daemon row> › Hardware [› here], each crumb but the last a link; U5: the daemon row
+    # is named as the Stacks page crumbs name it (its stack's name, as on /stacks/daemon/menu/stackrow-daemon).
+    c = _box(web, tmp_path, monkeypatch)
+    page = _text(c.get(url).get_data(as_text=True))
     crumbs = re.search(r'<nav class="crumbs"[^>]*>(.*?)</nav>', page).group(1)
-    assert re.findall(r">([^<>›]+)</a>", crumbs)[:3] == ["Home", "Apps", "Daemon"]
+    row = parse(c.get("/stacks/daemon/menu/stackrow-daemon").get_data(as_text=True)).find("nav", class_="crumbs")[0]
+    assert row.text == "Home › Apps › LoRaHAM daemon"
+    assert re.findall(r">([^<>›]+)</a>", crumbs)[:3] == ["Home", "Apps", "LoRaHAM daemon"]
     assert crumbs.rstrip().endswith(f'<span class="here">{here}</span>'), crumbs
 
 
 def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, monkeypatch):
-    # W251: the daemon's own entries in that order, Hardware a link to its page; another stack keeps Info before Settings.
+    # W251: the daemon's own entries in that order, Hardware's "page ›" its page (/hardware, U5); another stack keeps
+    # Info before Settings.
     c = _box(web, tmp_path, monkeypatch)
     page = c.get("/stacks?open=daemon").get_data(as_text=True)
     ids = [f'id="stack-{e}-daemon"' for e in ("install", "hardware", "settings", "info")]
@@ -128,7 +134,7 @@ def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, m
     kiss = c.get("/stacks?open=kiss").get_data(as_text=True)
     assert kiss.index('id="stack-info-kiss"') < kiss.index('id="stack-settings-kiss"')     # unchanged elsewhere
     hw = page[page.index('id="stack-hardware-daemon"'):]
-    assert 'href="/hardware"' in hw[:600]
+    assert re.match(r'.*?</details>\s*<div class="row-actions"><a class="pagelink" href="/hardware"', hw, re.S)
 
 
 def _hp(monkeypatch, warn=(), mismatch=None):
@@ -208,3 +214,64 @@ def test_c23_a_failed_bind_of_an_unknown_radio_lands_on_a_page_that_exists(web, 
     c = _box(web, tmp_path, monkeypatch)
     r = _post(c, csrf, "/hardware/bind", rid="r9", port="1-1.3")
     assert r.headers["Location"].endswith("/hardware") and c.get(r.headers["Location"]).status_code == 200
+
+
+# ---- U5 / E3-6: a Hardware form returns to the page it was pressed on, through K4's internal-URL parse ----------
+
+def _where(resp):
+    assert resp.status_code == 302, resp.status_code
+    return resp.headers["Location"].removeprefix("http://localhost")
+
+
+def _row_form(c, page, rid):
+    """Row `rid`'s Disable/Enable fields as `page` renders them (the public path: what the button posts)."""
+    r = c.get(page)
+    assert r.status_code == 200, (page, r.status_code)
+    doc = parse(r.get_data(as_text=True))
+    rows = [t for t in doc.find("tr", class_="hwrow") if t["data-rid"] == rid]
+    assert len(rows) == 1, (page, rid, len(rows))
+    return {i["name"]: i["value"] for i in doc.within(rows[0]).find("input")}
+
+
+@pytest.mark.parametrize("page, back", [
+    ("/hardware", "/hardware"),
+    ("/stacks?open=daemon", "/stacks?open=daemon#stack-hardware-daemon"),
+    ("/stacks?open=daemon&radio=r1", "/stacks?open=daemon&radio=r1#stack-hardware-daemon"),
+    ("/stacks/daemon/menu/stackrow-daemon", "/stacks/daemon/menu/stackrow-daemon#stackrow-daemon"),
+], ids=["hardware", "stacks", "stacks-radio", "daemon-row-page"])
+def test_disable_returns_to_the_page_it_was_pressed_on(web, tmp_path, monkeypatch, page, back):
+    from lhpc.core.paths import Paths
+    c = _box(web, tmp_path, monkeypatch)
+    where = _where(c.post("/hardware/enabled", data=_row_form(c, page, "r2")))
+    assert where == back
+    assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r2").enabled is False
+    assert "r2 disabled" in c.get(where.partition("#")[0]).get_data(as_text=True)    # its result shows there
+
+
+@pytest.mark.parametrize("back", [
+    "/hardware-not-a-page", "//host/x", "https://evil.example/hardware", "/hardware\\x", "/hardware?x=1",
+    "/hardware/radio/r9", "/stacks?open=meshcore", "/stacks?open=daemon&radio=r9#stack-hardware-daemon",
+    "/stacks?open=daemon#stack-install-daemon", "/stacks?open=daemon&x=1#stack-hardware-daemon", "/stacks",
+    "//[", "http://[", "/hardware?x=[", "[",                       # gate 1 NOTE 1: urlsplit refuses `//[` (ValueError)
+])
+def test_an_invalid_back_returns_to_the_default_page(web, tmp_path, monkeypatch, csrf, back):
+    from lhpc.core.paths import Paths
+    from lhpc.core.radio_detect import run
+    c = _box(web, tmp_path, monkeypatch)
+    assert _where(_post(c, csrf, "/hardware/enabled", rid="r2", enabled="off", back=back)) == "/hardware"
+    assert next(r for r in radios.load(Paths(runtime_root=tmp_path)).radios if r.id == "r2").enabled is False
+    monkeypatch.setattr(run, "detect_radio", lambda svc, rid: run.Detected("found", "r2: found", "sx127x"))
+    r = _post(c, csrf, "/hardware/detect", page="/hardware/radio/r2", kind="radio", rid="r2", back=back)
+    assert _where(r) == "/hardware#detect-r2"
+
+
+@pytest.mark.parametrize("back, where", [
+    ("/hardware/add", "/hardware/add#detect-r2"), ("/hardware/radio/r1", "/hardware/radio/r1#detect-r2"),
+    ("/hardware", "/hardware#detect-r2"),
+])
+def test_detect_returns_to_each_hardware_page(web, tmp_path, monkeypatch, csrf, back, where):
+    from lhpc.core.radio_detect import run
+    c = _box(web, tmp_path, monkeypatch)
+    monkeypatch.setattr(run, "detect_radio", lambda svc, rid: run.Detected("found", "r2: found", "sx127x"))
+    assert _where(_post(c, csrf, "/hardware/detect", page="/hardware/radio/r2", kind="radio", rid="r2",
+                        back=back)) == where

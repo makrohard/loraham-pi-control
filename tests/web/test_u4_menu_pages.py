@@ -76,13 +76,24 @@ def _expanded(c, owner):
     return _block(_html(c, "/stacks"), "controller-row") if owner == "controller" else _html(c, f"/stacks/{owner}/body")
 
 
+# U5 (rule 21): a level whose page is an existing route; its "page ›" and its tree entry link that route
+_OWN_PAGES = {"/hardware": ("daemon", "stack-hardware-daemon")}
+
+
+def _href(owner, mid):
+    """The link a level's "page ›" and tree entry carry."""
+    return next((url for url, level in _OWN_PAGES.items() if level == (owner, mid)), f"/stacks/{owner}/menu/{mid}")
+
+
 def _tree(c):
     """owner -> its levels, read through the tree page's links (the public path)."""
     out = {}
-    for a in parse(_html(c, "/stacks/menus")).find("a"):
+    doc = parse(_html(c, "/stacks/menus"))
+    for a in doc.within(doc.find("div", class_="card")[0]).find("a"):
         m = re.fullmatch(r"/stacks/([^/]+)/menu/([^?]+)", a["href"])
-        if m:
-            out.setdefault(m.group(1), set()).add(m.group(2))
+        owner, mid = (m.group(1), m.group(2)) if m else _OWN_PAGES.get(a["href"], (None, None))
+        if owner:
+            out.setdefault(owner, set()).add(mid)
     return out
 
 
@@ -143,11 +154,28 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
         top = "controller-row" if owner == "controller" else f"stackrow-{owner}"
         assert set(ids) | {top} == menus, owner                         # descriptors == rendered levels
         links = [a["href"] for a in parse(shown).find("a", class_="pagelink")]
-        assert sorted(links) == sorted(f"/stacks/{owner}/menu/{m}" for m in menus - {top}), owner
+        assert sorted(links) == sorted(_href(owner, m) for m in menus - {top}), owner
         for mid in (menus - {top}) if paged is None or owner in paged else ():
+            if _href(owner, mid) != f"/stacks/{owner}/menu/{mid}":
+                continue                     # its page is that route (test_a_level_with_an_own_page_has_one_page)
             page = _block(_html(c, f"/stacks/{owner}/menu/{mid}"), mid)
             assert _OPEN.search(_tag(page)), (owner, mid)
             assert _comparable(page) == _comparable(_block(shown, mid)), (owner, mid)
+
+
+def test_a_level_with_an_own_page_has_one_page(tmp_path, web):
+    # U5 (rule 21): the daemon row's Hardware submenu has /hardware as its page: its "page ›" and its tree entry
+    # link it, and its level URL answers 302 there (one block, one page).
+    c, _svc = _client(web, tmp_path)
+    doc = parse(_html(c, "/stacks?open=daemon"))
+    wrap = [d for d in doc.find("div", class_="stackrow-wrap") if doc.within(d).present("stack-hardware-daemon")]
+    assert [a["href"] for a in doc.within(wrap[-1]).find("a", class_="pagelink")] == ["/hardware"]   # innermost
+    tree = parse(_html(c, "/stacks/menus"))
+    assert [a["href"] for a in tree.find("a") if a.text == "Hardware"] == ["/hardware"]
+    assert "/stacks/daemon/menu/stack-install-daemon" in [a["href"] for a in tree.find("a")]    # anchor: a sibling
+    r = c.get("/stacks/daemon/menu/stack-hardware-daemon")
+    assert r.status_code == 302 and r.headers["Location"].removeprefix("http://localhost") == "/hardware"
+    assert c.get("/stacks/meshcore/menu/stack-hardware-daemon").status_code == 404          # still the owner's only
 
 
 def test_a_stack_row_page_renders_its_body_inline_and_opened(tmp_path, web):
@@ -511,6 +539,23 @@ def test_an_instance_action_returns_only_to_its_own_radios_page(tmp_path, web):
         loc = c.post("/action", data=_fields(confirm, step)).headers["Location"]
         assert loc == (page + "#stackrow-graywolf" if back_here else "/stacks?open=graywolf&radio=r2#stackrow-graywolf"), (rid, loc)
 
+
+
+def test_a_malformed_return_never_breaks_a_post(tmp_path, web, csrf):
+    """Gate 1 (G1-UI-U5REST NOTE 1): urlsplit refuses `//[` (ValueError). A POST whose confirm page renders the
+    `return` on answers that page without it (it names no page), and a redirecting POST keeps its view's target."""
+    c, _svc = _client(web, tmp_path, radios=True)
+    page = "/stacks/graywolf/menu/stackrow-graywolf?radio=r1"
+    doc = parse(_html(c, page))
+    form = [f for f in doc.find("form") if f["action"] == "/action"
+            and doc.within(f).find("input", name="op")[0]["value"] == "stop"][0]
+    r = c.post("/action", data={**_fields(doc, form), "return": "//["})              # Stop asks first
+    assert r.status_code == 200, r.status_code
+    confirm = parse(r.get_data(as_text=True))
+    step = [f for f in confirm.find("form") if f["action"] == "/action"][0]
+    assert "return" not in _fields(confirm, step) and _fields(confirm, step).get("_csrf")
+    r = _post(c, csrf, "/operator/callsign", "//[", page, callsign="G0ABC")
+    assert r.status_code in (302, 303) and urlsplit_path(r.headers["Location"]) == "/stacks", r.status_code
 
 
 def test_a_page_link_keeps_the_radio_the_view_shows_and_edits_that_radio(tmp_path, web):

@@ -12,6 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 CONTROLLER = "controller"
+# U5 (rule 21): a level whose page is an existing route (its endpoint): its "page ›" and tree entry link that
+# route, and its /stacks/<owner>/menu/<id> answers 302 there, so one block has one page.
+OWN_PAGES = {"stack-hardware-daemon": "hardware_view"}
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,11 @@ class Submenu:
     label: str
     template: str
     vars: dict = field(default_factory=dict, compare=False, hash=False)
+
+    @property
+    def page(self) -> str:
+        """The endpoint of the level's own page when it is an existing route (OWN_PAGES), else ""."""
+        return OWN_PAGES.get(self.id, "")
 
 
 def _radio_suffix(key: str) -> str:

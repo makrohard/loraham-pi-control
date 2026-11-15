@@ -7,10 +7,6 @@
   <div class="body">
     <p class="muted" id="hardware-list-notice">The hardware list (config/radios.toml) has one row per radio; each enabled
       radio runs its own daemon on its own sockets.</p>
-    {% if view.kind != "valid" %}
-      <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
-        {{ view.reasons|join("; ") }}{% endif %}.</p>
-    {% endif %}
     {% include "_hw_list.html" %}
     <p class="muted" id="hardware-shared-band">Two radios on one band each run their own daemon: address one by its radio id
       (<code>lhpc stack stop daemon@rN</code>).</p>

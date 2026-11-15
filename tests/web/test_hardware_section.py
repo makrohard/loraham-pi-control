@@ -112,3 +112,76 @@ def test_the_hardware_list_has_a_row_per_radio_naming_its_band(web, tmp_path, mo
     for band, rid in (("433", "r1"), ("868", "r2")):
         row = re.search(rf'<tr class="hwrow"[^>]*data-rid="{rid}".*?</tr>', page, re.S).group(0)
         assert f"{band} MHz" in _text(re.sub(r"<[^>]+>", " ", row))
+
+
+# ---- U5 (PLAN-UI-v5 §3 U5, MOCK-HW-v1): the list inline in the daemon row's Hardware submenu --------------------
+
+SETUP = ("state", "usb-setup", "usb-setup.sh")
+
+
+def _inline(c, path="/stacks?open=daemon"):
+    """The daemon row's Hardware submenu as the Stacks page renders it (200 asserted)."""
+    r = c.get(path)
+    assert r.status_code == 200, r.status_code
+    doc = parse(r.get_data(as_text=True))
+    return doc, doc.within(doc.by_id("stack-hardware-daemon"))
+
+
+def _rows(scope):
+    return [(tr["data-rid"], tr.text) for tr in scope.find("tr", class_="hwrow")]
+
+
+def test_the_daemon_rows_hardware_submenu_lists_the_same_rows_as_the_hardware_page(web, tmp_path, monkeypatch):
+    c = _box(web, tmp_path, monkeypatch)
+    _doc, inline = _inline(c)
+    page = parse(c.get("/hardware").get_data(as_text=True))
+    assert [rid for rid, _ in _rows(inline)] == ["r1", "r2"]
+    assert _rows(inline) == _rows(page.within(page.by_id("hw-list")))
+    assert [a["href"] for a in inline.find("a", id="hw-add")] == ["/hardware/add"]       # Add Hardware, as on /hardware
+    # no new control: each row's one Disable/Enable, no Detect (it stays on the radio's detail page)
+    assert [b.text for b in inline.find("button")] == ["Disable", "Disable"]
+    assert "Detect" not in inline.text and not inline.find("input", name="kind")
+
+
+def test_the_submenu_prepares_the_usb_setup_as_the_hardware_page_does(web, tmp_path, monkeypatch):
+    # His word D on /hardware (keep today's behaviour): the submenu reads the same view as /hardware
+    # (radio_start.hardware_view), so its GET prepares the same setup file the "USB setup ›" link leads to.
+    c = _box(web, tmp_path, monkeypatch)
+    setup = tmp_path.joinpath(*SETUP)
+    assert not setup.exists()
+    _doc, inline = _inline(c)
+    assert [rid for rid, _ in _rows(inline)] == ["r1", "r2"] and inline.present("hw-usb-setup")
+    assert setup.exists()
+    written = setup.read_bytes()
+    setup.unlink()
+    assert c.get("/hardware").status_code == 200 and setup.read_bytes() == written       # the same file /hardware writes
+
+
+def test_the_inline_list_links_the_usb_setup_while_it_is_needed(web, tmp_path, monkeypatch):
+    # A clean state, a USB radio listed, no setup file: the inline list links the setup on /hardware.
+    c = _box(web, tmp_path, monkeypatch)
+    assert not tmp_path.joinpath(*SETUP).exists()
+    _doc, inline = _inline(c)
+    assert [(a.text, a["href"]) for a in inline.find("a", id="hw-usb-setup")] == [("USB setup ›", "/hardware#usb-setup")]
+    assert not inline.present("usb-copybox")                                   # the setup itself stays on /hardware
+    monkeypatch.setattr(usb_access, "rule_state", lambda *a, **k: usb_access.RuleState.CURRENT)
+    monkeypatch.setattr(usb_access, "plugdev", lambda *a, **k: usb_access.Membership.MEMBER)
+    _doc, inline = _inline(c)
+    assert not inline.present("hw-usb-setup") and [rid for rid, _ in _rows(inline)] == ["r1", "r2"]
+
+
+def test_an_spi_only_inline_list_has_no_usb_setup_link(web, tmp_path, monkeypatch):
+    c = _box(web, tmp_path, monkeypatch, rows=ROWS[:1])
+    _doc, inline = _inline(c)
+    assert not inline.present("hw-usb-setup") and [rid for rid, _ in _rows(inline)] == ["r1"]
+
+
+def test_an_invalid_list_says_so_inline_as_on_the_hardware_page(web, tmp_path, monkeypatch):
+    c = _box(web, tmp_path, monkeypatch)
+    tmp_path.joinpath("config", "radios.toml").write_text("not = [valid\n")
+    _doc, inline = _inline(c)
+    page = parse(c.get("/hardware").get_data(as_text=True))
+    line = page.by_id("hardware-list-state").text
+    assert line.partition(":")[0] == "The hardware list is invalid" and inline.present("hardware-list-state")
+    assert inline.by_id("hardware-list-state").text == line
+    assert inline.present("hw-add")                                            # anchor: the rest of the block

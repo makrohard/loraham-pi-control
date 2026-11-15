@@ -122,6 +122,26 @@ def test_the_hardware_list_reflows_per_row_on_a_phone(page):
     assert _column_headers(page) == ["radio", "model", "band", "stick", "state"]
 
 
+def test_the_inline_hardware_list_reflows_inside_the_stack_body_on_a_phone(page):
+    """U5: the daemon row's Hardware submenu, opened by its link (the hardware-changed banner's), holds the same list;
+    at 390 px it reflows as on /hardware inside the stack body: every cell and its Disable/Enable in the viewport, no
+    sideways scroll of the list or of the page. Desktop keeps the table."""
+    url = page.lab_base + "/stacks?open=daemon#stack-hardware-daemon"
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.goto(url, wait_until="networkidle").ok
+    assert page.evaluate("() => document.getElementById('stack-hardware-daemon').open")
+    assert page.evaluate("() => document.querySelectorAll('#stack-hardware-daemon #hw-list').length") == 1
+    assert page.evaluate(_HW_ROWS) == [{"rid": rid, "cells": True, "button": True, "top_right": True}
+                                      for rid in ("r1", "r2")]
+    assert page.evaluate("() => { const t = document.getElementById('hw-list');"
+                         " return t.scrollWidth - t.clientWidth; }") <= 1
+    assert page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth") <= 1
+    assert page.evaluate("() => document.querySelector('#hw-list thead').getBoundingClientRect().width") <= 1
+    page.set_viewport_size({"width": 1280, "height": 900})           # the same page (a goto to it is a hash move)
+    assert page.evaluate("() => document.querySelector('#stack-hardware-daemon #hw-list thead')"
+                         ".getBoundingClientRect().width") > 300                    # the table's header row shows
+
+
 def _auto_install_rows(page):
     page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
     page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)

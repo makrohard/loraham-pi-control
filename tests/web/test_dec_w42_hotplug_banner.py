@@ -7,6 +7,8 @@ import re
 
 import radios_fixture
 
+from htmlq import parse
+
 from lhpc.core import radios, usb_access
 from lhpc.core.usb_access import Field, Probe, Scan, UsbDevice
 
@@ -32,6 +34,16 @@ class _Usb:
 def _box(web, tmp_path, monkeypatch, *devices):
     radios_fixture.write(tmp_path, ROWS)
     return web(), _Usb(monkeypatch, *devices)
+
+
+# UI-RULES C1 / U5: the banner's "Open Hardware" opens the daemon row's Hardware submenu on the Stacks page
+OPEN_HARDWARE = "/stacks?open=daemon#stack-hardware-daemon"
+
+
+def _open_hardware(page) -> list:
+    """The hrefs of the hardware-changed banner's "Open Hardware" links."""
+    doc = parse(page)
+    return [a["href"] for a in doc.within(doc.by_id("hardware-changes")).find("a") if a.text == "Open Hardware"]
 
 
 def _lines(c) -> list:
@@ -73,7 +85,7 @@ def test_two_changes_give_one_banner_with_two_lines(web, tmp_path, monkeypatch):
                for x in lines), lines
     assert any(re.fullmatch(r"\d\d:\d\dZ r2 unplugged \(serial 26073012\)", x) for x in lines), lines
     page = c.get("/").get_data(as_text=True)
-    assert page.count('id="hardware-changes"') == 1 and 'href="/hardware"' in page
+    assert page.count('id="hardware-changes"') == 1 and _open_hardware(page) == [OPEN_HARDWARE]
 
 
 def test_the_close_hides_it_and_a_new_change_shows_one_line(web, tmp_path, monkeypatch, csrf):
@@ -267,7 +279,7 @@ def test_a_seen_but_never_named_unlisted_stick_is_named(web, tmp_path, monkeypat
     _write_store(tmp_path, {"serial:26073012": ["1-1.2", "26073012"], "port:1-1.4": ["1-1.4", ""],
                             "serial:ABCD1234": ["1-2", "ABCD1234"]}, [], 3)
     assert _lines(c) == ["new stick: serial ABCD1234 on port 1-2, not in the hardware list"]
-    assert 'href="/hardware"' in c.get("/").get_data(as_text=True)
+    assert _open_hardware(c.get("/").get_data(as_text=True)) == [OPEN_HARDWARE]
 
 
 def test_the_close_quiets_it_until_it_is_unplugged_or_listed_and_unlisted_again(web, tmp_path, monkeypatch, csrf):

@@ -6,9 +6,9 @@
   <ul class="navtree">
     {% for m in kids.get(pid, []) %}
       <li>{% if kids.get(m.id) %}<details><summary>{{ m.label }}</summary>
-        <p class="tree-self"><a href="{{ url_for('menu_page', owner=owner, mid=m.id, radio=request.args.get('radio') or None) }}">{{ m.label }} page ›</a></p>
+        <p class="tree-self"><a href="{{ url_for(m.page) if m.page else url_for('menu_page', owner=owner, mid=m.id, radio=request.args.get('radio') or None) }}">{{ m.label }} page ›</a></p>
         {{ branch(owner, kids, m.id) }}</details>
-      {%- else %}<a href="{{ url_for('menu_page', owner=owner, mid=m.id, radio=request.args.get('radio') or None) }}">{{ m.label }}</a>{% endif %}</li>
+      {%- else %}<a href="{{ url_for(m.page) if m.page else url_for('menu_page', owner=owner, mid=m.id, radio=request.args.get('radio') or None) }}">{{ m.label }}</a>{% endif %}</li>
     {% endfor %}
   </ul>
 {% endmacro %}
