@@ -1070,3 +1070,30 @@ def test_a_platformio_fetch_that_met_a_5xx_is_a_transfer(monkeypatch, tmp_path, 
         assert calls["build"] == 3                                    # 1 + 2 retries
     else:
         assert not _EXTERNAL.search(msg) and calls["build"] == 1
+
+
+_DNS = "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com\n"
+
+
+@pytest.mark.parametrize("log_tail", [
+    # the step's LAST error line decides, as for every other shape: a later PackageException that
+    # names no 5xx wins over an earlier transfer line (intended: the step ended on the package)
+    _DNS + "PackageException: Could not find the package with 'foo @ 1.0' requirements for your "
+           "system 'linux_x86_64'\n",
+    # a 5xx PackageException the step went on past: its last error line is a compile error
+    "PackageException: Got the unrecognized status code '503' when downloaded https://x/y.zip\n"
+    "error: compilation terminated.\n",
+    # "status code" with a 5xx in a line that is not PlatformIO's is not a transfer
+    "ERROR: test_server: expected status code '200', got status code '500'\n",
+    # a PackageException inside a traceback line, after the last error line, is no error line
+    "error: compilation terminated.\n"
+    "  platformio.package.exception.PackageException: Got the unrecognized status code '504' "
+    "when downloaded https://x/y.zip\n",
+], ids=["later-packageexception-decides", "5xx-not-last", "non-platformio-status-500",
+        "traceback-packageexception"])
+def test_only_platformios_own_last_line_makes_a_5xx_a_transfer(monkeypatch, tmp_path, log_tail):
+    typed = _meshtastic_fetch_step_failed(tmp_path, log_tail)
+    calls = _lhpc(monkeypatch, install=[_Done(0)], build=[_Done(1, typed)])
+    msg = _install_build_message("meshtastic")
+    assert "STACK-REGRESSION" not in msg
+    assert not _EXTERNAL.search(msg) and calls["build"] == 1
