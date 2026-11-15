@@ -2078,7 +2078,13 @@ main = "meshcom-qemu"
   post_steps = [
     # Ready = the firmware's own line in this guest's current UART log (run.sh moves uart-latest.log at every
     # (re)boot), not the host forward QEMU opens long before the firmware runs (B2a, his C).
-    { kind = "log_wait", path = "{source}/.run/{instance_index_dir}uart-latest.log", pattern = "Console started on port 2323", timeout = 1300, label = "firmware boot" },
+    { kind = "log_wait", path = "{source}/.run/{instance_index_dir}uart-latest.log", pattern = "Console started on port 2323", timeout = 1300, label = "firmware boot", shares_clock = "meshcom-provisioning" },
+    # Done = the harness has VERIFIED the node: run.sh writes `<node image>.provisioned` ("<time>Z <sha>") only after
+    # its check of the persisted settings passes (run.sh:350), and polls the console (--info, --pos) until then; the
+    # console serves one client (P-0168), so the callsign step waits for it. A normal restart keeps the marker: no
+    # wait. `shares_clock`: both waits end by the harness's one provisioning deadline (run.sh:243, :274), so the
+    # required post-start budget counts them once.
+    { kind = "log_wait", path = "{runtime}/state/{instance_dir}meshcom/node-flash.bin.provisioned", pattern = "Z ", timeout = 1300, label = "provisioning verified", shares_clock = "meshcom-provisioning" },
     # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
     # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
     # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call

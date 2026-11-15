@@ -172,12 +172,94 @@ def test_meshcoms_start_waits_on_its_own_guests_console_line(rid, run_dir):
     assert wait["path"] == f"/src/mc/{run_dir}uart-latest.log" and wait["pattern"] == "Console started on port 2323"
 
 
+def _wait_budget(raw_steps):
+    """The waits' worst time: every wait's timeout summed, except waits that declare the same `shares_clock` (they end
+    by one external deadline: MeshCom's, run.sh:243, :274), which count once, as their longest."""
+    clocks, total = {}, 0.0
+    for s in raw_steps:
+        if s.get("kind") != "log_wait":
+            continue
+        if s.get("shares_clock"):
+            clocks[s["shares_clock"]] = max(clocks.get(s["shares_clock"], 0.0), float(s["timeout"]))
+        else:
+            total += float(s["timeout"])
+    return total + sum(clocks.values())
+
+
+@pytest.mark.parametrize("rid, state_dir", [("r1", "r1/"), ("r3", "r3/")])
+def test_meshcoms_start_waits_on_its_own_nodes_verified_marker_as_a_required_step(rid, state_dir):
+    steps = _rendered(_meshcom_steps(rid))
+    marker = next(s for s in steps if s.get("label") == "provisioning verified")
+    assert marker["path"] == f"/rt/state/{state_dir}meshcom/node-flash.bin.provisioned" and marker["optional"] is False
+    assert [s["label"] for s in steps].index("provisioning verified") < [s["label"] for s in steps].index("callsign")
+
+
 def test_the_waits_nest_inside_the_required_post_starts_cap():
-    steps = _rendered(_meshcom_steps())
-    wait = next(s for s in steps if s["kind"] == "log_wait")
-    send = next(s for s in steps if s["kind"] == "tcp_send")
+    comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
+    send = next(s for s in _rendered(_meshcom_steps()) if s["kind"] == "tcp_send")
     assert sum(send["intervals"]) == 904.0                     # the documented worst Zero boot + 60 s
-    assert wait["timeout"] + sum(send["intervals"]) + 64 <= REQUIRED_POST_TIMEOUT_S
+    assert _wait_budget(comp.post_steps) + sum(send["intervals"]) + 64 <= REQUIRED_POST_TIMEOUT_S
+
+
+def test_only_waits_declaring_one_clock_count_once():
+    w = {"kind": "log_wait", "timeout": 1300}
+    assert _wait_budget([w, dict(w)]) == 2600                                      # unrelated waits still sum
+    assert _wait_budget([{**w, "shares_clock": "a"}, {**w, "shares_clock": "b"}]) == 2600
+    assert _wait_budget([{**w, "shares_clock": "a"}, {**w, "timeout": 900, "shares_clock": "a"}]) == 1300
+
+
+def _console(replies):
+    """A fake MeshCom console: answers every connection with `replies`; the connection times are recorded."""
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    seen = []
+
+    def serve():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            seen.append(time.time())        # wallclock: when the launcher connects is what is measured
+            try:
+                conn.recv(256)
+                conn.sendall(replies.encode())
+            finally:
+                conn.close()
+    threading.Thread(target=serve, daemon=True).start()
+    return srv, seen
+
+
+@pytest.mark.slow                       # real waits of a few seconds
+@pytest.mark.wallclock("the real launcher's first console connect against the marker's appearance is measured")
+def test_meshcoms_callsign_step_waits_until_the_harness_has_verified_the_node(tmp_path):
+    # MESHCOM-VERIFY: on a provisioning start the console line is there while the harness still polls the console
+    # (it takes over one client at a time): no console connection before the marker, the probe after it
+    comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
+    srv, seen = _console("...Call: <DL1ABC>\r\n")
+    steps = [{**s, "port": srv.getsockname()[1]} if s.get("kind") == "tcp_send" else dict(s) for s in comp.post_steps]
+    src, root = tmp_path / "src", tmp_path / "rt"
+    (src / ".run").mkdir(parents=True)
+    (src / ".run" / "uart-latest.log").write_text(LINE)                            # the supervised boot's console
+    marker = root / "state" / "r1" / "meshcom" / "node-flash.bin.provisioned"
+    marker.parent.mkdir(parents=True)
+    (root / "state" / "post").mkdir(parents=True)
+    rp = root / "state" / "post" / "r.json"
+    script = commands.render_post_launcher(steps, comp, {"mc_callsign": "DL1ABC"}, _Op(), str(root), str(src), "",
+                                           result_path=str(rp), inst=commands.Instance("r1", band="433"))
+    (tmp_path / "launcher.py").write_text(script)
+    t0 = time.time()
+    p = subprocess.Popen([sys.executable, str(tmp_path / "launcher.py")], stderr=subprocess.PIPE, text=True)
+    threading.Thread(target=_later(6, lambda: marker.write_text("2026-11-15T01:00:00Z abc\n")), daemon=True).start()
+    try:
+        p.communicate(timeout=90)
+    finally:
+        srv.close()
+    assert seen and min(seen) - t0 >= 6, (seen, t0)                                # nothing before the marker
+    outcomes = {s["label"]: s["outcome"] for s in json.loads(rp.read_text())["steps"]}
+    assert outcomes.get("provisioning verified") == "ready", outcomes
 
 
 @pytest.mark.parametrize("step, why", [
