@@ -426,3 +426,23 @@ def test_an_update_finishing_before_the_locks_is_seen_under_them(box, monkeypatc
         assert rc != 0 and "releases could not be checked" in capsys.readouterr().out   # RED before: app to dev
         assert (box.head(), box.selector()) == (box.c[2], "stable")
     assert tip != box.head()
+
+def test_a_bare_update_keeps_a_stable_install_on_its_release(box):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                     # v2.7.0
+    box.push_tag("v2.9.0", box.c[2])
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+    assert box.cli("update", "s", "--yes") == 0       # RED with U1 alone: the bare update went back to the pin
+    assert (box.head(), box.selector()) == (box.c[2], "stable")
+
+
+def test_a_target_without_a_version_is_offered_beside_a_tagged_install(box, git):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                     # v2.7.0, kept in the checkout
+    git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")   # the upstream drops its tags
+    tip = box.advance()                               # stable target: the default-branch HEAD (no version)
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                  # RED before: read as current (a HEAD target "older")
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: refused as older
+    assert box.head() == tip

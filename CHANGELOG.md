@@ -76,6 +76,8 @@ Upgrading from 0.13.x
   whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
 - `lhpc update <stack>` without `--source` (and the console's Update) no longer moves a dev or stable source to the
   pin; to go back to the pins run `lhpc update <stack> --source pinned --yes`.
+- A stable source installed on a commit whose only tag is a pre-release (`v3.0-rc1`) is not updated on the stable
+  lane ("could not be checked"): move it with `lhpc update <stack> --source pinned --yes` (or `dev`), or reinstall it.
 - Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
   (or `sudo modprobe spi_ch341`).
 - A radio whose saved POWER is above its model's maximum (a PineDio stick: 14 dBm) is named on the Hardware page and

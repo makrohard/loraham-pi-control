@@ -119,12 +119,13 @@ def local_tags(run, src) -> list | None:
 def is_older(ref: StableRef, installed: str, mine=()) -> bool | None:
     """The target is older than the installed commit's version, the highest `version_of` among ALL its tag names (the
     upstream's and `mine`, `local_tags`); None when `mine` could not be read or no tag parses (`v3.0-rc1` alone). No
-    tag at all (a default-branch HEAD install) is not older: the plan's rule L6, the update appears when one comes."""
+    tag at all (a default-branch HEAD install), or a target without a version (the default-branch HEAD), is not older:
+    the plan's rule L6, the update is offered."""
     names = None if mine is None else [*(ref.tags or {}).get(installed, ()), *mine]
     have = max(filter(None, map(version_of, names or ())), default=None)
     if names is None or (names and have is None):
         return None
-    return have is not None and (ref.key is None or ref.key < have)
+    return have is not None and ref.key is not None and ref.key < have     # both known (a HEAD target: L6, offered)
 
 
 def update_gate(run, paths, items, source: str, remote_of):
