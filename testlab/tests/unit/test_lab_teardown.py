@@ -164,6 +164,7 @@ def _gone(pid: int) -> bool:
         os.close(fd)
 
 
+@pytest.mark.slow
 def test_a_member_that_ignores_term_dies_after_its_leader_exits(tmp_path):
     """G1-LF1 (1): the leader exits on TERM, a member of its group ignores TERM; the SIGKILL after the grace still
     reaches the group, so the member is gone (the stop no longer keys the KILL on the leader being alive)."""
@@ -362,6 +363,7 @@ def test_the_turn_lock_is_skipped_only_for_a_pytest_its_holder_runs(tmp_path):
 
 
 @pytest.mark.wallclock("waits on another process: a fake-daemon test holding the lock in a child pytest")
+@pytest.mark.slow
 def test_a_lab_waits_for_a_fake_daemon_test_of_another_process_then_takes_its_turn(tmp_path, monkeypatch):
     """DEC-W384x option (a), the browser-lane flake: a lab_serial test (one that runs a fake daemon) in ANOTHER process
     holds the host's lab lock through the real conftest fixture; a LabServer here waits for it and, past its wait,

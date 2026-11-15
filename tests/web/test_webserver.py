@@ -313,6 +313,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     assert mesh["listener_matches"] == "ok"
 
 
+@pytest.mark.slow
 def test_apply_web_context_timeout_unclaimed_names_the_watcher(tmp_path, monkeypatch):
     # Timeout split (a): the request is NEVER claimed -> the WATCHER is dead/not enabled. The stale
     # request is removed and the failure points at the integration remedies, not at nginx.
@@ -336,6 +337,7 @@ def test_apply_web_context_timeout_unclaimed_names_the_watcher(tmp_path, monkeyp
     assert "lhpc-nginx-restart.log" not in r.summary              # integration remedy, not nginx's
 
 
+@pytest.mark.slow
 def test_apply_web_context_timeout_claimed_names_nginx_evidence(tmp_path, monkeypatch):
     # Timeout split (b): the request WAS claimed but the listeners never came good -> the
     # integration worked; the failure points at the nginx-side evidence and removes nothing.

@@ -239,7 +239,7 @@ def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pi
     assert not log.exists(), log.read_text()
 
 
-@pytest.mark.parametrize("slow_start", [False, True])
+@pytest.mark.parametrize("slow_start", [False, pytest.param(True, marks=pytest.mark.slow)])
 @pytest.mark.wallclock("a real sampler process group is started and stopped")
 def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path, slow_start):
     # start_samplers as the job runs it (the guest half stubbed): the pidfile names the sampler's own group, and
@@ -316,9 +316,9 @@ start_samplers
     # the pidfile cannot be written at all (a dangling link): no file is ever created
     ("pidfile-unwritable", 'ln -s "$WORK/no/such/dir/x" "$WORK/runner-sampler.pid"'),
     # the sampler's own publication fails (its rename into the pidfile fails): the sentinel stays
-    ("publication-fails", 'mkdir -p "$WORK/stubbin"; printf "#!/bin/bash\\ncase \\"\\$*\\" in *runner-sampler.pid.tmp*) '
+    pytest.param("publication-fails", 'mkdir -p "$WORK/stubbin"; printf "#!/bin/bash\\ncase \\"\\$*\\" in *runner-sampler.pid.tmp*) '
                           'exit 1;; esac\\nexec /usr/bin/mv \\"\\$@\\"\\n" > "$WORK/stubbin/mv"; '
-                          'chmod +x "$WORK/stubbin/mv"; PATH="$WORK/stubbin:$PATH"'),
+                          'chmod +x "$WORK/stubbin/mv"; PATH="$WORK/stubbin:$PATH"', marks=pytest.mark.slow),
 ], ids=["pidfile-unwritable", "publication-fails"])
 def test_a_sampler_whose_pidfile_is_not_published_never_runs_beside_an_upload(tmp_path, case, prelude):
     # G1-LBS-3 B6, LANEB-G2-TABLES-v7 A6: a sampler must never run without a pidfile that names it or blocks the

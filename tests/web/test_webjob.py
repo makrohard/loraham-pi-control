@@ -151,6 +151,7 @@ def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
 
 
 @pytest.mark.wallclock("the stall rule against a real quiet child is the case")
+@pytest.mark.slow
 def test_web_build_stalled_detail(tmp_path, monkeypatch):
     # F42: a Build step whose session shows no activity is ended as STALLED, and the attempt record
     # says so with the effective stall window (1 s here, not the default 10 min).

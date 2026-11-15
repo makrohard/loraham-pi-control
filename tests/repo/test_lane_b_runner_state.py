@@ -219,6 +219,7 @@ def test_a_published_sampler_is_stopped_and_the_evidence_proceeds(tmp_path):
         _kill_group_of(tmp_path / "work" / "runner-sampler.pid")
 
 
+@pytest.mark.slow
 def test_a_launch_whose_child_cannot_run_setsid_fails_and_the_evidence_refuses(tmp_path):
     # A1e: setsid missing (the child exits 127): nothing is published, the bounded poll ends the launch with rc != 0,
     # and the evidence step refuses (state "launching", the sentinel still there).
@@ -241,6 +242,7 @@ def test_a_launch_whose_child_cannot_run_setsid_fails_and_the_evidence_refuses(t
     assert e.returncode == 1 and "not a group published" in e.stderr, (e.stdout, e.stderr)
 
 
+@pytest.mark.slow
 def test_a_sampler_whose_rename_fails_never_publishes_and_the_evidence_refuses(tmp_path):
     # A6, A7: the publication is a temp file and a rename; a failed rename (only the sampler's own) leaves the
     # sentinel, the child exits, the launch fails at the bound, and the step refuses.
@@ -251,6 +253,7 @@ def test_a_sampler_whose_rename_fails_never_publishes_and_the_evidence_refuses(t
     assert e.returncode == 1 and "not a group published" in e.stderr, (e.stdout, e.stderr)
 
 
+@pytest.mark.slow
 def test_a_partial_publication_left_in_the_temp_file_is_never_taken(tmp_path):
     # A7 (partial output, then a failure): a partial "grp:12" already sits in the temp file and the rename fails. The
     # pidfile keeps the sentinel, the launch fails at its bound, and the evidence step refuses: the pidfile changes only

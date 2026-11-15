@@ -420,6 +420,7 @@ def fake_daemon(tmp_path):
     assert [p.pid for p in procs if p.poll() is None] == [], "a fake daemon survived its test"
 
 
+@pytest.mark.slow
 def test_a_fake_daemon_that_never_opens_its_socket_is_stopped_and_reaped(fake_daemon, tmp_path, monkeypatch):
     """The leak of 2026-11-07: a fake that never served its socket (an older fake, without --id) failed the spawn's
     wait before the test held it, and kept running. This one also ignores SIGTERM, so the stop must kill it."""
