@@ -2645,7 +2645,7 @@ def test_a_gpsd_that_sends_only_a_banner_never_admits_a_start(tmp_path, fake_gps
     """Non-navigation traffic is not evidence of a position source either."""
     srv = fake_gpsd(sentences=[_nmea(b"$GPTXT,01,01,02,u-blox ag - www.u-blox.com").decode()])
     try:
-        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.sentences >= 3)
+        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.sentences >= 25)
     finally:
         srv.close()
     assert ready.state == "starting", f"a banner-only gpsd must not be admitted ({ready.state})"
@@ -2657,7 +2657,7 @@ def test_a_gpsd_sending_navigation_without_a_fix_is_admitted_as_connected(tmp_pa
     """The cold-receiver case must still start the stack."""
     srv = fake_gpsd(sentences=[_nmea(b"$GPGGA,120000.00,,,,,0,00,99.9,0.0,M,0.0,M,,").decode()])
     try:
-        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.nav >= 3)
+        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.state != "starting")
     finally:
         srv.close()
     assert ready.state == "connected" and ready.nav > 0 and ready.fixes == 0, ready.state

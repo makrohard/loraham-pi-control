@@ -2265,11 +2265,14 @@ def test_row15_a_state_read_that_fails_is_never_already_disabled(tmp_path, step)
     ("enabled-runtime:inactive", 0, "disabled the system nginx.service"),
     ("linked:active", 0, "disabled the system nginx.service"),
     ("disabled:active", 0, "disabled the system nginx.service"),
-    ("static:active", 8, "cannot confirm the state of nginx.service"),
-    ("bad:inactive", 8, "cannot confirm the state of nginx.service"),
-    ("enabled:frobbing", 8, "cannot confirm the state of nginx.service"),
+    # timed wait (CPU share 0.22 of 1.25-1.26 s serial); the five above: share 1.01-1.02, < 1 s
+    pytest.param("static:active", 8, "cannot confirm the state of nginx.service",
+                 marks=pytest.mark.slow),
+    pytest.param("bad:inactive", 8, "cannot confirm the state of nginx.service",
+                 marks=pytest.mark.slow),
+    pytest.param("enabled:frobbing", 8, "cannot confirm the state of nginx.service",
+                 marks=pytest.mark.slow),
 ])
-@pytest.mark.slow                   # timed wait (CPU share 0.22 of 1.26 s serial)
 def test_row16_each_state_value_decides_by_its_set(tmp_path, value, rc, said):
     r, _log = _units_run(tmp_path, [f"show value:{value}"] * 2, SVC_RETRIES="2")
     assert r.returncode == rc, r.stdout + r.stderr
