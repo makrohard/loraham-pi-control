@@ -1007,11 +1007,12 @@ def test_the_defaults_render_transport_off_and_the_internet_interface_inert():
     assert "enable_transport = No" in asset_path("bases/reticulum.conf").read_text()
 
 
-@pytest.mark.parametrize("values,expect", [({}, "rnode_framing = no"),
-                                           ({"rnode_framing": "yes"}, "rnode_framing = yes")])
+@pytest.mark.parametrize("values,expect", [({}, "rnode_framing = yes"),
+                                           ({"rnode_framing": "yes"}, "rnode_framing = yes"),
+                                           ({"rnode_framing": "no"}, "rnode_framing = no")])
 def test_rnode_framing_is_never_rendered_with_a_preamble(values, expect):
-    """`rnode_framing` reaches the driver as a plain key in [[LoRa]], off unless the operator
-    turns it on. NO `preamble` key is rendered in either state: the driver derives the RNode
+    """`rnode_framing` reaches the driver as a plain key in [[LoRa]], on unless the operator
+    turns it off. NO `preamble` key is rendered in either state: the driver derives the RNode
     preamble from SF/BW when framing is on (an SX127x receiver hears an RNode only with at
     least the firmware's 18 symbols) and an explicit key would override that — the deafness
     that cost the live check a day."""
@@ -1020,13 +1021,37 @@ def test_rnode_framing_is_never_rendered_with_a_preamble(values, expect):
     assert "preamble" not in lora
 
 
-def test_rnode_framing_is_off_by_default_and_saved_as_a_file_value():
+def test_rnode_framing_is_on_by_default_and_off_is_saved_as_a_file_value():
+    """The maintainer's 0.14.0 word: framing ON everywhere, so LHPC boxes and RNode devices hear
+    each other. Off is the operator's override and is kept as one (stored, not dropped as a default)."""
     by_name = {p.name: p for p in _rns_file_params()[0]}
-    assert by_name["rnode_framing"].default == "no" and "preamble" not in by_name
+    assert by_name["rnode_framing"].default == "yes" and "preamble" not in by_name
     from lhpc.core.services import ControllerService
     svc = ControllerService()
-    assert svc.save_config("reticulum", {"file_rnode_framing": "yes"}).ok
     assert svc.file_config_values("reticulum")["rnode_framing"] == "yes"
+    assert svc.save_config("reticulum", {"file_rnode_framing": "no"}).ok
+    assert svc.file_config_values("reticulum")["rnode_framing"] == "no"
+
+
+@pytest.mark.parametrize("saved,expect", [
+    pytest.param(None, "rnode_framing = yes", id="nothing-saved"),
+    pytest.param("yes", "rnode_framing = yes", id="saved-yes"),
+    pytest.param("no", "rnode_framing = no", id="saved-no"),
+])
+def test_the_start_path_writes_the_framing_default_unless_the_operator_saved_one(tmp_path, saved, expect):
+    """Through the service's config generation (what every start runs): a box with nothing saved
+    gets the new default, a saved value wins either way; never a `preamble` key."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    if saved is not None:
+        assert svc.save_config("reticulum", {"file_rnode_framing": saved}).ok
+    assert all(w.status == "written" for w in svc.write_config_files("reticulum"))
+    conf = (tmp_path / "state" / "reticulum" / "config").read_text()
+    lora = conf.split("[[LoRa]]", 1)[1].split("[[", 1)[0]
+    assert re.search(r"^\s*rnode_framing = (yes|no)\s*$", lora, re.M).group(0).strip() == expect
+    assert "preamble" not in lora
 
 
 def _framing_restart(tmp_path, monkeypatch, built_has_framing, switch):
@@ -1045,7 +1070,8 @@ def _framing_restart(tmp_path, monkeypatch, built_has_framing, switch):
     if built_has_framing:
         (pkg / "framing.py").write_text("")
     svc = ControllerService(paths=paths, system=FakeSystem().system)
-    assert svc.save_config("reticulum", {"file_rnode_framing": switch}).ok
+    if switch is not None:                                     # None: nothing saved, the default rules
+        assert svc.save_config("reticulum", {"file_rnode_framing": switch}).ok
     reached = []
     monkeypatch.setattr(ControllerService, "stop",
                         lambda self, *a, **k: reached.append(a) or ActionResult(True, "stopped"))
@@ -1061,7 +1087,18 @@ def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, mo
     r, reached = _framing_restart(tmp_path, monkeypatch, built_has_framing=False, switch="yes")
     assert not r.ok and r.data.get("reason") == ri.REASON_FRAMING_DRIVER_OLD
     assert not reached, "refused BEFORE the stop leg — the node was never taken down"
-    assert r.next_commands == ["lhpc update rns-lora-interface", "lhpc build reticulum"]
+    assert r.next_commands == ["lhpc update reticulum --source pinned --yes", "lhpc build reticulum --yes"]
+    assert "rebuild Reticulum at its pin" in r.summary
+
+
+def test_the_framing_default_refuses_to_start_on_a_driver_built_before_it(tmp_path, monkeypatch):
+    """The 0.14.0 upgrade case with NOTHING saved: the default is now framing on, so a box whose
+    built driver predates the switch must be refused by name before the stop leg, not start bare."""
+    r, reached = _framing_restart(tmp_path, monkeypatch, built_has_framing=False, switch=None)
+    assert not r.ok and r.data.get("reason") == ri.REASON_FRAMING_DRIVER_OLD
+    assert not reached, "refused BEFORE the stop leg — the node was never taken down"
+    assert r.next_commands == ["lhpc update reticulum --source pinned --yes", "lhpc build reticulum --yes"]
+    assert "rebuild Reticulum at its pin" in r.summary
 
 
 @pytest.mark.parametrize("built_has_framing,switch", [

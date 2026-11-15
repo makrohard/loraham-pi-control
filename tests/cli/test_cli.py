@@ -1491,3 +1491,21 @@ def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_sele
     rc, out, launches = run("start", "reticulum@r2")
     assert (rc, launches) == (1, []), out
     assert f"  [blocked] rns: its sources changed since the last build — rebuild first ({remedy})\n" in out, out
+
+
+def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, capsys, monkeypatch):
+    """The 0.14.0 CHANGELOG switch, exactly as printed: `lhpc config reticulum@<rid> rnode_framing
+    yes`, then `lhpc stack restart reticulum@<rid>`, on a box whose built driver has the framing
+    module (the box fixture's). The restart launches the node on that radio with a framed config.
+    The PC has no SPI device: the host requirements are the box's, not this test's."""
+    from lhpc.core.lifecycle import Lifecycle
+    from radios_fixture import R1, R2_868
+    run = box((R1, R2_868))
+    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])
+    assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0, capsys.readouterr().out
+    capsys.readouterr()
+    _rc, out, launches = run("restart", "reticulum@r2")    # readiness is the real node's (none here)
+    assert "Cannot restart" not in out and "[blocked]" not in out, out
+    assert ("rns", "868", "r2") in launches, launches
+    conf = (tmp_path / "state" / "reticulum" / "config").read_text()
+    assert "rnode_framing = yes" in conf.split("[[LoRa]]", 1)[1]

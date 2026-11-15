@@ -3303,10 +3303,10 @@ key = "rnode_framing"
 section = "interfaces/LoRa"
 kind = "enum"
 choices = ["no", "yes"]
-default = "no"
+default = "yes"
 group = "Radio"
 label = "RNode framing"
-note = "On: the RNode firmware's air format — one header byte per frame, packets split at 254 bytes, the RNode preamble for this SF/BW. Needed to talk to RNode devices; a framed box and a bare box cannot hear each other. Off: box-to-box as before."
+note = "On (default): the RNode firmware's air format — one header byte per frame, packets split at 254 bytes, the RNode preamble for this SF/BW; LHPC boxes and RNode devices hear each other. A framed box and a bare box cannot hear each other: every box of a link uses the same setting. Off: the bare format of LHPC before 0.14.0."
 [[stack.component.config_file.param]]
 name = "airtime_limit_short"
 key = "airtime_limit_short"

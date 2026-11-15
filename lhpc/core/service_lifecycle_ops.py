@@ -2164,8 +2164,8 @@ class LifecycleOpsMixin:
                 and not self._rns_driver_has_framing()):
             return ActionResult(
                 False, f"Cannot {op} '{target}': RNode framing is on, but the built LoRa driver "
-                       "predates it and would transmit bare — update the driver and rebuild",
-                next_commands=["lhpc update rns-lora-interface", f"lhpc build {_ri.STACK_ID}"],
+                       "predates it and would transmit bare — rebuild Reticulum at its pin",
+                next_commands=[f"lhpc update {_ri.STACK_ID} --source pinned --yes", f"lhpc build {_ri.STACK_ID} --yes"],
                 data={"reason": _ri.REASON_FRAMING_DRIVER_OLD})
         return None
 
