@@ -163,7 +163,7 @@ installed package and coverage of the checkout reads near zero.
 python -m pytest -q -p no:cacheprovider tests/web/test_webserver.py   # one file
 python -m pytest -q -p no:cacheprovider -m contract                   # the readable core
 python -m pytest -q -p no:cacheprovider -m safety                     # the invariant set
-python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"    # everything
+python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc" tests testlab/tests   # everything
 rm -rf -- "$HOME/pt-lhpc"
 ```
 
@@ -201,13 +201,13 @@ in full, the line links to it. The mark after a rule says what enforces it:
 
 ### B. What a test asserts
 
-- **B1** Behaviour, not implementation ([rule 1](#the-rules)). **CI HARD** for `inspect.getsource`, **CI WARN**
-  for a read of production `.py`/`.js`/`.css`
+- **B1** Behaviour, not implementation ([rule 1](#the-rules)). **CI HARD** for `inspect.getsource(`, **CI WARN**
+  for `read_text(` or `open(` of a literal `lhpc/…` `.py`/`.js`/`.css` path
 - **B2** Exact only where exactness is the contract; a sentence never decides ([rule 2](#the-rules)).
 - **B3** Structural HTML queries ([rule 5](#the-rules)).
 - **B4** Browser behaviour in a real browser, waiting on observable state ([rule 6](#the-rules)).
-- **B5** A decision-bearing value is compared whole, never by its prefix; a sentence or a log line is replaced
-  by the typed field ([rule 10](#the-rules)). **CI WARN** for `assert ….startswith(`
+- **B5** A decision-bearing value (a command, a lock key, a unit line, a hash) is compared whole, not by its
+  prefix ([rule 10](#the-rules)). **CI WARN** for `assert ….startswith(`
 - **B6** Coverage is diagnostic: no test is added or kept only because it covers lines.
 
 ### C. Determinism and time
@@ -221,10 +221,10 @@ in full, the line links to it. The mark after a rule says what enforces it:
   readiness.
 - **C4** A test is never re-run because it failed, and no retry wraps an assertion.
 - **C5** A transfer (a download, a clone, a package fetch) is not our code: it is fetched before the lane (a
-  mirror) or retried with backoff around the transfer only; still failing, it reports `EXTERNAL-UNAVAILABLE`,
+  mirror) or retried long, with backoff, around the transfer only; still failing, it reports `EXTERNAL-UNAVAILABLE`,
   never a regression ([testlab](../docs/testlab.md#running-the-verification-lanes)).
 - **C6** An intermittent failure: first the facts, then the change that brought it, then its mechanism, named
-  with the observation that confirms it; the fix goes where the change lives, and no mitigation comes before the
+  as fact or inference with the observation that confirms it; the fix goes where the change lives, and no mitigation comes before the
   mechanism. A red outside one's own change is checked against the fixes already on `dev` before anyone calls it
   flaky.
 - **C7** A red run stays red until a cause and a fix answer it; it is not re-run to green.
@@ -234,15 +234,13 @@ in full, the line links to it. The mark after a rule says what enforces it:
 
 ### D. Isolation
 
-- **D1** No ambient host or repository dependency ([rule 4](#the-rules)). **test** (`repo/test_suite_hygiene.py`:
-  a process on the host is invisible to the suite)
+- **D1** No ambient host or repository dependency ([rule 4](#the-rules)).
 - **D2** Autouse fixtures isolate the host, and say so ([rule 8](#the-rules)).
 - **D3** The injected `System` before a patched private ([rule 9](#the-rules)).
 - **D4** A fake keeps the real signature ([rule 11](#the-rules)). **test**
 - **D5** No sibling-test imports, no `sys.path` edits, no browser import in `tests/` ([rule 7](#the-rules)).
-  **test** for the two imports
-- **D6** No network in a test; a line that talks to the lab's own local server carries `# rule-4: <reason>`.
-  **CI WARN**
+  **test** for an import of a test module or a browser in a `tests/` module
+- **D6** No network in a test. **CI WARN** for `requests.`, `urllib.request` or `socket.create_connection`
 - **D7** A suite that uses git never runs under `git rebase --exec` or with an inherited `GIT_*` environment.
 
 ### E. A test must be able to fail
@@ -250,7 +248,8 @@ in full, the line links to it. The mark after a rule says what enforces it:
 - **E1** No `assert True`, no conditional body that can do nothing, no skip that hides what CI supports; a
   relied-on `ActionResult` is asserted ([rule 10](#the-rules)). **CI HARD** for `assert True`
 - **E2** A regression test is red before its fix, run against the fix's parent and stated in the commit
-  ([rule 12](#the-rules)). **CI WARN** for a commit that adds a test without "red-before" in its message
+  ([rule 12](#the-rules)). **CI WARN** for a commit that adds a module-level `def test_` without "red-before" in
+  its message
 - **E3** The red-before runs through the unchanged public caller; a `TypeError` from a changed signature is no
   red-before.
 - **E4** Mutation check: with each check under test removed, a test fails; every mutant runs with a fresh
@@ -259,7 +258,7 @@ in full, the line links to it. The mark after a rule says what enforces it:
   that must be there).
 - **E6** No test is weakened (fewer rows, extra stubs, a narrowed setup), deleted or skipped to go green; a
   narrowing that is needed is listed with its reason.
-- **E7** `needs_git_checkout` skips in a source export and fails under CI. **test**
+- **E7** `needs_git_checkout` skips in a source export and fails under CI.
 
 ### F. Markers
 
@@ -292,14 +291,14 @@ What a machine enforces today. The checker's other rows (changelog, docs, attrib
 | check | fails on | severity |
 |---|---|---|
 | checker `tests` row | a new or renamed test file outside the layer folders (A3) | CI HARD |
-| checker `tests` row | a commit that adds a test without "red-before" in its message (E2) | CI WARN |
+| checker `tests` row | a commit that adds a module-level `def test_` without "red-before" in its message (E2) | CI WARN |
 | checker `patterns` row | `inspect.getsource(`, `assert True` (B1, E1) | CI HARD |
-| checker `patterns` row | a read of production `.py`/`.js`/`.css` (B1), `assert ….startswith(` (B5), a network call (D6), each unless its line carries its rule tag; `time.sleep(` in the in-package suites, without an exemption | CI WARN |
+| checker `patterns` row | `read_text(`/`open(` of a literal `lhpc/…` `.py`/`.js`/`.css` path (B1), `assert ….startswith(` (B5), `requests.`/`urllib.request`/`socket.create_connection` (D6), each unless its line carries its rule tag; `time.sleep(` in the in-package suites, without an exemption | CI WARN |
 | checker `markers` row | a new test that builds a venv, runs `pip install` or loops on `monotonic`, without `slow` (F3) | CI WARN |
 | checker `wallclock` row | a real clock on an added line without `wallclock` (C1) | CI HARD |
-| checker `modules` row | the service family's budgets ([rule 13](#the-rules)) | CI HARD / CI WARN |
-| `repo/test_suite_hygiene.py` | a sibling-test import, a browser import in `tests/`, a host process the suite can see, a cited plan file the repository does not ship | test |
-| `repo/test_fake_signatures.py`, `pyproject.toml` | a fake off the real signature (D4); an unknown marker (F1); an unhandled thread exception (C8) | test |
+| checker `modules` row | the service family over a budget, or grown without a budget raise that carries its reason ([rule 13](#the-rules)) | CI HARD |
+| `repo/test_suite_hygiene.py` | in a `tests/` module other than `conftest.py`: an import of a test module or a browser (D5); in `lhpc`, `testlab`, `tests`, `deploy`, `docs` or `.github`: a citation of a plan or code-report file the repository does not ship | test |
+| `tests/conftest.py`, `pyproject.toml` | a fake called in a way the real signature refuses (D4); an unknown marker (F1); an unhandled exception in a test's thread (C8) | test |
 | ruff | `ruff check lhpc testlab`; `ruff check tests --select F,E9` | CI |
 
 CI runs the checker from the floor commit in `.github/workflows/ci.yml` (`HR_FLOOR`) over the pushed range.
