@@ -137,8 +137,10 @@ def check(svc) -> ActionResult:
 
 def _seed_node_identities(svc) -> tuple[list[str], ActionResult | None]:
     """Save a lab value into each unlicensed identity field (`node_short` gets a short one),
-    keyed by the product's own `_identity_bundle_key`. Returns ("<stack>.<key>" names, the
-    failed save result or None) — a failed save fails the reset, never a silent skip."""
+    keyed by the product's own `_identity_bundle_key`, in EVERY instance's own settings (K6: an identity is the
+    instance's; `instances.saved_insts`, the stack-wide store on a list-less root). Returns ("<stack>.<key>" names,
+    the failed save result or None) — a failed save fails the reset, never a silent skip."""
+    from lhpc.core import instances
     seeded: list[str] = []
     for st in svc.stacks():
         values = {svc._identity_bundle_key(st.id, rec):
@@ -146,9 +148,10 @@ def _seed_node_identities(svc) -> tuple[list[str], ActionResult | None]:
                   for rec in svc._identity_fields(st.id) if rec["enforce"] != "licensed"}
         if not values:
             continue
-        res = svc.save_stack_config(st.id, values)
-        if not res.ok:
-            return seeded, res
+        for inst in instances.saved_insts(svc, st.id):
+            res = svc.save_config_bundle(st.id, values=values, inst=inst)
+            if not res.ok:
+                return seeded, res
         seeded += [f"{st.id}.{k}" for k in values]
     return seeded, None
 

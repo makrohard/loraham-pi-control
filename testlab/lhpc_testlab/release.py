@@ -766,22 +766,30 @@ def start_component(env: dict, component: str, timeout: float = 900.0, *,
                                f"{r.stdout[-2000:]}\n{r.stderr[-500:]}")
 
 
+def _openhop_dirs(root) -> str:
+    """The openHop dirs of THIS runtime root as a regex: the template's `state/openhop` and every listed instance's
+    `state/<rid>/openhop` (the repeater's state_dir default `{runtime}/state/{instance_dir}openhop`)."""
+    return re.escape(str(pathlib.Path(root) / "state")) + r"/(?:r[1-9][0-9]?/)?openhop/"
+
+
 def plugin_manager_pids(root) -> list[int]:
     """Pids of upstream's MeshCore plugin manager (`python -m repeater.plugins`) serving THIS
-    runtime root — matched on the plugins-root path in its argv, so two labs on one host never
-    see each other's manager. The repeater roles spawn exactly one; chat spawns none."""
+    runtime root — matched on the plugins-root path in its argv, under any of the root's openHop dirs
+    (`_openhop_dirs`), so two labs on one host never see each other's manager. The repeater roles spawn exactly one
+    per instance; chat spawns none."""
     import subprocess as _sp
-    needle = str(pathlib.Path(root) / "state" / "openhop")
+    rx = re.compile(_openhop_dirs(root))
     r = _sp.run(["pgrep", "-f", "-a", "repeater.plugins"], capture_output=True, text=True,
                 check=False)                                   # no match = an empty list
     return sorted(int(line.split()[0]) for line in r.stdout.splitlines()
-                  if "--plugins-root" in line and needle in line)
+                  if "--plugins-root" in line and rx.search(line))
 
 
-def plugin_manager_marker(root) -> pathlib.Path:
-    """The same-boot ownership marker the node's host writes before spawning the manager and
-    clears only after a clean stop (docs/stacks/meshcore.md, "Plugins")."""
-    return pathlib.Path(root) / "state" / "openhop" / ".lhpc-plugin-manager-active"
+def plugin_manager_markers(root) -> list[pathlib.Path]:
+    """The same-boot ownership markers the node's host writes before spawning the manager and
+    clears only after a clean stop (docs/stacks/meshcore.md, "Plugins"), in any of the root's openHop dirs."""
+    rx = re.compile(_openhop_dirs(root) + r"\.lhpc-plugin-manager-active\Z")
+    return sorted(p for p in pathlib.Path(root, "state").glob("**/.lhpc-plugin-manager-active") if rx.match(str(p)))
 
 
 def alive(env: dict, component: str) -> bool:

@@ -22,7 +22,7 @@ from lhpc_testlab.release import (
     alive,
     gui_startable,
     install_build,
-    plugin_manager_marker,
+    plugin_manager_markers,
     plugin_manager_pids,
     pty_readiness,
     readiness_failed,
@@ -256,17 +256,17 @@ def _assert_plugin_manager_running(env) -> None:
     pids = plugin_manager_pids(root)
     assert len(pids) == 1, (f"{stack_regression('meshcore', 'readiness')}\n"
                             f"expected exactly one MeshCore plugin manager, found {pids}")
-    assert plugin_manager_marker(root).exists(), "plugin-manager marker missing while it runs"
+    assert plugin_manager_markers(root), "plugin-manager marker missing while it runs"
 
 
 def _assert_plugin_manager_gone(env) -> None:
     """A graceful stack stop takes the manager down and the host clears the marker: the ONE
     acceptance criterion of the plugin-manager lifecycle (docs/stacks/meshcore.md)."""
     root = env["LHPC_RUNTIME_ROOT"]
-    wait_for(lambda: not (plugin_manager_pids(root) or plugin_manager_marker(root).exists()),
+    wait_for(lambda: not (plugin_manager_pids(root) or plugin_manager_markers(root)),
              40, every=0.5)                                   # the node's stop_timeout budget
     assert plugin_manager_pids(root) == [], "plugin manager still running after the stack stop"
-    assert not plugin_manager_marker(root).exists(), \
+    assert not plugin_manager_markers(root), \
         "plugin-manager marker not cleared: the manager did not stop cleanly"
 
 
