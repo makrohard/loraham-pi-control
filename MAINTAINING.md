@@ -157,8 +157,9 @@ Before step 1 (each line was missed or found late in a real run):
 
 ### Maintainer patch (`0.X.Y`)
 
-1. The fix lands on `dev`, one commit per change, with the version bump and its changelog
-   section; a fix that moves a binary pin lands only once that binary is published (step 4).
+1. The fixes land on `dev`, one commit per change; a fix that moves a binary pin lands only once
+   that binary is published (step 4). The version bump and the changelog section come once, before
+   the tag ([commits](CONTRIBUTING.md#commits)).
 2. CI and `testlab.yml` with `release_verify=true` green on the exact `dev` tip to be released.
 3. Fast-forward `main` to it and tag it; no GitHub Release. If the bot has released in between, cut
    the patch on top of `main` instead ([branches and releases](docs/maintenance.md#branches-and-releases)).
