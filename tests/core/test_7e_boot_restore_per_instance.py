@@ -273,3 +273,21 @@ def test_an_unreadable_intents_skip_keeps_its_evidence_for_a_later_boot(tmp_path
     monkeypatch.setattr(sbr, "current_boot_id", lambda: "NEXTBOOT")
     assert svc.boot_restore_run().ok
     assert starts == [("kiss", "433", "r3")], starts
+
+
+def test_a_broken_hardware_list_at_boot_keeps_the_evidence_for_a_boot_with_it_fixed(tmp_path, monkeypatch):
+    """An INVALID (broken or unreadable) radios.toml proves no radio gone: every item on a radio is skipped as that,
+    its record kept, and the boot after the list is fixed restores it. (An ABSENT list is no radios: lasting.)"""
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
+    rec = _record(tmp_path, rid="r3", band="433", pid=999971, at=1000)
+    good = (tmp_path / "config" / "radios.toml").read_text()
+    (tmp_path / "config" / "radios.toml").write_text("[[radio]\nnot toml")
+    assert svc.boot_restore_run().ok
+    assert starts == [] and f"{rec['launch_id']}.json" in _owned(tmp_path)    # skipped, its record kept
+    assert [(k, "hardware list is not valid" in r) for k, r in _skips(tmp_path)] == [("kiss@r3", True)]
+
+    (tmp_path / "config" / "radios.toml").write_text(good)
+    monkeypatch.setattr(sbr, "current_boot_id", lambda: "NEXTBOOT")
+    assert svc.boot_restore_run().ok
+    assert starts == [("kiss", "433", "r3")], starts

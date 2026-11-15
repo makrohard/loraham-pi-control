@@ -348,7 +348,7 @@ class BootRestoreOpsMixin:
                    {e.stack for e in evidence}}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
-        boot_restore.radio_filter(plan, radios.load(self._paths).radios)   # D14/D15, 7e
+        boot_restore.radio_filter(plan, radios.load(self._paths))   # D14/D15, 7e
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),
@@ -426,13 +426,13 @@ class BootRestoreOpsMixin:
         return ident.get("starttime", 0)
 
     def _prune_skips(self, journal, write: bool = True) -> None:
-        """Prune every skipped item's leftovers but the unreadable-intents ones, and persist the results — AFTER the
+        """Prune every skipped item's leftovers but the two transient ones, and persist the results — AFTER the
         journal is durable (pruning first left destruction unrecorded on a crash or an unwritable journal; the
         disabled path documents the same journal-first order). They are dead prior-boot records: left, a later boot
         restored the stack from an OLDER boot (a plan skip), or re-classified a stopped one on every boot."""
         touched = False
         for _sk in journal.get("skipped", ()):
-            if _sk.get("reason") != self.INTENTS_UNREADABLE_REASON and "prune" not in _sk:
+            if _sk.get("reason") not in (self.INTENTS_UNREADABLE_REASON, boot_restore.RADIOS_INVALID_REASON) and "prune" not in _sk:
                 _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
                 touched = True
         if touched and write:

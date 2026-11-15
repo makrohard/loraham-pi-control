@@ -87,12 +87,23 @@ def resolve_item(svc, item) -> tuple:
     return sid, inst, band, why
 
 
-def radio_filter(plan, rows) -> None:
+# The one radio skip a later boot retries (not pruned): a broken or unreadable list proves no radio gone.
+RADIOS_INVALID_REASON = "the hardware list is not valid (broken or unreadable): nothing can be judged, not restored"
+
+
+def radio_filter(plan, hw) -> None:
     """D14/D15 (stage L5): a pre-0.14.0 band item (no `rid`) is not restored, W12 (nothing converted); an item whose
     radio is gone, disabled or no longer its instance's is refused with the reason (radio_daemon.restore_plan). Both
-    move to `plan.skipped`, their evidence named."""
-    from . import radio_daemon
-    kept, refused = radio_daemon.restore_plan(plan.items, rows)
+    move to `plan.skipped`, their evidence named. `hw` is the loaded hardware list (radios.load): when it is INVALID,
+    nothing is restored and every item is skipped as RADIOS_INVALID_REASON instead, so its evidence survives for a
+    later boot, as with unreadable stop intents (an ABSENT list is no radios: lasting)."""
+    from . import radio_daemon, radios
+    if hw.kind == radios.INVALID:
+        plan.skipped.extend({"stack": it["target"], "evidence_ids": it["evidence_ids"],
+                             "reason": RADIOS_INVALID_REASON} for it in plan.items)
+        plan.items = []
+        return
+    kept, refused = radio_daemon.restore_plan(plan.items, hw.radios)
     why = {id(it): r for it, r in refused}
     for it in plan.items:
         if not any(it is k for k in kept):

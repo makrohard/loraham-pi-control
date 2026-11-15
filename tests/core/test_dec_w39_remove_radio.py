@@ -145,7 +145,7 @@ def test_after_a_remove_the_boot_planner_skips_its_item_naming_the_evidence(tmp_
     assert radio_start.remove_radio(svc, "r3", "remove-r3").ok
     item = boot_restore.new_item("i1", "stack", target="kiss", band="868", evidence_ids=["L1"], rid="r3")
     plan = boot_restore.Plan(items=[item])
-    boot_restore.radio_filter(plan, radios.load(svc._paths).radios)
+    boot_restore.radio_filter(plan, radios.load(svc._paths))
     assert plan.items == []
     assert plan.skipped == [{"stack": "kiss", "evidence_ids": ["L1"], "reason": "radio r3 no longer exists"}]
 
