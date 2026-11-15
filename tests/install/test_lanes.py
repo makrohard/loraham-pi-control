@@ -11,6 +11,7 @@ so the URL stays a GitHub one); the GitHub releases API is the one faked command
 network. Red before U1: the install took the plain tag, the check compared with the branch tip, and a failed
 release check updated anyway. Red before U2: a bare update moved every source to the pin."""
 import json
+import shutil
 
 import htmlq
 import pytest
@@ -730,6 +731,24 @@ def test_a_commit_the_upstream_rewrote_away_is_not_published_although_the_mirror
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0
     assert UNPUBLISHED in capsys.readouterr().out
     assert box.head() == box.c[2]                     # RED before: moved onto the rewritten history
+
+
+def test_a_rebuilt_mirror_never_fetches_a_commit_the_upstream_rewrote_away(box, git, capsys):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v3.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # c3
+    box.drop_tags("v3.0")
+    git(box.work, "reset", "-q", "--hard", box.c[1])
+    git(box.work, "commit", "-q", "--allow-empty", "-m", "rewritten")
+    git(box.work, "push", "-q", "-f", "origin", "main")      # the upstream still holds c3's object, no ref reaches it
+    shutil.rmtree(box.mirror())                              # the mirror is rebuilt from the current refs only
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    assert UNPUBLISHED in capsys.readouterr().out
+    assert box.head() == box.c[2]
+    held = git(box.mirror(), "cat-file", "--batch-all-objects", "--batch-check=%(objectname)",
+               env={"GIT_NO_LAZY_FETCH": "1"}).split()
+    assert box.c[1] in held and box.c[2] not in held  # the read asked the upstream for no object (A-M14)
 
 
 def test_a_once_shallow_dev_checkout_on_the_stable_lane_moves_forward_only(box, git, capsys):
