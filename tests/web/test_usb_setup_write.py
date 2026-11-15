@@ -18,7 +18,8 @@ STICKS = repo_paths.REPO / "tests" / "data" / "usb_sysfs" / "meshstick"
 REAL_SCAN = usb_access.scan
 ROWS = (radios.Radio("r1", "low", "loraham", "433"),
         radios.Radio("r2", "stick", "meshstick-1262", "868", usb_port="1-1.9"))
-ROUTES = ("/hardware", "/hardware/add", "/hardware/radio/r2", "/")     # every GET through hardware_view
+# every GET through hardware_view; the daemon row's Hardware submenu (U5) renders the same view
+ROUTES = ("/hardware", "/hardware/add", "/hardware/radio/r2", "/", "/stacks?open=daemon")
 
 
 def _box(web, tmp_path, monkeypatch):
@@ -91,7 +92,9 @@ def test_a_failed_setup_write_renders_the_page_without_the_line_and_is_logged(we
     text = " ".join(re.sub(r"<[^>]+>", " ", page).split())
     shown = {"/hardware": f"USB setup The USB setup cannot be offered: {reason}",      # today's refusal note
              "/hardware/add": "Add Hardware", "/hardware/radio/r2": "r2 — stick",
-             "/": "Needs attention r2: stick not plugged in on port 1-1.9 the USB access setup is needed"}[route]
+             "/": "Needs attention r2: stick not plugged in on port 1-1.9 the USB access setup is needed",
+             "/stacks?open=daemon": "r2 details › stick ELECROW Meshstick (SX1262, USB) 868 MHz port 1-1.9 enabled",
+             }[route]
     assert shown in text, text
     assert 'id="usb-copybox"' not in page
     assert [rec.getMessage() for rec in caplog.records if rec.name == "lhpc.usb"] == [f"USB setup: {reason}"]
