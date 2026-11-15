@@ -1,8 +1,10 @@
 """The reader input matrix (L24, READER-INPUT-MATRIX-v1) as a regression test: every numeric field the matrix
 measured, fed each input class through the reader's own public function, gives the safe answer — refused, not
 fresh, not ceased, not running, unsafe or unchecked — and never raises out of a reader that must not raise.
-The per-defect tests (test_l24_*.py) hold the edges; this file holds the whole matrix in one place, so a new
-regression in any measured cell fails here."""
+The per-defect tests hold the edges (tests/core/test_boot_journal_numbers.py, test_cache_checked_at.py,
+test_job_marker_pid.py, test_restart_marker_time.py; tests/install/test_recorded_process_ceased.py;
+tests/stacks/test_gps_marker_freshness.py); this file holds the whole matrix in one place, so a new regression in
+any measured cell fails here."""
 import json
 import os
 import time

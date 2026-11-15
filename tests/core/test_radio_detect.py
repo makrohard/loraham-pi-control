@@ -469,7 +469,7 @@ class _Libusb:
 @pytest.mark.parametrize("sticks, kw", [
     ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "serial-fails")], {"serial": "A1B2C3D4"}),
     ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "unopenable")], {"serial": "A1B2C3D4"}),
-    # (by port, the target's unreadable serial proceeds: P2, tests/core/test_p2_ch341_port_select.py)
+    # (by port, the target's unreadable serial proceeds: P2, PORT_CASES in this file)
 ])
 def test_a_stick_of_unknown_identity_refuses_the_selection(sticks, kw):
     # A serial that cannot be read is not "no serial", and an unopenable stick still counts: no claim, no write.

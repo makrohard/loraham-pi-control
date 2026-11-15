@@ -1490,7 +1490,7 @@ def test_web_instance_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
 def test_a_confirmed_form_names_its_instance_never_a_band(tmp_path, monkeypatch):
     # W2 supersedes the confirmed-band rule (a confirmed form's band honoured or refused): a confirmed form names
     # `<stack>@<rid>`; a band beside it is a bad request and nothing runs. A plan that changed under the form (its
-    # radio moved band, its config was edited) is the detached job's "plan changed" (tests/web/test_w2_instances.py).
+    # radio moved band, its config was edited) is the detached job's "plan changed" (tests/web/test_actions_name_their_instance.py).
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     started = []
