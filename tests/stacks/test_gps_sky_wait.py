@@ -48,7 +48,6 @@ def _sky(*prns, device=A) -> bytes:
 # written, so the budget's read never races a fake's thread; whether a read waited is its connection
 # count: one connection is no wait, two are the budget's read and the wait.
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_list_arriving_after_the_budget_is_waited_for(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
     srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()],
@@ -58,7 +57,6 @@ def test_a_list_arriving_after_the_budget_is_waited_for(preloaded_gpsd, monkeypa
     assert r["sats_seen"] == 2 and srv.connects == 2
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_the_wait_takes_the_whole_burst_of_a_list(preloaded_gpsd, monkeypatch):
     # gpsd sends one list as several SKYs in a row, each with more satellites (16, 26, 29, 46, 50
     # on the field box); the wait ends with the message after the burst, not at its first SKY.
@@ -71,7 +69,6 @@ def test_the_wait_takes_the_whole_burst_of_a_list(preloaded_gpsd, monkeypatch):
     assert srv.connects == 2
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 @pytest.mark.wallclock("the wait's real end at SKY_WAIT_S is what is measured")
 def test_without_a_list_in_the_wait_the_read_ends_at_the_bound(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 0.8)
@@ -83,7 +80,6 @@ def test_without_a_list_in_the_wait_the_read_ends_at_the_bound(preloaded_gpsd, m
     assert srv.connects == 2 and 0.7 <= took < 1.5
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_remembered_list_ends_the_read_at_its_budget(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 3.0)
     srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _sky(5)],
@@ -120,7 +116,6 @@ def test_a_receiver_without_satellite_reports_waits_once_per_memo_window(preload
     assert read() == 2                              # the stamp expired: one wait again
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_another_devices_fresh_list_does_not_skip_the_wait(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
     srv = preloaded_gpsd([VERSION, DEV_AB, _tpv(A), _sky(3, 7, device=A), _tpv(A)],   # A remembered
@@ -133,7 +128,6 @@ def test_another_devices_fresh_list_does_not_skip_the_wait(preloaded_gpsd, monke
     assert srv.connects == 3
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_another_devices_list_does_not_end_the_wait(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
     srv = preloaded_gpsd([VERSION, DEV_AB, _tpv(B), _dop_sky(B)],
