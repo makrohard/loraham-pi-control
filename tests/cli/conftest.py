@@ -33,8 +33,9 @@ def no_venv_sync(monkeypatch):
 @pytest.fixture
 def box(tmp_path, monkeypatch, capsys):
     """The stack-instance tests' box (item 7), a FakeSystem service over a temporary runtime root:
-    box(rows, procs, ports) -> run(*argv) -> (rc, out, launches). The hardware list `rows` gives the copies (K4ac)."""
-    def make(rows, procs=None, ports=()):
+    box(rows, procs, ports, paths) -> run(*argv) -> (rc, out, launches). The hardware list `rows` gives the copies (K4ac);
+    `paths` are files the box reports present (a node's ready file)."""
+    def make(rows, procs=None, ports=(), paths=()):
         radios_fixture.write(tmp_path, rows)
         seed_framing_driver(tmp_path)                       # a built box at the pins
         assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
@@ -51,7 +52,7 @@ def box(tmp_path, monkeypatch, capsys):
             launches.append((comp.id, band, inst.rid))
             return StartLaunch(True, "")
         monkeypatch.setattr(Lifecycle, "start", launch)
-        system = FakeSystem(unix_replies=radios_fixture.INSTANCE_READY, cmdlines_data=procs or {},
+        system = FakeSystem(unix_replies=radios_fixture.INSTANCE_READY, cmdlines_data=procs or {}, paths=set(paths),
                             listeners=[Listener(family="ipv4", ip="127.0.0.1", port=p, inode=i)
                                        for i, p in enumerate(ports, 1)]).system
         real = ControllerService

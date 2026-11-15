@@ -2,26 +2,31 @@
 
 LHPC writes nothing into MeshChat: MeshChat's own post-start step makes its Announce button's call,
 `GET /api/v1/announce` (meshchat.py:1189-1192, answer {"message": "announcing"}). The start-path
-tests run the REAL manifest step through the real detached post-start runner, bound to a live main,
-against a fake MeshChat on loopback that records the call (MeshChat's fixed port is swapped for the
-fake's, nothing else). A failed announce is logged and never fails the start.
+tests run `lhpc stack start meshchat@r2` through the CLI: the real service start, the real Lifecycle
+with a real (sleeping) process for each launch, the real post-start scheduling and detached runner,
+against a fake MeshChat on loopback that records the call. The service reads a copy of the shipped
+manifest in which only the step's `--api` port is the fake's (MeshChat's 8790 may be taken on the
+test host); the box reports MeshChat's 8790 listener and the node's ready file. A failed announce is logged and never fails the start.
 """
 
-import dataclasses
 import importlib.util
 import json
 import socket
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 import repo_paths
-from lhpc.core.config import Config, OperatorConfig
+import radios_fixture
+from lhpc.adapters.cli import main as cli
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.manifest import load_manifest
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import RealSystem
+from lhpc.core.probes.backends import FakeSystem, Listener
+from lhpc.core.services import ControllerService
+from seams import seed_framing_driver
 
 _SCRIPT = repo_paths.REPO / "lhpc" / "data" / "scripts" / "meshchat-announce.py"
 
@@ -36,7 +41,7 @@ def _load():
 class FakeMeshChat:
     """MeshChat's announce route over real HTTP; records every call."""
 
-    def __init__(self, code=200, body=b'{"message": "announcing"}'):
+    def __init__(self, code=200, body=b'{"message": "announcing"}', length=None):
         self.calls, self.called = [], threading.Event()
         fake = self
 
@@ -47,7 +52,7 @@ class FakeMeshChat:
             def do_GET(self):
                 fake.calls.append(self.path)
                 self.send_response(code)
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(body) if length is None else length))
                 self.end_headers()
                 self.wfile.write(body)
                 fake.called.set()
@@ -73,8 +78,27 @@ def meshchat():
         f.close()
 
 
+def _bounded(fn, seconds=20.0):
+    """Run `fn` in a daemon thread and fail if it has not returned within `seconds`: a regression of
+    the announce's bound fails this test fast instead of holding the run (no timeout plugin here)."""
+    box = {}
+
+    def go():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:                  # re-raised in the test's own thread
+            box["error"] = exc
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(seconds)
+    assert not t.is_alive(), f"did not return within {seconds:g} s"
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _run(api, capsys, timeout="5"):
-    rc = _load().main(["--api", api, "--timeout", timeout])
+    rc = _bounded(lambda: _load().main(["--api", api, "--timeout", timeout]))
     out = capsys.readouterr()
     return rc, out.out + out.err
 
@@ -91,6 +115,7 @@ def test_the_announce_is_the_buttons_call_and_its_answer_is_checked(meshchat, ca
     pytest.param({"code": 500, "body": b"{}"}, "HTTP 500", id="http-500"),
     pytest.param({"body": b"<html>"}, "not JSON", id="not-json"),
     pytest.param({"body": b'{"message": "nope"}'}, "did not confirm", id="wrong-answer"),
+    pytest.param({"length": 200}, "IncompleteRead", id="body-cut-short"),     # the body ends before its length
 ])
 def test_an_announce_it_cannot_confirm_fails_by_name(meshchat, capsys, kw, why):
     rc, out = _run(meshchat(**kw).api, capsys)
@@ -109,7 +134,7 @@ def test_a_meshchat_that_never_listens_fails_within_the_bound():
         pauses.append(seconds)
         now[0] += seconds
     with pytest.raises(mod.Failure, match="did not answer"):
-        mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: now[0], pause=pause)
+        _bounded(lambda: mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: now[0], pause=pause))
     assert 1 <= len(pauses) <= 6
 
 
@@ -130,11 +155,26 @@ def test_an_error_other_than_refused_is_not_retried():
     pauses = []
     try:
         with pytest.raises(mod.Failure, match="GET /api/v1/announce"):
-            mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: 0.0, pause=pauses.append)
+            _bounded(lambda: mod.announce(f"127.0.0.1:{port}", 5.0, clock=lambda: 0.0, pause=pauses.append))
     finally:
         t.join(5)
         srv.close()
     assert pauses == []
+
+
+@pytest.mark.wallclock("a stalled server: the bound is the real socket timeout, capped by the time left")
+def test_a_meshchat_that_accepts_and_never_answers_ends_within_the_whole_bound():
+    """A server that accepts the connection and never answers: the attempt's socket timeout is the
+    time left (here 1 s), not a fixed 10 s, so the announce ends by its overall deadline."""
+    mod = _load()
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)                                      # accepted by the kernel; nobody ever reads
+    try:
+        with pytest.raises(mod.Failure, match="timed out|did not answer"):
+            _bounded(lambda: mod.announce(f"127.0.0.1:{srv.getsockname()[1]}", 1.0), seconds=8.0)
+    finally:
+        srv.close()
 
 
 # --- the real manifest step through the real post-start runner ---
@@ -152,62 +192,78 @@ def test_the_manifest_announces_meshchat_once_per_start_as_an_optional_step():
                             "--api", "127.0.0.1:8790", "--timeout", "60"]     # MeshChat's fixed loopback port
 
 
-def _start(tmp_path, fake):
-    """MeshChat's post-start as a start schedules it: a real Lifecycle, a live main recorded as the
-    verified launch, then `spawn_post_start` (the detached, armed runner) with the real step."""
-    import subprocess
-    stack, comp = _meshchat()
-    step = dict(comp.post_steps[0])
-    step["argv"] = [fake.api if a == "127.0.0.1:8790" else a for a in step["argv"]]
-    comp = dataclasses.replace(comp, post_steps=(step,))
-    life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()), RealSystem())
-    main = subprocess.Popen(["sleep", "60"], start_new_session=True)  # wallclock: a live main to bind to, ended in finally; never paces
-    seen = threading.Event()
-    for _ in range(100):
-        idn = life._capture_identity(main.pid)
-        if idn and idn.get("exec") == "sleep":
-            break
-        seen.wait(0.05)
-    assert life.record_launch(stack, comp, main.pid, "", ident=life._capture_identity(main.pid), role="")
-    return life, comp, main, life.spawn_post_start(stack, comp)
+_SHIPPED = repo_paths.REPO / "lhpc" / "data" / "manifest.example.toml"
+_API = '"--api", "127.0.0.1:8790", "--timeout", "60"'
 
 
-def _runner_result(life, comp, deadline_s=30.0):
-    """The runner's own result file, once it has ended (bounded; no fixed sleep)."""
-    (rec,) = life.owned_records(comp.id, role="post")
+@pytest.fixture
+def box(tmp_path, monkeypatch, capsys):
+    """A built box with a hardware list (Reticulum on r2) whose `lhpc` runs the real start path;
+    each launch is a real detached `sleep` (ownable), the node's ready file and MeshChat's listener
+    are what the box reports. `start(fake)` -> (rc, out, svc)."""
+    spawned = []
+
+    def spawn(argv, log, cwd=None, env=None):
+        open(str(log), "a").close()
+        spawned.append(subprocess.Popen(["sleep", "120"], start_new_session=True,   # wallclock: a live launch, ended after the test; never paces
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        return spawned[-1].pid
+
+    def start(fake, *argv):
+        man = _SHIPPED.read_text()                       # the step itself is pinned by the manifest test
+        (tmp_path / "manifest.toml").write_text(man.replace(_API, _API.replace("127.0.0.1:8790", fake.api)))
+        radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+        seed_framing_driver(tmp_path)
+        for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
+                            ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
+                            ("_source_present", lambda self, c: True)):
+            monkeypatch.setattr(ControllerService, name, value)
+        monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])   # the PC has no SPI
+        system = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8790, inode=1)],
+                            paths={str(tmp_path / "state" / "reticulum" / "ready")}).system
+        svc = ControllerService(system=system, paths=Paths(runtime_root=tmp_path), manifest_path=tmp_path / "manifest.toml")
+        monkeypatch.setattr(ControllerService, "_lifecycle",
+                            lambda self: Lifecycle(self._paths, self.stacks(), self.config(), self._system, spawn=spawn))
+        monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc)
+        rc = cli.main(["stack", "start", "meshchat@r2", "--yes", *argv])
+        got = capsys.readouterr()
+        return rc, got.out + got.err, svc
+
+    yield start
+    for p in spawned:
+        p.terminate()
+        p.wait()
+
+
+def _runner_result(svc, deadline_s=30.0):
+    """MeshChat's post-start runner's own result, once it has ended (bounded; no fixed sleep)."""
+    life = svc._lifecycle()
+    (rec,) = life.owned_records("meshchat", role="post")
     tick = threading.Event()
     for _ in range(int(deadline_s / 0.05)):
         if life._proc_ceased(rec["pid"]):
             break
         tick.wait(0.05)
-    return json.loads(open(rec["result_path"]).read())
+    return json.loads(open(rec["result_path"]).read())["steps"]
 
 
 @pytest.mark.needs_session
-def test_every_meshchat_start_sends_one_announce(meshchat, tmp_path):
+def test_a_meshchat_start_sends_exactly_one_announce(meshchat, box):
     fake = meshchat()
-    life, comp, main, sched = _start(tmp_path, fake)
-    try:
-        assert sched.ok, sched
-        assert fake.called.wait(30), "the start's runner never called MeshChat"
-        step = _runner_result(life, comp)["steps"][0]
-        assert (step["label"], step["outcome"], step["rc"]) == ("announce", "ok", 0)
-        assert fake.calls == ["/api/v1/announce"], "once per start"
-    finally:
-        life._cancel_post_runners(comp, None)
-        main.terminate(); main.wait()
+    rc, out, svc = box(fake)
+    assert rc == 0, out
+    assert "[verified] meshchat" in out and "optional post-start scheduled" in out, out
+    assert fake.called.wait(30), "the start's runner never called MeshChat"
+    (step,) = _runner_result(svc)
+    assert (step["label"], step["outcome"], step["rc"]) == ("announce", "ok", 0)
+    assert fake.calls == ["/api/v1/announce"], "one announce per start"
 
 
 @pytest.mark.needs_session
-def test_a_failed_announce_is_logged_and_never_fails_the_start(meshchat, tmp_path):
+def test_a_failed_announce_is_logged_and_never_fails_the_start(meshchat, box):
     fake = meshchat(code=500, body=b"{}")
-    life, comp, main, sched = _start(tmp_path, fake)
-    try:
-        assert sched.ok, "an optional post step never gates the start"
-        assert fake.called.wait(30)
-        result = _runner_result(life, comp)
-        step = result["steps"][0]
-        assert (step["label"], step["outcome"], step["rc"]) == ("announce", "failed", 1), result
-    finally:
-        life._cancel_post_runners(comp, None)
-        main.terminate(); main.wait()
+    rc, out, svc = box(fake)
+    assert rc == 0, out
+    assert fake.called.wait(30)
+    (step,) = _runner_result(svc)
+    assert (step["label"], step["outcome"], step["rc"]) == ("announce", "failed", 1)

@@ -1500,12 +1500,45 @@ def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, c
     The PC has no SPI device: the host requirements are the box's, not this test's."""
     from lhpc.core.lifecycle import Lifecycle
     from radios_fixture import R1, R2_868
-    run = box((R1, R2_868))
+    run = box((R1, R2_868), paths=[str(tmp_path / "state" / "reticulum" / "ready")])     # the node reports ready
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])
     assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0, capsys.readouterr().out
     capsys.readouterr()
-    _rc, out, launches = run("restart", "reticulum@r2")    # readiness is the real node's (none here)
-    assert "Cannot restart" not in out and "[blocked]" not in out, out
+    rc, out, launches = run("restart", "reticulum@r2")
+    assert rc == 0, out
     assert ("rns", "868", "r2") in launches, launches
     conf = (tmp_path / "state" / "reticulum" / "config").read_text()
     assert "rnode_framing = yes" in conf.split("[[LoRa]]", 1)[1]
+
+
+def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path, capsys, monkeypatch):
+    """The 0.14.0 CHANGELOG Reticulum block (v2), each step in its printed form and order, on a box
+    whose Reticulum runs on r2: (1) the update is refused while it runs and names the stop; (2) after
+    `lhpc stack stop reticulum@r2 --yes` that refusal is gone; (3) `lhpc config reticulum@r2
+    rnode_framing yes`; (4) `lhpc stack start reticulum@r2` launches the node on r2, framed. An update
+    never stops a stack itself (service_maintenance.py), so the stop comes first. The running state is
+    the fixture's: the node's process and instance as the box reports them."""
+    from lhpc.core import instances
+    from lhpc.core.lifecycle import Lifecycle
+    from radios_fixture import R1, R2_868
+    run = box((R1, R2_868), paths=[str(tmp_path / "state" / "reticulum" / "ready")])     # the node reports ready
+    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])
+    running = {"rns": True}
+    monkeypatch.setattr(ControllerService, "_running_source_consumers",
+                        lambda self, paths: ["rns"] if running["rns"] else [])
+    monkeypatch.setattr(instances, "running_keys",
+                        lambda svc, sid: ["reticulum@r2"] if sid == "reticulum" and running["rns"] else [])
+    assert main(["update", "reticulum", "--source", "pinned", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "stop them first" in out and "lhpc stack stop reticulum@r2 --yes" in out, out
+    rc, out, _ = run("stop", "reticulum@r2")
+    assert rc == 0, out
+    running["rns"] = False                                     # the stop's effect on the box
+    main(["update", "reticulum", "--source", "pinned", "--yes"])
+    assert "are running" not in capsys.readouterr().out
+    assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0
+    capsys.readouterr()
+    rc, out, launches = run("start", "reticulum@r2")
+    assert rc == 0, out
+    assert ("rns", "868", "r2") in launches, launches
+    assert "rnode_framing = yes" in (tmp_path / "state" / "reticulum" / "config").read_text().split("[[LoRa]]", 1)[1]

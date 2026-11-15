@@ -15,6 +15,7 @@ RE-AUDIT AT EVERY MESHCHAT BUMP: the route and its answer.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import time
@@ -33,20 +34,26 @@ def _refused(exc: BaseException) -> bool:
 
 
 def announce(api: str, timeout: float, clock=time.monotonic, pause=time.sleep) -> None:
+    """One announce, bounded as a whole by `timeout` seconds: every attempt's own socket timeout is
+    capped by the time left, so neither a connect that never completes nor a refused port can hold
+    a MeshChat start's post-start runner past the deadline."""
     deadline = clock() + timeout
     while True:
+        left = deadline - clock()
+        if left <= 0:
+            raise Failure(f"MeshChat did not answer on {api} within {timeout:g} s")
         try:
-            with urllib.request.urlopen(f"http://{api}{ROUTE}", timeout=10) as resp:
+            with urllib.request.urlopen(f"http://{api}{ROUTE}", timeout=min(10.0, left)) as resp:
                 raw = resp.read()
             break
         except urllib.error.HTTPError as exc:
             raise Failure(f"GET {ROUTE}: HTTP {exc.code}") from exc
+        except http.client.HTTPException as exc:            # e.g. IncompleteRead: the body cut short
+            raise Failure(f"GET {ROUTE}: {exc!r}") from exc
         except (urllib.error.URLError, OSError) as exc:
             if not _refused(exc):
                 raise Failure(f"GET {ROUTE}: {exc}") from exc
-            if clock() >= deadline:
-                raise Failure(f"MeshChat did not answer on {api} within {timeout:g} s") from exc
-            pause(1.0)
+        pause(1.0)                                          # refused: not listening yet
     try:
         answer = json.loads(raw)
     except ValueError as exc:
