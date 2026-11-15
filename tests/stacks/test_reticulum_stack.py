@@ -1068,6 +1068,7 @@ def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, mo
     pytest.param(True, "yes", id="framing-driver-switch-on"),
     pytest.param(False, "no", id="old-driver-switch-off"),
 ])
+@pytest.mark.slow                   # timed wait (CPU share 0.10 of 1.26 s serial)
 def test_rnode_framing_gate_is_silent_when_the_driver_can_honour_it(tmp_path, monkeypatch,
                                                                     built_has_framing, switch):
     """A driver built with the framing module, or the switch off: the old driver keeps working."""

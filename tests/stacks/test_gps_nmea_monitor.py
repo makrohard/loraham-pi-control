@@ -818,6 +818,7 @@ def _acquire(svc, key, op):
 
 @pytest.mark.wallclock("a child process holds the claim for 1 s: the start's real wait for its release is the claim")
 @pytest.mark.parametrize("mode", ["published", "unpublished"])
+@pytest.mark.slow                   # timed wait (CPU share 0.06 of 1.07 s serial)
 def test_a_start_waits_for_the_monitors_bounded_claim(tmp_path, mode):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     key = "claim.gps.serial.dev.4:64"
@@ -831,6 +832,7 @@ def test_a_start_waits_for_the_monitors_bounded_claim(tmp_path, mode):
 
 
 @pytest.mark.wallclock("a child process holds the claim: failing fast, not waiting, is the claim")
+@pytest.mark.slow                   # timed wait (CPU share 0.05 of 1.07 s serial)
 def test_a_start_still_fails_fast_on_another_external_operation(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     key = "claim.gps.serial.dev.4:64"

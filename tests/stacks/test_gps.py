@@ -314,6 +314,7 @@ def test_readiness_follows_the_source_not_the_endpoint(tmp_path):
 
 
 @pytest.mark.wallclock("a real pump thread ticks each _FIXED_INTERVAL_S; the deadline is a hang guard")
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.05 s serial)
 def test_the_fixed_pump_keeps_emitting_with_a_current_timestamp(tmp_path):
     """A consumer discards a fix whose timestamp is stale, so a station that does not move
     must still tick."""
@@ -1199,6 +1200,7 @@ def _run_feed(paths, consumer, stop):
 
 @pytest.mark.wallclock("the stop's real latency against the blocking call's own timeout is the claim")
 @pytest.mark.parametrize("state", ["silent-gpsd", "connect-hangs"])
+@pytest.mark.slow                   # timed wait (CPU share 0.01 of 1.01 s serial)
 def test_a_stop_signal_ends_the_feed_at_once_while_it_blocks(short_tmp_path, monkeypatch, state):
     """The lifecycle stops a feed with SIGTERM and waits `stop_timeout` (5 s) for it to exit. A
     gpsd that accepts but sends nothing (no fix) left the feed in a 5 s `recv`, a connect to an
@@ -1257,6 +1259,7 @@ def test_a_stop_signal_ends_the_feed_at_once_while_it_blocks(short_tmp_path, mon
     assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))   # the teardown ran
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.00 s serial)
 def test_a_stop_signal_during_the_teardown_leaves_no_endpoint_or_marker(short_tmp_path, monkeypatch):
     """A pump that returns without a stop (an error path) reaches run()'s teardown with the stop event
     unset; a SIGTERM arriving inside that teardown must not cut it short (an endpoint or a readiness
@@ -1288,6 +1291,7 @@ def test_a_stop_signal_during_the_teardown_leaves_no_endpoint_or_marker(short_tm
     assert not os.path.exists(os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json"))
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.00 s serial)
 def test_a_stop_signal_as_the_teardown_begins_is_ignored(short_tmp_path, monkeypatch):
     """A SIGTERM at the teardown's very first step (the stop event not yet set: the pump returned
     without a stop) must only set the event; outside a pump the handler never raises. Red before:
@@ -1322,6 +1326,7 @@ def test_a_stop_signal_as_the_teardown_begins_is_ignored(short_tmp_path, monkeyp
     assert not os.path.exists(os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json"))
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.09 of 1.10 s serial)
 def test_a_stop_signal_right_after_the_endpoint_appears_leaves_nothing(short_tmp_path):
     """The handler is in place before the endpoint is published, so a SIGTERM right after it appears
     ends in the teardown, not in Python's default exit. A separate process: the default action
@@ -1352,6 +1357,7 @@ def test_a_stop_signal_right_after_the_endpoint_appears_leaves_nothing(short_tmp
 
 
 @pytest.mark.parametrize("where", ["pump", "teardown"])
+@pytest.mark.slow                   # timed wait (CPU share 0.06 of 1.09 s serial)
 def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the_feed(short_tmp_path, where):
     """Python runs a signal handler on the main thread between two bytecodes, so it can land while that
     thread is inside the stop Event's own set/is_set/wait and holds its (non-reentrant) lock: in a pump's
@@ -1412,6 +1418,7 @@ def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the
     assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.00 s serial)
 def test_a_stop_signal_before_the_pump_starts_skips_the_pump(short_tmp_path, monkeypatch):
     """A SIGTERM during the setup (before a pump runs) only records the stop, so the pump must then not start:
     the pumps loop on the stop event, which the handler no longer sets. Red before: the pump ran."""
@@ -1446,6 +1453,7 @@ def test_a_stop_signal_before_the_pump_starts_skips_the_pump(short_tmp_path, mon
 
 @pytest.mark.wallclock("the late case holds the chmod before listen open on purpose; the deadlines are hang guards")
 @pytest.mark.parametrize("listen_delay_s", [0.0, 0.5])
+@pytest.mark.slow                   # timed wait (CPU share 0.01 of 1.51 s serial)
 def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, monkeypatch, listen_delay_s):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION
     (line-JSON on a Unix server socket), not a simulated GPS chip. The bridge must
@@ -1519,6 +1527,7 @@ def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, m
 
 
 @pytest.mark.wallclock("a real bridge serves the position socket; the deadline is a hang guard")
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.00 s serial)
 def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
     """A navigation sentence WITHOUT a usable fix must reach the consumer as
     {"fix": false} — silence would leave the old moving position advertised."""
@@ -1621,6 +1630,7 @@ def test_a_position_socket_publish_failing_after_the_rename_leaves_no_path(short
 
 @pytest.mark.wallclock("a real bridge serves the position socket; the deadline is a hang guard")
 @pytest.mark.parametrize("bad_lat", ["4875.000", "-1207.0", "487", "48nan"])
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.00 s serial)
 def test_a_malformed_coordinate_never_becomes_a_position(short_tmp_path, bad_lat):
     """A checksum-valid fix whose latitude field is malformed (minutes >= 60, signed, short,
     non-numeric) is dropped — never a different, plausible position or a `nan` record."""

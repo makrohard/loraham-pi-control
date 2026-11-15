@@ -2088,6 +2088,7 @@ def _calls(plan):
     return log.read_text().splitlines() if log.exists() else []
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.42 of 1.71 s serial)
 def test_a_timed_out_unit_file_listing_is_retried_and_the_run_goes_on(tmp_path):
     # Row 10 (L1, T): the listing is idempotent, so a "Connection timed out" is retried after the pause.
     plan = _plan(tmp_path, "timeout")
@@ -2097,6 +2098,7 @@ def test_a_timed_out_unit_file_listing_is_retried_and_the_run_goes_on(tmp_path):
     assert "Connection timed out" in r.stderr and "apt-get install" in apt
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.05 of 2.10 s serial)
 def test_a_listing_that_keeps_timing_out_fails_closed_after_the_last_attempt(tmp_path):
     # Row 10 (L1, T, every attempt used): exit 8 as today, the system untouched, the attempts named.
     plan = _plan(tmp_path, "timeout", "timeout", "timeout")
@@ -2115,6 +2117,7 @@ def test_a_refused_listing_fails_at_once_without_a_retry(tmp_path):
     assert "cannot inspect systemd unit files" in r.stderr and "apt-get install" not in apt
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.02 of 5.08 s serial)
 def test_a_listing_that_never_answers_is_ended_by_the_outer_bound(tmp_path):
     # Row 6 / 23 (H): `timeout` ends each attempt (124), counted as a timed-out attempt; the last one fails closed.
     plan = _plan(tmp_path, "hang", "hang")
@@ -2124,6 +2127,7 @@ def test_a_listing_that_never_answers_is_ended_by_the_outer_bound(tmp_path):
     assert "apt-get install" not in apt
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.03 of 2.06 s serial)
 def test_the_run_bound_stops_further_service_calls(tmp_path):
     # Row 24: the per-run bound accumulates measured call durations; reached = fail closed (exit 8 at L1).
     plan = _plan(tmp_path, "hang")
@@ -2185,12 +2189,14 @@ def _units_run(tmp_path, plan_lines, units="nginx.service", **env):
     return r, (log.read_text().splitlines() if log.exists() else [])
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.43 of 1.73 s serial)
 def test_row1_a_timed_out_disable_is_called_again_after_the_state_read(tmp_path):
     r, log = _units_run(tmp_path, ["disable timeout"])
     assert r.returncode == 0, r.stderr
     assert log == ["disable timeout"] and "disabled the system nginx.service" in r.stdout
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.20 of 1.23 s serial)
 def test_row2_a_disable_that_keeps_timing_out_fails_8_naming_the_calls(tmp_path):
     r, _log = _units_run(tmp_path, ["disable timeout"] * 2, SVC_RETRIES="2")
     assert r.returncode == 8
@@ -2203,12 +2209,14 @@ def test_row3_a_refused_disable_fails_8_at_once(tmp_path):
     assert "could not stop/disable the system nginx.service (Failed to disable unit: Access denied)" in r.stderr
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.45 of 1.79 s serial)
 def test_row4_a_timed_out_disable_that_took_effect_is_confirmed_by_the_read(tmp_path):
     r, log = _units_run(tmp_path, ["disable took"])
     assert r.returncode == 0, r.stderr
     assert log == ["disable took"] and "confirmed by a read after a call that timed out" in r.stdout
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.44 of 1.76 s serial)
 def test_row5_a_half_done_disable_is_called_again(tmp_path):
     r, log = _units_run(tmp_path, ["disable half"])
     assert r.returncode == 0, r.stderr
@@ -2223,12 +2231,14 @@ def test_row8_a_unit_that_vanished_is_absent_only_on_a_fresh_listing(tmp_path):
 
 
 @pytest.mark.parametrize("step", ["deny", "empty", "timeout"])
+@pytest.mark.slow                   # timed wait (CPU share 0.11 of 2.24 s serial)
 def test_row12_13_a_listing_that_fails_or_answers_nothing_is_not_absent(tmp_path, step):
     r, _log = _units_run(tmp_path, [f"list {step}"] * 3, SVC_RETRIES="3")
     assert r.returncode == 8, r.stdout + r.stderr
     assert "could not inspect systemd unit files" in r.stderr
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.48 of 1.89 s serial)
 def test_row12_a_timed_out_listing_is_retried(tmp_path):
     r, log = _units_run(tmp_path, ["list timeout"])
     assert r.returncode == 0, r.stderr
@@ -2242,6 +2252,7 @@ def test_row14_an_absent_unit_is_nothing_to_disable(tmp_path):
 
 
 @pytest.mark.parametrize("step", ["timeout", "deny", "empty"])
+@pytest.mark.slow                   # timed wait (CPU share 0.11 of 1.26 s serial)
 def test_row15_a_state_read_that_fails_is_never_already_disabled(tmp_path, step):
     r, _log = _units_run(tmp_path, [f"show {step}"] * 2, SVC_RETRIES="2")
     assert r.returncode == 8, r.stdout + r.stderr
@@ -2258,6 +2269,7 @@ def test_row15_a_state_read_that_fails_is_never_already_disabled(tmp_path, step)
     ("bad:inactive", 8, "cannot confirm the state of nginx.service"),
     ("enabled:frobbing", 8, "cannot confirm the state of nginx.service"),
 ])
+@pytest.mark.slow                   # timed wait (CPU share 0.22 of 1.26 s serial)
 def test_row16_each_state_value_decides_by_its_set(tmp_path, value, rc, said):
     r, _log = _units_run(tmp_path, [f"show value:{value}"] * 2, SVC_RETRIES="2")
     assert r.returncode == rc, r.stdout + r.stderr
@@ -2265,6 +2277,7 @@ def test_row16_each_state_value_decides_by_its_set(tmp_path, value, rc, said):
 
 
 @pytest.mark.parametrize("busy", ["activating", "deactivating"])
+@pytest.mark.slow                   # timed wait (CPU share 0.41 of 1.83 s serial)
 def test_row16_a_job_in_flight_is_read_again(tmp_path, busy):
     r, log = _units_run(tmp_path, [f"show value:enabled:{busy}"])
     assert r.returncode == 0, r.stderr
@@ -2290,6 +2303,7 @@ def test_row30_the_helpers_plumbing_on_meshtasticd_is_deferred_to_exit_12(tmp_pa
     assert r.stderr.rstrip().endswith("[bootstrap-deps] the service-call helper could not run (see above).")
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.49 of 1.90 s serial)
 def test_row9_the_meshtasticd_disable_keeps_its_deferred_exit_9(tmp_path):
     r, log = _units_run(tmp_path, ["disable ok", "disable timeout", "disable timeout"],
                         units="nginx.service meshtasticd.service", SVC_RETRIES="2")
@@ -2317,6 +2331,7 @@ def _ts_run(tmp_path, plan_lines, **kw):
     return _units_run(tmp_path, plan_lines, units="", **env, **kw)
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.39 of 1.65 s serial)
 def test_row18_a_timed_out_enable_is_called_again(tmp_path):
     r, log = _ts_run(tmp_path, ["enable timeout", "enable ok"])
     assert r.returncode == 0, r.stderr
@@ -2337,6 +2352,7 @@ def test_row18_28_the_helpers_plumbing_in_the_child_is_exit_12_at_the_end(tmp_pa
     assert "time source setup did NOT complete" not in r.stderr          # 12 never folds into the time source's 11
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.41 of 1.69 s serial)
 def test_row19_a_timed_out_restart_that_moved_past_the_baseline_is_done(tmp_path):
     r, log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
                                 "show@gpsd.service value:200:active", "restart@gpsd.service deny"])
@@ -2345,6 +2361,7 @@ def test_row19_a_timed_out_restart_that_moved_past_the_baseline_is_done(tmp_path
                    "show@gpsd.service value:200:active"]                  # done: no second call (the deny stays)
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.42 of 1.71 s serial)
 def test_row19_an_unmoved_timestamp_is_called_again(tmp_path):
     r, log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout",
                                 "show@gpsd.service value:100:active", "restart@gpsd.service ok"])
@@ -2352,6 +2369,7 @@ def test_row19_an_unmoved_timestamp_is_called_again(tmp_path):
     assert log[-1] == "restart@gpsd.service ok"
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.47 of 1.86 s serial)
 def test_row19_an_unknown_baseline_never_counts_as_moved(tmp_path):
     # after the timeout an active, "moved" state is on offer: with no accepted baseline it is never read as done; it
     # becomes the baseline, and the unit, not in a transition, is called again
@@ -2362,6 +2380,7 @@ def test_row19_an_unknown_baseline_never_counts_as_moved(tmp_path):
                    "restart@gpsd.service ok"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.26 of 2.70 s serial)
 def test_r18_b1_a_restart_in_progress_is_never_restarted_again(tmp_path):
     # G2-0.14.0-R18v3 B1: the start outlasts the call bound; the read after the timeout says activating, so no second
     # restart interrupts it (the deny would fail the step); the next read proves it done
@@ -2373,6 +2392,7 @@ def test_r18_b1_a_restart_in_progress_is_never_restarted_again(tmp_path):
                    "show@gpsd.service value:100:activating", "show@gpsd.service value:200:active"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.21 of 3.77 s serial)
 def test_r18_b1_an_unknown_baseline_still_reads_before_a_retry(tmp_path):
     # G2-0.14.0-R18v3 B1: the baseline read failed; the reads after the timeout are still made: an unknown state and a
     # transition withhold the call, the first accepted read becomes the baseline, and the move past it proves done
@@ -2399,6 +2419,7 @@ def test_r18_note_a_lost_stderr_read_stays_exit_12_never_a_refusal(tmp_path):
     assert "could not run in the time-source step (exit 12 at the end)" in r.stderr and "REFUSED" not in r.stderr
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.41 of 1.70 s serial)
 def test_row19_a_restart_that_keeps_timing_out_fails_the_time_source(tmp_path):
     r, _log = _ts_run(tmp_path, ["show@gpsd.service value:100:active", "restart@gpsd.service timeout"] * 2
                       + ["show@gpsd.service value:100:active"], env={"SVC_RETRIES": "2"})
@@ -2406,6 +2427,7 @@ def test_row19_a_restart_that_keeps_timing_out_fails_the_time_source(tmp_path):
     assert "systemd gave no answer to restart gpsd after 2 call(s)" in r.stderr
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.45 of 1.79 s serial)
 def test_row20_a_chrony_timeout_is_no_answer_never_refused(tmp_path):
     r, _log = _ts_run(tmp_path, ["show@chrony.service value:100:active", "restart@chrony.service timeout"] * 2
                       + ["show@chrony.service value:100:active"], env={"SVC_RETRIES": "2"})
@@ -2423,6 +2445,7 @@ def test_row28_plumbing_and_a_failed_time_source_report_both(tmp_path):
 
 # ---- DEC-W55 and G1-C8: a retry never adds load; the run's bound stops every further call; no pause after the last --
 
+@pytest.mark.slow                   # timed wait (CPU share 0.45 of 1.79 s serial)
 def test_dec_w55_a_half_done_disable_is_finished_by_a_stop_that_queues_no_reload(tmp_path):
     # lane run 11: each `disable` makes PID 1 reload (~29 s under TCG); the retry of a disable that took effect must not
     # queue another one. The fake counts one reload per disable and none per stop.
@@ -2433,6 +2456,7 @@ def test_dec_w55_a_half_done_disable_is_finished_by_a_stop_that_queues_no_reload
     assert (st / "reloads").read_text().splitlines() == ["nginx.service"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.07 of 3.21 s serial)
 def test_g1_c8_a_call_after_the_runs_bound_is_never_made(tmp_path):
     # the unit's listing answers but takes 5 s of the helper's clock (the fake advances SVC_UPTIME); with a 3 s run bound
     # no further call starts: the state read is refused, the state stays unknown, exit 8, no disable is called

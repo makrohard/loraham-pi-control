@@ -68,6 +68,7 @@ def test_connection_failure_is_unavailable():
     assert not r["ok"] and r["state"] == "unavailable" and r["error"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_an_unsupported_address_family_falls_through_to_the_next_address(fake_gpsd, monkeypatch):
     """`localhost` resolving to ::1 first on a box with IPv6 disabled: the IPv6 socket cannot even
     be created, and the IPv4 address after it must still be tried."""
@@ -93,11 +94,13 @@ def test_empty_devices_is_no_device_and_exits_early(fake_gpsd):
     assert r["ok"] and r["state"] == "no-device" and r["lat"] is None
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_device_listed_but_no_tpv_is_no_data_not_receiver(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _sky([_sat(1)]))
     assert r["state"] == "gpsd-no-data" and r["devices"] == ["/dev/ttyACM0"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_tpv_without_sky_is_a_fix_with_satellites_na(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(3, altMSL=120.5))
     assert r["state"] == "3d" and r["lat"] == 51.5 and r["sats_seen"] is None
@@ -162,16 +165,19 @@ def test_the_last_list_belongs_to_one_gpsd(fake_gpsd):
 
 # --- collecting for the whole budget, per device ---------------------------------------------
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_a_later_tpv_in_the_session_wins(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(1), _tpv(3))
     assert r["state"] == "3d"
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_losing_the_fix_clears_position_and_altitude(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(3, altMSL=10.0), _tpv(1))
     assert r["state"] == "no-fix" and r["lat"] is None and r["alt"] is None
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_mode_1_with_coordinates_renders_no_position(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(1, lat=51.5, lon=-0.12) if False else
               (json.dumps({"class": "TPV", "device": "/dev/ttyACM0", "mode": 1,
@@ -179,12 +185,14 @@ def test_mode_1_with_coordinates_renders_no_position(fake_gpsd):
     assert r["state"] == "no-fix" and r["lat"] is None
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_sky_from_another_device_never_joins_a_tpv(fake_gpsd):
     r = _snap(fake_gpsd, DEV_AB, _tpv(3, device="/dev/ttyACM0"),
               _sky([_sat(7)], device="/dev/ttyACM1"))
     assert r["state"] == "3d" and r["device"] == "/dev/ttyACM0" and r["satellites"] == []
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_two_tpv_devices_are_ambiguous_never_merged(fake_gpsd):
     r = _snap(fake_gpsd, DEV_AB, _tpv(3, device="/dev/ttyACM0"),
               _tpv(2, lat=1.0, lon=2.0, device="/dev/ttyACM1"))
@@ -192,6 +200,7 @@ def test_two_tpv_devices_are_ambiguous_never_merged(fake_gpsd):
     assert "/dev/ttyACM0" in r["note"] and "/dev/ttyACM1" in r["note"]
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_untagged_tpv_with_one_device_is_attributed(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(3, device=None))
     assert r["state"] == "3d" and r["device"] == "/dev/ttyACM0" and r["nmea_ok"]
@@ -206,6 +215,7 @@ def test_untagged_tpv_beside_several_devices_keeps_the_ambiguity(fake_gpsd):
     assert r2["state"] == "ambiguous"
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_non_gps_device_in_the_list_does_not_become_a_receiver(fake_gpsd):
     devs = (b'{"class":"DEVICES","devices":[{"path":"/dev/ttyACM0"},'
             b'{"path":"tcp://ais.example:1234","flags":4}]}\n')
@@ -224,6 +234,7 @@ def test_altitude_datum_order_and_legacy_fallback(fake_gpsd):
     assert r["alt"] == 1.0 and r["alt_kind"] == "msl"
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 2.40 s serial)
 def test_an_altitude_too_large_for_a_float_is_skipped_for_the_next_datum(fake_gpsd):
     # L24 F1, the class: a 401-digit JSON integer is not a finite number (math.isfinite raised).
     r = _snap(fake_gpsd, DEV_A, _tpv(3, altMSL=10 ** 400, altHAE=2.0))
@@ -232,6 +243,7 @@ def test_an_altitude_too_large_for_a_float_is_skipped_for_the_next_datum(fake_gp
     assert r["alt"] == 2.0 and r["alt_kind"] == "hae"
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_sky_counts_come_from_gpsd_when_present_and_bad_points_are_skipped(fake_gpsd):
     sats = [_sat(1), _sat(2, el=float("nan")) if False else {"PRN": 2, "el": "x", "az": 10, "ss": 5},
             {"PRN": 3, "el": 200, "az": 10, "ss": 5}, {"PRN": 4, "el": 10, "az": 370, "ss": -3},
@@ -244,11 +256,13 @@ def test_sky_counts_come_from_gpsd_when_present_and_bad_points_are_skipped(fake_
     assert by[5]["el"] is None and by[5]["used"] is False
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_out_of_range_coordinates_are_not_a_position(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, _tpv(3, lat=95.0, lon=10.0))
     assert r["state"] == "3d" and r["lat"] is None       # mode says fix; the value is unusable
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.50 s serial)
 def test_a_report_fragmented_across_reads_is_reassembled(fake_gpsd):
     big = _sky([_sat(i) for i in range(1, 200)])           # well above 4 KB
     assert len(big) > 4096
@@ -258,12 +272,14 @@ def test_a_report_fragmented_across_reads_is_reassembled(fake_gpsd):
     assert r["state"] == "3d" and r["sats_seen"] == 199
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_a_truncated_oversized_report_is_dropped_without_an_exception(fake_gpsd):
     junk = b'{"class":"SKY","device":"/dev/ttyACM0","satellites":[' + b'{"PRN":1},' * 3000
     r = _snap(fake_gpsd, DEV_A, _tpv(3), junk[:12000] + b"\n", _tpv(2))
     assert r["ok"] and r["state"] == "2d" and r["satellites"] == []
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.00 of 1.20 s serial)
 def test_malformed_json_lines_are_skipped(fake_gpsd):
     r = _snap(fake_gpsd, DEV_A, b'{"class":"TPV",,,\n', b"garbage\n", _tpv(3))
     assert r["state"] == "3d"

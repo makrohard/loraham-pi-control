@@ -49,6 +49,7 @@ def test_kiss_at_r1s_stop_takes_only_r1s_records_and_token(box, stops, rows):
     assert all("exclude_rids" not in kw for _cid, kw in stops)
 
 
+@pytest.mark.slow                   # timed wait (CPU share 0.29 of 1.75 s serial)
 def test_an_instance_restart_stops_and_starts_that_instance(box, stops):
     rc, out, launches = box((R1, R2_868, R3), ports=(8267,))("restart", "kiss@r3")
     assert [kw["rid"] for kw in _tnc(stops)] == ["r3"], (stops, out)

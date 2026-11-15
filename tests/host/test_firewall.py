@@ -2077,6 +2077,7 @@ def test_reset_interruption_recovers_forward(tmp_path):
 
 # --- FW logs + anchor ------------------------------------------------------------------------
 
+@pytest.mark.slow                   # timed wait (CPU share 0.10 of 2.79 s serial)
 def test_helper_appends_to_firewall_log(tmp_path):
     from lhpc.core import firewall_helper as fh
     run = str(tmp_path / "run")
