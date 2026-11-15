@@ -110,6 +110,7 @@ def _svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
+@pytest.mark.wallclock("a real sleeping child is the marker's live process; nothing is timed")
 def test_job_marker_reused_pid_not_active(tmp_path):
     svc = _svc(tmp_path)
     p = subprocess.Popen(["sleep", "30"])
@@ -128,6 +129,7 @@ def test_job_marker_reused_pid_not_active(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.wallclock("a real sleeping child is the job's live process; its /proc entry is polled, bounded at 1 s")
 def test_job_marker_matching_identity_is_active(tmp_path):
     svc = _svc(tmp_path)
     p = subprocess.Popen(["sleep", "30"])
@@ -173,13 +175,15 @@ def test_concurrent_post_launchers_are_unique(tmp_path, monkeypatch):
     assert all(os.path.exists(p) for p in captured)
 
 
+@pytest.mark.wallclock("a real sleeping child is the active job's process; its /proc entry is polled, bounded at 1 s")
 def test_prune_logs_bounds_count_and_protects_active(tmp_path):
     svc = _svc(tmp_path)
     svc.LOG_RETENTION = 5
     logs = svc._paths.under("logs"); logs.mkdir(parents=True)
     for i in range(20):
-        (logs / f"old-{i:02d}.log").write_text("x")
-        time.sleep(0.001)
+        old = logs / f"old-{i:02d}.log"
+        old.write_text("x")
+        os.utime(old, (1_700_000_000 + i, 1_700_000_000 + i))   # oldest first, each its own mtime
     # an "active" job whose log must never be pruned even though it's old
     keep = logs / "build-keep.log"; keep.write_text("evidence")
     p = subprocess.Popen(["sleep", "30"])

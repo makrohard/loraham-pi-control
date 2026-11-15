@@ -48,9 +48,10 @@ def _hold(root, key, secs):
     from lhpc.core import reslock as rl
     from lhpc.core.paths import Paths as P
     with rl.operation_lock(P(runtime_root=root), key, "build", "daemon"):
-        time.sleep(secs)
+        time.sleep(secs)  # wallclock: a real holder process keeps the lock while the test runs
 
 
+@pytest.mark.wallclock("a real holder process in its own interpreter; its claim is polled, bounded at 30 s")
 def test_dead_holder_lock_is_free(tmp_path):
     # A separate process holds the lock, then DIES -> the flock is auto-released by the
     # kernel, so a new acquisition succeeds (stale-lock recovery is intrinsic).
@@ -118,7 +119,7 @@ def _hold_lock_unpublished(root: str, key: str) -> None:
     lockfile = paths.under("state", "locks", reslock.canonical_key(key) + ".lock")
     fh = runtime_fs.open_lock(paths, lockfile)
     fcntl.flock(fh, fcntl.LOCK_EX)
-    _t.sleep(60)
+    _t.sleep(60)  # wallclock: a real holder process keeps the flock while the test runs
 
 
 def _lock_is_held(svc, key: str) -> bool:
@@ -288,14 +289,17 @@ def test_same_process_claim_retries_while_ownership_is_unpublished(tmp_path, mon
     assert contender.get("ok") is True, contender
 
 
-def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch):
+@pytest.mark.wallclock("a real holder process in its own interpreter; its flock is polled, bounded at 10 s (the "
+                       "admission wait itself is on the fake clock)")
+def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch, fake_clock):
     """An UNIDENTIFIABLE holder must not become a five-second stall: it is retried only for the
     short publication grace and then surfaces the typed ResourceBusy. Proven with a lock held by a
-    real external process whose owner record never appears."""
-    import contextlib, time
+    real external process whose owner record never appears. The admission's own wait is on the fake
+    clock: each of its polls advances it and never blocks, so `waited` is exactly what it waited."""
+    import contextlib, time, types
     import multiprocessing as mp
     import pytest as _pytest
-    from lhpc.core import reslock
+    from lhpc.core import reslock, service_admission
     svc = _svc(tmp_path)
     svc._SELF_LOCK_WAIT_S = 5.0
     key = "claim.loraham.daemon-socket.433"
@@ -309,11 +313,13 @@ def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch
             time.sleep(0.02)
         assert _lock_is_held(svc, key), "external holder never took the lock"
         assert reslock.read_owner(svc._paths, key) is None   # deliberately never published
-        started = time.monotonic()
+        monkeypatch.setattr(service_admission, "time", types.SimpleNamespace(
+            monotonic=fake_clock.monotonic, sleep=fake_clock.sleep, time=fake_clock.time))
+        started = fake_clock.monotonic()
         with _pytest.raises(reslock.ResourceBusy):
             with contextlib.ExitStack() as st:
                 svc._acquire_key(st, key, "start", "kiss")
-        waited = time.monotonic() - started
+        waited = fake_clock.monotonic() - started
         # bounded by the grace, nowhere near the same-process budget
         assert waited < svc._SELF_LOCK_WAIT_S / 2, f"waited {waited:.2f}s — grace not bounded"
     finally:
