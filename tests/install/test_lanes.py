@@ -247,7 +247,7 @@ def test_a_snapshot_tag_beside_a_release_only_name_does_not_hide_a_newer_tag(box
     assert box.head() == box.c[2]
 
 
-@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}'])   # a non-version name: NO_VERSION below
+@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}', '{"tag_name": ""}'])   # a non-version name: NO_VERSION
 def test_a_release_answer_without_a_usable_tag_name_is_not_verified(box, capsys, body):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v2.9.0", box.c[2])
