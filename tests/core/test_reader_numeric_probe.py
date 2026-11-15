@@ -7,7 +7,6 @@ tests/stacks/test_gps_marker_freshness.py); this file holds the whole matrix in 
 any measured cell fails here."""
 import json
 import os
-import time
 
 import pytest
 
@@ -36,8 +35,8 @@ def _with(base: dict, key: str, v) -> dict:
 
 
 @pytest.mark.parametrize("v", VALUES, ids=IDS)
-def test_gps_marker_freshness(v):
-    assert gps.marker_is_fresh(_with({}, "updated", v), time.time()) is False
+def test_gps_marker_freshness(v, fake_clock):
+    assert gps.marker_is_fresh(_with({}, "updated", v), fake_clock.time()) is False
 
 
 @pytest.mark.parametrize("v", VALUES, ids=IDS)

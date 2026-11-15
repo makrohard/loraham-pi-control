@@ -18,6 +18,8 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.validators import ValidationError
 
+CREATED_AT = 1_700_000_000.0  # a fixed marker stamp: restart_required only validates it, never against a clock
+
 
 def _svc(tmp_path):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
@@ -898,7 +900,7 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     # AUDIT-FOUND: the global setter merges markers; the local save path replaced blindly, so a
     # stronger BUILD requirement, its reason and its band were destroyed by an ordinary identity
     # save. One merge implementation now serves both writers.
-    import json, time
+    import json
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
@@ -907,7 +909,7 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "build",
                                 "params": ["firmware env"], "band": "433",
-                                "created_at": time.time()}))
+                                "created_at": CREATED_AT}))
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     m = svc.restart_required("chat")
@@ -921,7 +923,7 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     # config lock, so a marker committed in that window was overwritten and its reason lost. The
     # payload is now rendered INSIDE the transaction, the same merge-in-transaction contract the
     # stack/local renderers use.
-    import json, time
+    import json
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: True)   # K6: an instance is live by its own process
@@ -931,7 +933,7 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "stack": "chat@r1", "mode": "build",
                                 "params": ["callsign (inherited global)"], "band": "868",
-                                "created_at": time.time()}))
+                                "created_at": CREATED_AT}))
     merged = json.loads(svc.restart_marker_payload("chat", ["call"], "433"))
     assert merged["mode"] == "build", merged                       # the concurrent build survives
     assert merged["params"] == ["callsign (inherited global)", "call"], merged
@@ -997,7 +999,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     # AUDIT-FOUND: the marker compared the pre-save EFFECTIVE value against the RAW submitted one,
     # so clearing a licensed callsign that was already inherited — or that equalled the global —
     # demanded a restart although the running process still matches the resulting configuration.
-    import json, time
+    import json
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
@@ -1017,7 +1019,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     # D: an existing BUILD marker survives a genuine change, never downgraded
     restart_required.marker_path(svc._paths, "chat@r1").write_text(json.dumps(
         {"version": 1, "stack": "chat@r1", "mode": "build", "params": ["firmware env"],
-         "band": "433", "created_at": time.time()}))
+         "band": "433", "created_at": CREATED_AT}))
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-4"}).ok
     m = svc.restart_required("chat")
     assert m["mode"] == "build" and m["params"] == ["firmware env", "call"], m

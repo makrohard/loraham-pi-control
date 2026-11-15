@@ -181,16 +181,15 @@ def test_active_jobs_unchanged_stale_marker_removed(tmp_path):
 
 
 @pytest.mark.needs_session
-def test_active_jobs_live_marker_protects_its_log(tmp_path):
+def test_active_jobs_live_marker_protects_its_log(tmp_path, fake_clock):
     # a valid live identity-backed marker still protects its log from retention.
-    import time as _t
     svc = _svc(tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
     live_log = "build-loraham-daemon.log"
     (jobs / "live.job").write_text(_valid_job_marker(os.getpid(), log=live_log))
     (logs / live_log).write_text("live build\n")
-    now = _t.time()
+    now = fake_clock.time()                                    # mtimes only order the logs
     for i in range(svc.LOG_RETENTION + 10):                    # exceed retention budget
         f = logs / f"old-{i}.log"; f.write_text("x" * 20)
         os.utime(f, (now - 1000 - i, now - 1000 - i))

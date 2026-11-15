@@ -74,7 +74,7 @@ def test_run_job_announces_log_path_at_creation(tmp_path):
     assert seen[0][1] == res.log_path and Path(res.log_path).exists()   # announced == the file it wrote
 
 
-def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
+def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path, fake_clock):
     # `lhpc logs <comp>` (band-less) resolves to the NEWEST job log across start/build/test,
     # so it agrees with what a just-finished build wrote — never a stale unsuffixed sibling.
     import os
@@ -86,7 +86,7 @@ def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
     fresh = logs / "build-widget-1.log"
     stale.write_text("OLD single-step build\n")
     fresh.write_text("NEW multi-step build step 1\n")
-    old = time.time() - 100
+    old = fake_clock.time() - 100                                       # an mtime long before `fresh`'s
     os.utime(stale, (old, old))                                         # stale is older
     path, tail = life.logs(comp)
     assert path == str(fresh) and any("NEW multi-step" in ln for ln in tail)
@@ -385,14 +385,14 @@ def test_build_step_announce_bad_placeholder_is_typed_failure(tmp_path):
     assert not res.ok and "unresolved placeholder" in " ".join(res.tail)
 
 
-def test_logs_resolves_newest_post_and_adopt_logs(tmp_path):
+def test_logs_resolves_newest_post_and_adopt_logs(tmp_path, fake_clock):
     # Item B contract: `lhpc logs <comp>` resolves to the SAME newest file a `[log] … tail -f`
     # line announced — including a detached post runner's log and the adoption clone log.
     import os
     comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
     life = _life(FakeSystem().system, tmp_path)
     logs = life.logs_dir(); logs.mkdir(parents=True, exist_ok=True)
-    t = time.time()
+    t = fake_clock.time()                                       # mtimes only order the logs
     start = logs / "start-widget.log"; start.write_text("old start\n")
     post = logs / "post-widget-123-456.log"; post.write_text("retry window\n")
     adopt = logs / "adopt-widget.log"; adopt.write_text("clone progress\n")
