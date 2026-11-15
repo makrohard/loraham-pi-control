@@ -47,6 +47,7 @@ def test_the_clean_check_names_each_868_socket_spelling_in_a_touched_file(tmp_pa
     _clean(box, run)                                       # 433's own socket passes
 
 
+@pytest.mark.slow
 def test_a_stack_on_433_never_names_its_868_instance(kiss_box, run_op):
     """intended: the start, a save while running, and the stop of kiss on 433 touch only 433's
     or band-less state."""

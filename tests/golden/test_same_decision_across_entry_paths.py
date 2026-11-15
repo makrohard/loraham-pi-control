@@ -399,6 +399,7 @@ FAILED_AFTER_ADMISSION = {
     "boot": {"rc": 0, "journal": "failed", "items": ["failed"], "skipped": []}}
 
 
+@pytest.mark.slow
 def test_success(entry):
     """intended: a clean start succeeds on every path with the same files and the TNC live."""
     res = _all(entry, "start", "kiss")

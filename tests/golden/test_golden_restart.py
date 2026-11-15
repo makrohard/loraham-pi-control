@@ -81,6 +81,7 @@ def test_restart_a_running_stack(kiss_box, run_op):
     assert box.owned() == ["loraham-kiss-tnc"]
 
 
+@pytest.mark.slow
 def test_unverified_stop_aborts_before_any_start(kiss_box, run_op, monkeypatch):
     """intended: a stop that is not verified (the TNC really ignores SIGTERM and outlives the
     bounded wait) aborts the restart — nothing is spawned, the ownership record is retained and

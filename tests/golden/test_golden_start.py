@@ -177,6 +177,7 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
     assert box.owned() == []
 
 
+@pytest.mark.slow
 def test_an_error_after_the_launch_rolls_it_back(kiss_box, run_op, monkeypatch):
     """intended: an OSError escaping the launch after the TNC came up (finding 123) fails the
     start with the error as a row and rolls back what it launched — no process left running."""

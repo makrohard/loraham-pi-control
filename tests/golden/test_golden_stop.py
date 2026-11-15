@@ -40,6 +40,7 @@ def test_plan_is_read_only(kiss_box, run_op):
     assert plan.phases == [] and plan.files == {"added": [], "removed": [], "changed": []}
 
 
+@pytest.mark.slow
 def test_stop_a_running_stack(kiss_box, run_op):
     """intended: locks → verified SIGTERM → daemon band released → finalization; the ownership
     record goes, the operator's stop intent is written (K4b: no per-stack band marker exists)."""
@@ -97,6 +98,7 @@ def test_unowned_process_is_manual_required(kiss_box, run_op):
     assert run.files == {"added": [], "removed": [], "changed": []}
 
 
+@pytest.mark.slow
 def test_process_that_does_not_cease(kiss_box, run_op, monkeypatch):
     """intended: a TNC that really ignores SIGTERM is STILL_RUNNING after the bounded wait — no
     SIGKILL, the ownership record is retained, no stop intent, no

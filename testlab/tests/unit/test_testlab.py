@@ -968,6 +968,7 @@ def test_power_reboot_does_not_tombstone(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "stop-intent").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("admission", ["free", "held-by-the-console"])
 @pytest.mark.wallclock("real process groups die and another process holds the admission for a real 2 s")
 def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, monkeypatch,
