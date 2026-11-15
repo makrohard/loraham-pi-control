@@ -146,8 +146,8 @@ def test_a_main_gone_before_a_log_wait_records_it_as_never_run(tmp_path):
                                                              ("exec", "main-gone")], steps
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("before, outcome", [(100, "ready"), ((1 << 20) + 100, "timeout")])
+@pytest.mark.parametrize("before, outcome", [
+    (100, "ready"), pytest.param((1 << 20) + 100, "timeout", marks=pytest.mark.slow)])  # the timeout case waits
 def test_only_the_first_megabyte_of_a_log_is_read(tmp_path, before, outcome):
     link = tmp_path / "uart-latest.log"
     _boot(tmp_path, link, "uart-1.log", "x" * before + LINE + "y" * (1 << 20))
@@ -275,7 +275,6 @@ def test_meshcoms_callsign_step_waits_until_the_harness_has_verified_the_node(tm
     assert outcomes.get("provisioning verified") == "ready", outcomes
 
 
-@pytest.mark.slow                       # real waits of a few seconds
 @pytest.mark.wallclock("the real launcher's first console connect on a kept marker is measured")
 def test_a_normal_restart_with_its_marker_kept_probes_the_callsign_at_once(tmp_path):
     # G1-MCV-CODE NOTE: a restart keeps the marker (no provisioning): the wait passes on its first read and the

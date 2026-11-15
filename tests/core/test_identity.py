@@ -1026,7 +1026,6 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     m = svc.restart_required("chat")
     assert m["mode"] == "build" and m["params"] == ["firmware env", "call"], m
     assert m["band"] == "433", m
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch):
     # REVIEW-FOUND: a raced blank must not persist through the start panel. The panel takes no per-launch values any
     # more (a start runs the saved configuration), so nothing of this POST is saved; the in-transaction recheck that once

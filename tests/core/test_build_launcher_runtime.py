@@ -446,7 +446,6 @@ def _dead_or_zombie(pid: int) -> bool:
         return True
 
 
-@pytest.mark.slow
 @pytest.mark.wallclock("the rendered launcher kills a real step at its real 0.6 s timeout; the 10 s bound tells the "
                        "kill from the step's 60 s sleep")
 def test_build_launcher_step_timeout_kills_child_group(tmp_path):

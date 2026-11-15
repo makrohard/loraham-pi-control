@@ -70,8 +70,9 @@ def test_cap_controller_logs_missing_symlink_and_non_regular(tmp_path, small_cap
     os.mkfifo(logs / "nginx-error.log")
     out = svc.cap_controller_logs()
     assert out["lhpc-selfupdate.log"] == "absent"                 # a missing one is skipped
-    assert out["lhpc-web.log"].partition(": ")[0] == "error"     # a symlink is refused (status "error: <why>")
-    assert out["nginx-error.log"].partition(": ")[0] == "error"  # a FIFO is refused (status "error: <why>")
+    for name in ("lhpc-web.log", "nginx-error.log"):            # a symlink and a FIFO are refused
+        kind, sep, why = out[name].partition(": ")
+        assert (kind, sep) == ("error", ": ") and why, out[name]  # status "error: <why>", the why not empty
     assert target.stat().st_size > MAX                           # nothing followed the link
 
 

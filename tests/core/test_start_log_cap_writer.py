@@ -195,7 +195,6 @@ def test_start_log_descriptor_is_append_mode(paths):
         fh.close()
 
 
-@pytest.mark.slow
 @pytest.mark.wallclock("a real writer process appends while the cap truncates; that race over real time is the "
                        "point, bounded at 60 s")
 def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):

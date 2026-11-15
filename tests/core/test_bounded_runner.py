@@ -105,10 +105,23 @@ def _dead_or_zombie(pid: int) -> bool:
 
 
 def _ready_line(p, bound: float = 10.0) -> bytes:
-    """The next line of `p`'s stdout, or a loud failure when none is readable within `bound` (a child that died
-    before its marker, or hangs, must not block the test)."""
-    assert select.select([p.stdout], [], [], bound)[0], f"no line from the child within {bound} s"
-    return p.stdout.readline()
+    """The next complete line of `p`'s stdout, or a loud failure when the line is not complete within one overall
+    `bound` or the pipe ends first (a child that died before its marker, or hangs part-way, must not block the
+    test). One byte per read, so the next line stays in the pipe for the next call."""
+    fd = p.stdout.fileno()
+    os.set_blocking(fd, False)
+    deadline = time.monotonic() + bound  # wallclock: the bound on a real child's line
+    buf = b""
+    while True:
+        remaining = deadline - time.monotonic()  # wallclock: the bound on a real child's line
+        assert remaining > 0, f"no complete line from the child within {bound} s (got {buf!r})"
+        if not select.select([fd], [], [], remaining)[0]:
+            continue                                      # the bound ran out; the next pass fails loudly
+        chunk = os.read(fd, 1)
+        assert chunk, f"EOF from the child before a complete line (got {buf!r})"
+        buf += chunk
+        if chunk == b"\n":
+            return buf
 
 
 def _wait_ended(pid: int, bound: float = 5.0) -> None:
