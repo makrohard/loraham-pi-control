@@ -5,6 +5,7 @@ public recovery: an in-flight update record naming this live test process must k
 record stays. A pid that no longer exists is ceased whatever the start time says."""
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -48,7 +49,9 @@ def test_an_unreadable_stat_of_a_live_process_is_not_ceased(tmp_path, op_svc, mo
 
 def test_a_pid_that_no_longer_exists_is_ceased_whatever_the_start_time(tmp_path, op_svc):
     svc, _fake = op_svc(units=True, invocation=True)
-    (tmp_path / "state" / "selfupdate.inflight").write_text(json.dumps({"mode": "normal", "pid": 4194303}))
-    assert not os.path.exists("/proc/4194303")
+    dead = subprocess.Popen(["true"])
+    dead.wait()                                # a reaped child: its pid is dead for certain
+    (tmp_path / "state" / "selfupdate.inflight").write_text(json.dumps({"mode": "normal", "pid": dead.pid}))
+    assert not os.path.exists(f"/proc/{dead.pid}")
     res = svc.self_update_recover_request()
     assert res.ok and res.data.get("cleared") == "in_flight", (res.summary, res.data)

@@ -15,6 +15,7 @@ import re
 import json
 import os
 import socket
+import subprocess
 import threading
 import time
 
@@ -1153,7 +1154,9 @@ def test_a_marker_from_a_dead_feed_is_not_this_run(tmp_path):
     reads recent. The owning pid says whether that feed is still there."""
     svc = _svc(tmp_path)
     comp = _feed_comp(svc, "meshtastic", "meshtastic-gps")
-    _write_marker(tmp_path, "meshtastic", "ready", sentences=5, age=0, pid=999_999)
+    dead = subprocess.Popen(["true"])
+    dead.wait()                                # a reaped child: its pid is dead for certain
+    _write_marker(tmp_path, "meshtastic", "ready", sentences=5, age=0, pid=dead.pid)
     assert svc._gps_feed_ready(comp)[0] is False
 
 
@@ -1174,7 +1177,9 @@ def test_status_treats_an_expired_marker_as_degraded(tmp_path):
     # A feed killed right after its last refresh leaves a RECENT marker; the owning pid is
     # what still says the feed is gone. Status must agree with the start gate here, or the
     # console shows RUNNING for a feed nothing is driving.
-    _write_marker(tmp_path, "meshtastic", "ready", sentences=7, age=0, pid=999_999)
+    dead = subprocess.Popen(["true"])
+    dead.wait()                                # a reaped child: its pid is dead for certain
+    _write_marker(tmp_path, "meshtastic", "ready", sentences=7, age=0, pid=dead.pid)
     ok, note = prober._gps_feed_ready(comp)
     assert ok is False and "gone" in note
 
