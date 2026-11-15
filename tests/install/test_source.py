@@ -1349,34 +1349,8 @@ def test_update_refuses_a_changed_upstream_source(tmp_path, case, git, make_repo
     assert not inst._journal_path(dest).exists()
 
 
-@pytest.mark.parametrize("name, shapes, expected", [
-    # (upstream, its tag shapes, the release the rule must pick — "" means default-branch HEAD)
-    ("loraham-daemon", ["v0.4.0", "v112"], "v112"),         # a bare numeric version IS a version
-    ("kiss-tnc", ["v0.5.1"], "v0.5.1"),
-    ("reticulum", ["1.5.2", "1.8.2-pre"], "1.5.2"),         # a prerelease is not a release
-    ("meshcore-cli", ["v1.6.3", "v1.6.2"], "v1.6.3"),
-    # build-suffixed snapshots are NOT releases: no version tag -> default-branch HEAD
-    ("meshtastic", ["v2.7.26.54e0d8d", "v2.8.0.7239fe8"], ""),
-    ("meshcom-firmware", ["v4.35p.08.29", "v4.35s"], ""),
-    ("no-tags-at-all", [], ""),
-], ids=lambda v: v if isinstance(v, str) and not v.startswith("v") and "." not in v else None)
-def test_stable_resolves_the_real_manifest_tag_shapes(tmp_path, name, shapes, expected):
-    """The stable lane's one resolver (`stable_ref`, through `_frozen_ref`) over the tag shapes each pinned upstream
-    actually publishes, each tag ANNOTATED so the peeled commit is what must be selected. No release is read here
-    (the fake answers no API call): a build-suffixed tag counts only as a release (tests/install/test_lanes.py)."""
-    head_sha = "9" * 40
-    lines, peel = [], {}
-    for i, tag in enumerate(shapes):
-        tag_obj, peeled = f"{i:040x}", f"{i:039x}f"
-        peel[tag] = peeled
-        lines.append(f"{tag_obj}\trefs/tags/{tag}\n{peeled}\trefs/tags/{tag}^{{}}\n")
-    svc = _svc(tmp_path / "svc", {
-        ("git", "ls-remote", "--tags", DAEMON_REMOTE): CR(0, "".join(lines), ""),
-        ("git", "ls-remote", DAEMON_REMOTE, "HEAD"): CR(0, f"{head_sha}\tHEAD\n", "")})
-    comp_remote = svc.stack("daemon").component("loraham-daemon")
-    (fz, why) = svc._frozen_ref(comp_remote, "stable")
-    assert why == "", f"{name}: resolution failed: {why}"
-    assert fz[0] == (peel[expected] if expected else head_sha), f"{name}: picked {fz[0]!r}"
+# `test_stable_resolves_the_real_manifest_tag_shapes` moved to tests/install/test_lanes.py::test_the_real_manifest_tag_shapes_resolve_on_their_history
+# (MESHCOM-STABLE slice A: the stable target is read from the upstream's history, which a faked `ls-remote` lacks)
 
 
 @pytest.mark.parametrize("sel", ["pinned", "dev", "stable"])

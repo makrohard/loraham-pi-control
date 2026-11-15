@@ -1,17 +1,24 @@
-"""The Latest-stable lane (PLAN-UPDATE-v6 U1, D8): ONE target for install, update and the freshness check.
+"""The Latest-stable lane (PLAN-UPDATE-v6 U1, D8; MESHCOM-STABLE slice A): ONE target for install, update and the
+freshness check, decided by the upstream's HISTORY, never by comparing version numbers.
 
-Candidates: the remote's version-shaped tags (the WHOLE name an optional `v` and one to three dot-separated numbers:
-`v112`, `v1.2`, `1.5.2`) and, on a GitHub remote, the tag of its latest release (`releases/latest`: no drafts, no
-prereleases), so a build-suffixed tag (`v2.8.0.7239fe8`) counts only when the upstream published it as its
-release. They are compared by ONE strict parser (`version_of`); a tie goes to the plain tag. Neither: the
-default-branch HEAD. The result is VERIFIED when every applicable source was read (tags; on GitHub also the
-releases API, a 404 meaning "no release"); a failed call, a release without a parseable tag name, or one the tag list
-does not show (yet) leaves it DEGRADED.
-An update of an installed source runs only to a verified target that is not older than the installed commit: the
-highest version among ALL its tag names (`update_refusal`); a tag list that cannot be read refuses (fail closed).
+The history: one bare, treeless mirror per remote (`history_dir`), fetched on every resolve (commits and tag objects of
+all branches and tags, deleted refs pruned). A commit is PUBLISHED when a current branch or tag of the mirror reaches it;
+an object the mirror still holds after a force-push is not. Every ancestry answer is true, false or unknown (`_is`).
+
+Target (`resolve`): the release R (GitHub `releases/latest`, no drafts, no prereleases) when its name is a version, and
+the plain version-shaped tags (the WHOLE name an optional `v` and one to three numbers) in R's future; no release: every
+plain tag. The target is the candidate commit all others lead to; candidates that are not one line of history refuse
+by name. Tags in R's past or beside R's line are not successors of the release and never the target. No candidate:
+the default-branch HEAD. VERIFIED when every applicable source was read (the mirror; on GitHub also the releases API,
+a 404 meaning "no release"); a failed read, or a release the tags do not show (yet), leaves it DEGRADED.
+
+Move (`classify`): from the installed commit I to the target S only when I is published and an ancestor of S; S in I's
+past is "not newer"; anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
+(the user's choice) may go back, but only to a target the history places (`update_gate`).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import NamedTuple
@@ -23,36 +30,20 @@ _VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+){0,2})$|^v?(\d+\.\d+\.\d+)\.[0-9a-f]{
 _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)"
                                r"(?:\.git)?/?$")
 
-
-NO_VERSION = "publishes no version-shaped releases; use --source pinned or dev"   # a refusal no retry changes
+FINAL_HINT = "use --source pinned or dev"            # every refusal no retry changes ends with it (`is_final`)
+NO_VERSION = f"publishes no version-shaped releases; {FINAL_HINT}"
+TRY_LATER = "releases could not be checked — try again later"
 
 
 def is_final(why: str) -> bool:
-    """`why` (a `StableRef.why`, also through `frozen()`) is the final no-version refusal, not a read failure."""
-    return why.endswith(NO_VERSION)
-
-
-class StableRef(NamedTuple):
-    """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    upstream's tag names per commit, the target's own key (None = the default-branch HEAD), and whether `why` is final
-    (a retry cannot change it: the upstream publishes no version-shaped releases)."""
-    sha: str = ""
-    label: str = ""
-    verified: bool = False
-    why: str = ""
-    tags: dict | None = None
-    key: tuple | None = None
-    final: bool = False
-
-    def frozen(self) -> tuple:
-        """The plan's `((sha, label), "")`, or `((None, None), why)` when unresolved."""
-        return ((self.sha, self.label), "") if self.sha else ((None, None), self.why)
+    """`why` (a `StableRef.why`, also through `frozen()`) is a final refusal, not a read failure."""
+    return why.endswith(FINAL_HINT)
 
 
 def version_of(name):
     """THE version parser: `v?N[.N[.N]]`, or three numbers and a hex commit suffix, as an integer tuple without
     trailing zeros (`v1.2` = `v1.2.0`, `v2.8.0.7239fe8` and `v2.8.0.1234567` -> (2, 8)); None for anything else
-    (`v2.8.0.9`, `v99.0-dev`): a tag that does not parse fails closed."""
+    (`v2.8.0.9`, `v99.0-dev`). It decides which names are versions, and the label among names on ONE commit."""
     m = _VERSION_RE.match(name) if isinstance(name, str) else None
     if not m:
         return None
@@ -62,18 +53,74 @@ def version_of(name):
     return tuple(key)
 
 
-def stable_tag(names, release_tag: str = "") -> str:
-    """The newest version-shaped tag of `names` or `release_tag` (a candidate when it is one of `names` and has a
-    version), by `version_of`; on a tie the version-shaped tag. "" when there is no candidate."""
-    cands = [(version_of(n), 1, n) for n in names if STABLE_TAG_RE.match(n)]
-    if release_tag in names and version_of(release_tag) is not None:
-        cands.append((version_of(release_tag), 0, release_tag))
-    return max(cands)[2] if cands else ""
+class StableRef(NamedTuple):
+    """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
+    upstream's tag names per commit, the winning tag (`name`, "" = the default-branch HEAD) and the history mirror."""
+    sha: str = ""
+    label: str = ""
+    verified: bool = False
+    why: str = ""
+    tags: dict | None = None
+    name: str = ""
+    history: str = ""
+
+    @property
+    def key(self):
+        """The target's version (None = the default-branch HEAD)."""
+        return version_of(self.name) if self.name else None
+
+    def frozen(self) -> tuple:
+        """The plan's `((sha, label), "")`, or `((None, None), why)` when unresolved."""
+        return ((self.sha, self.label), "") if self.sha else ((None, None), self.why)
 
 
-def resolve(run, remote: str) -> StableRef:
-    """The stable target on `remote` (validated here first), through `run(argv, timeout=)`: `git ls-remote --tags`
-    (peeled commits), on GitHub ONE releases API call (curl, 10 s, no retry), else `git ls-remote <remote> HEAD`."""
+def history_dir(paths, remote: str):
+    """The remote's history mirror: `state/stable-history/<16 hex of sha256(remote)>.git` under the runtime root."""
+    return paths.under("state", "stable-history", hashlib.sha256(remote.encode()).hexdigest()[:16] + ".git")
+
+
+# Reads never fetch a missing object from the remote (a treeless mirror is a partial clone; git >= 2.44 honours this,
+# an older git fetches and fails, which reads as "could not tell" and refuses as well).
+_NO_LAZY = {"GIT_NO_LAZY_FETCH": "1"}
+
+
+def _git(run, mirror, *argv, timeout=10.0):
+    return run(["git", "-C", str(mirror), *argv], timeout=timeout, env=_NO_LAZY)
+
+
+def _fetch(run, mirror, remote: str) -> bool:
+    """Bring the mirror up to the remote: all branches and tags, deleted ones pruned, no trees or blobs; never shallow."""
+    if not (mirror / "HEAD").exists():
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        if run(["git", "init", "--quiet", "--bare", str(mirror)], timeout=10.0).returncode != 0:
+            return False
+    out = _git(run, mirror, "fetch", "--quiet", "--filter=tree:0", "--prune", "--prune-tags", "--no-write-fetch-head",
+               "--end-of-options", remote, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", timeout=120.0)
+    if out.returncode != 0:
+        return False
+    shallow = _git(run, mirror, "rev-parse", "--is-shallow-repository")
+    return shallow.returncode == 0 and shallow.stdout.strip() == "false"
+
+
+def _is(run, mirror, older: str, newer: str) -> bool | None:
+    """`older` is an ancestor of (or equal to) `newer` in the mirror: True, False, or None (could not tell)."""
+    return {0: True, 1: False}.get(_git(run, mirror, "merge-base", "--is-ancestor", older, newer).returncode)
+
+
+def _published(run, mirror, commit: str) -> bool | None:
+    """A current branch or tag of the mirror reaches `commit`: True, False (also: the mirror never saw it), or None
+    (could not tell). An object the mirror still holds after a force-push is NOT published: only refs count."""
+    have = _git(run, mirror, "cat-file", "-e", commit)      # 1: the mirror has no such object (a local commit)
+    if have.returncode != 0:
+        return False if have.returncode == 1 else None
+    out = _git(run, mirror, "for-each-ref", "--count=1", "--format=%(refname)", f"--contains={commit}",
+               "refs/heads", "refs/tags")
+    return bool(out.stdout.strip()) if out.returncode == 0 else None
+
+
+def resolve(run, remote: str, paths) -> StableRef:
+    """The stable target on `remote` (validated here first), through `run(argv, timeout=)`: the history mirror's fetch,
+    on GitHub ONE releases API call (curl, 10 s, no retry), and `git ls-remote <remote> HEAD` when no tag qualifies."""
     from . import validators
     try:
         remote = validators.remote_url(remote or "", field="remote")
@@ -81,16 +128,17 @@ def resolve(run, remote: str) -> StableRef:
         return StableRef(why=f"invalid remote ({exc})")
     if not remote:
         return StableRef(why="no remote configured")
-    out = run(["git", "ls-remote", "--tags", remote], timeout=15.0)
-    if out.returncode != 0:
+    mirror = history_dir(paths, remote)
+    if not _fetch(run, mirror, remote):
         return StableRef(why=f"could not list tags on {remote}")
-    plain, peeled = {}, {}
-    for line in (out.stdout or "").splitlines():
+    refs = _git(run, mirror, "for-each-ref", "refs/tags", "--format=%(refname:strip=2) %(objectname) %(*objectname)")
+    if refs.returncode != 0:
+        return StableRef(why=f"could not list tags on {remote}")
+    commits = {}
+    for line in (refs.stdout or "").splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[1].startswith("refs/tags/"):
-            name = parts[1][len("refs/tags/"):]
-            (peeled if name.endswith("^{}") else plain)[name.removesuffix("^{}")] = parts[0]
-    commits = {n: peeled.get(n, sha) for n, sha in plain.items()}
+        if len(parts) >= 2:
+            commits[parts[0]] = parts[-1]                    # an annotated tag: its peeled commit
     tags: dict = {}
     for n, sha in commits.items():
         tags.setdefault(sha, []).append(n)
@@ -105,94 +153,122 @@ def resolve(run, remote: str) -> StableRef:
                 tag = json.loads(body).get("tag_name")
             except (ValueError, AttributeError):
                 tag = None
-            if isinstance(tag, str) and tag and not version_of(tag):        # MeshCom's `v4.40a.11.14`: never verifiable
-                return StableRef(why=f"{gh[1]}/{gh[2]} {NO_VERSION}", final=True)
+            if isinstance(tag, str) and tag and not version_of(tag):        # MeshCom's `v4.40a.11.14`: plan B
+                return StableRef(why=f"{gh[1]}/{gh[2]} {NO_VERSION}")
             release = tag if version_of(tag) else ""
             verified = release in commits                         # unparseable, or not in the tag list yet: no answer
+            release = release if verified else ""
         elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
             verified = False
     note = "" if verified else " — releases not checked"
-    if name := stable_tag(commits, release):
-        sha = commits[name]
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", tags, version_of(name))
+    plain = [n for n in commits if STABLE_TAG_RE.match(n)]
+    if release:                                               # the release's line: R and the plain tags in its future
+        line = [release]
+        for n in plain:
+            if n != release:
+                if (fut := _is(run, mirror, commits[release], commits[n])) is None:
+                    return StableRef(why=f"could not read the history of {remote}")
+                if fut:
+                    line.append(n)
+    else:
+        line = plain
+    if line:
+        shas = sorted({commits[n] for n in line})
+        tip = []
+        for s in shas:
+            leads = [_is(run, mirror, o, s) for o in shas]
+            if None in leads:
+                return StableRef(why=f"could not read the history of {remote}")
+            if all(leads):
+                tip.append(s)
+        if not tip:
+            return StableRef(why=f"{remote}: its release and version tags are not one line of history; refused; "
+                                 f"{FINAL_HINT}")
+        sha = tip[0]
+        on_tip = [n for n in line if commits[n] == sha]
+        name = release if release in on_tip else max(on_tip, key=lambda n: (version_of(n), n))   # a label, one commit
+        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", tags, name, str(mirror))
     head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
     if head.returncode != 0 or not head.stdout.strip():
         return StableRef(why=f"could not resolve HEAD on {remote}")
     sha = head.stdout.split()[0]
-    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", tags)
+    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", tags, "",
+                     str(mirror))
 
 
-def local_tags(run, src) -> list | None:
-    """The tag names on the checkout's HEAD, kept from its clone (a tag the upstream deleted since still counts); None
-    when they cannot be read, never [] (that is "no tag")."""
-    out = run(["git", "-C", str(src), "tag", "--points-at", "HEAD"], timeout=5.0)
-    return out.stdout.split() if out.returncode == 0 else None
+def classify(run, installed: str, ref: StableRef) -> tuple[bool | None, str]:
+    """May the installed commit move to `ref`? `(older, why)`: older False = a forward move (or current), True = the
+    target is in the installed commit's past, None = refused (`why` names the reason, "" = a read failed)."""
+    if not installed or not ref.sha or not ref.history:
+        return None, ""
+    if installed == ref.sha:
+        return False, ""
+    from pathlib import Path
+    mirror = Path(ref.history)
+    pub = _published(run, mirror, installed)
+    if pub is None:
+        return None, ""
+    if not pub:
+        return None, f"the installed commit {installed[:9]} is not in the upstream's published history: refused"
+    fwd = _is(run, mirror, installed, ref.sha)
+    if fwd is None:
+        return None, ""
+    if fwd:
+        return False, ""
+    back = _is(run, mirror, ref.sha, installed)
+    if back is None:
+        return None, ""
+    if back:
+        return True, ""
+    return None, f"the installed commit is not in the history of the stable target ({ref.label}): refused"
 
 
-def is_older(ref: StableRef, installed: str, mine=(), forward=None) -> bool | None:
-    """The target is older than the installed commit: both versions known, the highest `version_of` among ALL the
-    installed commit's tag names (the upstream's and `mine`, `local_tags`) above the target's. A version missing on
-    either side: the COMMITS decide, offered (False) only when `forward()` says the installed commit is an ancestor of
-    the target (the plan's rule L6, a real forward move); proven not an ancestor: older (True). None (could not check):
-    the installed commit, its tags or the ancestry not read, or tags of which none parses (`v3.0-rc1` alone)."""
-    names = None if mine is None else [*(ref.tags or {}).get(installed, ()), *mine]
-    have = max(filter(None, map(version_of, names or ())), default=None)
-    if not installed or names is None or (names and have is None):
-        return None
-    if have is not None and ref.key is not None:
-        return ref.key < have
-    fwd = True if installed == ref.sha else forward() if forward else None
-    return None if fwd is None else not fwd
-
-
-def is_ancestor(run, src, older: str, newer: str, remote: str) -> bool | None:
-    """`older` is an ancestor of `newer` in the checkout at `src`, which fetches `newer` by its commit first when it lacks
-    it; None when it cannot be told."""
-    cmd = ["git", "-C", str(src), "merge-base", "--is-ancestor", older, newer]
-    r = run(cmd, timeout=10.0)
-    if r.returncode not in (0, 1) and run(["git", "-C", str(src), "fetch", "--quiet", "--no-tags", "--end-of-options",
-                                           remote, newer], timeout=60.0).returncode == 0:
-        r = run(cmd, timeout=10.0)
-    return {0: True, 1: False}.get(r.returncode)
-
-
-def assess(run, src, ref: StableRef, remote: str) -> tuple[str, bool | None]:
-    """The installed commit at `src` ("" when not read) and `is_older` for it: the one reading of the checkout the
-    update gate and the freshness check share."""
+def assess(run, src, ref: StableRef, remote: str = "") -> tuple[str, bool | None]:
+    """The installed commit at `src` ("" when not read) and `classify`'s `older` for it: the one reading of the checkout
+    the update gate and the freshness check share."""
     head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
     installed = (head.stdout or "").strip() if head.returncode == 0 else ""
-    return installed, is_older(ref, installed, local_tags(run, src),
-                               lambda: is_ancestor(run, src, installed, ref.sha, remote))
+    return installed, classify(run, installed, ref)[0]
 
 
 def update_gate(run, paths, items, source: str, remote_of):
     """An update's selector per source (`source`, or for a bare update "" each source's recorded one, none: pinned) and
-    U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan, refused the per-source refusal
-    lines. Within the stable lane no downgrade passes (`assess`); an explicit switch onto it (the source recorded
-    another lane) needs only a resolved, verified release version. The plan runs it without locks; the apply runs it ONCE, under its locks."""
+    U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan (per source path), refused the
+    per-source refusal lines. ONE target per remote: two paths that share a remote read it once. Within the stable lane
+    no move goes back or sideways (`classify`); an explicit switch onto it (the source recorded another lane) is the
+    user's choice and may go back, but only to a verified release target the history places. The plan runs it without
+    locks; the apply runs it ONCE, under its locks."""
     from . import source_fs, source_registry
     sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
-    refs, refused = {}, []
+    refs, by_remote, refused = {}, {}, []
     for _, c in items:
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
-            ref = refs[c.source.path] = refs.get(c.source.path) or resolve(run, remote_of(c))   # once per path
+            remote = remote_of(c)
+            ref = refs[c.source.path] = by_remote.get(remote) or by_remote.setdefault(remote, resolve(run, remote, paths))
+            head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+            installed = (head.stdout or "").strip() if head.returncode == 0 else ""
+            older, why = classify(run, installed, ref)
             if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
-                why = update_refusal(ref, "", False if ref.key is not None else None)   # a resolved release only
-            else:                                                                       # within the lane: no downgrade
-                why = update_refusal(ref, *assess(run, src, ref, remote_of(c)))
+                if older is not None and ref.key is None:                           # a resolved release only
+                    older = None
+                why = update_refusal(ref, installed, None if older is None else False, why)
+            else:                                                                   # within the lane: forward only
+                why = update_refusal(ref, installed, older, why)
             if why:
                 refused.append(f"  {c.id}: {why}")
     return sel, refs, refused
 
 
-def update_refusal(ref: StableRef, installed: str, older: bool | None) -> str:
-    """Why an installed source at `installed` (`assess`) may not move to `ref` ("" = it may)."""
-    if ref.final:
+def update_refusal(ref: StableRef, installed: str, older: bool | None, why: str = "") -> str:
+    """Why an installed source at `installed` may not move to `ref` ("" = it may); `older`/`why` from `classify`."""
+    if is_final(ref.why):
         return ref.why
     if not ref.sha or not ref.verified or older is None:
-        why = ref.why or ("" if older is not None else "the installed commit's version could not be read")
-        return "releases could not be checked — try again later" + (f" ({why})" if why else "")
+        if why:
+            return why
+        why = ref.why or ("" if older is not None else "the installed commit's history could not be read")
+        return TRY_LATER + (f" ({why})" if why else "")
     if older:
         return f"the stable target ({ref.label}) is not newer than the installed version: refused"
     return ""

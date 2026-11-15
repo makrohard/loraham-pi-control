@@ -118,7 +118,7 @@ class MaintenanceOpsMixin:
         run = self._system.runner.run
         rec = source_registry.read_record(self._paths, comp.source.path)
         if rec is not None and rec.selector == "stable" and not comp.source.artifact:
-            sref = stable_lane.resolve(run, remote)                 # U1: the lane's target, not the branch tip
+            sref = stable_lane.resolve(run, remote, self._paths)               # U1: the lane's target, not the branch tip
             if not (sref.sha and sref.verified):
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
             remote_sha = sref.sha
@@ -387,9 +387,9 @@ class MaintenanceOpsMixin:
 
     def _frozen_ref(self, comp, source: str) -> tuple:
         """Resolve ONE exact immutable commit for a dev/stable/artifact group at PLAN
-        time (bounded `git ls-remote`, no fetch, no mutation). Returns
-        ((sha, label), "") or ((None, None), typed-reason). Adoption receives the frozen
-        sha and performs NO second selector lookup."""
+        time (bounded `git ls-remote`; stable: the history mirror's fetch, no checkout
+        touched). Returns ((sha, label), "") or ((None, None), typed-reason). Adoption
+        receives the frozen sha and performs NO second selector lookup."""
 
         from . import validators
         spec = comp.source
@@ -412,7 +412,7 @@ class MaintenanceOpsMixin:
             label = ("declared artifact (default branch)" if spec.artifact
                      else f"development branch {ref}")
             return (sha, f"frozen: {label} @ {sha[:9]}"), ""
-        return stable_lane.resolve(run, remote).frozen()      # stable: the lane's one target (U1)
+        return stable_lane.resolve(run, remote, self._paths).frozen()    # stable: the lane's one target (U1)
 
     def _plan_source_groups(self, items, source: str, freeze: bool = False,
                             exact_pin: bool = False, stable_refs: dict | None = None) -> tuple:

@@ -1382,22 +1382,8 @@ def test_frozen_resolution_failure_refuses_before_mutation(tmp_path, monkeypatch
     assert not src.exists() or not any(src.iterdir())
 
 
-def test_stable_freeze_picks_version_tag_peeled_commit(tmp_path):
-    svc = _svc(tmp_path)
-    comp = next(c for s in svc.stacks() if s.id == "daemon"
-                for c in s.components if c.id == "loraham-daemon")
-    remote = svc.config().remotes.get(comp.id) or comp.source.remote
-    tag_sha, peel_sha, head_sha = "1" * 40, "2" * 40, "3" * 40
-    _ls_remote_fakes({("--tags", remote):
-                      f"{tag_sha}\trefs/tags/v1.2\n{peel_sha}\trefs/tags/v1.2^{{}}\n"
-                      f"{tag_sha}\trefs/tags/beta\n",
-                      (remote, "HEAD"): f"{head_sha}\tHEAD\n"})(svc)
-    (fz, why) = svc._frozen_ref(comp, "stable")
-    assert why == "" and fz[0] == peel_sha                       # peeled tag commit
-    _ls_remote_fakes({("--tags", remote): "",
-                      (remote, "HEAD"): f"{head_sha}\tHEAD\n"})(svc)
-    (fz2, _) = svc._frozen_ref(comp, "stable")
-    assert fz2[0] == head_sha                                    # no tags -> default HEAD
+# `test_stable_freeze_picks_version_tag_peeled_commit` moved to tests/install/test_lanes.py::test_the_real_manifest_tag_shapes_resolve_on_their_history
+# (MESHCOM-STABLE slice A: the stable target is read from the upstream's history, which a faked `ls-remote` lacks)
 
 
 # --- M2 round-5: exception-safe settlement + frozen identity on every adoption path ----------
