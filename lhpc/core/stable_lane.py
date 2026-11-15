@@ -5,7 +5,8 @@ Candidates: the remote's version-shaped tags (the WHOLE name an optional `v` and
 prereleases), so a build-suffixed tag (`v2.8.0.7239fe8`) counts only when the upstream published it as its
 release. They are compared by ONE strict parser (`version_of`); a tie goes to the plain tag. Neither: the
 default-branch HEAD. The result is VERIFIED when every applicable source was read (tags; on GitHub also the
-releases API, a 404 meaning "no release"); a failed call or a release without a parseable tag name leaves it DEGRADED.
+releases API, a 404 meaning "no release"); a failed call, a release without a parseable tag name, or one the tag list
+does not show (yet) leaves it DEGRADED.
 An update of an installed source runs only to a verified target that is not older than the installed commit: the
 highest version among ALL its tag names (`update_refusal`); a tag list that cannot be read refuses (fail closed).
 """
@@ -95,7 +96,7 @@ def resolve(run, remote: str) -> StableRef:
             except (ValueError, AttributeError):
                 tag = None
             release = tag if version_of(tag) else ""
-            verified = bool(release)                              # a 200 without a parseable tag_name: no answer
+            verified = release in commits                         # unparseable, or not in the tag list yet: no answer
         elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
             verified = False
     note = "" if verified else " — releases not checked"
@@ -163,7 +164,7 @@ def update_gate(run, paths, items, source: str, remote_of):
     for _, c in items:
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
-            ref = refs[c.source.path] = resolve(run, remote_of(c))
+            ref = refs[c.source.path] = refs.get(c.source.path) or resolve(run, remote_of(c))   # once per path
             if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
                 why = update_refusal(ref, "", False if ref.key is not None else None)   # a resolved release only
             else:                                                                       # within the lane: no downgrade

@@ -86,7 +86,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
     (rt / "config").mkdir(parents=True)
     manifest = tmp_path / "m.toml"
 
-    def use(remote, lib=False):
+    def use(remote, lib=False, lib_path=LIB):
         manifest.write_text(
             '[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
             '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
@@ -94,7 +94,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
             f'[stack.component.source]\npath = "{REL}"\nremote = "{remote}"\nbranch = "main"\n'
             f'pin_commit = "{c1}"\n'
             + ('[[stack.component]]\nid = "lib"\nname = "lib"\nkind = "library"\ntx_capable = false\n'
-               f'[stack.component.source]\npath = "{LIB}"\nremote = "{remote}"\nbranch = "main"\n'
+               f'[stack.component.source]\npath = "{lib_path}"\nremote = "{remote}"\nbranch = "main"\n'
                f'pin_commit = "{c1}"\n' if lib else ""))
     use(GH)
     svc = lambda: ControllerService(manifest_path=manifest, system=RealSystem(), paths=Paths(runtime_root=rt))  # noqa: E731
@@ -462,13 +462,13 @@ def test_a_target_without_a_version_is_offered_beside_a_tagged_install(box, git)
 
 # ---- gate 2 (G2-UPD-CODE): commits decide where a version is missing; the apply's one gate; commands ---------------
 
-def test_an_unlisted_release_with_an_older_head_target_refuses_the_downgrade(box, git, capsys):
+def test_an_older_head_target_refuses_the_downgrade(box, git, capsys):
     box.release = "v2.8.0.7239fe8"
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[1]                     # its tag v2.8.0.7239fe8 stays in the checkout
     git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
     git(box.work, "push", "-q", "-f", "origin", f"{box.c[0]}:main")      # the default branch moved back
-    box.release = "v4.0.0.abcdef4"                    # a release the tag list does not show
+    box.release = "404"                               # no release: the target is the default-branch HEAD (c1)
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to c1's parent
     out = capsys.readouterr().out                     # proven not forward: refused, not "try again later"
@@ -578,3 +578,28 @@ def test_a_switch_to_stable_without_a_release_version_is_refused(box, git, capsy
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0
     assert "could not be checked" in capsys.readouterr().out
     assert (box.head(), box.selector()) == (box.c[2], "dev")
+
+
+def test_a_release_the_tag_list_does_not_show_yet_is_not_verified(box, capsys):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                     # v2.7.0
+    box.push_tag("v2.9.0", box.c[2])
+    box.release = "v4.0.0.abcdef4"                    # published after the tag listing: not in it yet
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                   # RED before: behind, verified on v2.9.0
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: updated to v2.9.0
+    assert "releases could not be checked — try again later" in capsys.readouterr().out
+    assert box.head() == box.c[0]
+
+
+def test_one_source_path_is_resolved_once_per_gate(box):
+    from lhpc.core import stable_lane
+    box.use(GH, lib=True, lib_path=REL)               # two components share one checkout
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    svc = box.svc()
+    items = [(svc.stack("s"), c) for c in svc.stack("s").components]
+    box.api_calls.clear()
+    sel, refs, refused = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
+                                                 svc._effective_remote)
+    assert len(box.api_calls) == 1 and list(refs) == [REL] and refused == []   # RED before: 2 calls
