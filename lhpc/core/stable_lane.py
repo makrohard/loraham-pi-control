@@ -24,15 +24,25 @@ _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Z
                                r"(?:\.git)?/?$")
 
 
+NO_VERSION = "publishes no version-shaped releases; use --source pinned or dev"   # a refusal no retry changes
+
+
+def is_final(why: str) -> bool:
+    """`why` (a `StableRef.why`, also through `frozen()`) is the final no-version refusal, not a read failure."""
+    return why.endswith(NO_VERSION)
+
+
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    upstream's tag names per commit, the target's own key (None = the default-branch HEAD)."""
+    upstream's tag names per commit, the target's own key (None = the default-branch HEAD), and whether `why` is final
+    (a retry cannot change it: the upstream publishes no version-shaped releases)."""
     sha: str = ""
     label: str = ""
     verified: bool = False
     why: str = ""
     tags: dict | None = None
     key: tuple | None = None
+    final: bool = False
 
     def frozen(self) -> tuple:
         """The plan's `((sha, label), "")`, or `((None, None), why)` when unresolved."""
@@ -95,6 +105,8 @@ def resolve(run, remote: str) -> StableRef:
                 tag = json.loads(body).get("tag_name")
             except (ValueError, AttributeError):
                 tag = None
+            if isinstance(tag, str) and tag and not version_of(tag):        # MeshCom's `v4.40a.11.14`: never verifiable
+                return StableRef(why=f"{gh[1]}/{gh[2]} {NO_VERSION}", final=True)
             release = tag if version_of(tag) else ""
             verified = release in commits                         # unparseable, or not in the tag list yet: no answer
         elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
@@ -176,6 +188,8 @@ def update_gate(run, paths, items, source: str, remote_of):
 
 def update_refusal(ref: StableRef, installed: str, older: bool | None) -> str:
     """Why an installed source at `installed` (`assess`) may not move to `ref` ("" = it may)."""
+    if ref.final:
+        return ref.why
     if not ref.sha or not ref.verified or older is None:
         why = ref.why or ("" if older is not None else "the installed commit's version could not be read")
         return "releases could not be checked — try again later" + (f" ({why})" if why else "")

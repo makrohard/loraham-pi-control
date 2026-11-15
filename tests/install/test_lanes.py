@@ -247,7 +247,7 @@ def test_a_snapshot_tag_beside_a_release_only_name_does_not_hide_a_newer_tag(box
     assert box.head() == box.c[2]
 
 
-@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}', '{"tag_name": "release-3.0"}'])
+@pytest.mark.parametrize("body", ["{}", '{"tag_name": ["v3.0"]}'])   # a non-version name: NO_VERSION below
 def test_a_release_answer_without_a_usable_tag_name_is_not_verified(box, capsys, body):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v2.9.0", box.c[2])
@@ -603,3 +603,33 @@ def test_one_source_path_is_resolved_once_per_gate(box):
     sel, refs, refused = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
                                                  svc._effective_remote)
     assert len(box.api_calls) == 1 and list(refs) == [REL] and refused == []   # RED before: 2 calls
+
+
+# ---- a stable lane without version-shaped releases (MeshCom's `v4.40a.11.14`) ----------------------------------
+
+NO_VERSION = "up/app publishes no version-shaped releases; use --source pinned or dev"
+
+
+def test_a_stable_install_of_a_source_without_version_shaped_releases_is_refused(box, capsys):
+    box.release = "v4.40a.11.14"                      # the upstream's latest release does not parse
+    capsys.readouterr()
+    assert box.cli("install", "s", "--source", "stable", "--yes") != 0   # RED before: installed unverified
+    assert NO_VERSION in capsys.readouterr().out
+    assert not (box.dest / ".git").exists()
+
+
+def test_a_stable_update_of_a_source_without_version_shaped_releases_names_pinned_or_dev(box, capsys):
+    assert box.cli("install", "s", "--source", "pinned", "--yes") == 0
+    box.release = "v4.40a.11.14"
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    out = capsys.readouterr().out
+    assert NO_VERSION in out and "try again later" not in out   # RED before: "could not be checked — try again later"
+    assert (box.head(), box.selector()) == (box.c[0], "pinned")
+
+
+def test_control_a_release_less_source_still_installs_its_default_branch_head(box, git):
+    git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
+    box.release = "404"                               # no release at all: the default-branch HEAD (L6)
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]

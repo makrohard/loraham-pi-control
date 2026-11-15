@@ -488,7 +488,7 @@ class MaintenanceOpsMixin:
                     fb = self._kw_fallback_expected(st, comp)
                     if sel == "dev" and fb[0]:
                         resolved = fb
-                    elif freeze:         # unfrozen stable, remote unreadable: adoption's local fallback decides
+                    elif freeze or stable_lane.is_final(why):   # unfrozen, unreadable: the local fallback decides
                         conflicts.append(f"source {path!r}: exact {sel} resolution "
                                          f"failed — {why}")
                         continue
