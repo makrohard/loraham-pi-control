@@ -281,13 +281,42 @@ def test_a_broken_hardware_list_at_boot_keeps_the_evidence_for_a_boot_with_it_fi
     starts = []
     svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
     rec = _record(tmp_path, rid="r3", band="433", pid=999971, at=1000)
+    daemon = _record(tmp_path, rid="", band="433", pid=999972, at=999, stack="daemon", comp="loraham-daemon")   # no radio
     good = (tmp_path / "config" / "radios.toml").read_text()
     (tmp_path / "config" / "radios.toml").write_text("[[radio]\nnot toml")
     assert svc.boot_restore_run().ok
     assert starts == [] and f"{rec['launch_id']}.json" in _owned(tmp_path)    # skipped, its record kept
-    assert [(k, "hardware list is not valid" in r) for k, r in _skips(tmp_path)] == [("kiss@r3", True)]
+    assert f"{daemon['launch_id']}.json" in _owned(tmp_path)                   # an item on no radio is held too
+    skips = _skips(tmp_path)                                                   # kiss@r3, and the band daemon item
+    assert len(skips) == 2 and ("kiss@r3" in {k for k, _r in skips}) and all("hardware list is not valid" in r
+                                                                            for _k, r in skips), skips
 
     (tmp_path / "config" / "radios.toml").write_text(good)
     monkeypatch.setattr(sbr, "current_boot_id", lambda: "NEXTBOOT")
     assert svc.boot_restore_run().ok
-    assert starts == [("kiss", "433", "r3")], starts
+    assert sorted(starts, key=str) == [("daemon", "433", None), ("kiss", "433", "r3")], starts   # both, from the kept records
+
+
+@pytest.mark.no_default_hardware
+def test_no_hardware_list_at_boot_is_no_radios_and_retires_the_evidence(tmp_path, monkeypatch):
+    """An ABSENT radios.toml is lasting (no hardware list = no radios), unlike a broken one: the item on a radio is
+    refused as gone and its record retired. (Without the marker the suite supplies a default list.)"""
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT433, HAT868, USB433], starts)
+    rec = _record(tmp_path, rid="r3", band="433", pid=999981, at=1000)
+    (tmp_path / "config" / "radios.toml").unlink()
+    assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.ABSENT
+    assert svc.boot_restore_run().ok
+    assert starts == [] and _skips(tmp_path) == [("kiss@r3", "radio r3 no longer exists")]
+    assert f"{rec['launch_id']}.json" not in _owned(tmp_path)
+
+
+def test_a_boot_with_only_a_skipped_item_retires_its_record(tmp_path, monkeypatch):
+    """The box case: nothing to restore (the journal's no-plan path), one item skipped; its record is retired too."""
+    disabled = radios.Radio("r3", "rfm", "ch341-rfm98pw-433", "433", enabled=False, usb_serial="CHE1W433")
+    starts = []
+    svc = _service(tmp_path, monkeypatch, [HAT868, disabled], starts)
+    rec = _record(tmp_path, rid="r3", band="433", pid=999991, at=1000)
+    assert svc.boot_restore_run().ok
+    assert _journal(tmp_path)["state"] == "no-plan" and _skips(tmp_path) == [("kiss@r3", "radio r3 is disabled")]
+    assert starts == [] and f"{rec['launch_id']}.json" not in _owned(tmp_path)
