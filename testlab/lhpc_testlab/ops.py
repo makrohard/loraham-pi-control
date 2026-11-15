@@ -760,6 +760,7 @@ def _install_binary_stacks(svc, details: list) -> str:
             return f"install {sid} (binary): error ({exc})"
         details.append(f"  install {sid} (binary): {'ok' if r.ok else r.summary}")
         if not r.ok:
+            details.extend(r.details[:8])          # why, as the daemon install's failure shows it
             return f"install {sid} (binary): {r.summary}"
     return ""
 

@@ -1341,3 +1341,32 @@ def test_without_a_binary_channel_the_reset_skips_the_binary_stacks():
     details = []
     assert ops._install_binary_stacks(svc, details) == "" and calls == []
     assert sum("binary channel unavailable" in d for d in details) == 2
+
+
+def test_a_failed_binary_install_shows_its_own_details_in_the_reset_output(tmp_path, monkeypatch, capsys):
+    """F3: the reset's output carries the failed binary install's own details, as the daemon install's failure does
+    (only its summary reached the reset before, so a failed reset showed nothing of why). Through `lhpc-testlab
+    reset` in-process on a lab root; only the binary channel and its install are faked."""
+    from lhpc_testlab import cli
+    from lhpc_testlab.testing import stop_lab_fakes
+
+    from lhpc.core.service_base import ActionResult
+    make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    real_install = ControllerService.install
+
+    def install(self, sid, *a, **k):
+        if sid == "meshcom":
+            return ActionResult(False, "Binary install of 'meshcom' failed.",
+                                details=["  BINARY-STEP: the downloaded image failed its check"])
+        return real_install(self, sid, *a, **k)
+    monkeypatch.setattr(ControllerService, "install", install)
+    monkeypatch.setattr(ControllerService, "binary_available", lambda self, sid: (True, ""))
+    try:
+        rc = cli.main(["reset"])
+    finally:
+        stop_lab_fakes(tmp_path)
+    out = capsys.readouterr().out.splitlines()
+    assert rc == 1 and out[0] == ("Reset failed installing a binary stack: install meshcom (binary): "
+                                  "Binary install of 'meshcom' failed."), out
+    assert "  BINARY-STEP: the downloaded image failed its check" in out, out
