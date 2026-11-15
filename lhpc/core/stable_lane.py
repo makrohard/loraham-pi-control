@@ -1,7 +1,7 @@
 """The Latest-stable lane (PLAN-UPDATE-v6 U1, D8): ONE target for install, update and the freshness check.
 
-Candidates: the remote's version-shaped tags (the WHOLE name an optional `v` and dot-separated numbers: `v112`,
-`v1.2`, `1.5.2`) and, on a GitHub remote, the tag of its latest release (`releases/latest`: no drafts, no
+Candidates: the remote's version-shaped tags (the WHOLE name an optional `v` and one to three dot-separated numbers:
+`v112`, `v1.2`, `1.5.2`) and, on a GitHub remote, the tag of its latest release (`releases/latest`: no drafts, no
 prereleases), so a build-suffixed tag (`v2.8.0.7239fe8`) counts only when the upstream published it as its
 release. They are compared by ONE strict parser (`version_of`); a tie goes to the plain tag. Neither: the
 default-branch HEAD. The result is VERIFIED when every applicable source was read (tags; on GitHub also the
@@ -15,8 +15,9 @@ import json
 import re
 from typing import NamedTuple
 
-STABLE_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
-_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)(?:\.[0-9a-f]{7,40})?$")     # a version, optionally a commit suffix
+STABLE_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+){0,2})$")                        # major[.minor[.patch]]
+# A version: one to three numbers; after exactly three, a 4th dot part of 7-40 hex is the commit suffix, never a number.
+_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+){0,2})$|^v?(\d+\.\d+\.\d+)\.[0-9a-f]{7,40}$")
 # A GitHub remote (https or scp-style ssh): its owner and repository, for the releases API.
 _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)"
                                r"(?:\.git)?/?$")
@@ -38,12 +39,13 @@ class StableRef(NamedTuple):
 
 
 def version_of(name):
-    """THE version parser: `v?N(.N)*`, optionally a hex commit suffix, as an integer tuple without trailing zeros
-    (`v1.2` = `v1.2.0`, `v2.8.0.7239fe8` -> (2, 8), `v2.8.0.9` > `v2.8.0`); None for anything else (`v99.0-dev`)."""
+    """THE version parser: `v?N[.N[.N]]`, or three numbers and a hex commit suffix, as an integer tuple without
+    trailing zeros (`v1.2` = `v1.2.0`, `v2.8.0.7239fe8` and `v2.8.0.1234567` -> (2, 8)); None for anything else
+    (`v2.8.0.9`, `v99.0-dev`): a tag that does not parse fails closed."""
     m = _VERSION_RE.match(name) if isinstance(name, str) else None
     if not m:
         return None
-    key = [int(x) for x in m.group(1).split(".")]
+    key = [int(x) for x in (m.group(1) or m.group(2)).split(".")]
     while len(key) > 1 and key[-1] == 0:
         key.pop()
     return tuple(key)

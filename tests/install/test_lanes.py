@@ -176,7 +176,8 @@ def test_an_install_from_the_default_branch_head_is_offered_a_new_tag(box, git):
     (["v2.7.0", "v2.8.0.7239fe8"], "v2.8.0.7239fe8", "v2.8.0.7239fe8"),   # a newer release beats the plain tag
     (["v2.8.0", "v2.8.0.7239fe8"], "v2.8.0.7239fe8", "v2.8.0"),   # same leading version: the plain tag
     (["v1.2", "v1.1.9"], "", "v1.2"),                     # v1.2 = v1.2.0
-    (["v2.8.0", "v2.8.0.9"], "", "v2.8.0.9"),             # a fourth number is a version too
+    (["v2.8.0", "v2.8.0.9"], "", "v2.8.0"),               # a fourth part that is no commit suffix: no version
+    (["v2.8.0", "v2.8.0.1234567"], "", "v2.8.0"),         # an all-digit commit suffix: no plain tag
     (["v2.7.0", "release-2.8.0"], "release-2.8.0", "v2.7.0"),   # no leading version: not a candidate
     (["v2.7.0"], "v9.0", "v2.7.0"),                       # a release tag the remote does not list
     (["nightly", "1.8.2-pre"], "", ""),                   # no candidate: the default-branch HEAD
@@ -187,7 +188,8 @@ def test_the_stable_key_table(names, release, expected):
     assert stable_lane.version_of("v1.2") == stable_lane.version_of("v1.2.0") == (1, 2)
 
 
-@pytest.mark.parametrize("name, key", [("v2.8.0.7239fe8", (2, 8)), ("v2.8.0.9", (2, 8, 0, 9)), ("1.8.2-pre", None),
+@pytest.mark.parametrize("name, key", [("v2.8.0.7239fe8", (2, 8)), ("v2.8.0.9", None), ("v2.8.0.1234567", (2, 8)),
+                                       ("v2.8.7239fe8", None), ("v1.2.3.4.5", None), ("1.8.2-pre", None),
                                        ("v112", (112,)), ("release-2.8.0", None), ("v1.2.0", (1, 2)),
                                        ("v99.0-dev", None), (["v3.0"], None), (None, None)])
 def test_one_strict_version_parser(name, key):
@@ -286,3 +288,11 @@ def test_a_commit_with_only_unparseable_tags_refuses_a_stable_downgrade(box, cap
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
     assert "could not be checked — try again later" in capsys.readouterr().out
     assert box.head() == box.c[2]
+
+
+def test_an_all_digit_commit_suffix_is_no_version_number(box):
+    box.push_tag("v2.8.0.1234567", box.c[2])          # a build-suffixed snapshot, not published as the release
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                     # RED before: read as the plain version 2.8.0.1234567 (c3)
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE
