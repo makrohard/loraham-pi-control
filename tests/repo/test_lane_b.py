@@ -287,8 +287,9 @@ def _samplers_then_evidence(tmp_path, prelude):
         (work / f"{w}.state").write_text("none\n")
     # On exit the script waits for the shim's pid only when it launched a job: a launch is then known
     # for sure, and no launch is known for sure when there is no job.
+    wait_for_launch = f"until [ -s {launched} ]; do sleep 0.01; done"  # wallclock: waits for the real shim's launch
     script = f"""set -euo pipefail
-trap 'if [ -n "$(jobs -p)" ]; then until [ -s {launched} ]; do sleep 0.01; done; fi' EXIT  # wallclock: the EXIT trap waits for the real shim's launch
+trap 'if [ -n "$(jobs -p)" ]; then {wait_for_launch}; fi' EXIT
 . {LANE / "guest.sh"}
 g() {{ :; }}; gcp() {{ :; }}
 {prelude}
