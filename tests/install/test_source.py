@@ -4574,10 +4574,13 @@ def test_a_write_by_a_process_inside_the_prior_without_a_descriptor_is_never_los
         writer.wait(timeout=10)
 
 
+_FAKE_PID = 4194305     # above the kernel's pid_max (2**22): never this process, which `holders` skips
+
+
 def _fake_proc(tmp_path, uid, *, cwd="/"):
-    """A /proc with one other process (pid 4242) whose status names `uid`."""
+    """A /proc with one other process (pid `_FAKE_PID`) whose status names `uid`."""
     proc = tmp_path / "proc"
-    pdir = proc / "4242"
+    pdir = proc / str(_FAKE_PID)
     (pdir / "fd").mkdir(parents=True)
     (pdir / "status").write_text(f"Name:\tx\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
     (pdir / "maps").write_text("")
@@ -4653,16 +4656,16 @@ def test_a_working_directory_and_a_shared_mapping_inside_are_holders_a_private_o
     try:
         proc = _fake_proc(tmp_path, os.getuid(), cwd=str(tree / "q" / "sub"))
         assert source_fs.holders(fd, "q", proc=str(proc)) == [
-            "pid 4242 (working directory inside)"]
-        os.unlink(proc / "4242" / "cwd"); os.symlink("/", proc / "4242" / "cwd")
+            f"pid {_FAKE_PID} (working directory inside)"]
+        os.unlink(proc / str(_FAKE_PID) / "cwd"); os.symlink("/", proc / str(_FAKE_PID) / "cwd")
         mapped = tree / "q" / "log.txt"
-        (proc / "4242" / "maps").write_text(
+        (proc / str(_FAKE_PID) / "maps").write_text(
             f"7f00-7f01 rw-p 00000000 08:01 12 {mapped}\n")
         assert source_fs.holders(fd, "q", proc=str(proc)) == []
-        (proc / "4242" / "maps").write_text(
+        (proc / str(_FAKE_PID) / "maps").write_text(
             f"7f00-7f01 rw-s 00000000 08:01 12 {mapped} (deleted)\n")
         assert source_fs.holders(fd, "q", proc=str(proc)) == [
-            "pid 4242 (shared writable mapping)"]
+            f"pid {_FAKE_PID} (shared writable mapping)"]
     finally:
         os.close(fd)
 
