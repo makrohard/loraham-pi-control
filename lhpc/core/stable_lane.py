@@ -116,22 +116,46 @@ def local_tags(run, src) -> list | None:
     return out.stdout.split() if out.returncode == 0 else None
 
 
-def is_older(ref: StableRef, installed: str, mine=()) -> bool | None:
-    """The target is older than the installed commit's version, the highest `version_of` among ALL its tag names (the
-    upstream's and `mine`, `local_tags`); None when `mine` could not be read or no tag parses (`v3.0-rc1` alone). No
-    tag at all (a default-branch HEAD install), or a target without a version (the default-branch HEAD), is not older:
-    the plan's rule L6, the update is offered."""
+def is_older(ref: StableRef, installed: str, mine=(), forward=None) -> bool | None:
+    """The target is older than the installed commit: both versions known, the highest `version_of` among ALL the
+    installed commit's tag names (the upstream's and `mine`, `local_tags`) above the target's. A version missing on
+    either side: the COMMITS decide, offered (False) only when `forward()` says the installed commit is an ancestor of
+    the target (the plan's rule L6, a real forward move). None (could not check): the installed commit or its tags not
+    read, tags of which none parses (`v3.0-rc1` alone), or no forward move proven."""
     names = None if mine is None else [*(ref.tags or {}).get(installed, ()), *mine]
     have = max(filter(None, map(version_of, names or ())), default=None)
-    if names is None or (names and have is None):
+    if not installed or names is None or (names and have is None):
         return None
-    return have is not None and ref.key is not None and ref.key < have     # both known (a HEAD target: L6, offered)
+    if have is not None and ref.key is not None:
+        return ref.key < have
+    return False if installed == ref.sha or (forward and forward()) else None
+
+
+def is_ancestor(run, src, older: str, newer: str, remote: str) -> bool | None:
+    """`older` is an ancestor of `newer` in the checkout at `src`, which fetches `newer` by its commit first when it lacks
+    it; None when it cannot be told."""
+    cmd = ["git", "-C", str(src), "merge-base", "--is-ancestor", older, newer]
+    r = run(cmd, timeout=10.0)
+    if r.returncode not in (0, 1) and run(["git", "-C", str(src), "fetch", "--quiet", "--no-tags", "--end-of-options",
+                                           remote, newer], timeout=60.0).returncode == 0:
+        r = run(cmd, timeout=10.0)
+    return {0: True, 1: False}.get(r.returncode)
+
+
+def assess(run, src, ref: StableRef, remote: str) -> tuple[str, bool | None]:
+    """The installed commit at `src` ("" when not read) and `is_older` for it: the one reading of the checkout the
+    update gate and the freshness check share."""
+    head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+    installed = (head.stdout or "").strip() if head.returncode == 0 else ""
+    return installed, is_older(ref, installed, local_tags(run, src),
+                               lambda: is_ancestor(run, src, installed, ref.sha, remote))
 
 
 def update_gate(run, paths, items, source: str, remote_of):
     """An update's selector per source (`source`, or for a bare update "" each source's recorded one, none: pinned) and
     U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan, refused the per-source refusal
-    lines. The update runs it before its locks (the plan) and AGAIN under them (the apply: the authoritative read)."""
+    lines. Within the stable lane no downgrade passes (`assess`); an explicit switch onto it (the source recorded
+    another lane) needs only a resolved, verified release version. The plan runs it without locks; the apply runs it ONCE, under its locks."""
     from . import source_fs, source_registry
     sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
     refs, refused = {}, []
@@ -139,15 +163,17 @@ def update_gate(run, paths, items, source: str, remote_of):
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
             ref = refs[c.source.path] = resolve(run, remote_of(c))
-            head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-            if why := update_refusal(ref, (head.stdout or "").strip(), local_tags(run, src)):
+            if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
+                why = update_refusal(ref, "", False if ref.key is not None else None)   # a resolved release only
+            else:                                                                       # within the lane: no downgrade
+                why = update_refusal(ref, *assess(run, src, ref, remote_of(c)))
+            if why:
                 refused.append(f"  {c.id}: {why}")
     return sel, refs, refused
 
 
-def update_refusal(ref: StableRef, installed: str, mine=()) -> str:
-    """Why an installed source at `installed` may not move to `ref` ("" = it may)."""
-    older = is_older(ref, installed, mine)
+def update_refusal(ref: StableRef, installed: str, older: bool | None) -> str:
+    """Why an installed source at `installed` (`assess`) may not move to `ref` ("" = it may)."""
     if not ref.sha or not ref.verified or older is None:
         why = ref.why or ("" if older is not None else "the installed commit's version could not be read")
         return "releases could not be checked — try again later" + (f" ({why})" if why else "")

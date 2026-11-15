@@ -56,13 +56,19 @@ def box(tmp_path, git, make_repo, monkeypatch):
     class Box:
         release = "404"
         fail_local_tags = False
+        fail_head = False
         api_calls: list = []
+        git_calls: list = []
     b = Box()
     real_run = backends.RealCommandRunner.run
 
     def run(self, argv, timeout, cwd=None, env=None):
+        if argv[0] == "git":
+            b.git_calls.append(argv)
         if b.fail_local_tags and argv[:2] == ["git", "-C"] and argv[3:5] == ["tag", "--points-at"]:
             return CommandResult(128, "", "fatal: unable to read tags")
+        if b.fail_head and argv[:2] == ["git", "-C"] and argv[3:5] == ["rev-parse", "HEAD"]:
+            return CommandResult(128, "", "fatal: not a git repository")
         if argv[0] != "curl":
             return real_run(self, argv, timeout, cwd=cwd, env=env)
         b.api_calls.append(argv)
@@ -296,9 +302,12 @@ def test_an_unreadable_installed_tag_list_refuses_the_update(box, git, capsys):
     assert box.head() == box.c[2]
 
 
-def test_a_commit_with_only_unparseable_tags_refuses_a_stable_downgrade(box, capsys):
-    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+def test_a_commit_with_only_unparseable_tags_refuses_a_stable_downgrade(box, git, capsys):
+    box.push_tag("v3.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # within the stable lane (a switch is exempt)
     assert box.head() == box.c[2]
+    git(box.work, "push", "-q", "origin", "--delete", "v3.0")
+    git(box.dest, "tag", "-d", "v3.0")
     box.push_tag("v3.0-rc1", box.c[2])                # the installed commit's only tag does not parse
     box.push_tag("v2.9", box.c[1])
     box.release = "v2.9"
@@ -393,39 +402,39 @@ def test_a_source_without_a_valid_record_is_planned_on_the_pin_beside_a_dev_sour
 
 @pytest.mark.parametrize("release_then", ["404", "429"])
 def test_an_update_finishing_before_the_locks_is_seen_under_them(box, monkeypatch, capsys, release_then):
+    import contextlib
     import dataclasses
-
-    from lhpc.core import stable_lane
     box.use(GH, lib=True)
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
     tip = box.advance()
-    box.push_tag("v2.9.0", box.c[1])
-    real, real_update, applying = stable_lane.resolve, ControllerService.update, []
+    box.push_tag("v2.9.0", tip)
+    real_guard, real_update, applying = ControllerService._source_operation_guard, ControllerService.update, []
     paths = Paths(runtime_root=box.rt)
 
     def update(self, *a, **k):
         applying[:] = [k.get("apply", False)]
         return real_update(self, *a, **k)
 
-    def racing(run, remote):
-        """During the apply's first release check (before its locks), update B finishes: app recorded stable."""
-        ref = real(run, remote)
+    @contextlib.contextmanager
+    def guard(self, *a, **k):
+        """Update B finishes just before this apply takes its locks: app recorded stable."""
         if applying == [True] and source_registry.read_record(paths, REL).selector == "dev":
             source_registry.write_record(paths, dataclasses.replace(source_registry.read_record(paths, REL),
                                                                     selector="stable"))
             box.release = release_then
-        return ref
+        with real_guard(self, *a, **k):
+            yield
     monkeypatch.setattr(ControllerService, "update", update)
-    monkeypatch.setattr(stable_lane, "resolve", racing)
+    monkeypatch.setattr(ControllerService, "_source_operation_guard", guard)
     capsys.readouterr()
     rc = box.cli("update", "s", "--yes")
     if release_then == "404":                          # B's stable selection is kept and verified under the locks
-        assert rc == 0 and (box.head(), box.selector()) == (box.c[1], "stable")   # RED before: app back on dev (tip)
+        assert rc == 0 and (box.head(), box.selector()) == (tip, "stable")
     else:                                              # ... or its release check fails: refused, nothing changed
-        assert rc != 0 and "releases could not be checked" in capsys.readouterr().out   # RED before: app to dev
+        assert rc != 0 and "releases could not be checked" in capsys.readouterr().out
         assert (box.head(), box.selector()) == (box.c[2], "stable")
-    assert tip != box.head()
+    assert box.head(LIB) == (tip if release_then == "404" else box.c[0])
 
 def test_a_bare_update_keeps_a_stable_install_on_its_release(box):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
@@ -446,3 +455,108 @@ def test_a_target_without_a_version_is_offered_beside_a_tagged_install(box, git)
     assert box.status() == su.BEHIND                  # RED before: read as current (a HEAD target "older")
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: refused as older
     assert box.head() == tip
+
+
+# ---- gate 2 (G2-UPD-CODE): commits decide where a version is missing; the apply's one gate; commands ---------------
+
+def test_an_unlisted_release_with_an_older_head_target_refuses_the_downgrade(box, git, capsys):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]                     # its tag v2.8.0.7239fe8 stays in the checkout
+    git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
+    git(box.work, "push", "-q", "-f", "origin", f"{box.c[0]}:main")      # the default branch moved back
+    box.release = "v4.0.0.abcdef4"                    # a release the tag list does not show
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to c1's parent
+    assert "could not be checked" in capsys.readouterr().out
+    assert box.head() == box.c[1]
+
+
+def test_a_failed_head_read_refuses_the_update(box, git, capsys):
+    box.push_tag("v3.0.0.abcdef3", box.c[2])
+    box.release = "v3.0.0.abcdef3"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+    git(box.dest, "tag", "-d", "v3.0.0.abcdef3")      # only the upstream still names the installed version
+    box.push_tag("v2.9", box.c[1])
+    box.release = "v2.9"
+    box.fail_head = True
+    box.git_calls.clear()
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
+    assert "could not be checked" in capsys.readouterr().out
+    assert not [a for a in box.git_calls if "merge-base" in a or "fetch" in a]   # refused before any comparison
+    box.fail_head = False
+    assert box.head() == box.c[2]
+
+
+def test_the_apply_reads_each_release_once_and_under_its_locks(box, monkeypatch):
+    import contextlib
+
+    from lhpc.core import stable_lane
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    real_guard, real_resolve, real_update = (ControllerService._source_operation_guard, stable_lane.resolve,
+                                            ControllerService.update)
+    state, reads = {"apply": False, "locked": False}, []
+
+    @contextlib.contextmanager
+    def guard(self, *a, **k):
+        with real_guard(self, *a, **k):
+            state["locked"] = True
+            try:
+                yield
+            finally:
+                state["locked"] = False
+
+    def update(self, *a, **k):
+        state["apply"] = k.get("apply", False)
+        return real_update(self, *a, **k)
+
+    def resolve(run, remote):
+        if state["apply"]:
+            reads.append(state["locked"])
+        return real_resolve(run, remote)
+    monkeypatch.setattr(ControllerService, "_source_operation_guard", guard)
+    monkeypatch.setattr(ControllerService, "update", update)
+    monkeypatch.setattr(stable_lane, "resolve", resolve)
+    assert box.cli("update", "s", "--yes") == 0
+    assert reads == [True]                            # RED before: [False, True] (a gate before the locks too)
+    assert box.head() == box.c[2]
+
+
+def test_a_suggested_command_keeps_an_explicit_pinned_source(box, monkeypatch, capsys):
+    from lhpc.core import reslock
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "pinned") == 0       # the plan
+    assert "lhpc update s --source pinned --yes" in capsys.readouterr().out   # RED before: lhpc update s --yes
+
+    def busy(self, *a, **k):
+        raise reslock.ResourceBusy("source:src/app", {"operation": "update", "target": "s", "pid": 1})
+    monkeypatch.setattr(ControllerService, "_source_operation_guard", busy)
+    assert box.cli("update", "s", "--source", "pinned", "--yes") != 0
+    assert "lhpc update s --source pinned --yes" in capsys.readouterr().out   # RED before: lhpc update s --yes
+
+
+def test_a_selector_less_run_action_update_keeps_the_installed_lane(box):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    tip = box.advance()
+    assert box.svc().run_action("update", "s", apply=True).ok
+    assert (box.head(), box.selector()) == (tip, "dev")        # RED before: moved to the pin (c1)
+
+
+def test_an_explicit_switch_from_dev_to_stable_moves_back_to_the_release(box):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2]                     # the dev tip, ahead of v2.7.0 and without a version
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # control: a switch is the user's choice
+    assert (box.head(), box.selector()) == (box.c[0], "stable")
+
+
+def test_a_switch_to_stable_without_a_release_version_is_refused(box, git, capsys):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")   # no version upstream at all
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    assert "could not be checked" in capsys.readouterr().out
+    assert (box.head(), box.selector()) == (box.c[2], "dev")

@@ -3137,10 +3137,11 @@ class LifecycleOpsMixin:
         return out
 
     @invalidates_snapshot
-    def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
+    def run_action(self, op: str, target: str, apply: bool = False, source: str | None = None,
                    stop_owners: bool = False, cascade: bool = False,
                    band: str = "", purge: bool = False, inst=None) -> ActionResult:
-        """Dispatch a named action to its service method (plan when apply=False)."""
+        """Dispatch a named action (plan when apply=False); no source: an update keeps the lane (""), an install `pinned`."""
+        source = ("" if op == "update" else "pinned") if source is None else source
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.CHANNEL_CHOICES and (op, source) != ("update", ""):
             return ActionResult(False, f"Invalid source '{source}' (choose "

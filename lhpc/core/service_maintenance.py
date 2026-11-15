@@ -134,7 +134,7 @@ class MaintenanceOpsMixin:
         want = sref.sha if sref else stackupdates.pinned_target(
             self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        older = local_sha != want and sref is not None and stable_lane.is_older(sref, local_sha, stable_lane.local_tags(run, src))
+        older = local_sha != want and sref is not None and stable_lane.assess(run, src, sref, remote)[1]
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
@@ -1760,9 +1760,9 @@ class MaintenanceOpsMixin:
 
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
-               source: str = "pinned", auto_install_ctx=None,
+               source: str = "", auto_install_ctx=None,
                exact_pin: bool = False, build: bool = True) -> ActionResult:
-        """Refresh the managed source(s) from the remote (version per `source`:
+        """Refresh the managed source(s) from the remote (version per `source`, "" = each source's recorded one:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
         manifest-pin) identity, disclosed. A stack (or "all") updates its required sources,
         its hard build dependencies, and the optional components that are INSTALLED; an
@@ -1843,15 +1843,17 @@ class MaintenanceOpsMixin:
                                 details=["  nothing to run here — this is an lhpc defect (the "
                                          "auto-install run's lock context does not match), not a "
                                          "problem on the box; report it with this message"])
-        # U1 + U2: each source's selector and the stable gate on it (`stable_lane.update_gate`); the apply reads them
-        # again under its locks, so another update finishing in between is seen.
+        # U1 + U2: the selectors and the stable gate (`stable_lane.update_gate`): the plan reads them, the apply ONCE locked.
         def gate():
-            return stable_lane.update_gate(self._system.runner.run, self._paths, items, source, self._effective_remote)
-        sel, stable_refs, refused = gate()
-        if refused:
-            return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",
-                                details=refused, next_commands=[f"lhpc source-check {target}".strip()])
+            sel, refs, refused = stable_lane.update_gate(self._system.runner.run, self._paths, items, source, self._effective_remote)
+            return sel, refs, refused and ActionResult(
+                False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.", details=refused,
+                next_commands=[f"lhpc source-check {target}".strip()])
+        _src = f"--source {source} " if source else ""          # an explicit selector stays in every command
         if not apply:
+            sel, stable_refs, refusal = gate()
+            if refusal:
+                return refusal
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
             # routes never do this — they show "unknown" until this is run.
@@ -1863,7 +1865,7 @@ class MaintenanceOpsMixin:
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",
                 details=details,
-                next_commands=[f"lhpc update {target} --yes"] if items else [],
+                next_commands=[f"lhpc update {target} {_src}--yes"] if items else [],
                 data={"changes": len(items)})
         # HARD GATE: an update swaps source trees on disk, so it requires the affected stacks
         # STOPPED — the target's components AND every other consumer of an affected SHARED
@@ -1912,10 +1914,9 @@ class MaintenanceOpsMixin:
                         f"update '{target or 'all'}'",
                         {cid for p in affected for cid in self._source_consumers().get(p, ())})):
                     return _mp
-                sel, stable_refs, refused = gate()          # AUTHORITATIVE: the selectors and the gate, under the locks
-                if refused:
-                    return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",
-                                        details=refused, next_commands=[f"lhpc source-check {target}".strip()])
+                sel, stable_refs, refusal = gate()          # the apply's ONE read of selectors and gate, under the locks
+                if refusal:
+                    return refusal
                 # ONE effective remote per shared checkout + ONE immutable plan — both
                 # built UNDER the configuration-stable and source locks (a concurrent
                 # remote save waits; the plan can never use a stale config snapshot).
@@ -1981,13 +1982,11 @@ class MaintenanceOpsMixin:
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
                                 details=[TXN_BLOCKED_REMEDY],
-                                next_commands=[f"lhpc update {target + ' ' if target else ''}"
-                                               f"{'' if source in ('pinned', '') else f'--source {source} '}--yes"])
+                                next_commands=[f"lhpc update {target + ' ' if target else ''}{_src}--yes"])
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {busy}",
                                 details=[busy_remedy(busy)],
-                                next_commands=[f"lhpc update {target + ' ' if target else ''}"
-                                               f"{'' if source in ('pinned', '') else f'--source {source} '}--yes"])
+                                next_commands=[f"lhpc update {target + ' ' if target else ''}{_src}--yes"])
         needs_build = []
         # Every activated source of a public update is checked, also when another part failed
         # (auto-install builds itself; the binary channel's exact-pin repin builds nothing): the
