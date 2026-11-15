@@ -287,7 +287,7 @@ in full, the line links to it. The mark after a rule says what enforces it:
   ([testlab](../docs/testlab.md#running-the-verification-lanes)).
 - **G4** Chromium only for the browser lane: never to run `tests/`, never on a release box.
 - **G5** On one machine the unit suite and the acceptance, browser and lab lanes run one after the other, never
-  side by side (one lock file for all of them).
+  side by side.
 - **G6** Every full, acceptance, browser or lab run keeps its whole output in a log file of that run, not only
   its tail.
 - **G7** CI on the candidate's own commit is the authority; local runs serve the red-before and focused checks.
