@@ -148,7 +148,7 @@ All markers are declared in `pyproject.toml`; `--strict-markers` rejects a typo.
   `time.sleep`, a `sleep N` child or fake-script body); everything else takes the `fake_clock` fixture of
   `conftest.py`. The checker refuses an unmarked one; a line outside any test carries `# wallclock: <reason>`.
 - `slow` marks the real-venv builds, the timed loops and the timed waits (a test that spends less than half its
-  wall time on CPU).
+  wall time on CPU and runs at least 1.0 s on a serial run).
 - `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
   `no_default_display` state an environmental requirement or opt-out; `needs_git_checkout` skips in a
   source export and fails under CI (`CI` set).
@@ -231,6 +231,12 @@ in full, the line links to it. The mark after a rule says what enforces it:
 - **C8** An unhandled exception in a test's thread fails the test (`pyproject.toml`). **test**
 - **C9** An AF_UNIX socket path comes from `short_tmp_path` or a short basetemp; the suite also passes with a
   long basetemp.
+- **C10** A flake is fixed at its mechanism, never with a longer timeout.
+- **C11** A changed wait bound never reaches a product timer that gets to a state its assert accepts by time
+  alone; change only the bound the mechanism needs.
+- **C12** A fake pid that the code under test compares with `os.getpid()` (or the parent's pid) lies above
+  `pid_max`.
+- **C13** A "dead" pid is a spawned and reaped child, not a constant.
 
 ### D. Isolation
 
@@ -265,7 +271,8 @@ in full, the line links to it. The mark after a rule says what enforces it:
 
 - **F1** Every marker is declared in `pyproject.toml`; `--strict-markers` rejects a typo. **test**
 - **F2** `contract` and `safety(id)` as defined in [Markers](#markers).
-- **F3** `slow` marks a test that spends less than half its wall time on CPU; `-m 'not slow'` excludes it.
+- **F3** `slow` marks a test whose CPU share is below 0.5 and whose serial wall time is at least 1.0 s;
+  `-m 'not slow'` excludes it.
   **CI WARN** for a new test that builds a venv, runs `pip install` or loops on `monotonic` without it
 - **F4** `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
   `no_default_display` state an environment need or an opt-out.
