@@ -91,6 +91,14 @@ def ensure_rf_dir(svc, rid: str) -> str:
     return "" if rflog.radio_dir_state(svc._paths, job) == rflog.PRESENT else f"{rid}: logs/{rid} is not usable"
 
 
+def meshtastic_trace(svc, runtime: str, on: bool, rid: str) -> tuple:
+    """`(TraceFile, refusal)` for meshtasticd's config (rflog.meshtastic_trace_file). meshtasticd opens the trace at
+    start and crashes when logs/<rid>/ is missing (a radio whose daemon never ran), so a path that names an instance's
+    directory gets it made first, as the daemon start does (ensure_rf_dir); its refusal is the second value."""
+    path = rflog.meshtastic_trace_file(runtime, on, rid)
+    return path, (ensure_rf_dir(svc, rid) if path and rid else "")
+
+
 NO_LIST_TEXT = "No hardware list: run lhpc hardware <setup> (until then no stack has an instance on a radio)"
 
 
