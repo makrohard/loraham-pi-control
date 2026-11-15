@@ -3815,8 +3815,17 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   # `process` match below sees the client, not a wrapper). It lives in the `rns` component's
   # venv and is not on PATH.
   run = "{runtime}/src/reticulum/.venv/bin/loraham-rns-client --configdir {runtime}/state/reticulum --wait 10 -- .venv/bin/python meshchat.py --headless --host 127.0.0.1 --port 8790 --storage-dir {runtime}/state/meshchat --reticulum-config-dir {runtime}/state/reticulum"
-  note = "Browser GUI via the LHPC web proxy — enable the proxy for the reticulum stack on the Webserver page. It attaches to the Reticulum instance owned by `rns`; interface and transport settings are LHPC-owned and its routes for them are refused by the proxy."
+  note = "Browser GUI via the LHPC web proxy — enable the proxy for the reticulum stack on the Webserver page. It attaches to the Reticulum instance owned by `rns`; interface and transport settings are LHPC-owned and its routes for them are refused by the proxy. LHPC announces MeshChat once at every start (its Announce button's call); MeshChat's auto-announce setting stays yours."
   start_note = "Open MeshChat via the LHPC Webserver page (enable the proxy for the reticulum stack). It listens on loopback only."
+  # The maintainer's 0.14.0 word "A": MeshChat announces itself ONCE at every start — its Announce
+  # button's own call (GET /api/v1/announce), so a box is discoverable on the air without anyone
+  # pressing it. LHPC writes nothing into MeshChat; its auto-announce setting stays the operator's.
+  # Not required: a failed announce is logged in the post-start log and the start stands.
+  post_steps = [
+    { kind = "exec", label = "announce", argv = [
+        "{controller_python}", "{asset}/scripts/meshchat-announce.py", "--api", "127.0.0.1:8790", "--timeout", "60",
+      ] },
+  ]
 
   [stack.component.source]
   path = "src/meshchat"

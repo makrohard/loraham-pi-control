@@ -108,6 +108,11 @@ backend on `127.0.0.1:8790` plus a prebuilt frontend, with no authentication of 
 through the LHPC proxy ([webserver](../webserver.md#stack-web-ui-proxies)). Its venv is built
 **without** system site-packages, so it cannot import the SPI driver.
 
+At every MeshChat start LHPC sends **one announce**, the same call as MeshChat's Announce button
+(`GET /api/v1/announce` on loopback), so the box is discoverable on the air without anyone pressing
+it; a failed announce is logged in the post-start log and the start stands. LHPC writes nothing into
+MeshChat: its own auto-announce setting stays yours.
+
 MeshChat reads the interface list **once, at startup**: after an interface change, restart it
 (`lhpc stack restart meshchat`), or its Interfaces page shows the old list next to live counters
 (e.g. `Disabled` with `Connected`).
