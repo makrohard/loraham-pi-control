@@ -11,7 +11,10 @@ A non-required post-start step: a failure is logged in the post-start log and th
 ONE wall-clock deadline bounds the whole run (`--timeout`): a real-time interval timer interrupts
 whatever the run is doing when it fires — a connect, the status line, the headers, chunk framing,
 the body, a pause between refused connects. Only a refused connection (MeshChat not listening yet)
-is retried. The post-start runner's own kill of an exec step after 120 s is the backstop.
+is retried. The connection is direct (http.client to the loopback address: no proxy from the
+environment, no redirect followed — any status but 200 is a failure), and at most 64 KB of the answer
+is read, whatever its framing. The post-start runner's own kill of an exec step after 120 s is the
+backstop.
 RE-AUDIT AT EVERY MESHCHAT BUMP: the route and its answer.
 """
 
@@ -23,8 +26,6 @@ import json
 import signal
 import sys
 import time
-import urllib.error
-import urllib.request
 
 ROUTE = "/api/v1/announce"
 MAX_BODY = 64 * 1024                                       # the answer is ~27 bytes
@@ -34,31 +35,37 @@ class Failure(Exception):
     """The announce could not be confirmed."""
 
 
-def _refused(exc: BaseException) -> bool:
-    return isinstance(getattr(exc, "reason", exc), ConnectionRefusedError)
-
-
 def _deadline(_signum, _frame):
     raise Failure("announce timed out")
 
 
 def announce(api: str, pause=time.sleep) -> None:
-    """The call and its answer; unbounded here: `main` bounds the whole run."""
+    """The call and its answer; unbounded in time here: `main` bounds the whole run."""
+    host, _, port = api.rpartition(":")
     while True:
+        conn = http.client.HTTPConnection(host, int(port), timeout=10)
         try:
-            with urllib.request.urlopen(f"http://{api}{ROUTE}", timeout=10) as resp:
-                if (resp.length or 0) > MAX_BODY:
-                    raise Failure(f"GET {ROUTE}: the answer is larger than {MAX_BODY} bytes")
-                raw = resp.read()
+            conn.request("GET", ROUTE)
+            resp = conn.getresponse()
+            if resp.status != 200:                         # a redirect too: never followed
+                raise Failure(f"GET {ROUTE}: HTTP {resp.status}")
+            if (resp.length or 0) > MAX_BODY:
+                raise Failure(f"GET {ROUTE}: the answer is larger than {MAX_BODY} bytes")
+            raw = resp.read(MAX_BODY + 1)                  # bounded, whatever the framing
+            if len(raw) > MAX_BODY:
+                raise Failure(f"GET {ROUTE}: the answer is larger than {MAX_BODY} bytes")
+            if resp.length:                                # ended inside its declared length
+                raise Failure(f"GET {ROUTE}: the answer ended {resp.length} bytes short (IncompleteRead)")
             break
-        except urllib.error.HTTPError as exc:
-            raise Failure(f"GET {ROUTE}: HTTP {exc.code}") from exc
-        except http.client.HTTPException as exc:           # e.g. IncompleteRead: the body cut short
+        except ConnectionRefusedError:
+            pass                                           # not listening yet
+        except http.client.HTTPException as exc:           # e.g. IncompleteRead in the chunk framing
             raise Failure(f"GET {ROUTE}: {exc!r}") from exc
-        except (urllib.error.URLError, OSError) as exc:
-            if not _refused(exc):
-                raise Failure(f"GET {ROUTE}: {exc}") from exc
-        pause(1.0)                                         # refused: not listening yet
+        except OSError as exc:                             # a timeout, a reset, anything else: final
+            raise Failure(f"GET {ROUTE}: {exc}") from exc
+        finally:
+            conn.close()
+        pause(1.0)
     try:
         answer = json.loads(raw)
     except ValueError as exc:
@@ -76,15 +83,16 @@ def main(argv=None) -> int:
         print("meshchat-announce: --timeout must be > 0", file=sys.stderr)
         return 2
     signal.signal(signal.SIGALRM, _deadline)
-    signal.setitimer(signal.ITIMER_REAL, args.timeout)
     try:
-        announce(args.api)
-        signal.setitimer(signal.ITIMER_REAL, 0)            # disarmed inside the try: a late alarm is caught
-    except Failure as exc:
+        try:
+            signal.setitimer(signal.ITIMER_REAL, args.timeout)   # armed inside the protected region
+            announce(args.api)
+        finally:
+            signal.signal(signal.SIGALRM, signal.SIG_IGN)        # first: no alarm can land after this
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    except Failure as exc:                                       # also an alarm in the inner finally
         print(f"meshchat-announce: not announced — {exc}", file=sys.stderr)
         return 1
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
     print("meshchat-announce: announced")
     return 0
 

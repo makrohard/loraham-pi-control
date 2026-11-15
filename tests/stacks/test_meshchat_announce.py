@@ -50,9 +50,15 @@ class FakeMeshChat:
     answer from `drip_from` on one byte every `drip` seconds: "status" (from the first byte),
     "headers" (after the status line), "body" (after the header block); `chunked` frames the body."""
 
-    def __init__(self, code=200, body=_OK, length=None, chunked=False, drip=0.0, drip_from="body"):
+    def __init__(self, code=200, body=_OK, length=None, chunked=False, drip=0.0, drip_from="body",
+                 raw=None, stream=None):
         self.calls, self.called, self.stop = [], threading.Event(), threading.Event()
-        self.data, end_of_head = _response(code, body, length, chunked)
+        self.stream = stream                           # "chunked" | "unframed": 8 MB fast, then it stalls
+        if stream == "chunked":
+            raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        elif stream == "unframed":
+            raw = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"
+        self.data, end_of_head = (raw, len(raw)) if raw is not None else _response(code, body, length, chunked)
         self.cut = {"status": 0, "headers": self.data.index(b"\r\n") + 2, "body": end_of_head}[drip_from] if drip else len(self.data)
         self.drip = drip
         self.srv = socket.socket()
@@ -83,6 +89,12 @@ class FakeMeshChat:
             self.called.set()
             try:
                 conn.sendall(self.data[:self.cut])
+                if self.stream:                            # far over the 64 KB cap, then it stalls
+                    piece = b"x" * 4096
+                    for _ in range(2048):
+                        conn.sendall(b"1000\r\n" + piece + b"\r\n" if self.stream == "chunked" else piece)
+                    self.stop.wait()
+                    return
                 for i in range(self.cut, len(self.data)):  # one byte every `drip` seconds
                     if self.stop.wait(self.drip):
                         return
@@ -107,12 +119,12 @@ def meshchat():
         f.close()
 
 
-def _script(api, timeout="5"):
+def _script(api, timeout="5", env=None):
     """The script as the runner runs it: its own process, here under a 30 s subprocess timeout (a
     regression of the bound fails the test instead of holding the run). -> (rc, output, seconds)."""
     t0 = time.monotonic()                            # wallclock: measures the script's real bound
     p = subprocess.run([sys.executable, str(_SCRIPT), "--api", api, "--timeout", timeout],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, env=env)
     return p.returncode, p.stdout + p.stderr, time.monotonic() - t0  # wallclock: the real bound
 
 
@@ -193,6 +205,45 @@ def test_an_answer_that_trickles_in_ends_by_the_deadline(meshchat, kw):
     every read completes in time, only the one deadline ends it — by its 1 s (code re-rounds 1, 2)."""
     rc, out, secs = _script(meshchat(drip=0.3, **kw).api, timeout="1")
     assert rc == 1 and "announce timed out" in out and secs < 3, (out, secs)
+
+
+@pytest.mark.parametrize("stream", ["chunked", "unframed"])
+def test_an_answer_without_a_declared_length_is_capped_by_the_bytes_read(meshchat, stream):
+    """Chunked, or no Content-Length at all, streaming far past 64 KB: refused once more than 64 KB
+    has arrived — not read on until the deadline (code re-round 3, B1)."""
+    rc, out, secs = _script(meshchat(stream=stream).api, timeout="10")
+    assert rc == 1 and "larger than 65536 bytes" in out and secs < 5, (out, secs)
+
+
+def test_a_redirect_is_refused_and_never_followed(meshchat):
+    """The call is direct: a 302 to another address is the named failure; that address is never
+    contacted (code re-round 3, B2)."""
+    elsewhere = meshchat()
+    to = f"http://{elsewhere.api}/api/v1/announce"
+    fake = meshchat(raw=f"HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
+    rc, out, _s = _script(fake.api)
+    assert rc == 1 and "HTTP 302" in out, out
+    assert fake.calls == ["/api/v1/announce"] and elsewhere.calls == []
+
+
+def test_a_proxy_in_the_environment_is_not_used(meshchat):
+    """The call is direct: with http_proxy / HTTP_PROXY set (no no_proxy), MeshChat on loopback
+    gets the call and the proxy gets nothing (code re-round 3, B2)."""
+    import os
+    proxy, fake = meshchat(), meshchat()
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("no_proxy", "http_proxy")}
+    env.update(http_proxy=f"http://{proxy.api}", HTTP_PROXY=f"http://{proxy.api}")
+    rc, out, _s = _script(fake.api, env=env)
+    assert rc == 0 and "announced" in out, out
+    assert fake.calls == ["/api/v1/announce"] and proxy.calls == []
+
+
+def test_a_tiny_deadline_ends_as_the_named_failure_never_a_traceback():
+    """An alarm that fires at any moment, even right after the timer is armed, is the named failure
+    (code re-round 3, note 1). Ten tries, each on a port nothing listens on."""
+    for _ in range(10):
+        rc, out, _s = _script(f"127.0.0.1:{_free_port()}", timeout="0.000001")
+        assert rc == 1 and "Traceback" not in out and "not announced" in out, out
 
 
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
