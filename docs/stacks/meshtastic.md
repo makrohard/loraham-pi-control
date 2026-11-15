@@ -11,7 +11,7 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radi
 | Endpoints | TCP API `:4403` · web UI `:9443` on r1, each + 133 per further radio (r2: 4536 / 9576), written into the instance's config (`General.APIPort`, `Webserver.Port`) (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
 | Config | `<runtime>/config/files/<rid>/meshtasticd.yaml`, one per instance, regenerated from `lhpc/data/bases/meshtasticd.yaml` at every start (LoRa pins from the radio's board preset, else its band; web root, TLS paths, log level) |
 | Artifacts | `build/tools/meshtasticd/meshtasticd`, the web UI at `build/tools/meshtastic-web/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
-| Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.<api>` + `.<web>` exclusive (4403 / 9443 on r1) |
+| Resources | `loraham.radio.{radio:868}` + `{radio:433}` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.<api>` + `.<web>` exclusive (4403 / 9443 on r1) |
 | System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
 | Install channel | **binary** by default (then the web client, `binary`, in the same run); `--source pinned\|dev\|stable` builds natively. Policy: [provenance](../provenance.md#the-binary-channel) |
 
@@ -30,19 +30,19 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radi
 |---|---|---|
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
 | `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set ([architecture](../architecture.md#identity-and-callsigns)) |
-| `max_power` | `17` | TX power cap in dBm (1–20), written to the YAML (`Lora.RF95_MAX_POWER`), so it holds from the first frame; the node's own `lora.tx_power` never exceeds it. 20 dBm: `lhpc config meshtastic max_power 20`, then restart |
+| `max_power` | `17` | TX power cap in dBm (1–20), written to the YAML (`Lora.RF95_MAX_POWER`), so it holds from the first frame; the node's own `lora.tx_power` never exceeds it. 20 dBm: `lhpc config meshtastic@<rid> max_power 20`, then restart |
 | `use_gps` | `on` | use the global position source |
 | `rf_log` | `on` | `logs/<rid>/rf-meshtastic.log` — meshtasticd's own per-packet JSON trace (`Logging.TraceFile`). Decrypt ([maintenance](../maintenance.md#rf-logs)) reads the peers' keys from `prefs/nodes.proto`, which meshtasticd saves with a delay (a key learned within a minute of the last save waits for the next), so a direct message can show `no-key` while `lhpc meshtastic --nodes` already lists the key |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
 Region, node identity, GPS mode and fixed position are device settings applied through the
-managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic`).
+managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic@<rid>`).
 The web port is derived, not settable: 9443 on r1, + 133 per further radio; it serves HTTPS only. Upstream meshtastic/web #1464, merged after the
 pinned v2.7.2, makes the Add Connection dialog default a local address to HTTP in Chromium-based
 browsers; if it shows HTTP, switch it to HTTPS for this box.
 
 A hand edit of the generated YAML is lost at the next start; change a setting with
-`lhpc config meshtastic <param> <value>` or the stack's Settings (effective at the next start).
+`lhpc config meshtastic@<rid> <param> <value>` or the stack's Settings (effective at the next start).
 
 ## Native build
 
@@ -93,7 +93,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   `--ch-add-url`) run, then LHPC re-asserts and verifies region/name/GPS; if it cannot, the
   command exits non-zero and names `lhpc stack poststart meshtastic@<rid>`.
 - The three `--factory-reset*` flags warn and ask (`--yes` skips); afterwards
-  `lhpc stack poststart meshtastic` re-applies the managed settings.
+  `lhpc stack poststart meshtastic@<rid>` re-applies the managed settings.
 - Node operations need the running stack; `--help`, `--version`, `--support`, `--test` do not.
 
 ## Notes
@@ -104,10 +104,8 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   node-info check follows about 30 s after start. Both pass the firmware's node-info throttle
   (10 minutes by default), so "Skip send NodeInfo since we sent it <600s ago" means one was
   generated, not that it went over the air — a logged node-info is not proof of a transmission.
-  (That line and "Started Tx"/"Completed sending" are DEBUG: `lhpc config meshtastic loglevel debug`.)
-  On a fresh node the node-info logged at start did not reach the peer in the recorded live test: a following
-  start step cut its transmission, the throttle then applied, and the node's later answer was
-  dropped by a peer still holding the old key (next note). Record:
+  (That line and "Started Tx"/"Completed sending" are DEBUG: `lhpc config meshtastic@<rid> loglevel debug`.)
+  A live-test record of a first node-info that never reached the peer:
   [live test](../live-tests/live-test.md#notes-from-the-run).
 - A new image, `lhpc clean meshtastic --purge` or a deleted `state/<rid>/meshtasticd` gives the node a
   new key but the same node number (from the Pi's Bluetooth MAC; the YAML sets no `MACAddress`).
