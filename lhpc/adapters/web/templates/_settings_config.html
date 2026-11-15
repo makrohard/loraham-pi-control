@@ -68,7 +68,7 @@
                   <span class="badge badge-{{ 'running' if opt.running else 'stopped' }}">{{ 'running' if opt.running else 'stopped' }}</span>
                 </th>
                 <td>{% if opt.startable %}<label><input type="checkbox" name="c_autostart_{{ opt.id }}" value="on"
-                     {% if opt.autostart %}checked{% endif %}> auto-start</label>
+                     {% if opt.autostart %}checked{% endif %}> auto-start{% if view.radio %} on {{ view.radio }}{% endif %}</label>
                     {% else %}<span class="muted">run on demand in a terminal (its launch line is shown on the Dashboard); not spawned by the controller</span>{% endif %}</td>
               </tr>
             {% endfor %}
