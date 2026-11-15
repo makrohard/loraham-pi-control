@@ -478,7 +478,6 @@ def test_w384az_an_old_per_band_value_is_read_nowhere(tmp_path):
     assert radio_start.row_dp(svc, "r1") == {}
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path, web):
     # A crafted web POST carrying the OLD per-launch fields (dp_<band>_<PARAM>, p_<name>) changes
     # nothing: the start runs the saved configuration, the saved daemon params stay untouched,
