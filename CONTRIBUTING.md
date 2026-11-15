@@ -5,11 +5,23 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## Contents
 
+- [Before you change code, tests or docs](#before-you-change-code-tests-or-docs)
 - [Branches](#branches)
 - [Commits](#commits)
 - [What should be green](#what-should-be-green)
 - [What a good change looks like](#what-a-good-change-looks-like)
 - [Adding a stack](#adding-a-stack)
+
+## Before you change code, tests or docs
+
+Read the rules for what you change first:
+
+- **Tests:** [the test rules](tests/README.md#rules-by-area): where a test goes, what it asserts, how it stays
+  deterministic and able to fail, and which rules CI checks.
+- **Docs and CHANGELOG:** [the docs rules](docs/maintenance.md#docs-and-changelog).
+- **House rules:** `python tools/check_houserules.py <base>..HEAD` passes before you push
+  ([the check](docs/maintenance.md#policy)); CI runs it on every pull request and on pushes to `dev` and
+  `main`, and a HARD line fails the job.
 
 ## Branches
 
@@ -54,8 +66,7 @@ enforce](docs/maintenance.md#what-ci-does-not-enforce)); don't let it drop when 
 ## What a good change looks like
 
 - **Tests that fail on the unfixed code.** A bug fix carries a regression test; a new capability
-  tags its widest-seam happy and refusal case `@pytest.mark.contract`. Where a test goes and the
-  rules it follows: [tests/README](tests/README.md).
+  tags its widest-seam happy and refusal case `@pytest.mark.contract`.
 - **Docs in the same commit.** The CLI reference and the operator docs change with the code,
   by the [docs rules](docs/maintenance.md#docs-and-changelog).
 - **Both READMEs.** `README.de.md` is a full translation: a change to `README.md` lands with its
