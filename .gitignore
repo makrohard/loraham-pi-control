@@ -44,3 +44,6 @@ logs/
 # developer's tree looked complete. Nothing under these trees is ever generated here.
 !lhpc/data/*-dist/
 !lhpc/data/*-dist/**
+
+# The hardware test line's local lab file (rf-proof.sh): lab values only, never committed
+testlab/hardware/*.local.env
