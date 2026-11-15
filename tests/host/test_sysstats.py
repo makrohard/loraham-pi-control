@@ -723,7 +723,7 @@ def test_the_host_metrics_module_never_reaches_a_subprocess(tmp_path):
     import inspect
 
     from lhpc.core import service_system as ss
-    code = _code_only(inspect.getsource(ss))
+    code = _code_only(inspect.getsource(ss))    # rule-1 exception: a whole-module negative invariant, twin below
     for banned in ("subprocess", "os.system", "os.popen", "os.fork", "os.exec", "pty.spawn",
                    "timedatectl"):
         assert banned not in code, f"service_system must never reach {banned}"
