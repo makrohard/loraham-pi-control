@@ -2,7 +2,7 @@
 ###
 ### `lhpc stack start meshtastic` GENERATES {runtime}/config/files/meshtasticd.yaml from THIS
 ### file each time, updating only the keys the manifest declares (region, node name, CS/IRQ …).
-### Edit stack settings in lhpc (`lhpc config meshtastic …` or the web console) — an edit HERE
+### Edit stack settings in lhpc (`lhpc config meshtastic@<rid> …` or the web console) — an edit HERE
 ### is a template change for every future generation, and lhpc never writes back to it.
 ###
 ### Adapted from the LoRaHAM_Pi board template (github.com/LoRaHAM/LoRaHAM_Pi); vendored so a
