@@ -241,6 +241,7 @@ def test_labfs_overlay_missing_present_and_uptime(tmp_path, monkeypatch):
 # --- spawn guard / boot identity ----------------------------------------------------------
 
 
+@pytest.mark.wallclock("no clock runs: the literal is the production power-trigger argv the guard reads")
 def test_spawn_guard_power_deny_and_passthrough(tmp_path, monkeypatch):
     paths = make_lab_root(tmp_path, monkeypatch)
     seen = []
@@ -369,16 +370,27 @@ def _spawn_fake_daemon(tmp_path, procs, band="433", radio="READY", air=(), rid="
     proc = subprocess.Popen([sys.executable, script, "--radio", band, *(["--id", rid] if rid else []), *extra], env=env)
     procs.append(proc)                       # owned by the fake_daemon fixture from here on
     conf = sockdir / (f"loraconf-{rid}.sock" if rid else f"loraconf{band}.sock")    # stage L5: the radio's socket
-    import time as _t
-    deadline = _t.monotonic() + wait_s
-    while _t.monotonic() < deadline:
-        if conf.exists():
-            break
-        _t.sleep(0.05)
-    if not conf.exists():
+    # Ready = a connect succeeds (rule C3): the fake binds the socket file before it listens.
+    deadline = time.monotonic() + wait_s  # wallclock: a real fake daemon's start, bounded
+    while not _accepts(conf) and time.monotonic() < deadline:  # wallclock: a real fake daemon's start, bounded
+        time.sleep(0.05)  # wallclock: a real fake daemon's start, bounded
+    if not _accepts(conf):
         _stop(proc)
         raise AssertionError("fake daemon did not open its socket")
     return sockdir, root
+
+
+def _accepts(path) -> bool:
+    """A connect to the unix socket at `path` succeeds (the connection is closed at once)."""
+    import socket as _s
+    c = _s.socket(_s.AF_UNIX)
+    try:
+        c.connect(str(path))
+        return True
+    except OSError:
+        return False
+    finally:
+        c.close()
 
 
 def _stop(proc):
@@ -698,6 +710,7 @@ def test_explicit_injection_never_gets_the_overlay(tmp_path, monkeypatch):
     assert svc2._ext is None and svc2._manifest_path == other
 
 
+@pytest.mark.wallclock("no clock runs: the literals are power-trigger argvs the guard reads")
 def test_power_trigger_guard_locked_to_production_argv():
     """The guard matches EXACTLY the argv lhpc.core.power composes —
     locked together via power_trigger_argv, no substring heuristics."""
@@ -716,7 +729,7 @@ def test_power_trigger_guard_locked_to_production_argv():
 def unrelated_pid():
     """A live process of this user that is NOT the lab's — what a stale pid file names after
     the pid was reused."""
-    proc = subprocess.Popen(["sleep", "60"])
+    proc = subprocess.Popen(["sleep", "60"])  # wallclock: a real live process that is not the lab's
     yield proc
     proc.kill()
     proc.wait()
@@ -734,9 +747,9 @@ def _spawned(proc, needle):
     """`proc` once its /proc cmdline carries `needle`, as the lab's matchers read it. Popen returns
     while the child's exec is still finishing, and until then its cmdline (and comm) is not yet
     the new program's: a slow runner reads it there. Bounded; a child that never shows is killed."""
-    deadline = time.monotonic() + 10
-    while not supervisor.pid_alive(proc.pid, needle) and time.monotonic() < deadline:
-        time.sleep(0.01)
+    deadline = time.monotonic() + 10  # wallclock: a real child's exec, bounded
+    while not supervisor.pid_alive(proc.pid, needle) and time.monotonic() < deadline:  # wallclock: a real child's exec, bounded
+        time.sleep(0.01)  # wallclock: a real child's exec, bounded
     if not supervisor.pid_alive(proc.pid, needle):
         proc.kill()
         proc.wait()
@@ -955,6 +968,7 @@ def test_power_reboot_does_not_tombstone(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("admission", ["free", "held-by-the-console"])
+@pytest.mark.wallclock("real process groups die and another process holds the admission for a real 2 s")
 def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, monkeypatch,
                                                                     admission):
     """A reboot is a power cut, then a boot: the owned process group dies of SIGKILL with its
@@ -1045,7 +1059,7 @@ def _owned_group_with_descendant(tmp_path, boot1):
     cfg.mkdir(parents=True, exist_ok=True)
     if not (cfg / "radios.toml").exists():
         (cfg / "radios.toml").write_text(radios.render((radios.Radio("r1", "low", "loraham", "433"),)))
-    proc = subprocess.Popen(["sh", "-c", "sleep 300 & echo $!; wait"], preexec_fn=os.setsid,
+    proc = subprocess.Popen(["sh", "-c", "sleep 300 & echo $!; wait"], preexec_fn=os.setsid,  # wallclock: a real group leader with a descendant
                             stdout=subprocess.PIPE, text=True)
     child = int(proc.stdout.readline())
     assert os.getpgid(child) == proc.pid

@@ -659,6 +659,7 @@ def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=(), on_t
     "printf 'loading the node list'; sleep 30",         # still running, drew something else
     "printf '[Error] interface not ready\\n'; sleep 30",  # an app's own log tag, not a crash
 ])
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_readiness_timeout_without_evidence_blames_no_stack(tmp_path, command):
     msg = _readiness_failure(command, tmp_path)
     assert "STACK-REGRESSION" not in msg
@@ -669,11 +670,13 @@ def test_a_readiness_timeout_without_evidence_blames_no_stack(tmp_path, command)
     "printf 'Traceback (most recent call last):\\n'; sleep 30",             # drew a traceback
     "printf 'ModuleNotFoundError: no module named x\\n'; sleep 30",         # drew an exception line
 ])
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_readiness_failure_with_evidence_of_breaking_is_marked(tmp_path, command):
     msg = _readiness_failure(command, tmp_path)
     assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
 
 
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_readiness_failure_carries_the_tails_of_the_named_logs(tmp_path):
     app, daemon = tmp_path / "logfile", tmp_path / "absent-logfile"
     app.write_text("old line\n" + "x" * 2000 + "APP-LOG-LAST-LINE\n")
@@ -698,6 +701,7 @@ def _hang_in_python():
     return f"exec {sys.executable} -c 'import time; time.sleep(60)'"
 
 
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_start_that_times_out_is_not_retried_and_carries_its_stack(tmp_path):
     """A test body is never re-run because it failed: a hung first start fails, unmarked, with
     the thread dump of where it hung — even when a second start would have drawn."""
@@ -774,6 +778,7 @@ def test_the_reticulum_snapshot_aborts_only_recorded_reticulum_processes(tmp_pat
     "exit 3",                                                           # exited
     "printf 'Traceback (most recent call last):\\n'; sleep 30",         # drew a traceback
 ])
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_start_that_shows_it_is_broken_is_never_retried(tmp_path, first):
     command, counter = _counted(tmp_path, first, "printf 'READY'; sleep 30")
     msg = _readiness_failure(command, tmp_path, expect="READY")
@@ -781,6 +786,7 @@ def test_a_start_that_shows_it_is_broken_is_never_retried(tmp_path, first):
     assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
 
 
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_the_program_runs_without_core_dumps(tmp_path):
     import os
 
@@ -791,6 +797,7 @@ def test_the_program_runs_without_core_dumps(tmp_path):
     assert limit.read_text().strip() == "0"
 
 
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_start_whose_terminal_closed_before_it_was_reaped_is_an_exit(tmp_path, monkeypatch):
     """The race CI hit: the program's terminal closes BEFORE its exit can be reaped, so
     `poll()` still says "running" right after an exit. That is an exit — marked, never retried
@@ -822,6 +829,7 @@ def test_a_start_whose_terminal_closed_before_it_was_reaped_is_an_exit(tmp_path,
     assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
 
 
+@pytest.mark.wallclock("a real child on a terminal against the readiness wait")
 def test_a_read_error_other_than_a_closed_terminal_propagates_unmarked(tmp_path, monkeypatch):
     """Only EOF and EIO mean the program's terminal closed. Any other read error (EBADF here)
     is this harness's own fault: it propagates, and never reads as a marked exit."""
