@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.14.0"
 description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "makrohard" }]
 
 # The CLI and probe core use only the standard library (argparse, tomllib,

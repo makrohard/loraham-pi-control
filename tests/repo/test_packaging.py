@@ -90,3 +90,22 @@ def test_every_file_in_a_shipped_asset_tree_is_tracked_by_git():
         assert on_disk - tracked == set(), (
             f"{rel}: present in this checkout but NOT tracked — a clone ships without them; "
             f"a .gitignore rule matched a path inside the bundle")
+
+
+def test_the_wheel_carries_the_licence_and_the_third_party_notices():
+    """The wheel ships third-party code, so it must ship their notices too. setuptools' default
+    licence patterns (LICEN[CS]E*, COPYING*, NOTICE*, AUTHORS*) do not match
+    THIRD-PARTY-NOTICES.md, so the file is named in `license-files`. That key needs setuptools 77
+    (PEP 639); 76 refuses the project table. Like the package-data guard above, this checks the
+    declaration; a built wheel's dist-info/licenses is not built here (see this module's header)."""
+    root = repo_paths.REPO
+    py = tomllib.loads((root / "pyproject.toml").read_text())
+    files = py["project"].get("license-files", [])
+    for name in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+        assert name in files, f"{name} is not in [project] license-files; the wheel would ship without it"
+        assert (root / name).is_file(), name
+    floors = [r.removeprefix("setuptools>=") for r in py["build-system"]["requires"]
+              if r.startswith("setuptools>=")]
+    assert len(floors) == 1, py["build-system"]["requires"]
+    assert int(floors[0].split(".")[0]) >= 77, (
+        f"setuptools>={floors[0]} cannot read license-files (PEP 639 needs 77)")
