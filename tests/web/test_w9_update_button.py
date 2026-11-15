@@ -1,7 +1,6 @@
 """Week item 9 (W204, W208): after a successful Update the stack row keeps no Update button.
 
-A bare Update installs the stack's pin ("Known working": the operator-confirmed composition, else the
-manifest pin), but the freshness check compared the installed head with the branch TIP. On a pinned
+A bare Update installs the stack's pin ("Known working": the manifest pin), but the freshness check compared the installed head with the branch TIP. On a pinned
 source the tip is usually ahead of the pin, so the check said "behind" and the row offered an Update
 that could never clear it (Chat: W204, MeshCore: W208). The verdict is now relative to what the
 source follows: a source installed from the pinned selector is up to date at its pin and behind
@@ -99,20 +98,21 @@ def test_r4_control_without_an_ownership_record_the_branch_tip_decides(web, csrf
     assert bool(_update_links(doc, "chat")) is behind
 
 
-KW = "e" * 40                               # an operator-confirmed (known-working) commit, not the manifest pin
+KW = "e" * 40                               # the commit a 0.13.x known-working store names, not the manifest pin
 
 
-@pytest.mark.parametrize("at_known_working", [True, False], ids=["at-known-working", "at-manifest-pin"])
-def test_r5_an_operator_confirmed_composition_comes_before_the_manifest_pin(web, csrf, tmp_path, at_known_working):
-    """With a compatible known-working composition, a bare Update installs ITS commit: at that commit the row is up
-    to date; at the manifest pin it is behind. RED before the fix for the first case (the tip decided)."""
-    from lhpc.core import known_working
+@pytest.mark.parametrize("at_old_record", [True, False], ids=["at-old-record", "at-manifest-pin"])
+def test_r5_an_old_known_working_store_is_not_read_the_manifest_pin_decides(web, csrf, tmp_path, at_old_record):
+    """U7 (D3): the "Known working" lane is the manifest pin itself. A store an older LHPC left under
+    profiles/known-working/ is not read: at the manifest pin the row is up to date, at the store's commit it is
+    behind. RED at 912c37d5: the store's commit decided (the two cases were the other way round)."""
+    import json
     comp, remote = _main_source(tmp_path / "probe", "chat")
-    ok, why = known_working.record(Paths(runtime_root=tmp_path), "chat",
-                                   {comp.id: {"commit": KW, "selector": "pinned", "remote": remote,
-                                              "source_rel": comp.source.path}}, {})
-    assert ok, why
-    head = KW if at_known_working else comp.source.pin_commit
+    store = tmp_path / "profiles" / "known-working" / "chat.json"
+    store.parent.mkdir(parents=True)
+    store.write_text(json.dumps({"version": 1, "compositions": [{"hash": "f" * 64, "validated": {}, "entries": {
+        comp.id: {"commit": KW, "selector": "pinned", "remote": remote, "source_rel": comp.source.path}}}]}))
+    head = KW if at_old_record else comp.source.pin_commit
     client, _comp = _client(web, tmp_path, "chat", head=head, selector="pinned")
     doc = _checked_page(client, csrf, "chat")
-    assert bool(_update_links(doc, "chat")) is not at_known_working
+    assert bool(_update_links(doc, "chat")) is at_old_record
