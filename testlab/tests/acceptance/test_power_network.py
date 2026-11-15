@@ -8,6 +8,7 @@ import re
 import subprocess
 import time
 
+import pytest
 from lhpc_testlab.testing import run_lab
 
 
@@ -15,6 +16,7 @@ def _boot_id(lab) -> str:
     return (lab.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
 
 
+@pytest.mark.wallclock("waits for the real lab's power helper to advance the boot id, bounded")
 def test_simulated_reboot_advances_boot_identity_and_recovers(lab, client):
     before = _boot_id(lab)
     status, body = client.post("/power/reboot", {"confirmed": "yes"}, csrf_from="/")
@@ -30,6 +32,7 @@ def test_simulated_reboot_advances_boot_identity_and_recovers(lab, client):
     assert "simulated reboot" in events and "host untouched" in events
 
 
+@pytest.mark.wallclock("waits for the real lab's network outcome record, bounded")
 def test_network_join_wrong_password_and_back_to_ap(lab, client):
     run_lab(lab.env, "scenario", "wrong-password", check=True)
     _s, page = client.get("/stacks?open=network")

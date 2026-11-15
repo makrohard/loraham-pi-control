@@ -200,9 +200,9 @@ def _build(env: dict, component: str) -> None:
     for p in (logs_dir.iterdir() if logs_dir.is_dir() else ()):
         if name.fullmatch(p.name):
             p.write_text(mark)
-    t0 = time.monotonic()
+    t0 = time.monotonic()  # wallclock: the lane times a real operation against its budget
     r = run_lhpc(env, "build", component, "--yes", timeout=HARNESS_S)
-    seconds = time.monotonic() - t0
+    seconds = time.monotonic() - t0  # wallclock: the lane times a real operation against its budget
     _judged(f"building {component}", r)
     logs = [p for p in (logs_dir.iterdir() if logs_dir.is_dir() else ())
             if name.fullmatch(p.name) and p.read_text(errors="replace") != mark]
@@ -224,11 +224,11 @@ def _deb_fetch(svc, component: str, tmp: Path) -> None:
     version = stt._fetch_version(comp)
     assert version, f"the manifest names no release for {component}'s fetch step"
     FETCHED[component] = version
-    t0 = time.monotonic()
+    t0 = time.monotonic()  # wallclock: the lane times a real operation against its budget
     r = subprocess.run(["bash", str(asset_path("scripts/graywolf-fetch.sh")), str(tmp / "deb"),
                         version, "--from-upstream"], capture_output=True, text=True,
                        timeout=HARNESS_S, check=False)
-    seconds = time.monotonic() - t0
+    seconds = time.monotonic() - t0  # wallclock: the lane times a real operation against its budget
     _judged(f"the upstream fetch of {version}", r)
     _record(component, "deb-fetch", seconds)
 
@@ -268,9 +268,9 @@ def _offline(env: dict) -> dict:
 
 
 def _install(env: dict, stack: str):
-    t0 = time.monotonic()
+    t0 = time.monotonic()  # wallclock: the lane times a real operation against its budget
     r = run_lhpc(env, "install", stack, "--yes", timeout=HARNESS_S)
-    _judged(f"installing {stack} ({time.monotonic() - t0:.0f} s)", r)
+    _judged(f"installing {stack} ({time.monotonic() - t0:.0f} s)", r)  # wallclock: the lane times a real operation against its budget
     return r
 
 
@@ -286,11 +286,11 @@ def _helper(lhpc: Path, env: dict) -> tuple[float, str]:
     """The self-update helper body, timed whole: (seconds, stdout + stderr). It runs the way
     its systemd unit runs it: `--run-service` is unit plumbing, refused (rc 2) without the
     systemd invocation marker `INVOCATION_ID`."""
-    t0 = time.monotonic()
+    t0 = time.monotonic()  # wallclock: the lane times a real operation against its budget
     r = subprocess.run([str(lhpc), "self-update", "--run-service"],
                        env={**env, "INVOCATION_ID": "slow-build-lane"},
                        capture_output=True, text=True, timeout=HARNESS_S, check=False)
-    seconds = time.monotonic() - t0
+    seconds = time.monotonic() - t0  # wallclock: the lane times a real operation against its budget
     return seconds, _judged("the self-update helper", r)
 
 

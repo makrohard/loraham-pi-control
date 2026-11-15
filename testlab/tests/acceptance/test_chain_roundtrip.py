@@ -91,6 +91,7 @@ def chain(lab):
 
 
 @pytest.mark.slow
+@pytest.mark.wallclock("waits for the real lab's TX log, bounded")
 def test_kiss_rx_and_tx_round_trip(chain):
     """Injected APRS frame -> fake daemon framed RX -> real kiss TNC -> valid AX.25/KISS
     on TCP 8001; the same frame written back is a TX the fake daemon captures."""
@@ -124,6 +125,7 @@ def test_kiss_stop_restart_and_status(chain):
 
 
 @pytest.mark.slow
+@pytest.mark.wallclock("waits for the real graywolf's packet list, bounded")
 def test_graywolf_shows_injected_station(chain):
     """Real graywolf consumes the chain and its REAL web UI shows the injected
     station. Needs dpkg-deb (Debian containers — the devcontainer/CI always has it)."""
