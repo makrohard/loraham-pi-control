@@ -140,12 +140,6 @@ body.dash-narrow .radiogrid { grid-template-columns: 1fr; }
   border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
 .update-link:hover { text-decoration: none; border-color: var(--flash-ok-ink); }
 
-/* Overview tiles -------------------------------------------------------- */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
-.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: .8rem .9rem; box-shadow: var(--shadow); }
-.tile .n { font-size: 1.6rem; font-weight: 700; }
-.tile .l { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .4px; }
-
 /* Cards ----------------------------------------------------------------- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 1.1rem; overflow: hidden; }
 .card > header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }

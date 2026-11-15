@@ -501,20 +501,15 @@ _SEVERITY = {
 
 
 def summarize(snapshot: Snapshot) -> dict:
-    """Counts for the dashboard overview tiles (presentation-neutral). `states` counts
-    components; `stack_states` counts stacks by their rollup (a stack whose main is dead while
-    its sidecars run is failed), the unit the tiles show beside the stack count."""
+    """Component counts for `lhpc status` (presentation-neutral): `components` is their number,
+    `states` counts them by run state."""
     states: dict[str, int] = {}
     components = 0
     for ss in snapshot.stacks:
         for st in ss.components.values():
             components += 1
             states[st.run_state.value] = states.get(st.run_state.value, 0) + 1
-    stack_states: dict[str, int] = {}
-    for value in rollup_states(snapshot).values():
-        stack_states[value] = stack_states.get(value, 0) + 1
-    return {"stacks": len(snapshot.stacks), "components": components, "states": states,
-            "stack_states": stack_states}
+    return {"components": components, "states": states}
 
 
 def stack_dependencies(stacks) -> dict[str, list[str]]:

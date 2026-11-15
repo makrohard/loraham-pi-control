@@ -1003,10 +1003,10 @@ def _stack_snapshot(svc, stack_id, states):
     return snap
 
 
-def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, monkeypatch):
-    # On the reference box: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
-    # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
-    # of the Stacks tile beside them (the rollup itself: tests/core/test_status_rules.py).
+def test_the_stacks_page_shows_no_summary_tiles(tmp_path, web, monkeypatch):
+    # The maintainer's word for 0.14.0: "remove the four tiles" (Stacks, Running, Degraded / failed,
+    # Active conflicts) at the top of the Stacks page. The stack's own state badge in its row stays:
+    # it is this absence check's anchor (rule E5). The stack state itself: tests/core/test_status_rules.py.
     from lhpc.core.model import RunState
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -1014,14 +1014,16 @@ def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, mon
     snap = _stack_snapshot(svc, "meshcore",
                            {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED})
     monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *a, **k: snap)
-    doc = parse(web().get("/stacks").get_data(as_text=True))
-    # a tile is a box holding exactly two boxes: its count, then its label
-    tiles = {}
-    for box in doc.find("div"):
-        inner = doc.within(box).find("div")[1:]
-        if len(inner) == 2 and inner[0].text.isdigit():
-            tiles[inner[1].text] = int(inner[0].text)
-    assert (tiles["Degraded / failed"], tiles["Running"]) == (1, 0)
+    resp = web().get("/stacks")
+    assert resp.status_code == 200
+    doc = parse(resp.get_data(as_text=True))
+    assert "stopped" in [b.text for b in doc.within(doc.by_id("stackrow-meshcore")).find("span", class_="badge")]
+    # a tile was a box holding exactly two boxes: its count, then its label
+    tiles = [inner[1].text for box in doc.find("div")
+             if len(inner := doc.within(box).find("div")[1:]) == 2 and inner[0].text.isdigit()]
+    assert tiles == []
+    labels = {"Stacks", "Running", "Degraded / failed", "Active conflicts"}
+    assert [d.text for d in doc.find("div") if d.text in labels] == []
 
 
 def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path, web):

@@ -64,7 +64,6 @@ from lhpc.core.status import (
     component_note,
     rollup_states,
     stack_dependencies,
-    summarize,
 )
 from lhpc.version import __version__
 
@@ -1334,7 +1333,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "version": __version__, "snapshot": snapshot,
             # W2 (G1-W2 2): the page's radio picks that radio in every instance selector; a rid it cannot use is said
             "page_radio": "?" if _page_radio()[2] else _page_radio()[0], "page_radio_why": _page_radio()[2],
-            "summary": summarize(snapshot), "groups": groups, "auto_install_mode": service.auto_install_mode(),
+            "groups": groups, "auto_install_mode": service.auto_install_mode(),
             "observed_conflicts": service.observed_conflicts(snapshot),   # band-aware
             "controller": service.controller_status(),
             "controller_system_deps": service.controller_system_deps(),

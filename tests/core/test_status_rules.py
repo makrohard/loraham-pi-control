@@ -498,16 +498,3 @@ def test_rollup_is_failed_when_the_main_is_down_but_sidecars_run(tmp_path):
     chat = next(s for s in svc.stacks() if s.id == "chat")
     assert next(c for c in chat.components if c.id == chat.main).interactive
     assert rollup_states(_stack_snapshot(svc, "chat", {}))["chat"] == "stopped"
-
-
-def test_the_summary_counts_a_stack_with_a_dead_main_as_failed(tmp_path):
-    # On the reference box: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
-    # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
-    # of the Stacks tile beside them. (The page's tiles: tests/web/test_web.py.)
-    from lhpc.core.services import ControllerService
-    from lhpc.core.status import summarize
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    up = RunState.RUNNING
-    snap = _stack_snapshot(svc, "meshcore",
-                           {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED})
-    assert summarize(snap)["stack_states"] == {"failed": 1}
