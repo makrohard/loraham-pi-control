@@ -8,9 +8,11 @@ from lhpc.core.service_base import ActionResult
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from seams import seed_framing_driver
 
 
 def _svc(tmp_path):
+    seed_framing_driver(tmp_path)                   # a Reticulum node built at the pins
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 

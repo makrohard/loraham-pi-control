@@ -13,10 +13,12 @@ from lhpc.core import runtime_fs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from seams import seed_framing_driver
 
 
 def _svc(tmp_path, r2=radios_fixture.R2):
     radios_fixture.write(tmp_path, (radios_fixture.R1, r2))          # r1 on 433, r2 on 433 unless named
+    seed_framing_driver(tmp_path)                                     # a Reticulum node built at the pins
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 

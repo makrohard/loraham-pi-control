@@ -16,7 +16,7 @@ from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ConfigWrite, ControllerService
-from seams import seed_built
+from seams import seed_built, seed_framing_driver
 
 
 def outcomes(res):
@@ -42,6 +42,7 @@ def _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=True
     seed_built(tmp_path, "loraham-daemon/loraham_daemon/loraham_daemon", "RadioLib/build/libRadioLib.a",
                 "LoRaHAM_Voice/loraham_voice_cli",
                 *(("LoRaHAM_Voice/loraham_voice",) if gtk_built else ()))
+    seed_framing_driver(tmp_path)                   # a Reticulum node built at the pins
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     # host evidence outside the injected System (compositor sockets), like the root conftest
     monkeypatch.setattr(type(svc), "display_available", staticmethod(lambda: desktop))

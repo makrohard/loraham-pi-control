@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import radios_fixture
+from seams import seed_framing_driver
 
 from lhpc.adapters.cli import main as cli
 from lhpc.core import commands, radio_start, radios
@@ -35,12 +36,7 @@ def box(tmp_path, monkeypatch, capsys):
     box(rows, procs, ports) -> run(*argv) -> (rc, out, launches). The hardware list `rows` gives the copies (K4ac)."""
     def make(rows, procs=None, ports=()):
         radios_fixture.write(tmp_path, rows)
-        # A built box at the pins: its Reticulum venv carries the driver's RNode framing module (the
-        # pinned rns-lora-interface has it; framing is on by default since 0.14.0, and the start
-        # gate refuses a built driver without it).
-        drv = tmp_path / "src" / "reticulum" / ".venv" / "lib" / "python3.13" / "site-packages" / "loraham_rns"
-        drv.mkdir(parents=True, exist_ok=True)
-        (drv / "framing.py").write_text("")
+        seed_framing_driver(tmp_path)                       # a built box at the pins
         assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
         for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
                             ("install_blocker", lambda self, c: ""), ("is_built", lambda self, c: True),

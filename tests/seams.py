@@ -18,6 +18,15 @@ def seed_built(tmp_path, *rels):
         (tmp_path / "src" / rel).write_text("#!bin")
 
 
+def seed_framing_driver(root):
+    """A Reticulum node built at the pins: its venv carries the LoRa driver's RNode framing module
+    (the pinned rns-lora-interface has it). Framing is on by default since 0.14.0, and the start
+    gate refuses a built driver without it, so a box that starts Reticulum needs this."""
+    drv = root / "src" / "reticulum" / ".venv" / "lib" / "python3.13" / "site-packages" / "loraham_rns"
+    drv.mkdir(parents=True, exist_ok=True)
+    (drv / "framing.py").write_text("")
+
+
 def outcomes(res):
     """What a start actually produced — an `any(...)` assertion otherwise reports only False,
     which is unusable when the run that fails is a CI runner you cannot attach to."""

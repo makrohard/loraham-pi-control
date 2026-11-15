@@ -11,6 +11,7 @@ from lhpc.core.outcomes import CompResult, Outcome
 from lhpc.core.model import Component, ComponentKind, EndpointSpec
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
+from seams import seed_framing_driver
 
 
 def _life(tmp_path, **kw):
@@ -50,6 +51,7 @@ class _FakeLife:
 
 
 def _svc(tmp_path):
+    seed_framing_driver(tmp_path)                   # a Reticulum node built at the pins
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
