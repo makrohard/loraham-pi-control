@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 
 import pytest
 
@@ -46,15 +47,36 @@ def _leader(reaper):
     """A real detached process in its OWN session (as LHPC starts components).
     Wait until its /proc identity is fully observable (exe symlink ready), so a
     record taken now matches a later verify (avoids a startup race)."""
-    p = subprocess.Popen(["sleep", "30"], start_new_session=True,
+    p = subprocess.Popen(["sleep", "30"], start_new_session=True,  # wallclock: a real long-lived process
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     reaper.append(p)
     for _ in range(50):
         ident = Lifecycle._proc_identity(p.pid)
         if ident and ident["exec"] == "sleep":
             break
-        time.sleep(0.02)
+        time.sleep(0.02)  # wallclock: the kernel's exec window of a real process, bounded at 1 s
     return p
+
+
+def _ended_within(pid: int, bound: float = 5.0) -> None:
+    """Wait on `pid`'s pidfd until it has ended (a zombie counts) or `bound` passes: the wait returns at the exit
+    itself, it never polls and it reaps nothing. The caller asserts the end."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return                                            # already gone
+    try:
+        select.select([fd], [], [], bound)
+    finally:
+        os.close(fd)
+
+
+def _lifecycle_clock(monkeypatch, fake_clock):
+    """lifecycle's clock is the fake one: its bounded waits advance it and never block."""
+    from lhpc.core import lifecycle
+    monkeypatch.setattr(lifecycle, "time", types.SimpleNamespace(
+        monotonic=fake_clock.monotonic, sleep=fake_clock.sleep, time=fake_clock.time,
+        monotonic_ns=lambda: int(fake_clock.monotonic() * 1e9)))
 
 
 @pytest.mark.needs_session
@@ -68,6 +90,7 @@ def test_owned_session_leader_is_verified_and_stopped(tmp_path, reaper):
     assert life.owned_records("loraham-daemon") == []      # record cleared after cessation
 
 
+@pytest.mark.wallclock("a real sleeping child is the live matching process; nothing is timed")
 def test_manual_matching_process_without_record_is_not_killed(tmp_path, reaper):
     p = _leader(reaper)
     # A process that matches the ProcessSpec is running, but LHPC has NO record.
@@ -102,6 +125,7 @@ def test_wrong_start_time_fails_verification(tmp_path, reaper):
     assert not ok and "starttime" in why
 
 
+@pytest.mark.wallclock("a real sleeping child in the controller's group; nothing is timed")
 def test_controller_own_group_is_never_signalled(tmp_path, reaper):
     life = _life(tmp_path)
     # A child in the CONTROLLER's own session/group (no start_new_session).
@@ -566,6 +590,7 @@ def test_start_records_ownership_for_shebang_wrapper(tmp_path, reaper):
 
 # --- 3.1: observed identity changes between spawn and marker persistence -------
 
+@pytest.mark.wallclock("a real sleeping child is the spawned process; nothing is timed")
 def test_reused_pid_between_spawn_and_persist_is_not_owned(tmp_path, reaper):
     # The launch identity is captured at spawn; if the SAME pid presents a different
     # start time when we go to record (i.e. it exited and was reused), ownership must
@@ -609,10 +634,7 @@ def test_untracked_job_spawn_is_terminated_not_orphaned(tmp_path, reaper, monkey
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     outcome, err = svc._track_or_terminate(life, "build-x", p.pid, "x", "build")
     assert outcome is jobs.TrackOutcome.TERMINATED and "could not be persisted" in err
-    for _ in range(50):
-        if not life._proc_alive(p.pid):
-            break
-        time.sleep(0.05)
+    _ended_within(p.pid)
     assert not life._proc_alive(p.pid)                   # the untracked process was killed
     assert svc.active_jobs() == []                        # and never recorded as a job
 
@@ -889,6 +911,7 @@ def test_a_failed_start_stops_the_daemon_only_if_it_launched_it(tmp_path, monkey
 
 
 @pytest.mark.needs_session
+@pytest.mark.wallclock("a real TERM-ignoring child outlives the roll-back's real 0.5 s stop wait")
 def test_a_failed_start_names_what_it_could_not_stop(tmp_path, monkeypatch):
     """When a component this start launched does not cease on the roll-back's SIGTERM, the
     result names it with its typed stop outcome, and the daemon this start launched stays up
@@ -1029,49 +1052,52 @@ def test_rollback_takes_what_the_start_verified_last_started_first():
 
 # --- the exec window: a just-spawned process's identity is waited for, within a bound -------
 
-def _identity_after(life, pid, seconds):
-    """The real /proc identity of `pid`, but with an empty exe and argv until `seconds` have
-    passed — the exec window right after a spawn, stretched the way a loaded box stretches it."""
-    real, start = life._proc_identity, time.monotonic()
+def _identity_after(life, clock, seconds):
+    """The real /proc identity, but with an empty exe and argv until `seconds` have passed on `clock` — the exec
+    window right after a spawn, stretched the way a loaded box stretches it."""
+    real, start = life._proc_identity, clock.monotonic()
 
     def read(p):
         ident = real(p)
-        if ident is not None and time.monotonic() - start < seconds:
+        if ident is not None and clock.monotonic() - start < seconds:
             ident = dict(ident, exec="", argv_fp="", argv_len=0)
         return ident
     return read
 
 
-def test_an_identity_that_completes_late_is_still_captured_complete(tmp_path, reaper):
+def test_an_identity_that_completes_late_is_still_captured_complete(tmp_path, reaper, monkeypatch, fake_clock):
+    _lifecycle_clock(monkeypatch, fake_clock)
     life = _life(tmp_path)
     p = _leader(reaper)
-    life._proc_identity = _identity_after(life, p.pid, 0.5)
+    life._proc_identity = _identity_after(life, fake_clock, 0.5)
+    t0 = fake_clock.monotonic()
     assert life._identity_complete(life._capture_identity(p.pid))
+    assert 0.5 <= fake_clock.monotonic() - t0 < Lifecycle.CAPTURE_WAIT_S     # it waited past the window, in bound
 
 
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_an_identity_that_never_completes_is_returned_weak_within_the_bound(tmp_path, reaper):
+def test_an_identity_that_never_completes_is_returned_weak_within_the_bound(tmp_path, reaper, monkeypatch,
+                                                                           fake_clock):
+    _lifecycle_clock(monkeypatch, fake_clock)
     life = _life(tmp_path)
     p = _leader(reaper)
-    life._proc_identity = _identity_after(life, p.pid, 3600)
-    t0 = time.monotonic()
+    life._proc_identity = _identity_after(life, fake_clock, 3600)
+    t0 = fake_clock.monotonic()
     ident = life._capture_identity(p.pid)
-    waited = time.monotonic() - t0
+    waited = fake_clock.monotonic() - t0
     assert ident is not None and not life._identity_complete(ident)   # fail-closed
-    assert Lifecycle.CAPTURE_WAIT_S <= waited < Lifecycle.CAPTURE_WAIT_S + 1.0
+    assert Lifecycle.CAPTURE_WAIT_S <= waited < Lifecycle.CAPTURE_WAIT_S + Lifecycle.CAPTURE_POLL_S + 1e-9
 
 
-def test_a_process_that_already_ended_is_not_waited_for(tmp_path, reaper):
+def test_a_process_that_already_ended_is_not_waited_for(tmp_path, reaper, monkeypatch, fake_clock):
     """A component that crashes at once is a zombie until reaped: its /proc entry stays, with
     an empty exe and argv. Its identity can never complete, so the capture must not wait."""
     life = _life(tmp_path)
     p = subprocess.Popen(["true"], start_new_session=True)
     reaper.append(p)                       # NOT waited on here: it stays a zombie
-    deadline = time.monotonic() + 5
-    while life._proc_alive(p.pid) and time.monotonic() < deadline:
-        time.sleep(0.02)
+    _ended_within(p.pid)
     assert not life._proc_alive(p.pid)
-    t0 = time.monotonic()
+    _lifecycle_clock(monkeypatch, fake_clock)
+    t0 = fake_clock.monotonic()
     ident = life._capture_identity(p.pid)
-    assert time.monotonic() - t0 < Lifecycle.CAPTURE_WAIT_S / 4
+    assert fake_clock.monotonic() == t0                               # not one poll waited
     assert not life._identity_complete(ident)
