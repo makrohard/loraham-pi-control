@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import contextlib
 
+import pytest
+
 from lhpc.core.manifest import load_manifest
 from lhpc.core.model import ResourceMode
 from lhpc.core.resources import radio_claim
@@ -298,6 +300,7 @@ def test_meshcore_cli_wrapped_for_slot_handoff():
     assert dict(webui.run_env).get("MESHCORE_INSTANCE_DIR") == "{instance_dir}"   # the same instance level
 
 
+@pytest.mark.wallclock("a real wrapper process holds the kernel lease; the loops are hang guards")
 def test_meshcli_wrapper_flock_lease_is_crash_safe(tmp_path):
     # Exercises the REAL shipped wrapper: it holds a KERNEL flock lease while the CLI runs, and the
     # kernel drops that lease when the process tree dies — even by SIGKILL (a stand-in for a
@@ -355,6 +358,7 @@ def test_meshcli_wrapper_flock_lease_is_crash_safe(tmp_path):
     assert os.path.exists(lock), "the lock file survives — only the kernel lease is gone"
 
 
+@pytest.mark.wallclock("a real wrapper process blocks on the kernel lease; the poll is a hang guard")
 def test_meshcli_wrapper_waits_for_a_transient_lease_holder(tmp_path):
     # Deterministic race barrier: while the WebUI holds the transition lease across its own connect,
     # the CLI wrapper must WAIT (blocking flock), not race in and get evicted. It runs its command
@@ -374,8 +378,19 @@ def test_meshcli_wrapper_waits_for_a_transient_lease_holder(tmp_path):
     holder = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
     fcntl.flock(holder, fcntl.LOCK_EX)
     proc = subprocess.Popen(["bash", str(wrapper), lock, "touch", str(marker)])
+
+    def blocked_on_the_lease():
+        # The kernel lists a flock waiter blocked on the lock file as "-> FLOCK ... <dev>:<inode>";
+        # the inode alone (the device there is the superblock's, which stat() need not report).
+        ino = f":{os.stat(lock).st_ino}"
+        with open("/proc/locks") as f:
+            return any(" -> FLOCK " in line and line.split()[-3].endswith(ino) for line in f)
     try:
-        time.sleep(1.5)
+        for _ in range(300):                    # a hang guard, not a margin
+            if blocked_on_the_lease():
+                break
+            time.sleep(0.05)
+        assert blocked_on_the_lease(), "the CLI must reach the lease and block on it"
         assert not marker.exists(), "CLI must WAIT while the transition lease is held (no race-in)"
         fcntl.flock(holder, fcntl.LOCK_UN)  # WebUI finished connecting -> release
         proc.wait(timeout=15)

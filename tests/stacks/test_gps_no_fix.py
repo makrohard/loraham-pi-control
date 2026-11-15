@@ -40,8 +40,9 @@ def _marker(tmp_path, payload):
 
 
 def _feed(state, **kw):
-    return {"state": state, "detail": "", "sentences": 3, "fixes": 0, "updated": int(time.time()), "pid": os.getpid(),
-            **kw}
+    return {"state": state, "detail": "", "sentences": 3, "fixes": 0,
+            "updated": int(time.time()),    # wallclock: the marker's timestamp, data the product ages
+            "pid": os.getpid(), **kw}
 
 
 def _fix(tmp_path):
@@ -58,6 +59,7 @@ def test_r1_the_feed_state_is_typed_fix_or_no_fix(tmp_path, state, word):
 
 
 @pytest.mark.parametrize("seed", range(20))
+@pytest.mark.wallclock("a stale marker's timestamp, data the product ages against its clock")
 def test_r2_an_unreadable_stale_or_foreign_marker_never_reads_fix_or_no_fix(tmp_path, seed):
     """Tri-state: what the marker does not say is "", never a fix and never "no fix". RED before for the key."""
     rng = random.Random(seed)  # noqa: S311 - a seeded, repeatable test input, no secret

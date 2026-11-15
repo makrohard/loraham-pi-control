@@ -395,6 +395,7 @@ def test_the_marker_check_rejects_an_added_field():
     assert _marker_problems(m) == ["lat"]
 
 
+@pytest.mark.wallclock("the late case writes the marker late on purpose; the waits are hang guards")
 @pytest.mark.parametrize("marker_delay_s", [0.0, 0.3])
 def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path, monkeypatch, marker_delay_s):
     # The monitor socket and the readiness marker are written by the same pump, in that order: the
@@ -522,6 +523,7 @@ def _opens(monkeypatch):
     return calls
 
 
+@pytest.mark.wallclock("a real writer thread feeds the PTY for the monitor's real sample window")
 def test_idle_receiver_gives_one_sample_with_status_and_tail(tmp_path, pty_device, monkeypatch):
     master, dev = pty_device
     svc = _svc_nmea(tmp_path, dev, monkeypatch)
@@ -600,6 +602,7 @@ def test_orphan_feed_is_a_holder_and_broken_monitor_never_falls_through(tmp_path
     assert m["state"] == "held" and "monitor unavailable" in m["note"] and calls == []
 
 
+@pytest.mark.wallclock("the marker's timestamp, data the product ages against its clock")
 def test_live_feed_with_working_monitor_is_via_feed(short_tmp_path, pty_device, monkeypatch):
     _master, dev = pty_device
     svc = _svc_nmea(short_tmp_path, dev, monkeypatch)
@@ -681,6 +684,7 @@ def test_a_consumer_that_starts_during_the_check_is_seen_by_the_recheck(tmp_path
     assert m["state"] == "held" and "started while" in m["note"] and calls == []
 
 
+@pytest.mark.wallclock("a stalled probe and the claim's real hold time against the sample window are the claim")
 def test_a_stalled_source_probe_cannot_extend_the_claim(tmp_path, pty_device, monkeypatch):
     """Audit P1: the re-check under the claim must not build a snapshot — a source probe
     (git, 3 s per checkout) would hold the receiver claim past the lifecycle's 5 s wait. A
@@ -723,6 +727,7 @@ def test_a_stalled_source_probe_cannot_extend_the_claim(tmp_path, pty_device, mo
     assert held[0][2] - held[0][1] < svc._MONITOR_SAMPLE_S + 0.5   # claim = check + read only
 
 
+@pytest.mark.wallclock("a stalled unit probe against the hold budget; the real elapsed time is the claim")
 def test_budget_exhaustion_abandons_the_sample_and_releases(tmp_path, pty_device, monkeypatch):
     """The runtime re-check itself is bounded: a unit probe that stalls (systemctl hanging)
     exhausts the hold budget, the sample is abandoned and the claim released."""
@@ -748,6 +753,7 @@ def test_budget_exhaustion_abandons_the_sample_and_releases(tmp_path, pty_device
         pass
 
 
+@pytest.mark.wallclock("a real writer thread feeds the PTY for the monitor's real sample window")
 def test_bytes_without_sentences_is_no_data_binary_hint(tmp_path, pty_device, monkeypatch):
     master, dev = pty_device
     svc = _svc_nmea(tmp_path, dev, monkeypatch)
@@ -810,6 +816,7 @@ def _acquire(svc, key, op):
         return True
 
 
+@pytest.mark.wallclock("a child process holds the claim for 1 s: the start's real wait for its release is the claim")
 @pytest.mark.parametrize("mode", ["published", "unpublished"])
 def test_a_start_waits_for_the_monitors_bounded_claim(tmp_path, mode):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -823,6 +830,7 @@ def test_a_start_waits_for_the_monitors_bounded_claim(tmp_path, mode):
         child.wait(5)
 
 
+@pytest.mark.wallclock("a child process holds the claim: failing fast, not waiting, is the claim")
 def test_a_start_still_fails_fast_on_another_external_operation(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     key = "claim.gps.serial.dev.4:64"
@@ -836,6 +844,7 @@ def test_a_start_still_fails_fast_on_another_external_operation(tmp_path):
         child.wait(5)
 
 
+@pytest.mark.wallclock("a child process never releases: failing within the real deadline is the claim")
 def test_a_holder_that_never_releases_still_fails_within_the_deadline(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     svc._SELF_LOCK_WAIT_S = 0.6

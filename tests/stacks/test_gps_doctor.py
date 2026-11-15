@@ -99,6 +99,7 @@ def test_doctor_does_not_probe_gpsd_for_other_sources(tmp_path, source):
 
 # ---- the doctor probe must keep doctor's promises ---------------------------------------------
 
+@pytest.mark.wallclock("a real gpsd socket thread answers just inside each read: the one total deadline is the claim")
 def test_the_gpsd_query_honours_one_total_deadline():
     """`timeout` was applied per `recv` across up to 40 reads, so a gpsd that keeps talking
     without ever sending DEVICES could hold the caller for 40x the budget. `doctor` promises a

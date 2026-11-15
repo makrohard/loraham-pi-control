@@ -275,6 +275,7 @@ def test_unsupported_protocol_major_is_unavailable(fake_gpsd):
     assert r["state"] == "unavailable" and "protocol" in r["error"]
 
 
+@pytest.mark.wallclock("a silent gpsd: the budget's real end is the claim")
 def test_a_silent_gpsd_exhausts_the_budget_as_unavailable(fake_gpsd):
     import time
     srv = fake_gpsd(silent=True)

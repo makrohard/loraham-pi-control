@@ -199,6 +199,7 @@ def test_dependency_param_override_channel(tmp_path):
     assert r2.ok and svc.stack_config("kiss").get("tx_freq") == "433.900"
 
 
+@pytest.mark.wallclock("a real child process stands in for the live post-start runner")
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_component_booting_tracks_live_post_runner(tmp_path):
     # A running component reads 'booting' while its post-start (--setcall) runner is still alive,

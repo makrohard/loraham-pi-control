@@ -24,7 +24,8 @@ def _svc(tmp_path, pid):
     d = tmp_path / "state" / "gps" / "meshtastic"
     d.mkdir(parents=True, exist_ok=True)
     (d / "readiness.json").write_text(json.dumps({"state": "connected", "detail": "", "sentences": 1, "fixes": 0,
-                                                  "updated": int(time.time()), "pid": pid}))
+                                                  "updated": int(time.time()),    # wallclock: the marker's timestamp
+                                                  "pid": pid}))
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
