@@ -125,3 +125,45 @@ def test_the_confirmed_working_profile_state_is_gone():
     values = {p.value for p in ProfileState}
     assert "installed-unvalidated" in values                    # anchor: the enum is read
     assert "confirmed-working" not in values
+
+
+def _repo_at(path):
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    (path / "f").write_text("x\n")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "c")
+    return _git(path, "rev-parse", "HEAD")
+
+
+def test_the_source_profile_mapping_stays_without_the_record(tmp_path):
+    """The status profile now derives from the source alone (no confirmed map): a dirty tree reads
+    locally-modified, the same tree clean at its pin installed-unvalidated (second read M1: the mapping lost
+    its only test with tests/stacks/test_profiles.py)."""
+    from lhpc.core.model import Component, ComponentKind, SourceSpec
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.status import StatusProber
+    head = _repo_at(tmp_path / "src" / "c")
+    comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/c", pin_commit=head))
+    prober = StatusProber(RealSystem(), Paths(runtime_root=tmp_path))
+    assert prober.assess_component(comp).profile_state is ProfileState.INSTALLED_UNVALIDATED     # anchor
+    (tmp_path / "src" / "c" / "f").write_text("changed\n")
+    prober = StatusProber(RealSystem(), Paths(runtime_root=tmp_path))
+    assert prober.assess_component(comp).profile_state is ProfileState.LOCALLY_MODIFIED
+
+
+def test_a_planned_pin_reads_planned_commit_in_provenance(tmp_path):
+    """The one wording change of U7 (W290): a planned exact pin is "planned commit", the manifest pin
+    itself still "pinned commit" (second read M2)."""
+    from lhpc.core import provenance
+    from lhpc.core.model import SourceSpec
+    from lhpc.core.probes import RealSystem
+    head = _repo_at(tmp_path / "src" / "c")
+    spec = SourceSpec(path="src/c", pin_commit=head)
+    run = RealSystem().runner
+    dest = str(tmp_path / "src" / "c")
+    planned = provenance.evaluate(run, dest, spec, "pinned", expected_commit=head)
+    assert planned.ok and planned.detail == f"at planned commit {head[:12]} (no trusted signer configured)"
+    plain = provenance.evaluate(run, dest, spec, "pinned")
+    assert plain.ok and plain.detail == f"at pinned commit {head[:12]} (no trusted signer configured)"
