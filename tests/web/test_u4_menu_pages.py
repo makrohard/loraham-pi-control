@@ -310,7 +310,11 @@ def test_a_refused_save_with_another_owners_return_falls_back_to_stacks(tmp_path
               cidrs="", confirm_phrase="")
     # the K4 fallback: the Stacks page with the action's stack open and its radio (the view names neither)
     assert r.headers["Location"] == "/stacks?open=meshcore&radio=r2#stack-webserver-meshcore@r2"
-    assert _slot(parse(_html(c, r.headers["Location"].split("#")[0])), "stack-webserver-meshcore@r2--settings")
+    doc = parse(_html(c, r.headers["Location"].split("#")[0]))
+    assert _slot(doc, "stack-webserver-meshcore@r2--settings")
+    # seen without JS: the panel around the Settings block holding the result renders open (its sibling does not)
+    assert doc.by_id("stack-webserver-meshcore@r2").has_attr("open")
+    assert not doc.by_id("stack-webserver-meshcore-meshcore-node@r2").has_attr("open")
 
 
 def _fields(doc, form):
