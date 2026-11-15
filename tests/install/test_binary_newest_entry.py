@@ -169,6 +169,8 @@ def test_the_meshcom_checkout_follows_the_entrys_commit_not_the_pin(tmp_path, mo
         seen.append((comp.id, pinned_expected[0] if pinned_expected else None))
         return _Failed()
     monkeypatch.setattr(Installer, "adopt_source", adopt)
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)   # staged first, then the checkout
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "STOP-HERE" in res.summary
     assert seen == [("meshcom-qemu", "f" * 40)]
@@ -211,6 +213,8 @@ def test_a_clean_checkout_at_the_pin_is_moved_to_the_entrys_commit_under_the_loc
     monkeypatch.setattr(Installer, "adopt_source", adopt)
     monkeypatch.setattr(ControllerService, "update", lambda self, *a, **k: (
         seen.append("update"), ActionResult(False, "UPDATE-CALLED"))[1])
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)   # staged first, then the checkout
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "STOP-HERE" in res.summary, res.summary
     assert seen == [("meshcom-qemu", True, True, "f" * 40)]

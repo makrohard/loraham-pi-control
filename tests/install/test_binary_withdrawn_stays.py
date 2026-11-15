@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from lhpc.core import binary_install as bi, binary_receipt as brx, source_registry
 from lhpc.core.install import DirtyReport
 from lhpc.core.paths import Paths
@@ -232,3 +234,149 @@ def test_a_newer_entrys_missing_packages_are_refused_before_any_download(tmp_pat
         assert not res.ok and "needs system packages" in res.summary, res.summary
         assert res.data["missing_runtime_deps"] == ["libonly-a1"]
         assert "sudo apt install -y libonly-a1" in res.next_commands
+
+
+def _moving_clone(monkeypatch, svc, commit):
+    """meshcom-qemu's checkout present, proven ours, clean, at `commit`; the adoption really moves it (to its
+    `pinned_expected` commit) and is recorded."""
+    comp = svc.stack("meshcom").component("meshcom-qemu")
+    svc._paths.resolve_source(comp.source.path).mkdir(parents=True, exist_ok=True)
+    state = {"commit": commit, "adopted": []}
+
+    class _Rec:
+        @property
+        def resolved_commit(self):
+            return state["commit"]
+
+    class _Done:
+        status, detail = "done", ""
+
+    class _Installer:
+        def dirty_report(self, d, path):
+            return DirtyReport()
+
+        def adopt_source(self, c, *, pinned_expected=None, **kw):
+            state["adopted"].append(pinned_expected[0])
+            if state.get("refuse"):                 # a failed adoption changes nothing
+                return type("_Failed", (), {"status": "failed", "detail": state["refuse"]})()
+            state["commit"] = pinned_expected[0]
+            return _Done()
+
+        def _index_key(self):
+            return "source-txn-index"
+
+        def _recover_scan(self):
+            return None
+
+        def _pending_journals(self):
+            return []
+
+    monkeypatch.setattr(ControllerService, "_installer", lambda self: _Installer())
+    monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
+    return state
+
+
+def _fail(what):
+    def _raise(*a, **k):
+        raise bi.BinaryInstallError(what)
+    return _raise
+
+
+@pytest.mark.parametrize("step", ["download_artifact", "validate_and_extract", "publish"])
+def test_a_failed_install_leaves_the_binary_and_its_checkout_as_before(tmp_path, monkeypatch, binary_receipt, step):
+    # B installed, its checkout at B's commit; the newer A was built from another commit. A failed download,
+    # extract or swap leaves B and B's checkout exactly as before (one rollback boundary).
+    svc = _svc(tmp_path, monkeypatch)
+    rec = _installed(svc, binary_receipt, "meshcom")
+    files = {rel: (tmp_path / rel).read_bytes() for rel in rec.files}
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
+    monkeypatch.setattr(bi, step, _fail(f"{step} FAILED"))
+    res = svc.update("meshcom", apply=True, source="binary")
+    assert not res.ok and f"{step} FAILED" in res.summary and res.data["rolled_back"], res
+    assert state["commit"] == "b" * 40
+    assert state["adopted"] == ([] if step != "publish" else ["a" * 40, "b" * 40])   # staged first, moved back
+    assert brx.receipt_state(svc._paths, "meshcom")[1].artifact_sha256 == "b" * 64
+    assert {rel: (tmp_path / rel).read_bytes() for rel in rec.files} == files
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_an_install_interrupted_after_the_checkout_move_is_moved_back_by_the_next_install(tmp_path, monkeypatch,
+                                                                                         binary_receipt):
+    # A run died after journaling and moving the checkout: another command leaves the journal (it cannot move a
+    # checkout without the install's locks); the next binary install moves it back, then decides.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "a" * 40)
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    ok, why = svc.binary_recover()
+    assert not ok and "lhpc install meshcom --source binary --yes" in why
+    assert bi.read_journal(svc._paths)[1] == "valid" and state["commit"] == "a" * 40
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, OLDER))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert res.ok and res.data["changes"] == 0, res.summary
+    assert state["commit"] == "b" * 40 and state["adopted"] == ["b" * 40]
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_plan_and_apply_agree_on_a_missing_package_of_the_installed_artifact(tmp_path, monkeypatch, binary_receipt):
+    # The same intact artifact B is listed, and a package its entry names is gone: the plan says what the apply
+    # says (the package refusal with its apt command), not "nothing to install".
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "daemon")
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, pkg: pkg != "libonly-b1")
+    _serve(monkeypatch, "daemon", _entry("daemon", "b" * 64, "b" * 40, INSTALLED, deps=("libonly-b1",)))
+    plan, apply = (svc.update("daemon", apply=a, source="binary") for a in (False, True))
+    for res in (plan, apply):
+        assert not res.ok and "needs system packages" in res.summary, res.summary
+    assert plan.summary == apply.summary and plan.next_commands == apply.next_commands
+
+
+def test_the_same_intact_artifact_moves_a_stale_checkout_to_its_commit_and_touches_no_file(
+        tmp_path, monkeypatch, binary_receipt):
+    # B installed and intact, its checkout left at another commit: installing B again is the repair. The checkout
+    # moves to B's commit; nothing is downloaded and no installed file changes.
+    svc = _svc(tmp_path, monkeypatch)
+    rec = _installed(svc, binary_receipt, "meshcom")
+    files = {rel: (tmp_path / rel).read_bytes() for rel in rec.files}
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))   # downloads refuse
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert res.ok and res.data["changes"] == 1 and "nothing to download" in res.summary, res.summary   # the move
+    assert "  adopted pinned source for meshcom-qemu (run scripts)" in res.details, res.details
+    assert state["adopted"] == ["b" * 40] and state["commit"] == "b" * 40
+    assert {rel: (tmp_path / rel).read_bytes() for rel in rec.files} == files
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_the_same_artifacts_checkout_repair_is_refused_while_the_stack_runs(tmp_path, monkeypatch, binary_receipt):
+    # The running stack runs its scripts from that checkout: the repair is refused under the locks, nothing moved.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
+    monkeypatch.setattr(ControllerService, "_binary_running_components", lambda self, sid: ["meshcom-qemu"])
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "component(s) running" in res.summary, res.summary
+    assert state["adopted"] == [] and state["commit"] == "c" * 40
+
+
+def test_a_checkout_that_cannot_be_moved_back_blocks_the_next_install_by_name_and_keeps_the_journal(
+        tmp_path, monkeypatch, binary_receipt):
+    # An interrupted install moved the checkout from B's commit; moving it back fails: the next install refuses,
+    # naming the checkout, the commit and why, and the journal stays for the retry.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "a" * 40)
+    state["refuse"] = "disk full"
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, OLDER))
+    res = svc.install("meshcom", apply=True, source="binary")
+    path = svc.stack("meshcom").component("meshcom-qemu").source.path
+    assert not res.ok and f"the {path} checkout could not be moved back to {'b' * 9} (disk full)" in res.summary, (
+        res.summary)
+    assert bi.read_journal(svc._paths)[1] == "valid" and state["commit"] == "a" * 40

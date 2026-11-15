@@ -127,16 +127,19 @@ class BinaryOpsMixin:
                                 data={"binary_failed": True, "offer_source": True})
         size_mb = entry.size / (1024 * 1024)
         if not apply:
-            # PLAN text only (D10 order: the "nothing to install" decision, then the packages). The apply decides
-            # nothing and moves nothing before its locks: it takes them, recovers, then decides (below).
+            # PLAN text only, in the apply's order (D10: an installed binary the entry would not replace stays, then
+            # the packages, then the same artifact). The apply decides nothing and moves nothing before its locks:
+            # it takes them, recovers, then decides (below).
             _settled = bi.read_journal(self._paths)[1] == "absent"
             _have, _stuck = self._binary_current(stack_id, entry) if _settled else ("", "")
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
-            if _have:
+            if _have and _have != entry.filename:
                 return self._binary_already_installed(stack_id, entry, _have, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
+            if _have:
+                return self._binary_already_installed(stack_id, entry, _have, [])
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
@@ -180,7 +183,7 @@ class BinaryOpsMixin:
             # here, in this order: recover an interrupted transaction, read the current
             # receipt + registry baseline, verify/adopt the required clone, prove the stack is
             # stopped, THEN open the journal and mutate.
-            _rec_ok, _rec_why = self.binary_recover()
+            _rec_ok, _rec_why = self.binary_recover(sources_locked=True)
             if not _rec_ok:
                 return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_rec_why}",
                                     details=["  nothing to run here — an earlier binary install left "
@@ -215,7 +218,7 @@ class BinaryOpsMixin:
             # then cannot start on a box that never had the checkout. A clean checkout of ours at
             # another commit is moved to the binary's commit by the same adoption (U9: the checkout
             # follows the binary); a dirty, foreign or unproven tree is refused.
-            clone_notes = []
+            _moves = []                                 # (component, the binary's commit, its commit now or "")
             if spec.clone_required:
                 st = self.stack(stack_id)
                 by_id = {c.id: c for c in (st.components if st else ())}
@@ -263,37 +266,16 @@ class BinaryOpsMixin:
                                 next_commands=[src_cmd], data={"binary_failed": True})
                         if not stale:   # clean and at the binary's commit: reuse it
                             continue
-                    # A running stack runs its scripts from this checkout: refused, nothing moved.
-                    if (_run := self._binary_running_refusal(stack_id)) is not None:
-                        return _run
-                    # The source lock for this path may be held by an OUTER boundary (the
-                    # auto-install run, `locked=True`) **or** by THIS call's own guard, which
-                    # covers every path in `spec.covers` (see the `if not locked:` block above).
-                    # Either way, re-acquiring it here self-contends and the adoption fails —
-                    # reported as "another source operation is in progress" naming a PID that is
-                    # really our own stale owner record. Passing the bare `locked` told adoption
-                    # the lock was free whenever the guard was ours, which made `install --source
-                    # binary` impossible for any stack with `clone_required` (MeshCom: the artifact
-                    # runs run.sh / gps-relay.py out of the pinned checkout, so it must be adopted).
-                    _guard_held = locked or (
-                        comp.source is not None
-                        and comp.source.path in set(self._binary_source_paths(stack_id)))
-                    # The binary's EXACT commit, not the known-working selector or the pin (U9).
-                    act = inst.adopt_source(
-                        comp, source="pinned", locked=_guard_held, force=dest.is_dir(),
-                        pinned_expected=(want, "the binary artifact's commit"))
-                    if act.status == "failed":
-                        return ActionResult(
-                            False,
-                            f"Binary install of '{stack_id}' blocked: {cid} needs its source "
-                            f"checkout (run scripts live there) and it could not be adopted "
-                            f"({act.detail}).",
-                            next_commands=[src_cmd], data={"binary_failed": True})
-                    clone_notes.append(f"  adopted pinned source for {cid} (run scripts)")
-            # AUTHORITATIVE "already installed" (the same artifact): after recovery, under the locks, with
-            # the required clones proven above — an open transaction is never read as installed.
-            if (_have := self._binary_current(stack_id, entry)[0]):
-                return self._binary_already_installed(stack_id, entry, _have, clone_notes)
+                    _moves.append((comp, want, (rec.resolved_commit or "") if dest.is_dir() else ""))
+            # Nothing is moved here. A running stack runs its scripts from these checkouts: refused.
+            if _moves and (_run := self._binary_running_refusal(stack_id)) is not None:
+                return _run
+            if _have:   # the same artifact, intact: only its checkouts may need the repair, no binary change
+                notes, _cerr = bi.move_clones(self, stack_id, _moves, locked)
+                if _cerr:
+                    return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_cerr}",
+                                        next_commands=[src_cmd], data={"binary_failed": True})
+                return self._binary_already_installed(stack_id, entry, _have, notes)
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
@@ -336,7 +318,14 @@ class BinaryOpsMixin:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return ActionResult(False, f"Binary install of '{stack_id}' blocked: {exc.message}",
                                     next_commands=[src_cmd], data={"binary_failed": True})
+            clone_notes: list = []
             try:
+                # STAGED FIRST: download, verify and extract change nothing outside the staging directory.
+                tar_path = os.path.join(tmpdir, entry.filename)
+                stage = os.path.join(tmpdir, "stage")
+                os.makedirs(stage, exist_ok=True)
+                bi.download_artifact(entry, tar_path)
+                files = bi.validate_and_extract(tar_path, stage, spec.publish_roots)
                 if auth_journal:
                     # The published firmware has no mesh password: the bridge must not be launched
                     # with --password-file. Journaled above, so this is undoable either way.
@@ -346,11 +335,10 @@ class BinaryOpsMixin:
                         if not _r.ok:
                             raise bi.BinaryInstallError(f"could not switch the mesh password of {k} off ({_r.summary})")
                     _auth_restore = auth_journal["previous"]
-                tar_path = os.path.join(tmpdir, entry.filename)
-                stage = os.path.join(tmpdir, "stage")
-                os.makedirs(stage, exist_ok=True)
-                bi.download_artifact(entry, tar_path)
-                files = bi.validate_and_extract(tar_path, stage, spec.publish_roots)
+                # The supporting checkouts move WITH the binary swap, inside this transaction (journaled first).
+                clone_notes, _cerr = bi.move_clones(self, stack_id, _moves, locked, txn=True)
+                if _cerr:
+                    raise bi.BinaryInstallError(_cerr)
                 # The transaction stays OPEN across promotion, probes and the receipt write:
                 # the journal carries the displaced files, the newly created ones, the PREVIOUS
                 # receipt and the previous auth value, so any failure below restores the old
@@ -399,7 +387,7 @@ class BinaryOpsMixin:
                 # created are removed, the previous receipt and auth are restored. A failed update
                 # never costs the operator their working install — not even when the diagnostic
                 # below fails (closed stderr, a raising __repr__/__str__).
-                _rb_ok, _rb_why = self.binary_recover()
+                _rb_ok, _rb_why = self.binary_recover(sources_locked=True)
                 _unexpected = {}
                 if not isinstance(exc, (bi.BinaryInstallError, OSError, tarfile.TarError,
                                         PathContainmentError)):
@@ -427,7 +415,7 @@ class BinaryOpsMixin:
                 # Ctrl-C / SystemExit inside the transaction: unwind NOW (a half-switched install
                 # must not wait for the next command), then let the original propagate unchanged.
                 # A failing unwind leaves the journal open for that next command to recover.
-                best_effort(self.binary_recover,
+                best_effort(lambda: self.binary_recover(sources_locked=True),
                             what=f"binary install of '{stack_id}': the unwind after the interrupt "
                                  "failed — the next command recovers it")
                 raise
@@ -516,10 +504,12 @@ class BinaryOpsMixin:
                       if cid in ids and cs.run_state in up)
 
     @invalidates_snapshot
-    def binary_recover(self) -> tuple[bool, str]:
+    def binary_recover(self, *, sources_locked: bool = False) -> tuple[bool, str]:
         """THE authoritative recovery for an open/interrupted binary transaction — files,
-        receipt AND auth in one operation. Called under the locks before any new binary work
-        and by the in-process failure path, so a crash and an exception recover identically."""
+        receipt, auth AND the supporting checkouts it moved, in one operation. Called under the locks before any
+        new binary work and by the in-process failure path, so a crash and an exception recover identically.
+        A moved checkout goes back only under the install's source locks (`sources_locked`); any other caller
+        leaves the journal for the next binary install, which recovers it."""
         # A KILLED run (OOM, power cut) cannot run its own cleanup, and each staging directory
         # holds a whole artifact — tens of megabytes on an SD card. Every binary operation is
         # serialized under the same locks, so anything left here is stale by definition
@@ -536,6 +526,11 @@ class BinaryOpsMixin:
         if j.get("state") == "committed":
             # The commit is durable: the NEW install is the truth. Only bookkeeping remains.
             return bi.drop_txn(self._paths, j), ""
+        if (clones := j.get("clones") or {}) and not sources_locked:
+            return False, (f"a binary install of '{stack_id}' was interrupted after moving its supporting checkout: "
+                           f"lhpc install {stack_id} --source binary --yes moves it back")
+        if clones and not (r := bi.restore_clones(self, stack_id, clones))[0]:
+            return r                             # journal RETAINED: the next binary install retries
         ok, why = bi.rollback_files(self._paths, j)
         if not ok:
             return False, why                    # journal RETAINED as evidence

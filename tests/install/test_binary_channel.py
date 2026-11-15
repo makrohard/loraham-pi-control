@@ -911,7 +911,7 @@ def _interrupted_meshcom_install(svc, monkeypatch, binary_receipt):
                                   _allow_managed_params=frozenset({"password_file"})).ok
     seen, real = [], ControllerService.binary_recover
     monkeypatch.setattr(ControllerService, "binary_recover",
-                        lambda self: seen.append(real(self)) or seen[-1])
+                        lambda self, **kw: seen.append(real(self, **kw)) or seen[-1])
     return seen
 
 
@@ -1275,10 +1275,10 @@ def test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates(
         interrupted.append(True)
         raise ctrl_c
 
-    def recover(self):
+    def recover(self, **kw):
         if interrupted:                       # only the unwind after the Ctrl-C fails
             raise OSError(5, "I/O error")
-        return real_recover(self)
+        return real_recover(self, **kw)
     new = _fail_past_publish(svc, tmp_path, monkeypatch, stub_pipeline, interrupt)
     monkeypatch.setattr(ControllerService, "binary_recover", recover)
     with pytest.raises(KeyboardInterrupt) as got:
@@ -1289,7 +1289,8 @@ def test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates(
     assert lines[0].endswith(": OSError: [Errno 5] I/O error"), lines
     assert bi.read_journal(svc._paths)[1] != "absent"          # left for the next command
     monkeypatch.setattr(ControllerService, "binary_recover", real_recover)
-    ok, why = svc.binary_recover()
+    # the next binary install recovers under its source locks (the journal holds the moved checkout)
+    ok, why = svc.binary_recover(sources_locked=True)
     assert ok, why
     assert bi.read_journal(svc._paths)[1] == "absent"
     assert not any((tmp_path / f).exists() for f in new)
@@ -1693,14 +1694,14 @@ def test_a_binary_install_switches_off_every_meshcom_instances_mesh_password(tmp
                                       _allow_managed_params=frozenset({"password_file"})).ok
     monkeypatch.setattr(type(svc), "hmac_applies", lambda self, sid: sid == "meshcom")
     monkeypatch.setattr(Installer, "adopt_source", lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
-    stub_pipeline(svc, download=lambda entry, path: None)
+    stub_pipeline(svc)                     # staged first; the swap comes after the password switch
     during = {}
 
     def broken(*a, **k):
         svc._invalidate_config()
         during.update({r: svc._resolved_param_value("meshcom", "run", hc, "password_file", "", i) for r, i in ins.items()})
         raise ValueError("bad member header")
-    monkeypatch.setattr(bi, "validate_and_extract", broken)
+    monkeypatch.setattr(bi, "publish", broken)
     res = svc.binary_install("meshcom", apply=True)
     assert not res.ok and during == {"r1": "", "r2": ""}, during
     svc._invalidate_config()
@@ -1722,7 +1723,7 @@ def _two_meshcom_passwords(tmp_path, monkeypatch, stub_pipeline, saved=("r1", "r
                                       _allow_managed_params=frozenset({"password_file"})).ok
     monkeypatch.setattr(type(svc), "hmac_applies", lambda self, sid: sid == "meshcom")
     monkeypatch.setattr(Installer, "adopt_source", lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
-    stub_pipeline(svc, download=lambda entry, path: None)
+    stub_pipeline(svc)                     # staged first; the swap (publish) comes after the password switch
     hc = svc._hmac_component("meshcom").id
 
     def pw():
@@ -1743,7 +1744,7 @@ def test_a_radio_gone_before_the_rollback_is_refused_by_name_and_no_other_radio_
     def broken(*a, **k):
         radios_fixture.write(tmp_path, (radios_fixture.R1,))
         raise ValueError("bad member header")
-    monkeypatch.setattr(bi, "validate_and_extract", broken)
+    monkeypatch.setattr(bi, "publish", broken)                        # after the password switch
     res = svc.binary_install("meshcom", apply=True)
     text = " ".join([res.summary, *res.details])
     assert not res.ok and "meshcom@r2 names no radio now" in text, text
@@ -1762,7 +1763,7 @@ def test_every_journaled_password_is_tried_and_the_failures_are_named_together(t
         if (values or {}).get("password_file") and getattr(inst, "rid", "") == "r1":
             return ActionResult(False, "r1 store unwritable")
         return real(self, target, values=values, inst=inst, **k)
-    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad member")))
+    monkeypatch.setattr(bi, "publish", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad member")))
     monkeypatch.setattr(type(svc), "save_config_bundle", save)
     res = svc.binary_install("meshcom", apply=True)
     text = " ".join([res.summary, *res.details])

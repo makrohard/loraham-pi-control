@@ -600,6 +600,53 @@ def _journal_update(paths: Paths, **fields) -> dict:
     return j
 
 
+def record_clone(paths: Paths, comp_id: str, commit: str | None) -> None:
+    """Journal a supporting checkout's commit BEFORE the transaction moves it ("" = it did not exist), so the
+    rollback can move it back; None forgets it (its adoption failed and changed nothing)."""
+    j, _state = read_journal(paths)
+    clones = {k: v for k, v in ((j or {}).get("clones") or {}).items() if k != comp_id}
+    _journal_update(paths, clones=clones if commit is None else {**clones, comp_id: commit})
+
+
+def move_clones(svc, stack_id: str, moves, locked: bool, txn: bool = False) -> tuple[list, str]:
+    """Adopt each supporting checkout in `moves` [(component, the binary's commit, its commit now or "")] at
+    the binary's commit, under the held locks: (notes, "") or (notes so far, why it failed). In a binary
+    transaction (`txn`) each checkout's commit is journaled BEFORE it is moved, so the rollback (in-process or
+    the next recovery) moves it back: a failed install never leaves the old binary with new run scripts."""
+    inst, notes = svc._installer(), []
+    for comp, want, prev in moves:
+        if txn:
+            record_clone(svc._paths, comp.id, prev)
+        # The source lock of this path is held by an OUTER boundary (the auto-install run, `locked`) or by
+        # THIS install's own guard over `_binary_source_paths`: re-acquiring it would self-contend.
+        held = locked or comp.source.path in set(svc._binary_source_paths(stack_id))
+        act = inst.adopt_source(comp, source="pinned", locked=held,
+                                force=svc._paths.resolve_source(comp.source.path).is_dir(),
+                                pinned_expected=(want, "the binary artifact's commit"))   # exact, not the pin (U9)
+        if act.status == "failed":                 # the adoption changes nothing when it fails
+            if txn:
+                record_clone(svc._paths, comp.id, None)
+            return notes, (f"{comp.id} needs its source checkout (run scripts live there) and it could not "
+                           f"be adopted ({act.detail}).")
+        notes.append(f"  adopted pinned source for {comp.id} (run scripts)")
+    return notes, ""
+
+
+def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str]:
+    """Move every checkout a rolled-back binary transaction moved back to its journaled commit (under the
+    install's locks). One that did not exist before stays as adopted: nothing older to return to."""
+    st = svc.stack(stack_id)
+    by_id = {c.id: c for c in (st.components if st else ())}
+    for cid, prev in clones.items():
+        if not prev or (comp := by_id.get(cid)) is None or comp.source is None:
+            continue
+        act = svc._installer().adopt_source(comp, source="pinned", locked=True, force=True,
+                                             pinned_expected=(prev, "the checkout before the failed install"))
+        if act.status == "failed":
+            return False, f"the {comp.source.path} checkout could not be moved back to {prev[:9]} ({act.detail})"
+    return True, ""
+
+
 def backup_path(txn: str, rel: str) -> str:
     return f"state/binary/.backup-{txn}/{rel.replace('/', '__')}"
 

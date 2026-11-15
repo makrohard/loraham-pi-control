@@ -150,8 +150,9 @@ def stub_pipeline(monkeypatch):
     """`stub_pipeline(svc, *, download=None) -> entry`: everything of `binary_install` up to the
     download is answered locally — the index is fetched from nowhere, its entry for the stack
     carries the manifest pins and this box's target (so the real target and pin checks pass),
-    and `zstd` is taken as present. `download` replaces `download_artifact`; by default it
-    raises `BinaryInstallError("DOWNLOAD-REACHED")`, the marker that the gates were passed."""
+    and `zstd` is taken as present. `download` replaces `download_artifact`; by default the download and
+    the extraction stage nothing and the swap (`publish`) raises `BinaryInstallError("DOWNLOAD-REACHED")`,
+    the marker that the gates were passed (it comes after staging, the auth switch and the checkout moves)."""
     from lhpc.core import binary_install as bi
 
     def _stub(svc, *, download=None):
@@ -168,7 +169,10 @@ def stub_pipeline(monkeypatch):
         monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 3, "stacks": {}})
         monkeypatch.setattr(bi, "index_entries", lambda idx, sid: [entry(sid)])
         monkeypatch.setattr(bi, "require_zstd", lambda: None)
-        monkeypatch.setattr(bi, "download_artifact", download or _reached)
+        monkeypatch.setattr(bi, "download_artifact", download or (lambda *a, **k: None))
+        if download is None:
+            monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
+            monkeypatch.setattr(bi, "publish", _reached)
         return entry
     return _stub
 

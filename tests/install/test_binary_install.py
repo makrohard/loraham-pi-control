@@ -967,10 +967,15 @@ def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch, stu
     assert adopted == []
 
     stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
-        bi.BinaryInstallError("stop after clone")))
+        bi.BinaryInstallError("stop at the download")))
     r = svc.binary_install("meshcom", apply=True)
     assert not r.ok and r.data["rolled_back"] is True
-    assert ("meshcom-qemu", "pinned") in adopted        # adopted BEFORE the download
+    assert adopted == []                                # staged FIRST: a failed download moved nothing
+
+    stub_pipeline(svc)                                  # staged; the swap (publish) stops it
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data["rolled_back"] is True and "DOWNLOAD-REACHED" in r.summary, r.summary
+    assert ("meshcom-qemu", "pinned") in adopted        # adopted inside the transaction, BEFORE the overlay
 
 
 def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp_path, monkeypatch, stub_pipeline):
@@ -1074,11 +1079,15 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
         raise _ReachedAdoption()
 
     monkeypatch.setattr(inst_cls, "adopt_source", _spy)
+    # Staging comes first (nothing outside the staging directory changes): the artifact is answered locally.
+    monkeypatch.setattr(_bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(_bi, "validate_and_extract", lambda *a, **k: [])
 
     dest = svc._paths.resolve_source("src/meshcom-qemu-raspi")
     assert not dest.is_dir(), "the checkout must be absent so adoption is required"
-    with pytest.raises(_ReachedAdoption):
-        svc.binary_install("meshcom", apply=True)
+    # The adoption runs inside the binary transaction: the spy's exception is a rolled-back failure.
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data.get("unexpected") == "_ReachedAdoption" and r.data.get("rolled_back"), r
 
     assert seen["comp"] == "meshcom-qemu"
     assert seen["locked"] is True, "adoption must be told the source lock is already held"
@@ -1534,7 +1543,7 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
         def adopt_source(self, c, *, force=False, source="pinned", pinned_expected=None,
                          locked=False):
             state["adopted"].append((c.id, source, force, locked, (pinned_expected or ("",))[0]))
-            state["commit"] = c.source.pin_commit             # the real adoption moves it
+            state["commit"] = (pinned_expected or (c.source.pin_commit,))[0]   # the real adoption moves it
 
             class _Done:
                 status, detail = "done", "moved to the pin"
@@ -1564,11 +1573,14 @@ def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch
     the operator ran `lhpc update meshcom-qemu --source pinned` by hand (found on e293). A CLEAN
     checkout of ours is now moved under the install's own locks, by the adoption a missing checkout gets."""
     svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
-    stub_pipeline(svc)                                         # stops at DOWNLOAD-REACHED
+    stub_pipeline(svc)                                         # the swap stops at DOWNLOAD-REACHED
     res = svc.binary_install("meshcom", apply=True)
-    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit)], res
+    # moved to the pin inside the transaction, then moved back by the rollback of the failed swap
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit),
+                                ("meshcom-qemu", "pinned", True, True, "0" * 40)], res
+    assert state["commit"] == "0" * 40                         # the checkout is exactly as before
     assert state["updated"] == []                              # no source update inside the install
-    assert "DOWNLOAD-REACHED" in res.summary, res.summary      # past the clone gate
+    assert "DOWNLOAD-REACHED" in res.summary and res.data["rolled_back"], res.summary   # past the clone gate
 
 
 def test_a_checkout_made_dirty_before_the_locks_is_refused_and_nothing_moved_before_them(
@@ -1620,11 +1632,13 @@ def test_inside_an_auto_install_run_a_clean_clone_at_an_older_pin_is_moved_to_th
     the row sent the operator to a source build. Under the held locks the clean checkout of ours
     is now moved to the manifest pin by the same adoption a missing checkout gets."""
     svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
-    stub_pipeline(svc)                                         # stops at DOWNLOAD-REACHED
+    stub_pipeline(svc)                                         # the swap stops at DOWNLOAD-REACHED
     res = svc.binary_install("meshcom", apply=True, locked=True)
-    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit)]
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit),
+                                ("meshcom-qemu", "pinned", True, True, "0" * 40)], res   # moved, then back
+    assert state["commit"] == "0" * 40
     assert state["updated"] == []                              # no generic update inside the run
-    assert "DOWNLOAD-REACHED" in res.summary, res.summary      # past the clone gate
+    assert "DOWNLOAD-REACHED" in res.summary and res.data["rolled_back"], res.summary   # past the clone gate
 
 
 def _older_known_working(svc, commit="7" * 40):
@@ -1676,10 +1690,10 @@ def test_a_stale_clone_moves_to_the_manifest_pin_not_an_older_known_working(tmp_
     monkeypatch.setattr(type(svc._installer()), "dirty_report", lambda self, d, p: DirtyReport())
     seen = []
     _record_adoption_target(monkeypatch, svc, seen)
-    stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
+    stub_pipeline(svc)                           # the artifact is staged first; the adoption stop comes next
     r = svc.binary_install("meshcom", apply=True)
-    assert not r.ok and r.data["binary_failed"]  # stopped at staging by the test
-    assert seen and all(c == comp.source.pin_commit for _cid, c in seen), seen
+    assert not r.ok and r.data["binary_failed"]  # stopped at the checkout's staging by the test
+    assert seen == [("meshcom-qemu", comp.source.pin_commit)], seen   # a failed adoption is not moved back
 
 
 def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_working(tmp_path, monkeypatch, stub_pipeline):
@@ -1689,9 +1703,9 @@ def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_worki
     assert not svc._paths.resolve_source(comp.source.path).exists()
     seen, recs = [], []
     _record_adoption_target(monkeypatch, svc, seen, recs)
-    stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
+    stub_pipeline(svc)                           # the artifact is staged first; the adoption stop comes next
     r = svc.binary_install("meshcom", apply=True)
-    assert not r.ok and r.data["binary_failed"]  # stopped at staging by the test
+    assert not r.ok and r.data["binary_failed"]  # stopped at the checkout's staging by the test
     assert seen == [("meshcom-qemu", comp.source.pin_commit)], seen
     # The staging gets the pre-clone record the real path holds for it (CR3-3b): the
     # `<journal stem><candidate>.staging` leaf, written before the candidate exists.
