@@ -774,18 +774,24 @@ def _openhop_dirs(root) -> str:
 
 def plugin_managers(root) -> list[tuple[int, pathlib.Path]]:
     """(pid, its `--plugins-root`) of each of upstream's MeshCore plugin managers (`python -m repeater.plugins`) serving
-    THIS runtime root: its plugins root lies under one of the root's openHop dirs (`_openhop_dirs`, the root at a word
-    start), so two labs on one host never see each other's manager. The repeater roles spawn exactly one per
-    instance; chat spawns none."""
+    THIS runtime root: its plugins root lies under one of the root's openHop dirs (`_openhop_dirs`, matched from the
+    value's start), so two labs on one host never see each other's manager. The argv is the process's own
+    (`/proc/<pid>/cmdline`, NUL-separated), so a root with whitespace keeps its path. The repeater roles spawn exactly
+    one per instance; chat spawns none."""
     import subprocess as _sp
-    rx = re.compile(r"(?:^|\s)" + _openhop_dirs(root))      # the root itself: a lab at /y<root> never counts
-    r = _sp.run(["pgrep", "-f", "-a", "repeater.plugins"], capture_output=True, text=True,
+    rx = re.compile(_openhop_dirs(root))                       # .match: a lab at /y<root> never counts
+    r = _sp.run(["pgrep", "-f", "repeater.plugins"], capture_output=True, text=True,
                 check=False)                                   # no match = an empty list
     out = []
-    for line in r.stdout.splitlines():
-        argv = line.split()
-        if "--plugins-root" in argv[:-1] and rx.search(line):
-            out.append((int(argv[0]), pathlib.Path(argv[argv.index("--plugins-root") + 1])))
+    for pid in r.stdout.split():
+        try:
+            argv = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="surrogateescape").split("\0")
+        except OSError:                                        # gone since pgrep listed it
+            continue
+        if "--plugins-root" in argv[:-1]:                      # cmdline ends in NUL: the value follows in argv
+            plugins = argv[argv.index("--plugins-root") + 1]
+            if rx.match(plugins):
+                out.append((int(pid), pathlib.Path(plugins)))
     return sorted(out)
 
 

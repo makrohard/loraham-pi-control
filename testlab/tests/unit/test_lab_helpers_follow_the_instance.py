@@ -15,6 +15,7 @@ from lhpc_testlab.release import (
     plugin_manager_marker,
     plugin_manager_markers,
     plugin_manager_pids,
+    plugin_managers,
 )
 
 from lhpc.core import instances, radios
@@ -79,6 +80,22 @@ def test_a_running_managers_marker_is_its_own_never_another_instances(tmp_path):
         own.write_text("")
         assert plugin_manager_marker(plugins) == own
         assert_plugin_manager_running(tmp_path)                           # r1's own does
+    finally:
+        m.kill()
+        m.wait(timeout=5)
+
+
+def test_a_root_with_whitespace_keeps_its_managers_path(tmp_path):
+    # G1-RVH-CODE round 2 BLOCKING: a split `pgrep -a` line cut the --plugins-root at the space
+    root = tmp_path / "lab run"
+    plugins = root / "state" / "r1" / "openhop" / "plugins"
+    own = root / "state" / "r1" / "openhop" / ".lhpc-plugin-manager-active"
+    own.parent.mkdir(parents=True)
+    own.write_text("")
+    m = _manager(plugins)
+    try:
+        assert_plugin_manager_running(root)                               # its own marker, found at the whole path
+        assert plugin_managers(root) == [(m.pid, plugins)]
     finally:
         m.kill()
         m.wait(timeout=5)
