@@ -253,6 +253,7 @@ def test_synthesized_fixed_sentences_are_valid_nmea():
     assert "GPGGA" in lines[0] and "GPRMC" in lines[1]
 
 
+@pytest.mark.wallclock("a real drain thread empties the PTY; the deadline is a hang guard")
 def test_the_pty_feed_is_drained_so_a_probing_consumer_cannot_block_it(tmp_path):
     """meshtasticd PROBES the chip and writes into the PTY. With nothing draining, that buffer
     fills and blocks the writer — the feed stops and the node silently loses position."""
@@ -295,6 +296,7 @@ def test_a_stopped_feed_leaves_nothing_that_looks_live(tmp_path):
     assert not os.path.exists(ready.path)
 
 
+@pytest.mark.wallclock("a timestamp 999 s back, data the product ages against its clock")
 def test_readiness_follows_the_source_not_the_endpoint(tmp_path):
     """A PTY exists the moment it is created, long before any position flows; readiness that
     trusted the path would report a healthy GPS for a dead gpsd."""
@@ -311,6 +313,7 @@ def test_readiness_follows_the_source_not_the_endpoint(tmp_path):
     assert ready.state == "source-lost"
 
 
+@pytest.mark.wallclock("a real pump thread ticks each _FIXED_INTERVAL_S; the deadline is a hang guard")
 def test_the_fixed_pump_keeps_emitting_with_a_current_timestamp(tmp_path):
     """A consumer discards a fix whose timestamp is stale, so a station that does not move
     must still tick."""
@@ -780,7 +783,8 @@ def _write_marker(tmp_path, consumer, state, detail="", sentences=0, age=0.0, pi
     d.mkdir(parents=True, exist_ok=True)
     (d / "readiness.json").write_text(json.dumps(
         {"state": state, "detail": detail, "sentences": sentences,
-         "updated": int(time.time() - age), "pid": os.getpid() if pid is None else pid}))
+         "updated": int(time.time() - age),    # wallclock: the marker's timestamp, data the product ages
+         "pid": os.getpid() if pid is None else pid}))
 
 
 def _feed_comp(svc, stack, cid):
@@ -970,6 +974,7 @@ def test_no_receiver_claim_means_no_conflict(tmp_path):
                     if str(b.get("resource", "")).startswith("gps.")]
 
 
+@pytest.mark.wallclock("a real NMEA pump thread; the deadline is a hang guard")
 def test_the_feed_refuses_a_device_that_changed_underneath_it(tmp_path):
     """The lock key comes from a stat() of the path; opening it is a SECOND resolution, and
     `/dev/serial/by-id/...` is a symlink that can be repointed between the two. Without the
@@ -1188,6 +1193,7 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
+@pytest.mark.wallclock("the stop's real latency against the blocking call's own timeout is the claim")
 @pytest.mark.parametrize("state", ["silent-gpsd", "connect-hangs"])
 def test_a_stop_signal_ends_the_feed_at_once_while_it_blocks(short_tmp_path, monkeypatch, state):
     """The lifecycle stops a feed with SIGTERM and waits `stop_timeout` (5 s) for it to exit. A
@@ -1434,6 +1440,7 @@ def test_a_stop_signal_before_the_pump_starts_skips_the_pump(short_tmp_path, mon
     assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
 
 
+@pytest.mark.wallclock("the late case holds the chmod before listen open on purpose; the deadlines are hang guards")
 @pytest.mark.parametrize("listen_delay_s", [0.0, 0.5])
 def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, monkeypatch, listen_delay_s):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION
@@ -1507,6 +1514,7 @@ def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, m
     assert not os.path.exists(state)
 
 
+@pytest.mark.wallclock("a real bridge serves the position socket; the deadline is a hang guard")
 def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
     """A navigation sentence WITHOUT a usable fix must reach the consumer as
     {"fix": false} — silence would leave the old moving position advertised."""
@@ -1535,6 +1543,7 @@ def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
         out.close()
 
 
+@pytest.mark.wallclock("the chmod before listen is held open 0.5 s on purpose; the deadline is a hang guard")
 def test_the_position_socket_path_appears_only_once_it_accepts(short_tmp_path, monkeypatch):
     """A client that finds the path must be able to connect at once: publish() binds and
     listens under a temp name and renames it onto the link, so there is no moment where the
@@ -1606,6 +1615,7 @@ def test_a_position_socket_publish_failing_after_the_rename_leaves_no_path(short
     assert made and made[0].fileno() == -1, "the listening socket must be closed"
 
 
+@pytest.mark.wallclock("a real bridge serves the position socket; the deadline is a hang guard")
 @pytest.mark.parametrize("bad_lat", ["4875.000", "-1207.0", "487", "48nan"])
 def test_a_malformed_coordinate_never_becomes_a_position(short_tmp_path, bad_lat):
     """A checksum-valid fix whose latitude field is malformed (minutes >= 60, signed, short,
@@ -1667,6 +1677,7 @@ def test_run_refuses_an_unknown_consumer(tmp_path):
     assert run("not-a-consumer", Paths(runtime_root=tmp_path)) == EXIT_CONFIG
 
 
+@pytest.mark.wallclock("the real feed process end to end; the deadline is a hang guard")
 def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path, fake_gpsd):
     """The full path: resolve the plan, publish the PTY, relay from a live gpsd, then remove
     BOTH the endpoint and the readiness marker on the way out."""
@@ -1701,6 +1712,7 @@ def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path, fake_gpsd
     assert not os.path.exists(state), "a stopped feed must leave no readiness marker"
 
 
+@pytest.mark.wallclock("the real fixed feed ticks each _FIXED_INTERVAL_S; the deadlines are hang guards")
 def test_run_serves_a_fixed_position_without_any_source(tmp_path):
     """`fixed` needs no gpsd and no device: the feed synthesises sentences itself."""
     import threading
@@ -1736,6 +1748,7 @@ def test_run_serves_a_fixed_position_without_any_source(tmp_path):
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("a real NMEA pump thread reads a FIFO; the deadline is a hang guard")
 def test_a_device_sending_binary_is_reported_not_waited_on(tmp_path):
     """Found on hardware: gpsd switches u-blox receivers into UBX BINARY mode, and they stay
     there after gpsd stops. The feed read 434 bytes and forwarded none, sitting at "waiting
@@ -2035,6 +2048,7 @@ def test_a_running_probe_that_cannot_answer_refuses_the_switch(tmp_path):
     (True, "a bool — which IS an int in Python, and would read as the always-alive pid 1"),
     ("123", "a string pid"),
 ])
+@pytest.mark.wallclock("the marker's timestamp, data the product ages against its clock")
 def test_a_marker_without_a_usable_pid_is_rejected_everywhere(tmp_path, pid, why):
     """The bridge writes its pid on every refresh, so a marker without a usable one is not from a
     feed we are running. Start and status must agree, or the console shows RUNNING for a feed the
@@ -2421,6 +2435,7 @@ def test_a_source_that_talks_without_a_fix_is_reachable_not_live(tmp_path):
     assert got["nav"] == 42, "and `nav` records what was actually navigation traffic"
 
 
+@pytest.mark.wallclock("the marker's timestamp, data the product ages against its clock")
 def test_a_feed_reachable_without_a_fix_still_passes_the_start_gate(tmp_path):
     """The cold-receiver case is documented as a warning: refusing it would make a normal start
     impossible for the first minutes after power-on."""
@@ -2550,8 +2565,13 @@ def test_a_genuinely_off_source_is_not_reported_as_unresolvable(tmp_path):
 
 # ---- gpsd admission, driven through the REAL pump ---------------------------------------------
 
-def _run_gpsd_pump(tmp_path, srv, seconds=1.2):
+def _run_gpsd_pump(tmp_path, srv, seconds=1.2, until=None):
     """Drive `_pump_gpsd` against a fake gpsd and return its readiness marker.
+
+    Without `until` the pump runs `seconds` of real time: the claim is what it did NOT reach in a
+    window in which nothing it waits for arrives. With `until`, the run ends as soon as the
+    readiness satisfies it, so a fake thread that is late under load cannot fail a positive case;
+    `_FEED_UP_S` is only a hang guard.
 
     Deliberately NOT `Readiness.note_data(...)` by hand: the defect this guards lived in the
     pump's connect path, so a test that calls the state machine directly cannot see it.
@@ -2568,7 +2588,12 @@ def _run_gpsd_pump(tmp_path, srv, seconds=1.2):
     t = threading.Thread(target=_pump_gpsd, args=("127.0.0.1", srv.port, out, ready, stop),
                          daemon=True)
     t.start()
-    time.sleep(seconds)
+    if until is None:
+        time.sleep(seconds)    # wallclock: the window in which nothing it waits for arrives
+    else:
+        deadline = time.monotonic() + _FEED_UP_S    # wallclock: a hang guard, not a margin
+        while not until(ready) and time.monotonic() < deadline:    # wallclock: the hang guard
+            time.sleep(0.01)    # wallclock: polls the readiness the pump thread writes
     stop.set()
     t.join(5)
     out.close()
@@ -2606,7 +2631,7 @@ def test_a_gpsd_that_sends_only_a_banner_never_admits_a_start(tmp_path, fake_gps
     """Non-navigation traffic is not evidence of a position source either."""
     srv = fake_gpsd(sentences=[_nmea(b"$GPTXT,01,01,02,u-blox ag - www.u-blox.com").decode()])
     try:
-        ready = _run_gpsd_pump(tmp_path, srv)
+        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.sentences >= 3)
     finally:
         srv.close()
     assert ready.state == "starting", f"a banner-only gpsd must not be admitted ({ready.state})"
@@ -2618,7 +2643,7 @@ def test_a_gpsd_sending_navigation_without_a_fix_is_admitted_as_connected(tmp_pa
     """The cold-receiver case must still start the stack."""
     srv = fake_gpsd(sentences=[_nmea(b"$GPGGA,120000.00,,,,,0,00,99.9,0.0,M,0.0,M,,").decode()])
     try:
-        ready = _run_gpsd_pump(tmp_path, srv)
+        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.nav >= 3)
     finally:
         srv.close()
     assert ready.state == "connected" and ready.nav > 0 and ready.fixes == 0, ready.state
@@ -2628,7 +2653,7 @@ def test_a_gpsd_sending_a_real_fix_becomes_ready(tmp_path, fake_gpsd):
     srv = fake_gpsd(sentences=[
         _nmea(b"$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,").decode()])
     try:
-        ready = _run_gpsd_pump(tmp_path, srv)
+        ready = _run_gpsd_pump(tmp_path, srv, until=lambda r: r.state == "ready")
     finally:
         srv.close()
     assert ready.state == "ready" and ready.fixes > 0, ready.state
