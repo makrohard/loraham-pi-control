@@ -627,7 +627,7 @@ def test_control_a_release_less_source_still_installs_its_default_branch_head(bo
 
 NOT_IN_LINE = "is not in the history of the stable target"
 UNPUBLISHED = "is not in the upstream's published history: refused"
-NOT_NEWER = "is not newer than the installed version: refused"
+NOT_NEWER = "is not newer than the installed version: refused; use --source pinned to go back to LHPC's tested versions"
 NOT_ONE_LINE = "its release and version tags are not one line of history; refused; use --source pinned or dev"
 
 
@@ -852,6 +852,20 @@ def test_two_paths_of_one_remote_read_one_target_in_one_install(box):
     box.api_calls.clear()
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     assert len(box.api_calls) == 1                    # RED before: one releases read per path
+    assert box.head() == box.head(LIB) == box.c[1]
+
+
+def test_an_update_installing_a_second_path_of_one_remote_reads_only_the_gates_target(box, monkeypatch):
+    from lhpc.core import stable_lane
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # src/app on the release
+    box.use(GH, lib=True)                             # src/lib of the same remote, not installed
+    gates = []
+    real_gate = stable_lane.update_gate
+    monkeypatch.setattr(stable_lane, "update_gate", lambda *a, **k: (gates.append(1), real_gate(*a, **k))[1])
+    box.api_calls.clear()
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert gates and len(box.api_calls) == len(gates)  # RED before: the plan read the remote again for src/lib
     assert box.head() == box.head(LIB) == box.c[1]
 
 

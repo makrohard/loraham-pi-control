@@ -139,7 +139,7 @@ class MaintenanceOpsMixin:
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
 
-    def update_status(self, comp) -> str:
+    def update_status(self, comp, stable_ref=None) -> str:
         """Is the installed source up to date with its GitHub remote branch?
         Returns "up-to-date", "update-available", or "unknown" (no remote/git/net).
         Uses a bounded `git ls-remote` — no fetch, no mutation.
@@ -147,7 +147,7 @@ class MaintenanceOpsMixin:
         Thin wrapper over `_update_probe`, preserving the 3-value contract its callers expect
         (`update()`'s dry-run): a probe ERROR collapses back to "unknown" here."""
         from . import stackupdates
-        status = self._update_probe(comp)["status"]
+        status = self._update_probe(comp, stable_ref and (lambda _remote: stable_ref))["status"]   # the gate's read
         if status == stackupdates.UP_TO_DATE:
             return "up-to-date"
         if status == stackupdates.BEHIND:
@@ -461,7 +461,8 @@ class MaintenanceOpsMixin:
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
-        frozen_cache = {p: r.frozen() for p, r in (stable_refs or {}).items()}   # stable refs `update` read
+        frozen_cache = {("stable", self._effective_remote(m[1])): stable_refs[p].frozen()   # the gate's targets:
+                        for p, ms in by_path.items() if p in (stable_refs or {}) for m in ms}   # ONE per remote
         for path, members in by_path.items():
             idents = {m[3] for m in members}
             if len(idents) > 1:
@@ -478,9 +479,8 @@ class MaintenanceOpsMixin:
                 # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
                 # selector (incl. 'pinned' — they never use known-working entries): the
                 # plan-time commit IS this run's immutable artifact identity.
-                once = ("stable", self._effective_remote(comp)) if sel == "stable" else path   # one per remote
-                (fz, why) = (frozen_cache.get(path) or frozen_cache.get(once)
-                             or frozen_cache.setdefault(once, self._frozen_ref(comp, sel)))
+                once = ("stable", self._effective_remote(comp)) if sel == "stable" else path
+                (fz, why) = frozen_cache.get(once) or frozen_cache.setdefault(once, self._frozen_ref(comp, sel))
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
                     # known-working composition (then the manifest pin) when dev is
@@ -1859,7 +1859,7 @@ class MaintenanceOpsMixin:
             # routes never do this — they show "unknown" until this is run.
             details = []
             for _, c in items:
-                fresh = self.update_status(c)
+                fresh = self.update_status(c, stable_refs.get(c.source.path))   # the gate's target, no second read
                 details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
                                f"{sel[c.source.path]} version from {c.source.remote or 'local checkout'}")
             return ActionResult(

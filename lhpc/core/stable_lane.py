@@ -275,5 +275,6 @@ def update_refusal(ref: StableRef, installed: str, older: bool | None, why: str 
         why = ref.why or ("" if older is not None else "the installed commit's history could not be read")
         return TRY_LATER + (f" ({why})" if why else "")
     if older:
-        return f"the stable target ({ref.label}) is not newer than the installed version: refused"
+        return (f"the stable target ({ref.label}) is not newer than the installed version: refused; "
+                "use --source pinned to go back to LHPC's tested versions")
     return ""
