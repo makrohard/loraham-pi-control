@@ -127,6 +127,23 @@ def is_older(ref: StableRef, installed: str, mine=()) -> bool | None:
     return have is not None and (ref.key is None or ref.key < have)
 
 
+def update_gate(run, paths, items, source: str, remote_of):
+    """An update's selector per source (`source`, or for a bare update "" each source's recorded one, none: pinned) and
+    U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan, refused the per-source refusal
+    lines. The update runs it before its locks (the plan) and AGAIN under them (the apply: the authoritative read)."""
+    from . import source_fs, source_registry
+    sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
+    refs, refused = {}, []
+    for _, c in items:
+        if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
+                paths, src := paths.resolve_source(c.source.path)):
+            ref = refs[c.source.path] = resolve(run, remote_of(c))
+            head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+            if why := update_refusal(ref, (head.stdout or "").strip(), local_tags(run, src)):
+                refused.append(f"  {c.id}: {why}")
+    return sel, refs, refused
+
+
 def update_refusal(ref: StableRef, installed: str, mine=()) -> str:
     """Why an installed source at `installed` may not move to `ref` ("" = it may)."""
     older = is_older(ref, installed, mine)

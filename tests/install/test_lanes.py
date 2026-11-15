@@ -391,7 +391,8 @@ def test_a_source_without_a_valid_record_is_planned_on_the_pin_beside_a_dev_sour
     assert "fetches the pinned version" in lanes["lib"]                   # RED before: lib followed app onto dev
 
 
-def test_a_selector_changed_after_the_release_check_does_not_reach_the_plan(box, monkeypatch):
+@pytest.mark.parametrize("release_then", ["404", "429"])
+def test_an_update_finishing_before_the_locks_is_seen_under_them(box, monkeypatch, capsys, release_then):
     import dataclasses
 
     from lhpc.core import stable_lane
@@ -399,7 +400,7 @@ def test_a_selector_changed_after_the_release_check_does_not_reach_the_plan(box,
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
     tip = box.advance()
-    box.push_tag("v2.9.0", box.c[2])
+    box.push_tag("v2.9.0", box.c[1])
     real, real_update, applying = stable_lane.resolve, ControllerService.update, []
     paths = Paths(runtime_root=box.rt)
 
@@ -408,15 +409,20 @@ def test_a_selector_changed_after_the_release_check_does_not_reach_the_plan(box,
         return real_update(self, *a, **k)
 
     def racing(run, remote):
-        """During the APPLY's release check of lib another update records app as stable; later checks fail."""
+        """During the apply's first release check (before its locks), update B finishes: app recorded stable."""
         ref = real(run, remote)
         if applying == [True] and source_registry.read_record(paths, REL).selector == "dev":
             source_registry.write_record(paths, dataclasses.replace(source_registry.read_record(paths, REL),
                                                                     selector="stable"))
-            box.release = "429"
+            box.release = release_then
         return ref
     monkeypatch.setattr(ControllerService, "update", update)
     monkeypatch.setattr(stable_lane, "resolve", racing)
-    assert box.cli("update", "s", "--yes") == 0       # RED before: app re-read as stable mid-operation
-    assert box.head() == tip                          # app on the dev lane this operation verified
-    assert box.head(LIB) == box.c[2]
+    capsys.readouterr()
+    rc = box.cli("update", "s", "--yes")
+    if release_then == "404":                          # B's stable selection is kept and verified under the locks
+        assert rc == 0 and (box.head(), box.selector()) == (box.c[1], "stable")   # RED before: app back on dev (tip)
+    else:                                              # ... or its release check fails: refused, nothing changed
+        assert rc != 0 and "releases could not be checked" in capsys.readouterr().out   # RED before: app to dev
+        assert (box.head(), box.selector()) == (box.c[2], "stable")
+    assert tip != box.head()

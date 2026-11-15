@@ -1838,24 +1838,16 @@ class MaintenanceOpsMixin:
             items = [(s, c) for s, c in all_items if self._stack_scope_keeps(c, required)]
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
 
-        # U2: each source's selector, read ONCE for the whole operation (gate, plan, details); a bare update ("") keeps
-        # each source on its own recorded one.
-        sel = {c.source.path: source or source_registry.recorded_selector(self._paths, c.source.path) for _, c in items}
         if ctx_err:
             return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}",
                                 details=["  nothing to run here — this is an lhpc defect (the "
                                          "auto-install run's lock context does not match), not a "
                                          "problem on the box; report it with this message"])
-        # U1: an installed stable source moves only to a verified, not older target (read once, before the locks).
-        stable_refs, refused = {}, []
-        for _, c in items:
-            if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
-                    self._paths, src := self._paths.resolve_source(c.source.path)):
-                ref = stable_refs[c.source.path] = stable_lane.resolve(self._system.runner.run, self._effective_remote(c))
-                head = self._system.runner.run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-                if why := stable_lane.update_refusal(ref, (head.stdout or "").strip(),
-                                                     stable_lane.local_tags(self._system.runner.run, src)):
-                    refused.append(f"  {c.id}: {why}")
+        # U1 + U2: each source's selector and the stable gate on it (`stable_lane.update_gate`); the apply reads them
+        # again under its locks, so another update finishing in between is seen.
+        def gate():
+            return stable_lane.update_gate(self._system.runner.run, self._paths, items, source, self._effective_remote)
+        sel, stable_refs, refused = gate()
         if refused:
             return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",
                                 details=refused, next_commands=[f"lhpc source-check {target}".strip()])
@@ -1920,6 +1912,10 @@ class MaintenanceOpsMixin:
                         f"update '{target or 'all'}'",
                         {cid for p in affected for cid in self._source_consumers().get(p, ())})):
                     return _mp
+                sel, stable_refs, refused = gate()          # AUTHORITATIVE: the selectors and the gate, under the locks
+                if refused:
+                    return ActionResult(False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.",
+                                        details=refused, next_commands=[f"lhpc source-check {target}".strip()])
                 # ONE effective remote per shared checkout + ONE immutable plan — both
                 # built UNDER the configuration-stable and source locks (a concurrent
                 # remote save waits; the plan can never use a stale config snapshot).
