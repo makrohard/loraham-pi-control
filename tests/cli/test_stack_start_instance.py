@@ -178,3 +178,38 @@ def test_graywolf_at_r2_leaves_a_running_kiss_at_r1_alone(box, monkeypatch):
     assert [x for x in launches if x[0] == "loraham-kiss-tnc"] == [("loraham-kiss-tnc", "868", "r2")], (launches, out)
     assert [s for s in seen["stop"] if s[0] == "loraham-kiss-tnc"] == [], seen["stop"]     # never stopped nor replaced
     assert cli.ControllerService()._system.procfs.cmdlines()[4100] == _kiss_on("r1")       # its process untouched
+
+
+def _meshtastic_at_r2(box, tmp_path, monkeypatch):
+    """`lhpc stack start meshtastic@r2` on a runtime where r2's daemon never ran (no logs/r2), RF log on (the default)."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.commands import Instance
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.paths import Paths
+    run = box((R3, R2_868))
+    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp, *a, **k: [])
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshtastic", {"node_name": "TEST", "node_short": "T"},
+                               inst=Instance("r2"))
+    assert not (tmp_path / "logs" / "r2").exists()
+    return run
+
+
+def test_a_meshtastic_start_on_a_radio_whose_daemon_never_ran_has_its_trace_directory(box, tmp_path, monkeypatch):
+    """meshtasticd opens Logging.TraceFile at start and crashed ("traceFile open failure", "free(): invalid pointer")
+    when logs/<rid>/ was missing; the config names that directory only once it exists."""
+    rc, out, launches = _meshtastic_at_r2(box, tmp_path, monkeypatch)("start", "meshtastic@r2")
+    text = (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").read_text()
+    assert f"TraceFile: {tmp_path}/logs/r2/rf-meshtastic.log" in text, out
+    d = tmp_path / "logs" / "r2"
+    assert d.is_dir() and not d.is_symlink(), out
+    assert any(c == "meshtastic" and rid == "r2" for c, _band, rid in launches), (launches, out)
+
+
+def test_a_meshtastic_start_whose_trace_directory_is_a_file_launches_nothing(box, tmp_path, monkeypatch):
+    run = _meshtastic_at_r2(box, tmp_path, monkeypatch)
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "logs" / "r2").write_text("not a directory")
+    rc, out, launches = run("start", "meshtastic@r2")
+    assert rc != 0 and "logs/r2" in out, out
+    assert not (tmp_path / "config" / "files" / "r2" / "meshtasticd.yaml").exists()
+    assert not [c for c, _band, rid in launches if rid == "r2"], launches     # nothing of meshtastic@r2 launched
