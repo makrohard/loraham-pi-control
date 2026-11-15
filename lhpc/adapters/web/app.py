@@ -44,6 +44,7 @@ from flask import (
     url_for,
 )
 from flask import g as _g
+from flask.globals import request_ctx
 from markupsafe import Markup
 
 from lhpc.adapters.web import submenus as _submenus
@@ -1562,12 +1563,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if page is None:
             return None
         owner, mid, radio, _url = page
-        with _as_page_radio(radio):
+        with _as_page_radio(radio), _flashes_untouched():
             ctx, menus = _owner_menus(owner)
             for level in reversed(_submenus.chain(menus, mid)):
                 if _renders_form(_level_html(owner, level, ctx), request.path, request.args, request.form):
                     return owner, level.id, radio
         return None
+
+    @contextmanager
+    def _flashes_untouched():
+        """The pre-action render reads no flash for good: a panel slot in it (panel_results) pops the
+        pending flashes from the cookie store; they are put back, and the request's flash caches are
+        reset, so the page after the POST still shows them."""
+        saved = session.get("_flashes")
+        try:
+            yield
+        finally:
+            if saved is not None:
+                session["_flashes"] = list(saved)
+            request_ctx.flashes = None
+            for name in ("flash_entries", "flash_taken"):
+                _g.pop(name, None)
 
     def _action_owner(query: dict) -> str | None:
         """The stack the action's Stacks redirect opens (`open`/`cfg`/`dp`/`inst`), if any."""

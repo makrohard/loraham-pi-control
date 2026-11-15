@@ -7,11 +7,12 @@
    Same shape as the controller Webserver panel: status pills in the summary, a Settings section (one
    "Apply" that saves + validates + reloads), and a Monitor section. The proxy reuses the console's
    client CA; `scheme` is the PUBLIC LISTENER scheme, the upstream scheme is fixed by the manifest. #}
-{% from "_macros.html" import webserver_pills, panel_banner %}{% from "_stackweb_port.html" import live_port_of %}
+{% from "_macros.html" import webserver_pills %}{% from "_stackweb_port.html" import live_port_of %}
 {% set sw = stack_web %}
 {# `live_port`: the port to name for the live proxy (the rule: _stackweb_port.html). #}
 {% set live_port = live_port_of(sw) %}
-{# K4: the results of this page's proxy Settings form (its block id, the same once the block is its own partial) #}
+{# K4/E3-1: the results of this page's proxy Settings form show in that block (_stackweb_settings.html); the panel
+   renders open while it holds one, so they are seen without JS. #}
 {% set sw_results = panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') %}
 <details class="advcfg" id="stack-webserver-{{ sw.page_id }}"{% if sw_results %} open{% endif %}>
   <summary>Webserver (web UI proxy){% if not sw.primary %} — {{ sw.name }}{% endif %}
@@ -24,7 +25,6 @@
     {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
   </summary>
   <div class="body">
-    {{ panel_banner(sw_results) }}
     {# The URL is a LINK here, not in the summary above (a11y: no interactive element
        inside a <summary> toggle). #}
     {% if (sw.cfg.enabled or sw.pending_disable) and sw.posture %}<p class="wsopen"><a class="wsurl iface-web" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}" target="_blank" rel="noopener">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}</a></p>{% endif %}

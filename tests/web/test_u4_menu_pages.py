@@ -90,6 +90,11 @@ def _menus(c, owner):
     return _tree(c).get(owner, set())
 
 
+def _slot(doc, block):
+    """The result banners U1's slot renders inside the level `block` (E3-1: the block holding the form)."""
+    return doc.within(doc.by_id(block)).find("div", class_="panel-result")
+
+
 def _crumbs(doc):
     return doc.find("nav", class_="crumbs")[0]
 
@@ -235,7 +240,7 @@ def test_a_refused_post_from_a_webserver_page_returns_there_with_its_message(tmp
               port="80", scheme="https", access_mode="no-auth", cidrs="", confirm_phrase="")
     assert r.status_code in (302, 303) and r.headers["Location"].split("#")[0] == page
     doc = parse(_html(c, page))
-    assert doc.find("p", class_="flash"), "the refusal is shown on the page it came from"
+    assert _slot(doc, "stack-webserver-meshcore@r2--settings"), "the refusal shows at its form's block on that page"
 
 
 @pytest.mark.parametrize("ret", [
@@ -305,7 +310,7 @@ def test_a_refused_save_with_another_owners_return_falls_back_to_stacks(tmp_path
               cidrs="", confirm_phrase="")
     # the K4 fallback: the Stacks page with the action's stack open and its radio (the view names neither)
     assert r.headers["Location"] == "/stacks?open=meshcore&radio=r2#stack-webserver-meshcore@r2"
-    assert parse(_html(c, r.headers["Location"].split("#")[0])).find("p", class_="flash")
+    assert _slot(parse(_html(c, r.headers["Location"].split("#")[0])), "stack-webserver-meshcore@r2--settings")
 
 
 def _fields(doc, form):
@@ -428,7 +433,8 @@ def test_a_certificate_issue_keeps_the_stacks_page_with_its_one_time_passphrase(
 
 def test_a_successful_revoke_returns_to_certificates_though_its_form_is_gone(tmp_path, web, csrf):
     """G1 round 1 B2: the Revoke form exists only while the certificate is active; after the revoke
-    the POST still comes back to the Certificates page (the level holds the action by its template)."""
+    the POST still comes back to the Certificates page (its form is matched on the page as it was before the
+    action)."""
     c, _svc = _client(web, tmp_path)
     page = "/stacks/controller/menu/webserver-row--certificates"
     _post(c, csrf, "/webserver/init", page, page)
@@ -468,7 +474,7 @@ def test_a_refused_apply_from_the_standalone_settings_child_returns_there(tmp_pa
     page = "/stacks/meshcore/menu/stack-webserver-meshcore@r2--settings?radio=r2"
     r = _post(c, csrf, "/stacks/meshcore/webserver", page, page, **_REFUSED_PROXY)
     assert r.headers["Location"] == page + "#stack-webserver-meshcore@r2--settings"
-    assert parse(_html(c, page)).find("p", class_="flash"), "the refusal shows on that page (global area before U1)"
+    assert _slot(parse(_html(c, page)), "stack-webserver-meshcore@r2--settings"), "the refusal shows in that block"
 
 
 def test_a_return_to_the_monitor_child_goes_to_the_panel_that_holds_the_settings(tmp_path, web, csrf):
@@ -550,3 +556,45 @@ def test_a_sibling_components_form_returns_to_the_level_holding_both(tmp_path, w
         r = c.post("/action", data=_fields(confirm, step))
     assert r.headers["Location"] == ("/stacks/daemon/menu/stack-install-daemon--dependencies"
                                      "#stack-install-daemon--dependencies")
+
+
+
+def test_a_flash_pending_before_a_post_still_shows_after_it(tmp_path, web, csrf):
+    """The pre-action render (which runs the sent level's partials, result slots included) reads no
+    flash: one still pending before the POST shows on the page after it."""
+    c, _svc = _client(web, tmp_path, radios=True)
+    page = "/stacks/meshcore/menu/stack-webserver-meshcore@r2--settings?radio=r2"
+    token = csrf(c, page)
+    with c.session_transaction() as sess:
+        sess["_flashes"] = [*sess.get("_flashes", []), ("warn", "a pending note")]
+    r = c.post("/stacks/meshcore/webserver", data={"_csrf": token, "return": page, **_REFUSED_PROXY})
+    assert r.headers["Location"] == page + "#stack-webserver-meshcore@r2--settings"
+    doc = parse(_html(c, page))
+    assert [p.text.strip() for p in doc.find("p", class_="flash")] == ["a pending note"]
+    assert _slot(doc, "stack-webserver-meshcore@r2--settings")                   # and the refusal at its block
+
+
+def test_the_tree_and_its_links_keep_the_pages_radio(tmp_path, web):
+    c, _svc = _client(web, tmp_path, radios=True)
+    page = parse(_html(c, "/stacks/daemon/menu/stack-settings-daemon?radio=r2"))
+    tree_link = [a["href"] for a in page.within(page.find("p", class_="pagebar")[0]).find("a")][-1]
+    assert tree_link == "/stacks/menus?radio=r2"
+    links = [a["href"] for a in parse(_html(c, tree_link)).find("a") if "/menu/" in a["href"]]
+    assert links and all(_query(h) == {"radio": "r2"} for h in links)
+    assert "/stacks/daemon/menu/stack-settings-daemon--r2-live?radio=r2" in links     # that radio's levels
+
+
+def test_a_fallback_opens_the_stack_the_views_redirect_does_not_name(tmp_path, web, csrf):
+    """K4 / ERRATA-UI-v5-1: with no radio for MeshCore (a 433 MHz list) the Webserver save is refused to
+    `/stacks#stackrow-meshcore` (no `open`); sent from a level page that does not hold that form,
+    the fallback opens the stack, so its row shows."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    p = Paths(runtime_root=tmp_path)
+    assert radio_start.setup_radios(p, "waveshare-433")[0]                     # one 433 MHz radio: MeshCore has none
+    cfgmod.save_hardware_setup(p, "waveshare-433")
+    svc = ControllerService(system=FakeSystem().system, paths=p)
+    c = web(service_factory=lambda: svc)
+    page = "/stacks/meshcore/menu/stackrow-meshcore"
+    r = _post(c, csrf, "/stacks/meshcore/webserver", page, page, page="meshcore", mode="local", port="8446",
+              scheme="https", access_mode="no-auth", cidrs="", confirm_phrase="")
+    assert r.headers["Location"] == "/stacks?open=meshcore#stackrow-meshcore"
