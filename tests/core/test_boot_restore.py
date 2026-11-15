@@ -32,7 +32,7 @@ def _life(tmp_path):
 
 
 def _spawn():
-    p = subprocess.Popen(["sleep", "60"], start_new_session=True,
+    p = subprocess.Popen(["sleep", "60"], start_new_session=True,  # wallclock: a real long-lived process
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return p
 
@@ -874,8 +874,17 @@ def _banner(svc):
     return [t for t in svc.running_tasks() if t.get("kind") == "boot-restore"]
 
 
-def test_banner_states(tmp_path):
-    import time as _time
+def _banner_clock(monkeypatch, fake_clock):
+    """The task banners' clock (service_maintenance's `time`) is the fake one."""
+    import time
+    import types
+    from lhpc.core import service_maintenance
+    monkeypatch.setattr(service_maintenance, "time", types.SimpleNamespace(
+        time=fake_clock.time, monotonic=fake_clock.monotonic, strptime=time.strptime))
+
+
+def test_banner_states(tmp_path, monkeypatch, fake_clock):
+    _banner_clock(monkeypatch, fake_clock)
     svc = _svc(tmp_path)
     assert _banner(svc) == []                             # no journal -> no banner
 
@@ -889,7 +898,7 @@ def test_banner_states(tmp_path):
     # failed items -> red with the consumed-evidence remedy
     j["state"] = "failed"
     j["items"][0]["state"] = "failed"
-    j["finished_at"] = _time.time()
+    j["finished_at"] = fake_clock.time()
     assert br.write_journal(svc._paths, j)
     (entry,) = _banner(svc)
     assert entry["state"] == "failed" and "lhpc stack start" in entry["hint"]
@@ -900,7 +909,7 @@ def test_banner_states(tmp_path):
     assert br.write_journal(svc._paths, j)
     (entry,) = _banner(svc)
     assert entry["state"] == "done" and "Restored 1" in entry["label"]
-    j["finished_at"] = _time.time() - 3600
+    j["finished_at"] = fake_clock.time() - 3600
     assert br.write_journal(svc._paths, j)
     assert _banner(svc) == []                             # old green results expire
 
@@ -1152,14 +1161,14 @@ def test_client_failure_keeps_daemon_reconciliation(tmp_path, monkeypatch):
     assert [c["target"] for c in calls] == ["kiss", "daemon"]   # reconcile still ran
 
 
-def test_banner_failed_is_dismissible_truncated_is_not(tmp_path):
-    import time as _time
+def test_banner_failed_is_dismissible_truncated_is_not(tmp_path, monkeypatch, fake_clock):
+    _banner_clock(monkeypatch, fake_clock)
     svc = _svc(tmp_path)
     j = br.new_journal(boot_id="B", pid=999999, process_start_time=1,
                        items=[dict(br.new_item("i1", "stack", target="kiss",
                                                evidence_ids=("e",)), state="failed")])
     j["state"] = "failed"
-    j["finished_at"] = _time.time()
+    j["finished_at"] = fake_clock.time()
     assert br.write_journal(svc._paths, j)
     assert svc.task_dismiss("boot-restore", j["run_id"]) is True
     assert _banner(svc) == []                              # dismissed
