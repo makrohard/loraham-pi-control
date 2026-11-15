@@ -1,13 +1,15 @@
 # LHPC maintenance
 
-What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on a Pi. Open work:
-[backlog.md](backlog.md); the release-matrix procedure: [test-matrix.md](test-matrix.md).
+What CI enforces, the docs and CHANGELOG rules, branches and releases, the pin-bump recipe, and the
+gotchas on a Pi. Open work: [backlog.md](backlog.md); the release-matrix procedure:
+[test-matrix.md](test-matrix.md).
 
 ## Contents
 
 - [What CI enforces](#what-ci-enforces)
 - [What CI does not enforce](#what-ci-does-not-enforce)
 - [Policy](#policy)
+- [Docs and CHANGELOG](#docs-and-changelog)
 - [Branches and releases](#branches-and-releases)
 - [Moving a pin](#moving-a-pin)
 - [Dependencies and platform](#dependencies-and-platform)
@@ -102,14 +104,10 @@ repositories.
   [tests/README.md](../tests/README.md#markers).
 - **Version bump** = `pyproject.toml` **and** `lhpc/version.py` (a test pins them equal and
   requires the matching `CHANGELOG.md` heading) + tag.
-- **Docs and CHANGELOG.** One place per fact; elsewhere a link. Short and structured: tables and
-  lists over prose. No history and no explanation of why it was once otherwise. Every sentence is
-  checkable against the code or a command. A change that makes a sentence untrue fixes that
-  sentence in the same commit. CHANGELOG: one or two entries per item, each at most two lines, in
-  the operator's words, under `## Unreleased`; an item that only corrects a released section passes
-  `--correction`. `python tools/check_houserules.py <base>..<head> [--fact <literal>]` prints the
-  item's HOUSE RULES KEPT block (CHANGELOG, docs, tests, patterns, markers, attribution, module
-  budgets); a HARD line fails it. It checks form, not truth: a PASS says nothing about whether a
+- **The house-rules check.** `python tools/check_houserules.py <base>..<head> [--fact <literal>]`
+  prints the item's HOUSE RULES KEPT block (CHANGELOG, docs, tests, patterns, markers, attribution,
+  module budgets); a HARD line fails it. An item that only corrects a released CHANGELOG section
+  passes `--correction`. It checks form, not truth: a PASS says nothing about whether a
   stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own
   repository runs the same tool; its `.houserules.toml` at `<base>` names its layers, test files and
   test definitions, changelog and budget file (empty: that rule off; a budgeted file that is not Python, a
@@ -133,6 +131,29 @@ repositories.
   r=$b; [ "$h" -le "$r" ] || r=$h; (exit "$r")
   ```
 
+## Docs and CHANGELOG
+
+These rules hold for every `.md` in the repository and for `CHANGELOG.md`, whoever writes them.
+
+| # | rule | what it asks |
+|---|---|---|
+| 1 | Short | Only what the reader needs to do the task. No history ("used to", "since 0.x"): the CHANGELOG and git own it, [live-tests](live-tests/) own dated evidence. A rationale is no longer than its rule; a one-line why that stops a known mistake stays. |
+| 2 | Once | One fact, one page; elsewhere one line and a link, never a paraphrase. |
+| 3 | True | Every sentence is true of the code and no stronger than the mechanism: checked against a file:line, or removed. Numbers are measured. Page and CLI literals come from a rendered page. A model-table value is LHPC's support, not a vendor fact. A change that makes a sentence untrue fixes it in the same commit. |
+| 4 | Frames | When two docs disagree on a figure, name whose frame each is; change no number without a code line. |
+| 5 | Proven commands | A command given to outsiders is proven on two distinct environments, one of them a real host. |
+| 6 | Structure | Every doc has a `## Contents` list and clear sections; tables for state and catalogs; a code block for every typed command. [cli.md](cli.md) has one `### <verb>` per verb. [docs/README.md](README.md) is the map, not a summary. README.md keeps its design: an opening paragraph, two "way in" call-outs, `<details>` blocks, two badges. |
+| 7 | MAINTAINING.md | One line and a link per step; where it disagrees with the linked doc, the linked doc is right. |
+| 8 | CHANGELOG entries | One or two lines each, in the operator's words. The why, measurements and history go to the docs or the commit. Tooling and test changes get no entry. A released section is not corrected for a minor inaccuracy. |
+| 9 | CHANGELOG sections | A change adds no CHANGELOG line: each release's section is written once, before its tag. A major or minor section holds the major changes only, with no back and forth, and keeps its upgrade steps. |
+| 10 | Upgrade steps | Before 1.0.0, an upgrade problem is a step under "Upgrading from …" in the CHANGELOG, never one-time migration code. |
+| 11 | Names | No Co-Authored-By or AI attribution; no tool, assistant or run names in committed text. The maintainer's name and email appear in copyright files only. No secrets, addresses, call signs, node ids or box names. English, except README.de.md. |
+| 12 | Special files | README.de.md is a full translation of README.md, worked last, and lands with its English change. Live-test records stay (at most a one-line release header). Not edited by a docs pass: the vendored rnode-flasher README, released CHANGELOG sections, licence texts, `code-review/`. |
+| 13 | Plans and reports | Plans, reports and item notes follow rules 1, 2 and 6. |
+| 14 | Docs changes | A docs change changes no behaviour or policy: a sentence that needs code becomes a code finding. Parallel editors work on disjoint files. Each change is read for lost facts, contradictions, the reader and policy, and reviewed before it lands. When the work does not fit, stop with a report the next editor can resume from. A user-facing element the code still has is never dropped from the docs. |
+| 15 | Gates | Before a docs commit: the house-rules check (above), `tests/repo` (the README drift tests) and every other test that reads a doc or the CHANGELOG (the cli sections: `tests/cli/test_cli.py`), ruff, and a link, anchor and Contents check. |
+| 16 | Per release | Each release gets a docs pass over what it changed. |
+
 ## Branches and releases
 
 - **`main` is the latest release.** Every released tip is tagged; `install.sh` clones it,
@@ -142,9 +163,9 @@ repositories.
   from a topic branch rebased on `dev`; `dev` is not rewritten during a cycle. The reference box
   runs it (`lhpc status` reports its identity as `identity UNSAFE (checkout branch 'dev' != 'main')`:
   expected there, wrong on an operator's box).
-- **During a minor's cycle `dev` carries the last released version**; changes go under a
-  `## Unreleased` changelog heading; the release commit sets `pyproject.toml`,
-  `lhpc/version.py` and the `CHANGELOG.md` heading to the new version.
+- **During a minor's cycle `dev` carries the last released version**; the release commit sets
+  `pyproject.toml` and `lhpc/version.py` to the new version, and its `CHANGELOG.md` section is
+  written once, before the tag ([docs and CHANGELOG](#docs-and-changelog)).
 - **A minor release (`0.X.0`)** comes from `dev` and carries a new capability or a changed
   contract: a CLI verb, a manifest model change, a unit template, a changed refusal, a stack added or removed. Before it,
   run the release bot's `watch-only` and move what upstream has moved, so the

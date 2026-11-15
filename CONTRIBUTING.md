@@ -20,8 +20,10 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## Commits
 
-- **One change, one commit**, and it is complete: code, its tests, the docs it changes and the
-  `CHANGELOG.md` line, together. Fix-ups are squashed on the topic branch before it lands.
+- **One change, one commit**, and it is complete: code, its tests and the docs it changes,
+  together. It adds no `CHANGELOG.md` line: a release's section is written once, before its tag
+  ([docs and CHANGELOG](docs/maintenance.md#docs-and-changelog)). Fix-ups are squashed on the
+  topic branch before it lands.
 - **The subject names the change** in at most 72 characters, present tense, no prefix ritual
   (`firewall: bootstrap renders the operator scripts`, `known-working: a binary stack is told it
   has no source composition`). The body, when there is one, says why and what was measured; it
@@ -54,10 +56,10 @@ enforce](docs/maintenance.md#what-ci-does-not-enforce)); don't let it drop when 
 - **Tests that fail on the unfixed code.** A bug fix carries a regression test; a new capability
   tags its widest-seam happy and refusal case `@pytest.mark.contract`. Where a test goes and the
   rules it follows: [tests/README](tests/README.md).
-- **Docs in the same commit.** The CLI reference, the operator docs and `CHANGELOG.md` change
-  with the code. Docs state the current contract; history goes in the changelog, live runs in
-  `docs/live-tests/`. Numbers in docs are measured, never estimated.
-- **Both READMEs.** A factual change to `README.md` is mirrored in `README.de.md`.
+- **Docs in the same commit.** The CLI reference and the operator docs change with the code,
+  by the [docs rules](docs/maintenance.md#docs-and-changelog).
+- **Both READMEs.** `README.de.md` is a full translation: a change to `README.md` lands with its
+  German twin.
 - **No architecture change without a discussion first.** Open an issue; the
   [architecture](docs/architecture.md) doc is the model to argue against.
 - **Prefer deletion.** Compatibility shims, feature flags and do-nothing knobs are not taken.
