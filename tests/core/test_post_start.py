@@ -313,7 +313,7 @@ def _serve_once(port, delay=0.0, accepts=1):
 
     def run():
         if delay:
-            time.sleep(delay)
+            time.sleep(delay)  # wallclock: a listener that comes up late is the scenario
         s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", port)); s.listen(1)
         listening.set()                       # the port is accepting from HERE
@@ -460,6 +460,8 @@ def test_schedule_spacing_measured():
 
 
 @pytest.mark.slow                                      # ~3.5 s of real timed retries
+@pytest.mark.wallclock("the rendered launcher runs in its own process on the real clock; a probe that answers in "
+                       "0.5 s overruns its 0.4 s schedule window")
 def test_no_attempt_starts_after_the_schedule_window():
     """The schedule is a clock, not a count: an attempt that overruns (a probe waiting on a slow
     node) eats into the window, and no attempt starts once the window has passed. A required
@@ -623,12 +625,12 @@ def _record_main(life, comp, stack, extra=None):
     # A real main session leader recorded as the verified role="" launch, so spawn_post_start has a
     # main to bind its runner to (a detached runner must never be unbound).
     import subprocess
-    p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    p = subprocess.Popen(["sleep", "60"], start_new_session=True)  # wallclock: a real main process
     for _ in range(50):
         idn = life._capture_identity(p.pid)
         if idn and idn.get("exec") == "sleep":
             break
-        time.sleep(0.05)
+        time.sleep(0.05)  # wallclock: the kernel's exec window of a real process, bounded
     assert life.record_launch(stack, comp, p.pid, "", ident=life._capture_identity(p.pid), role="", extra=extra)
     return p
 
@@ -678,6 +680,8 @@ def test_restart_isolation_old_runner_payload_not_delivered(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.wallclock("the real runner is spawned; the 10 s bound tells a non-gating return from waiting out its "
+                       "~100 s retry window")
 def test_optional_post_start_scheduling_non_gating(tmp_path):
     # scheduling a runner returns ok (non-gating) and does not block on the retry window.
     life = _real_life(tmp_path)
@@ -905,7 +909,7 @@ def test_render_rejects_bad_retry_and_guard_metadata():
 
 def _pr_main(port):
     from lhpc.core.model import Component, ComponentKind, Stack
-    comp = Component(id="pr", name="pr", kind=ComponentKind.SERVICE, run_argv=("sleep", "3"),
+    comp = Component(id="pr", name="pr", kind=ComponentKind.SERVICE, run_argv=("sleep", "3"),  # wallclock: a real main
                      post_steps=({"kind": "tcp_send", "port": port, "data": "X\n",
                                   "optional": True, "repeat": 100, "interval": 1},))
     return comp, Stack(id="prs", name="prs", components=(comp,), main="pr")
@@ -983,19 +987,13 @@ def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
 @pytest.mark.needs_session
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_main_zombie(tmp_path):
+    import os
     import subprocess
     z = subprocess.Popen(["true"])                                   # exits immediately -> zombie
     try:
-        rest = None
-        for _ in range(100):
-            try:
-                with open("/proc/%d/stat" % z.pid, "rb") as f:
-                    rest = f.read().rsplit(b") ", 1)[1].split()
-            except OSError:
-                break
-            if rest[0] == b"Z":
-                break
-            time.sleep(0.02)
+        os.waitid(os.P_PID, z.pid, os.WEXITED | os.WNOWAIT)          # until it has exited; it stays unreaped
+        with open("/proc/%d/stat" % z.pid, "rb") as f:
+            rest = f.read().rsplit(b") ", 1)[1].split()
         assert rest and rest[0] == b"Z"                              # confirmed zombie
         # binding matches the zombie's start time + session/group -> ONLY the state gates it
         binding = {"main_launch_id": "z", "main_pid": z.pid, "main_starttime": int(rest[19]),
@@ -1040,6 +1038,8 @@ def test_render_rejects_malformed_binding_and_nonstring_skip_values():
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("the rendered launcher's real 1 s interval between deliveries is the claim, measured at the "
+                       "listener")
 def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
     # Three SUCCESSFUL deliveries (listener accepts every attempt) are measurably spaced by the
     # validated interval — the sleep applies after a success, not only after a failure.
@@ -1696,12 +1696,12 @@ def _band_svc(set_call, tmp_path):
 def _record_main_on_band(life, stack, comp, band):
     """Record a REAL running main for comp on `band`, exactly as a start would."""
     import subprocess
-    p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    p = subprocess.Popen(["sleep", "60"], start_new_session=True)  # wallclock: a real main process
     for _ in range(50):
         idn = life._capture_identity(p.pid)
         if idn and idn.get("exec") == "sleep":
             break
-        time.sleep(0.05)
+        time.sleep(0.05)  # wallclock: the kernel's exec window of a real process, bounded
     assert life.record_launch(stack, comp, p.pid, band,
                              ident=life._capture_identity(p.pid), role="")
     return p
