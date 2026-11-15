@@ -108,7 +108,7 @@ def test_the_channel_reads_of_a_band_reach_its_radios_socket(tmp_path, call):
 def test_the_socket_monitor_line_of_a_band_is_its_radios(tmp_path):
     svc, fake = _svc(tmp_path)
     line = svc.daemon_socket_line("868")
-    assert line.startswith("STATUS ") and "ID=r2" in line.split()
+    assert line.split()[0] == "STATUS" and "ID=r2" in line.split()
     assert fake.asked == ["/tmp/loraconf-r2.sock"]
 
 

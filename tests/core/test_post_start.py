@@ -1364,7 +1364,7 @@ def test_required_post_start_announces_log(tmp_path, monkeypatch):
     assert jr.ok
     assert len(seen) == 1
     name, path = seen[0]
-    assert name.startswith("post-c-") and path.endswith(f"{name}.log")
+    assert name.startswith("post-c-") and path.endswith(f"{name}.log")  # rule-10: a generated name: a fixed lead and a unique part
 
 
 def test_run_post_start_announces_detached_runner_log(tmp_path):
@@ -1649,7 +1649,7 @@ def test_required_sidecar_leaf_is_unique_per_launch():
     a = Lifecycle.required_result_leaf({"main_launch_id": "comp__x__1234"})
     b = Lifecycle.required_result_leaf({"main_launch_id": "comp__x__5678"})
     assert a != b                                        # a new launch writes a NEW leaf
-    assert a.startswith("required-") and a.endswith(".result.json")
+    assert a.startswith("required-") and a.endswith(".result.json")  # rule-10: a generated name: a fixed lead and a unique part
     assert "/" not in a and ".." not in a                # hashed: never shaped by the id
 
 

@@ -65,7 +65,7 @@ def _state(*radios):
 
 def test_u1_an_unknown_listing_offers_no_choice_and_says_why():
     c = _choices(_scan(listing=_ua().Probe.UNKNOWN))
-    assert c.listing is _ua().Probe.UNKNOWN and c.items == () and c.reason.startswith("USB devices cannot be listed")
+    assert c.listing is _ua().Probe.UNKNOWN and c.items == () and c.reason.startswith("USB devices cannot be listed")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
 
 
 def test_u2_each_model_match_is_listed_with_its_port_and_serial_or_no_serial():

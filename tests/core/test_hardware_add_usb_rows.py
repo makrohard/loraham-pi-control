@@ -172,7 +172,7 @@ def test_a_taken_name_gets_the_models_next_default_name(tmp_path, monkeypatch):
     ok, msg, _box = _add(tmp_path)
     assert ok, msg
     new = _rows(tmp_path).radios[-1]
-    assert new.name.casefold() != f"{short} 868".casefold() and new.name.startswith(short)
+    assert new.name.casefold() != f"{short} 868".casefold() and new.name.startswith(short)  # rule-10: a unique name: the stick's short name leads, a distinct suffix follows
 
 
 # ---- what the page offers ----------------------------------------------------------------------------

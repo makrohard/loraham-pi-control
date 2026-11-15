@@ -365,7 +365,7 @@ def test_load_journal_malformed_is_unsafe(tmp_path):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("{nope")
     _j, state = br.load_journal(svc._paths)
-    assert state.startswith("unsafe:")
+    assert state.startswith("unsafe:")  # rule-10: a state 'unsafe: <why>'; its kind is the lead, the why is wording
 
 
 def test_unpruned_consumed_selection():
@@ -1107,7 +1107,7 @@ def test_hook_runs_after_every_lock_before_any_mutation(tmp_path, monkeypatch, s
     locks = [e for e in events if e.startswith("lock:claim.loraham.radio.")
              or e.startswith("lock:lifecycle.") or e.startswith("lock:source.")]
     assert locks and all(events.index(e) < hook_at for e in locks)   # every radio lock first
-    assert all(events.index(e) > hook_at for e in events if e.startswith("clear:") or e == "spawn")
+    assert all(events.index(e) > hook_at for e in events if e.startswith("clear:") or e == "spawn")  # rule-10: a filter over names, not a compared value
 
 
 def test_hook_refusal_cancels_with_zero_side_effects(tmp_path, monkeypatch, set_call):
@@ -1795,7 +1795,7 @@ def test_parts_journal_item_components(tmp_path, components, accepted):
     if accepted:
         assert (state, loaded) == ("valid", j)
     else:
-        assert state.startswith("unsafe:") and loaded is None, state
+        assert state.startswith("unsafe:") and loaded is None, state  # rule-10: a state 'unsafe: <why>'; its kind is the lead, the why is wording
 
 
 def _parts_stub(calls, *, stack_ok=True, part_ok=True, part_result="typed"):

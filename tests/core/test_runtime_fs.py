@@ -196,7 +196,7 @@ def test_prune_logs_bounds_count_and_protects_active(tmp_path):
         removed = svc.prune_logs()
         remaining = sorted(f.name for f in logs.glob("*.log"))
         assert "build-keep.log" in remaining                # active log protected
-        assert len([n for n in remaining if n.startswith("old-")]) <= 5
+        assert len([n for n in remaining if n.startswith("old-")]) <= 5  # rule-10: a filter over names, not a compared value
         assert removed > 0
     finally:
         p.kill(); p.wait()
@@ -1070,7 +1070,7 @@ def test_python_stacks_have_in_tree_venv_build_steps():
     # un-seeded generated-output path (the old meshcore-pi-base.toml bug).
     base = comps["meshcore-node"]["config_file"]["base"]
     assert base == "{asset}/bases/meshcore.toml", base
-    assert not base.startswith("{runtime}/config/files/"), base   # never the generated-output dir
+    assert not base.startswith("{runtime}/config/files/"), base   # never the generated-output dir  # rule-10: a containment check: never under the generated-output dir
 
 
 def test_meshcom_secret_env_resolves_in_root(tmp_path):

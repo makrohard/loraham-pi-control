@@ -307,8 +307,8 @@ def test_meshtastic_trace_is_rolled_on_read_keeping_the_last_5mb(tmp_path):
     assert os.stat(p).st_size == 0 and os.stat(p).st_ino == inode       # same inode: the node keeps appending
     assert 0 < prev.stat().st_size <= rflog.MAX_BYTES
     text = prev.read_bytes()
-    assert text.endswith(b"069999" + line[6:]) and text.startswith(b"0")  # whole lines, the tail
-    assert len(lines) == 300 and lines[-1].startswith("069999")          # history still shown
+    assert text.endswith(b"069999" + line[6:]) and text.startswith(b"0")  # whole lines, the tail  # rule-10: the log's bytes: a kept tail starts on a line boundary
+    assert len(lines) == 300 and lines[-1].startswith("069999")          # history still shown  # rule-10: a line's sequence lead; its tail is the record
 
 
 def test_meshtastic_clear_only_empties(tmp_path):

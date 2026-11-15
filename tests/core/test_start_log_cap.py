@@ -43,7 +43,7 @@ def test_cap_keeps_the_tail_from_a_line_start_and_truncates(tmp_path):
     assert runtime_fs.cap_start_log(paths, p, max_bytes=5000, keep_bytes=keep) == "capped"
     prev = (p.parent / runtime_fs.prev_log_name(p.name)).read_bytes()
     assert whole.endswith(prev) and 0 < len(prev) <= keep
-    assert prev.startswith(b"0") and whole[len(whole) - len(prev) - 1:][:1] == b"\n"   # a line start
+    assert prev.startswith(b"0") and whole[len(whole) - len(prev) - 1:][:1] == b"\n"   # a line start  # rule-10: the log's bytes: a kept tail starts on a line boundary
     assert p.read_bytes() == b"" and p.stat().st_ino == ino                            # in place
     assert (p.parent / "start-x.prev.log").stat().st_mode & 0o777 == 0o640              # mode kept
 

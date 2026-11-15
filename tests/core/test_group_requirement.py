@@ -117,7 +117,7 @@ def test_req_remediation_restart_pending_vs_missing():
     m_pending = req_remediation(g, pending=True)
     assert GROUP_RESTART_HINT in m_pending and GROUP_RESTART_CMD in m_pending and "usermod" not in m_pending
     m_missing = req_remediation(g, pending=False)
-    assert (m_missing.startswith("missing ") and "sudo usermod -aG spi,gpio $USER" in m_missing
+    assert (m_missing.startswith("missing ") and "sudo usermod -aG spi,gpio $USER" in m_missing  # rule-10: no typed reason in this result; the sentence's lead names the refusal
             and GROUP_RESTART_HINT not in m_missing)
     c = Requirement(cmd="socat", install="sudo apt install socat")
     assert "missing socat" in req_remediation(c, pending=False) and "apt install socat" in req_remediation(c, pending=False)

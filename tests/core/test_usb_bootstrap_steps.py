@@ -74,7 +74,7 @@ def test_b1_the_rule_file_is_written_with_the_librarys_text_mode_0644(tmp_path):
         f = root / path.lstrip("/")
         assert f.read_text(encoding="utf-8") == text
         assert stat.S_IMODE(f.stat().st_mode) == 0o644
-    assert not [p for p in (root / "etc").rglob("*") if p.is_file() and p.name.startswith(".")]
+    assert not [p for p in (root / "etc").rglob("*") if p.is_file() and p.name.startswith(".")]  # rule-10: an absence check over every dot file
 
 
 def test_b1_a_file_that_cannot_be_written_exits_13_naming_it(tmp_path):

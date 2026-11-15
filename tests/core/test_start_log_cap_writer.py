@@ -169,7 +169,7 @@ def _seq(data: bytes, *, partial_ok: bool = False) -> list[int]:
     assert data.endswith(b"\n"), "a writer line was split"
     out = []
     for raw in data.split(b"\n")[:-1]:
-        assert raw.startswith(b"w-") and len(raw) == _LINE - 1, f"not a whole writer line: {raw[:40]!r}"
+        assert raw.startswith(b"w-") and len(raw) == _LINE - 1, f"not a whole writer line: {raw[:40]!r}"  # rule-10: a writer line: its fixed lead, then its length
         out.append(int(raw[2:]))
     return out
 

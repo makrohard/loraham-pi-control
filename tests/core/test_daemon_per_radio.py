@@ -75,7 +75,7 @@ def test_t_co9_ocp_is_always_passed_and_high_power_only_when_on():
 
 
 def test_the_daemon_argv_never_carries_a_usb_port():
-    assert not [t for t in _daemon_argv("r1") if t.startswith("--usb-port")]
+    assert not [t for t in _daemon_argv("r1") if t.startswith("--usb-port")]  # rule-10: an absence check over every token of that form
 
 
 # ---- daemon_params (class (b)) ---------------------------------------------------------------------

@@ -1405,7 +1405,7 @@ def test_an_unlicensed_identity_never_inherits(tmp_path):
         plan = svc.run_action("start", target, apply=False)
         assert not plan.ok and "never used here" in plan.summary, plan.summary
         assert plan.data.get("enforce_fields") == fields, plan.data
-        assert any(c.startswith(f"lhpc config {target}") for c in plan.next_commands)
+        assert any(c.startswith(f"lhpc config {target}") for c in plan.next_commands)  # rule-10: a remedy line: its command lead is the claim; placeholders and comment are wording
 
 
 def test_a_missing_identity_refuses_on_plan_and_apply_before_any_mutation(tmp_path, monkeypatch):
@@ -1422,7 +1422,7 @@ def test_a_missing_identity_refuses_on_plan_and_apply_before_any_mutation(tmp_pa
         r = svc.start("chat", apply=apply)
         assert not r.ok and "callsign is required" in r.summary
         assert r.data.get("enforce_fields") == ["f_call"]
-        assert any(c.startswith("lhpc config chat") for c in r.next_commands)   # invariant #4
+        assert any(c.startswith("lhpc config chat") for c in r.next_commands)   # invariant #4  # rule-10: a remedy line: its command lead is the claim; placeholders and comment are wording
     assert touched == []
     plan = svc.restart("chat", apply=False)
     assert not plan.ok and "Cannot restart 'chat'" in plan.summary

@@ -446,7 +446,7 @@ def test_probe_match_skips_all_sends():
                          "stop_on": "Call:{param:mc_callsign}",
                          "repeat": 5, "interval": 0.1}])
         r = _run_launcher(code)
-        assert not [d for d in received if d.startswith("--setcall")]
+        assert not [d for d in received if d.startswith("--setcall")]  # rule-10: an absence check over every token of that form
         assert "probe matched" in r.stderr
     finally:
         stop()
@@ -503,7 +503,7 @@ def test_probe_match_writes_probe_matched_result(tmp_path):
         assert r.returncode == 0
         st = json.loads(rp.read_text())["steps"][0]
         assert st["outcome"] == "probe-matched" and st["attempts"] == 1
-        assert not [d for d in received if d.startswith("--setcall")]
+        assert not [d for d in received if d.startswith("--setcall")]  # rule-10: an absence check over every token of that form
     finally:
         stop()
 

@@ -339,7 +339,7 @@ def test_run_job_announce_is_first_log_content_real_child(tmp_path):
                   announce=ann)
     assert res.ok
     text = (tmp_path / "logs" / "build-x.log").read_text()
-    assert text.startswith(ann + "\n")
+    assert text.partition("\n")[:2] == (ann, "\n")                 # the first line, whole
     assert "CHILD-OUTPUT" in text[len(ann):]
 
 
@@ -375,7 +375,7 @@ def test_build_step_announce_substituted_and_written(tmp_path):
     res = life.build(comp, on_log_open=lambda n, p: seen.append(p))
     assert res.ok and seen
     text = (life.logs_dir() / "build-c.log").read_text()
-    assert text.startswith(f"[resolve] watch {tmp_path}/build/tools grow\n")
+    assert text.partition("\n")[:2] == (f"[resolve] watch {tmp_path}/build/tools grow", "\n")   # the first line, whole
 
 
 def test_build_step_announce_bad_placeholder_is_typed_failure(tmp_path):

@@ -1322,7 +1322,7 @@ def test_restart_refuses_gps_and_radio_mode_before_its_stop(tmp_path, monkeypatc
     stopped = _spy_life_stops(monkeypatch)
     monkeypatch.setattr(ControllerService, seam, lambda self, t, *_inst: value)
     res = svc.restart("kiss", apply=True)
-    assert res.ok is False and res.summary.startswith("Cannot restart 'kiss':")
+    assert res.ok is False and res.summary.startswith("Cannot restart 'kiss':")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
     assert needle in res.summary
     assert not res.results and stopped == []
     assert svc.restart("kiss", apply=False).summary == res.summary

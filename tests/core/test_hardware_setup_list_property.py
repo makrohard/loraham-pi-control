@@ -106,7 +106,7 @@ def test_the_service_refuses_a_setup_outside_the_catalog_and_writes_nothing(tmp_
     from lhpc.core.services import ControllerService
     (tmp_path / "config").mkdir()
     res = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_hardware_setup(value)
-    assert not res.ok and res.summary.startswith("unknown hardware setup")             # measured at 66f162d8
+    assert not res.ok and res.summary.startswith("unknown hardware setup")             # measured at 66f162d8  # rule-10: no typed reason in this result; the sentence's lead names the refusal
     assert sorted(p.name for p in (tmp_path / "config").iterdir()) == []
 
 

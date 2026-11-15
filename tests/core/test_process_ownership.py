@@ -928,8 +928,8 @@ def test_a_failed_start_names_what_it_could_not_stop(tmp_path, monkeypatch):
         kept = rows[("loraham-daemon", "stop")]
         assert kept.outcome.value == "blocked"
         # The kept band and the component that holds it are what the operator acts on.
-        assert kept.summary.startswith("433 MHz instance") and "a is not verified stopped" in \
-            kept.summary, kept.summary
+        assert (kept.summary.startswith("433 MHz instance")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
+                and "a is not verified stopped" in kept.summary), kept.summary
         assert _owned_ids(svc) == ["a", "loraham-daemon"]
     finally:
         for rec in svc._lifecycle().owned_inventory()[0]:
@@ -992,7 +992,7 @@ def test_the_daemon_band_held_for_a_client_names_why_it_is_up(tmp_path):
     assert [(r.component, r.outcome) for r in kept] == [("loraham-daemon", Outcome.BLOCKED)]
     # The band and both holders are named (how each is classified is the pure
     # `residual_reason`'s, owned by test_start_plan.py).
-    assert kept[0].summary.startswith("433 MHz instance"), kept[0].summary
+    assert kept[0].summary.startswith("433 MHz instance"), kept[0].summary  # rule-10: no typed reason in this result; the sentence's lead names the refusal
     assert "ui is not verified stopped" in kept[0].summary and "web still running" in kept[0].summary
 
 

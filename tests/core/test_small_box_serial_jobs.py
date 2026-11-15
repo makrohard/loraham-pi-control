@@ -274,6 +274,6 @@ def test_the_rendered_launcher_names_the_round_lock_it_was_given(lock_path, name
     import ast
     script = commands.render_build_launcher([{"argv": ["true"]}], "/rt", "/src", round_lock_path=lock_path)
     call = script.strip().splitlines()[-1]
-    assert call.startswith("build_launcher_runtime.run(") and call.endswith(")")
+    assert call.startswith("build_launcher_runtime.run(") and call.endswith(")")  # rule-10: the call's form; its argument is parsed and compared whole below
     spec = ast.literal_eval(call[len("build_launcher_runtime.run("):-1])
     assert spec["round_lock_name"] == name

@@ -636,7 +636,7 @@ def test_a_created_target_that_appears_before_the_apply_is_refused(tmp_path, mon
         (b / "state/graywolf/theirs").write_text("keep")
     _between_plan_and_apply(monkeypatch, svc, appear)
     r = svc.secrets_restore(str(tmp_path / "b.tar"), choice=choice)
-    assert not r.ok and r.summary.startswith("state changed; run restore again")
+    assert not r.ok and r.summary.startswith("state changed; run restore again")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
     assert (b / "state/graywolf/theirs").read_text() == "keep" and not (b / "config/secrets").exists()
 
 
@@ -649,7 +649,7 @@ def test_a_revocation_between_the_plan_and_the_apply_is_refused(tmp_path, monkey
     assert shown["warnings"] == []                              # nothing revoked yet
     _between_plan_and_apply(monkeypatch, svc, lambda: svc.webserver_cert_revoke("laptop"))
     r = svc.secrets_restore(str(tmp_path / "b.tar"), choice="overwrite", expected_plan=shown)
-    assert not r.ok and r.summary.startswith("state changed; run restore again")
+    assert not r.ok and r.summary.startswith("state changed; run restore again")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
     now = svc.secrets_restore(str(tmp_path / "b.tar")).data["plan"]
     assert any("revives" in w and "laptop" in w for w in now["warnings"])
 
@@ -666,7 +666,7 @@ def test_another_backup_file_between_the_shown_plan_and_the_apply_is_refused(tmp
     shown = _svc(b).secrets_restore(str(tmp_path / "first.tar")).data["plan"]
     before = _tree(b)
     r = _svc(b).secrets_restore(str(tmp_path / "second.tar"), choice="overwrite", expected_plan=shown)
-    assert not r.ok and r.summary.startswith("state changed; run restore again") and _tree(b) == before
+    assert not r.ok and r.summary.startswith("state changed; run restore again") and _tree(b) == before  # rule-10: no typed reason in this result; the sentence's lead names the refusal
 
 
 # ---- --only pki, the warnings, the next commands -----------------------------------------
@@ -682,8 +682,8 @@ def test_only_pki_changes_exactly_the_two_authorities(tmp_path):
     assert r.ok, r.summary
     assert sb.PKI_ONLY
     for ca in sb.PKI_ONLY:
-        assert {k: v for k, v in _tree(b).items() if k.startswith(ca)} == \
-               {k: v for k, v in _tree(a).items() if k.startswith(ca)}
+        assert ({k: v for k, v in _tree(b).items() if k.startswith(ca)}  # rule-10: a filter over the backup tree's paths, not a compared value
+                == {k: v for k, v in _tree(a).items() if k.startswith(ca)})
     assert {p: (p.stat().st_ino, p.read_bytes()) for p in others} == others
     assert r.next_commands[:2] == ["lhpc webserver tls-renew", "lhpc webserver apply"]
 

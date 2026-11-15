@@ -632,7 +632,7 @@ def test_every_neutral_writer_names_its_written_paths():
     for name, globs in SNAPSHOT_NEUTRAL_WRITERS.items():
         assert globs, f"{name} names no written path"
         for g in globs:
-            assert g == _RECEIVER or (g.strip() and not g.startswith("/")
+            assert g == _RECEIVER or (g.strip() and not g.startswith("/")  # rule-10: a path that is not absolute: any '/' lead refuses
                                       and ".." not in g.split("/")), (name, g)
 
 
@@ -766,7 +766,7 @@ def test_no_neutral_writer_path_is_a_snapshot_input(tmp_path, receiver, monkeypa
     for call in _WRITER_CALLS.values():
         call(svc)
     locks = sorted(os.listdir(os.path.join(root, "state", "locks")))
-    assert any(n.startswith("claim.gps.") and n.endswith(".lock") for n in locks), locks
+    assert any(n.startswith("claim.gps.") and n.endswith(".lock") for n in locks), locks  # rule-10: a lock-name family: a fixed lead and suffix
     assert "rflog-rf-meshtastic.log.lock" in locks
     assert os.path.getsize(os.path.join(root, "logs", "rf-meshtastic.log.1")) > 0
     seen, snap = _snapshot_inputs(svc, root, receiver, fake, monkeypatch)

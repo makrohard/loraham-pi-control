@@ -148,12 +148,12 @@ def test_an_uputronics_board_on_kernel_chip_selects_requests_no_lines(tmp_path, 
     from lhpc.core import radio_models
     (tmp_path / "spidev0.1").touch()
     pins = radio_models.load()["uputronics"].variant(variant).pins
-    requests = []
+    line_requests = []
     bus = spi.SpiBus(pins, "sx127x", tmp_path / "spi0.lock", dev=tmp_path,
-                     gpio_request=lambda c, o, i: requests.append((o, i)), spi_factory=lambda node: _Echo())
+                     gpio_request=lambda c, o, i: line_requests.append((o, i)), spi_factory=lambda node: _Echo())
     assert bus.transfer(b"\x42\x00") == b"\x42\x00"
     bus.close()
-    assert requests == []
+    assert line_requests == []
 
 
 def test_the_lock_folder_is_made_before_any_daemon_ever_started(tmp_path):

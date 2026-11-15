@@ -171,7 +171,7 @@ def test_the_run_is_bounded_in_time_and_output(tmp_path, monkeypatch):
     missing = tmp_path / "gone.py"
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv",
                         lambda self, e, rid="": ((str(tmp_path / "no-such-python"), str(missing)), ""))
-    assert svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))["error"].startswith("decoder could not start")
+    assert svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))["error"].startswith("decoder could not start")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
 
 
 def test_stdin_carries_key_and_raw_only_and_stdout_is_capped_per_field(tmp_path, monkeypatch):

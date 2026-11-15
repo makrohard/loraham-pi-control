@@ -38,7 +38,7 @@ def test_a_record_that_cannot_be_written_is_the_passs_failure(tmp_path, monkeypa
     out = maintenance.run(svc)
     assert [n for n in out if n != "record"] == [n for n, _ in maintenance.TASKS]
     outcome, message = out["record"]
-    assert outcome is maintenance.Outcome.FAILED and message.startswith("maintenance.json not written: ")
+    assert outcome is maintenance.Outcome.FAILED and message.startswith("maintenance.json not written: ")  # rule-10: no typed reason in this result; the sentence's lead names the refusal
 
 
 def test_a_multi_line_error_is_recorded_as_one_line(tmp_path, monkeypatch):
