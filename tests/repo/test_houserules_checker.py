@@ -292,6 +292,19 @@ def test_each_warn_condition_passes_with_a_warning(repo, case):
     assert {k: v for k, v in rows.items() if k not in (line, "VERDICT")} == dict.fromkeys(_others(line), "OK")
 
 
+@pytest.mark.parametrize("case, files, line, verdict", [
+    # The added "++ x" reads "+++ x" in the diff: the word line after it in the same file still counts.
+    ("same-file", {"docs/a.md": "Alpha fact.\n++ x\nWritten in one " + "ses" + "sion.\n"}, "attribution", "WARN"),
+    # After a hunk, the next file's "+++ b/" header is still a header: its added lines keep their path.
+    ("next-file", {"docs/a.md": "Alpha fact.\n++ x\n", **_test("\ndef test_two():\n    assert True\n")},
+     "patterns", "HARD"),
+])
+def test_an_added_line_starting_with_plus_plus_hides_no_line(repo, case, files, line, verdict):
+    _commit(repo, files)
+    rc, rows = _run(repo, "--fact", "Alpha fact.")
+    assert (rc, rows[line]) == ({"WARN": 0, "HARD": 1}[verdict], verdict)
+
+
 def test_a_clean_range_passes_with_every_line_ok(repo):
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- one line\n"),
                    "docs/a.md": "Alpha fact.\nGamma.\n",

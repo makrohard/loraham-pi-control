@@ -110,13 +110,16 @@ def show(rev: str, path: str) -> str | None:
 
 
 def added_lines(diff: str) -> list[tuple[str, int, str]]:
-    """(path, new line number, text) of every added line in a `--unified=0` diff."""
-    out, path, n = [], None, 0
+    """(path, new line number, text) of every added line in a `--unified=0` diff. A "+++ " line is the file header
+    only outside a hunk: inside one it is an added line that starts with "++ "."""
+    out, path, n, hunk = [], None, 0, False
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("diff "):
+            hunk = False
+        elif line.startswith("+++ ") and not hunk:
             path = line[6:] if line.startswith("+++ b/") else None
         elif line.startswith("@@"):
-            n = int(re.search(r"\+(\d+)", line).group(1))
+            n, hunk = int(re.search(r"\+(\d+)", line).group(1)), True
         elif line.startswith("+") and path:
             out.append((path, n, line[1:]))
             n += 1
