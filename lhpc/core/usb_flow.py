@@ -270,7 +270,10 @@ def _holds(target: Path, data: bytes) -> bool:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return False
-        return os.read(fd, len(data) + 1) == data          # a regular file: one read, one byte past the text
+        got = b""                                          # read to one byte past the text or EOF (short reads)
+        while len(got) <= len(data) and (chunk := os.read(fd, len(data) + 1 - len(got))):
+            got += chunk
+        return got == data
     except OSError:
         return False
     finally:

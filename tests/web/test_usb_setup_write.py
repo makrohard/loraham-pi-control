@@ -1,6 +1,7 @@
 """B6-D (his word: "keep today's behaviour and make it robust. Write only when the content differs, and a failed
 write never breaks the page"): the GET pages that offer the USB setup write its file only when it is missing or
 differs, and a failed write renders the page with the reminder, without the copy line, and is logged."""
+import fcntl
 import hashlib
 import logging
 import os
@@ -102,7 +103,7 @@ def _fds():
 
 
 @pytest.mark.parametrize("route", ROUTES)
-@pytest.mark.parametrize("kind", ["symlink", "fifo", "fifo-holding-the-text"])
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "fifo-holding-the-text", "fifo-whose-writer-left"])
 def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path, monkeypatch, route, kind):
     # G1-B6D B2 + NOTE 3: only a regular file holds the text; a link (even to the right text) and a FIFO (even one
     # with exactly the text queued by a writer) differ and are replaced by the file
@@ -110,7 +111,6 @@ def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path,
     assert c.get("/hardware").status_code == 200                          # the file as today's page writes it
     f = _setup_file(tmp_path)
     good = f.read_bytes()
-    assert len(good) < 65536                                              # fits a pipe's buffer
     f.unlink()
     elsewhere, writer = tmp_path / "elsewhere.sh", None
     if kind == "symlink":
@@ -118,9 +118,19 @@ def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path,
         f.symlink_to(elsewhere)
     else:
         os.mkfifo(f)
-        if kind == "fifo-holding-the-text":
+        if kind != "fifo":
             writer = os.open(f, os.O_RDWR | os.O_NONBLOCK)
+            assert fcntl.fcntl(writer, fcntl.F_GETPIPE_SZ) > len(good)         # the whole text fits the pipe
             assert os.write(writer, good) == len(good)
+        if kind == "fifo-whose-writer-left":                               # the read after the text sees EOF, as
+            real = os.read                                                 # when the writer closes after the open
+
+            def read(fd, n):
+                try:
+                    return real(fd, n)
+                except BlockingIOError:
+                    return b""
+            monkeypatch.setattr(os, "read", read)
     try:
         later = c.get(route)
     finally:
@@ -154,3 +164,48 @@ def test_a_directory_at_the_setup_path_leaks_no_fd_and_is_refused_by_name(web, t
     want = (rf"USB setup: {path} could not be written \(IsADirectoryError: \[Errno 21\] Is a directory: "
             rf"'{temp}' -> '{path}'\)")
     assert len(logged) == 3 and all(re.fullmatch(want, m) for m in logged), logged
+
+
+def _reads_of(f, monkeypatch, chunk=7):
+    """os.read on the setup file returns at most `chunk` bytes (a short-reading file system); other fds as they are."""
+    real, calls = os.read, []
+
+    def read(fd, n):
+        try:
+            mine = os.readlink(f"/proc/self/fd/{fd}") == str(f)
+        except OSError:
+            mine = False
+        if not mine:
+            return real(fd, n)
+        calls.append(n)
+        return real(fd, min(n, chunk))
+    monkeypatch.setattr(os, "read", read)
+    return calls
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_an_unchanged_file_read_in_short_chunks_is_not_rewritten(web, tmp_path, monkeypatch, route):
+    # G1-B6D-RE B1: a read may return fewer bytes than asked without EOF; an unchanged file still holds the text
+    c = _box(web, tmp_path, monkeypatch)
+    assert c.get("/hardware").status_code == 200
+    f = _setup_file(tmp_path)
+    before = f.stat()
+    calls = _reads_of(f, monkeypatch)
+    assert c.get(route).status_code == 200
+    after = f.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert len(calls) > 1                                                  # the text came in short reads
+
+
+
+@pytest.mark.parametrize("route", ROUTES)
+def test_a_longer_file_read_in_short_chunks_is_rewritten(web, tmp_path, monkeypatch, route):
+    # the read goes one byte past the text even in short reads: a file that starts with the text but is longer differs
+    c = _box(web, tmp_path, monkeypatch)
+    assert c.get("/hardware").status_code == 200
+    f = _setup_file(tmp_path)
+    good = f.read_bytes()
+    f.write_bytes(good + b"echo appended\n")
+    calls = _reads_of(f, monkeypatch, chunk=1)                           # exact steps: no read overshoots the text
+    assert c.get(route).status_code == 200
+    assert len(calls) > 1 and f.read_bytes() == good
