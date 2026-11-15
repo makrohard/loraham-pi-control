@@ -1132,6 +1132,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 _upd_comp, _upd_is_main = None, False
             _jobs = jobs_by_stack.get(stack.id, [])
             inline = _row_inline(stack.id, _jobs, restored_open, request.args)
+            # W250: a running stack's tools; a radio's page lists them only while the stack runs on THAT radio
+            _tool_comps = [c for c in stack.components if c.interactive and c.id != stack.main]
+            _page_rid = _page_radio()[0]
+            _tools_here = bool(_tool_comps and rollup[stack.id] in _RUNNING and (
+                not _page_rid or f"{stack.id}@{_page_rid}" in _instances.running_keys(service, stack.id)))
             g = {
                 "stack": stack,
                 "main": index.get(main.id) if main else None,
@@ -1176,8 +1181,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
                 # W250: what Home's card showed for a running stack: its RF log (W4: its instance's), its tools' launch lines
                 "rflog": _stack_rflog(stack.id) if rollup[stack.id] in _RUNNING else None,
-                "tools": [(c.id, c.name, service.manual_start_command(c, _inst)) for c in stack.components
-                          if c.interactive and c.id != stack.main and rollup[stack.id] in _RUNNING],
+                "tools": [(c.id, c.name, service.manual_start_command(c, _inst)) for c in _tool_comps] if _tools_here else [],
                 "inline": inline,
             }
             if _row_needs_body(inline or bodies, only_sid):
