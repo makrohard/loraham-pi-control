@@ -24,11 +24,9 @@ class _FakeGpsd:
     timeout path.
     """
 
-    def __init__(self, devices=(), sentences=(), close_after=None,
-                 json_lines=None, silent=False):
+    def __init__(self, devices=(), sentences=(), json_lines=None, silent=False):
         self.devices = list(devices)
         self.sentences = list(sentences)
-        self.close_after = close_after
         self.json_lines = list(json_lines) if json_lines is not None else None
         self.silent = silent
         self.connections = 0
@@ -68,26 +66,22 @@ class _FakeGpsd:
                 if self.json_lines is not None:
                     for chunk in self.json_lines:
                         if isinstance(chunk, float):     # a pause in the stream, in seconds
-                            time.sleep(chunk)
+                            time.sleep(chunk)    # wallclock: a scripted pause, the scenario's own timing
                             continue
                         try:
                             conn.sendall(chunk)
                         except OSError:
                             return
-                        time.sleep(0.01)
+                        time.sleep(0.01)    # wallclock: the fake's line pacing, as gpsd streams
                     self._hold_until_closed(conn)    # then serve the next connection
                     continue
-                sent = 0
                 while not self._stop.is_set():
                     for s in self.sentences:
                         try:
                             conn.sendall(s.encode() + b"\r\n")
                         except OSError:
                             return
-                        sent += 1
-                        if self.close_after and sent >= self.close_after:
-                            return
-                    time.sleep(0.05)
+                    time.sleep(0.05)    # wallclock: the fake's NMEA pacing between rounds
 
     def _hold_until_closed(self, conn):
         """Keep the connection open, as gpsd does, until the client closes it or the fake stops."""
@@ -106,6 +100,52 @@ class _FakeGpsd:
             self._srv.close()
         except OSError:
             pass
+
+
+class _PreloadedGpsd:
+    """gpsd as a transport that already holds its whole answer. `gps._gpsd_connect` is replaced
+    by `connect`, which hands out one end of a socketpair whose other end has the script written
+    before the read starts: the first recv returns data at once, whatever the scheduler does, and
+    the read still ends at its budget, as in production. Connection i gets scripts[i] (the last one
+    for any later connection); `connects` counts them, and a SKY wait is a second connection. The
+    far ends stay open until the test ends, as gpsd keeps a watch open."""
+
+    port = 2947
+
+    def __init__(self, scripts):
+        self.scripts = scripts
+        self.connects = 0
+        self._far = []
+
+    def connect(self, host, port, deadline):
+        script = self.scripts[min(self.connects, len(self.scripts) - 1)]
+        self.connects += 1
+        near, far = socket.socketpair()
+        far.sendall(b"".join(script))
+        self._far.append(far)
+        return near, ""
+
+    def close(self):
+        for far in self._far:
+            far.close()
+
+
+@pytest.fixture
+def preloaded_gpsd(monkeypatch):
+    """Factory for a `_PreloadedGpsd`: `preloaded_gpsd(script, ...)` patches the snapshot's
+    transport for the rest of the test; every far end is closed at teardown."""
+    from lhpc.core import gps
+    made: list = []
+
+    def _make(*scripts):
+        srv = _PreloadedGpsd(scripts)
+        made.append(srv)
+        monkeypatch.setattr(gps, "_gpsd_connect", srv.connect)
+        return srv
+
+    yield _make
+    for srv in made:
+        srv.close()
 
 
 @pytest.fixture(autouse=True)

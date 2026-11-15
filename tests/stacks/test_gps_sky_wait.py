@@ -11,6 +11,7 @@ import json
 import socket
 import threading
 import time
+import types
 
 import pytest
 
@@ -43,168 +44,111 @@ def _sky(*prns, device=A) -> bytes:
 
 
 # --- the bounded wait ----------------------------------------------------------------------------
-# The wait is a second connection to gpsd, so these fakes serve every connection at once, each its
-# own script (the shared fake serves one connection after the other).
-
-class _ScriptGpsd:
-    """Connection i gets scripts[i] (the last one for any later connection): bytes are sent, a
-    float is a pause in seconds; then the connection stays open until the client closes it."""
-
-    def __init__(self, *scripts):
-        self.scripts = scripts
-        self.n = 0
-        self._srv = socket.socket()
-        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv.bind(("127.0.0.1", 0))
-        self._srv.listen(8)
-        self.port = self._srv.getsockname()[1]
-        self._stop = threading.Event()
-        threading.Thread(target=self._accept, daemon=True).start()
-
-    def _accept(self):
-        while not self._stop.is_set():
-            try:
-                self._srv.settimeout(0.2)
-                conn, _ = self._srv.accept()
-            except OSError:
-                continue
-            script = self.scripts[min(self.n, len(self.scripts) - 1)]
-            self.n += 1
-            threading.Thread(target=self._serve, args=(conn, script), daemon=True).start()
-
-    def _serve(self, conn, script):
-        with conn:
-            try:
-                conn.settimeout(1.0)
-                conn.recv(4096)
-                for chunk in script:
-                    if isinstance(chunk, float):
-                        time.sleep(chunk)
-                    else:
-                        conn.sendall(chunk)
-                conn.settimeout(0.2)
-                while not self._stop.is_set():
-                    try:
-                        if not conn.recv(4096):
-                            return
-                    except TimeoutError:
-                        continue
-            except OSError:
-                return
-
-    def close(self):
-        self._stop.set()
-        self._srv.close()
-
-
-@pytest.fixture
-def script_gpsd():
-    made = []
-
-    def make(*scripts):
-        made.append(_ScriptGpsd(*scripts))
-        return made[-1]
-    yield make
-    for srv in made:
-        srv.close()
-
+# The wait is a second connection to gpsd. `preloaded_gpsd` hands each connection its script already
+# written, so the budget's read never races a fake's thread; whether a read waited is its connection
+# count: one connection is no wait, two are the budget's read and the wait.
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_a_list_arriving_after_the_budget_is_waited_for(script_gpsd, monkeypatch):
+def test_a_list_arriving_after_the_budget_is_waited_for(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
-    srv = script_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()],
-                      [VERSION, DEV_A, _tpv(), _dop_sky(), 0.4, _sky(3, 7), _tpv()])
+    srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()],
+                         [VERSION, DEV_A, _tpv(), _dop_sky(), _sky(3, 7), _tpv()])
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     assert r["state"] == "3d" and [s["prn"] for s in r["satellites"]] == [3, 7]
-    assert r["sats_seen"] == 2
+    assert r["sats_seen"] == 2 and srv.connects == 2
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_the_wait_takes_the_whole_burst_of_a_list(script_gpsd, monkeypatch):
+def test_the_wait_takes_the_whole_burst_of_a_list(preloaded_gpsd, monkeypatch):
     # gpsd sends one list as several SKYs in a row, each with more satellites (16, 26, 29, 46, 50
     # on the field box); the wait ends with the message after the burst, not at its first SKY.
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
-    srv = script_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()],
-                      [VERSION, DEV_A, _tpv(), _dop_sky(), 0.4,
-                       _sky(3), _sky(3, 7), _sky(3, 7, 9), _tpv()])
+    srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()],
+                         [VERSION, DEV_A, _tpv(), _dop_sky(),
+                          _sky(3), _sky(3, 7), _sky(3, 7, 9), _tpv()])
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     assert [s["prn"] for s in r["satellites"]] == [3, 7, 9] and r["sats_seen"] == 3
+    assert srv.connects == 2
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_without_a_list_in_the_wait_the_read_ends_at_the_bound(fake_gpsd, monkeypatch):
+@pytest.mark.wallclock("the wait's real end at SKY_WAIT_S is what is measured")
+def test_without_a_list_in_the_wait_the_read_ends_at_the_bound(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 0.8)
-    srv = fake_gpsd(json_lines=[VERSION, DEV_A, _tpv(), _dop_sky()])
+    srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()])
     t0 = time.monotonic()
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     took = time.monotonic() - t0
     assert r["state"] == "3d" and r["satellites"] == [] and r["sats_seen"] is None
-    assert 0.7 <= took < 1.5
+    assert srv.connects == 2 and 0.7 <= took < 1.5
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_a_remembered_list_ends_the_read_at_its_budget(fake_gpsd, monkeypatch):
+def test_a_remembered_list_ends_the_read_at_its_budget(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 3.0)
-    srv = fake_gpsd(json_lines=[VERSION, DEV_A, _tpv(), _sky(5)])
+    srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _sky(5)],
+                         [VERSION, DEV_A, _tpv(), _dop_sky()])
     _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
-    srv.json_lines = [VERSION, DEV_A, _tpv(), _dop_sky()]
-    t0 = time.monotonic()
+    assert srv.connects == 1
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
-    assert time.monotonic() - t0 < 1.0 and [s["prn"] for s in r["satellites"]] == [5]
+    assert srv.connects == 2 and [s["prn"] for s in r["satellites"]] == [5]      # no wait
 
 
 # Two receivers on one gpsd: only the device whose position the snapshot shows decides the wait.
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_a_receiver_without_satellite_reports_waits_once_per_memo_window(script_gpsd,
-                                                                         monkeypatch):
+def test_a_receiver_without_satellite_reports_waits_once_per_memo_window(preloaded_gpsd,
+                                                                         fake_clock, monkeypatch):
     # NMEA without GSV: positions and DOP-only SKYs, never a list. Waiting on every read would
     # slow every poll by the whole wait; one wait per memo window finds out, then reads are short.
+    # The memo's age is on the module's clock, here the fake one; the reads still end at their
+    # budgets in real time.
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 0.8)
     monkeypatch.setattr(_gps, "SKY_MEMO_S", 2.5)
-    srv = script_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()])
+    monkeypatch.setattr(_gps, "time", types.SimpleNamespace(monotonic=fake_clock.monotonic))
+    srv = preloaded_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()])
 
     def read():
-        t0 = time.monotonic()
+        before = srv.connects
         r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
         assert r["state"] == "3d" and r["satellites"] == [] and r["sats_seen"] is None
-        return time.monotonic() - t0
+        return srv.connects - before
 
-    first = time.monotonic()
-    assert read() >= 0.7                            # the one wait
-    assert read() < 0.6                             # stamped: no wait
-    time.sleep(max(0.0, first + 2.6 - time.monotonic()))
-    assert read() >= 0.7                            # the stamp expired: one wait again
+    assert read() == 2                              # the one wait
+    assert read() == 1                              # stamped: no wait
+    fake_clock.advance(2.6)
+    assert read() == 2                              # the stamp expired: one wait again
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_another_devices_fresh_list_does_not_skip_the_wait(script_gpsd, monkeypatch):
+def test_another_devices_fresh_list_does_not_skip_the_wait(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
-    srv = script_gpsd([VERSION, DEV_AB, _tpv(A), _sky(3, 7, device=A), _tpv(A)],   # A remembered
-                      [VERSION, DEV_AB, _tpv(B), _dop_sky(B)],
-                      [VERSION, DEV_AB, _tpv(B), _dop_sky(B), 0.4, _sky(5, device=B), _tpv(B)])
+    srv = preloaded_gpsd([VERSION, DEV_AB, _tpv(A), _sky(3, 7, device=A), _tpv(A)],   # A remembered
+                         [VERSION, DEV_AB, _tpv(B), _dop_sky(B)],
+                         [VERSION, DEV_AB, _tpv(B), _dop_sky(B), _sky(5, device=B), _tpv(B)])
     first = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     assert first["device"] == A and [s["prn"] for s in first["satellites"]] == [3, 7]
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     assert r["device"] == B and [s["prn"] for s in r["satellites"]] == [5]
+    assert srv.connects == 3
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
-def test_another_devices_list_does_not_end_the_wait(script_gpsd, monkeypatch):
+def test_another_devices_list_does_not_end_the_wait(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
-    srv = script_gpsd([VERSION, DEV_AB, _tpv(B), _dop_sky(B)],
-                      [VERSION, DEV_AB, _tpv(B), 0.3, _sky(3, device=A), _tpv(B), 0.3,
-                       _sky(5, device=B), _tpv(B)])
+    srv = preloaded_gpsd([VERSION, DEV_AB, _tpv(B), _dop_sky(B)],
+                         [VERSION, DEV_AB, _tpv(B), _sky(3, device=A), _tpv(B),
+                          _sky(5, device=B), _tpv(B)])
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
     assert r["device"] == B and [s["prn"] for s in r["satellites"]] == [5]
+    assert srv.connects == 2
 
 
-def test_no_wait_without_a_position(fake_gpsd, monkeypatch):
+def test_no_wait_without_a_position(preloaded_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 3.0)
-    srv = fake_gpsd(json_lines=[VERSION, DEV_A, _dop_sky()])
-    t0 = time.monotonic()
+    srv = preloaded_gpsd([VERSION, DEV_A, _dop_sky()])
     r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
-    assert r["state"] == "gpsd-no-data" and time.monotonic() - t0 < 1.0
+    assert r["state"] == "gpsd-no-data" and srv.connects == 1
 
 
 def test_the_memo_covers_the_measured_worst_miss(monkeypatch):
@@ -222,7 +166,7 @@ class _CadenceGpsd:
 
     def __init__(self, period):
         self.period = period
-        self.t0 = time.monotonic()
+        self.t0 = time.monotonic()    # wallclock: the receiver's own clock, as gpsd's runs
         self._srv = socket.socket()
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind(("127.0.0.1", 0))
@@ -246,11 +190,11 @@ class _CadenceGpsd:
                 conn.settimeout(1.0)
                 conn.recv(4096)
                 conn.sendall(VERSION + DEV_A)
-                k = int((time.monotonic() - self.t0) / self.period) + 1
+                k = int((time.monotonic() - self.t0) / self.period) + 1    # wallclock: the cadence
                 while not self._stop.is_set():
-                    delay = self.t0 + k * self.period - time.monotonic()
+                    delay = self.t0 + k * self.period - time.monotonic()    # wallclock: the cadence
                     if delay > 0:
-                        time.sleep(delay)
+                        time.sleep(delay)    # wallclock: the cadence's next period
                     conn.sendall(_tpv() + _dop_sky() + (_sky(1, 2, 3) if k % 5 == 0 else b""))
                     k += 1
             except OSError:
@@ -262,6 +206,7 @@ class _CadenceGpsd:
 
 
 @pytest.mark.slow                   # ~25 s of real time: the field cadence at a fifth of its speed
+@pytest.mark.wallclock("the field cadence on a real clock: the poll cycle drifts against the list period")
 def test_the_console_poll_never_shows_an_empty_sky_at_the_field_cadence(monkeypatch):
     scale = 0.2                     # every duration of the field row, times this
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 6.0 * scale)
