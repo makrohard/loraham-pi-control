@@ -886,9 +886,9 @@ def build_parser() -> argparse.ArgumentParser:
             # exactly as install offers it (the service validates it per stack).
             sp.add_argument("--source", choices=("pinned", "dev", "stable", "binary"),
                             default="",
-                            help="Version to fetch: prebuilt binary / latest dev / latest "
-                                 "stable / pinned (default: pinned; a stack installed from "
-                                 "the binary stays on it; graywolf: binary = its pinned "
+                            help="Version to fetch: prebuilt binary / latest dev / latest stable / pinned (default: "
+                                 "the installed lane, per source: binary while binary-installed, else the selector each "
+                                 "source was installed from, pinned without a record; graywolf: binary = its pinned "
                                  "release, stable = the newest upstream release)")
             # The old name of `--source stable` for a fetched package (graywolf); kept, unlisted.
             sp.add_argument("--upstream", action="store_true", help=argparse.SUPPRESS)

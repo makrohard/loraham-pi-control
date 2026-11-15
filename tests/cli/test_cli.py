@@ -802,9 +802,8 @@ def test_docs_cli_lists_every_command():
 
 
 def test_update_source_help_names_the_real_default(capsys):
-    # K1 (audit round 7): the help said "default: keep the stack's current channel";
-    # without --source the CLI updates a binary-installed target binary->binary, any other to
-    # `pinned` (the `update` branch of main()).
+    # K1 (audit round 7), then U2: without --source the CLI keeps the installed lane (`stack_lane`: binary while
+    # binary-installed, else each source's recorded selector), so the help may not say "default: pinned".
     def help_of(*argv):
         with pytest.raises(SystemExit):
             main([*argv, "--help"])
@@ -812,7 +811,10 @@ def test_update_source_help_names_the_real_default(capsys):
 
     update = help_of("update")
     assert "keep the stack's current channel" not in update
-    assert "default: pinned" in update and "installed from the binary stays on it" in update, update
+    assert ("--source {pinned,dev,stable,binary} Version to fetch: prebuilt binary / latest dev / latest stable / "
+            "pinned (default: the installed lane, per source: binary while binary-installed, else the selector each "
+            "source was installed from, pinned without a record; graywolf: binary = its pinned release, stable = the "
+            "newest upstream release)") in update, update                  # U2: a bare update keeps the lane
     # K1b: auto-install's --source help named "else dev"; default_channel() returns binary where
     # published, else pinned.
     auto = help_of("auto-install")
