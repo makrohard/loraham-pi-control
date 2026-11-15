@@ -1,11 +1,13 @@
 """P1.8: `install --source pinned` over a checkout adopted from `dev` says so instead of a silent
 "Nothing to do" (install never changes an installed source; `update --source` does)."""
-import time
 
 from lhpc.core import source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
+
 
 _KISS = ("loraham-kiss-tnc", "loraham-kiss-serial")
 
@@ -14,7 +16,7 @@ def _svc_with_kiss(tmp_path, selector):
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
         "src/loraham-kiss-tnc", "https://github.com/makrohard/loraham-kiss-tnc.git", selector,
-        "c" * 40, time.time(), "", _KISS))
+        "c" * 40, ADOPTED_AT, "", _KISS))
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
@@ -54,7 +56,7 @@ def test_no_commit_shown_when_none_was_recorded(tmp_path):
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
         "src/loraham-kiss-tnc", "https://github.com/makrohard/loraham-kiss-tnc.git", "dev",
-        "", time.time(), "", _KISS))
+        "", ADOPTED_AT, "", _KISS))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     note = [d for d in svc.install("kiss", apply=False, source="pinned").details if "installed from" in d]
     assert note and "commit" not in note[0]

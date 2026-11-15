@@ -2,7 +2,6 @@
 edge: reported truthfully with operator commands, enforced in update inclusion and
 uninstall refcounting. LHPC never installs system packages itself."""
 
-import time
 
 import re
 
@@ -16,6 +15,8 @@ from seams import readable_heads, write_own_rev
 import pytest
 
 import repo_paths
+
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
 
 
 def _stamp_inputs(path, text):
@@ -45,7 +46,7 @@ def _seed_sources(svc, tmp_path, stack_id):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", ADOPTED_AT, "",
                                        tuple(comps)))
 
 

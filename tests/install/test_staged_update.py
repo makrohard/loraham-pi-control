@@ -7,6 +7,8 @@ from lhpc.core.config import Config
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
+
 
 def _stack(comp):
     return (Stack(id="s", name="s", main=comp.id, components=(comp,)),)
@@ -54,11 +56,10 @@ def _comp():
 
 def _register(rt, commit="abc123", remote="https://example/repo.git"):
     """Seed the ownership record an existing tree must match (identity gate)."""
-    import time as _t
     from lhpc.core import source_registry
     from lhpc.core.paths import Paths
     assert source_registry.write_record(Paths(runtime_root=rt), source_registry.RegistryRecord(
-        "src/repo", remote, "dev", commit, _t.time(), "", ("c",)))
+        "src/repo", remote, "dev", commit, ADOPTED_AT, "", ("c",)))
 
 
 def test_failed_clone_leaves_active_source_intact(tmp_path):

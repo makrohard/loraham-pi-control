@@ -134,6 +134,7 @@ def test_power_authorization_is_per_action(tmp_path, monkeypatch):
     assert svc.power_supported("reboot") is True
 
 
+@pytest.mark.wallclock("cache entries stamped 61 s back, data the product ages against its clock")
 def test_power_visibility_cache_bounded_both_ways(tmp_path, monkeypatch):
     """Verdicts cache per action with a bounded TTL BOTH ways: repeated GETs inside the TTL
     never re-probe, and BOTH a later install AND a revocation become visible once the TTL
@@ -222,6 +223,7 @@ def test_handshake_refusals_are_typed_and_carry_the_copybox(tmp_path, monkeypatc
     assert not spawned and not svc._power_pending_path().exists()
 
 
+@pytest.mark.wallclock("asserts the trigger's own `sleep 1.5` text; no real clock runs in the test")
 def test_apply_success_marker_and_bounded_trigger(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")

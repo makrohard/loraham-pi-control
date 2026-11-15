@@ -94,6 +94,7 @@ def test_capability_gate_requires_the_ap_profile(tmp_path):
     assert svc3.network_supported() is False
 
 
+@pytest.mark.wallclock("a cache entry stamped 61 s back, data the product ages against its clock")
 def test_authorization_verdict_cached_both_ways(tmp_path):
     svc = _svc(tmp_path)
     calls = _fake_nmcli(svc, _std_replies(perms=PERMS_YES.replace("system:yes",
