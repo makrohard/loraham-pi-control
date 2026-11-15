@@ -33,6 +33,7 @@ info, an HTTP answer, `rnstatus` counters), never a log grep.
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
 | Channels | `binary` (daemon, meshtastic, meshcom), `pinned` and `dev` ([selections](provenance.md#selections)); see [Coverage](#coverage) |
 | Console | running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`; [why](maintenance.md#running-on-a-pi)) |
+| RF on air | the hardware test line, RF fast and RF full ([hardware proof](live-tests/hardware-proof.md)); its RF fast is not this matrix's [fast lane](#fast-lane) |
 | Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
 ## Procedure per stack

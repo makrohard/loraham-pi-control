@@ -104,7 +104,7 @@ so).
 ## Running the verification lanes
 
 ```sh
-python -m pytest -q testlab/tests                # unit lane; the opt-in lanes skip
+python -m pytest -q testlab/tests                # unit and hardware lanes; the opt-in lanes skip
 LHPC_ACCEPTANCE=1 python -m pytest testlab/tests/acceptance -q   # real server + real executable
 LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
 LHPC_RELEASE_VERIFY=1 python -m pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
@@ -151,7 +151,8 @@ a stack-regression marker; a transfer error the step recovered from does not cou
 failure of an acquisition (a broken Dockerfile, say) turns red only after the backoff's waits,
 about half an hour.
 
-`testlab/tests/unit` tests the simulator itself; the four opt-in lanes:
+`testlab/tests/unit` tests the simulator itself and `testlab/tests/hardware` the hardware test line in dry mode
+([hardware proof](live-tests/hardware-proof.md)); the four opt-in lanes:
 
 - **acceptance** drives the running server and the real `lhpc` executable and verifies the
   effect. `test_http_smoke.py` sweeps the app's own `url_map`: every parameterless GET must
