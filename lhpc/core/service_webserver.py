@@ -1306,8 +1306,8 @@ class WebserverOpsMixin:
 
     def _stack_webs_candidates(self) -> list:
         """THE candidate port walk for the 'Stacks WebGUIs' bulk policy — the ONE place that
-        decides, per eligible stack, which port a bulk Apply uses: `_page_ports()` (the saved
-        nonzero port kept, else the same suggested default the per-stack panel offers, unique). The form's overview and the bulk Apply both consume
+        decides, per eligible stack, which port a bulk Apply uses: the saved nonzero port (kept), else the panel's
+        suggested default, candidate-aware (unique). The form's overview, the bulk Apply and `_page_ports` all consume
         this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
         Returns [(page_id, port, keeps, why)] in `_page_positions()` order (stacks' first pages
         first); port None with `why` when a page gets no default (`_default_stack_web_port`)."""
