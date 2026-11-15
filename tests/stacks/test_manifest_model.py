@@ -380,11 +380,21 @@ def test_meshcli_wrapper_waits_for_a_transient_lease_holder(tmp_path):
     proc = subprocess.Popen(["bash", str(wrapper), lock, "touch", str(marker)])
 
     def blocked_on_the_lease():
-        # The kernel lists a flock waiter blocked on the lock file as "-> FLOCK ... <dev>:<inode>";
-        # the inode alone (the device there is the superblock's, which stat() need not report).
-        ino = f":{os.stat(lock).st_ino}"
+        # /proc/locks rows end "<pid> <dev>:<inode> <start> <end>"; a blocked waiter's row has "->". The lock file's id
+        # is read from this test's own hold on it (the kernel's device, which stat() on btrfs does not report), and the
+        # waiter must be the wrapper's own `flock` child: no other process's lock can stand in for the wrapper's.
         with open("/proc/locks") as f:
-            return any(" -> FLOCK " in line and line.split()[-3].endswith(ino) for line in f)
+            rows = [ln.split() for ln in f]
+        ino = f":{os.stat(lock).st_ino}"
+        held = {r[-3] for r in rows if "->" not in r and r[-3].endswith(ino) and int(r[-4]) == os.getpid()}
+
+        def parent(pid):
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    return int(f.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                return None
+        return any("->" in r and r[-3] in held and parent(int(r[-4])) == proc.pid for r in rows)
     try:
         for _ in range(300):                    # a hang guard, not a margin
             if blocked_on_the_lease():
