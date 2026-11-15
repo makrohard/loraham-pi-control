@@ -53,9 +53,32 @@ def lab_env(root: Path) -> dict:
     return env
 
 
+def _text(data: bytes | None) -> str:
+    return (data or b"").decode("utf-8", "replace")
+
+
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
-    r = subprocess.run([str(lab_bin()), *args], env=env, capture_output=True,
-                       text=True, timeout=timeout, check=False)
+    """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
+    runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
+    stack) is drained for up to 5 s and kept in the error with the rest of its output; then it is
+    killed. It runs without core dumps (set by a shell in front of it, as the release lane's
+    programs run: no Python between this threaded process's fork and exec)."""
+    argv = ["/bin/sh", "-c", 'ulimit -c 0; exec "$@"', "sh", str(lab_bin()), *args]
+    proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.send_signal(signal.SIGABRT)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired as late:      # still running, or a descendant holds the pipes
+            proc.kill()
+            proc.wait()
+            out, err = late.stdout, late.stderr        # everything read so far
+        raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
+                           f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
+    r = subprocess.CompletedProcess(argv, proc.returncode, _text(out), _text(err))
     if check and r.returncode != 0:
         raise RuntimeError(f"lhpc-testlab {' '.join(args)} rc={r.returncode}\n"
                            f"stdout: {r.stdout[-2000:]}\nstderr: {r.stderr[-2000:]}")
