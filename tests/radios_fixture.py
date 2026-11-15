@@ -50,3 +50,32 @@ INSTANCE_READY = {f"/tmp/loraconf-{r}.sock": f"STATUS RADIO=READY ID={r} BOUND=-
 
 def kiss_on(rid):                                      # a kiss-tnc process of radio `rid`, by its instance token
     return ["loraham-kiss-tnc", "--data-socket", f"/tmp/loraf-{rid}.sock"]
+
+
+# STATUS-DEAD-SOCKET: box H's radios of 11-15 (r3 the CH341 433 stick, r4 the PineDio 868 stick) and its launch records.
+BOX_H = RADIOS + (radios.Radio("r3", "rfm98 433", "ch341-rfm98pw-433", "433", usb_serial="CHE1W433"),
+                  radios.Radio("r4", "pine64 868", "pinedio-usb-1262", "868", usb_port="1-1"))
+NO_PID = 4194304                 # the largest pid_max is 2**22: a pid from here on is no process, ever
+
+
+def launch_record(root, sid, cid, rid, band, pid, *, boot=None):
+    """Write the launch record Lifecycle.start leaves for `<sid>@<rid>`'s `cid` (box H r3's shape, 11-15) under the
+    runtime root `root`; `boot`: its boot id (default: this boot's)."""
+    import json
+
+    from lhpc.core.lifecycle import current_boot_id
+    lid = f"{cid}__{band}__{pid}__{rid}"
+    rec = {"rid": rid, "starttime": 4705741, "pgid": pid, "sid": pid, "exec": cid, "version": 1, "launch_id": lid,
+           "stack": sid, "component": cid, "requested_target": sid, "start_scope": "stack", "band": band, "pid": pid,
+           "role": "", "launched_at": 1794776015, "boot_id": current_boot_id() if boot is None else boot}
+    (root / "state" / "owned").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "owned" / f"{lid}.json").write_text(json.dumps(rec))
+
+
+def live_records(monkeypatch, pids):
+    """Records of `pids` verify as live (Lifecycle.verify_owned): a fake process has no /proc identity to verify, and
+    the daemon's instances are told by their records alone (its argv names no instance)."""
+    from lhpc.core.lifecycle import Lifecycle
+    live = set(pids)
+    monkeypatch.setattr(Lifecycle, "verify_owned",
+                        lambda self, rec: (True, "verified") if rec.get("pid") in live else (False, "process gone"))

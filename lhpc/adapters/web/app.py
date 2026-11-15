@@ -1060,6 +1060,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         _live_radios = _radio_start.view_radios(service._paths)        # W3: one read of the enabled radios per render
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
+        from lhpc.core import instance_liveness as _liveness
+        _inst_rows = _liveness.rows(service, snapshot)     # STATUS-DEAD-SOCKET: each instance's own state, one read
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
         all_conflicts = service.observed_conflicts(snapshot)
         index = {}
@@ -1141,6 +1143,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "main": index.get(main.id) if main else None,
                 "main_status": main_status,
                 "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
+                "instance_rows": {c.id: _inst_rows[c.id] for c in stack.components if c.id in _inst_rows},
                 "update_states": upd_states,          # comp_id -> unchecked|unknown|up_to_date|behind|error
                 "update_main": upd_states.get(main.id, "unchecked") if main else "unchecked",
                 "update_available": any(v == "behind" for v in upd_states.values()),

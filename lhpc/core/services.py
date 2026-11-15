@@ -23,7 +23,7 @@ from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import commands as _commands
 from . import config as _cfgmod
-from . import instances, radio_start, spi_mode
+from . import instance_liveness, instances, radio_start, spi_mode
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
 from .config import (
@@ -868,7 +868,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if stack_id and self.stack(stack_id) is None:
             return self._unknown_stack(stack_id)
         snap = self.build_snapshot()
-        rollup = rollup_states(snap)
+        rollup, by_inst = rollup_states(snap), instance_liveness.rows(self, snap)     # STATUS-DEAD-SOCKET: per instance
         details: list[str] = [n] if (n := radio_start.no_list_notice(self._paths)) else []   # DEC-W384g
         if not stack_id:
             counts = summarize(snap)["states"]
@@ -893,7 +893,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             _ov = self.binary_active_override(ss.stack.id)       # A3: {} unless in force
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
-                details.extend(_render_component(comp, st))
+                details.extend(_render_component(comp, st) + instance_liveness.lines(by_inst.get(comp.id, ())))
                 if comp.id == web_client.COMPONENT and (_wl := web_client.status(self)):
                     details.append(f"    {_wl}")
                 if comp.id in _ov:

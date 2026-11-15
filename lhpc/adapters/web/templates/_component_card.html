@@ -25,6 +25,19 @@
   </tbody>
 </table>
 
+{% set inst_rows = (g.instance_rows|default({})).get(comp.id, []) %}
+{% if inst_rows %}
+  {# STATUS-DEAD-SOCKET: each instance's own state (core instance_liveness), never another instance's. #}
+  <div class="panel" id="{{ card_id }}--instances">
+    <h3>Instances</h3>
+    <ul class="clean">{% for x in inst_rows %}
+      <li data-instance="{{ x.key }}"><span class="mono">{{ x.key }}</span>
+        <span class="badge badge-{{ x.state|replace(' ', '-') }}" data-instance-state="{{ x.state }}">{{ x.state }}</span>
+        {% if x.detail %}<span class="muted">— {{ x.detail }}</span>{% endif %}</li>
+    {% endfor %}</ul>
+  </div>
+{% endif %}
+
 {% if comp.resources %}
   <div class="panel">
     <h3>Declared resources</h3>

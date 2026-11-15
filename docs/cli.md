@@ -37,7 +37,11 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 ### status
 `lhpc status [<stack>] [--versions]` — bounded, read-only stack/component status; `--versions`
-shows source/pin status instead.
+shows source/pin status instead. Under a component that runs as instances, one `instance <stack>@<rid>:` line
+each: `running` only while its process is alive and its own endpoints answer (its daemon socket, its listeners);
+`degraded` names the endpoint that does not answer; `not running` is an instance whose process ended without a
+stop (a crash, a lost USB stick, a kill): start it again, or stop it to clear the line. The console's stack card
+lists the same states.
 
 ### explain
 `lhpc explain <stack>` — a stack and its components (order, bands, ownership).

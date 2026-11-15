@@ -1255,6 +1255,15 @@ class Lifecycle:
                 out.setdefault(rec.get("component", ""), []).append(rec["pid"])
         return out
 
+    def ended_launches(self) -> list[dict]:
+        """The main launch records of THIS boot whose process provably ended while no stop removed its record (a
+        crash, a kill): the evidence that an instance was started and is gone (STATUS-DEAD-SOCKET). Never a record of
+        another boot (boot restore owns those), and never one whose cessation is not proven (`_original_ceased`)."""
+        boot = current_boot_id()
+        return [rec for rec in self.owned_inventory()[0]
+                if boot and rec.get("role", "") == "" and rec.get("rid") and str(rec.get("boot_id") or "") == boot
+                and not self.verify_owned(rec)[0] and self._original_ceased(rec)]
+
     def verify_owned(self, rec: dict) -> tuple[bool, str]:
         """All-or-nothing identity check before any signal is sent.
 
