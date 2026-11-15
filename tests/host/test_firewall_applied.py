@@ -115,6 +115,16 @@ def _remote_console(lab, bind="0.0.0.0"):
                                  allowed_cidrs=["192.168.178.0/24"])
 
 
+# The rendered refusals (FW-HR: exact compares, rule 10)
+NOT_COVERED = "The saved listener is not covered by the applied firewall — apply the firewall, then start."
+
+
+def _apply_cmds(lab):
+    """The commands a start refusal names once the firewall scripts were rendered (the rendered text)."""
+    return [f"sudo bash {lab.root}/config/files/firewall/firewall-apply.sh",
+            "sudo systemctl start lhpc-firewall-check.service", "lhpc webserver apply"]
+
+
 def _box(tmp_path, monkeypatch, rows=(R1, R2), console=True):
     """r1 + r2 configured (and the console remote), the firewall applied: the box after its hardware's apply."""
     lab = Lab(tmp_path, monkeypatch, rows)
@@ -170,7 +180,7 @@ def test_a_configured_radios_stack_starts_after_another_radio_is_added(tmp_path,
         res = _start(svc, "meshtastic", rid)                              # and the public plan is not refused by it
         assert (res.data or {}).get("firewall_gate") != "pending", res.summary
     ok, msg, cmds = _gate(svc, "meshtastic", "r3")                        # r3 waits for its own apply
-    assert not ok and msg.startswith("The saved listener is not covered by the applied firewall"), msg
+    assert not ok and msg == NOT_COVERED, msg
     assert cmds[0] == "lhpc firewall --script > /dev/null"               # the dry run wrote no script
     assert lab.apply() == fh.EXIT_OK                                      # r3's apply: one per hardware
     assert _gate(lab.svc(), "meshtastic", "r3")[0]
@@ -261,7 +271,7 @@ def test_a_changed_listener_key_is_refused_until_its_apply(tmp_path, monkeypatch
     assert _gate(svc, "kiss", "r1")[0]                                    # anchor: the applied listener passes
     _kiss(svc, values)
     ok, msg, _cmds = _gate(svc, "kiss", "r1")
-    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert not ok and msg == NOT_COVERED, msg
 
 
 def test_a_loopback_listener_bound_to_the_network_is_refused_until_its_apply(tmp_path, monkeypatch):
@@ -269,7 +279,7 @@ def test_a_loopback_listener_bound_to_the_network_is_refused_until_its_apply(tmp
     svc = lab.svc()
     _kiss(svc, {"kiss_host": "0.0.0.0"})
     ok, msg, _cmds = _gate(svc, "kiss", "r1")
-    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert not ok and msg == NOT_COVERED, msg
     assert _gate(svc, "meshtastic", "r1")[0]                              # anchor: an applied listener passes
 
 
@@ -294,7 +304,8 @@ def test_a_policy_the_applied_firewall_does_not_carry_waits_for_its_apply(tmp_pa
         cfgmod.save_firewall_config(svc._paths, ssh_ports=list(range(2201, 2218)))
     svc._invalidate_config()
     ok, msg, _cmds = _gate(svc, "meshtastic", "r1")
-    assert not ok and msg.startswith("Firewall changes pending"), msg
+    assert not ok and msg == ("Firewall changes pending — the listener was NOT started. Apply the firewall first, then "
+                                "start 'meshtastic' again."), msg
     r = svc.webserver_apply()
     assert not r.ok and "Firewall changes pending" in r.summary and applied == [1]
 
@@ -339,7 +350,7 @@ def test_a_band_agnostic_row_never_covers_a_band_whose_scope_diverged(tmp_path, 
     assert _gate(svc, "kiss", "r2")[0]                                    # anchor: before the divergence it passes
     _kiss(svc, {"kiss_port": "9002"}, rid="r2")
     ok, msg, _cmds = _gate(svc, "kiss", "r2")
-    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert not ok and msg == NOT_COVERED, msg
     assert _gate(svc, "kiss", "r1")[0]
     assert lab.apply() == fh.EXIT_OK and _gate(lab.svc(), "kiss", "r2")[0]   # its apply covers it
 
@@ -361,7 +372,7 @@ def test_one_field_of_one_bands_row_not_as_applied_is_refused_until_its_apply(tm
     next(e for e in other["endpoints"] if e["id"].startswith("loraham-kiss-tnc-r2"))[field] = value
     monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: other)
     ok, msg, _cmds = _gate(svc, "kiss", "r2")
-    assert not ok and msg.startswith("The saved listener is not covered"), msg
+    assert not ok and msg == NOT_COVERED, msg
     assert _gate(svc, "kiss", "r1")[0]
     monkeypatch.setattr(svc, "_fw_applied_candidate", lambda: real)        # its apply: the evidence as saved
     assert _gate(svc, "kiss", "r2")[0]
@@ -564,7 +575,7 @@ def test_a_start_refusal_names_the_script_only_when_it_was_rendered(tmp_path, mo
     assert not ok and cmds == ["lhpc firewall --script"], cmds
     monkeypatch.setattr(type(svc), "firewall_render", lambda self: ActionResult(True, "regenerated"))
     ok, _msg, cmds = _gate(svc, "meshtastic", "r3", render=True)
-    assert not ok and cmds[0].startswith("sudo bash ") and cmds[0].endswith("firewall-apply.sh"), cmds
+    assert not ok and cmds == _apply_cmds(lab), cmds
 
 
 def test_a_pass_on_the_applied_firewall_renders_on_the_apply_and_never_on_the_dry_run(tmp_path, monkeypatch):
@@ -817,9 +828,10 @@ def test_a_saved_page_port_conflict_is_never_preopened_and_is_shown(tmp_path, mo
     rows = [p for p, _c in _ingress(svc.firewall_candidate())]
     assert port not in rows or (case == "console" and rows.count(port) == 1)   # the console keeps only its own row
     lines = svc.firewall_settings_view()["port_conflicts"]
-    assert len(lines) == 1 and lines[0].startswith(f"port conflict: page port {port} of "), lines
-    assert {"console": "console's port", "shared": "the pages share it", "listener-later": "listens on it"}[case] \
-        in lines[0]
+    why = {"console": "meshcom@r1: it is the console's port", "shared": "graywolf@r1, meshcom@r1: the pages share it",
+           "listener-later": "meshcom@r1: kiss@r1/loraham-kiss-tnc listens on it"}[case]
+    assert lines == [f"port conflict: page port {port} of {why} — not opened by the firewall; save the page on another "
+                     "port"], lines
     assert (svc._page_ports()["graywolf@r1"] if case != "shared" else svc._page_ports()["meshtastic@r1"]) in rows
 
 
@@ -1015,7 +1027,7 @@ def test_the_partial_install_start_refusal_names_the_script_only_when_it_was_ren
     assert not ok and cmds[0] == "lhpc firewall --script > /dev/null", cmds
     monkeypatch.setattr(type(svc), "firewall_render", lambda self: ActionResult(True, "regenerated"))
     ok, _msg, cmds = _gate(svc, "meshtastic", "r1", render=True)
-    assert not ok and cmds[0].startswith("sudo bash ") and cmds[-1] == "lhpc webserver apply", cmds
+    assert not ok and cmds == _apply_cmds(lab), cmds
 
 
 def test_an_error_receipt_published_after_the_status_read_refuses(tmp_path, monkeypatch):
