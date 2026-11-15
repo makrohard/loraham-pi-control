@@ -353,9 +353,9 @@ jobs:
       # The throttle. Measured: the Zero's calibration (row A, 2026-10-03) is cpu 99.7 s,
       # io 489.8 s, mem 110.1 s; this container at --cpus 0.5, --memory 416m and no disk
       # throttle took cpu 57.8, io 31.4, mem 12.2 (testlab run 37148794385): faster on all three.
-      # CPU — the cpu part is CPU-time bound and scales with the quota: 0.5 x 57.8 / 99.7 =
-      # 0.29 CPUs matches the Zero; 0.25 leaves ~15 %.
-      SLOW_CPUS: "0.25"
+      # CPU — SLOW_CPUS is set per run by the step "Size the CPU quota from this runner": the cpu
+      # part is CPU-time bound and scales with the quota, and ubuntu-24.04-arm is not one fixed CPU
+      # (a fixed 0.25 left a faster runner faster than the Zero: testlab run 43626338096).
       # Memory — what a Zero 2 W leaves free; the rest of the 700 MB mem part swaps (the Zero
       # swaps into zram). --memory-swap is memory + 768 MiB swap.
       SLOW_MEM: "416m"
@@ -384,6 +384,17 @@ jobs:
           IMG=lhpc-testlab:ci
           backoff docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Size the CPU quota from this runner
+        # SLOW_CPUS = min(0.25, floor_3dp(0.85 x W1 / Z_cpu)): W1 is the calibration's cpu build in
+        # this image at --cpus 1 (about its CPU time on this runner), Z_cpu the Zero's cpu_s of the
+        # current workload. The throttled build then takes the Zero's time with the ~15 % margin;
+        # 0.25 stays the ceiling (a throttle only ever gets tighter). test_slow_build_calibrated
+        # still judges the throttled run on its own.
+        run: |
+          q=$(python3 testlab/slowbuild/cpu_quota.py --image "$IMG")
+          echo "$q" >> "$GITHUB_ENV"
+          echo "slow-build CPU quota: \`$q\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Acquire the timed operations' transfers (timed, recorded, never judged)
         # Decision (a): a timed operation's transfer is measured as its own number and never

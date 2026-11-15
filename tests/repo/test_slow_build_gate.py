@@ -107,12 +107,16 @@ def _job_env() -> dict[str, str]:
 
 
 def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
-    """Every axis is a named constant, applied by `docker run` and handed to the lane, whose
-    `test_slow_build_env` proves each one is in force (cpu.max, memory.max, io.max)."""
+    """Every axis is named, applied by `docker run` and handed to the lane, whose
+    `test_slow_build_env` proves each one is in force (cpu.max, memory.max, io.max). The CPU quota
+    is sized per run (F13) by a step before the lane; the other axes are the job's constants."""
     env = _job_env()
-    assert set(env) == {"SLOW_CPUS", "SLOW_MEM", "SLOW_SWAP", "SLOW_WRITE_IOPS",
-                        "SLOW_READ_IOPS"}, env
+    assert set(env) == {"SLOW_MEM", "SLOW_SWAP", "SLOW_WRITE_IOPS", "SLOW_READ_IOPS"}, env
     text = WORKFLOW.read_text()
+    job = text[text.index("\n  slow-build:\n"):]
+    sizing = job.index('q=$(python3 testlab/slowbuild/cpu_quota.py --image "$IMG")\n'
+                       '          echo "$q" >> "$GITHUB_ENV"\n')
+    assert job.index('echo "IMG=$IMG" >> "$GITHUB_ENV"') < sizing < job.index("- name: Slow-target build")
     run = text[text.index("docker run --rm --user root"):text.index("test -s slowevidence")]
     for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',
                  "$SLOW_IO_FLAGS", "-e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS",
@@ -128,8 +132,14 @@ def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
 def test_the_cpu_quota_is_below_the_zero_breakeven():
     """Row C at 0.5 CPUs took 57.8 s on the cpu part, the Zero 99.7 s (testlab run 37148794385,
     row A 2026-10-03); the part is CPU-time bound, so the Zero's quota is 0.5 x 57.8 / 99.7. A
-    quota above it is a container faster than the Zero by construction."""
-    assert 0 < float(_job_env()["SLOW_CPUS"]) <= 0.5 * 57.8 / 99.7
+    quota above it is a container faster than the Zero by construction. The per-run quota never
+    exceeds its ceiling (testlab/tests/unit/test_slow_build_cpu_quota.py), which stays below."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cpu_quota", repo_paths.REPO / "testlab" / "slowbuild" / "cpu_quota.py")
+    cpu_quota = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cpu_quota)
+    assert 0 < cpu_quota.CEILING <= 0.5 * 57.8 / 99.7
     assert int(_job_env()["SLOW_WRITE_IOPS"]) <= 134    # the Zero's 65536 synced files / 489.8 s
 
 
