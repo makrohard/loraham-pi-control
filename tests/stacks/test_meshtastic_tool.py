@@ -296,7 +296,7 @@ def test_blocked_transport_returns_2_and_does_not_exec(tmp_path, captured_exec):
 def test_owned_setting_returns_2_with_guidance(tmp_path, captured_exec):
     _make_fake_cli(tmp_path)
     rc, _out, err = _run(["--set", "lora.region", "EU_868"], root=tmp_path, box=captured_exec)
-    assert rc == 2 and "lhpc config meshtastic region" in err
+    assert rc == 2 and "lhpc config meshtastic@<rid> region <value>" in err      # no instance named: no guess
 
 
 def test_node_op_refused_when_stack_not_running(tmp_path, captured_exec):
@@ -616,3 +616,18 @@ def test_k7_one_running_instance_on_r1_is_exactly_the_old_command(cli_box, captu
     cli_box["running"] = ["meshtastic@r1"]
     assert cli_box["run"](["meshtastic", "--info"]) is None
     assert captured_exec["argv"][1:] == ["--host", mt.LOCAL_API, "--info"]
+
+
+@pytest.mark.parametrize("argv, field, pointer", [
+    (["--set", "lora.region", "EU_868"], "lora.region", "lhpc config meshtastic@r2 region <value>"),
+    (["--set-owner", "Name"], "set-owner", "lhpc config meshtastic@r2 node_name <value>"),
+])
+def test_an_owned_setting_points_at_the_instance_the_operator_named(tmp_path, monkeypatch, capsys, argv, field, pointer):
+    # `lhpc meshtastic@r2 …`: the pointer names meshtastic@r2. A bare `lhpc config meshtastic …` is refused with two
+    # radios (W323), so the old pointer led nowhere.
+    from lhpc.adapters.cli.main import main
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    _make_fake_cli(tmp_path)
+    assert main(["meshtastic@r2", *argv]) == 2
+    assert capsys.readouterr().err == (f"ERR  {field} is managed by LHPC for the local node.\n\nUse:\n  {pointer}\n\n"
+                                       "(A remote node targeted with --dest is not affected.)\n")

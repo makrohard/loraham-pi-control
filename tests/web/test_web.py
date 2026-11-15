@@ -3050,3 +3050,10 @@ def test_an_inline_update_whose_build_job_is_refused_ends_as_the_clis_failed_bui
     cls = _flash_classes(body, "needs-rebuild")
     assert "depnote-bad" in cls and "depnote-ok" not in cls and "depnote-warn" not in cls
     assert "lhpc build kiss --yes" in body and "an uninstall is pending" in body
+
+
+def test_the_graywolf_note_names_the_kiss_instance_for_rx_only(web):
+    # A bare `lhpc config kiss rx_only on` is refused with two radios (W323); rx_only is set per radio.
+    page = web().get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "RX-only is set on the kiss stack, per radio (`lhpc config kiss@&lt;rid&gt; rx_only on`)" in page
+    assert "`lhpc config kiss rx_only on`" not in page

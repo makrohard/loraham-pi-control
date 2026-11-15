@@ -1092,7 +1092,7 @@ def _cmd_meshtastic(target: str, passthrough: list[str]) -> int:
         passthrough,
         runtime_root=resolve_paths().runtime_root,
         stack_running=lambda _sid: bool(key) and key in running,
-        local_api=api,
+        local_api=api, key=key,
         confirm=_confirm,
         # Reassert LHPC-owned region/name/GPS after a broad local mutator by re-running the stack's
         # post-start steps in place (no restart). require_all=True escalates the normally-optional

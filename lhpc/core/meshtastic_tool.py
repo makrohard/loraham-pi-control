@@ -58,9 +58,9 @@ def instance_api(target: str, running: list, argv=()) -> tuple[str, str]:
 _TRANSPORT_LONG = ("--host", "--tcp", "--port", "--serial", "--ble", "--ble-scan")
 _TRANSPORT_SHORT = ("-t", "-s", "-b")
 
-# LHPC-owned `--set FIELD VALUE` fields on the local node -> where to change them instead.
+# LHPC-owned `--set FIELD VALUE` fields on the local node -> where to change them instead (`{target}`: the instance).
 _OWNED_SET_FIELDS = {
-    "lora.region": "lhpc config meshtastic region <value>",
+    "lora.region": "lhpc config {target} region <value>",
     "position.gps_mode": "lhpc gps ...   (or the stack's use_gps setting)",
     "position.fixed_position": "lhpc gps ...   (LHPC manages the fixed position)",
 }
@@ -69,9 +69,9 @@ _OWNED_SET_FIELDS = {
 # turns off primary-channel encryption — it mutates the node name LHPC owns. Ham mode is not an
 # LHPC-managed setting, so it is refused here rather than given its own subsystem.
 _OWNED_FLAGS = {
-    "--set-owner": "lhpc config meshtastic node_name <value>",
-    "--set-owner-short": "lhpc config meshtastic node_short <value>",
-    "--set-ham": "lhpc config meshtastic node_name <value>   (ham mode is not LHPC-managed)",
+    "--set-owner": "lhpc config {target} node_name <value>",
+    "--set-owner-short": "lhpc config {target} node_short <value>",
+    "--set-ham": "lhpc config {target} node_name <value>   (ham mode is not LHPC-managed)",
     "--setlat": "lhpc gps --source fixed --lat <deg>",
     "--setlon": "lhpc gps --source fixed --lon <deg>",
     "--setalt": "lhpc gps --source fixed --alt <m>",
@@ -229,8 +229,9 @@ def _match_factory_flag(name: str) -> str | None:
     return "--factory-reset"
 
 
-def classify(argv: list[str]) -> Decision:
-    """Classify forwarded argv (WITHOUT the wrapper's own options) against LHPC's boundary."""
+def classify(argv: list[str], target: str = "meshtastic@<rid>") -> Decision:
+    """Classify forwarded argv (WITHOUT the wrapper's own options) against LHPC's boundary; a pointer names `target`,
+    the instance (W323: a bare `lhpc config meshtastic` is refused with two radios)."""
     remote = _has_remote_dest(argv)
     factory: str | None = None
     bulk = False
@@ -261,7 +262,7 @@ def classify(argv: list[str]) -> Decision:
                 field, consume = (argv[i + 1] if i + 1 < len(argv) else ""), 3  # --set FIELD VALUE
             norm = _norm_field(field)
             if not remote and norm in _OWNED_SET_FIELDS:
-                return Decision("block", _owned_msg(norm, _OWNED_SET_FIELDS[norm]))
+                return Decision("block", _owned_msg(norm, _OWNED_SET_FIELDS[norm].replace("{target}", target)))
             i += consume
             continue
         # Broad local mutators need reconvergence — but only when they hit the LOCAL node (a remote
@@ -274,7 +275,7 @@ def classify(argv: list[str]) -> Decision:
         if not remote:
             owned = _match_owned_flag(name)
             if owned:
-                return Decision("block", _owned_msg(owned.lstrip("-"), _OWNED_FLAGS[owned]))
+                return Decision("block", _owned_msg(owned.lstrip("-"), _OWNED_FLAGS[owned].replace("{target}", target)))
         fac = _match_factory_flag(name)
         if fac is not None and (factory is None or fac == _FACTORY_DEVICE):
             factory = fac
@@ -354,7 +355,7 @@ def _needs_node(forwarded: list[str]) -> bool:
 
 def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
         confirm: Callable[[str], bool], reconverge: Callable[[], bool] | None = None,
-        out=None, err=None, local_api: str = LOCAL_API) -> int:
+        out=None, err=None, local_api: str = LOCAL_API, key: str = "") -> int:
     """Guarded foreground passthrough. Returns the upstream CLI's exit code, or an LHPC code.
 
     `reconverge` re-asserts LHPC-owned settings (region/name/GPS) via the stack's post-start path;
@@ -375,7 +376,7 @@ def run(argv: list[str], *, runtime_root, stack_running: Callable[[str], bool],
     if not _needs_node(forwarded):
         return _exec_foreground(exe, forwarded)
 
-    decision = classify(forwarded)
+    decision = classify(forwarded, key or "meshtastic@<rid>")     # `key`: the instance the operator named
     if decision.action == "block":
         err.write(f"ERR  {decision.message}\n")
         return 2
