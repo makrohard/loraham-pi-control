@@ -232,11 +232,10 @@ def _console(replies):
     return srv, seen
 
 
-@pytest.mark.slow                       # real waits of a few seconds
-@pytest.mark.wallclock("the real launcher's first console connect against the marker's appearance is measured")
-def test_meshcoms_callsign_step_waits_until_the_harness_has_verified_the_node(tmp_path):
-    # MESHCOM-VERIFY: on a provisioning start the console line is there while the harness still polls the console
-    # (it takes over one client at a time): no console connection before the marker, the probe after it
+def _meshcom_runner(tmp_path, marker_after):
+    """MeshCom's real post steps (its console pointed at a fake one) in a real launcher: the boot's console line is
+    in uart-latest.log; the harness's marker is written `marker_after` s after the start (0: already there, a normal
+    restart). Returns (seconds from the start to each console connection, the step outcomes by label)."""
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
     srv, seen = _console("...Call: <DL1ABC>\r\n")
     steps = [{**s, "port": srv.getsockname()[1]} if s.get("kind") == "tcp_send" else dict(s) for s in comp.post_steps]
@@ -250,16 +249,41 @@ def test_meshcoms_callsign_step_waits_until_the_harness_has_verified_the_node(tm
     script = commands.render_post_launcher(steps, comp, {"mc_callsign": "DL1ABC"}, _Op(), str(root), str(src), "",
                                            result_path=str(rp), inst=commands.Instance("r1", band="433"))
     (tmp_path / "launcher.py").write_text(script)
-    t0 = time.time()
+
+    def write_marker():
+        marker.write_text("2026-11-15T01:00:00Z abc\n")
+    if not marker_after:
+        write_marker()
+    t0 = time.time()                    # wallclock: the console connections are timed from the launcher's start
     p = subprocess.Popen([sys.executable, str(tmp_path / "launcher.py")], stderr=subprocess.PIPE, text=True)
-    threading.Thread(target=_later(6, lambda: marker.write_text("2026-11-15T01:00:00Z abc\n")), daemon=True).start()
+    if marker_after:
+        threading.Thread(target=_later(marker_after, write_marker), daemon=True).start()
     try:
         p.communicate(timeout=90)
     finally:
         srv.close()
-    assert seen and min(seen) - t0 >= 6, (seen, t0)                                # nothing before the marker
-    outcomes = {s["label"]: s["outcome"] for s in json.loads(rp.read_text())["steps"]}
+    return [t - t0 for t in seen], {s["label"]: s["outcome"] for s in json.loads(rp.read_text())["steps"]}
+
+
+@pytest.mark.slow                       # real waits of a few seconds
+@pytest.mark.wallclock("the real launcher's first console connect against the marker's appearance is measured")
+def test_meshcoms_callsign_step_waits_until_the_harness_has_verified_the_node(tmp_path):
+    # MESHCOM-VERIFY: on a provisioning start the console line is there while the harness still polls the console
+    # (it takes over one client at a time): no console connection before the marker, the probe after it
+    seen, outcomes = _meshcom_runner(tmp_path, marker_after=6)
+    assert seen and min(seen) >= 6, seen                                           # nothing before the marker
     assert outcomes.get("provisioning verified") == "ready", outcomes
+
+
+@pytest.mark.slow                       # real waits of a few seconds
+@pytest.mark.wallclock("the real launcher's first console connect on a kept marker is measured")
+def test_a_normal_restart_with_its_marker_kept_probes_the_callsign_at_once(tmp_path):
+    # G1-MCV-CODE NOTE: a restart keeps the marker (no provisioning): the wait passes on its first read and the
+    # callsign probe runs right away (the runner polls every 2 s)
+    seen, outcomes = _meshcom_runner(tmp_path, marker_after=0)
+    assert seen and min(seen) < 4, seen
+    assert outcomes.get("provisioning verified") == "ready", outcomes
+    assert outcomes.get("callsign") not in (None, "timeout"), outcomes
 
 
 @pytest.mark.parametrize("step, why", [
