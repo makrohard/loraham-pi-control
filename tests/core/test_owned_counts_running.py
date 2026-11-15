@@ -40,6 +40,7 @@ def test_without_a_verified_record_the_unmatched_spec_stays_stopped(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.wallclock("a real sleeping child is the recorded process; its /proc entry is polled, bounded at 1 s")
 def test_only_a_record_that_still_verifies_is_passed_to_status(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     p = subprocess.Popen(["sleep", "30"], start_new_session=True,
@@ -85,6 +86,7 @@ def _box(tmp_path, monkeypatch):
 
 
 @pytest.mark.needs_session
+@pytest.mark.wallclock("a real sleeping child is the recorded process; its /proc entry is polled, bounded at 1 s")
 def test_a_start_does_not_launch_a_second_one(tmp_path, monkeypatch):
     # T-R6 (A §2.3 across the update): a TNC an older LHPC started, recorded, whose argv lacks the
     # new instance token, counts as running, so a start does not launch a second one. At L3 status

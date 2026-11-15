@@ -913,6 +913,8 @@ def test_component_remote_set_and_clear_preserve_others(tmp_path):
     assert "loraham-daemon" not in rem and rem["meshcore-node"] == "https://b/mc.git"
 
 
+@pytest.mark.wallclock("no clock seam in lhpc.core.config: _config_flock imports time inside itself; a real 0.5 s "
+                       "timeout, and the 3 s bound tells bounded from wedged")
 def test_the_config_lock_wait_is_bounded(tmp_path):
     # A held exclusive config lock must make a second acquire fail fast with
     # ConfigLockBusy, not block forever (which would wedge the fixed web thread pool).

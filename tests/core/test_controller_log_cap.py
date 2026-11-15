@@ -102,6 +102,7 @@ _WRITER = textwrap.dedent("""
 """)
 
 
+@pytest.mark.wallclock("a real O_APPEND writer process fills the log; its size is polled, bounded at 30 s")
 def test_cap_controller_log_with_a_live_o_append_writer(tmp_path, small_cap):
     svc = _svc(tmp_path)
     live = tmp_path / "logs" / "lhpc-web.log"

@@ -218,6 +218,7 @@ def test_the_receipt_records_the_revision_read_under_the_locks(tmp_path, monkeyp
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("a real sleeping child stands in for the detached launcher; nothing is timed")
 def test_the_console_builds_a_component_as_the_cli_does(tmp_path, monkeypatch):
     """A console Build of one component builds what `lhpc build <component>` builds — that
     component — even while a provider of it is not built (the stack's Build builds providers

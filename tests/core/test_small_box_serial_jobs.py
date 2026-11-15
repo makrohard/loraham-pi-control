@@ -149,10 +149,10 @@ def _launcher(tmp_path, steps):
 
 def _until(cond, what):
     """Wait for an EVENT; the deadline only ends a hang, it never decides a pass."""
-    end = time.monotonic() + 60
+    end = time.monotonic() + 60  # wallclock: real launcher processes; the deadline only ends a hang
     while not cond():
-        assert time.monotonic() < end, f"no {what} within 60 s"
-        time.sleep(0.02)
+        assert time.monotonic() < end, f"no {what} within 60 s"  # wallclock: the same hang deadline
+        time.sleep(0.02)  # wallclock: polls the kernel's /proc/locks, which has no event to wait on
 
 
 def _blocked_on_flock(pid):

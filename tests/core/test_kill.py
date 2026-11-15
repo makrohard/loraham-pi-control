@@ -743,7 +743,8 @@ def _owner(tmp_path, **fields):
 
 def _wall_start(pid):
     up = float(Path("/proc/uptime").read_text().split()[0])
-    return time.time() - up + procident.proc_identity(pid)["starttime"] / os.sysconf("SC_CLK_TCK")
+    now = time.time()  # wallclock: a real process's wall start, as the product derives it
+    return now - up + procident.proc_identity(pid)["starttime"] / os.sysconf("SC_CLK_TCK")
 
 
 def test_a_cli_holder_whose_identity_is_not_the_one_that_took_the_admission_is_refused(tmp_path, clock, procs,
