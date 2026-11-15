@@ -10,7 +10,12 @@ import sys
 
 import pytest
 from lhpc_testlab import ops
-from lhpc_testlab.release import plugin_manager_markers, plugin_manager_pids
+from lhpc_testlab.release import (
+    assert_plugin_manager_running,
+    plugin_manager_marker,
+    plugin_manager_markers,
+    plugin_manager_pids,
+)
 
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
@@ -57,3 +62,23 @@ def test_the_lab_seeds_a_node_identity_into_every_instances_own_settings(tmp_pat
     for rid in ("r1", "r2"):
         store = instances.store(svc, "meshtastic", "", instances.copy_of(svc, "meshtastic", rid)[0])
         assert store.get("node_name") == "LHPC Lab" and store.get("node_short") == "LAB", (rid, store)
+
+
+def test_a_running_managers_marker_is_its_own_never_another_instances(tmp_path):
+    # G1-RVH-CODE BLOCKING: r1's manager runs without its marker; a stale marker of r2 must not stand in for it
+    plugins = tmp_path / "state" / "r1" / "openhop" / "plugins"
+    stale = tmp_path / "state" / "r2" / "openhop" / ".lhpc-plugin-manager-active"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("")
+    m = _manager(plugins)
+    try:
+        with pytest.raises(AssertionError, match="marker missing while it runs"):
+            assert_plugin_manager_running(tmp_path)                       # r2's stale marker does not count
+        own = tmp_path / "state" / "r1" / "openhop" / ".lhpc-plugin-manager-active"   # where the host writes it
+        own.parent.mkdir(parents=True)
+        own.write_text("")
+        assert plugin_manager_marker(plugins) == own
+        assert_plugin_manager_running(tmp_path)                           # r1's own does
+    finally:
+        m.kill()
+        m.wait(timeout=5)

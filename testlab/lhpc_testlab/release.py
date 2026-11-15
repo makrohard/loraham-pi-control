@@ -772,17 +772,44 @@ def _openhop_dirs(root) -> str:
     return re.escape(str(pathlib.Path(root) / "state")) + r"/(?:r[1-9][0-9]?/)?openhop/"
 
 
-def plugin_manager_pids(root) -> list[int]:
-    """Pids of upstream's MeshCore plugin manager (`python -m repeater.plugins`) serving THIS
-    runtime root — matched on the plugins-root path in its argv, under any of the root's openHop dirs
-    (`_openhop_dirs`), so two labs on one host never see each other's manager. The repeater roles spawn exactly one
-    per instance; chat spawns none."""
+def plugin_managers(root) -> list[tuple[int, pathlib.Path]]:
+    """(pid, its `--plugins-root`) of each of upstream's MeshCore plugin managers (`python -m repeater.plugins`) serving
+    THIS runtime root: its plugins root lies under one of the root's openHop dirs (`_openhop_dirs`, the root at a word
+    start), so two labs on one host never see each other's manager. The repeater roles spawn exactly one per
+    instance; chat spawns none."""
     import subprocess as _sp
     rx = re.compile(r"(?:^|\s)" + _openhop_dirs(root))      # the root itself: a lab at /y<root> never counts
     r = _sp.run(["pgrep", "-f", "-a", "repeater.plugins"], capture_output=True, text=True,
                 check=False)                                   # no match = an empty list
-    return sorted(int(line.split()[0]) for line in r.stdout.splitlines()
-                  if "--plugins-root" in line and rx.search(line))
+    out = []
+    for line in r.stdout.splitlines():
+        argv = line.split()
+        if "--plugins-root" in argv[:-1] and rx.search(line):
+            out.append((int(argv[0]), pathlib.Path(argv[argv.index("--plugins-root") + 1])))
+    return sorted(out)
+
+
+def plugin_manager_pids(root) -> list[int]:
+    """The pids of `plugin_managers(root)`."""
+    return [pid for pid, _plugins in plugin_managers(root)]
+
+
+def plugin_manager_marker(plugins_root) -> pathlib.Path:
+    """THE marker of the manager whose `--plugins-root` is `plugins_root`: the host writes it in the same openHop dir
+    (`<state_dir>/.lhpc-plugin-manager-active` beside `<state_dir>/plugins`), so a running manager is tied to its own
+    marker, never to another instance's."""
+    return pathlib.Path(plugins_root).parent / ".lhpc-plugin-manager-active"
+
+
+def assert_plugin_manager_running(root) -> None:
+    """The repeater roles spawn upstream's plugin manager beside the repeater — exactly one, in this lab's runtime
+    root — and THAT manager's own same-boot marker is on disk while it runs (another instance's stale marker never
+    stands in for it)."""
+    managers = plugin_managers(root)
+    assert len(managers) == 1, (f"{stack_regression('meshcore', 'readiness')}\n"
+                                f"expected exactly one MeshCore plugin manager, found {managers}")
+    marker = plugin_manager_marker(managers[0][1])
+    assert marker.exists(), f"plugin-manager marker missing while it runs: {marker}"
 
 
 def plugin_manager_markers(root) -> list[pathlib.Path]:

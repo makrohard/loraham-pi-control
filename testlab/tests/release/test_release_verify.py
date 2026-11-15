@@ -20,6 +20,7 @@ from lhpc_testlab.release import (
     MESHTASTIC_API,
     REPEATER_DASHBOARD,
     alive,
+    assert_plugin_manager_running,
     gui_startable,
     install_build,
     plugin_manager_markers,
@@ -251,13 +252,7 @@ def _meshcore_mode(env, mode: str):
 
 
 def _assert_plugin_manager_running(env) -> None:
-    """The repeater roles spawn upstream's plugin manager beside the repeater — exactly one,
-    in this lab's runtime root, and its same-boot marker is on disk while it runs."""
-    root = env["LHPC_RUNTIME_ROOT"]
-    pids = plugin_manager_pids(root)
-    assert len(pids) == 1, (f"{stack_regression('meshcore', 'readiness')}\n"
-                            f"expected exactly one MeshCore plugin manager, found {pids}")
-    assert plugin_manager_markers(root), "plugin-manager marker missing while it runs"
+    assert_plugin_manager_running(env["LHPC_RUNTIME_ROOT"])
 
 
 def _assert_plugin_manager_gone(env) -> None:
