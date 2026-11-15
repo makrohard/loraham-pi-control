@@ -25,7 +25,7 @@ def _kiss_serving() -> bool:
     """True when kiss's KISS/TCP listener accepts a connection RIGHT NOW — a one-shot functional
     liveness probe that does not depend on lhpc's /proc-based status."""
     try:
-        socket.create_connection(("127.0.0.1", KISS_TCP), timeout=5).close()
+        socket.create_connection(("127.0.0.1", KISS_TCP), timeout=5).close()  # rule-4: lab-local server
         return True
     except OSError:
         return False
@@ -95,7 +95,7 @@ def chain(lab):
 def test_kiss_rx_and_tx_round_trip(chain):
     """Injected APRS frame -> fake daemon framed RX -> real kiss TNC -> valid AX.25/KISS
     on TCP 8001; the same frame written back is a TX the fake daemon captures."""
-    s = socket.create_connection(("127.0.0.1", KISS_TCP), timeout=10)
+    s = socket.create_connection(("127.0.0.1", KISS_TCP), timeout=10)  # rule-4: lab-local server
     s.settimeout(15)
     run_lab(chain.env, "inject", "433", "aprs-position", check=True)
     data = s.recv(1024)
@@ -132,7 +132,7 @@ def test_graywolf_shows_injected_station(chain):
     if not shutil.which("dpkg-deb"):
         pytest.skip("dpkg-deb not installed (graywolf fetch unpacks a .deb)")
     import urllib.error
-    import urllib.request
+    import urllib.request  # rule-4: lab-local server
     run_lhpc(chain.env, "install", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "stack", "start", named(chain.env, "graywolf"), "--yes", check=True, timeout=300)
@@ -145,8 +145,8 @@ def test_graywolf_shows_injected_station(chain):
         rid = named(chain.env, "graywolf").partition("@")[2]
         pw = (chain.root / "state" / rid / "graywolf" / "graywolf-admin.txt").read_text().strip()
         jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        login = urllib.request.Request(
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))  # rule-4: lab-local server
+        login = urllib.request.Request(  # rule-4: lab-local server
             f"http://127.0.0.1:{GRAYWOLF_UI}/api/auth/login",
             data=json.dumps({"username": "admin", "password": pw}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")

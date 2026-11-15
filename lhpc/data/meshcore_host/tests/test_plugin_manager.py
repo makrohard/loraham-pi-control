@@ -491,19 +491,23 @@ def test_a_killed_host_takes_its_manager_down(tmp_path):
     its manager was reparented to PID 1 and kept running, and the same-boot marker then kept every
     later manager from starting. The parent-death signal hands the manager the SIGTERM the host
     could not send. A real host process (the fake resolver only), SIGKILLed after the spawn."""
+    import select
     import sys
     import textwrap
-    import time
     flag = tmp_path / "manager-got-sigterm"
+    ready = tmp_path / "manager-ready"
+    os.mkfifo(ready)                           # opened by both: the host waits for the manager's handler
     manager = textwrap.dedent(f"""
-        import signal, sys, time
+        import signal, sys
         def term(*_):
             open({str(flag)!r}, "w").write("term"); sys.exit(0)
         signal.signal(signal.SIGTERM, term)
-        time.sleep(30)
+        open({str(ready)!r}, "w").close()       # the handler is installed
+        signal.alarm(30)                        # a manager left behind ends by itself, as before
+        signal.pause()
     """)
     host = textwrap.dedent(f"""
-        import os, signal, sys, time
+        import os, signal, sys
         from pathlib import Path
         from meshcore_host import plugin_manager as pm
         pm.paths_for = lambda d: (Path(d) / "plugins", Path(d) / "plugin-manager.sock")
@@ -511,14 +515,18 @@ def test_a_killed_host_takes_its_manager_down(tmp_path):
         child.argv = [sys.executable, "-c", {manager!r}]
         assert child.start()
         print(child.proc.pid, flush=True)
-        time.sleep(1.0)                        # the manager installed its handler
+        open({str(ready)!r}).read()            # returns once the manager installed its handler
         os.kill(os.getpid(), signal.SIGKILL)   # no handler, no stop(): the Zero 2 W case
     """)
     out = subprocess.run([sys.executable, "-c", host], capture_output=True, text=True, timeout=30)
     manager_pid = int(out.stdout.split()[-1])
-    deadline = time.monotonic() + 10
-    while not flag.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
+    try:
+        pidfd = os.pidfd_open(manager_pid)
+    except ProcessLookupError:
+        pidfd = None                           # already gone
+    if pidfd is not None:
+        select.select([pidfd], [], [], 10)     # the manager's exit, at most 10 s
+        os.close(pidfd)
     alive = True
     try:
         os.kill(manager_pid, 0)

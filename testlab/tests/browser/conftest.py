@@ -100,7 +100,7 @@ def seeded_rf_logs(lab):
     the plain API serves it — fetched here, in Python, so a route handler that answers the
     decoded API never has to call back into the page for it."""
     import json
-    import urllib.request
+    import urllib.request  # rule-4: lab-local server
     from types import SimpleNamespace
 
     logs = lab.root / "logs"
@@ -115,7 +115,7 @@ def seeded_rf_logs(lab):
     (logs / "rf-meshtastic.log").write_text(
         '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":4294967295,'
         '"size":4,"bytes":"01020304"}\n')
-    with urllib.request.urlopen(lab.base + "/api/rflog/meshtastic?job=rf-meshtastic.log",
+    with urllib.request.urlopen(lab.base + "/api/rflog/meshtastic?job=rf-meshtastic.log",  # rule-4: lab-local server
                                 timeout=10) as r:
         record = json.loads(r.read())["records"][0]
     return SimpleNamespace(dir=logs, older=older, newer=newer, meshtastic_record=record)

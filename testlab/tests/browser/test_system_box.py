@@ -162,7 +162,7 @@ def _gps(state, label, lat=None, lon=None):
 
 
 def _serve_gps(page, payload):
-    """Answer `/api/gps` with `payload` and count the requests."""
+    """Answer `/api/gps` with `payload` and count each request."""
     seen = {"n": 0}
 
     def handler(route):

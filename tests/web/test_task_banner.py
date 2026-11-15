@@ -223,7 +223,7 @@ def test_running_tasks_is_get_safe_never_cleans_jobs(tmp_path, monkeypatch):
         return real(self, cleanup=cleanup)
     monkeypatch.setattr(ControllerService, "active_jobs", spy)
     svc.running_tasks()
-    assert True not in called                             # never the mutating (cleanup=True) variant
+    assert called.count(True) == 0                        # never the mutating (cleanup=True) variant
 
 
 def test_spawn_web_job_blocked_by_auto_install_gate(tmp_path, monkeypatch):
