@@ -116,6 +116,7 @@ def _timeout_env(monkeypatch):
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("the runaway guard against a real child is the case")
 def test_unverified_timeout_step_records_unsafe(tmp_path, monkeypatch):
     from lhpc.core import proctree
     _timeout_env(monkeypatch)
@@ -131,6 +132,7 @@ def test_unverified_timeout_step_records_unsafe(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("the runaway guard against a real child is the case")
 def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
     from lhpc.core import proctree
     _timeout_env(monkeypatch)
@@ -148,6 +150,7 @@ def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
     assert d["detail"].startswith("timed out (runaway guard 0.3 s): sleep 5"), d["detail"]
 
 
+@pytest.mark.wallclock("the stall rule against a real quiet child is the case")
 def test_web_build_stalled_detail(tmp_path, monkeypatch):
     # F42: a Build step whose session shows no activity is ended as STALLED, and the attempt record
     # says so with the effective stall window (1 s here, not the default 10 min).

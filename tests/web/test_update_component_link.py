@@ -5,7 +5,6 @@ pinned in test_stacks_page_source_state.py).
 The first three cases fake freshness at the cached-verdict seam (`_fake_freshness`); the
 render cases below drive the real seam with a recorded verdict and a probed head."""
 
-import time
 
 import pytest
 
@@ -37,7 +36,7 @@ def _faked_client(web, tmp_path, behind):
     def factory():
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         svc.source_check_view = lambda: {"components": {cid: {"k": st} for cid, st in behind.items()},
-                                         "checked_at": int(time.time())}
+                                         "checked_at": 1_700_000_000}
         return svc
     return web(service_factory=factory)
 

@@ -1774,13 +1774,12 @@ def test_no_chip_without_flag(web):
 # --- M7: Clean all confirm flow (typed stack id, zero mutation on mismatch) -------------------
 
 def _seed_clean_target(tmp_path):
-    import time as _t
     from lhpc.core import source_registry
     from lhpc.core.paths import Paths
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", 1_700_000_000.0,
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
 
 

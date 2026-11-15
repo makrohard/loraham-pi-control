@@ -9,7 +9,6 @@ could not pass here.
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 
@@ -41,7 +40,7 @@ def _client(tmp_path, web, cmdlines):
         (tmp_path / SRC / rel).write_bytes(data)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(SRC, "", "pinned", "", time.time(), "",
+        source_registry.RegistryRecord(SRC, "", "pinned", "", 1_700_000_000.0, "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines).system,
                             paths=Paths(runtime_root=tmp_path))

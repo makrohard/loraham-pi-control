@@ -900,10 +900,9 @@ def test_get_routes_200_with_escaping_logs_during_run(tmp_path, web):
     assert "EXTERNAL-SECRET" not in json.dumps(api.get_json())
 
 
-def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path, web):
+def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path, web, fake_clock):
     # a SAFE runtime-owned logs/ still prunes eligible old logs by the
     # count budget while preserving the LIVE auto-install run's component logs (full-run prefix).
-    import time as _t
     paths = Paths(runtime_root=tmp_path)
     rid = "c" * 32
     m = _seed_running_marker(paths, rid)
@@ -911,7 +910,7 @@ def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path, 
                          "LoRaHAM Daemon — Build log", "live\n")   # live auto-install component log
     c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"
-    now = _t.time()
+    now = fake_clock.time()
     # create many old unrelated runtime logs (exceed the retention count budget)
     for i in range(svc.LOG_RETENTION + 10):
         f = logs / f"old-{i}.log"; f.write_text("x" * 10)
@@ -924,14 +923,13 @@ def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path, 
 
 # --- prune retention must skip non-regular entries & fail-closed ephemeral dirs -----
 
-def test_prune_retains_directory_named_log(tmp_path, web):
+def test_prune_retains_directory_named_log(tmp_path, web, fake_clock):
     # P2-A: a runtime-owned DIRECTORY named `bad.log` must not raise (os.unlink would raise
     # IsADirectoryError) and must not be deleted; eligible old REGULAR logs still prune.
-    import time as _t
     c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     (logs / "bad.log").mkdir()                                   # directory, not a file
-    now = _t.time()
+    now = fake_clock.time()
     for i in range(svc.LOG_RETENTION + 5):
         f = logs / f"old-{i}.log"; f.write_text("x" * 20)
         os.utime(f, (now - 1000 - i, now - 1000 - i))
@@ -940,9 +938,8 @@ def test_prune_retains_directory_named_log(tmp_path, web):
     assert (logs / "bad.log").is_dir()                          # directory retained, untouched
 
 
-def test_prune_non_regular_entries_retained(tmp_path, web):
+def test_prune_non_regular_entries_retained(tmp_path, web, fake_clock):
     # P2-A: a FIFO named `*.log` is non-regular -> never a deletion candidate, no raise.
-    import time as _t
     c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     fifo = logs / "pipe.log"
@@ -950,7 +947,7 @@ def test_prune_non_regular_entries_retained(tmp_path, web):
         os.mkfifo(fifo)
     except (OSError, AttributeError):
         return                                                  # platform without mkfifo
-    now = _t.time()
+    now = fake_clock.time()
     for i in range(svc.LOG_RETENTION + 3):
         f = logs / f"old-{i}.log"; f.write_text("y" * 15)
         os.utime(f, (now - 1000 - i, now - 1000 - i))
@@ -958,15 +955,14 @@ def test_prune_non_regular_entries_retained(tmp_path, web):
     assert removed > 0 and fifo.exists()                        # fifo retained, no raise
 
 
-def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch, web):
+def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch, web, fake_clock):
     # P2-A: a deletion that raises (OSError/PathContainmentError — e.g. a leaf swapped to a
     # symlink between stat and unlink) is retained, does not raise, and is NOT counted.
-    import time as _t
     from lhpc.core import runtime_fs
     from lhpc.core.paths import PathContainmentError
     c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
-    now = _t.time()
+    now = fake_clock.time()
     for i in range(svc.LOG_RETENTION + 6):
         f = logs / f"old-{i}.log"; f.write_text("z" * 12)
         os.utime(f, (now - 1000 - i, now - 1000 - i))
@@ -998,13 +994,12 @@ def test_prune_ephemeral_escaping_dirs_fail_closed(tmp_path, web):
     assert (out_post / "s.py").read_text() == "SENT-POST\n"
 
 
-def test_prune_ephemeral_normal_pruning_still_works(tmp_path, web):
+def test_prune_ephemeral_normal_pruning_still_works(tmp_path, web, fake_clock):
     # P2-B: a SAFE state/jobs still prunes eligible old regular launcher files.
-    import time as _t
     c, svc = _client(web, tmp_path)
     (tmp_path / "logs").mkdir()
     jdir = tmp_path / "state" / "jobs"; jdir.mkdir(parents=True)
-    now = _t.time()
+    now = fake_clock.time()
     for i in range(svc.LOG_RETENTION + 8):
         f = jdir / f"u{i}.py"; f.write_text("x")
         os.utime(f, (now - 1000 - i, now - 1000 - i))
@@ -1199,7 +1194,6 @@ def test_a_confirmation_staged_before_a_restart_is_refused(tmp_path, monkeypatch
 @pytest.mark.parametrize("refusal", ["already-used", "before-restart"])
 def test_a_refused_confirmation_leaves_the_used_set_unchanged(tmp_path, monkeypatch, web, csrf,
                                                               refusal):
-    import time as _time
     c, svc = _client(web, tmp_path)
     _no_spawn(monkeypatch, svc)
     form, staged_cookie = _confirmed(csrf, c, svc)
@@ -1209,7 +1203,7 @@ def test_a_refused_confirmation_leaves_the_used_set_unchanged(tmp_path, monkeypa
         c = web(service_factory=lambda: svc)                       # staged before a restart
     c.set_cookie("session", staged_cookie)                         # the replay / the old cookie
     used = c.application.extensions["lhpc_tx_used"]
-    used["unrelated-expired"] = _time.time() - 1.0                 # a sentinel a prune would drop
+    used["unrelated-sentinel"] = None                             # any prune or add shows below
     before = dict(used)
     r = c.post("/auto-install/start", data=form, follow_redirects=True)
     assert b"RF confirmation refused" in r.data

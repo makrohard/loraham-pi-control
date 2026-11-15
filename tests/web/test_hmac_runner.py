@@ -3,8 +3,7 @@
 These prove the security invariant — a secret echoed by the firmware build NEVER reaches the log, at EVERY
 chunk boundary — and the typed cancellation/timeout outcomes."""
 
-import threading
-import time
+import pytest
 
 from lhpc.core.probes.backends import RealCommandRunner
 from lhpc.core.service_hmac import _StreamRedactor
@@ -60,22 +59,18 @@ def test_controlled_runner_redacts_real_subprocess_output(tmp_path):
     assert not r.timed_out and not r.cancelled and r.output_unverified is False
 
 
+@pytest.mark.wallclock("a real child is cancelled and its stop proven")
 def test_controlled_runner_cooperative_cancellation_terminates(tmp_path):
     log = tmp_path / "c.log"
-    flag = {"v": False}
-
-    def flip():
-        time.sleep(0.4)
-        flag["v"] = True
-    threading.Thread(target=flip, daemon=True).start()
-    with open(log, "wb") as fh:
+    with open(log, "wb") as fh:                 # the runner asks only once its child runs: cancel at once
         r = RealCommandRunner().run_streaming(
-            ["sleep", "30"], timeout=30, log_fh=fh, should_cancel=lambda: flag["v"])
+            ["sleep", "30"], timeout=30, log_fh=fh, should_cancel=lambda: True)
     assert r.cancelled and not r.timed_out
     assert r.termination in ("terminated", "already-ceased")   # proven stopped
     assert r.session_ident and r.session_ident["pid"] > 0
 
 
+@pytest.mark.wallclock("the runner's own timeout against a real child is the case")
 def test_controlled_runner_timeout_is_typed(tmp_path):
     log = tmp_path / "t.log"
     with open(log, "wb") as fh:

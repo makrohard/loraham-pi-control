@@ -126,6 +126,7 @@ def test_the_cadence_is_unchanged_when_a_task_fails(tmp_path, monkeypatch, ap_bo
     assert network_watch_pass(svc) == expected
 
 
+@pytest.mark.wallclock("no clock seam in lhpc.core.maintenance: failing() ages the record by time.time()")
 def test_a_record_that_stops_being_written_is_shown_failing(tmp_path, monkeypatch, web, caplog):
     """A pass whose task fails and whose record cannot be written leaves the last record on disk;
     once that record is older than three pass intervals, doctor and the dashboard say it is no
