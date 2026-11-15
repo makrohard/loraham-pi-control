@@ -85,7 +85,7 @@ def test_a_client_start_without_its_radio_is_blocked_before_any_launch(tmp_path,
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     launched = []
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append(c.id))
     res = svc.start("kiss", apply=True, band=band)
@@ -133,7 +133,7 @@ def test_a_fixed_band_client_starts_on_its_bands_radio_beside_the_other_band(tmp
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     monkeypatch.setattr(ControllerService, "start_blocking_requirements", lambda self, comp: [])
     launched = []
     from lhpc.core.lifecycle import StartLaunch

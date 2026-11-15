@@ -37,7 +37,8 @@ def box(tmp_path, monkeypatch, capsys):
         radios_fixture.write(tmp_path, rows)
         assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.VALID
         for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
-                            ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
+                            ("install_blocker", lambda self, c: ""), ("is_built", lambda self, c: True),
+                            ("_build_complete", lambda self, c: True),
                             ("_source_present", lambda self, c: True), ("_verify_band_up", lambda self, b: True)):
             monkeypatch.setattr(ControllerService, name, value)
         monkeypatch.setattr(radio_start, "verify_identity", lambda svc, rid: "")

@@ -49,7 +49,7 @@ def test_w4_1_two_radios_on_one_band_refuse_the_client_naming_both(tmp_path, mon
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     launched = []
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append(c.id))
     res = svc.start("kiss", apply=True, band="868")

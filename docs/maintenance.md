@@ -343,13 +343,14 @@ its move changes only that step, republishes nothing, and a box on `binary` read
   build step that consumes it (`command = "pip"`) and the argv token it fills
   (`token = "meshtastic=={value}"`); the loader requires exactly one such token in that command's
   steps, so moving one without the other fails to load. The values are recorded in a sidecar file
-  beside the completion marker, so a built box reads *Build required* (binary channel: reinstall
-  the artifact).
+  beside the completion marker, so a built box offers a rebuild and still starts (binary channel:
+  reinstall the artifact).
 
 **Packaged assets in build steps are build inputs too.** Every `{asset}/…` token in a component's
 `build_steps` is recorded in the same sidecar as `asset <rel> <sha256>`, so an lhpc update that
-changes such an asset makes the component read *Build required* until rebuilt (binary channel:
-reinstall). A `config_file.base`, `run` line or `post_steps` entry resolves the asset fresh and is
+changes such an asset makes the stack page say *Rebuild available* until it is rebuilt; the
+component still starts (binary channel: reinstall). Only a build that did not finish against today's
+sources reads *Build required to start*. A `config_file.base`, `run` line or `post_steps` entry resolves the asset fresh and is
 not a build input. An asset in a build step without a `build_marker` fails to load. A binary whose
 sidecar predates these records reads *behind*, so a release that adds or changes recorded inputs
 republishes every binary stack that consumes one (meshtastic, meshcom), not only those whose pins

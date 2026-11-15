@@ -43,7 +43,7 @@ def _spawned(svc, monkeypatch, band="433"):
     monkeypatch.setattr(Lifecycle, "start", start)
     monkeypatch.setattr(ControllerService, "is_built", lambda self, c: True)
     monkeypatch.setattr(ControllerService, "_source_present", lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     res = svc.start("daemon", apply=True)
     return "\n".join((res.summary, *res.details)), seen.get(band)
 

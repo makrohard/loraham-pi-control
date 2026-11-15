@@ -18,7 +18,7 @@ def test_a_radios_daemon_launches_with_its_own_store(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     seen = []
 
     def start(self, stack, comp, params=None, band="", **kw):

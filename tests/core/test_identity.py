@@ -257,6 +257,7 @@ def test_start_refuses_identity_before_boot_hook_and_feed_clear(tmp_path, monkey
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
+    monkeypatch.setattr(type(svc), "_build_complete", lambda self, c: True)   # U8: the start reads it
     touched = []
     monkeypatch.setattr(type(svc), "clear_daemon_feed",
                         lambda self, *a, **kw: touched.append("feed") or 0, raising=False)
@@ -1038,6 +1039,7 @@ def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
@@ -1071,6 +1073,7 @@ def test_settings_and_cli_may_clear_an_identity(tmp_path, monkeypatch):
     assert svc.save_config_bundle("meshtastic", values={"node_name": "Shack"}).ok
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
@@ -1319,6 +1322,7 @@ def _web(svc, monkeypatch):
     from lhpc.adapters.web.app import create_app
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
@@ -1380,6 +1384,7 @@ def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
+    monkeypatch.setattr(type(svc), "_build_complete", lambda self, c: True)   # U8: the start reads it
     seen = {}
     def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)

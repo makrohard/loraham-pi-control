@@ -1211,7 +1211,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
-                    "needs_build": service.unbuilt_components(stack.id),
+                    # U8: what refuses a start ([(cid, reason)]) and what starts but has a rebuild available
+                    "start_ready": service.start_readiness(stack.id),
                     "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
                     "daemon_params": service.daemon_params_view(stack.id, rid=_dp_rid(stack.id, _live_radios, _inst)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
@@ -2148,15 +2149,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 flash(f"'{target}' is not installed yet — install it on this page "
                       f"(or run: lhpc install {target}).", "warn")
                 return _install_back(target)
-            unbuilt = service.unbuilt_components(target)
-            if unbuilt:
-                # The remedy is per component: on the binary channel `lhpc build` is refused,
-                # so a covered component that reads unbuilt must be pointed at the artifact
-                # reinstall instead. Offering the build here was a dead end.
-                remedy = service.build_remedy(target, unbuilt[0])
-                flash(f"'{target}' needs building before it can run — its binary is "
-                      f"missing ({', '.join(unbuilt)}). Build it on this page "
-                      f"(or run: {remedy}).", "warn")
+            # The start readiness names each refusal with its own remedy (a build, the binary
+            # reinstall, an unsafe install to resolve); changed build inputs alone start.
+            blocked, _rebuild = service.start_readiness(target)
+            if blocked:
+                flash(f"'{target}' cannot start yet — "
+                      + "; ".join(f"{cid}: {why}" for cid, why in blocked) + ".", "warn")
                 return _install_back(target)
         if op in ("start", "restart") and not confirmed:
             # START MEANS START: plan the SAVED configuration (identity included — the plan and

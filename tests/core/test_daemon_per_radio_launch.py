@@ -31,7 +31,7 @@ def _box(tmp_path, monkeypatch, *, ready=()):
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     launches, recorded = [], []
 
     def start(self, stack, comp, params=None, band="", **kw):

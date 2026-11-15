@@ -730,6 +730,17 @@ class BuildOpsMixin:
             return False
 
     def is_built(self, comp) -> bool:
+        """Built AND current, for every planning reader (build planner, `unbuilt_components`, auto-install,
+        status, update): `_build_complete` and `_inputs_current`. A start asks `install_blocker`."""
+        return self._build_complete(comp) and self._inputs_current(comp)
+
+    def _inputs_current(self, comp) -> bool:
+        """True unless a marker-built component declares inputs/assets whose recorded sidecar differs."""
+        if not (comp.build_marker and comp.build_steps) or not (comp.build_inputs or comp.asset_inputs):
+            return True
+        return self._inputs_recorded(comp)
+
+    def _build_complete(self, comp) -> bool:
         """True if the component needs no build, or its built artifact is present.
         The artifact path may carry run-param placeholders (e.g. {env} for the
         firmware build dir), substituted from the stack's saved config.
@@ -759,15 +770,12 @@ class BuildOpsMixin:
                 # A source build of a binary-capable component also records its own revision
                 # beside the marker (`_own_rev`): checked only off the binary channel, where an
                 # artifact's static marker (and any side file inside it) is never compared.
+                # The declared inputs and consumed assets are `_inputs_current`'s.
                 own = self._own_rev_expected(comp)
-                if (own is not None
-                        and not self.on_binary_channel(self.stack_of(comp.id) or comp.id)
-                        and (" unknown\n" in own[1] or runtime_fs.read_text_regular(
-                            self._paths, own[0], max_bytes=_BUILD_MARKER_MAX) != own[1])):
-                    return False
-                # Declared inputs AND consumed assets: an old sidecar without the asset
-                # lines mismatches and reads NOT built, exactly like a missing one.
-                return not (comp.build_inputs or comp.asset_inputs) or self._inputs_recorded(comp)
+                return not (own is not None
+                            and not self.on_binary_channel(self.stack_of(comp.id) or comp.id)
+                            and (" unknown\n" in own[1] or runtime_fs.read_text_regular(
+                                self._paths, own[0], max_bytes=_BUILD_MARKER_MAX) != own[1]))
             except (FileNotFoundError, OSError, PathContainmentError):
                 return False
         rel = self._build_artifact(comp)
@@ -780,18 +788,31 @@ class BuildOpsMixin:
         return (self._lifecycle().source_dir(comp) / rel).exists()
 
     def install_blocker(self, comp) -> str:
-        """Why a component can't be launched yet ("" = ready): its source isn't
-        installed, or it compiles to a binary that isn't built. Avoids handing the
-        operator (or the spawner) a command that points at a missing binary."""
+        """Why a component may not START ("" = it may): the ONE start readiness of the CLI start, the daemon
+        path, the web start gate and the stack page (`start_readiness`). On an installed binary:
+        `_binary_ready`. Else: its source present and `_build_complete`; changed inputs alone never refuse."""
+        if (ready := self._binary_ready(comp)) is not None:
+            return ready
         sid = self.stack_of(comp.id) or comp.id
-        # A binary-covered component has no clone by design (the artifact provides its build
-        # output directly) — only the physical artifact check below decides readiness. Every
-        # other component keeps the byte-identical source-dir requirement.
-        covered = self.binary_covers(comp.id)
-        if comp.source and not covered and not self._source_present(comp):
+        if comp.source and not self._source_present(comp):
             return f"not installed — run: lhpc install {sid}"
-        if (behind := self.binary_behind(comp)):
-            return behind
-        if not self.is_built(comp):
+        if not self._build_complete(comp):
             return f"not built — run: {self.build_remedy(sid, comp.id)}"
         return ""
+
+    def start_readiness(self, target: str) -> tuple[list[tuple[str, str]], list[str]]:
+        """(blocked, rebuild) for the web start gate and the stack page: `blocked` = [(id, `install_blocker`
+        reason)], what refuses a start; `rebuild` = the source-built ids that start but whose recorded build
+        inputs changed (`_build_complete`, not `_inputs_current`): a rebuild picks them up. An absent
+        checkout or GUI toolkit (`unbuilt_components`) is in neither."""
+        s = self.stack(target)
+        gui_dropped = set(self.gui_unavailable_components(s)) if s else set()
+        blocked, rebuild = [], []
+        for c in (s.components if s else ()):
+            if (c.id in gui_dropped and (c.optional or c.gui_optional)) or (c.source and not self._source_present(c)):
+                continue
+            if (why := self.install_blocker(c)):
+                blocked.append((c.id, why))
+            elif self._binary_ready(c) is None and not self._inputs_current(c):
+                rebuild.append(c.id)
+        return blocked, rebuild

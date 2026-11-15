@@ -38,7 +38,7 @@ def ensure(tmp_path, monkeypatch):
     for name, value in (("hardware_configured", lambda self: True),
                         ("_daemon_arbitrated_bands", lambda self, radio: (["433", "868"], {})),
                         ("_source_present", lambda self, comp: True),
-                        ("binary_behind", lambda self, comp: None),
+                        ("install_blocker", lambda self, comp: None),
                         ("is_built", lambda self, comp: True),
                         ("_apply_stack_daemon_params", lambda self, sid, b, rid="": ([], True, ""))):
         monkeypatch.setattr(ControllerService, name, value)

@@ -41,8 +41,13 @@
         {# A build DEPENDENCY (e.g. RadioLib) is not built — the link opens ITS Dependencies card
            (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
         {% call(part) banner('bad', title=g.needs_build_deps|join(', ') ~ ' not built') %}{% if part == 'body' %}Build this dependency first.{% else %}<a href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0] }}">Build &rarr;</a>{% endif %}{% endcall %}
-      {% elif g.needs_build %}
-        {% call(part) banner('warn', title='Build needed') %}{% if part == 'body' %}{{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
+      {% elif g.start_ready[0] %}
+        {# U8: what refuses a start, each component with its own reason and remedy. #}
+        {% call(part) banner('warn', title='Build required to start') %}{% if part == 'body' %}{% for cid, why in g.start_ready[0] %}{{ cid }}: {{ why }}{{ '; ' if not loop.last }}{% endfor %}.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
+      {% endif %}
+      {% if g.start_ready[1] %}
+        {# U8: changed build inputs only (an LHPC update shipped new ones): the stack starts as it is. #}
+        {% call(part) banner('info', title='Rebuild available') %}{% if part == 'body' %}{{ g.start_ready[1]|join(', ') }} {{ 'starts as built; its' if g.start_ready[1]|length == 1 else 'start as built; their' }} build inputs changed since the last build. Run <strong>Build</strong> to pick them up.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
       {% endif %}
       {% if g.hardware_block %}
         <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio hardware</span> —

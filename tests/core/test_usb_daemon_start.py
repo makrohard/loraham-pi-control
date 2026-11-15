@@ -24,7 +24,7 @@ def test_a_usb_radios_daemon_start_reaches_the_launch_with_its_preset(tmp_path, 
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     spawned = []
 
     def spawn(self, argv, log, cwd=None, env=None):
@@ -52,7 +52,7 @@ def test_a_shared_band_starts_each_radios_daemon_with_its_own_preset(tmp_path, m
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     spawned = []
     monkeypatch.setattr(Lifecycle, "_real_spawn", lambda self, argv, *a, **k: spawned.append(argv))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))

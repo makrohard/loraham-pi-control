@@ -55,7 +55,7 @@ def test_a_refused_usb_radio_is_never_launched(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     launched = []
     monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append((c.id, k.get("band"))))
     res = svc.start("daemon", apply=True, band="868")

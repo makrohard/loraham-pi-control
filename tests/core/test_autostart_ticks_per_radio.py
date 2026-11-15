@@ -30,7 +30,7 @@ def box(tmp_path, monkeypatch):
         if rows:
             radios_fixture.write(tmp_path, rows)
         (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
-        for name, value in (("hardware_configured", lambda self: True), ("binary_behind", lambda self, c: ""),
+        for name, value in (("hardware_configured", lambda self: True), ("install_blocker", lambda self, c: ""),
                             ("is_built", lambda self, c: True), ("_source_present", lambda self, c: True),
                             ("_verify_band_up", lambda self, b: True)):
             monkeypatch.setattr(ControllerService, name, value)

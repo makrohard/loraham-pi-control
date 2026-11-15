@@ -1580,23 +1580,25 @@ def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypa
     assert svc.build_remedy("meshtastic") == "lhpc build meshtastic"
 
 
-def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
-    """The operator-visible end of it: the blocker string carries the command that works."""
+def test_a_stale_artifact_starts_and_reads_behind(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
+    """The operator-visible end of it: the artifact built before a CLI bump starts (U8), and the
+    update offer names it behind."""
     _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     svc = ControllerService(manifest_path=_manifest_with_a_newer_cli(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    blocker = svc.install_blocker(_comp(svc, "meshtastic"))
-    assert "not built" in blocker
-    assert "lhpc install meshtastic --source binary --yes" in blocker
+    # U8: changed build inputs alone never refuse a start; the binary update offer says it is behind.
+    assert svc.install_blocker(_comp(svc, "meshtastic")) == ""
+    assert svc.binary_freshness("meshtastic")["state"] == "behind"
+    assert "meshtastic" not in svc.start_readiness("meshtastic")[1]   # no "Rebuild available": a build is refused here
 
 
-# ---- an installed artifact behind the manifest is refused before any start ----------------------
+# ---- U8: an installed artifact behind the manifest still starts (a moved pin is an update) --------
 
-def test_a_binary_artifact_behind_the_manifest_is_refused_before_start(tmp_path, monkeypatch, binary_receipt):
-    """Publishing a new artifact never updates an installed copy. A copy built from other
-    commits than the manifest pins would be launched with argv it does not know (the RF-log
-    options were the first case) and exit — so the start refuses it, typed, and names the fix."""
+def test_a_binary_artifact_behind_the_manifest_starts(tmp_path, monkeypatch, binary_receipt):
+    """Publishing a new artifact never updates an installed copy, and a moved pin no longer refuses
+    its start (U8): the receipt is valid and records the component, so the start goes past the
+    readiness gate to the spawn. The update offer, not the start, says it is behind."""
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     spec = svc.binary_spec("meshtastic")
@@ -1604,29 +1606,26 @@ def test_a_binary_artifact_behind_the_manifest_is_refused_before_start(tmp_path,
     (tmp_path / comp.source.path).mkdir(parents=True)      # the artifact overlays a clone
     binary_receipt(svc, "meshtastic", commits={c: "b" * 40 for c in spec.covers})   # not the pin
     assert svc.on_binary_channel("meshtastic")
-    why = svc.binary_behind(comp)
-    assert "behind the manifest" in why and "lhpc update meshtastic" in why
-    assert svc.install_blocker(comp) == why
-    # Past the identity and hardware gates, the start refuses this component typed.
+    assert svc.install_blocker(comp) == ""
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
     assert svc.save_config_bundle("meshtastic", values={"node_name": "LHPC test", "node_short": "LHPT"}).ok
+    # Everything outside the readiness gate is stubbed: the host has the packages, the spawn records.
+    from lhpc.core.lifecycle import StartLaunch
+    monkeypatch.setattr(type(svc), "start_blocking_requirements", lambda self, comp: [])
+    spawned = []
+    monkeypatch.setattr(type(svc._lifecycle()), "start", lambda self, stack, comp, *a, **k: spawned.append(
+        comp.id) or StartLaunch(False, "", "stubbed spawn"))
     r = svc.start("meshtastic", apply=True)
-    blocked = [x for x in r.results if x.component == "meshtastic"]
-    assert not r.ok and blocked, (r.summary, r.details)
-    assert blocked[0].outcome.value == "blocked" and blocked[0].summary == why
-    # The matching artifact is not "behind".
-    binary_receipt(svc, "meshtastic")                          # components == the manifest pins
-    assert svc.binary_behind(comp) == ""
-    # A source-installed component is never judged here (its checkout is the operator's choice).
-    assert svc.binary_behind(svc.stack("kiss").component("loraham-kiss-tnc")) == ""
+    assert spawned == ["meshtastic"], r.details                  # past every readiness gate
 
 
 @pytest.mark.parametrize("target", ["daemon", "meshcom"])
-def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(short_tmp_path, monkeypatch, target, binary_receipt):
-    """The daemon is spawned by `_ensure_daemon`, not by the generic start loop, so the
-    behind-manifest refusal has to sit on that path too — for a direct `start daemon` and for a
-    dependent stack that asks for the band. A stale artifact must never reach the spawn."""
+def test_a_daemon_binary_behind_the_manifest_starts_on_its_own_spawn_path(short_tmp_path, monkeypatch,
+                                                                          target, binary_receipt):
+    """The daemon is spawned by `_ensure_daemon`, not by the generic start loop: the same readiness
+    (U8) lets a daemon artifact behind a moved pin reach the spawn, for a direct `start daemon` and
+    for a dependent stack that asks for the band."""
     from lhpc.core import config as cfgmod
     svc = _svc(short_tmp_path, monkeypatch=monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
@@ -1637,20 +1636,14 @@ def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(short_tmp_path, 
     (short_tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
     binary_receipt(svc, commits={c: "b" * 40 for c in spec.covers},      # not the manifest pins
                    probe="loraham_daemon 0.9.0")
-    why = svc.binary_behind(daemon)
-    assert svc.on_binary_channel("daemon") and why
+    assert svc.on_binary_channel("daemon") and svc.install_blocker(daemon) == ""
     spawned = []
     monkeypatch.setattr(type(svc._lifecycle()), "start",
-                        lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(AssertionError("spawned")))
-    r = svc.start(target, apply=True)
-    assert not r.ok
-    assert any(why in str(d) for d in r.details), (r.summary, r.details)
-    assert spawned == []                                          # never reached the spawn
-    # The daemon's typed result carries the SAME reason, not a generic readiness failure: the
-    # boot-restore record is built from it (P1.4; e293 S6 printed "daemon readiness/TX gating
-    # failed" while the cause was this artifact).
-    dres = [x for x in r.results if x.component == "loraham-daemon"]
-    assert dres and why in dres[0].summary, [(x.component, x.summary) for x in r.results]
+                        lambda self, stack, comp, *a, **k: spawned.append(comp.id) or (_ for _ in ()).throw(
+                            AssertionError("spawned")))
+    with pytest.raises(AssertionError, match="spawned"):
+        svc.start(target, apply=True)
+    assert spawned == ["loraham-daemon"]                          # the daemon reached the spawn
 
 
 @pytest.mark.parametrize("action", ["enable", "renew", "disable"])

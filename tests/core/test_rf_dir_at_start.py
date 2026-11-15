@@ -18,7 +18,7 @@ def _svc(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "radio_bands", lambda self: ["433", "868"])
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     seen = []
 
     def launch(self, s, c, *a, **k):

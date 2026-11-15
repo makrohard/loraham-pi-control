@@ -1277,9 +1277,9 @@ class LifecycleOpsMixin:
             # a typed SKIPPED, not a failure, and never for a non-GUI component.
             # A receipt-bearing component whose consumed sources moved since its last
             # build must not launch: the venv still holds the OLD driver, and starting
-            # it would run code the manifest no longer describes. Web starts and
-            # auto-install already gate on unbuilt_components; the CLI start did not.
-            if comp.build_marker and comp.build_requires and not self.is_built(comp):
+            # it would run code the manifest no longer describes (changed build inputs
+            # alone do not refuse: `install_blocker`).
+            if comp.build_marker and comp.build_requires and not self._build_complete(comp):
                 record(comp, stack, Outcome.BLOCKED,
                        "its sources changed since the last build — rebuild first "
                        f"({self.build_remedy(stack.id, comp.id, st_index[comp.id].source_state)})")
@@ -1313,13 +1313,6 @@ class LifecycleOpsMixin:
                 continue
             if comp.source and not self._source_present(comp):
                 record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
-                continue
-            # An installed binary artifact built from other commits than the manifest pins is
-            # an install-state problem like "not installed": refused here, before any
-            # requirement or build check, so a stale binary is never launched with argv it
-            # does not know.
-            if (_behind := self.binary_behind(comp)):
-                record(comp, stack, Outcome.BLOCKED, _behind)
                 continue
             if comp.interactive:
                 # Never auto-start an interactive TUI — the operator runs it in a terminal.
@@ -1356,11 +1349,6 @@ class LifecycleOpsMixin:
                     # The exclusive UI claim is REAL for a terminal variant too (its instance's, DEC-W351).
                     if self._running_conflicts(comp, cfg_band, prep.inst):
                         record(comp, stack, Outcome.BLOCKED, "resource conflict")
-                        continue
-                    if not self.is_built(comp):
-                        record(comp, stack, Outcome.BLOCKED,
-                               "not built — build it first "
-                               f"({self.build_remedy(stack.id, comp.id)})")
                         continue
                     # The shared-config OWNER must have completed in THIS run: a BLOCKED
                     # owner (config generation failed) must not yield a presented command
@@ -1439,10 +1427,8 @@ class LifecycleOpsMixin:
             if self._running_conflicts(comp, cfg_band, prep.inst):
                 record(comp, stack, Outcome.BLOCKED, "resource conflict")
                 continue
-            if not self.is_built(comp):
-                record(comp, stack, Outcome.BLOCKED,
-                       "not built — build it first "
-                       f"({self.build_remedy(stack.id, comp.id)})")
+            if (_why := self.install_blocker(comp)):
+                record(comp, stack, Outcome.BLOCKED, _why)
                 continue
             # Regenerate any config file this component reads (per the chosen band). A
             # generation FAILURE for this component blocks the launch — never start with
@@ -2044,15 +2030,10 @@ class LifecycleOpsMixin:
             if comp.source and not self._source_present(comp):
                 lines.append("  [BLOCKED] daemon: not installed (lhpc install daemon)")
                 return lines, False, ""
-            # The daemon takes this separate path, so the same refusal as the generic start:
-            # an installed binary artifact behind the manifest pins is never spawned — it
-            # would be launched with argv it does not know (the RF-log options were the first
-            # case) — whether the daemon itself or a dependent stack asked for it.
-            if (_behind := self.binary_behind(comp)):
-                lines.append(f"  [BLOCKED] daemon: {_behind}")
-                return lines, False, ""
-            if not self.is_built(comp):
-                lines.append("  [BLOCKED] daemon: not built — build it first (lhpc build daemon)")
+            # The daemon takes this separate path: the same start readiness as the generic start,
+            # whether the daemon itself or a dependent stack asked for it.
+            if (_why := self.install_blocker(comp)):
+                lines.append(f"  [BLOCKED] daemon: {_why}")
                 return lines, False, ""
             # Start ONE per-band instance for EACH missing band — lhpc NEVER launches `--radio
             # both` (a mode the operator may still start manually); it runs an independent

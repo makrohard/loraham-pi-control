@@ -1482,7 +1482,7 @@ def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_sele
     rel = next(s for s in load_manifest() if s.id == "reticulum").component("rns").source.path
     assert selector is None or source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
         rel, "", selector, "", 1.0, "", ("rns",)))   # adopted_at: any time; it is not read
-    monkeypatch.setattr(ControllerService, "is_built", lambda self, c: c.id != "rns")
+    monkeypatch.setattr(ControllerService, "_build_complete", lambda self, c: c.id != "rns")
     real = ControllerService.build_snapshot
 
     def snapshot(self, *a, **k):

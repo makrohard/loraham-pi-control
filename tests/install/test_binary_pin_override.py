@@ -110,12 +110,12 @@ def test_malformed_commit_refused_before_download(tmp_path, monkeypatch, stub_pi
     assert not (tmp_path / "state" / "binary").exists()
 
 
-# ---- gate 2: the start, against a receipt an older lhpc may have written -------------------------
+# ---- the start, against a receipt an older lhpc may have written (U8: no pin gate at start) -------
 
 def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatch, binary_receipt):
     """The daemon's artifact also covers RadioLib, a library that never runs. Its lag, with or
     without an acceptance, no longer blocks a start (the maintainer's decision after 0.11.5); it
-    still reads "behind" in the update status. The daemon's own lag still blocks."""
+    still reads "behind" in the update status."""
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
@@ -129,8 +129,7 @@ def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatc
     (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
     binary_receipt(svc, commits={**pins, lib: A}, probe="loraham_daemon 0.9.0")
     assert svc.binary_active_override("daemon") == {}                  # no acceptance at all
-    assert svc.binary_behind(daemon) == ""
-    assert "behind the manifest" not in svc.install_blocker(daemon)
+    assert svc.install_blocker(daemon) == ""
     assert svc.binary_freshness("daemon")["behind"] == [lib]           # still shown as behind
     spawned = []
     monkeypatch.setattr(type(svc._lifecycle()), "start",
@@ -141,19 +140,15 @@ def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatc
     except AssertionError:
         pass
     assert spawned                                                     # reached the spawn
-    binary_receipt(svc, commits={**pins, daemon.id: A}, probe="loraham_daemon 0.9.0")
-    assert svc.binary_behind(daemon).startswith(
-        "installed binary artifact is behind the manifest (built from")
 
 
-@pytest.mark.parametrize(("lagging", "blocks"), [("meshcom-bridge", True),
-                                                 ("meshcom-firmware", False)])
-def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, binary_receipt,
-                                                 lagging, blocks):
-    """`start meshcom` with one covered component off its pin: a lagging bridge (a service)
-    refuses before any spawn, and QEMU's own gate names it too; a lagging firmware image no
-    longer blocks (the maintainer's decision after 0.11.5): the bridge and QEMU both reach the
-    spawn. Either lag still reads "behind" in the update status."""
+@pytest.mark.parametrize(("lagging", "kind"), [("meshcom-bridge", "service"),
+                                               ("meshcom-firmware", "firmware")])
+def test_a_covered_component_off_its_pin_does_not_block_the_start(short_tmp_path, monkeypatch, binary_receipt,
+                                                                  lagging, kind):
+    """`start meshcom` with one covered component off its pin (U8: a moved pin is an update, not
+    a broken install): a lagging bridge (a service) or firmware image, the bridge and QEMU both
+    reach the spawn. Either lag still reads "behind" in the update status."""
     from lhpc.core import config as cfgmod
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT, StartLaunch
     svc = _svc(short_tmp_path, monkeypatch)
@@ -175,12 +170,8 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
             svc.build_inputs_path(c).parent.mkdir(parents=True, exist_ok=True)
             svc.build_inputs_path(c).write_text(svc.build_inputs_text(c))
     binary_receipt(svc, "meshcom", commits={**pins, lagging: A})
-    assert stack.component(lagging).kind.value == ("service" if blocks else "firmware")
-    why = svc.binary_behind(stack.component("meshcom-qemu"))
-    if blocks:
-        assert why.startswith(f"installed binary artifact is behind the manifest ({lagging}: built from")
-    else:
-        assert why == ""
+    assert stack.component(lagging).kind.value == kind
+    assert svc.install_blocker(stack.component("meshcom-qemu")) == ""
     assert svc.binary_freshness("meshcom")["behind"] == [lagging]      # still shown as behind
     # Everything outside the gate is stubbed: the daemon is ready, the host has the packages,
     # a launched bridge is ready; the spawn records the component and QEMU's launch "fails".
@@ -193,13 +184,8 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
                             comp.id != "meshcom-qemu", "", "stubbed spawn"))
     r = svc.start("meshcom", apply=True)
     res = {x.component: x for x in r.results}
-    if blocks:
-        assert spawned == []                                           # never reached the spawn
-        assert res[lagging].outcome.value == "blocked"
-        assert res[lagging].summary.startswith("installed binary artifact is behind the manifest")
-    else:
-        assert spawned == ["meshcom-bridge", "meshcom-qemu"], r.summary   # both reached the spawn
-        assert res["meshcom-qemu"].summary.startswith("start failed: stubbed spawn")
+    assert spawned == ["meshcom-bridge", "meshcom-qemu"], r.summary    # both reached the spawn
+    assert res["meshcom-qemu"].summary == "start failed: stubbed spawn (log )"
 
 
 def test_an_install_never_records_an_override(tmp_path, monkeypatch, stub_pipeline):
@@ -249,8 +235,7 @@ def test_receipt_override_round_trips(tmp_path, monkeypatch, binary_receipt):
     {"at": 1, "lhpc_version": "x" * 65, "mismatch": {"CID": [A, B]}},
     "not a dict",
 ])
-def test_malformed_override_keeps_receipt_valid_and_gate2_refuses(tmp_path, monkeypatch,
-                                                                  binary_receipt, bad):
+def test_malformed_override_keeps_receipt_valid(tmp_path, monkeypatch, binary_receipt, bad):
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     rec = binary_receipt(svc, commits={**svc._binary_pins("daemon"), cid: A})
@@ -262,14 +247,12 @@ def test_malformed_override_keeps_receipt_valid_and_gate2_refuses(tmp_path, monk
     svc.invalidate_snapshot()
     state, back, _ = brx.receipt_state(svc._paths, "daemon")
     assert state == "valid" and back.override is None
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert "behind the manifest" in svc.binary_behind(comp)
     assert rec.stack == "daemon"
 
 
-def test_an_older_reader_keeps_the_receipt_valid_and_refuses(tmp_path, monkeypatch, binary_receipt):
+def test_an_older_reader_keeps_the_receipt_valid(tmp_path, monkeypatch, binary_receipt):
     """Rollback: an lhpc that does not know `override` validates named fields only, so the
-    receipt stays valid; without the field its gate 2 refuses (the safe direction)."""
+    receipt stays valid."""
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     pin = svc._binary_pins("daemon")[cid]
@@ -278,11 +261,9 @@ def test_an_older_reader_keeps_the_receipt_valid_and_refuses(tmp_path, monkeypat
     monkeypatch.setattr(brx, "_parse_override", lambda raw, comps: None)   # the old reader
     svc.invalidate_snapshot()
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert "behind the manifest" in svc.binary_behind(comp)
 
 
-# ---- gate 2 and the one helper ---------------------------------------------------------------
+# ---- the one override helper -----------------------------------------------------------------
 
 def test_active_override_staleness():
     rec = type("R", (), {"components": {"x": A}, "override": _override("x", A, B)})()
@@ -292,49 +273,39 @@ def test_active_override_staleness():
     assert brx.active_override(rec, {"x": B}, clone_required=("x",)) == {}   # B1 at use
 
 
-def test_gate2_allows_the_exact_recorded_pair_and_refuses_a_third_pin(tmp_path, monkeypatch,
-                                                                     binary_receipt):
+def test_override_is_active_for_the_exact_recorded_pair_only(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     pin = svc._binary_pins("daemon")[cid]
     rec = binary_receipt(svc, commits={**svc._binary_pins("daemon"), cid: A})
     assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=_override(cid, A, pin)))
     svc.invalidate_snapshot()
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert svc.binary_behind(comp) == ""
     assert svc.binary_active_override("daemon") == {cid: [A, pin]}
     moved = {**svc._binary_pins("daemon"), cid: C}
     monkeypatch.setattr(ControllerService, "_binary_pins", lambda self, sid: moved)
-    moved_comp = dataclasses.replace(comp, source=dataclasses.replace(comp.source, pin_commit=C))
-    assert "behind the manifest" in svc.binary_behind(moved_comp)   # the pin moved on: refused
-    assert svc.binary_active_override("daemon") == {}
+    assert svc.binary_active_override("daemon") == {}                # the pin moved on: stale
 
 
-def test_gate2_needs_no_override_once_the_pin_equals_the_installed_commit(tmp_path, monkeypatch,
-                                                                         binary_receipt):
+def test_override_is_stale_once_the_pin_equals_the_installed_commit(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     rec = binary_receipt(svc)                              # installed == pins
     cid = _daemon_cid(svc)
     pin = svc._binary_pins("daemon")[cid]
     assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=_override(cid, A, pin)))
     svc.invalidate_snapshot()
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert svc.binary_behind(comp) == ""
     assert svc.binary_active_override("daemon") == {}      # stale: not shown, not needed
 
 
-def test_gate2_refuses_an_injected_exact_override_for_a_clone_required_component(
+def test_an_injected_exact_override_for_a_clone_required_component_is_inactive(
         tmp_path, monkeypatch, binary_receipt):
     """B1 at USE: a well-formed receipt override for meshcom-qemu whose pair matches exactly is
-    not honoured — gate 2 refuses, and the helper shows nothing."""
+    not honoured: the helper shows nothing."""
     svc = _svc(tmp_path, monkeypatch)
     pin = svc._binary_pins("meshcom")["meshcom-qemu"]
     rec = binary_receipt(svc, "meshcom", commits={**svc._binary_pins("meshcom"), "meshcom-qemu": A})
     assert brx.write_receipt(svc._paths, dataclasses.replace(
         rec, override=_override("meshcom-qemu", A, pin)))
     svc.invalidate_snapshot()
-    comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
-    assert "behind the manifest" in svc.binary_behind(comp)
     assert svc.binary_active_override("meshcom") == {}
 
 
@@ -347,13 +318,11 @@ def test_override_is_inactive_once_its_component_becomes_clone_required(tmp_path
     rec = binary_receipt(svc, commits={**svc._binary_pins("daemon"), cid: A})
     assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=_override(cid, A, pin)))
     svc.invalidate_snapshot()
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert svc.binary_behind(comp) == ""                   # honoured while not clone_required
+    assert svc.binary_active_override("daemon") == {cid: [A, pin]}   # active while not clone_required
     spec = svc.binary_spec("daemon")
     later = dataclasses.replace(spec, clone_required=(cid,))
     monkeypatch.setattr(ControllerService, "binary_spec",
                         lambda self, sid: later if sid == "daemon" else spec)
-    assert "behind the manifest" in svc.binary_behind(comp)
     assert svc.binary_active_override("daemon") == {}
 
 
@@ -439,18 +408,3 @@ def test_boot_restore_success_without_an_override_has_no_note(tmp_path, monkeypa
     monkeypatch.setattr(type(svc), "_boot_prune_evidence", lambda self, ids: None)
     svc._boot_settle_item(journal, item, type("R", (), {"summary": "started", "ok": True})())
     assert "override" not in item["result"]
-
-
-
-def test_gate2_honours_an_override_only_on_a_receipt_it_read_valid(tmp_path, monkeypatch,
-                                                                   binary_receipt):
-    """`binary_behind` reads the receipt twice (the coverage check, then the commits). If the
-    second read is not valid, an exact override is not honoured: gate 2 refuses the mismatch."""
-    svc, cid, _pin, rec = _overridden(tmp_path, monkeypatch, binary_receipt)
-    rec = brx.receipt_state(svc._paths, "daemon")[1]             # the override, as read
-    comp = next(c for c in svc.stack("daemon").components if c.id == cid)
-    assert svc.binary_behind(comp) == ""                          # valid: honoured
-    monkeypatch.setattr(ControllerService, "binary_receipt_state",
-                        lambda self, sid: ("unsafe", rec, "changed between the two reads"))
-    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: True)
-    assert "behind the manifest" in svc.binary_behind(comp)

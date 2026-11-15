@@ -81,7 +81,7 @@ def _box(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     for name in ("is_built", "_source_present"):
         monkeypatch.setattr(ControllerService, name, lambda self, c: True)
-    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "install_blocker", lambda self, c: "")
     return fake, svc, svc.stack("kiss"), svc.stack("kiss").component("loraham-kiss-tnc")
 
 

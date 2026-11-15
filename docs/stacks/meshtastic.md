@@ -53,11 +53,11 @@ Wayland, Mesa/GL, LLVM, PulseAudio, ALSA, libinput, xkbcommon or GTK; fail-close
 The stack's build then fetches the **web client** as its own component (`meshtastic-web-assets.sh`:
 the meshtastic/web release LHPC pins by version and sha256, verified on every install — v2.7.2,
 independent of the firmware's `bin/web.version`, which is upstream's ESP32 last-known-good). The completion marker lives in the checkout and
-is written after the last step, so an updated checkout reads *Build required* until rebuilt. A
+is written after the last step, so an updated checkout reads *Build required to start* until rebuilt. A
 native build takes about 2¾ h on a Pi Zero 2W.
 
 The CLI and decoder versions are recorded beside the marker (`build_inputs`), so moving either
-also reads *Build required*; a binary-channel box is pointed at
+offers a rebuild; the stack still starts. A binary-channel box is pointed at
 `lhpc install meshtastic --source binary --yes`. Moving these pins:
 [maintenance](../maintenance.md#moving-a-pin).
 

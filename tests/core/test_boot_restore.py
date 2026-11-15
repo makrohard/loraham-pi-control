@@ -253,6 +253,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
     set_call(svc)
     captured = {}
     monkeypatch.setattr(ControllerService, "is_built", lambda self, comp: True)
+    monkeypatch.setattr(ControllerService, "_build_complete", lambda self, comp: True)   # U8: the start reads it
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "missing_requirements",
                         lambda self, comp: [])
     monkeypatch.setattr(
@@ -1040,6 +1041,7 @@ def _serving_svc(set_call, tmp_path, monkeypatch, *, hardware=False, sockets=("/
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     monkeypatch.setattr(ControllerService, "is_built", lambda self, comp: True)
+    monkeypatch.setattr(ControllerService, "_build_complete", lambda self, comp: True)   # U8: the start reads it
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "missing_requirements", lambda self, comp: [])
     return svc
 

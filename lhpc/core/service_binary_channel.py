@@ -16,7 +16,6 @@ import platform
 
 from . import binary_receipt as brx
 from . import source_registry
-from .model import ComponentKind
 from .web_client import COMPONENT as WEB_CLIENT
 
 # The only target the builder publishes for today; the index entry is checked against this at
@@ -120,38 +119,24 @@ class BinaryChannelMixin:
         """True while the stack is installed from a binary artifact (receipt VALID)."""
         return self.binary_receipt_state(stack_id)[0] == "valid"
 
-    def binary_behind(self, comp) -> str:
-        """"" unless `comp` runs from an installed binary artifact whose recorded commit for it,
-        or for another RUNNABLE component the artifact covers, differs from its pin without an
-        exact acceptance still in force (a library's or a firmware image's lag, e.g. RadioLib's,
-        shows in the update status and stops an install, but not a start). Publishing a new
-        artifact never touches an installed copy, and a stale copy would be launched with argv it
-        does not know (the RF-log options were the first such case) — so the start refuses,
-        typed, before spawning anything."""
-        if comp.source is None or not self.binary_covers(comp.id):
-            return ""
+    def _binary_ready(self, comp) -> str | None:
+        """The binary branch of the start readiness (`install_blocker`); None off it. It holds a
+        component the stack's binary spec covers while the stack's receipt is valid or unsafe:
+        "" = it may start, the receipt is valid and records it (no hashing at start; the hash
+        check stays at install). An unsafe receipt or an interrupted transaction refuses, never a
+        source fallback; a superseded or absent receipt is the source branch. A binary built from
+        other commits than today's pins starts: a moved pin is an update, not a broken install."""
         sid = self.stack_of(comp.id) or comp.id
-        _state, rec, _why = self.binary_receipt_state(sid)
-        if rec is None:
-            return ""
-        # The started component and every other RUNNABLE one the artifact covers: each commit
-        # differing from its pin needs an exact acceptance that is still in force; the one
-        # helper decides it, nothing here. A covered library (the daemon's RadioLib) or firmware
-        # image (MeshCom's) is not runnable, so its lag does not block a start (the maintainer's
-        # decision after 0.11.5).
-        active = self.binary_active_override(sid, rec) if _state == "valid" else {}
-        pins = self._binary_pins(sid)
-        stack = self.stack(sid)
-        inert = {c.id for c in (stack.components if stack else ())
-                 if c.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)}
-        for cid in [comp.id, *sorted(c for c in pins if c != comp.id and c not in inert)]:
-            got, want = rec.components.get(cid, ""), pins.get(cid, "")
-            if not got or not want or got == want or cid in active:
-                continue
-            which = "" if cid == comp.id else f"{cid}: "
-            return (f"installed binary artifact is behind the manifest ({which}built from "
-                    f"{got[:9]}, the manifest pins {want[:9]}) — update it first (lhpc update "
-                    f"{sid}, or lhpc install {sid} --source pinned)")
+        spec = self.binary_spec(sid)
+        if spec is None or comp.id not in spec.covers:
+            return None
+        state, rec, why = self.binary_receipt_state(sid)
+        if state == "unsafe":
+            return why or f"the binary install of {sid!r} is unsafe — resolve it first"
+        if state != "valid":
+            return None
+        if comp.id not in rec.components:
+            return f"the installed binary predates {comp.id}: lhpc update {sid} or install it from source"
         return ""
 
     def binary_active_override(self, stack_id: str, rec=None) -> dict:
