@@ -2,6 +2,8 @@
 child process group (TERM→KILL) on timeout, so a runaway build/test cannot exhaust memory
 or orphan sub-processes. Uses harmless local subprocesses (python3/sleep) — no RF/hardware."""
 
+import os
+import select
 import time
 
 import pytest
@@ -24,6 +26,8 @@ def test_stdout_stderr_kept_separate():
     assert r.stdout == "OUT" and r.stderr == "ERR"        # streams not merged (git parsing safe)
 
 
+@pytest.mark.wallclock("a real child is killed at a real 0.4 s timeout; the 5 s bound tells the kill from waiting "
+                        "out its 30 s sleep")
 def test_timeout_kills_process_group_promptly():
     t0 = time.time()
     r = RealCommandRunner().run(["sleep", "30"], timeout=0.4)
@@ -100,6 +104,19 @@ def _dead_or_zombie(pid: int) -> bool:
         return True                                       # /proc gone -> dead
 
 
+def _wait_ended(pid: int, bound: float = 5.0) -> None:
+    """Wait on `pid`'s pidfd until it has ended (a zombie counts) or `bound` passes: the wait returns at the exit
+    itself, it never polls. The caller still asserts the end."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return                                            # already gone
+    try:
+        select.select([fd], [], [], bound)
+    finally:
+        os.close(fd)
+
+
 def test_timeout_kills_term_ignoring_child_that_outlives_parent(tmp_path, monkeypatch):
     # The parent spawns a child that IGNORES SIGTERM and, on its own SIGTERM, the parent
     # exits immediately — so the leader dies but the child survives in the original session.
@@ -119,30 +136,25 @@ def test_timeout_kills_term_ignoring_child_that_outlives_parent(tmp_path, monkey
     r = RealCommandRunner().run([sys.executable, "-c", prog, str(ready)], timeout=30)
     assert r.timed_out
     child_pid = int(r.stdout.strip().splitlines()[0])
-    for _ in range(60):                                   # bounded wait for the KILL to land
-        if _dead_or_zombie(child_pid):
-            break
-        time.sleep(0.1)
+    _wait_ended(child_pid)                                # bounded wait for the KILL to land
     assert _dead_or_zombie(child_pid)                     # TERM-ignoring child was SIGKILLed
 
 
 def test_proctree_valid_token_kills_term_ignoring_child():
     # #13: a VALID token still kills a TERM-ignoring child that outlives its parent.
-    import subprocess, sys, os, time
+    import subprocess, sys, os
     from lhpc.core import proctree
     p = subprocess.Popen(
         [sys.executable, "-c",
-         "import subprocess, signal, time\n"
+         "import subprocess, signal, sys, time\n"
          "subprocess.Popen(['sleep', '60'])\n"           # child in the same session
          "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"  # leader ignores TERM
+         "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
          "time.sleep(60)\n"],
-        start_new_session=True)
+        stdout=subprocess.PIPE, start_new_session=True)
     token = proctree.capture_session_token(p.pid)         # FULL typed token at spawn
     assert token and token.sid == p.pid and token.pgid == p.pid
-    for _ in range(50):
-        if proctree.session_members(p.pid, os.getpid()):
-            break
-        time.sleep(0.05)
+    assert p.stdout.readline() == b"ready\n"             # the child runs and the leader ignores TERM
     res = proctree.terminate_session(token, os.getpid())  # TERM ignored -> escalates to KILL
     try:
         p.wait(timeout=2)
@@ -220,6 +232,7 @@ def test_command_result_may_still_be_running_flags():
     assert not CommandResult(0, "", "").may_still_be_running
 
 
+@pytest.mark.wallclock("a real child is terminated at a real 0.4 s timeout")
 def test_runner_surfaces_termination_status_on_timeout():
     # #11: a normal timeout is cleanly TERMINATED and the status is carried on the result.
     r = RealCommandRunner().run(["sleep", "30"], timeout=0.4)
@@ -230,13 +243,14 @@ def test_runner_surfaces_termination_status_on_timeout():
 def test_proctree_kills_setpgrp_descendant_in_session():
     # #12: a descendant that calls setpgrp() (new group, SAME session) and ignores TERM,
     # outliving its leader, is still reached — we signal EVERY group in the private session.
-    import subprocess, sys, os, time
+    import subprocess, sys, os
     from lhpc.core import proctree
     prog = (
         "import os, signal, subprocess, sys, time\n"
         "child = subprocess.Popen([sys.executable, '-c',"
-        " 'import os,signal,time; os.setpgrp();"
-        " signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
+        " 'import os,signal,sys,time; os.setpgrp();"
+        " signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        " sys.stdout.write(\"ignoring\\\\n\"); sys.stdout.flush(); time.sleep(60)'])\n"
         "sys.stdout.write(str(child.pid) + '\\n'); sys.stdout.flush()\n"
         "time.sleep(60)\n"
     )
@@ -244,16 +258,15 @@ def test_proctree_kills_setpgrp_descendant_in_session():
                          start_new_session=True)
     try:
         token = proctree.capture_session_token(p.pid)
-        child_pid = int(p.stdout.readline())
+        lines = {p.stdout.readline().strip(), p.stdout.readline().strip()}  # the pid and the descendant's line,
+        assert b"ignoring" in lines                                         # in either order: it ignores TERM
+        child_pid = int((lines - {b"ignoring"}).pop())
         res = proctree.terminate_session(token, os.getpid())
         try:
             p.wait(timeout=3)
         except Exception:
             pass
-        for _ in range(60):
-            if _dead_or_zombie(child_pid):
-                break
-            time.sleep(0.1)
+        _wait_ended(child_pid, bound=6.0)
         assert _dead_or_zombie(child_pid)                    # setpgrp child was reached + killed
         assert res == proctree.Termination.TERMINATED
     finally:
@@ -267,21 +280,21 @@ def test_setsid_descendant_is_outside_proven_ownership():
     # §4: a descendant that calls setsid() LEAVES our private session and is OUTSIDE the
     # proven ownership set — session_members does not include it (documented behavior: we
     # neither see nor claim to have killed a session escapee; we never falsely report it).
-    import subprocess, sys, os, time
+    import subprocess, sys, os
     from lhpc.core import proctree
     prog = ("import os, subprocess, sys, time\n"
-            "c = subprocess.Popen([sys.executable, '-c', 'import os,time; os.setsid(); time.sleep(30)'])\n"
+            "c = subprocess.Popen([sys.executable, '-c',"
+            " 'import os,sys,time; os.setsid(); sys.stdout.write(\"setsid\\\\n\"); sys.stdout.flush(); time.sleep(30)'])\n"
             "sys.stdout.write(str(c.pid) + '\\n'); sys.stdout.flush()\n"
             "time.sleep(30)\n")
     p = subprocess.Popen([sys.executable, "-c", prog], stdout=subprocess.PIPE,
                          start_new_session=True)
     child = None
     try:
-        child = int(p.stdout.readline())
-        for _ in range(200):            # bounded wait for the grandchild's setsid() to land
-            if os.getsid(child) != p.pid:   # p was spawned start_new_session -> sid == p.pid
-                break
-            time.sleep(0.02)
+        lines = {p.stdout.readline().strip(), p.stdout.readline().strip()}  # the pid and the grandchild's line,
+        assert b"setsid" in lines                                           # in either order: its setsid() landed
+        child = int((lines - {b"setsid"}).pop())
+        assert os.getsid(child) != p.pid                        # p was spawned start_new_session -> sid == p.pid
         members = proctree.session_members(p.pid, os.getpid())
         assert child not in members                             # setsid escapee not in our session
         assert p.pid in members                                 # the leader IS ours (so members is non-empty)
@@ -297,6 +310,8 @@ def test_setsid_descendant_is_outside_proven_ownership():
 # --- F42: a build step ends on a stall, not on the clock ------------------------------------------
 
 @pytest.mark.slow
+@pytest.mark.wallclock("the stall rule samples a real sleeping step's process tree (CPU, I/O) over real time; the 5 s bound "
+                       "tells a stall at 1 s from the 60 s ceiling")
 @pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
 def test_sleeping_step_is_stalled(tmp_path, controlled):
     # A step whose whole session sleeps (no CPU, no I/O, no output after its first line) is ended
@@ -310,9 +325,7 @@ def test_sleeping_step_is_stalled(tmp_path, controlled):
     assert r.timed_out and r.returncode == 124 and r.stop_reason == "stalled"
     assert time.time() - t0 < 5.0
     bg = int(log.read_text().split()[0])
-    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
-    while not _dead_or_zombie(bg) and time.monotonic() < deadline:
-        time.sleep(0.1)
+    _wait_ended(bg)
     assert _dead_or_zombie(bg)                            # the background sleep is gone too
 
 
@@ -365,7 +378,7 @@ def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled,
 
 # A child whose descendant leaves the session (setsid) still holding stdout, prints that
 # descendant's pid and exits at once. The escapee outlives the call by design; it is killed after.
-_ESCAPEE = ["sh", "-c", "setsid sleep 8 & echo $!; echo hi"]
+_ESCAPEE = ["sh", "-c", "setsid sleep 8 & echo $!; echo hi"]  # wallclock: a real escapee that outlives the call
 
 
 def _kill(pid_text):
@@ -377,6 +390,7 @@ def _kill(pid_text):
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("the 6 s bound tells a return at once from a wait for the real escapee's 8 s sleep")
 def test_run_returns_while_an_escaped_descendant_holds_stdout():
     # Closing the pipe used to wait for the drain thread's buffer lock, i.e. for the escapee to
     # exit: the bounded joins did not bound the call.
@@ -390,6 +404,7 @@ def test_run_returns_while_an_escaped_descendant_holds_stdout():
 
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("the 6 s bound tells a return at once from a wait for the real escapee's 8 s sleep")
 def test_streaming_run_returns_and_flags_unverified_output(tmp_path):
     log = tmp_path / "job.log"
     t0 = time.time()
@@ -416,6 +431,8 @@ def test_a_short_command_is_reaped_without_a_sleep_loop(monkeypatch):
     assert (r.returncode, r.stdout, r.timed_out) == (0, "ok\n", False)
 
 
+@pytest.mark.wallclock("the timed-wait fallback kills a real child at a real 0.4 s timeout; the 5 s bound tells "
+                       "the kill from waiting out its 30 s sleep")
 def test_without_pidfd_the_runner_falls_back_to_the_timed_wait(monkeypatch):
     import os
 
