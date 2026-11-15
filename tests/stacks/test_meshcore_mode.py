@@ -124,6 +124,7 @@ def test_a_stale_repeater_mode_without_a_name_still_refuses_the_start(tmp_path):
     r = svc._meshcore_mode_refusal(mm.STACK_ID)
     assert r is not None and r.data.get("reason") == mm.REASON_REPEATER_NAME_REQUIRED
     assert any("repeater_name" in d for d in r.details), "the remedy names the field"
+    assert r.details == ["lhpc config meshcore@r2 repeater_name <name>"], r.details   # the instance, never the bare stack
     assert svc._meshcore_mode_refusal("daemon") is None            # other stacks: not our business
     assert svc.restart(mm.STACK_ID, apply=True).ok is False       # refused BEFORE any stop
 

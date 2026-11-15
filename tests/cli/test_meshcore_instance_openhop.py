@@ -122,3 +122,16 @@ def test_a_repeater_mode_save_reads_its_own_radios_name_never_another_radios(box
     assert rc != 0, out
     assert "needs the repeater's own node name" in out.out + out.err, out
     assert (r3_store.read_bytes() if r3_store.exists() else None) == before
+
+
+def test_a_repeater_mode_refusal_names_the_instance_in_its_remedy(box, tmp_path, monkeypatch, capsys):
+    # The box render (RF v18 J5, meshcore@r4): the remedy said `lhpc config meshcore repeater_name <name>`, a bare stack
+    # the CLI refuses with two radios of the band (W323). It names the instance the operator typed.
+    from lhpc.adapters.cli import main as cli
+    box((R1, R2_868, R3))
+    monkeypatch.setattr(ops, "_helper", _helper([]))
+    capsys.readouterr()
+    assert cli.main(["config", "meshcore@r3", "mode", "chat+repeater"]) != 0
+    out = capsys.readouterr()
+    assert "from the CLI `lhpc config meshcore@r3 repeater_name <name>` first, then the mode" in out.out + out.err, out
+    assert "`lhpc config meshcore repeater_name" not in out.out + out.err

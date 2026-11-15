@@ -396,7 +396,7 @@ class LifecycleOpsMixin:
         blockers, seen = [], set()
         elsewhere = instances.elsewhere(self, getattr(inst, "rid", "") or "")     # K6: one app stack per radio
 
-        def add(stack_id, holder, resource):
+        def add(stack_id, holder, resource, rid=""):
             key = (stack_id, resource)
             if key not in seen:
                 seen.add(key)
@@ -404,8 +404,8 @@ class LifecycleOpsMixin:
                 # stopped (and named) per band; "" for any other resource.
                 rband = resources_mod.radio_band(resource) if resource.startswith("loraham.radio.") else ""
                 name = resources_mod.claim_name(resource, lambda b: radio_start.radio_name(self._paths, b))   # W4-2: the radio by its id
-                blockers.append({"resource": name, "holder": holder,
-                                 "holder_stack": stack_id, "band": rband})
+                blockers.append({"resource": name, "holder": holder, "holder_stack": stack_id, "band": rband,
+                                 **({"rid": rid} if rid else {})})     # a same-radio holder: the radio it shares
 
         for ss in snap.stacks:
             sid = ss.stack.id
@@ -459,7 +459,7 @@ class LifecycleOpsMixin:
                         and sid != self.stack_of(self.DAEMON_ID)
                         and comp_bands & needed_bands and not on_other_radio):
                     add(sid, c.id,
-                        f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
+                        f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz", getattr(inst, "rid", "") or "")
         return blockers
 
     def _spi_shared_warning(self, target: str, band: str = "", radio: str = "", inst=None) -> str | None:

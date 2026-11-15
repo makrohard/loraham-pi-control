@@ -27,6 +27,8 @@ def test_a_copys_client_is_refused_by_the_copys_own_running_repeater_only_mode(t
     svc = _svc(tmp_path)
     res = svc.start("meshcore-webui", apply=False, inst=instances.copy_of(svc, "meshcore", "r4")[0])
     assert res.ok is False and "repeater-only mode" in res.summary
+    assert res.details == ["lhpc config meshcore@r4 mode chat+repeater   # keep the repeater, run the chat node "
+                           "inside it"], res.details                                        # its own copy (W323)
 
 
 def test_the_bare_nodes_client_is_not_refused_by_the_copys_mode(tmp_path):

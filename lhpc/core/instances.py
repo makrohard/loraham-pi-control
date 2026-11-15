@@ -211,11 +211,14 @@ def stop_keys(svc, sid: str) -> list:
 
 def holder_keys(svc, blocker: dict) -> list:
     """The instances holding a resource blocker: the one its claim's radio names (`loraham.radio.r2` -> daemon@r2),
-    else every running instance of the holder on the claim's band, else the holder with `<rid>` for the operator to
-    fill in (a process without an ownership record; G1-C60-RE: never a guess)."""
+    else the holder's running instance on the radio a same-radio blocker shares (`rid`), else every running instance
+    of the holder on the claim's band, else the holder with `<rid>` for the operator to fill in (a process without an
+    ownership record; G1-C60-RE: never a guess)."""
     sid = blocker.get("holder_stack", "")
     if m := re.search(r"\.(r[1-9][0-9]?)$", str(blocker.get("resource", ""))):
         return [f"{sid}@{m.group(1)}"]
+    if (rid := blocker.get("rid", "")) and f"{sid}@{rid}" in running_keys(svc, sid):
+        return [f"{sid}@{rid}"]
     on = {r.id for r in radios.load(svc._paths).radios if r.band == blocker.get("band", "")}
     return [k for k in running_keys(svc, sid) if k.partition("@")[2] in on] or [f"{sid}@<rid>"]
 

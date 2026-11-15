@@ -129,7 +129,7 @@ def start_refusal(svc, target: str, inst):
         return ActionResult(
             False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "
                    f"there is no Companion on TCP {COMPANION_PORT} to connect to",
-            details=[f"lhpc config {STACK_ID} mode chat+repeater   # keep the repeater, "
+            details=[f"lhpc config {_named(svc, inst)} mode chat+repeater   # keep the repeater, "
                      "run the chat node inside it"])
     if target in (STACK_ID, NODE_ID) and repeater_on(mode):
         name = svc._resolved_param_value(STACK_ID, "file", NODE_ID, "repeater_name", inst=inst)
@@ -139,9 +139,15 @@ def start_refusal(svc, target: str, inst):
             return ActionResult(
                 False, f"Cannot start '{target}': mode '{mode}' needs the repeater's own node "
                        f"name — {exc}",
-                details=[f"lhpc config {STACK_ID} repeater_name <name>"],
+                details=[f"lhpc config {_named(svc, inst)} repeater_name <name>"],
                 data={"reason": REASON_REPEATER_NAME_REQUIRED})
     return None
+
+
+def _named(svc, inst) -> str:
+    """`meshcore@<rid>` for a remedy lhpc prints: the instance the operator named (W323: a bare stack is refused)."""
+    from . import instances
+    return instances.named(svc, STACK_ID, inst)
 
 
 def save_refusal(svc, merged: dict, pending: dict | None, inst) -> str:
@@ -160,6 +166,6 @@ def save_refusal(svc, merged: dict, pending: dict | None, inst) -> str:
     except validators.ValidationError as exc:
         return (f"mode '{normalize(mode)}' needs the repeater's own node name — {exc} "
                 f"(set a repeater name: in the console under Settings → Repeater, "
-                f"'Repeater node name'; from the CLI `lhpc config meshcore repeater_name "
+                f"'Repeater node name'; from the CLI `lhpc config {_named(svc, inst)} repeater_name "
                 f"<name>` first, then the mode — or keep mode chat)")
     return ""

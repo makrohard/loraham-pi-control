@@ -2627,7 +2627,7 @@ def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_p
     assert "A repeater mode needs a saved repeater name" in shown
     refused = svc.save_config("meshcore", {"file_mode": "repeater"})         # the same text, CLI too
     text = refused.summary + " " + " ".join(refused.details)
-    assert not refused.ok and "`lhpc config meshcore repeater_name <name>`" in text
+    assert not refused.ok and "`lhpc config meshcore@r2 repeater_name <name>`" in text     # its instance (W323)
     assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
     r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater", "radio": "r2"})
     assert r.status_code in (302, 303)

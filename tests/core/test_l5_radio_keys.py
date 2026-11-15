@@ -271,3 +271,51 @@ def test_g1_k6c_1_a_component_is_judged_by_its_own_radios_not_its_stacks(tmp_pat
         for p in (a, b):
             p.kill()
             p.wait(timeout=5)
+
+
+ONE_433 = (radios.Radio("r1", "low", "loraham", "433"),)
+TWO_433 = (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "wave", "waveshare-sx1262", "433"))
+
+
+@pytest.mark.parametrize("rows, running, holder", [
+    (ONE_433, ["meshcom@r1"], "meshcom@r1"),                    # the Zero: the plan said 'meshcom@<rid>'
+    (TWO_433, ["meshcom@r1", "meshcom@r2"], "meshcom@r1"),      # the start's own radio only, never r2's copy
+    (ONE_433, [], "meshcom@<rid>"),                             # a process no record tells: no guess (G1-C60-RE)
+])
+def test_a_same_radio_holder_is_named_by_the_radio_it_shares(tmp_path, monkeypatch, rows, running, holder):
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path, rows)
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: running if sid == "meshcom" else [])
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            st.run_state = RunState.RUNNING if cid == "meshcom-bridge" else RunState.STOPPED
+    svc.build_snapshot = lambda fresh=False: snap
+    inst = instances.parse_target(svc, "chat@r1", "start")[1]
+    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}, inst=inst).ok
+    res = svc.start("chat", inst=inst, apply=True)
+    assert res.summary == f"Cannot run 'chat': {holder} must be stopped first.", res.summary
+    assert f"lhpc stack stop {holder}" in res.next_commands, res.next_commands
+
+
+def test_yes_stops_only_the_same_radio_holder_never_its_copy_on_another_radio(tmp_path, monkeypatch):
+    # `--yes` (stop_owners): meshcom runs on r1 and r2, chat starts on r1. Only meshcom@r1 is stopped; before, the
+    # `<rid>` holder was stopped as the bare stack, every meshcom instance (r2's too).
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    from lhpc.core.services import ActionResult
+    svc = _svc(tmp_path, TWO_433)
+    monkeypatch.setattr(instances, "running_keys", lambda s, sid: ["meshcom@r1", "meshcom@r2"] if sid == "meshcom" else [])
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            st.run_state = RunState.RUNNING if cid == "meshcom-bridge" else RunState.STOPPED
+    svc.build_snapshot = lambda fresh=False: snap
+    stops = []
+    monkeypatch.setattr(ControllerService, "stop", lambda self, target, apply=False, inst=None, **kw: (
+        stops.append((target, getattr(inst, "rid", None))), ActionResult(True, "stopped"))[1])
+    inst = instances.parse_target(svc, "chat@r1", "start")[1]
+    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}, inst=inst).ok
+    svc.start("chat", inst=inst, apply=True, stop_owners=True)
+    assert stops == [("meshcom", "r1")], stops
