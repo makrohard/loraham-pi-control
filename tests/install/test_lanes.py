@@ -273,3 +273,16 @@ def test_an_unreadable_installed_tag_list_refuses_the_update(box, git, capsys):
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
     assert "could not be checked — try again later" in capsys.readouterr().out
     assert box.head() == box.c[2]
+
+
+def test_a_commit_with_only_unparseable_tags_refuses_a_stable_downgrade(box, capsys):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2]
+    box.push_tag("v3.0-rc1", box.c[2])                # the installed commit's only tag does not parse
+    box.push_tag("v2.9", box.c[1])
+    box.release = "v2.9"
+    box.cli("source-check", "s")
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
+    assert "could not be checked — try again later" in capsys.readouterr().out
+    assert box.head() == box.c[2]

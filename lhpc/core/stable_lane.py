@@ -116,11 +116,12 @@ def local_tags(run, src) -> list | None:
 
 def is_older(ref: StableRef, installed: str, mine=()) -> bool | None:
     """The target is older than the installed commit's version, the highest `version_of` among ALL its tag names (the
-    upstream's and `mine`, `local_tags`); None when `mine` could not be read. No version at all (a default-branch HEAD
-    install) is not older: the plan's rule L6, the stable update appears when the upstream tags or releases."""
-    if mine is None:
+    upstream's and `mine`, `local_tags`); None when `mine` could not be read or no tag parses (`v3.0-rc1` alone). No
+    tag at all (a default-branch HEAD install) is not older: the plan's rule L6, the update appears when one comes."""
+    names = None if mine is None else [*(ref.tags or {}).get(installed, ()), *mine]
+    have = max(filter(None, map(version_of, names or ())), default=None)
+    if names is None or (names and have is None):
         return None
-    have = max(filter(None, map(version_of, [*(ref.tags or {}).get(installed, ()), *mine])), default=None)
     return have is not None and (ref.key is None or ref.key < have)
 
 
@@ -128,7 +129,7 @@ def update_refusal(ref: StableRef, installed: str, mine=()) -> str:
     """Why an installed source at `installed` may not move to `ref` ("" = it may)."""
     older = is_older(ref, installed, mine)
     if not ref.sha or not ref.verified or older is None:
-        why = ref.why or ("" if older is not None else "the checkout's tags could not be read")
+        why = ref.why or ("" if older is not None else "the installed commit's version could not be read")
         return "releases could not be checked — try again later" + (f" ({why})" if why else "")
     if older:
         return f"the stable target ({ref.label}) is older than the installed commit — nothing to update"
