@@ -112,30 +112,29 @@ def test_a_link_or_fifo_at_the_setup_path_is_replaced_by_the_file(web, tmp_path,
     f = _setup_file(tmp_path)
     good = f.read_bytes()
     f.unlink()
-    elsewhere, writer = tmp_path / "elsewhere.sh", None
-    if kind == "symlink":
-        elsewhere.write_bytes(good)
-        f.symlink_to(elsewhere)
-    else:
-        os.mkfifo(f)
-        if kind != "fifo":
-            writer = os.open(f, os.O_RDWR | os.O_NONBLOCK)
-            assert fcntl.fcntl(writer, fcntl.F_GETPIPE_SZ) > len(good)         # the whole text fits the pipe
-            assert os.write(writer, good) == len(good)
-        if kind == "fifo-whose-writer-left":                               # the read after the text sees EOF, as
-            real = os.read                                                 # when the writer closes after the open
-
-            def read(fd, n):
-                try:
-                    return real(fd, n)
-                except BlockingIOError:
-                    return b""
-            monkeypatch.setattr(os, "read", read)
+    elsewhere, held = tmp_path / "elsewhere.sh", []
     try:
+        if kind == "symlink":
+            elsewhere.write_bytes(good)
+            f.symlink_to(elsewhere)
+        else:
+            os.mkfifo(f)
+            if kind == "fifo-holding-the-text":                              # a writer still there: the read after
+                held.append(os.open(f, os.O_RDWR | os.O_NONBLOCK))           # the text finds no EOF (EAGAIN)
+                assert fcntl.fcntl(held[0], fcntl.F_GETPIPE_SZ) > len(good)    # the whole text fits the pipe
+                assert os.write(held[0], good) == len(good)
+            elif kind == "fifo-whose-writer-left":                           # a genuine EOF after the text: an anchor
+                held.append(os.open(f, os.O_RDONLY | os.O_NONBLOCK))         # reader keeps the pipe and its text;
+                writer = os.open(f, os.O_WRONLY | os.O_NONBLOCK)             # the writer leaves before the GET
+                try:
+                    assert fcntl.fcntl(writer, fcntl.F_GETPIPE_SZ) > len(good)
+                    assert os.write(writer, good) == len(good)
+                finally:
+                    os.close(writer)
         later = c.get(route)
     finally:
-        if writer is not None:
-            os.close(writer)
+        for fd in held:
+            os.close(fd)
     assert later.status_code == 200
     assert not f.is_symlink() and f.is_file() and f.read_bytes() == good
     assert kind != "symlink" or elsewhere.read_bytes() == good                   # the link's target is untouched
