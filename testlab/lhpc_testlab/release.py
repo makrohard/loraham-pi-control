@@ -778,7 +778,7 @@ def plugin_manager_pids(root) -> list[int]:
     (`_openhop_dirs`), so two labs on one host never see each other's manager. The repeater roles spawn exactly one
     per instance; chat spawns none."""
     import subprocess as _sp
-    rx = re.compile(_openhop_dirs(root))
+    rx = re.compile(r"(?:^|\s)" + _openhop_dirs(root))      # the root itself: a lab at /y<root> never counts
     r = _sp.run(["pgrep", "-f", "-a", "repeater.plugins"], capture_output=True, text=True,
                 check=False)                                   # no match = an empty list
     return sorted(int(line.split()[0]) for line in r.stdout.splitlines()

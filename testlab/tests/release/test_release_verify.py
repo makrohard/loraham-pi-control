@@ -331,6 +331,7 @@ def test_release_meshcore_repeater(env):
 def test_release_meshcore_cli(env, svc):
     """The MeshCore CLI is an interactive component: proved on a terminal against the running
     companion, not by `--version`."""
+    _meshcore_mode(env, "chat")                     # its own mode, never the previous case's last line
     _start(env, "meshcore", timeout=900)
     assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")

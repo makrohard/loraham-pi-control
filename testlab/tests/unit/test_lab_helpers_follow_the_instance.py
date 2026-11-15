@@ -8,6 +8,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
 from lhpc_testlab import ops
 from lhpc_testlab.release import plugin_manager_markers, plugin_manager_pids
 
@@ -23,21 +24,24 @@ def _manager(plugins_root):
                              "--plugins-root", str(plugins_root)], start_new_session=True)
 
 
-def test_a_listed_instances_plugin_manager_is_found_and_another_roots_is_not(tmp_path):
-    mine = _manager(tmp_path / "lab" / "state" / "r2" / "openhop" / "plugins")
-    other = _manager(tmp_path / "other-lab" / "state" / "r2" / "openhop" / "plugins")
+@pytest.mark.parametrize("state_dir", ["r2/openhop", "openhop"])          # a listed instance's, the template's
+def test_a_managers_root_is_found_and_another_labs_is_not(tmp_path, state_dir):
+    mine = _manager(tmp_path / "lab" / "state" / state_dir / "plugins")
+    other = _manager(tmp_path / "other-lab" / "state" / state_dir / "plugins")
+    prefixed = _manager(f"/y{tmp_path}/lab/state/{state_dir}/plugins")      # a lab at /y<root>: never this root
     try:
         assert plugin_manager_pids(tmp_path / "lab") == [mine.pid]
     finally:
-        for p in (mine, other):
+        for p in (mine, other, prefixed):
             p.kill()
             p.wait(timeout=5)
     assert plugin_manager_pids(tmp_path / "lab") == []
 
 
-def test_a_listed_instances_plugin_manager_marker_is_found(tmp_path):
+@pytest.mark.parametrize("state_dir", ["r2/openhop", "openhop"])          # a listed instance's, the template's
+def test_a_plugin_manager_marker_is_found(tmp_path, state_dir):
     assert plugin_manager_markers(tmp_path) == []
-    marker = tmp_path / "state" / "r2" / "openhop" / ".lhpc-plugin-manager-active"
+    marker = tmp_path / "state" / state_dir / ".lhpc-plugin-manager-active"
     marker.parent.mkdir(parents=True)
     marker.write_text("")
     assert plugin_manager_markers(tmp_path) == [marker]
