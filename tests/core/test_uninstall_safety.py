@@ -3,7 +3,6 @@ used by another component (shared source), never touches config/secrets, removes
 LHPC-OWNED verified trees, refuses dirty trees, and update refuses while any consumer
 of an affected source is running."""
 
-import time
 
 import pytest
 
@@ -11,6 +10,8 @@ from lhpc.core import source_registry
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
+
+ADOPTED_AT = 1_700_000_000.0  # a fixed registry stamp: the registry stores it, nothing compares it with a clock
 
 
 def _svc(tmp_path, cmdlines=None, commands=None):
@@ -52,7 +53,7 @@ def _own(tmp_path, rel, comps=("x",)):
     """Seed an ownership record — the tree is a registered LHPC adoption."""
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", ADOPTED_AT, "",
                                        tuple(comps)))
 
 
@@ -149,13 +150,12 @@ def test_uninstall_fails_toward_dirty_when_status_unprovable(tmp_path):
 def test_uninstall_refuses_identity_drift(tmp_path):
     # A registered tree whose ORIGIN no longer matches the record/config, or whose HEAD
     # moved to a different commit, is NOT LHPC's anymore: refused, tree unchanged.
-    import time as _t
     _mksrc(tmp_path, "loraham-kiss-tnc")
     (tmp_path / "src" / "loraham-kiss-tnc" / ".git").mkdir()
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                       "a" * 40, _t.time(), "", ("loraham-kiss-tnc",)))
+                                       "a" * 40, ADOPTED_AT, "", ("loraham-kiss-tnc",)))
     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc",
                          _KISS_REMOTE, head="b" * 40)        # HEAD drifted a… -> b…
     res = svc.uninstall("kiss", apply=True)
@@ -215,11 +215,10 @@ def test_uninstall_registry_removal_failure_is_incomplete_then_retry(tmp_path, m
 def test_stale_record_never_authorizes_a_future_tree(tmp_path):
     # An orphan record left at an absent leaf must not authorize a NEW tree later placed at
     # the same path: the identity verifier refuses it (commit/origin unprovable or drifted).
-    import time as _t
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                       "a" * 40, _t.time(), "", ("loraham-kiss-tnc",)))
+                                       "a" * 40, ADOPTED_AT, "", ("loraham-kiss-tnc",)))
     _mksrc(tmp_path, "loraham-kiss-tnc")                                # a NEW unrelated tree
     (tmp_path / "src" / "loraham-kiss-tnc" / "new.txt").write_text("x")
     svc = _svc(tmp_path)                                                # git queries unanswered
@@ -233,13 +232,12 @@ def test_stale_record_never_authorizes_a_future_tree(tmp_path):
 
 def _seed_shared(tmp_path):
     from lhpc.core import source_registry
-    import time as _t
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     (dest / "app.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", ADOPTED_AT,
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     return dest
 

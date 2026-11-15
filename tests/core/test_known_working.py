@@ -5,12 +5,13 @@ selector resolution from compositions."""
 import pytest
 import json
 import os
-import time
 
 from lhpc.core import known_working, source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+
+ADOPTED_AT = 1_700_000_000.0  # a fixed registry stamp: the registry stores it, nothing compares it with a clock
 
 
 def _paths(tmp_path) -> Paths:
@@ -110,7 +111,7 @@ def _seed_running_chat(tmp_path, commit="a" * 40):
                                 "source_rel": "src/LoRaHAM_Daemon"}}
     assert known_working.write_candidate(paths, "chat", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "",
+        "src/LoRaHAM_Daemon", "", "dev", commit, ADOPTED_AT, "",
         ("loraham-chat",)))
     return paths, entries
 
@@ -134,7 +135,7 @@ def test_offer_hidden_when_stopped_recorded_or_changed(tmp_path):
     assert known_working.clear_candidate_checked(paths, "chat")[0]
     _seed_running_chat(tmp_path)                                  # fresh candidate (commit a…)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", "b" * 40, time.time(), "",
+        "src/LoRaHAM_Daemon", "", "dev", "b" * 40, ADOPTED_AT, "",
         ("loraham-chat",)))
     svc2 = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     assert svc2.known_working_offer("chat") is None
@@ -187,7 +188,7 @@ def _seed_registry_only_chat(tmp_path, commit="a" * 40):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "",
+        "src/LoRaHAM_Daemon", "", "dev", commit, ADOPTED_AT, "",
         ("loraham-chat",)))
     return paths
 
@@ -640,7 +641,7 @@ def _seed_reticulum_sources(tmp_path, *, with_sideband: bool):
     for i, (cid, rel) in enumerate(rels.items()):
         (tmp_path / rel).mkdir(parents=True, exist_ok=True)
         assert source_registry.write_record(paths, source_registry.RegistryRecord(
-            rel, "", "dev", chr(ord("a") + i) * 40, time.time(), "", (cid,)))
+            rel, "", "dev", chr(ord("a") + i) * 40, ADOPTED_AT, "", (cid,)))
     return paths
 
 

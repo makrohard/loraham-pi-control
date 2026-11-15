@@ -4,7 +4,6 @@ config, markers, known-working history, logs (never an active job's), and regist
 records. Never follows symlinks; local.toml/secrets/other stacks untouched."""
 
 import json
-import time
 
 import pytest
 
@@ -12,6 +11,8 @@ from lhpc.core import known_working, source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+
+ADOPTED_AT = 1_700_000_000.0  # a fixed registry stamp: the registry stores it, nothing compares it with a clock
 
 
 def _svc(tmp_path, cmdlines=None, commands=None):
@@ -47,7 +48,7 @@ def _bind_identity(svc, dest, remote, head=""):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", ADOPTED_AT, "",
                                        tuple(comps)))
 
 
@@ -193,7 +194,7 @@ def test_clean_refuses_identity_drift(tmp_path):
     _seed_kiss(tmp_path)
     # re-register with an exact commit, then fake a DIFFERENT actual HEAD
     _own2 = source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                           "a" * 40, time.time(), "",
+                                           "a" * 40, ADOPTED_AT, "",
                                            ("loraham-kiss-tnc", "loraham-kiss-serial"))
     assert source_registry.write_record(Paths(runtime_root=tmp_path), _own2)
     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc",

@@ -4,7 +4,6 @@ retirement, with zero mutation on a post-lock refusal. Races are injected determ
 through the `_op_seam` hook using separate service instances over one runtime root."""
 
 import threading
-import time
 
 import pytest
 
@@ -13,6 +12,8 @@ from lhpc.core.install import Installer, PlanAction
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+
+ADOPTED_AT = 1_700_000_000.0  # a fixed registry stamp: the registry stores it, nothing compares it with a clock
 
 _KISS_REMOTE = "https://github.com/makrohard/loraham-kiss-tnc.git"
 
@@ -31,7 +32,7 @@ def _seed_kiss_env(tmp_path):
     dest.mkdir(parents=True)
     (dest / "code.c").write_text("v1")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "pinned", "", time.time(), "",
+        "src/loraham-kiss-tnc", "", "pinned", "", ADOPTED_AT, "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     assert known_working.write_candidate(
         paths, "kiss", {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "dev",

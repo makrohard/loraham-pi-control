@@ -7,7 +7,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -21,6 +20,8 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from repo_paths import REPO
+
+ADOPTED_AT = 1_700_000_000.0  # a fixed registry stamp: the registry stores it, nothing compares it with a clock
 
 BOOT_A = "aaaaaaaa-0000-0000-0000-000000000001"
 BOOT_B = "bbbbbbbb-0000-0000-0000-000000000002"
@@ -213,7 +214,7 @@ def _mksrc(tmp_path, *rel):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", ADOPTED_AT, "",
                                        tuple(comps)))
 
 
