@@ -12,10 +12,10 @@ Unmodified MeshCom firmware running headless under QEMU, bridged to the LoRaHAM 
 | Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port <port> --backend loraham --data-socket /tmp/loraf-<rid>.sock --conf-socket /tmp/loraconf-<rid>.sock [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000 --rflog on --rflog-path <runtime>/logs/<rid>/rf-meshcom.log`; `<port>` is 7000 on r1, + 133 per further radio; consumes its radio's framed socket `/tmp/loraf-<rid>.sock`; built with cmake (needs `libssl-dev`) |
 | QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary> --node-image <runtime>/state/<rid>/meshcom/node-flash.bin --instance <n − 1> --ports <web>:<console> --xr-redirect 7000:<bridge port>` on rN; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323` on r1 (each + 133 per further radio); readiness window 600 s |
 | Firmware image | `.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin`, completion marker `.lhpc-build-complete` beside it |
-| Callsign | `mc_callsign` is pushed over the net-console (`--setcall`) after boot, unless a `--info` probe shows the node already has it (it persists in the node's NVS); an empty or cut reply counts as not ready. Re-sent on a stepped schedule (~13 min) until the firmware ACKs; a call never confirmed shows `UNVERIFIED` in `lhpc status` and does not fail the start. `lhpc stack poststart meshcom` re-runs it |
+| Callsign | `mc_callsign` is pushed over the net-console (`--setcall`) after boot, unless a `--info` probe shows the node already has it (it persists in the node's NVS); an empty or cut reply counts as not ready. Re-sent on a stepped schedule (~13 min) until the firmware ACKs; a call never confirmed shows `UNVERIFIED` in `lhpc status` and does not fail the start. `lhpc stack poststart meshcom@<rid>` re-runs it |
 | Secrets | `<runtime>/config/secrets/xr_pw` (0600) — the HMAC password, first line |
-| Resources | `tcp.port.<port>` for the bridge, web UI and net-console (7000 / 18083 / 12323 on r1) exclusive · `loraham.daemon-socket.433` consumer · `loraham.profile.433` requirement `MANAGED` · `meshcom.uart1.feed` exclusive (one feed on the UART: production or fixture) |
-| Install channel | **binary** by default ([provenance](../provenance.md#the-binary-channel)): the QEMU binary, firmware image and bridge overlaid on the pinned clone, which keeps the run scripts. Its firmware has an empty password: open auth, HMAC changes refused until installed from source. `--source pinned\|dev\|stable` builds everything on the box (about 2 h on a Pi Zero 2W). After an LHPC update that moves MeshCom's pins it does not start until updated (the node keeps its ID): `lhpc stack stop meshcom --yes`, `lhpc update meshcom --yes`, `lhpc stack start meshcom --yes` |
+| Resources | `tcp.port.<port>` for the bridge, web UI and net-console (7000 / 18083 / 12323 on r1) exclusive · `loraham.daemon-socket.{radio:433}` consumer · `loraham.profile.433` requirement `MANAGED` · `meshcom.uart1.feed` exclusive (one feed on the UART: production or fixture) |
+| Install channel | **binary** by default ([provenance](../provenance.md#the-binary-channel)): the QEMU binary, firmware image and bridge overlaid on the pinned clone, which keeps the run scripts. Its firmware has an empty password: open auth, HMAC changes refused until installed from source. `--source pinned\|dev` builds everything on the box (about 2 h on a Pi Zero 2W); not `stable`: its firmware publishes no version-shaped tags ([provenance](../provenance.md#selections)). After an LHPC update that moves MeshCom's pins it does not start until updated (the node keeps its ID): `lhpc stack stop meshcom@<rid> --yes`, `lhpc update meshcom --yes`, `lhpc stack start meshcom@<rid> --yes` |
 
 ## Contents
 
@@ -73,7 +73,7 @@ never by editing the file ([operations](../operations.md#secrets-and-passwords))
 The global position ([GPS](../gps.md)) is served by the `meshcom-gps` feed on the QEMU node's
 UART1 socket (lhpc is the client, QEMU the server). The feed starts before the node because
 MeshCom's GPS init is one-shot at boot. `meshcom-gps-relay` replays a synthetic NMEA fixture — a
-test facility, never started by a normal start (`lhpc stack start meshcom-gps-relay` runs it).
+test facility, never started by a normal start (`lhpc stack start meshcom-gps-relay@<rid>` runs it).
 
 ## Notes
 
