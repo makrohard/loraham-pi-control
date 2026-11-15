@@ -125,6 +125,15 @@ class BinaryOpsMixin:
                                          f"  Staying on the binary keeps {stack_id} exactly as it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
+        # FIRST (D10), before any package is asked for or any clone moved: an installed binary `entry` would not
+        # replace stays as it is. With no open transaction only; otherwise the apply's locks decide, after
+        # recovery (and no clone is moved before them).
+        _settled = bi.read_journal(self._paths)[1] == "absent"
+        _have, _stuck = self._binary_current(stack_id, entry) if _settled else ("", "")
+        if _stuck:
+            return self._binary_changed(stack_id, _stuck, src_cmd)
+        if _have and (not apply or _have != entry.filename):
+            return self._binary_already_installed(stack_id, entry, _have, [])
         missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
         if missing:
             # lhpc never installs system packages itself — name the exact command.
@@ -136,10 +145,6 @@ class BinaryOpsMixin:
                                f"lhpc install {stack_id} --yes"],
                 data={"binary_failed": True, "missing_runtime_deps": missing})
 
-        if (not apply and bi.read_journal(self._paths)[1] == "absent"
-                and (_have := self._binary_installed_is(stack_id, entry))):
-            # A HINT for the plan only: the apply decides under its locks, after recovery.
-            return self._binary_already_installed(stack_id, entry, _have, [])
         size_mb = entry.size / (1024 * 1024)
         if not apply:
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
@@ -160,7 +165,7 @@ class BinaryOpsMixin:
         # left alone and refused below, exactly as before. Top-level calls only: an outer
         # boundary (`locked`, the auto-install run) keeps the refusal.
         moved_notes: list[str] = []
-        if not locked:
+        if not locked and _settled:
             for cid in self._stale_clean_clones(stack_id, spec, entry):
                 r = self.update(cid, apply=True, source="pinned", exact_commits=dict(entry.components))
                 if not r.ok:
@@ -221,6 +226,13 @@ class BinaryOpsMixin:
             # the transaction below, never left behind unowned.
             prev_files = list(_prec.files) if (_prec and _pstate in ("valid", "superseded")) else []
             prev_receipt_raw = brx.read_raw(self._paths, stack_id)
+            # AUTHORITATIVE, under the locks after recovery and before any clone is touched (D10): another
+            # installed binary `entry` is not newer than stays, clones and files untouched.
+            _have, _stuck = self._binary_current(stack_id, entry)
+            if _stuck:
+                return self._binary_changed(stack_id, _stuck, src_cmd)
+            if _have and _have != entry.filename:
+                return self._binary_already_installed(stack_id, entry, _have, moved_notes)
             # HYBRID stacks: some covered components still need their PINNED clone, because the
             # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
             # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
@@ -299,9 +311,9 @@ class BinaryOpsMixin:
                             next_commands=[src_cmd], data={"binary_failed": True})
                     clone_notes.append(f"  adopted pinned source for {cid} (run scripts)")
             clone_notes = moved_notes + clone_notes
-            # AUTHORITATIVE "already installed": after recovery, under the locks, with the
-            # required clones proven above — an open transaction is never read as installed.
-            if (_have := self._binary_installed_is(stack_id, entry)):
+            # AUTHORITATIVE "already installed" (the same artifact): after recovery, under the locks, with
+            # the required clones proven above — an open transaction is never read as installed.
+            if (_have := self._binary_current(stack_id, entry)[0]):
                 return self._binary_already_installed(stack_id, entry, _have, clone_notes)
 
             baseline, berr = self._binary_registry_baseline(stack_id)
@@ -463,16 +475,28 @@ class BinaryOpsMixin:
                             details=[*notes, *older], next_commands=[f"lhpc status {stack_id}"],
                             data={"changes": 1 if notes else 0, "channel": "binary"})
 
-    def _binary_installed_is(self, stack_id: str, entry) -> str:
-        """The installed artifact's file name when there is nothing to install, else "": a valid receipt of
-        `entry` itself with every recorded file still hashing as installed, or of another binary `entry` is
-        not newer than (D10: a withdrawn installed binary stays)."""
+    def _binary_current(self, stack_id: str, entry) -> tuple[str, str]:
+        """(installed file name, refusal): the one "nothing to install" decision. The installed binary stays when
+        `entry` is the same artifact or is not newer (D10, also when its own entry was withdrawn), and only while
+        its files still hash as installed: verified whatever the entry's age. Changed files of the same artifact:
+        ("", ""), the reinstall is the repair; changed files and nothing newer: the refusal, never an older
+        replacement."""
         state, rec, _why = self.binary_receipt_state(stack_id)
-        if state != "valid":
-            return ""
-        if rec.artifact_sha256 != entry.sha256:
-            return "" if bi.is_newer(entry, rec) else rec.filename
-        return rec.filename if brx.verify_files(self._paths, rec)[0] else ""
+        if state != "valid" or (rec.artifact_sha256 != entry.sha256 and bi.is_newer(entry, rec)):
+            return "", ""
+        if brx.verify_files(self._paths, rec)[0]:
+            return rec.filename, ""
+        if rec.artifact_sha256 == entry.sha256:
+            return "", ""
+        return "", f"the installed binary {rec.filename} changed since its install and no newer one is published"
+
+    @staticmethod
+    def _binary_changed(stack_id: str, why: str, src_cmd: str) -> ActionResult:
+        return ActionResult(False, f"Binary install of '{stack_id}' refused: {why}",
+                            details=[f"  nothing was changed: {stack_id} stays as it is",
+                                     f"  install it from source: {src_cmd} (a full local build, this can take "
+                                     "hours on a Pi)"],
+                            next_commands=[src_cmd], data={"binary_failed": True, "offer_source": True})
 
     @staticmethod
     def _binary_none_compatible(stack_id: str, exc, src_cmd: str) -> ActionResult:
