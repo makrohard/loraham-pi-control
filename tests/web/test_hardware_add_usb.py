@@ -14,7 +14,7 @@ from lhpc.core.usb_access import Probe
 @pytest.fixture(autouse=True)
 def _chip_found(monkeypatch):
     """DEC-W21: the add checks the stick's chip first; these cases are about the list, so the check answers "found"
-    (tests/web/test_w21_add_checks_the_chip.py drives the check itself)."""
+    (tests/web/test_hardware_add_checks_the_chip.py drives the check itself)."""
     from lhpc.core.radio_detect import run
     monkeypatch.setattr(run, "detect_stick", lambda svc, model, port: run.Detected("found", f"{model}: found", "", ""))
 

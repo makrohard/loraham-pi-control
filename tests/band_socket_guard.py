@@ -12,7 +12,7 @@ A hit fails the test at teardown, unless DELIBERATE names that exact test with t
 any other socket still fails it. A runtime root counts when it is `tmp_path`'s tree or the root of a `Paths`
 built during the test.
 
-Loaded for every test by `tests/conftest.py`. `tests/repo/test_w22_band_socket_guard.py` holds the canaries,
+Loaded for every test by `tests/conftest.py`. `tests/repo/test_band_socket_guard_canaries.py` holds the canaries,
 which fail when the guard is not loaded or misses a form or a way of serving. A fake that never goes through
 `.system`, or a `System` built by hand, is outside it.
 """

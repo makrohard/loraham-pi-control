@@ -319,7 +319,7 @@ OLD_CONFIG_TEXT = ("the old [radio] configuration is present and nothing was con
                    "hardware list first")
 OLD_CONFIG_UNREADABLE = "the old configuration cannot be read"
 # PKT-D20 / item 16: the one wording for a band two radios share, for a band-addressed refusal, daemon.md, the Hardware
-# page and the CHANGELOG (tests/repo/test_l5_gates).
+# page and the CHANGELOG (tests/repo/test_radios_named_by_id_not_band).
 SHARED_BAND_TEXT = ("two radios on one band each run their own daemon: address one by its radio id "
                     "(lhpc stack stop daemon@rN)")
 

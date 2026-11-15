@@ -1,6 +1,6 @@
 """A13 (§H "check EVERY radio switcher"): each control that names a radio names the radio the page shows. Box H's
 hardware list (r1, r3 on 433; r2, r4 on 868); every check renders the page for two radios and reads the control.
-The Logs page's forms are pinned by tests/web/test_w4_logs_per_radio.py::test_the_bottom_forms_return_to_the_same_radio."""
+The Logs page's forms are pinned by tests/web/test_logs_per_radio.py::test_the_bottom_forms_return_to_the_same_radio."""
 import pytest
 import radios_fixture
 from htmlq import parse
