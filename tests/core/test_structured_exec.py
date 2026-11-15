@@ -1,6 +1,8 @@
 """Structured command execution: argv token boundaries, no shell on the migrated
 run path, and the shell-to-exec ownership-race fix (controlled real subprocesses)."""
 
+import os
+import select
 import subprocess
 
 import pytest
@@ -107,6 +109,7 @@ def test_the_generated_launcher_never_execs_through_a_shell():
 
 
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+@pytest.mark.wallclock("a real sleeping child is the started component; nothing is timed")
 def test_structured_start_records_real_executable_not_shell(tmp_path):
     life = _life(tmp_path)
     life.OBSERVE_TIMEOUT_S = 3.0          # exercise the real observation path
@@ -121,8 +124,8 @@ def test_structured_start_records_real_executable_not_shell(tmp_path):
 
 
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+@pytest.mark.wallclock("a real sleeping child is the mismatched leader; its end is a pidfd wait")
 def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
-    import time
     life = _life(tmp_path)
     life.OBSERVE_TIMEOUT_S = 1.0
     # A real session leader is running, but its observed argv will NOT match the
@@ -138,9 +141,11 @@ def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
     assert ok != "ok"                                          # not owned
     assert ok in ("ceased", "unverified")                      # typed cleanup status
     assert life.owned_records("racer") == []
-    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
-    while life._proc_alive(p.pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
+    fd = os.pidfd_open(p.pid)                                  # readable once it has exited (a zombie too)
+    try:
+        select.select([fd], [], [], 5.0)                       # bounded: returns at the exit itself
+    finally:
+        os.close(fd)
     assert not life._proc_alive(p.pid)                          # session terminated
 
 
@@ -541,7 +546,7 @@ def _serve_chunks(behavior):
                 chunks = behavior(received, data)
                 received.append(data)
                 for delay, text in chunks:
-                    time.sleep(delay)
+                    time.sleep(delay)  # wallclock: a pause between chunks (a slow node) is the scenario
                     try:
                         conn.sendall(text.encode())
                     except OSError:

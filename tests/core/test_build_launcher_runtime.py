@@ -5,6 +5,7 @@ symlinked/replaced parent ANYWHERE in the lock/journal path fails closed before 
 
 import fcntl
 import os
+import select
 import subprocess
 import sys
 import time
@@ -111,6 +112,8 @@ def _record_step_timeouts(monkeypatch):
     return seen
 
 
+@pytest.mark.wallclock("a real 5 s step is ended at its real 0.3 s spec timeout; the 4 s bound tells the timeout "
+                       "from the step's own end")
 def test_run_uses_the_spec_step_timeout(tmp_path, monkeypatch):
     # The web Build/Test launcher gets the component's manifest timeout through the spec, not a flat 1800.
     monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
@@ -444,6 +447,8 @@ def _dead_or_zombie(pid: int) -> bool:
 
 
 @pytest.mark.slow
+@pytest.mark.wallclock("the rendered launcher kills a real step at its real 0.6 s timeout; the 10 s bound tells the "
+                       "kill from the step's 60 s sleep")
 def test_build_launcher_step_timeout_kills_child_group(tmp_path):
     prog = ("import subprocess, sys, time\n"
             "c = subprocess.Popen(['sleep', '60'])\n"
@@ -457,10 +462,15 @@ def test_build_launcher_step_timeout_kills_child_group(tmp_path):
     assert r.returncode == 124 and "step timed out" in r.stderr
     assert time.time() - t0 < 10
     child = int((tmp_path / "childpid").read_text())
-    for _ in range(60):
-        if _dead_or_zombie(child):
-            break
-        time.sleep(0.1)
+    try:
+        fd = os.pidfd_open(child)                          # readable once it has exited (a zombie too)
+    except ProcessLookupError:
+        fd = None                                          # already gone
+    if fd is not None:
+        try:
+            select.select([fd], [], [], 6.0)               # bounded: returns at the exit itself
+        finally:
+            os.close(fd)
     assert _dead_or_zombie(child)                          # step's child killed with the group
 
 
@@ -519,10 +529,37 @@ def test_web_build_limits_follow_build_limits(tmp_path, monkeypatch):
     assert seen == [(86400.0, 600.0), (86400.0, 600.0), (2.0, 60.0)]
 
 
-@pytest.mark.slow
-def test_web_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path):
-    # Ceiling 1.5 s, sample 1 s: a 1.8 s step ends at the ceiling — each wait is capped by the time
-    # REMAINING to the ceiling, not by the whole ceiling.
-    rc, reason, _unverified = blr._run_step(["sleep", "1.8"], str(tmp_path), dict(os.environ),
-                                            1.5, None, 1.0)
+def test_web_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, monkeypatch, fake_clock):
+    # Ceiling 1.55 s (on no slice boundary), sample 1 s: a step that would end on its own at 1.8 s ends AT the
+    # ceiling — each wait is capped by the time REMAINING to the ceiling, not by a whole slice. The time is the fake
+    # clock's (the step's Watch takes it), so no margin can be lost to load: a wait on the step advances it by
+    # exactly its timeout (at least 1 µs, as a real wait takes); at 1.8 s the step "ends on its own" (it is killed,
+    # as its own exit). Any other wait (ionice, the wait after the stop) is the real one and moves no fake time.
+    from lhpc.core import proctree, progress
+    argv = [sys.executable, "-c", "import signal; signal.pause()"]
+    probe = subprocess.Popen(["true"])                            # the real class (the suite may wrap
+    probe.wait()                                                  # the `Popen` name in a guard)
+    popen, real_wait = type(probe), type(probe).wait
+    t0 = fake_clock.monotonic()
+    end, ceiling, stopped_at = t0 + 1.8, 1.55, []
+
+    def wait(self, timeout=None):
+        if self.args != argv or timeout is None or self.poll() is not None or stopped_at:
+            return real_wait(self, timeout)
+        if fake_clock.monotonic() + timeout < end:
+            fake_clock.advance(max(timeout, 1e-6))
+            raise subprocess.TimeoutExpired(self.args, timeout)
+        fake_clock.advance(max(0.0, end - fake_clock.monotonic()))
+        self.kill()
+        return real_wait(self)
+    real_watch, real_terminate = progress.Watch, proctree.terminate_session
+
+    def terminate(token, exclude_pid, **kw):
+        stopped_at.append(fake_clock.monotonic())
+        return real_terminate(token, exclude_pid, **kw)
+    monkeypatch.setattr(popen, "wait", wait)
+    monkeypatch.setattr(progress, "Watch", lambda *a, **kw: real_watch(*a, clock=fake_clock.monotonic, **kw))
+    monkeypatch.setattr(proctree, "terminate_session", terminate)
+    rc, reason, _unverified = blr._run_step(argv, str(tmp_path), dict(os.environ), ceiling, None, 1.0)
     assert (rc, reason) == (124, "budget")
+    assert ceiling <= stopped_at[0] - t0 <= ceiling + 1e-5         # stopped at the ceiling, not a slice past it
