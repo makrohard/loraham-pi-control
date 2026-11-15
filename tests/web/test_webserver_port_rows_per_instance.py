@@ -34,10 +34,11 @@ def test_each_running_instance_has_its_own_port_row(tmp_path, monkeypatch, web, 
     svc = _box(tmp_path, monkeypatch, values)
     rows = [(w["name"], w.get("rid", ""), w["port"], w["exposure"]) for w in svc.dashboard_webservers(fw_status={})
             if w["kind"] == "port"]
-    assert rows == [("LoRaHAM KISS TNC (r1)", "r1", "8001", {"level": "ok", "label": "local"}),
-                    ("LoRaHAM KISS TNC (r2)", "r2", "8134", r2_exposure)], rows
+    # U3 (K2): one label form "<stack> @rN" (his yes "mock ok", MOCK-WEB-v1: "(rN)" -> "@rN")
+    assert rows == [("LoRaHAM KISS TNC @r1", "r1", "8001", {"level": "ok", "label": "local"}),
+                    ("LoRaHAM KISS TNC @r2", "r2", "8134", r2_exposure)], rows
     page = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
-    assert "LoRaHAM KISS TNC (r2)</a>" in page and ":8134 · listener absent" in page
+    assert "LoRaHAM KISS TNC @r2</a>" in page and ":8134 · listener absent" in page
 
 
 def test_each_instances_live_port_is_read_from_its_own_process(tmp_path, monkeypatch):

@@ -9,6 +9,7 @@ import dataclasses as _dc
 from . import commands, instances
 from . import listeners as _listener_inv
 from . import openhop_store as _openhop_store
+from . import webserver as _ws
 from .paths import PathContainmentError
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -856,7 +857,7 @@ class WebserverOpsMixin:
         return {
             # The page and the component behind it (`page_id` is the key of every saved policy).
             "page_id": page_id, "stack": page.stack_id, "component_id": page.component_id,
-            "name": page.name, "label": page.label, "primary": page.primary,
+            "name": page.name, "label": page.label, "primary": page.primary, "rid": page_id.partition("@")[2],   # U3: its radio
             "mode_note": self.page_mode_note(page),
             "cfg": swc, "upstream_address": address,
             "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
@@ -948,16 +949,14 @@ class WebserverOpsMixin:
             mst = ss.components.get(stk.main_component.id)
             if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
-            for page in self.stack_web_pages(stk.id):          # one row per proxied page; F3b: its component's state
-                cs = ss.components.get(page.component_id)
-                rows.append({**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""})
+            pages = self.stack_web_pages(stk.id)               # one row per proxied page; F3b: its component's state
+            stack_rows = [{**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""}
+                          for page in pages for cs in [ss.components.get(page.component_id)]]
             insts = instances.running_insts(self, stk.id)    # K8f S4-4b1 (D3 B3): a row per running instance
-            for comp in stk.components:                      # every OTHER open port (no-auth tcp)
-                for ep in comp.endpoints:
-                    if self._is_raw_endpoint(ep):
-                        rows.extend(self._dashboard_port_row(
-                            stk, comp, ep, snap, fw_status,
-                            comp_state=ss.components.get(comp.id), get_argvs=_argvs, inst=i) for i in insts or [None])
+            stack_rows += [self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=ss.components.get(comp.id),
+                                                    get_argvs=_argvs, inst=i, pages=pages)     # every OTHER open port (no-auth tcp)
+                           for comp in stk.components for ep in comp.endpoints if self._is_raw_endpoint(ep) for i in insts or [None]]
+            rows.extend(_ws.home_rows(stack_rows, insts))   # U3 (K2): running instances' pages, one line per listener
         return rows
 
     @staticmethod
@@ -1007,7 +1006,8 @@ class WebserverOpsMixin:
         if shown:
             port = (v.get("live_port") or swc.port) if listen_scope != "absent" else swc.port
         return {"kind": "stack", "name": page.label, "sid": stk.id, "pid": page.page_id,
-                "anchor": page.anchor, "enabled": enabled, "live": live,
+                "anchor": page.anchor, "enabled": enabled, "live": live,   # U3 (K2): its radio, for the link and the merge
+                "rid": page.page_id.partition("@")[2], "cfg": "", "component": page.component_id,
                 "pending_disable": bool(live and not enabled),
                 "mode_note": v.get("mode_note", ""),      # "" unless the mode hides the upstream
                 "posture": v.get("posture") if shown else None,
@@ -1098,7 +1098,7 @@ class WebserverOpsMixin:
         val = found.pop()
         return (int(val), True) if val.isdigit() else (static_port, False)
 
-    def _dashboard_port_row(self, stk, comp, ep, listeners=None, fw_status=None, comp_state=None, get_argvs=None, inst=None) -> dict:
+    def _dashboard_port_row(self, stk, comp, ep, listeners=None, fw_status=None, comp_state=None, get_argvs=None, inst=None, pages=()) -> dict:
         """A `kind="port"` box row for a no-authentication TCP service (any scheme — an https
         listener with no auth and no bind knob is exactly as directly reachable as a tcp one).
 
@@ -1134,8 +1134,8 @@ class WebserverOpsMixin:
         port, verified = self._endpoint_live_port(comp, ep, pids, get_argvs)
 
         def row(port_shown, live_scope, level, label, warn_reason):
-            return {"kind": "port", "name": f"{stk.name} ({inst.rid})" if inst else stk.name, "sid": stk.id, "rid": getattr(inst, "rid", ""), "port": str(port_shown),
-                    "anchor": f"#stack-webserver-{stk.id}",
+            return {"kind": "port", **_ws.raw_link(stk, comp, inst, pages), "sid": stk.id, "port": str(port_shown),   # U3 (K2)
+                    "bind": _ws.single_bind(self.listener_scopes(port, listeners)) if live_scope in ("loopback", "exposed") else "",
                     "scheme": ep.scheme or "tcp", "live_scope": live_scope,
                     "exposure": {"level": level, "label": label},
                     "warn_reason": warn_reason,

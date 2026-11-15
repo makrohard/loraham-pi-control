@@ -327,7 +327,8 @@ def test_the_stack_panel_renders_one_webserver_subpanel_and_password_block_per_p
     svc = _svc(tmp_path)
     doc = parse(web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True))
     assert doc.present("stack-webserver-two@r1") and doc.present("stack-webserver-two-b@r1")
-    assert "Webserver (web UI proxy) — Dashboard" in doc.text
+    # U3 (K2): one "Webserver (web UI proxy)" submenu; each page's panel is headed "<page> · <stack>@rN"
+    assert doc.present("stack-webservers-two") and "Dashboard · two@r1" in doc.text
     assert doc.within(doc.by_id("stack-webserver-two-b@r1")).field_default("page") == "two-b@r1"
     assert doc.present("stack-password-b") and not doc.present("stack-password-a")
 
@@ -522,3 +523,58 @@ def test_denied_routes_answer_200_notice_on_a_flagged_page_else_404():
     assert "403" not in plain + flagged
     assert ("default_type application/json; return 200 "
             "'{\"success\": false, \"error\": \"Managed by LoRaHAM Pi Control\"}';") in flagged
+
+
+# --- the per-radio Webserver submenu (PLAN-UI-v5 K2, U3) ------------------------------------------------------------
+#
+# meshcom on r1 and r2 (both 433): one "Webserver (web UI proxy)" submenu with the Settings radio switcher; below it
+# the chosen radio's pages, each headed "<page> · meshcom@rN". Every instance page keeps its own page and tree entry.
+
+def _two_radio_web(tmp_path, web):
+    import radios_fixture
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    return web(service_factory=lambda: svc)
+
+
+def _summary(doc, el_id):
+    return doc.within(doc.by_id(el_id)).find("summary")[0].text
+
+
+@pytest.mark.parametrize("rid, other", [("r1", "r2"), ("r2", "r1")])
+def test_one_webserver_submenu_switches_radio_in_place_and_heads_each_page_by_its_instance(tmp_path, web, rid, other):
+    # red on 6b82239a: a "Webserver (web UI proxy)" panel per instance page, no radio in its heading, no switcher
+    c = _two_radio_web(tmp_path, web)
+    r = c.get(f"/stacks?open=meshcom&radio={rid}")
+    assert r.status_code == 200
+    doc = parse(r.get_data(as_text=True))
+    assert _summary(doc, "stack-webservers-meshcom").strip() == "Webserver (web UI proxy)"
+    assert " ".join(_summary(doc, f"stack-webserver-meshcom@{rid}").split()) == f"MeshCom QEMU node · meshcom@{rid} not proxied"
+    assert doc.by_id(f"stack-webserver-meshcom@{other}") is None    # the other radio's page: its own page, the switch
+    wrap = doc.within(doc.by_id("stack-webservers-meshcom"))
+    [switch] = wrap.find("span", class_="bandswitch")
+    links = {a.text.strip(): (a["href"], a.has_class("sel")) for a in wrap.within(switch).find("a")}
+    assert links == {"r1 · 433": ("/stacks?radio=r1&open=meshcom#stack-webservers-meshcom", rid == "r1"),
+                     "r2 · 433": ("/stacks?radio=r2&open=meshcom#stack-webservers-meshcom", rid == "r2")}
+    # Expose all still names every instance page while the Stacks view shows one radio's
+    bulk = doc.within(doc.by_id("ws-stackwebs")).text
+    assert "meshcom@r1" in bulk and "meshcom@r2" in bulk
+
+
+def test_every_instance_page_keeps_its_own_page_and_the_submenu_page_switches_radio(tmp_path, web):
+    c = _two_radio_web(tmp_path, web)
+    tree = c.get("/stacks/menus").get_data(as_text=True)
+    for rid in ("r1", "r2"):
+        assert f'href="/stacks/meshcom/menu/stack-webserver-meshcom@{rid}"' in tree
+        page = c.get(f"/stacks/meshcom/menu/stack-webserver-meshcom@{rid}")
+        assert page.status_code == 200
+        doc = parse(page.get_data(as_text=True))
+        assert doc.by_id(f"stack-webserver-meshcom@{rid}") is not None
+        crumbs = " ".join(doc.find("nav", class_="crumbs")[0].text.split())     # the page sits under the one submenu
+        assert crumbs.endswith(f"› Webserver (web UI proxy) › MeshCom QEMU node · meshcom@{rid}"), crumbs
+    # the submenu's own page: the chosen radio's panels, its switcher stays on that page
+    doc = parse(c.get("/stacks/meshcom/menu/stack-webservers-meshcom?radio=r2").get_data(as_text=True))
+    assert doc.by_id("stack-webserver-meshcom@r2") is not None and doc.by_id("stack-webserver-meshcom@r1") is None
+    wrap = doc.within(doc.by_id("stack-webservers-meshcom"))
+    assert sorted(a["href"] for a in wrap.within(wrap.find("span", class_="bandswitch")[0]).find("a")) == [
+        "/stacks/meshcom/menu/stack-webservers-meshcom?radio=r1", "/stacks/meshcom/menu/stack-webservers-meshcom?radio=r2"]

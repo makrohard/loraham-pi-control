@@ -91,12 +91,12 @@
     </div>
   {% endfor %}
 
-  {# ===== Webserver — LAST sub-section(s), one per proxied page: each component whose manifest
-     declares a client http/https endpoint. Same level and styling as Install / Info / Settings. ===== #}
-  {% for stack_web in g.stack_webs %}
+  {# ===== Webserver — LAST sub-section: ONE submenu (U3, K2) holding a panel per proxied page of the shown radio (each
+     component whose manifest declares a client http/https endpoint). Same level and styling as Install / Info / Settings. ===== #}
+  {% if g.stack_webs %}
     <div class="stackrow-wrap">
-    {% include "_stackweb.html" %}
-    {{ page_actions(g.stack.id, 'stack-webserver-' ~ stack_web.page_id) }}
+    {% include "_stackwebs.html" %}
+    {{ page_actions(g.stack.id, 'stack-webservers-' ~ g.stack.id) }}
     </div>
-  {% endfor %}
+  {% endif %}
 </div>

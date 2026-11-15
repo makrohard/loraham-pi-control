@@ -611,6 +611,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         elif ds != "absent" and peer_is_loopback():   # loopback (or unset) + local viewer
                             w_entry = {**w, "direct_addr": f"127.0.0.1:{w['direct_port']}"}
                 webservers.append({**w_entry, "addr": addr})
+            merged = {w["merge_key"]: w for w in webservers if w.get("merged")}    # U3 (K2): one line per listener
+            for w in webservers:
+                if w.get("raw_key"):
+                    w["raw"] = merged[w["raw_key"]]
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
         try:

@@ -126,10 +126,12 @@ def stack_menus(g: dict) -> list[Submenu]:
     for c in creds:
         label = "Password" + (f" — {c['name']}" if len(creds) > 1 else "") + (f" — {c['instance']}" if c.get("instance") else "")
         add(f"stack-password-{c['component_id']}", top, label, "_stack_password.html", c=c)
+    if g["stack_webs"]:                                  # U3 (K2): one submenu, a level per instance page under it
+        add(f"stack-webservers-{sid}", top, "Webserver (web UI proxy)", "_stackwebs.html")
     for sw in g["stack_webs"]:
         wid, rs = f"stack-webserver-{sw['page_id']}", _radio_suffix(sw["page_id"])
-        label = "Webserver (web UI proxy)" + ("" if sw["primary"] else f" — {sw['name']}") + rs
-        add(wid, top, label, "_stackweb.html", stack_web=sw)
+        label = sw["name"] + (f" · {sid}@{sw['rid']}" if sw["rid"] else "")
+        add(wid, f"stack-webservers-{sid}", label, "_stackweb.html", stack_web=sw)
         add(f"{wid}--settings", wid, "Settings" + rs, "_stackweb_settings.html", stack_web=sw)
         add(f"{wid}--monitor", wid, "Monitor" + rs, "_stackweb_monitor.html", stack_web=sw)
     return out

@@ -142,6 +142,32 @@ def test_the_inline_hardware_list_reflows_inside_the_stack_body_on_a_phone(page)
                          ".getBoundingClientRect().width") > 300                    # the table's header row shows
 
 
+_WEB_SUBMENU = """() => { const w = document.getElementById('stack-webservers-meshtastic');
+    const fits = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.right <= innerWidth; };
+    return {open: w.open, radios: [...w.querySelectorAll('.bandswitch a')].map(a => [a.textContent.trim(), fits(a)]),
+            heads: [...w.querySelectorAll('summary')].filter(s => s.offsetParent)
+                     .map(s => [s.textContent.replace(/\\s+/g, ' ').trim(), fits(s), s.scrollWidth <= s.clientWidth + 1]),
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth}; }"""
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_the_webserver_submenu_switcher_and_headings_fit_without_sideways_scroll(page, width):
+    """U3 (K2): Meshtastic's one Webserver submenu on r2, opened by the Home box link's anchor: the radio switcher and
+    every shown heading ("<page> · meshtastic@r2", its Settings and Monitor) sit inside the viewport, none clips its
+    text, and the page does not scroll sideways."""
+    page.set_viewport_size({"width": width, "height": 900})
+    assert page.goto(page.lab_base + "/stacks?open=meshtastic&radio=r2#stack-webserver-meshtastic@r2",
+                     wait_until="networkidle").ok
+    page.wait_for_function("() => { const p = document.getElementById('stack-webserver-meshtastic@r2');"
+                           " return p && p.open; }", timeout=15000)
+    page.evaluate("() => document.querySelectorAll('#stack-webservers-meshtastic details').forEach(d => d.open = true)")
+    got = page.evaluate(_WEB_SUBMENU)
+    assert got["open"] and got["radios"] == [["r1 · 433", True], ["r2 · 868", True]], got
+    assert got["heads"][0][0] == "Webserver (web UI proxy)" and any("· meshtastic@r2" in h for h, _f, _c in got["heads"]), got
+    assert all(f and c for _h, f, c in got["heads"]), got
+    assert got["overflow"] <= 1, got
+
+
 def _auto_install_rows(page):
     page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
     page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)

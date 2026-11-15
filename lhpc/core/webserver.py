@@ -197,6 +197,46 @@ def port_exposure(bind_value: str) -> tuple[str, str]:
     return ("warn", "LAN")
 
 
+def single_bind(scopes) -> str:
+    """The ONE bind address of a port's live listener scopes ("*" = a wildcard), "" for none or several (U3, K2)."""
+    addrs = {s["addr"] for s in scopes}
+    return addrs.pop() if len(addrs) == 1 else ""
+
+
+def raw_link(stack, comp, inst, pages) -> dict:
+    """A raw-port row's label and link (U3, K2): "<stack> @rN", linked to the page of the same component on that radio,
+    else to that radio's Settings; a row with no attributed instance gets no radio (none is invented, G2-B3)."""
+    rid = getattr(inst, "rid", "") or ""
+    page = next((p for p in pages if rid and p.component_id == comp.id and p.page_id.partition("@")[2] == rid), None)
+    return {"name": f"{stack.name} @{rid}" if rid else stack.name, "rid": rid, "component": comp.id,
+            "cfg": "" if page else stack.id, "anchor": page.anchor if page else f"#stack-settings-{stack.id}"}
+
+
+def home_rows(rows: list, insts) -> list:
+    """One started stack's Home Webserver box rows (U3, PLAN-UI-v5 K2): its page rows (`kind="stack"`), then its
+    raw-port rows (`kind="port"`).
+
+    - A page row stays only while its instance runs (`insts`: the running instances, None = unknown). An unknown
+      running set, and a page without a radio, keep the rule from before (every page of a started stack).
+    - A not-proxied page row and a raw row that are the SAME effective listener — component + radio + the live
+      socket's bind address + port (G2-N2; the Zero's meshcom@r1 :18083 was listed twice) — show as one line.
+      Only a live, verified, single-address listener merges: a raw row's `bind` is "" otherwise (absent,
+      unverified, or two bind addresses on the port). Both rows read the same port from the same listener
+      snapshot, so the raw row's bind address is the page's too.
+    - Every raw row stays in the list, so the security pill still counts it: a merged one is marked `merged`, its
+      page row names it by `raw_key`, and the adapter attaches it."""
+    running = None if insts is None else {i.rid for i in insts} | {""}
+    pages = [r for r in rows if r["kind"] == "stack" and (running is None or r["rid"] in running)]
+    ports = [r for r in rows if r["kind"] == "port"]
+    for r in ports:
+        p = next((p for p in pages if r["bind"] and not p.get("raw_key") and not p["posture"]
+                  and (p["component"], p["rid"], p["direct_port"]) == (r["component"], r["rid"], r["port"])), None)
+        if p is not None:
+            p["raw_key"] = r["merge_key"] = f"{r['component']}@{r['rid']} {r['bind']}:{r['port']}"
+            r["merged"] = True
+    return pages + ports
+
+
 _AUTH_LABEL = {"no-auth": "no-auth", "local-open-remote-auth": "remote-auth",
                "auth-everywhere": "auth-everywhere"}
 

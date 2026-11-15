@@ -413,14 +413,8 @@
         {% endif %}
       {% endif %}
       {% endif %}
-      {% for w in webservers %}
-        <div class="wsline">
-          {% if w.kind == 'console' %}
-            <a class="wsname" href="{{ url_for('stacks_overview') ~ '#webserver-row' }}">{{ w.name }}</a>
-          {% else %}
-            <a class="wsname" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}">{{ w.name }}</a>
-          {% endif %}
-          {% if w.kind == 'port' %}
+      {# A raw no-auth listener's pills: its own line, or the line of the page it is the same listener as (U3, K2). #}
+      {% macro raw_pills(w) %}
             {# A no-auth TCP address: COPYABLE text, never an inert tcp:// anchor. The stack name links
                to Settings; here we show the address that works for this viewer. ABSENT is its own
                state — the listener is DOWN, so it is neither a working address nor 'local only'. #}
@@ -435,12 +429,23 @@
             {% endif %}
             {% if w.restart_required %}<span class="pill pill-warn" title="The saved allow-list is not applied yet — the running service keeps its launch-time value until restarted">restart pending</span>{% endif %}
             {% if w.logs_component %}<a class="logslink" href="{{ url_for('logs_view', target=w.logs_component) }}">logs</a>{% endif %}
+      {% endmacro %}
+      {% for w in webservers if not w.merged %}
+        {# U3 (K2): every link names the row's radio, so the Stacks page renders that radio's panels #}
+        {% set wl = url_for('stacks_overview', open=w.sid, cfg=w.cfg or None, radio=w.rid or None) ~ w.anchor %}
+        <div class="wsline">
+          {% if w.kind == 'console' %}
+            <a class="wsname" href="{{ url_for('stacks_overview') ~ '#webserver-row' }}">{{ w.name }}</a>
+          {% else %}
+            <a class="wsname" href="{{ wl }}">{{ w.name }}</a>
+          {% endif %}
+          {% if w.kind == 'port' %}{{ raw_pills(w) }}
           {% elif w.posture %}
             {# Enabled proxy: the scheme pill is a LIVE link only where the proxy actually listens
                (w.addr set by the adapter from listen_scope + viewer). Loopback-remote / absent → no
                dead proxy URL; link to this stack's Webserver Settings (Apply if the proxy is down). #}
             {% if w.addr %}{{ webserver_pills(w.posture, w.addr, link=true) }}{% if w.mode_note %} <span class="pill" title="{{ w.mode_note }}">not served in this mode</span>{% endif %}
-            {% else %}{{ webserver_pills(w.posture, '', link=false) }} <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings">{{ 'proxy not active — Apply' if w.listen_scope == 'absent' else 'local only' }}</a>{% endif %}
+            {% else %}{{ webserver_pills(w.posture, '', link=false) }} <a class="pill wsurl" href="{{ wl }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings">{{ 'proxy not active — Apply' if w.listen_scope == 'absent' else 'local only' }}</a>{% endif %}
             {% if w.pending_disable %}<span class="pill pill-warn" title="Disabled in the saved settings — nginx still serves this proxy until Apply runs">disable pending</span>{% endif %}
             {% if w.comp_state == 'stopped' %}<span class="pill pill-warn" title="The component serving this page is stopped — start it on its stack's page." data-state="web-ui-stopped">web UI stopped</span>{% endif %}
           {% elif w.direct_port %}
@@ -449,16 +454,17 @@
             {% if w.direct_addr %}
               <span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl iface-web" href="{{ w.direct_scheme }}://{{ w.direct_addr }}" target="_blank" rel="noopener">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
             {% elif w.mode_note %}
-              <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="{{ w.mode_note }}">not served in this mode</a> <span class="pill">not proxied</span>
+              <a class="pill wsurl" href="{{ wl }}" title="{{ w.mode_note }}">not served in this mode</a> <span class="pill">not proxied</span>
             {% elif w.comp_state == 'stopped' %}
               {# F3b: the page's own component is stopped (its stack runs): say that, not a bare "listener absent". #}
-              <a class="pill pill-warn wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="The component serving this page is stopped — start it on its stack's page." data-state="web-ui-stopped">web UI stopped</a> <span class="pill">not proxied</span>
+              <a class="pill pill-warn wsurl" href="{{ wl }}" title="The component serving this page is stopped — start it on its stack's page." data-state="web-ui-stopped">web UI stopped</a> <span class="pill">not proxied</span>
             {% elif w.direct_scope == 'absent' %}
-              <a class="pill pill-warn wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="The web-UI listener is not running — check its logs or restart it.">listener absent</a> <span class="pill">not proxied</span>
+              <a class="pill pill-warn wsurl" href="{{ wl }}" title="The web-UI listener is not running — check its logs or restart it.">listener absent</a> <span class="pill">not proxied</span>
             {% else %}
-              <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it">{{ w.direct_scheme }} · local only · not proxied</a>
+              <a class="pill wsurl" href="{{ wl }}" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it">{{ w.direct_scheme }} · local only · not proxied</a>
             {% endif %}
-          {% else %}<a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}">not proxied</a>{% endif %}
+          {% else %}<a class="pill wsurl" href="{{ wl }}">not proxied</a>{% endif %}
+          {% if w.raw %}{{ raw_pills(w.raw) }}{% endif %}
         </div>
       {% endfor %}
     </div>

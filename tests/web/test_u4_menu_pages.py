@@ -71,10 +71,11 @@ def _owners(svc):
     return ["controller"] + [s.id for s in svc.stacks()]
 
 
-def _expanded(c, owner):
+def _expanded(c, owner, radio=""):
     """The owner's levels as the Stacks page shows them: the controller row on /stacks, a stack's
-    body as its row loads it (no query: nothing forced open)."""
-    return _block(_html(c, "/stacks"), "controller-row") if owner == "controller" else _html(c, f"/stacks/{owner}/body")
+    body as its row loads it (no query: nothing forced open; `radio`: that radio's view)."""
+    return (_block(_html(c, "/stacks"), "controller-row") if owner == "controller"
+            else _html(c, f"/stacks/{owner}/body" + (f"?radio={radio}" if radio else "")))
 
 
 # U5 (rule 21): a level whose page is an existing route; its "page ›" and its tree entry link that route
@@ -144,22 +145,32 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
     """Every owner: its rendered levels are its descriptors, each has one "page ›" link, and each
     page shows the level's own block. With radios, the pages of the owners with radio levels (the
     daemon's per-radio Settings, MeshCore's per-radio Webserver pages; the other stacks' are the
-    same partials)."""
+    same partials). U3 (K2): a stack's Webserver submenu shows the instance pages of the radio the
+    view shows, so the levels are read from the stack's view on each radio (and with none)."""
     c, svc = _client(web, tmp_path, radios)
     tree = _tree(c)
+    web_level = re.compile(r"stack-webserver-[^@]+@(r\d+)(--settings|--monitor)?")
     for owner in _owners(svc):
-        shown = _expanded(c, owner)
-        ids = re.findall(r'<details\b[^>]*\bid="([^"]+)"', shown)
-        assert not re.search(r"<details(?![^>]*\bid=)[^>]*>", shown), f"{owner}: a level without an id"
         menus = tree[owner]
+        # the view with no radio, then (its Webserver levels only) the view of each radio an instance page names
+        views = [(_expanded(c, owner), None, "")] + [(_expanded(c, owner, r), web_level, r) for r in
+                                                     sorted({m.group(1) for m in map(web_level.fullmatch, menus) if m})]
+        ids, links = set(), set()
+        for shown, only, _radio in views:
+            assert not re.search(r"<details(?![^>]*\bid=)[^>]*>", shown), f"{owner}: a level without an id"
+            ids |= {i for i in re.findall(r'<details\b[^>]*\bid="([^"]+)"', shown) if not only or only.fullmatch(i)}
+            hrefs = [a["href"] for a in parse(shown).find("a", class_="pagelink")]
+            assert len(hrefs) == len(set(hrefs)), owner                 # one link per shown level
+            links |= {h for h in hrefs if not only or only.fullmatch(h.rsplit("/", 1)[1].split("?")[0])}
         top = "controller-row" if owner == "controller" else f"stackrow-{owner}"
-        assert set(ids) | {top} == menus, owner                         # descriptors == rendered levels
-        links = [a["href"] for a in parse(shown).find("a", class_="pagelink")]
-        assert sorted(links) == sorted(_href(owner, m) for m in menus - {top}), owner
+        assert ids | {top} == menus, owner                              # descriptors == rendered levels
+        links = {h.split("?")[0] for h in links}
+        assert links == {_href(owner, m) for m in menus - {top}}, owner
         for mid in (menus - {top}) if paged is None or owner in paged else ():
             if _href(owner, mid) != f"/stacks/{owner}/menu/{mid}":
                 continue                     # its page is that route (test_a_level_with_an_own_page_has_one_page)
-            page = _block(_html(c, f"/stacks/{owner}/menu/{mid}"), mid)
+            shown, radio = next((v, r) for v, _only, r in views if f'id="{mid}"' in v)
+            page = _block(_html(c, f"/stacks/{owner}/menu/{mid}" + (f"?radio={radio}" if radio else "")), mid)
             assert _OPEN.search(_tag(page)), (owner, mid)
             assert _comparable(page) == _comparable(_block(shown, mid)), (owner, mid)
 
@@ -270,6 +281,19 @@ def test_a_refused_post_from_a_webserver_page_returns_there_with_its_message(tmp
     assert r.status_code in (302, 303) and r.headers["Location"].split("#")[0] == page
     doc = parse(_html(c, page))
     assert _slot(doc, "stack-webserver-meshcore@r2--settings"), "the refusal shows at its form's block on that page"
+
+
+@pytest.mark.parametrize("page", ["/stacks/meshcore/menu/stack-webserver-meshcore@r2--settings?radio=r2",
+                                  "/stacks/meshcore/menu/stack-webservers-meshcore?radio=r2"])
+def test_a_refused_proxy_apply_returns_to_its_settings_page_or_the_webserver_submenu_page(tmp_path, web, csrf, page):
+    """E3-1 with U3: the standalone Settings page of an instance holds the form; the stack's Webserver submenu page is
+    an ancestor that renders it (the r2 panels on the r2 page), so either is the return."""
+    c, _svc = _client(web, tmp_path, radios=True)
+    r = _post(c, csrf, "/stacks/meshcore/webserver", page, page, page="meshcore@r2", mode="public",
+              port="80", scheme="https", access_mode="no-auth", cidrs="", confirm_phrase="")
+    level = urlsplit_path(page).rsplit("/", 1)[1]
+    assert r.status_code in (302, 303) and r.headers["Location"] == page + "#" + level
+    assert _slot(parse(_html(c, page)), "stack-webserver-meshcore@r2--settings")
 
 
 @pytest.mark.parametrize("ret", [

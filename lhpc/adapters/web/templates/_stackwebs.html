@@ -1,0 +1,34 @@
+{% from "_menu.html" import page_actions -%}
+{# U3 (PLAN-UI-v5 K2): the stack's ONE "Webserver (web UI proxy)" submenu. It holds the instance pages of the radio the
+   view shows (`g.view.radio`), chosen with the radio switcher of Settings (the same `.bandswitch` markup, a server-rendered
+   link, no JS); a page without a radio always shows. Filtered here, at render time only: `g.stack_webs` keeps every
+   instance page, so each one stays reachable by its own page, the tree and Expose all. Requires `g`. #}
+{% set ws_radio = g.view.radio or "" %}
+{% set ws_pages = (g.stack_webs | selectattr("rid", "in", ["", ws_radio]) | list) if ws_radio else g.stack_webs %}
+{# Open while a shown page's Settings block holds a result (its panel opens too, _stackweb.html). #}
+{% set ws_open = namespace(v=false) %}
+{% for sw in ws_pages %}{% if panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') %}{% set ws_open.v = true %}{% endif %}{% endfor %}
+<details class="advcfg" id="stack-webservers-{{ g.stack.id }}"{% if ws_open.v %} open{% endif %}>
+  <summary>Webserver (web UI proxy)</summary>
+  <div class="body">
+    {% if g.view.radio_choices %}
+      <p><strong>Radio:</strong>
+        <span class="bandswitch">
+          {% for c in g.view.radio_choices %}
+            {% if c.disabled %}<span class="disabled" title="{{ c.title }}">{{ c.label }}</span>
+            {% else %}<a class="{{ 'sel' if c.sel else '' }}"
+               href="{% if menu_id %}{{ url_for('menu_page', owner=menu_owner, mid=menu_id, radio=c.radio) }}{% else %}{{ url_for('stacks_overview', radio=c.radio, open=g.stack.id) }}#stack-webservers-{{ g.stack.id }}{% endif %}">{{ c.label }}</a>{% endif %}
+          {% endfor %}
+        </span>
+        <span class="muted">— each radio's web UIs have their own proxy and port</span></p>
+    {% endif %}
+    {% for stack_web in ws_pages %}
+      <div class="stackrow-wrap">
+      {% include "_stackweb.html" %}
+      {{ page_actions(g.stack.id, 'stack-webserver-' ~ stack_web.page_id) }}
+      </div>
+    {% else %}
+      <p class="muted">No web UI page on {{ ws_radio }}.</p>
+    {% endfor %}
+  </div>
+</details>

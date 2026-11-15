@@ -15,7 +15,8 @@
    renders open while it holds one, so they are seen without JS. #}
 {% set sw_results = panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') %}
 <details class="advcfg" id="stack-webserver-{{ sw.page_id }}"{% if sw_results %} open{% endif %}>
-  <summary>Webserver (web UI proxy){% if not sw.primary %} — {{ sw.name }}{% endif %}
+  {# U3 (K2): headed by its page and instance; the stack's one "Webserver (web UI proxy)" submenu holds it (_stackwebs.html) #}
+  <summary>{{ sw.name }}{% if sw.rid %} · {{ sw.stack }}@{{ sw.rid }}{% endif %}
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
        address = reached host + the proxy's port. Second pill = RUNNING: grey "offline" (stack not started),
        yellow "local-only" (started, not proxied), green "proxied". #}

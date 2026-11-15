@@ -2382,3 +2382,108 @@ def test_the_bulk_route_does_not_default_a_missing_select(tmp_path, web, csrf):
     assert r.status_code in (302, 303)
     assert {c.mode for c in load_config(paths).stackweb.values()} == {"lan"}, \
         "a submit without Access must leave every page's mode alone"
+
+
+# ===== the Home box per running instance: links name the radio, one line per effective listener =====
+#
+# PLAN-UI-v5 K2 (U3). meshcom runs under QEMU on r1 and r2 (both 433); its web UI :18083 is a proxied page AND a no-auth
+# raw listener, so the box had two lines for one socket (the Zero, INVENTORY-v3 §9: "MeshCom (QEMU) @r1" and
+# "MeshCom (QEMU) (r1)", the second linking to an anchor no element carries).
+
+def _meshcom_box(tmp_path, monkeypatch, listeners, run=("r1",)):
+    """meshcom on r1 and r2, RUNNING on the radios `run` (None: an unknown running set), with the live sockets."""
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path, listeners)
+    insts = None if run is None else [instances.parse_target(svc, f"meshcom@{r}", "start")[1] for r in run]
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "meshcom":
+            for cs in ss.components.values():
+                cs.run_state = RunState.RUNNING
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: insts if sid == "meshcom" else None)
+    return svc
+
+
+def _mc_listener(ip, inode=1):
+    return {"family": "ipv4", "ip": ip, "port": 18083, "inode": inode}
+
+
+def _box_lines(c):
+    """(name, its href, the line's element) of every Home Webserver box line but the console's."""
+    r = c.get("/")
+    assert r.status_code == 200
+    doc = parse(r.get_data(as_text=True))
+    box = doc.within(doc.by_id("wsbox"))
+    out = []
+    for line in box.find("div", class_="wsline"):
+        names = box.within(line).find("a", class_="wsname")
+        if names and names[0].text.strip() not in ("LHPC", "Firewall"):
+            out.append((names[0].text.strip(), names[0]["href"], line))
+    return doc, box, out
+
+
+def test_home_lists_the_pages_of_running_instances_only_and_each_link_names_its_radio(tmp_path, monkeypatch, web):
+    # red on 6b82239a: r2's page line shows while only r1 runs, no link carries the radio, the raw line reads "(r1)"
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")])
+    c = web(service_factory=lambda: svc)
+    _doc, _box, lines = _box_lines(c)
+    assert [(n, h) for n, h, _l in lines] == [("MeshCom (QEMU) @r1", "/stacks?open=meshcom&radio=r1#stack-webserver-meshcom@r1")]
+    # the link renders r1's panel on the Stacks page, server-side (no JS); r2's is not shown there (the switcher's)
+    page = c.get(lines[0][1].split("#")[0])
+    assert page.status_code == 200
+    doc = parse(page.get_data(as_text=True))
+    assert doc.by_id("stack-webserver-meshcom@r1") is not None and doc.by_id("stack-webserver-meshcom@r2") is None
+
+
+def test_one_line_per_listener_keeps_the_address_link_exposure_warning_and_logs_of_both_rows(tmp_path, monkeypatch, web):
+    # one public socket :18083 of meshcom@r1, with a bind allow-list control (log link) and a pending restart
+    from lhpc.core.services import ControllerService as CS
+    monkeypatch.setattr(CS, "_bind_exposure", lambda self, sid, comp, inst=None: ("bad", "public", True))
+    monkeypatch.setattr(CS, "restart_required", lambda self, sid: {"meshcom-qemu": "kiss_bind"})
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("0.0.0.0")])
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [(name, href, line)] = lines                                       # red on 6b82239a: two lines
+    assert (name, href) == ("MeshCom (QEMU) @r1", "/stacks?open=meshcom&radio=r1#stack-webserver-meshcom@r1")
+    one = box.within(line)
+    assert [a["href"] for a in one.find("a", class_="iface-web")] == ["http://localhost:18083"]   # the direct link
+    [addr] = one.find("span", class_="wsaddr")                         # the raw verdict: address + exposure class
+    assert addr.text.strip() == "localhost:18083 · public" and "pill-bad" in addr.classes
+    assert "restart pending" in line.text                              # the warning
+    assert [a["href"] for a in one.find("a", class_="logslink")] == ["/logs/meshcom-qemu"]   # the log action
+    # the merged raw row still decides the box's colour (one line on screen, not one listener less)
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
+def test_one_port_on_two_bind_addresses_stays_two_lines_and_the_public_one_is_red(tmp_path, monkeypatch, web):
+    # a loopback AND a LAN socket on :18083: two effective listeners, never one line; the raw verdict stays public
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1"), _mc_listener("192.168.1.5", 2)])
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r1"]
+    [raw] = [line for _n, _h, line in lines if box.within(line).find("span", class_="wsaddr")]
+    [addr] = box.within(raw).find("span", class_="wsaddr")
+    assert addr.text.strip() == "localhost:18083 · public" and "pill-bad" in addr.classes
+
+
+def test_an_unverified_listener_is_never_merged(tmp_path, monkeypatch, web):
+    from lhpc.core.services import ControllerService as CS
+    monkeypatch.setattr(CS, "_endpoint_live_port", lambda self, comp, ep, pids, get_argvs: (18083, False))
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")])
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r1"]
+    assert any(":18083 · port unverified" in line.text for _n, _h, line in lines)
+
+
+def test_a_raw_listener_of_no_known_instance_keeps_its_warning_without_a_radio(tmp_path, monkeypatch, web):
+    # an unknown running set: the raw row is the stack's (no radio invented, G2-B3), linked to its Settings; the pages
+    # keep the rule before K2 (every page of the started stack)
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("0.0.0.0")], run=None)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    raw = [(n, h, line) for n, h, line in lines if box.within(line).find("span", class_="wsaddr")]
+    [(name, href, line)] = raw
+    assert (name, href) == ("MeshCom (QEMU)", "/stacks?open=meshcom&cfg=meshcom#stack-settings-meshcom")
+    [addr] = box.within(line).find("span", class_="wsaddr")
+    assert "public" in addr.text and "pill-bad" in addr.classes
+    assert sorted(n for n, _h, _l in lines) == ["MeshCom (QEMU)", "MeshCom (QEMU) @r1", "MeshCom (QEMU) @r2"]
