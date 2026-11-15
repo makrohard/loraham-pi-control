@@ -120,15 +120,16 @@ def is_older(ref: StableRef, installed: str, mine=(), forward=None) -> bool | No
     """The target is older than the installed commit: both versions known, the highest `version_of` among ALL the
     installed commit's tag names (the upstream's and `mine`, `local_tags`) above the target's. A version missing on
     either side: the COMMITS decide, offered (False) only when `forward()` says the installed commit is an ancestor of
-    the target (the plan's rule L6, a real forward move). None (could not check): the installed commit or its tags not
-    read, tags of which none parses (`v3.0-rc1` alone), or no forward move proven."""
+    the target (the plan's rule L6, a real forward move); proven not an ancestor: older (True). None (could not check):
+    the installed commit, its tags or the ancestry not read, or tags of which none parses (`v3.0-rc1` alone)."""
     names = None if mine is None else [*(ref.tags or {}).get(installed, ()), *mine]
     have = max(filter(None, map(version_of, names or ())), default=None)
     if not installed or names is None or (names and have is None):
         return None
     if have is not None and ref.key is not None:
         return ref.key < have
-    return False if installed == ref.sha or (forward and forward()) else None
+    fwd = True if installed == ref.sha else forward() if forward else None
+    return None if fwd is None else not fwd
 
 
 def is_ancestor(run, src, older: str, newer: str, remote: str) -> bool | None:
@@ -178,5 +179,5 @@ def update_refusal(ref: StableRef, installed: str, older: bool | None) -> str:
         why = ref.why or ("" if older is not None else "the installed commit's version could not be read")
         return "releases could not be checked — try again later" + (f" ({why})" if why else "")
     if older:
-        return f"the stable target ({ref.label}) is older than the installed commit — nothing to update"
+        return f"the stable target ({ref.label}) is not newer than the installed version: refused"
     return ""

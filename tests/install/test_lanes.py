@@ -57,6 +57,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
         release = "404"
         fail_local_tags = False
         fail_head = False
+        fail_fetch = False
         api_calls: list = []
         git_calls: list = []
     b = Box()
@@ -69,6 +70,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
             return CommandResult(128, "", "fatal: unable to read tags")
         if b.fail_head and argv[:2] == ["git", "-C"] and argv[3:5] == ["rev-parse", "HEAD"]:
             return CommandResult(128, "", "fatal: not a git repository")
+        if b.fail_fetch and argv[:2] == ["git", "-C"] and argv[3] == "fetch":
+            return CommandResult(128, "", "fatal: unable to access the remote")
         if argv[0] != "curl":
             return real_run(self, argv, timeout, cwd=cwd, env=env)
         b.api_calls.append(argv)
@@ -176,7 +179,7 @@ def test_a_verified_but_older_target_is_refused_and_reads_current(box, capsys):
     box.release = "v2.7.0"                           # the upstream's latest release moved back
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert "older than the installed commit" in capsys.readouterr().out
+    assert "is not newer than the installed version: refused" in capsys.readouterr().out
     assert box.head() == box.c[1]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
@@ -266,7 +269,7 @@ def test_a_deleted_upstream_tag_still_blocks_a_downgrade(box, git, capsys):
     box.release = "v2.9"                                           # ... and its latest release is older
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
-    assert "older than the installed commit" in capsys.readouterr().out
+    assert "is not newer than the installed version: refused" in capsys.readouterr().out
     assert box.head() == box.c[2]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
@@ -281,7 +284,7 @@ def test_an_older_plain_tag_beside_a_newer_release_only_name_still_blocks_a_down
     box.release = "v2.7.1"                             # the latest release moved back below 2.8.0
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.7.1
-    assert "older than the installed commit" in capsys.readouterr().out
+    assert "is not newer than the installed version: refused" in capsys.readouterr().out
     assert box.head() == box.c[1]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
@@ -468,7 +471,22 @@ def test_an_unlisted_release_with_an_older_head_target_refuses_the_downgrade(box
     box.release = "v4.0.0.abcdef4"                    # a release the tag list does not show
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to c1's parent
-    assert "could not be checked" in capsys.readouterr().out
+    out = capsys.readouterr().out                     # proven not forward: refused, not "try again later"
+    assert "is not newer than the installed version: refused" in out and "try again later" not in out
+    assert box.head() == box.c[1]
+
+
+def test_an_unreadable_ancestry_reads_could_not_be_checked(box, git, capsys):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
+    box.advance()                                     # the target: a commit the checkout does not have yet ...
+    box.release = "404"
+    box.fail_fetch = True                             # ... and cannot fetch now
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    out = capsys.readouterr().out
+    assert "releases could not be checked — try again later" in out and "is not newer" not in out
     assert box.head() == box.c[1]
 
 
