@@ -19,8 +19,6 @@ import http.client
 import json
 import sys
 import time
-import urllib.error
-import urllib.request
 
 ROUTE = "/api/v1/announce"
 
@@ -29,31 +27,53 @@ class Failure(Exception):
     """The announce could not be confirmed."""
 
 
-def _refused(exc: BaseException) -> bool:
-    return isinstance(getattr(exc, "reason", exc), ConnectionRefusedError)
+MAX_BODY = 64 * 1024                                       # the answer is ~27 bytes
 
 
 def announce(api: str, timeout: float, clock=time.monotonic, pause=time.sleep) -> None:
-    """One announce, bounded as a whole by `timeout` seconds: every attempt's own socket timeout is
-    capped by the time left, so neither a connect that never completes nor a refused port can hold
-    a MeshChat start's post-start runner past the deadline."""
+    """One announce, bounded as a whole by `timeout` seconds on the wall clock: the deadline is checked
+    before every attempt and before every read of the answer, and every socket operation's timeout is
+    the time left (at most 10 s). So neither a refused port, a connect that never completes, nor an
+    answer that trickles in can hold a MeshChat start's post-start runner past the deadline. (The
+    runner also kills an exec step after 120 s: a backstop, not the bound.)"""
     deadline = clock() + timeout
-    while True:
-        left = deadline - clock()
-        if left <= 0:
+    host, _, port = api.rpartition(":")
+
+    def left() -> float:
+        rest = deadline - clock()
+        if rest <= 0:
             raise Failure(f"MeshChat did not answer on {api} within {timeout:g} s")
+        return min(10.0, rest)
+
+    while True:
+        conn = http.client.HTTPConnection(host, int(port), timeout=left())
         try:
-            with urllib.request.urlopen(f"http://{api}{ROUTE}", timeout=min(10.0, left)) as resp:
-                raw = resp.read()
+            conn.connect()
+            sock = conn.sock                               # kept: the response reads through it
+            conn.request("GET", ROUTE)
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raise Failure(f"GET {ROUTE}: HTTP {resp.status}")
+            raw = b""
+            while not resp.isclosed():                     # it closes itself once the body is read
+                sock.settimeout(left())
+                chunk = resp.read1(1024)                   # returns after ONE read: the deadline is checked per chunk
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > MAX_BODY:
+                    raise Failure(f"GET {ROUTE}: the answer is larger than {MAX_BODY} bytes")
+            if resp.length:                                # the connection ended inside the declared body
+                raise Failure(f"GET {ROUTE}: the answer ended {resp.length} bytes short (IncompleteRead)")
             break
-        except urllib.error.HTTPError as exc:
-            raise Failure(f"GET {ROUTE}: HTTP {exc.code}") from exc
-        except http.client.HTTPException as exc:            # e.g. IncompleteRead: the body cut short
+        except ConnectionRefusedError:
+            pause(min(1.0, max(0.0, deadline - clock())))  # not listening yet
+        except http.client.HTTPException as exc:           # e.g. IncompleteRead: the body cut short
             raise Failure(f"GET {ROUTE}: {exc!r}") from exc
-        except (urllib.error.URLError, OSError) as exc:
-            if not _refused(exc):
-                raise Failure(f"GET {ROUTE}: {exc}") from exc
-        pause(1.0)                                          # refused: not listening yet
+        except OSError as exc:                             # a timeout, a reset, anything else: final
+            raise Failure(f"GET {ROUTE}: {exc}") from exc
+        finally:
+            conn.close()
     try:
         answer = json.loads(raw)
     except ValueError as exc:

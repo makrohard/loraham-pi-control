@@ -1534,8 +1534,13 @@ def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path,
     rc, out, _ = run("stop", "reticulum@r2")
     assert rc == 0, out
     running["rns"] = False                                     # the stop's effect on the box
-    main(["update", "reticulum", "--source", "pinned", "--yes"])
-    assert "are running" not in capsys.readouterr().out
+    rc_up = main(["update", "reticulum", "--source", "pinned", "--yes"])
+    up = capsys.readouterr()
+    assert "are running" not in up.out + up.err
+    # Measured: past the running gate the update plans its refresh, then stops at the source check,
+    # because this fixture's sources are no git checkouts (rc 1); on a box it applies (live row L8b).
+    assert rc_up == 1, (up.out, up.err)
+    assert up.out.splitlines()[0] == "OK    Update plan for 'reticulum': refresh 2 source(s) from the remote.", up.out
     assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0
     capsys.readouterr()
     rc, out, launches = run("start", "reticulum@r2")
