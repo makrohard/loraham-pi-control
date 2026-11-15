@@ -51,10 +51,10 @@ boots in about a minute. On a Pi 5 the start note gives about one minute for the
 
 ## Notes from the run
 
-- The Meshtastic node-info measurement after a purge (cited by [meshtastic](../stacks/meshtastic.md)) was recorded in
-  the 0.11.0 matrix; it was not repeated here.
+- The Meshtastic node-info measurement after a purge was recorded in the 0.11.0 matrix (this file at `v0.11.3`); it
+  was not repeated here.
 - The rows ran with the console up, except during the MeshCom start (stopped while the QEMU node boots, as
   [maintenance](../maintenance.md#running-on-a-pi) advises on a Zero).
 
-The 0.11.0 record (with its patch [0.11.3](patch-0.11.3-2026-09-29.md)) is this file at `v0.11.0`; the 0.10.0 record is
+The 0.11.0 record (with its patch [0.11.3](patch-0.11.3-2026-09-29.md)) is this file at `v0.11.3`; the 0.10.0 record is
 this file at `v0.10.0`.

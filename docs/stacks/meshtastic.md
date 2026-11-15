@@ -105,8 +105,6 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   (10 minutes by default), so "Skip send NodeInfo since we sent it <600s ago" means one was
   generated, not that it went over the air — a logged node-info is not proof of a transmission.
   (That line and "Started Tx"/"Completed sending" are DEBUG: `lhpc config meshtastic@<rid> loglevel debug`.)
-  On a fresh node even the start's own node-info may not reach a peer: a following start step can cut its
-  transmission, and the throttle then holds the next one back.
 - A new image, `lhpc clean meshtastic --purge` or a deleted `state/<rid>/meshtasticd` gives the node a
   new key but the same node number (from the Pi's Bluetooth MAC; the YAML sets no `MACAddress`).
   A peer that stored the old key drops node-info carrying the new one, so direct messages fail both
