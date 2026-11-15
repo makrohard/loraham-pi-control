@@ -740,16 +740,30 @@ def test_nginx_ctl_never_signals_a_reused_pid(tmp_path, unrelated_pid):
 
 
 def _spawned(proc, needle):
-    """`proc` once its /proc cmdline carries `needle`, as the lab's matchers read it. Popen returns
-    while the child's exec is still finishing, and until then its cmdline (and comm) is not yet
-    the new program's: a slow runner reads it there. Bounded; a child that never shows is killed."""
-    deadline = time.monotonic() + 10  # wallclock: a real child's exec, bounded
-    while not supervisor.pid_alive(proc.pid, needle) and time.monotonic() < deadline:  # wallclock: a real child's exec, bounded
-        time.sleep(0.01)  # wallclock: a real child's exec, bounded
+    """`proc`, an exec'd foreign binary (the nginx fakes: `sleep` under the name nginx), once its /proc cmdline
+    carries `needle`, as the lab's matchers read it. Popen returns while the exec is still setting the argument
+    area, and such a binary runs no code of ours to say it is done, so this polls the /proc state; the 10 s bound
+    only guards a hang, and a child that never shows is killed. A Python child uses `_sleeper` instead."""
+    deadline = time.monotonic() + 10  # wallclock: an exec'd foreign binary gives no exec-done notification; the poll ends on /proc state
+    while not supervisor.pid_alive(proc.pid, needle) and time.monotonic() < deadline:  # wallclock: an exec'd foreign binary gives no exec-done notification; the poll ends on /proc state
+        time.sleep(0.01)  # wallclock: an exec'd foreign binary gives no exec-done notification; the poll ends on /proc state
     if not supervisor.pid_alive(proc.pid, needle):
         proc.kill()
         proc.wait()
         pytest.fail(f"{needle!r} never showed in /proc (exit {proc.returncode})")
+    return proc
+
+
+def _sleeper(*argv_tail):
+    """A Python sleeper carrying `argv_tail`, returned once it runs its own code: it writes one byte first, so its
+    exec is done and /proc shows its argv (Popen returns while the exec is still setting the argument area)."""
+    proc = subprocess.Popen([sys.executable, "-c", "import os, time; os.write(1, b'r'); time.sleep(60)",
+                             *argv_tail], stdout=subprocess.PIPE)
+    ran = proc.stdout.read(1)
+    proc.stdout.close()
+    if ran != b"r":
+        proc.wait()
+        pytest.fail(f"the sleeper exited before it ran (exit {proc.returncode})")
     return proc
 
 
@@ -764,8 +778,7 @@ def test_a_reused_pid_naming_the_config_is_not_the_lab_nginx(tmp_path):
     """A reused pid whose command line merely contains the config path (an editor open on the
     file) is neither alive as the lab's nginx nor ever signalled by a stop or a reload."""
     conf = str(Paths(runtime_root=tmp_path).under("config", "nginx", "lhpc.conf"))
-    proc = _spawned(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", conf]),
-                    conf)
+    proc = _sleeper(conf)
     try:
         paths, _ = _lab_nginx_pidfile(tmp_path, proc.pid)
         assert conf in Path(f"/proc/{proc.pid}/cmdline").read_text().replace("\0", " ")
@@ -860,9 +873,9 @@ def _fake_running(pid_file, *argv_tail):
     """A sleeper carrying the argv tail the lab spawns a fake with, its pid in `pid_file`: what
     `check` recognises as that fake alive. The caller kills it.
 
-    Returns once `check`'s own matcher sees it (`_spawned`)."""
-    proc = _spawned(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
-                                      *argv_tail]), " ".join(argv_tail))
+    Returns once it runs (`_sleeper`), so `check`'s own matcher sees it."""
+    proc = _sleeper(*argv_tail)
+    assert supervisor.pid_alive(proc.pid, " ".join(argv_tail))
     pid_file.write_text(f"{proc.pid}\n")
     return proc
 
