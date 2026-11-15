@@ -426,17 +426,26 @@ def test_a_name_that_is_not_an_identifier_is_refused():
         parse_manifest(_manifest(_with_inputs(_input(name="web client"))))
 
 
-def test_components_sharing_a_source_path_must_declare_the_same_source():
+@pytest.mark.parametrize("field, other", [
+    ("remote", "https://github.com/OTHER/z.git"),
+    ("pin_commit", "b" * 40),
+    ("pin_tag", "v2.0.0"),
+    ("branch", "other"),
+])
+def test_components_sharing_a_source_path_must_declare_the_same_source(field, other):
     """Two components may build from ONE checkout (kiss-tnc + kiss-serial), but only when their
     source specs are identical — a second remote for the same path would be two different
-    repositories fighting over one directory."""
-    def comp(cid, remote):
+    repositories fighting over one directory, and a second pin, tag or branch two versions of it.
+    U7 relies on this: the pinned lane is the manifest pin, so one path has one pin."""
+    spec = {"path": "src/x", "remote": "https://github.com/x/y.git", "pin_commit": "a" * 40,
+            "pin_tag": "v1.0.0", "branch": "main"}
+
+    def comp(cid, **over):
         return {"id": cid, "name": cid, "kind": "service", "run": "true", "readiness": "process",
-                "source": {"path": "src/x", "remote": remote}}
+                "source": {**spec, **over}}
     base = {"stack": [{"id": "s", "name": "s", "main": "a",
-                       "component": [comp("a", "https://github.com/x/y.git"),
-                                     comp("b", "https://github.com/OTHER/z.git")]}]}
+                       "component": [comp("a"), comp("b", **{field: other})]}]}
     with pytest.raises(ManifestError, match="share source path"):
         parse_manifest(base)
-    base["stack"][0]["component"][1]["source"]["remote"] = "https://github.com/x/y.git"
+    base["stack"][0]["component"][1]["source"][field] = spec[field]
     assert parse_manifest(base)                        # identical specs -> valid
