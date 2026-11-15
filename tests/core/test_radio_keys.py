@@ -152,7 +152,7 @@ def test_w4_7_a_per_band_stop_never_signals_a_daemon_it_does_not_own(tmp_path, a
 
 def test_w1_11_a_per_band_daemon_stop_of_a_shared_band_is_no_longer_refused(tmp_path):
     # Item 16 (DEC-W53 (2)) replaces B4-D39's refusal: a per-band stop of a band two radios share stops each radio's
-    # daemon (test_16_radio_stop.py); one radio's daemon alone is `--radio rN`.
+    # daemon (test_radio_daemon_stop.py); one radio's daemon alone is `--radio rN`.
     svc = _svc(tmp_path, TWO_868, cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r1"]})
     for apply in (False, True):
         assert "share it" not in svc.stop("daemon", apply=apply, band="868").summary
