@@ -770,6 +770,34 @@ class WebserverOpsMixin:
                     "note": c.ui_password_note}
         return {}
 
+    def _page_live_proxy(self, page_id: str, swc, listeners=None, applied=None) -> dict:
+        """The LIVE proxy of one page, the one rule for its Webserver panel, the Home box and the card's web link
+        (E3-2). Its port: the desired one only becomes real at Apply; until then nginx holds the applied one, so both
+        are probed. It is REPORTED while a listener exists for it: a saved Disable takes effect at Apply, so `eff` is
+        the policy actually served (the saved one while enabled, else the applied record). `pending`: a saved mode,
+        port or Disable that the live listener does not match yet."""
+        from . import webserver as _ws
+        listeners = self._listeners(listeners)
+        ap = _ws.applied_proxy(_ws.read_applied(self._paths) if applied is None else applied, page_id)
+        listen_scope, live_port = self._stack_listen_scope(swc, listeners), swc.port
+        try:
+            old_port = int(ap.get("port") or 0)
+        except (TypeError, ValueError):
+            old_port = 0
+        if listen_scope != "exposed" and old_port and old_port != swc.port:
+            old_scope = _ws.listener_scope(self._system, old_port, listeners)
+            if old_scope != "absent":
+                listen_scope, live_port = old_scope, old_port
+        live, eff = listen_scope != "absent", swc
+        if live and not swc.enabled:
+            eff = _dc.replace(swc, mode=ap.get("mode") or swc.mode, port=live_port,
+                              scheme=ap.get("scheme") or swc.scheme, access_mode=ap.get("access_mode") or swc.access_mode,
+                              allowed_cidrs=tuple(ap.get("allowed_cidrs") or swc.allowed_cidrs))
+        pending = (swc.enabled and (listen_scope == "absent" or swc.remote != (listen_scope == "exposed")
+                                    or live_port != swc.port)) or (live and not swc.enabled)
+        return {"ap": ap, "listen_scope": listen_scope, "live_port": live_port, "live": live, "eff": eff,
+                "pending": bool(pending), "pending_disable": bool(live and not swc.enabled)}
+
     def stack_web_views(self, stack_id: str, listeners=None, fw_status=None,
                         applied=None) -> list:
         """One `stack_web_view` per proxied page of the stack, in manifest order — the stack's
@@ -819,37 +847,10 @@ class WebserverOpsMixin:
         listeners = self._listeners(listeners)
         scope = (_ws.listener_scope(self._system, upstream_port, listeners)
                  if upstream_port else "absent")
-        if applied is None:
-            applied = _ws.read_applied(self._paths)
-        ap = _ws.applied_proxy(applied, page_id)
-        # WHICH PORT does this proxy actually listen on? The desired port only becomes real at
-        # Apply; until then the running nginx still holds the applied one, so probe both or a
-        # saved port move hides a live listener behind a freshly-saved "local" intent.
-        listen_scope = self._stack_listen_scope(swc, listeners)
-        live_port = swc.port
-        try:
-            old_port = int(ap.get("port") or 0)
-        except (TypeError, ValueError):
-            old_port = 0
-        if listen_scope != "exposed" and old_port and old_port != swc.port:
-            old_scope = _ws.listener_scope(self._system, old_port, listeners)
-            if old_scope != "absent":
-                listen_scope, live_port = old_scope, old_port
+        lp = self._page_live_proxy(page_id, swc, listeners, applied)
+        ap, listen_scope, live_port, live, eff = lp["ap"], lp["listen_scope"], lp["live_port"], lp["live"], lp["eff"]
         contained = (self._listener_restricted(live_port, listeners, fw_status)
                      if listen_scope == "exposed" else None)
-        # A proxy is REPORTED while a listener exists for it — desired or not. A saved Disable
-        # takes effect at Apply; until then nginx keeps serving the APPLIED proxy, and the panel,
-        # the dashboard and the warnings must describe that live socket, not the saved intent.
-        # `eff` is the policy that is actually exposed: the saved one while enabled, else the
-        # applied record the live listener still implements.
-        live = listen_scope != "absent"
-        eff = swc
-        if live and not swc.enabled:
-            eff = _dc.replace(
-                swc, mode=ap.get("mode") or swc.mode, port=live_port,
-                scheme=ap.get("scheme") or swc.scheme,
-                access_mode=ap.get("access_mode") or swc.access_mode,
-                allowed_cidrs=tuple(ap.get("allowed_cidrs") or swc.allowed_cidrs))
         shown = eff.enabled
         plan = _ws.plan_stack_exposure(swc, ws.port, used)
         return {
@@ -871,14 +872,9 @@ class WebserverOpsMixin:
             # (i.e. an Apply is still pending to make the live listener match the saved intent).
             "listen_scope": listen_scope,
             "live_port": live_port,
-            # A saved PORT move is pending exactly like a saved MODE move: the listener is live and
-            # healthy, just not on the port the operator now asks for. Without this the panel read
-            # "in sync" while nginx still served the old socket.
-            "pending": bool((swc.enabled and (
-                listen_scope == "absent" or swc.remote != (listen_scope == "exposed")
-                or live_port != swc.port)) or (live and not swc.enabled)),
+            "pending": lp["pending"],
             # Saved Disable, listener still up: the truthful state until Apply removes it.
-            "pending_disable": bool(live and not swc.enabled),
+            "pending_disable": lp["pending_disable"],
             # Security + running posture for the two summary pills. Security via posture_for() — the
             # LIVE listener's applied policy, never a saved-but-unapplied one; the RUNNING pill for a
             # PROXY is: grey "offline" (stack not started — its web-UI upstream is down), yellow

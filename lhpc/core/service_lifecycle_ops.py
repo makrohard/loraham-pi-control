@@ -2694,6 +2694,11 @@ class LifecycleOpsMixin:
                                       self._system.procfs.tcp_listeners)
         except Exception:
             snap = []
+        # E3-2: the page's LIVE proxy (the Webserver panel's rule): its listener's port and scope, never the desired
+        # `swc.port`; a saved Disable whose proxy still listens stays proxied until Apply (pending)
+        lp = (self._page_live_proxy(page.page_id, swc, snap,
+                                    self._request_memo(("stackweb-applied",), lambda: _ws.read_applied(self._paths)))
+              if swc is not None else None)
         out = []
         for obs in status.endpoints:
             sp = obs.spec
@@ -2703,7 +2708,7 @@ class LifecycleOpsMixin:
             port = sp.address.rsplit(":", 1)[-1] if ":" in sp.address else ""
             link = f"{sp.scheme}://{sp.address}" if is_web else ""   # loopback fallback
             label = sp.description or sp.address
-            proxied = bool(is_web and swc is not None and swc.enabled)
+            proxied = bool(is_web and lp is not None and (swc.enabled or lp["live"]))
             # LIVE listener scope for THIS port from /proc/net/tcp (authoritative, per-port). Only a
             # genuinely off-loopback listener earns a request-host link; a loopback/absent one never
             # does (that was the dead-remote-link bug for fixed-loopback services like MeshCom QEMU).
@@ -2719,24 +2724,23 @@ class LifecycleOpsMixin:
                      "proxy_scope": "", "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
                      "pending": False}
             if proxied:
-                # Truthful link: the reachable path is the nginx proxy on swc.port, so key off its
+                # Truthful link: the reachable path is the nginx proxy on its LIVE port, so key off its
                 # EFFECTIVE live scope (/proc/net/tcp), NOT the desired `mode`. Carry the scope so the
                 # template links per viewer and NEVER turns a known-absent proxy into an anchor. A
                 # stale 0.0.0.0 listener reads "exposed"; a public mode not applied reads "loopback";
                 # `pending` marks any such desired-vs-live drift (an Apply reconciles it).
-                scope = self._stack_listen_scope(swc)
-                entry.update(proxy_scope=scope, proxy_scheme=swc.scheme, proxy_port=swc.port)
+                scope, eff = lp["listen_scope"], lp["eff"]
+                pport = lp["live_port"] if lp["live"] else swc.port
+                entry.update(proxy_scope=scope, proxy_scheme=eff.scheme, proxy_port=pport, pending=lp["pending"])
                 if scope == "exposed":
-                    entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # loopback/no-request fallback
-                    entry.update(proxy_remote=True, pending=not swc.remote)
+                    entry["link"] = f"{eff.scheme}://127.0.0.1:{pport}/"   # loopback/no-request fallback
+                    entry["proxy_remote"] = True
                 elif scope == "loopback":
-                    entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # works for a LOCAL viewer
+                    entry["link"] = f"{eff.scheme}://127.0.0.1:{pport}/"   # works for a LOCAL viewer
                     entry["label"] = f"{label} (local only)"
-                    entry["pending"] = bool(swc.remote)
                 else:                                # absent: proxy enabled but not listening yet
                     entry["link"] = ""               # NO dead URL — the template shows an Apply link
                     entry["label"] = f"{label} (proxy not active — Apply)"
-                    entry["pending"] = True
             out.append(entry)
         return out
 
@@ -2957,17 +2961,12 @@ class LifecycleOpsMixin:
                     # A running component whose post-start runner is still applying settings reads 'booting' until
                     # the callsign lands (e.g. MeshCom); its links follow its listeners only (his Q-B2-5 rule).
                     booting = c.id in live and live[c.id].run_state in up and self._component_booting(c.id)
-                    comps.append({"id": c.id, "name": c.name, "optional": c.optional,
-                          "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
-                          "interactive": c.interactive, "note": component_note(live.get(c.id)),   # F2, F3b
-                          # Interactive components (GUI/CLI/REPL) are run by the
-                          # operator, never by lhpc — show the command to copy, each radio's card its own.
-                          "commands": radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {},
-                          "blocker": self.install_blocker(c) if c.interactive else "",
-                          **radio_start.link_kinds(c),
-                          "state": ("booting" if booting
-                                    else (live[c.id].run_state.value if c.id in live else "unknown")),
-                          "interfaces": self._client_interfaces(live.get(c.id), s.id)})
+                    # E3-4: the one row schema; the band's state and note (F2, F3b), each radio's card its command
+                    comps.append(radio_start.component_row(
+                        self, c, note=component_note(live.get(c.id)),
+                        state="booting" if booting else (live[c.id].run_state.value if c.id in live else "unknown"),
+                        interfaces=self._client_interfaces(live.get(c.id), s.id),
+                        commands=radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {}))
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
                 entries[s.id] = entry

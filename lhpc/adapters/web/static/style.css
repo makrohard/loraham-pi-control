@@ -271,6 +271,16 @@ a.iface { text-decoration: none; color: var(--brand); }
 .complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
 /* Web-UI links read as buttons — give them breathing room above and below. */
 .complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
+/* U2 layout B (phone first): a component row is two lines. Line 1: state · name · the part's own Run/Stop on the
+   right; line 2: its note, addresses, config, logs and web UI, wrapping inside the card. */
+.cgrid .chead { display: flex; align-items: center; gap: .5rem; }
+.cgrid .cname { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.cgrid .cact { flex: 0 0 auto; display: flex; gap: .3rem; }
+.cgrid .cact form.act { margin: 0; }
+.cgrid .csub { margin: .15rem 0 0; font-size: .9em; overflow-wrap: anywhere; }
+.cgrid .csub .iface { display: inline-block; margin: .15rem .4rem 0 0; }
+.cgrid .csub .logslink { margin-left: 0; }
+.headlink { margin-left: .5rem; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
                    padding: .1rem .5rem; cursor: pointer;

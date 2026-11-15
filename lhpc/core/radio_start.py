@@ -1200,12 +1200,27 @@ def link_kinds(c) -> dict:
                            else bool(c.log_paths) or bool(c.run_argv and not c.interactive))}
 
 
+def component_row(svc, c, *, state: str, note: str, interfaces: list, commands: dict) -> dict:
+    """One component row of Home's cards (K1, E3-4): the one schema for an instance's rows and the band entries'
+    (an orphan's) rows. The caller passes what its scope reads: the instance's or the band's state, note and client
+    interfaces, and the run commands of the cards the row shows on (an interactive part's only)."""
+    from .model import ComponentKind
+    return {"id": c.id, "name": c.name, "optional": c.optional,
+            "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
+            # Interactive components (GUI/CLI/REPL) are run by the operator, never by lhpc: the command to copy.
+            "interactive": c.interactive, "commands": commands if c.interactive else {},
+            "blocker": svc.install_blocker(c) if c.interactive else "",
+            **link_kinds(c), "state": state, "note": note, "interfaces": interfaces}
+
+
 def running_instances(svc, band: str, live: dict, procs=None) -> list:
-    """Cleanup C7c (W286, W290; K5: decision B out): Home's entry for each instance that runs on a radio of `band`
-    (`<sid>@<rid>`, for its own radio's card only), with a row per component that runs as that instance, both from
-    ONE read of the instances' processes (instances.instance_processes, G1-C51: no second probe to race), each row judged as the core's
-    already_healthy does (G1-C49): RUNNING, or DEGRADED when one of its own TCP listeners is absent, noted in
-    component_note's words. `live` is the snapshot's component statuses."""
+    """Cleanup C7c (W286, W290; K5: decision B out), K1: Home's entry for each instance that runs on a radio of
+    `band` (`<sid>@<rid>`, for its own radio's card only), with a row per component of its stack. A row's state is
+    process membership, from ONE read of the instances' processes (instances.instance_processes, G1-C51: no second
+    probe to race): a component that runs as the instance is judged as the core's already_healthy does (G1-C49):
+    RUNNING, or DEGRADED when one of its own TCP listeners is absent, noted in component_note's words; one that does
+    not is `stopped` (never another instance's state in `live`), without interfaces. The entry shows while at least
+    one of its components runs. `live` is the snapshot's component statuses."""
     import dataclasses
 
     from . import commands, instances
@@ -1215,20 +1230,23 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
     procs = instances.instance_processes(svc, svc._system.procfs.cmdlines()) if procs is None else procs
     runs = {(sid, rid, comp) for sid, rid, comp, _pid in procs}
     for stk, inst in ((s, i) for s in svc.stacks() for i in commands.stack_instances(s, svc._paths) if i.rid in on):
+        up = {c.id for c in stk.components if (stk.id, inst.rid, c.id) in runs and c.id in live}
+        if not up:
+            continue                                     # an instance that runs no component shows nowhere
         rows = []
         for c in stk.components:
-            cs = live.get(c.id)
-            if cs is None or (stk.id, inst.rid, c.id) not in runs:
-                continue
-            eps = instances.endpoint_statuses(svc, cs, inst)
-            st = RunState.DEGRADED if any(o.spec.kind == "tcp" and not o.present for o in eps) else RunState.RUNNING
-            own = dataclasses.replace(cs, run_state=st, endpoints=eps)          # its own endpoints only (G1-B1-PLAN-RE2 B2)
-            rows.append({"id": c.id, "name": c.name, "optional": c.optional, **link_kinds(c),
-                         "state": "booting" if svc._component_booting(c.id, inst.rid) else st.value,
-                         "note": component_note(own), "interfaces": svc._client_interfaces(own, stk.id, inst.rid)})
-        if rows:                                         # an instance that runs no component shows nowhere
-            out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
-                        "main": stk.main, "components": rows, "multi_band": False})
+            state, note, itfs = "stopped", "", []
+            if c.id in up:
+                cs = live[c.id]
+                eps = instances.endpoint_statuses(svc, cs, inst)
+                st = RunState.DEGRADED if any(o.spec.kind == "tcp" and not o.present for o in eps) else RunState.RUNNING
+                own = dataclasses.replace(cs, run_state=st, endpoints=eps)      # its own endpoints only (G1-B1-PLAN-RE2 B2)
+                state = "booting" if svc._component_booting(c.id, inst.rid) else st.value
+                note, itfs = component_note(own), svc._client_interfaces(own, stk.id, inst.rid)
+            rows.append(component_row(svc, c, state=state, note=note, interfaces=itfs,
+                                      commands=commands_by_radio(svc, c, [inst.rid]) if c.interactive else {}))
+        out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
+                    "main": stk.main, "components": rows, "multi_band": False})
     return out
 
 

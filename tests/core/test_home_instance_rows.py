@@ -160,3 +160,130 @@ def test_without_its_own_page_an_instance_never_takes_a_longer_rids(tmp_path):
     assert "meshcom@r3" not in [p.page_id for p in svc.stack_web_pages("meshcom")]
     web_itfs = [i for i in svc._client_interfaces(cs, "meshcom", rid="r3") if i["is_web"]]
     assert web_itfs and all(i["proxy_port"] == 0 for i in web_itfs), web_itfs
+
+
+# --- K1 (U2): a row per component of a running instance, stopped ones too; the state is process membership ---------
+
+R4 = radios.Radio("r4", "stick", "meshstick-1262", "868", usb_serial="MS123456")
+MC_NODE = {"r2": 5133, "r4": 5399}                  # meshcore-node's own TCP port per instance
+MC_WEB = {"r2": 8921, "r4": 9187}                   # meshcore-webui's own port per instance
+K1_KEYS = {"id", "name", "optional", "state", "note", "configurable", "writes_log", "interfaces", "runnable",
+           "interactive", "commands", "blocker"}
+
+
+def _mc(tmp_path, running, ports=()):
+    """meshcore on r2 and r4 (868): `running` {rid: the component ids that run as that instance, each by its own argv
+    token}; `ports`: the 127.0.0.1 listeners that are up."""
+    radios_fixture.write(tmp_path, (radios_fixture.R2_868, R4))
+    paths = Paths(runtime_root=tmp_path)
+    plain = ControllerService(system=FakeSystem().system, paths=paths)
+    table = {}
+    for rid, comps in running.items():
+        inst = instances.parse_target(plain, f"meshcore@{rid}", "start")[1]
+        for cid in comps:
+            spec = plain.stack("meshcore").component(cid).process
+            opt, val = instances._token(plain, plain.stack("meshcore").component(cid), inst, "868")
+            table[700 + len(table)] = [spec.exec_name, *[a for a in spec.all_args if a != opt], opt, val]
+    fake = FakeSystem(cmdlines_data=table, listeners=[Listener("ipv4", "127.0.0.1", p, p) for p in ports])
+    return ControllerService(system=fake.system, paths=paths)
+
+
+def _mc_rows(svc):
+    """{rid: {component id: row}} of Home's meshcore instance entries on 868."""
+    live = {c: cs for ss in svc.build_snapshot().stacks for c, cs in ss.components.items()}
+    return {e["rid"]: {r["id"]: r for r in e["components"]}
+            for e in radio_start.running_instances(svc, "868", live) if e["sid"] == "meshcore"}
+
+
+def test_a_stopped_part_of_a_running_instance_is_its_own_row_with_every_key(tmp_path):
+    # red-before (6b82239a): meshcore@r4 runs node + gps; its web UI had no row (radio_start.py:1221 skipped it)
+    rows = _mc_rows(_mc(tmp_path, {"r4": ["meshcore-node", "meshcore-gps"]}, ports=[MC_NODE["r4"]]))["r4"]
+    stack = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack("meshcore")
+    assert list(rows) == [c.id for c in stack.components]                 # every part, in the stack's order
+    assert all(set(r) == K1_KEYS for r in rows.values()), {c: sorted(r) for c, r in rows.items()}
+    web = rows["meshcore-webui"]
+    assert (web["state"], web["interfaces"], web["note"]) == ("stopped", [], "")
+    assert web["runnable"] and web["optional"] and web["configurable"] and web["writes_log"]
+    assert (rows["meshcore-node"]["state"], rows["meshcore-gps"]["state"]) == ("running", "running")
+    assert list(rows["meshcore-cli"]["commands"]) == ["r4"]               # this radio's command only
+    assert rows["openhop-repeater-src"]["runnable"] is False              # a library: a row, never a Run
+
+
+def test_each_radios_rows_read_its_own_processes_and_endpoints(tmp_path):
+    # N1 / G2-N1: r2 runs node + web UI + gps with its listeners up; r4 runs its node only, its listener absent. r4's
+    # web UI and gps read stopped (never r2's live state), r4's node degraded on r4's own address.
+    svc = _mc(tmp_path, {"r2": ["meshcore-node", "meshcore-webui", "meshcore-gps"], "r4": ["meshcore-node"]},
+              ports=[MC_NODE["r2"], MC_WEB["r2"]])
+    rows = _mc_rows(svc)
+    state = {rid: {c: r["state"] for c, r in rows[rid].items() if c != "openhop-repeater-src"} for rid in rows}
+    assert state == {"r2": {"meshcore-gps": "running", "meshcore-node": "running", "meshcore-webui": "running",
+                            "meshcore-cli": "stopped"},
+                     "r4": {"meshcore-gps": "stopped", "meshcore-node": "degraded", "meshcore-webui": "stopped",
+                            "meshcore-cli": "stopped"}}
+    assert rows["r2"]["meshcore-node"]["note"] == ""
+    assert f"127.0.0.1:{MC_NODE['r4']}" in rows["r4"]["meshcore-node"]["note"]
+    assert [i["address"] for i in rows["r2"]["meshcore-node"]["interfaces"]] == [f"127.0.0.1:{MC_NODE['r2']}"]
+    assert [i["address"] for i in rows["r2"]["meshcore-webui"]["interfaces"]] == [f"127.0.0.1:{MC_WEB['r2']}"]
+    assert rows["r4"]["meshcore-node"]["interfaces"] == rows["r4"]["meshcore-webui"]["interfaces"] == []
+
+
+def test_an_instance_that_runs_no_part_is_on_no_card(tmp_path):
+    # a pin (green before): both copies are listed; only the one with a running part has an entry
+    assert list(_mc_rows(_mc(tmp_path, {"r2": ["meshcore-gps"]}))) == ["r2"]
+    assert _mc_rows(_mc(tmp_path, {})) == {}
+
+
+def test_the_instance_rows_and_the_band_rows_are_one_schema(tmp_path):
+    # E3-4: one builder for both; red-before (6b82239a): the instance rows lacked runnable/interactive/commands/blocker
+    svc = _svc(tmp_path, rids=("r3",), legacy=True)                     # meshcom@r3 + an unclaimed (band) qemu
+    band = [r for e in svc._band_entries() if "meshcom" in e.get("entries", {})
+            for r in e["entries"]["meshcom"]["components"]]
+    inst = [r for e in radio_start.running_instances(
+        svc, "433", {c: cs for ss in svc.build_snapshot().stacks for c, cs in ss.components.items()})
+        if e["sid"] == "meshcom" for r in e["components"]]
+    assert band and inst and all(set(r) == K1_KEYS for r in band + inst)
+    pick = ("id", "name", "optional", "runnable", "interactive", "configurable", "writes_log", "blocker")
+    assert [{k: r[k] for k in pick} for r in inst] == [{k: r[k] for k in pick} for r in band]
+
+
+# --- E3-2: the card's proxied web link names the proxy's EFFECTIVE listener, never the desired port ----------------
+
+def _seed_applied(svc, page, port):
+    """The last Apply's snapshot: `page`'s proxy as nginx serves it now (local, http, no auth, on 127.0.0.1:port)."""
+    from lhpc.core import webserver
+    webserver.write_evidence(svc._paths, {"applied_snapshot": {
+        "console": {"bind": "127.0.0.1", "port": 8443},
+        "proxies": [{"stack_id": page, "bind": "127.0.0.1", "port": port, "mode": "local", "scheme": "http",
+                     "access_mode": "no-auth"}]}})
+
+
+def test_an_unapplied_port_move_links_the_port_that_answers(tmp_path):
+    # red-before (6b82239a): the link took the saved 9000 (nothing listens there): "proxy not active — Apply", no URL
+    svc = _svc(tmp_path, ports=[18083, 12323, 18349, 12589, 8845])
+    _proxy(svc, "meshcom@r3", 9000)                                       # saved, never applied
+    _seed_applied(svc, "meshcom@r3", 8845)                                # nginx still serves 8845
+    (r3,) = _web(_rows(svc)["r3"])
+    assert (r3["proxy_port"], r3["proxy_scope"], r3["link"], r3["pending"]) == (
+        8845, "loopback", "http://127.0.0.1:8845/", True)
+    assert svc.config().stackweb["meshcom@r3"].port == 9000               # the desired config stays, for editing
+    (r1,) = _web(_rows(svc)["r1"])
+    assert (r1["proxy_port"], r1["link"]) == (0, "http://127.0.0.1:18083")
+
+
+def test_a_saved_disable_keeps_the_live_proxy_link_until_apply(tmp_path):
+    # red-before (6b82239a): a saved Disable dropped the proxy at once: the direct upstream link, nothing pending
+    svc = _svc(tmp_path, ports=[18083, 12323, 18349, 12589, 8845])
+    _proxy(svc, "meshcom@r3", 8845)
+    _seed_applied(svc, "meshcom@r3", 8845)
+    assert svc.stack_web_configure("meshcom@r3", port=0, confirm=True).ok    # Disable, no Apply
+    (r3,) = _web(_rows(svc)["r3"])
+    assert (r3["proxy_port"], r3["link"], r3["pending"]) == (8845, "http://127.0.0.1:8845/", True)
+
+
+def test_an_applied_proxy_reads_in_sync(tmp_path):
+    # the other side (a pin): applied on the saved port -> that port, nothing pending
+    svc = _svc(tmp_path, ports=[18083, 12323, 18349, 12589, 8845])
+    _proxy(svc, "meshcom@r3", 8845)
+    _seed_applied(svc, "meshcom@r3", 8845)
+    (r3,) = _web(_rows(svc)["r3"])
+    assert (r3["proxy_port"], r3["link"], r3["pending"]) == (8845, "http://127.0.0.1:8845/", False)

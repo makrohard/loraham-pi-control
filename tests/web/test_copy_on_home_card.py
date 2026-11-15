@@ -35,12 +35,13 @@ def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeyp
     doc = _home(tmp_path, web, monkeypatch)
     r3, r1 = _card(doc, "r3"), _card(doc, "r1")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 config logs Stop Restart"]
+        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 config logs "
+        "stopped KISS serial (PTY) opt Run logs Stop Restart"]                  # K1: its stopped part too, with Run
     assert not r1.find("div", class_="runstack")
     assert "No stack running on this radio." in r1.text
     forms = [r3.within(x) for x in r3.find("form", action="/action")]
-    assert [(f.field_default("op"), f.field_default("target")) for f in forms
-            if f.field_default("target") == "kiss@r3"] == [("stop", "kiss@r3"), ("restart", "kiss@r3")]   # W325
+    assert [(f.field_default("op"), f.field_default("target")) for f in forms if "kiss" in f.field_default("target")] == [
+        ("start", "loraham-kiss-serial@r3"), ("stop", "kiss@r3"), ("restart", "kiss@r3")]   # K1 Run; W325
 
 
 def test_a_listed_copy_that_does_not_run_shows_nowhere(tmp_path, web, monkeypatch):
@@ -67,7 +68,8 @@ def test_a_copy_whose_own_listener_is_up_reads_running_with_no_note(tmp_path, we
     # G1-C49: the copy's rows are judged on its OWN listener, as slot 0's are on slot 0's (already_healthy's calls).
     r3 = _card(_home(tmp_path, web, monkeypatch, listening=True), "r3")
     assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC config logs kiss: 127.0.0.1:8267 Stop Restart"]
+        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC kiss: 127.0.0.1:8267 config logs "
+        "stopped KISS serial (PTY) opt Run logs Stop Restart"]        # layout B: address · config · logs on line 2
 
 
 def test_a_copys_entry_and_rows_come_from_one_read_of_its_processes(tmp_path, web, monkeypatch):
@@ -88,5 +90,6 @@ def test_a_copys_entry_and_rows_come_from_one_read_of_its_processes(tmp_path, we
         raise AssertionError("running_instances probed an instance again")
     monkeypatch.setattr(instances, "instance_runs", no_second_probe)
     entries = radio_start.running_instances(svc, "433", live)
-    assert [(e["id"], [c["id"] for c in e["components"]]) for e in entries] == [("kiss@r3", ["loraham-kiss-tnc"])]
+    assert [(e["id"], [(c["id"], c["state"]) for c in e["components"]]) for e in entries] == [
+        ("kiss@r3", [("loraham-kiss-tnc", "degraded"), ("loraham-kiss-serial", "stopped")])]      # K1: every part
     assert reads == [1]

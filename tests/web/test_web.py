@@ -305,7 +305,9 @@ def test_only_web_ui_links_open_a_new_tab(web):
     offenders, web_ui = [], 0
     for f in sorted(tdir.glob("*.html")):
         for m in re.finditer(r'<a\b[^>]*target="_blank"[^>]*>', f.read_text()):
-            if "iface-web" in m.group(0):
+            # a web-UI link: a row's `iface-web`, or the stack head's "Web UI ↗" on Home (layout B: its href is the
+            # same web_href of a row's web interface)
+            if "iface-web" in m.group(0) or (f.name == "dashboard.html" and 'class="headlink"' in m.group(0)):
                 web_ui += 1
             else:
                 offenders.append(f"{f.name}: {m.group(0)[:80]}")
