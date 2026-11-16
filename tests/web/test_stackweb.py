@@ -2390,8 +2390,9 @@ def test_the_bulk_route_does_not_default_a_missing_select(tmp_path, web, csrf):
 # raw listener, so the box had two lines for one socket (the Zero, INVENTORY-v3 §9: "MeshCom (QEMU) @r1" and
 # "MeshCom (QEMU) (r1)", the second linking to an anchor no element carries).
 
-def _meshcom_box(tmp_path, monkeypatch, listeners, run=("r1",)):
-    """meshcom on r1 and r2, RUNNING on the radios `run` (None: an unknown running set), with the live sockets."""
+def _meshcom_box(tmp_path, monkeypatch, listeners, run=("r1",), state="RUNNING"):
+    """meshcom on r1 and r2, RUNNING on the radios `run` (None: an unknown running set), with the live sockets.
+    `state`: every meshcom component's run state (STOPPED: the stack is not started)."""
     from lhpc.core import instances
     from lhpc.core.model import RunState
     radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
@@ -2401,7 +2402,7 @@ def _meshcom_box(tmp_path, monkeypatch, listeners, run=("r1",)):
     for ss in snap.stacks:
         if ss.stack.id == "meshcom":
             for cs in ss.components.values():
-                cs.run_state = RunState.RUNNING
+                cs.run_state = RunState[state]
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
     monkeypatch.setattr(instances, "running_insts", lambda s, sid: insts if sid == "meshcom" else None)
     return svc
@@ -2469,7 +2470,9 @@ def test_one_port_on_two_bind_addresses_stays_two_lines_and_the_public_one_is_re
 
 def test_an_unverified_listener_is_never_merged(tmp_path, monkeypatch, web):
     from lhpc.core.services import ControllerService as CS
-    monkeypatch.setattr(CS, "_endpoint_live_port", lambda self, comp, ep, pids, get_argvs: (18083, False))
+    real = CS._endpoint_live_port        # only the running meshcom's port is unverified (a stopped stack has no pids)
+    monkeypatch.setattr(CS, "_endpoint_live_port", lambda self, comp, ep, pids, get_argvs: (18083, False)
+                        if comp.id == "meshcom-qemu" else real(self, comp, ep, pids, get_argvs))
     svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")])
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
     assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r1"]
@@ -2495,6 +2498,14 @@ def _r2_public_proxy(svc):
                                    confirm=True, confirm_public=True).ok
 
 
+def _box_pill(box):
+    """The text of the Home Webserver box's security pill (the first pill, in the box's summary)."""
+    return box.find("span", class_="pill")[0].text.strip()
+
+
+_R2_PROXY = {"family": "ipv4", "ip": "0.0.0.0", "port": 8578, "inode": 3}
+
+
 def test_a_stopped_instance_whose_proxy_still_listens_keeps_its_line_marked_instance_stopped(tmp_path, monkeypatch, web):
     # G2-PRELAND7B10 §UI-U3: r2's app is stopped, its public proxy :8578 still listens -> its line stays and says so
     # red on beab3100: the r2 line is absent (the running filter drops it)
@@ -2512,6 +2523,23 @@ def test_a_stopped_instance_whose_proxy_still_listens_keeps_its_line_marked_inst
     assert [a["href"] for a in one.find("a", class_="wsurl")] == ["https://localhost:8578"]   # the live proxy address
     # the r1 line of the running instance carries no stopped pill
     assert not box.within(by_name["MeshCom (QEMU) @r1"][1]).find("span", **{"data-state": "instance-stopped"})
+    assert _box_pill(box) == "exposed"                                 # the live public proxy decides the box's pill
+
+
+def test_a_stopped_instances_disable_pending_proxy_keeps_its_line_and_the_box_pill(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v1 M1: a saved Disable over an applied public :8578, r2 stopped, nginx still serves it
+    from lhpc.core import webserver as ws
+    from types import SimpleNamespace
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1"), _R2_PROXY])
+    _r2_public_proxy(svc)
+    cfg = load_config(svc._paths)
+    applied = ws.applied_snapshot_of(cfg.webserver, [SimpleNamespace(swc=cfg.stackweb["meshcom@r2"])])
+    monkeypatch.setattr(ws, "read_applied", lambda paths: applied)    # the Apply that made :8578 live
+    assert svc.stack_web_configure("meshcom@r2", port=0, confirm=True).ok          # the Disable, saved, no Apply
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [r2] = [line for n, _h, line in lines if n == "MeshCom (QEMU) @r2"]
+    assert "disable pending" in r2.text and "instance stopped" in r2.text
+    assert _box_pill(box) == "review"           # the applied policy (public, authenticated) still served: never "secure"
 
 
 def test_a_stopped_instance_whose_direct_web_ui_still_listens_keeps_its_line_marked_instance_stopped(tmp_path, monkeypatch, web):
@@ -2530,3 +2558,14 @@ def test_a_stopped_instance_with_nothing_listening_stays_off_home(tmp_path, monk
     _r2_public_proxy(svc)
     _doc, _box, lines = _box_lines(web(service_factory=lambda: svc))
     assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1"]
+
+
+def test_a_stopped_stacks_live_public_proxy_keeps_its_line_and_the_box_pill_is_not_secure(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v1 N1: meshcom is not started, r2's public proxy :8578 still listens; nothing else of
+    # meshcom listens. red on 7ddf7323: no meshcom line at all and the pill reads "secure"
+    svc = _meshcom_box(tmp_path, monkeypatch, [_R2_PROXY], run=None, state="STOPPED")
+    _r2_public_proxy(svc)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r2"]        # only what still listens (no absent raw rows)
+    assert box.within(lines[0][2]).find("span", **{"data-state": "instance-stopped"})
+    assert _box_pill(box) == "exposed"

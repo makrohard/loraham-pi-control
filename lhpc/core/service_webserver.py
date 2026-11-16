@@ -946,9 +946,7 @@ class WebserverOpsMixin:
             ss = by_id.get(stk.id)
             if ss is None or stk.main_component is None:
                 continue
-            mst = ss.components.get(stk.main_component.id)
-            if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
-                continue
+            mst = ss.components.get(stk.main_component.id)   # not started: only what still listens (home_rows)
             pages = self.stack_web_pages(stk.id)               # one row per proxied page; F3b: its component's state
             stack_rows = [{**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""}
                           for page in pages for cs in [ss.components.get(page.component_id)]]
@@ -956,7 +954,7 @@ class WebserverOpsMixin:
             stack_rows += [self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=ss.components.get(comp.id),
                                                     get_argvs=_argvs, inst=i, pages=pages)     # every OTHER open port (no-auth tcp)
                            for comp in stk.components for ep in comp.endpoints if self._is_raw_endpoint(ep) for i in insts or [None]]
-            rows.extend(_ws.home_rows(stack_rows, insts))   # U3 (K2): running instances' pages, one line per listener
+            rows.extend(_ws.home_rows(stack_rows, insts, started=mst is not None and mst.run_state in up))   # U3 (K2)
         return rows
 
     @staticmethod
