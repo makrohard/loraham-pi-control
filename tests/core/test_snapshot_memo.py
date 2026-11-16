@@ -11,7 +11,7 @@ import threading
 import types
 
 import pytest
-from seams import entry_args
+from seams import entry_args, exe
 
 from lhpc.adapters.web.app import create_app
 from lhpc.core import reslock, status as statusmod
@@ -900,7 +900,7 @@ def test_a_snapshot_reads_the_process_table_once(tmp_path):
     matched = [c for s in svc.stacks() for c in s.components if c.process is not None]
     assert len(matched) >= 2                                   # precondition: several scans before
     spec = matched[0].process
-    fake.cmdlines_data = {4242: [f"/usr/bin/{spec.exec_name}", *entry_args(spec), *spec.all_args, *spec.any_args[:1]]}
+    fake.cmdlines_data = {4242: [exe(spec, f"/usr/bin/{spec.exec_name}"), *entry_args(spec), *spec.all_args, *spec.any_args[:1]]}
     reads = []
     orig = fake.cmdlines
     fake.cmdlines = lambda: (reads.append(1), orig())[1]
@@ -966,7 +966,7 @@ def test_a_snapshot_without_git_has_the_same_run_states(tmp_path, state, running
     stacks = tuple(dataclasses.replace(s, components=tuple(
         dataclasses.replace(c, source=dataclasses.replace(c.source, pin_commit=_PIN))
         if c.id == "meshcore-webui" else c for c in s.components)) for s in stacks)
-    argv = [f"/opt/bin/{webui.process.exec_name}", *entry_args(webui.process), *webui.process.all_args]
+    argv = [exe(webui.process, f"/opt/bin/{webui.process.exec_name}"), *entry_args(webui.process), *webui.process.all_args]
     states = {}
     for sources in (True, False):
         fake = FakeSystem(paths=probe_paths, commands=cmds,
@@ -1011,7 +1011,7 @@ def test_the_rf_log_badge_runs_no_git(tmp_path, running):
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     node = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-node")
     if running:
-        fake.cmdlines_data = {77: [f"/opt/bin/{node.process.exec_name}", *entry_args(node.process), *node.process.all_args]}
+        fake.cmdlines_data = {77: [exe(node.process, f"/opt/bin/{node.process.exec_name}"), *entry_args(node.process), *node.process.all_args]}
     full = (svc.build_snapshot(), svc.rflog_running("rf-meshcore.log"))[1]    # the request's full snapshot
     assert any(c[:1] == ["git"] for c in fake.calls)                         # precondition: git ran
     svc.invalidate_snapshot()

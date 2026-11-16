@@ -4,7 +4,7 @@ rendered Home page, each assertion scoped to one instance's `data-stack="meshcom
 never satisfy it. Two instances run: meshcom@r1 and meshcom@r3, each with its own ports."""
 import radios_fixture
 from htmlq import parse
-from seams import entry_args
+from seams import entry_args, exe
 
 from lhpc.core import commands, config, instances, radios
 from lhpc.core.lifecycle import Lifecycle
@@ -173,7 +173,7 @@ def _mc(tmp_path, running, ports=()):
         for cid in comps:
             comp = plain.stack("meshcore").component(cid)
             opt, val = instances._token(plain, comp, inst, "868")
-            table[700 + len(table)] = [comp.process.exec_name, *entry_args(comp.process), *[a for a in comp.process.all_args if a != opt], opt, val]
+            table[700 + len(table)] = [exe(comp.process, comp.process.exec_name), *entry_args(comp.process), *[a for a in comp.process.all_args if a != opt], opt, val]
     fake = FakeSystem(cmdlines_data=table, listeners=[Listener("ipv4", "127.0.0.1", p, p) for p in ports])
     return ControllerService(system=fake.system, paths=paths)
 
@@ -332,9 +332,11 @@ def _orphan_meshcom(tmp_path, web):
     its GPS feed running; the meshcom block of card r1."""
     from radios_fixture import RADIOS
     radios_fixture.write(tmp_path, RADIOS)
+    plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    bridge = plain.stack("meshcom").component("meshcom-gps").process.exec_path     # this install's interpreter
     svc = ControllerService(system=FakeSystem(
         cmdlines_data={2000: ["qemu-system-xtensa", "-nographic"],
-                       2001: ["python3", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom"]},
+                       2001: [bridge, "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom"]},
         listeners=[Listener("ipv4", "127.0.0.1", 18083, 1)]).system, paths=Paths(runtime_root=tmp_path))
     r = web(service_factory=lambda: svc).get("/", headers=LOCAL)
     assert r.status_code == 200

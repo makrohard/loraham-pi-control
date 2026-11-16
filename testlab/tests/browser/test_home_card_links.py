@@ -35,7 +35,7 @@ def test_a_cards_rows_are_two_lines_with_their_button_on_the_right(flask_page, t
     for cid in ("meshcore-node", "meshcore-gps"):
         comp = plain.stack("meshcore").component(cid)
         opt, val = instances._token(plain, comp, inst, "868")
-        table[700 + len(table)] = [comp.process.exec_name, *(("-m", comp.process.entry) if comp.process.entry else ()),
+        table[700 + len(table)] = [comp.process.exec_path or comp.process.exec_name, *(("-m", comp.process.entry) if comp.process.entry else ()),
                                        *[a for a in comp.process.all_args if a != opt], opt, val]
     page, _posts = flask_page(path="/", cmdlines=table, listeners=[Listener("ipv4", "127.0.0.1", 5399, 1)])
     block = page.locator('div.runstack:has(p[data-stack="meshcore@r3"])')

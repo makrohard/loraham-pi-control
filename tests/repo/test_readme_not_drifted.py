@@ -43,7 +43,7 @@ _BAND_PRESET_RE = re.compile(r"(\d+)\s*(?:→|->)\s*([A-Za-z0-9-]+)")
 
 def _svc():
     return ControllerService(system=FakeSystem().system,
-                             paths=Paths(runtime_root=tempfile.mkdtemp()))
+                             paths=Paths(runtime_root=pathlib.Path(tempfile.mkdtemp())))
 
 
 def _apt_tokens(command_line: str) -> set:

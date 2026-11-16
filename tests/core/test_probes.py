@@ -43,6 +43,10 @@ def test_process_entry_is_the_interpreters_own_program():
     assert matches(script, ["python3", "scripts/gps-relay.py", "--mode", "fixture"])
     assert not matches(script, ["python3", "-m", "pyflakes", "scripts/gps-relay.py"])
     assert not matches(script, ["python3", "scripts/old-gps-relay.py"])                      # exact basename
+    own = ProcessSpec(exec_name="python", entry="uvicorn", exec_path="/r/src/w/backend/.venv/bin/python")
+    assert matches(own, ["/r/src/w/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app"])
+    assert not matches(own, ["/o/backend/.venv/bin/python", "-m", "uvicorn", "/r/src/w/backend/.venv/bin/python"])
+    assert not matches(own, ["/r/src/w/backend/.venv/bin/python/../python", "-m", "uvicorn"])  # whole, not resolved
 
 
 def test_process_match_requires_exec_basename():

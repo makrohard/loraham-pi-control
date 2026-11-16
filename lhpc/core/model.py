@@ -190,8 +190,8 @@ class ProcessSpec:
 
     A process matches when its executable basename equals `exec_name`, ALL of
     `all_args` appear among its argv, (if `any_args` is non-empty) at least
-    one of `any_args` appears, and (if `entry` is set) the interpreter runs that
-    program.
+    one of `any_args` appears, (if `entry` is set) the interpreter runs that
+    program, and (if `exec_path` is set) argv[0] is exactly that path.
     """
 
     exec_name: str
@@ -203,6 +203,10 @@ class ProcessSpec:
     # The program an interpreter runs, compared WHOLE (`probes.process.matches`): `-m <entry>` as
     # its first two arguments, or a script argument whose basename is <entry>; "" = not checked.
     entry: str = ""
+    # This install's own interpreter, where argv[0] is an absolute path: "{source}/…" or "{controller_python}" in the
+    # manifest, resolved by `manifest.resolve_exec_paths` when the service loads it, then compared WHOLE to argv[0];
+    # "" = not checked. Another venv's interpreter running the same program is not this component.
+    exec_path: str = ""
 
 
 @dataclass(frozen=True)

@@ -377,7 +377,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def stacks(self) -> tuple[Stack, ...]:
         if self._stacks is None:
-            self._stacks = manifest_mod.load_manifest(self._manifest_path)
+            self._stacks = manifest_mod.resolve_exec_paths(manifest_mod.load_manifest(self._manifest_path), self._paths)
         return self._stacks
 
     def stack(self, stack_id: str) -> Stack | None:

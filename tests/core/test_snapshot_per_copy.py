@@ -3,7 +3,7 @@ its own token or verified record): an instance holds its own radio by its key `<
 left the hardware list holds every radio; a process no instance claims (no token, no record) holds its band's radios
 by the bare stack id, fail-safe for a removal."""
 import radios_fixture
-from seams import entry_args
+from seams import entry_args, exe
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -99,7 +99,7 @@ def test_an_unclaimed_process_beside_a_running_instance_holds_every_radio_of_its
     node = svc.stack("meshcore").component("meshcore-node")
     own = ["/usr/bin/python", "-m", "meshcore_host", instances._token(svc, node, instances.copy_of(svc, "meshcore", "r4")[0],
                                                                         "868")[1]]
-    bare = [node.process.exec_name, *entry_args(node.process), *node.process.all_args]
+    bare = [exe(node.process, node.process.exec_name), *entry_args(node.process), *node.process.all_args]
     svc = ControllerService(system=FakeSystem(cmdlines_data={92: own, 94: bare}).system, paths=Paths(runtime_root=tmp_path))
     assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {
         "r2": ["meshcore"], "r4": ["meshcore", "meshcore@r4"]}
@@ -114,7 +114,7 @@ def test_a_hand_started_non_main_component_holds_its_band_beside_a_running_insta
     stk = svc.stack("meshcore")
     node, web = stk.component("meshcore-node"), stk.component("meshcore-webui")
     copy = ["/usr/bin/python", "-m", "meshcore_host", instances._token(svc, node, instances.copy_of(svc, "meshcore", "r4")[0], "868")[1]]
-    ui = [web.process.exec_name, *entry_args(web.process), *web.process.all_args, *web.process.any_args[:1]]
+    ui = [exe(web.process, web.process.exec_name), *entry_args(web.process), *web.process.all_args, *web.process.any_args[:1]]
     svc = ControllerService(system=FakeSystem(cmdlines_data={92: copy, 93: ui}).system, paths=Paths(runtime_root=tmp_path))
     assert svc.build_snapshot(fresh=True).stack("meshcore").components["meshcore-webui"].pids == [93]
     assert {r.id: radio_start._radio_users(svc, r) for r in radios.load(svc._paths).radios} == {

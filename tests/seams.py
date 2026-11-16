@@ -1,8 +1,14 @@
 """Shared start-path probes for the ordinary tests (core/ and stacks/), beside `htmlq` and
 `repo_paths`: importable as a plain module because pytest puts this directory on `sys.path`.
 
-    from seams import LifecycleSeam, entry_args, outcomes, readable_heads, seed_built, write_own_rev
+    from seams import LifecycleSeam, entry_args, exe, outcomes, readable_heads, seed_built, write_own_rev
 """
+
+
+def exe(spec, default):
+    """argv[0] of a hand-built process of the spec: this install's interpreter when the spec names one (`exec_path`,
+    resolved by the service), else `default`."""
+    return spec.exec_path or default
 
 
 def entry_args(spec):

@@ -1182,6 +1182,7 @@ main = "meshtastic"
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshtastic"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     entry = "lhpc.adapters.cli.main"
+    exec_path = "{controller_python}"
     all_args = ["_gps-bridge", "meshtastic"]
 
     # SOFT + CONDITIONAL: only reported when the global source is a gpsd on THIS box. With a
@@ -1902,6 +1903,7 @@ main = "meshcom-qemu"
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcom"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     entry = "lhpc.adapters.cli.main"
+    exec_path = "{controller_python}"
     all_args = ["_gps-bridge", "meshcom"]
 
     # ONE feed may own the QEMU UART at a time. Production and fixture both write the SAME
@@ -2315,6 +2317,7 @@ main = "meshcore-node"
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcore"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     entry = "lhpc.adapters.cli.main"
+    exec_path = "{controller_python}"
     all_args = ["_gps-bridge", "meshcore"]
 
   [[stack.component]]
@@ -2833,9 +2836,10 @@ main = "meshcore-node"
     instance_arg = ["--port", "{port:8788}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     entry = "uvicorn"
-    # its venv's interpreter (meshcore-webui-run.sh execs "$src/backend/.venv/bin/python"): another
+    # its venv's interpreter (meshcore-webui-run.sh:71 execs "$src/backend/.venv/bin/python"): another
     # FastAPI app run as `python -m uvicorn app.main:app` has every other token of this argv
-    all_args = ["app.main:app", "src/meshcore-webui/backend/.venv/bin/python"]
+    exec_path = "{source}/backend/.venv/bin/python"
+    all_args = ["app.main:app"]
 
     # Loopback backend the LHPC proxy sits in front of. `client=true` + `scheme=http` is what
     # marks it as a proxied web UI (service_webserver.stack_web_upstream). Firewall DENY-DEFAULT:

@@ -128,7 +128,10 @@ cannot run, refused as a direct start target.
 
 A component run by an interpreter (`exec_name = "python3"`) also sets `process.entry`: the
 module after `-m`, or the script's file name, compared whole. Then a test, linter or editor run
-that only names the module or script path is not taken for the component.
+that only names the module or script path is not taken for the component. Where the interpreter
+is an absolute path of this install, `process.exec_path` (`"{source}/…"` or `"{controller_python}"`)
+must also equal argv[0]: another venv or app running the same program is not the component. One
+LHPC install per box is assumed: a component whose argv[0] is relative or bare relies on `entry` alone.
 
 **Slow starters** set `readiness_timeout` (seconds, 0 = default, at most 600), e.g.
 `meshcore-node` uses `120.0`. `reads_position = true` marks a component that consumes the

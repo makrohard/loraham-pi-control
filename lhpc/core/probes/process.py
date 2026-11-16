@@ -3,8 +3,9 @@
 Matches a process by structured identity, never by a bare whole-command-line
 substring: the executable basename must equal `exec_name`, every `all_args`
 pattern must appear within some argv token, (if given) at least one
-`any_args` pattern must appear within some argv token, and (if given) the
-interpreter's program must be `entry`, compared whole. Matching is scoped to
+`any_args` pattern must appear within some argv token, (if given) the
+interpreter's program must be `entry`, and (if given) argv[0] must be
+`exec_path` (resolved for this install), each compared whole. Matching is scoped to
 individual argv tokens (NUL-separated), so a pattern cannot accidentally span
 two arguments.
 """
@@ -74,6 +75,8 @@ def matches(spec: ProcessSpec, argv: list[str], instance: tuple[str, str] | None
         if not (_PY_INTERP.match(exec_basename) and len(argv) >= 2
                 and posixpath.basename(argv[1]) == spec.exec_name):
             return False
+    if spec.exec_path and argv[0] != spec.exec_path:      # this install's own interpreter, compared whole
+        return False
     # `entry`: the program the interpreter runs, compared whole, so a pytest/grep/linter
     # run that merely NAMES the program's path or module is not the component.
     if spec.entry and not (argv[1:3] == ["-m", spec.entry]

@@ -174,6 +174,19 @@ def load_manifest(path: Path | None = None) -> tuple[Stack, ...]:
     return stacks
 
 
+def resolve_exec_paths(stacks: tuple[Stack, ...], paths) -> tuple[Stack, ...]:
+    """The stacks with every `process.exec_path` resolved for THIS install: `{source}` as the component's source
+    directory (as its start renders it), `{controller_python}` as this controller's interpreter."""
+    def resolved(comp):
+        spec = comp.process
+        if spec is None or not spec.exec_path:
+            return comp
+        src = str(paths.resolve_source(comp.source.path) if comp.source else paths.runtime_root)
+        exe = spec.exec_path.replace("{source}", src).replace("{controller_python}", commands._controller_python())
+        return dataclasses.replace(comp, process=dataclasses.replace(spec, exec_path=exe))
+    return tuple(dataclasses.replace(st, components=tuple(resolved(c) for c in st.components)) for st in stacks)
+
+
 def _load_stacks_and_controller(path: Path | None):
     """Shared load+parse: stacks + the (validated) controller. `parse_controller` raises
     `ManifestError` on any invalid `[controller]` table (unknown key, nested sub-table,
@@ -965,12 +978,17 @@ def _parse_process(raw: dict | None) -> ProcessSpec | None:
     entry = raw.get("entry", "")
     if not isinstance(entry, str):
         raise ManifestError(f"process.entry must be a string, got {entry!r}")
+    exec_path = raw.get("exec_path", "")
+    if exec_path != "" and not (isinstance(exec_path, str)
+                                and (exec_path == "{controller_python}" or exec_path.startswith("{source}/"))):
+        raise ManifestError(f'process.exec_path must be "{{controller_python}}" or "{{source}}/…", got {exec_path!r}')
     return ProcessSpec(
         exec_name=raw["exec_name"],
         all_args=tuple(raw.get("all_args", [])),
         any_args=tuple(raw.get("any_args", [])),
         instance_arg=tuple(inst),
         entry=entry,
+        exec_path=exec_path,
     )
 
 

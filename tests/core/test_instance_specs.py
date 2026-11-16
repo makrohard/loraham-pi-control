@@ -1,15 +1,19 @@
 """T-R5 at L3 (PROOF r16, A §2.3): every process spec names its instance by an exact argv token
 pair, or is in the named exemption table. Each declared token matches its component's own
 resolved argv, and not a neighbouring value; below, every radio's instance (K4b: no slots)."""
+from pathlib import Path
+
 import pytest
 
 from lhpc.core import commands
 from lhpc.core.config import Config
-from lhpc.core.manifest import load_manifest
+from lhpc.core.manifest import load_manifest, resolve_exec_paths
+from lhpc.core.paths import Paths
 from lhpc.core.probes.process import NO_INSTANCE_ARG, has_instance_token, matches
 
 RT, SRC = "/rt", "/rt/src/x"
-SPECS = [c for st in load_manifest() for c in st.components if c.process is not None]
+SPECS = [c for st in resolve_exec_paths(load_manifest(), Paths(runtime_root=Path(RT)))   # as the service resolves them
+         for c in st.components if c.process is not None]
 
 
 def _inst0(comp):

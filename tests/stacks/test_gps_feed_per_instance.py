@@ -8,7 +8,7 @@ import time
 
 import pytest
 import radios_fixture
-from seams import entry_args
+from seams import entry_args, exe
 
 from lhpc.core import gps
 from lhpc.core.commands import Instance
@@ -98,7 +98,7 @@ def test_g1_k7a_1_a_running_feed_without_a_marker_is_unhealthy(tmp_path):
     plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = _feed(plain)
     spec = comp.process
-    table = {500 + n: [f"/x/{spec.exec_name}", *entry_args(spec), *spec.all_args,
+    table = {500 + n: [exe(spec, f"/x/{spec.exec_name}"), *entry_args(spec), *spec.all_args,
                        *instances._token(plain, comp, Instance(rid, band="868"), "868")]
              for n, rid in enumerate(("r2", "r3"))}
     prober = StatusProber(FakeSystem(cmdlines_data=table).system, Paths(runtime_root=tmp_path))
@@ -118,7 +118,7 @@ def test_g1_k7a_4_a_left_over_marker_no_running_feed_names_does_not_count(tmp_pa
     (bare / "readiness.json").write_text(json.dumps({"state": "ready", "updated": int(time.time()) - 3600, "pid": 1}))
     plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = _feed(plain)
-    table = {500: [f"/x/{comp.process.exec_name}", *entry_args(comp.process), *comp.process.all_args,
+    table = {500: [exe(comp.process, f"/x/{comp.process.exec_name}"), *entry_args(comp.process), *comp.process.all_args,
                    *instances._token(plain, comp, Instance("r2", band="868"), "868")]}
     prober = StatusProber(FakeSystem(cmdlines_data=table).system, Paths(runtime_root=tmp_path))
     assert prober._gps_feed_ready(comp) == (True, "source live (7 sentences)")
@@ -132,7 +132,7 @@ def test_g1_k7a_1_the_snapshot_degrades_on_a_running_feed_without_a_marker(tmp_p
     _marker(tmp_path, "r2", state="ready")
     plain = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = _feed(plain)
-    table = {500 + n: [f"/x/{comp.process.exec_name}", *entry_args(comp.process), *comp.process.all_args,
+    table = {500 + n: [exe(comp.process, f"/x/{comp.process.exec_name}"), *entry_args(comp.process), *comp.process.all_args,
                        *instances._token(plain, comp, Instance(rid, band="868"), "868")]
              for n, rid in enumerate(("r2", "r3"))}
     svc = ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))

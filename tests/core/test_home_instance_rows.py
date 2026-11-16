@@ -5,7 +5,7 @@ page for the band card (Home renders an instance row's state only; its links are
 import dataclasses
 
 import radios_fixture
-from seams import entry_args
+from seams import entry_args, exe
 from htmlq import parse
 
 from lhpc.core import commands, instances, radio_start, radios
@@ -184,7 +184,7 @@ def _mc(tmp_path, running, ports=()):
         for cid in comps:
             spec = plain.stack("meshcore").component(cid).process
             opt, val = instances._token(plain, plain.stack("meshcore").component(cid), inst, "868")
-            table[700 + len(table)] = [spec.exec_name, *entry_args(spec), *[a for a in spec.all_args if a != opt], opt, val]
+            table[700 + len(table)] = [exe(spec, spec.exec_name), *entry_args(spec), *[a for a in spec.all_args if a != opt], opt, val]
     fake = FakeSystem(cmdlines_data=table, listeners=[Listener("ipv4", "127.0.0.1", p, p) for p in ports])
     return ControllerService(system=fake.system, paths=paths)
 
