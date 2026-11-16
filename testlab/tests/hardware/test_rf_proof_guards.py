@@ -668,3 +668,11 @@ def test_an_incomplete_forms_ok_stops_a_live_start(tmp_path):
     assert r.returncode == 2
     assert stop_lines(r) == ["STOP: form not confirmed: dset rx_rf stop tx_text (FORMS_OK must hold every form of the chosen rows)"]
     assert "== ROW" not in r.stdout
+
+
+def test_row_2_alone_needs_only_the_forms_it_renders(tmp_path):
+    # red-before (7f58f02c): row 2 listed rx_rf, which it never renders (its Graywolf helper reads the RF log itself):
+    # ROWS_ONLY=2 in dry ended "needed but never printed: rx_rf", rc 2
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="2", FAKE_PEER=_null_peer(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert "dry self-check OK all-forms-printed" in r.stdout

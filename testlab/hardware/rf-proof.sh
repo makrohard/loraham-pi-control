@@ -82,7 +82,7 @@ declare -A F=(
 )
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional: row 5 box -> peer is NOT RUN without it).
-declare -A RFORMS=([1]="start stop" [2]="start stop rx_rf" [3]="start stop mt_cap mt_send mt_pget rx_mt" [4]="start stop mc_send mc_pget rx_mc"
+declare -A RFORMS=([1]="start stop" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt" [4]="start stop mc_send mc_pget rx_mc"
   [5]="start stop rt_get rt_pget rt_set rx_mchat" [6]="start stop chat_client rx_rf")
 rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
 # ---- 4. the box-side helpers (python, run on the box) ----------------------------------------------------------------------
