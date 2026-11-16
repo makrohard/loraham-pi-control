@@ -306,6 +306,13 @@ pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one
 jpower() {   # jpower <box|PC> <rid|peer-action> <value>: journal a radio's pre-state power before the row changes it: the
   # value the restore may set (PRE_<box|PC>_<target>) and its undo (@pset, replayed by pset --restore)
   keep "PRE_$1_$2" "$3"; undo_push "$1" "@pset $1 $2 $3"; }
+rnsinst() {   # rnsinst <name> <the key's fields>: the RNS shared instance of an rnode peer: instance=<name> port=<n> control=<n>,
+  # no defaults: instance [A-Za-z0-9_.-]+, port and control 1..65535 and different; a missing or malformed one is a STOP
+  local t k inst= port= ctl=; for t in $2; do case "$t" in instance=*) inst=${t#*=};; port=*) port=${t#*=};; control=*) ctl=${t#*=};; esac; done
+  [[ $inst =~ ^[A-Za-z0-9_.-]+$ ]] || stop "PEER_$1: instance= missing or malformed ('$inst')"
+  for k in port ctl; do t=${!k}; [[ $t =~ ^[0-9]{1,5}$ ]] && [ "$((10#$t))" -ge 1 ] && [ "$((10#$t))" -le 65535 ] \
+    || stop "PEER_$1: $([ $k = ctl ] && echo control || echo port)= missing or not 1..65535 ('$t')"; done
+  [ "$((10#$port))" != "$((10#$ctl))" ] || stop "PEER_$1: port= and control= are the same ($port)"; }
 pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixed read form, rendered here from its name
   local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read
   case "$n" in
@@ -541,6 +548,7 @@ peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; ca
   local v="PEER_$1" kind id rest; read -r kind id rest <<< "${!v:-}"; PK=; [ -n "$kind" ] || { PK="absent: peer $1"; return 0; }   # unset or empty
   case "$kind" in meshcom|aprs|meshtastic|meshcore-ble|rnode) ;; *) stop "PEER_$1: unknown kind '$kind' (want meshcom, aprs, meshtastic, meshcore-ble or rnode)";; esac
   [ -n "$id" ] || stop "PEER_$1: kind '$kind' without its by-id name or BLE address (an empty or unset key = the peer is absent)"
+  [ "$kind" != rnode ] || rnsinst "$1" "$rest"
   if [ "$kind" = meshcore-ble ]; then
     if [ "$MODE" = dry ]; then case " ${DRY_BLE:-} " in *" $id "*) ;; *) PK="absent: peer $1";; esac
     else pread PC "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || PK="absent: peer $1"; fi   # its read-only power read: the connect

@@ -366,3 +366,29 @@ def test_a_peer_power_change_journals_its_pre_state_and_its_restore(tmp_path):
     assert "PRE_PC_mt-power=1" in (evd / "state.env").read_text().splitlines()
     assert (evd / "undo.list").read_text() == "u1\tPC\t@pset PC mt-power 1\n"
     assert marker.read_text() == "mt-power\nmt-power 1\n"
+
+
+# ---- the rnode peer names its RNS shared instance; a missing or malformed field is a STOP at R0 ----------------------------
+
+@pytest.mark.parametrize("fields, want", [
+    ("", "instance= missing or malformed ('')"),
+    ("instance=a/b port=1 control=2", "instance= missing or malformed ('a/b')"),
+    ("instance=lhpc-rf-host control=37439", "port= missing or not 1..65535 ('')"),
+    ("instance=lhpc-rf-host port=0 control=37439", "port= missing or not 1..65535 ('0')"),
+    ("instance=lhpc-rf-host port=37438", "control= missing or not 1..65535 ('')"),
+    ("instance=lhpc-rf-host port=37438 control=70000", "control= missing or not 1..65535 ('70000')"),
+    ("instance=lhpc-rf-host port=37438 control=x", "control= missing or not 1..65535 ('x')"),
+    ("instance=lhpc-rf-host port=37438 control=37438", "port= and control= are the same (37438)"),
+])
+def test_a_missing_or_malformed_rns_instance_field_stops_r0(tmp_path, fields, want):
+    # red-before (d7f61ebe): the fields were not read; R0 went on into the rows
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="5", PEER_rnode=f"rnode usb-Example_RNode_CP2102-if00-port0 hubA {fields}".strip())
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: PEER_rnode: {want}"]
+    assert "== ROW R1" not in r.stdout
+
+
+def test_a_valid_rns_instance_passes_r0(tmp_path):
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="5")       # the example's instance=lhpc-rf-host port=37438 control=37439
+    assert "== ROW R1" in r.stdout, r.stderr
+    assert not [line for line in stop_lines(r) if "PEER_rnode" in line]
