@@ -646,7 +646,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     if getattr(m, "timed_out", False):
         # Cut off by the limit, git may have written part of the new tree: put the checkout back on
         # the commit it started from, so the same update can simply be run again.
-        back = _restore(system, root, local.get("head", ""))
+        back = _put_back(system, root, local.get("head", ""), up["upstream_head"])
         return {"ok": False, "timed_out": True,
                 "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s; "
                 + ("the checkout is back on the commit it started from — run the update again."
@@ -686,14 +686,40 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     return out
 
 
-def _restore(system: System, root: Path, head: str) -> bool:
-    """Put a checkout whose advance timed out back on `head` with a clean tree; False when it cannot.
-    The files it discards are the update's own: the advance starts only on a clean tree, or after
-    the operator agreed to discard local changes."""
-    if not head:
+def _put_back(system: System, root: Path, head: str, new: str) -> bool:
+    """Put a checkout whose advance from `head` to `new` timed out back on `head`; False when it
+    cannot. Only the update's own writes are undone: a path the update changes is restored to `head`
+    (or, added by the update, removed) when it holds `new`'s content or is missing. Any other change
+    is left as it is: a file someone created or edited while git ran is not the update's to discard,
+    even though the advance began on a clean tree (or after the operator agreed to discard what was
+    there then)."""
+    if not head or not new:
         return False
-    return all(_git(system, root, args, _APPLY_TIMEOUT).returncode == 0
-               for args in (["reset", "--hard", head], ["clean", "-ffd"]))
+    d = _git(system, root, ["diff", "--name-status", "-z", "--no-renames", head, new], _APPLY_TIMEOUT)
+    if d.returncode != 0:
+        return False
+    fields = d.stdout.split("\0")[:-1]                            # -z: every field ends in NUL
+    status = dict(zip(fields[1::2], fields[0::2], strict=True))   # path -> A / M / T / D
+    # Against `new` in the index, `diff` lists the paths whose file is not `new`'s; against `head`,
+    # `ls-files -d` the ones that are missing. Both compare content, so a file is judged by its bytes.
+    steps = [["reset", "-q", new], ["diff", "--name-only", "-z"], ["reset", "-q", head],
+             ["ls-files", "-d", "-z"]]
+    out = []
+    for args in steps:
+        r = _git(system, root, args, _APPLY_TIMEOUT)
+        if r.returncode != 0:
+            return False
+        out.append(set(r.stdout.split("\0")) - {""})
+    _, not_new, _, missing = out
+    written = {p for p, st in status.items() if st != "D"} - not_new
+    restore = sorted({p for p in written if status[p] != "A"} | (missing & status.keys()))
+    remove = sorted(p for p in written if status[p] == "A")
+    for args, paths in ((["checkout", head, "--"], restore), (["clean", "-fq", "--"], remove)):
+        for i in range(0, len(paths), 500):                       # bounded argv per call
+            chunk = [":(literal)" + p for p in paths[i:i + 500]]
+            if _git(system, root, [*args, *chunk], _APPLY_TIMEOUT).returncode != 0:
+                return False
+    return True
 
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).

@@ -179,9 +179,10 @@ def test_failed_forced_reset_is_not_reported_as_divergence(env, monkeypatch):
 
 _HANG = "exec sleep 60"  # wallclock: the git must outlast the runner's real time limit, which is under test
 
-def _hanging_git(tmp_path, monkeypatch):
+def _hanging_git(tmp_path, monkeypatch, meanwhile=":"):
     """Put a `git` first on the runner's PATH whose FIRST advance to `origin/main` (the merge, or the
-    forced reset) writes the new commit's files, unstaged, and then hangs: the checkout a git cut off
+    forced reset) writes the new commit's files, unstaged, runs `meanwhile` (shell, in the checkout:
+    what someone else does there while git runs) and then hangs: the checkout a git cut off
     mid-checkout leaves, HEAD still on the old commit. Every other call is the real git."""
     bindir, flag = tmp_path / "bin", tmp_path / "hang"
     bindir.mkdir()
@@ -190,7 +191,7 @@ def _hanging_git(tmp_path, monkeypatch):
     script.write_text(f"""#!/bin/sh
 if [ "$5" = origin/main ] && [ -e '{flag}' ]; then
   rm -f '{flag}'
-  '{gitrepo.GIT}' -C "$2" checkout origin/main -- . && '{gitrepo.GIT}' -C "$2" reset -q && {_HANG}
+  '{gitrepo.GIT}' -C "$2" checkout origin/main -- . && '{gitrepo.GIT}' -C "$2" reset -q && (cd "$2" && {meanwhile}) && {_HANG}
 fi
 exec '{gitrepo.GIT}' "$@"
 """)
@@ -232,9 +233,53 @@ def test_an_advance_cut_off_by_its_limit_says_timed_out_and_a_plain_retry_update
     assert "git timed out after 1 s" in out and "back on the commit it started from" in out, out
     assert "refused" not in out, out
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
-    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+    # Only the update's own files are put back: the local file the overwrite was to discard is
+    # still there until an advance that completes discards it.
+    assert gitrepo.git(env["work"], "status", "--porcelain") == ("?? local.txt" if flags else "")
     assert main(["self-update", "--apply", "--yes", *flags]) == 0, capsys.readouterr().out
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == new
+    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+
+
+def test_a_cut_advance_put_back_keeps_what_someone_else_wrote_meanwhile(env, tmp_path, monkeypatch):
+    """Files written in the checkout while git ran are not the update's: putting the checkout back
+    undoes the update's writes only, so a new file, an edit to a file the update leaves alone and an
+    edit over a file the update had just written (changed or added) all survive; a plain retry then
+    names them."""
+    old = selfupdate.local_state(env["sys"])["head"]
+    (env["up"] / "extra.txt").write_text("upstream extra\n")
+    gitrepo.upstream_commit(env["up"], version="0.1.1")  # adds note.txt + extra.txt, changes version.py
+    _hanging_git(tmp_path, monkeypatch, meanwhile="echo mine > mine.txt && echo '# mine' >> "
+                 "pyproject.toml && echo '# mine' > lhpc/version.py && echo mine > extra.txt")
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res["timed_out"] is True, res
+    assert "back on the commit it started from" in res["message"], res["message"]
+    w = env["work"]
+    assert gitrepo.git(w, "rev-parse", "HEAD") == old
+    assert not (w / "note.txt").exists()                          # the update's own new file: gone
+    assert (w / "mine.txt").read_text() == "mine\n"
+    assert (w / "pyproject.toml").read_text().endswith("# mine\n")
+    assert (w / "lhpc" / "version.py").read_text() == "# mine\n"
+    assert (w / "extra.txt").read_text() == "mine\n"
+    assert {" ".join(ln.split()) for ln in gitrepo.git(w, "status", "--porcelain").splitlines()} == {
+        "M lhpc/version.py", "M pyproject.toml", "?? mine.txt", "?? extra.txt"}
+    again = selfupdate.apply_update(env["sys"], env["paths"])
+    assert again["ok"] is False and again.get("dirty") is True, again
+    assert (w / "mine.txt").exists()
+
+
+def test_a_cut_advance_put_back_restores_a_file_the_update_removed(env, tmp_path, monkeypatch):
+    """git removes the files the new commit drops before it writes the rest (and replaces a file by
+    unlinking it first): a missing file the update touches is put back."""
+    old = selfupdate.local_state(env["sys"])["head"]
+    gitrepo.git(env["up"], "rm", "-q", "pyproject.toml")
+    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    _hanging_git(tmp_path, monkeypatch, meanwhile="rm pyproject.toml lhpc/version.py")
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res["timed_out"] is True, res
+    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
+    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+    assert (env["work"] / "pyproject.toml").is_file() and (env["work"] / "lhpc" / "version.py").is_file()
 
 
 def test_a_timed_out_advance_that_cannot_be_put_back_names_the_overwrite(env, monkeypatch):
