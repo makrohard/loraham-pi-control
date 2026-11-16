@@ -294,6 +294,19 @@ def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys):
     assert "not announced — announce timed out" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("kw", [
+    pytest.param({"body": b'{"message": "unexpected", "token": "CANARY_SECRET"}'}, id="answer-values"),
+    pytest.param({"raw": b"HTTP/1.1 CANARY_SECRET\r\n\r\n"}, id="status-line"),
+    pytest.param({"code": 500, "body": b'{"error": "CANARY_SECRET"}'}, id="error-body"),
+])
+def test_a_failed_announce_never_logs_meshchats_answer(meshchat, kw):
+    """G2-GROUP11 note: the post-start log gets a fixed message plus at most an exception type or the
+    HTTP status — never a value from the answer, nor an exception's text that carries it."""
+    rc, out, _s = _script(meshchat(**kw).api)
+    assert rc == 1 and "not announced" in out, out
+    assert "CANARY" not in out, out
+
+
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
     rc, out, _s = _script(meshchat(chunked=True).api)
     assert rc == 0 and "announced" in out, out

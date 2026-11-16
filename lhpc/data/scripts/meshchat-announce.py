@@ -15,7 +15,8 @@ is retried. The connection is direct (http.client to the loopback address: no pr
 environment, no redirect followed — any status but 200 is a failure), and at most 64 KB of the answer
 is read, whatever its framing. The post-start runner's own kill of an exec step after 120 s is the
 backstop.
-RE-AUDIT AT EVERY MESHCHAT BUMP: the route and its answer.
+A failure is logged by a fixed message plus at most an exception type, an errno or the HTTP status —
+never a value from MeshChat's answer. RE-AUDIT AT EVERY MESHCHAT BUMP: the route and its answer.
 """
 
 from __future__ import annotations
@@ -60,9 +61,9 @@ def announce(api: str, pause=time.sleep) -> None:
         except ConnectionRefusedError:
             pass                                           # not listening yet
         except http.client.HTTPException as exc:           # e.g. IncompleteRead in the chunk framing
-            raise Failure(f"GET {ROUTE}: {exc!r}") from exc
+            raise Failure(f"GET {ROUTE}: {type(exc).__name__}") from exc   # never its text: it can carry the answer
         except OSError as exc:                             # a timeout, a reset, anything else: final
-            raise Failure(f"GET {ROUTE}: {exc}") from exc
+            raise Failure(f"GET {ROUTE}: {type(exc).__name__}" + (f" errno {exc.errno}" if exc.errno else "")) from exc
         finally:
             conn.close()
         pause(1.0)
@@ -71,7 +72,7 @@ def announce(api: str, pause=time.sleep) -> None:
     except ValueError as exc:
         raise Failure(f"GET {ROUTE}: the answer is not JSON") from exc
     if not (isinstance(answer, dict) and answer.get("message") == "announcing"):
-        raise Failure(f"GET {ROUTE}: MeshChat did not confirm the announce ({str(answer)[:80]})")
+        raise Failure(f"GET {ROUTE}: MeshChat did not confirm the announce")   # never its values
 
 
 def main(argv=None) -> int:
