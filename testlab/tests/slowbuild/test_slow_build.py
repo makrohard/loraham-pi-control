@@ -26,7 +26,6 @@ import datetime as dt
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 import time
@@ -35,6 +34,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from lhpc_testlab import upgrade_0138
 from lhpc_testlab.release import external_unavailable, on_binary
 from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
 
@@ -596,15 +596,9 @@ fi
 exec '{git}' "$@"
 """
 
-# The "Upgrading from 0.13.x" step, as the CHANGELOG gives it (the checkout's path filled in):
-# `status` shows what the cut wrote and any file of the operator's the reset would replace; the
-# reset writes the new commit over the half-written files; the update run again syncs the venv and
-# the units. If the reset fails on git's lock (UPGRADE_LOCK_0138: the text, then the line), the
-# operator, once no git runs in this checkout, removes it and runs the reset again.
-UPGRADE_STEP_0138 = ("git -C {checkout} status --short",
-                     "git -C {checkout} reset --hard origin/main",
-                     "lhpc self-update --apply --yes")
-UPGRADE_LOCK_0138 = ("index.lock': File exists", "rm {checkout}/.git/index.lock")
+# The "Upgrading from 0.13.x" step is the CHANGELOG's, from one source (lhpc_testlab.upgrade_0138), run here as
+# written, in the checkout.
+UPGRADE_STEP_0138, UPGRADE_LOCK_0138 = upgrade_0138.STEPS, upgrade_0138.LOCK
 
 
 @pytest.mark.slow
@@ -637,16 +631,16 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
     cut_env = {**env, "PATH": f"{bindir}:{path}"}
     op_env = {**env, "PATH": f"{venv / 'bin'}:{path}"}           # the operator's shell on the box
     lhpc, lock = str(venv / "bin" / "lhpc"), co / ".git" / "index.lock"
-    steps = [ln.format(checkout=shlex.quote(str(co))) for ln in UPGRADE_STEP_0138]
-    lock_text, lock_line = UPGRADE_LOCK_0138[0], UPGRADE_LOCK_0138[1].format(checkout=shlex.quote(str(co)))
+    steps = list(UPGRADE_STEP_0138)
+    lock_text, lock_line = UPGRADE_LOCK_0138
     added = [ln.split("\t", 1)[1] for ln in changed if ln.startswith("A")]
     # another git, elsewhere on the box, alive through every step: the step never looks at it
     other = subprocess.Popen([real, "-C", str(tmp_path / "remote.git"), "cat-file", "--batch"],
                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
 
     def run(line, ok=True):
-        r = subprocess.run(["sh", "-c", line], env=op_env, capture_output=True, text=True,
-                           timeout=HARNESS_S, check=False)
+        r = subprocess.run(["sh", "-c", line], env=op_env, cwd=co, capture_output=True, text=True,
+                           timeout=HARNESS_S, check=False)          # in the checkout, as the CHANGELOG says
         assert (r.returncode == 0) == ok, f"{line}: {(r.stdout + r.stderr)[-1500:]}"
         return r.stdout + r.stderr
 

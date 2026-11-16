@@ -74,6 +74,10 @@ Upgrading from 0.13.x
   to list your radios (an existing list is kept), then re-enter settings and pages.
 - `lhpc self-update` leaves installed stacks as they are; run `lhpc update <stack> --yes` for each installed stack
   whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
+- 0.13.8's update stopped with "git refused the fast-forward": in `~/loraham-pi-control/src/loraham-pi-control` run
+  `git status --short` (what the next line replaces), `git reset --hard origin/main`, `lhpc self-update --apply --yes`.
+- If that reset fails with "index.lock': File exists": once no git runs in that checkout, `rm .git/index.lock`, then
+  run the reset again.
 - `lhpc update <stack>` without `--source` (and the console's Update) no longer moves a dev or stable source to the
   pin; to go back to the pins run `lhpc update <stack> --source pinned --yes`.
 - A stable source installed on a commit whose only tag is a pre-release (`v3.0-rc1`) is not updated on the stable
