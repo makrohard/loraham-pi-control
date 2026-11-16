@@ -623,6 +623,10 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
             return {"ok": True, "already": True, "deps_changed": False, "changes": list(local_changes(system)),
                     "message": "Already up to date, but local changes are present (modified or untracked "
                                "files) — 'overwrite local changes' discards them."}
+        if unknown:                                   # the tree's state is not known: say so, offer the finish
+            return {"ok": True, "already": True, "deps_changed": False, "status_unread": True,
+                    "message": "Already up to date by HEAD; the checkout's state could not be read — "
+                               "'overwrite local changes' finishes a cut cleanup."}
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if not force and not local.get("status_ok", True):
         # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing

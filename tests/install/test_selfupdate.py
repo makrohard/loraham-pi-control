@@ -396,6 +396,52 @@ def test_a_cleanup_cut_after_its_reset_is_listed_by_the_retry_and_finished_by_th
     assert selfupdate.apply_update(env["sys"], env["paths"], force=True).get("already") is True   # clean: nothing to do
 
 
+def _cut_cleanup(env, monkeypatch):
+    """The forced reset moved HEAD to upstream, then its `clean -ffd` was cut off after removing a.txt (b.txt left)."""
+    gitrepo.upstream_commit(env["up"])
+    w = env["work"]
+    for name in ("a.txt", "b.txt"):
+        (w / name).write_text("local\n")
+    real_git = selfupdate._git
+    cut = []
+
+    def clean_cut_after_one(system, root, args, timeout):
+        if args[:1] == ["clean"] and not cut:
+            cut.append(args)
+            (w / "a.txt").unlink()
+            return CommandResult(124, "", "", timed_out=True)
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", clean_cut_after_one)
+    assert selfupdate.apply_update(env["sys"], env["paths"], force=True)["timed_out"] is True
+
+
+def test_the_cli_retry_after_a_cut_cleanup_names_what_is_left_and_the_overwrite(env, tmp_path, monkeypatch, capsys):
+    """The operator's path: `lhpc self-update --apply` after the cut cleanup prints the paths the overwrite would
+    discard and the overwrite command itself, as the dirty refusal does."""
+    main = _operator_cli(monkeypatch)
+    _cut_cleanup(env, monkeypatch)
+    capsys.readouterr()
+    assert main(["self-update", "--apply", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "These paths would be discarded by 'overwrite local changes':" in out and "b.txt" in out, out
+    assert "lhpc self-update --apply --overwrite" in out, out
+
+
+def test_an_unreadable_status_at_an_up_to_date_head_is_finished_by_the_overwrite_and_said_by_the_retry(env, monkeypatch):
+    """The slow-card case: after a cut cleanup the 5 s status times out. The plain retry says the state could not
+    be read and names the finish; the overwrite runs the reset and clean again and finishes it."""
+    _cut_cleanup(env, monkeypatch)
+    real_state = selfupdate.local_state
+    monkeypatch.setattr(selfupdate, "local_state", lambda system: {**real_state(system), "status_ok": False,
+                                                                    "dirty": False})
+    plain = selfupdate.apply_update(env["sys"], env["paths"])
+    assert plain.get("already") is True and plain.get("status_unread") is True, plain
+    assert "could not be read" in plain["message"] and "'overwrite local changes'" in plain["message"], plain
+    done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert done["ok"] is True and not done.get("already") and not (env["work"] / "b.txt").exists(), done
+
+
 def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):
     real_git = selfupdate._git
     seen = []

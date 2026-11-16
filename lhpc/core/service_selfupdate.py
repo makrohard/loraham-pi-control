@@ -734,12 +734,11 @@ class SelfUpdateOpsMixin:
                                                 self._controller_deps_sync_cmd())
         data = {**res, "restart": instr, "firewall_reapply_required": data_fw}
 
+        # Changes named (a dirty refusal, or an up-to-date HEAD a cut cleanup left them on): the paths a force would
+        # discard. `message` stays single-line (it is flashed verbatim); the evidence rides in details.
+        refusal = (["These paths would be discarded by 'overwrite local changes':", *(f"  {ln}" for ln in res["changes"])]
+                   if res.get("changes") else [])
         if not res["ok"]:                                    # git failure: dirty refusal / diverged / fetch
-            # On a DIRTY refusal, name the paths a force would discard. `message` stays single-line
-            # (it is flashed verbatim); the evidence rides in details.
-            refusal = [f"  {ln}" for ln in res.get("changes", ())]
-            if refusal:
-                refusal.insert(0, "These paths would be discarded by 'overwrite local changes':")
             nxt = []
             if res.get("detached"):
                 # A developer moved the checkout off its branch: put it back, then update.
@@ -764,7 +763,8 @@ class SelfUpdateOpsMixin:
                                 details=tuple(d for d in details if d),
                                 next_commands=list(instr["commands"]))
         if res.get("already"):                               # nothing to update
-            return ActionResult(True, res["message"], data=data)
+            return ActionResult(True, res["message"], data=data, details=tuple(refusal), next_commands=(
+                ["lhpc self-update --apply --overwrite"] if refusal or res.get("status_unread") else []))
         details = [n for n in (instr.get("note", ""),) if n]
         details += ["Restart the web console to load the new version:"]
         details += ["  " + c for c in instr["commands"]]
