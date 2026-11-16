@@ -37,7 +37,7 @@ gotchas on a Pi. Open work: [backlog.md](backlog.md); the release-matrix procedu
     current digest is in the append-only history `tests/data/unit-templates-released.sha256`, and the
     other release's units (`updater_units._COMPATIBLE_EDITS`) render to
     `tests/data/unit-templates-compatible.sha256`, which always holds the 0.12.0/0.12.1 units
-    (`tests/repo/test_unit_templates_frozen.py`; the procedure: *Changing a unit* below).
+    (`tests/host/test_unit_templates_frozen.py`; the procedure: *Changing a unit* below).
 - `pin-validation`: every pinned source has a rule in the release bot's policy, and every pin is
   an ancestor of its live branch with its referenced scripts present
 - `meshcore-host`: LHPC's own tests for `lhpc/data/meshcore_host` (not collected by `python -m pytest -q`)

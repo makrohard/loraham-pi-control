@@ -16,7 +16,7 @@ Known gaps reviewed and left for a later change. Each entry says what holds the 
 ## Two-stage unit-template migration
 
 The procedure exists and ran once (0.12.1 accepted, 0.13.0 ships the web, nginx and boot-restore
-units; [maintenance](maintenance.md), *Changing a unit*; `tests/repo/test_unit_templates_frozen.py`).
+units; [maintenance](maintenance.md), *Changing a unit*; `tests/host/test_unit_templates_frozen.py`).
 
 **Deferred:** the update path cannot write new units itself.
 `service_selfupdate._refresh_units_post_update()` repairs **in process** with the pre-update

@@ -181,7 +181,7 @@ jobs:
           retry 3 pip install .[dev]
 
       - name: Fake-signature guard and frozen unit templates
-        run: python -m pytest -q -p no:cacheprovider tests/repo/test_fake_signatures.py tests/repo/test_unit_templates_frozen.py
+        run: python -m pytest -q -p no:cacheprovider tests/repo/test_fake_signatures.py tests/host/test_unit_templates_frozen.py
 
   # Authoritative CROSS-REPOSITORY pin gate. Catches BOTH orphaned-pin classes: a pin that predates a
   # referenced script, AND a once-valid SHA orphaned by force-pushing/amending the source branch (no

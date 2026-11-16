@@ -78,7 +78,7 @@ _MAX_UNIT_BYTES = 64 * 1024
 # variable instead — that is why Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy
 # rather than ~/.kivy.
 #
-# tests/repo/test_unit_templates_frozen.py enforces this.
+# tests/host/test_unit_templates_frozen.py enforces this.
 
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).
@@ -407,7 +407,7 @@ _TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT
 # release restores before `lhpc self-update --repair-integration` rewrites this version's. No
 # replacement text contains a brace (the template is formatted after the edits), and each edit
 # matches its template exactly once; an edit that does not is left out of `_COMPATIBLE_TEMPLATES`
-# here, never raised, and tests/repo/test_unit_templates_frozen.py fails on it.
+# here, never raised, and tests/host/test_unit_templates_frozen.py fails on it.
 _COMPATIBLE_EDITS = {
     WEB_UNIT: (
         ("# runtime root + /tmp for lhpc itself.\n",

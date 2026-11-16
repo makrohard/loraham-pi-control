@@ -95,7 +95,7 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
     # Sideband is NOT granted %h/.kivy: KIVY_HOME redirects its state into
     # {root}/state/sideband/kivy, which is already writable. Granting it here would
     # change the unit bytes and strand every installed box — see
-    # tests/repo/test_unit_templates_frozen.py.
+    # tests/host/test_unit_templates_frozen.py.
     assert f"ReadWritePaths={ROOT} /tmp" in web
     assert f"ReadWritePaths={ROOT} /tmp" in helper
     assert "%h/.meshcore_nm" not in web + helper and "%h/.kivy" not in helper
