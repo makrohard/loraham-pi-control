@@ -573,8 +573,8 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                                        else os.path.basename(argv[0]) or "exec")})
         elif kind in ("tcp_wait", "tcp_send"):
             host = step.get("host", "127.0.0.1")
-            try:
-                ipaddress.ip_address(host)            # no name lookup: nothing outside a wait's deadline
+            try:                                      # no name lookup: nothing outside a wait's deadline; an int
+                ipaddress.ip_address(host if isinstance(host, str) else "")   # passes ip_address, breaks the connect
             except ValueError:
                 raise CommandError(f"{kind}: host must be an IP address, not {host!r}") from None
             d = {"kind": kind, "host": host,

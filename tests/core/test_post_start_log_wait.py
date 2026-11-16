@@ -562,15 +562,15 @@ runpy.run_path(sys.argv[1], run_name="__main__")
 '''
 
 
-def _hooked(tmp_path, steps, binding=None, limit=20, **cfg):
+def _hooked(tmp_path, steps, binding=None, limit=20, source=None, **cfg):
     """The steps in a real launcher under the hook wrapper: (rc, the step records, stderr, the trace lines). A launcher
     that is still running at `limit` s is a hang: the test fails on it."""
     root = tmp_path / "rt"
     (root / "state" / "post").mkdir(parents=True, exist_ok=True)
     rp = root / "state" / "post" / "r.json"
     (tmp_path / "launcher.py").write_text(commands.render_post_launcher(steps, _C(), {}, _Op(), str(root),
-                                                                        str(tmp_path), "", result_path=str(rp),
-                                                                        binding=binding))
+                                                                        str(source or tmp_path), "",
+                                                                        result_path=str(rp), binding=binding))
     trace = tmp_path / "trace"
     cfg = {"trace": str(trace), **cfg}
     if binding:
@@ -604,7 +604,7 @@ _C1 = 1 << 20
     ("x" * (_C1 + 100) + LINE, "rst:0x1\n", "timeout"),            # B1 converse: the old log's line is obsolete
     (LINE, "rst:0x1\n", "timeout"),                                 # ... also when the chunk read holds it
 ], ids=["moved-to-the-ready-log", "obsolete-line-in-the-old-log", "obsolete-line-in-the-chunk-read"])
-def test_a_log_moved_mid_scan_is_followed_at_once_and_the_old_ones_line_never_counts(tmp_path, a_text, b_text, outcome):
+def test_a_log_moved_mid_scan_is_followed_and_the_old_ones_line_never_counts(tmp_path, a_text, b_text, outcome):
     link = tmp_path / "uart-latest.log"
     _boot(tmp_path, link, "uart-1.log", a_text)
     (tmp_path / "uart-2.log").write_text(b_text)
@@ -743,7 +743,7 @@ def test_a_tcp_connect_that_completes_after_the_deadline_is_not_ready(tmp_path):
     assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
 
 
-@pytest.mark.parametrize("timeout", [0.6, 0.65, 0.7])
+@pytest.mark.parametrize("timeout", [0.35, 0.6, 0.65, 0.7])
 @pytest.mark.parametrize("wait", ["log_wait", "tcp_wait"])
 def test_a_deadline_that_passes_between_the_check_and_the_sleep_still_records_the_wait(tmp_path, wait, timeout):
     """Every clock reading costs 0.1 s and the sleep keeps the real one's rule (a negative length raises): when the
@@ -839,9 +839,23 @@ def test_a_pinned_file_outside_the_roots_is_never_read(tmp_path):
 @pytest.mark.parametrize("step, why", [
     ({"kind": "log_wait", "path": "/etc/hostname", "pattern": "p", "timeout": 5}, "under the runtime or source root"),
     ({"kind": "log_wait", "path": "{source}/../x.log", "pattern": "p", "timeout": 5}, "under the runtime or source root"),
+    ({"kind": "log_wait", "path": "/srcx/x.log", "pattern": "p", "timeout": 5}, "under the runtime or source root"),
     ({"kind": "tcp_wait", "port": 1, "host": "localhost"}, "IP address"),
+    ({"kind": "tcp_wait", "port": 1, "host": 2130706433}, "IP address"),      # an int: no connect would take it
     ({"kind": "tcp_send", "port": 1, "host": "example.org", "data": "x"}, "IP address"),
 ])
 def test_a_wait_outside_the_roots_or_on_a_host_name_is_refused(step, why):
     with pytest.raises(commands.CommandError, match=why):
         commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "")
+
+
+def test_a_source_root_linked_elsewhere_still_counts_as_the_source_root(tmp_path):
+    """Adopt-by-link: the stack's source dir is a symlink to a checkout elsewhere; its log, pinned there, lies under
+    the source root as the renderer resolves it, so the wait reads it."""
+    elsewhere = tmp_path.parent / (tmp_path.name + "-checkout")
+    (elsewhere / ".run").mkdir(parents=True)
+    (elsewhere / ".run" / "uart.log").write_text(LINE)
+    src = tmp_path / "src"
+    os.symlink(elsewhere, src)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(src / ".run" / "uart.log", 3)], virtual=True, source=str(src))
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
