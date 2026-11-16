@@ -88,7 +88,8 @@ has() { [ "$MODE" = dry ] && return 0; grep -qF -- "$2" "$EVD/$1"; }
 undo() { [ "$MODE" = dry ] && { echo "  [dry] undo += $*"; return 0; }; echo "$(date -u +%FT%TZ) $*" >> "$EVD/UNDO.txt"; }
 gstart() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then echo ALREADY-RUNNING $1; else $LH stack start $1 --yes; fi"; }
 gstop() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then $LH stack stop $1 --yes; else echo ALREADY-STOPPED $1; fi"; }
-lan() { if [ "$MODE" = dry ]; then echo "  [dry] PC > $1: curl -sk https://$HOSTIP:$2/"; LANCODE=403; return 0; fi
+page_ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }   # a page answers 2xx or 3xx; 000 (no answer), 4xx and 5xx are not reachable
+lan() { if [ "$MODE" = dry ]; then echo "  [dry] PC > $1: curl -sk https://$HOSTIP:$2/"; LANCODE=200; return 0; fi
   LANCODE=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "https://$HOSTIP:$2/" 2>/dev/null); echo "$LANCODE" > "$EVD/$1"; }   # 000 = not reachable
 fwstate() { X "$1" "$LH firewall"; }
 mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: normal power, <= 17)
@@ -125,7 +126,7 @@ must F0-runset.txt "$RUNSET"; KEYS=$(body F0-runset.txt | grep -E '^[a-z0-9_-]+@
 must F0-r4.txt "$PY -c '$ROWR4_PY'"; [ "$MODE" = dry ] || grep -qx 'ROW r4 pinedio-usb-1262 868 True' "$EVD/F0-r4.txt" || stop "FW0: r4 is not the enabled pinedio 868 row"
 must F0-mtid.txt "$LH config meshtastic@r2 list"; [ "$MODE" = dry ] || { grep -qE 'node_name \* = \(empty\)' "$EVD/F0-mtid.txt" && grep -qE 'node_short \* = \(empty\)' "$EVD/F0-mtid.txt"; } || stop "FW0: meshtastic@r2 already has a node identity (the --reset undo would remove it)"
 must F0-etc.txt "sha256sum /etc/lhpc/firewall.snapshot.json /etc/lhpc/firewall.candidate.json"
-lan F0-lan.txt 8443; [ "$LANCODE" != 000 ] || stop "FW0: the console is not reachable from the LAN"; ok "FW0: console remote, LAN code $LANCODE, running [$KEYS]"
+lan F0-lan.txt 8443; page_ok "$LANCODE" || stop "FW0: the console is not reachable from the LAN (code $LANCODE)"; ok "FW0: console remote, LAN code $LANCODE, running [$KEYS]"
 
 echo "== FW1/FW2: the update to FWSHA is done before this runner (FW0 checked clean main at FWSHA)"
 
@@ -162,7 +163,7 @@ must F7-state.txt "echo boot \$(cat /proc/sys/kernel/random/boot_id)"; BOOT1=$(b
 if [ "$MODE" = live ]; then [ -n "$BOOT1" ] && [ "$BOOT1" != "$BOOT0" ] || stop "FW7: no new boot id after the reboot"; fi
 must F7-ws.txt "for i in \$(seq 1 60); do $LH webserver status 2>&1 | grep -qF 'Remote listener active' && { $LH webserver status; exit 0; }; sleep 5; done; $LH webserver status; exit 1"
 lan F7-lan.txt 8443; fwstate F7-fw.txt
-if [ "$LANCODE" != 000 ] && has F7-ws.txt "Remote listener active"; then report "1c | the console stays remote over a reboot (LAN code $LANCODE) | PASS"; else fail "FW7: the console is not remote after the reboot (LAN $LANCODE)"; report "1c | console remote over a reboot | FAIL"; fi
+if page_ok "$LANCODE" && has F7-ws.txt "Remote listener active"; then report "1c | the console stays remote over a reboot (LAN code $LANCODE) | PASS"; else fail "FW7: the console is not remote after the reboot (LAN $LANCODE)"; report "1c | console remote over a reboot | FAIL"; fi
 
 echo "== FW8 (claim 2) one apply"
 fwapply F8; fwstate F8-fw.txt
@@ -176,7 +177,7 @@ must F9-port.txt "$PY -c '$PORT_PY'"; PORT=$(body F9-port.txt | sed -n 's/^PORT 
 must F9-proxy.txt "$LH webserver proxy meshtastic@r2 --mode lan --port $PORT --cidr $LANCIDR --confirm-phrase enable-remote < /dev/null"
 must F9-wsapply.txt "$LH webserver apply < /dev/null"; must F9-ws.txt "$LH webserver status"
 lan F9-lan.txt "$PORT"; fwstate F9-fw.txt
-if [ "$LANCODE" != 000 ] && ! { [ "$MODE" = live ] && grep -qF "Firewall: Changes pending" "$EVD/F9-fw.txt"; }; then report "3 | meshtastic@r2's page exposed, LAN code $LANCODE on :$PORT, no sudo, no change pending | PASS"
+if page_ok "$LANCODE" && ! { [ "$MODE" = live ] && grep -qF "Firewall: Changes pending" "$EVD/F9-fw.txt"; }; then report "3 | meshtastic@r2's page exposed, LAN code $LANCODE on :$PORT, no sudo, no change pending | PASS"
 else fail "FW9: the page on :$PORT gives LAN code $LANCODE (or a change is pending)"; report "3 | exposed page reachable from the LAN | FAIL"; fi
 
 echo "== FE undo (this run's changes; the firewall stays at FWSHA's apply, the checkout at FWSHA)"
@@ -186,7 +187,7 @@ must FE-reset.txt "$LH config meshtastic@r2 --reset --yes < /dev/null"; must FE-
 [ "$MODE" = dry ] || { grep -qE 'node_name \* = \(empty\)' "$EVD/FE-mtid.txt" && grep -qE 'node_short \* = \(empty\)' "$EVD/FE-mtid.txt"; } || fail "FE: meshtastic@r2's identity is not empty after the reset"
 for k in $KEYS; do must "FE-start-$k.txt" "$(gstart "$k")"; done
 must FE-runset.txt "$RUNSET"; [ "$MODE" = dry ] || [ "$(body FE-runset.txt | sort | tr '\n' ' ')" = "$(body F0-runset.txt | sort | tr '\n' ' ')" ] || fail "FE: the running set differs from FW0"
-fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; ok "FE: running set as at FW0, console LAN code $LANCODE"
+fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; page_ok "$LANCODE" || fail "FE: the console is not reachable from the LAN after the undo (code $LANCODE)"; ok "FE: running set as at FW0, console LAN code $LANCODE"
 
 echo "== RE"
 if [ "$MODE" = live ]; then

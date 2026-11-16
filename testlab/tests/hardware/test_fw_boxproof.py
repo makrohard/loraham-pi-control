@@ -5,6 +5,8 @@ import pathlib
 import re
 import subprocess
 
+import pytest
+
 KIT = pathlib.Path(__file__).resolve().parents[2] / "hardware"
 PROOF = KIT / "fw-boxproof.sh"
 PW = "pw-h-Qz71"
@@ -44,3 +46,11 @@ def test_no_password_or_call_reaches_the_evidence(tmp_path):
     text = "\n".join(f.read_text(errors="replace") for f in files)
     assert "argv" in text and "to stderr" in text                  # the captures ran, stderr included
     assert [s for s in (PW,) if s in text] + re.findall(CALL, text, re.IGNORECASE) == []
+
+
+@pytest.mark.parametrize("code,ok", [("200", True), ("302", True), ("000", False), ("403", False), ("404", False),
+                                     ("500", False), ("", False), ("2000", False)])
+def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
+    # A claim of reachability (the console, an exposed page) needs a 2xx or 3xx answer; 000, 4xx and 5xx are FAIL.
+    p, _ = proof(tmp_path, f'page_ok "{code}" && echo REACHABLE || echo NOT')
+    assert p.stdout.split() == (["REACHABLE"] if ok else ["NOT"]), p.stderr
