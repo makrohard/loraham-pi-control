@@ -613,7 +613,16 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         return {"ok": False, "unreachable": True,
                 "message": f"Could not reach upstream: {up.get('error', '')}"}
     ref = f"{_REMOTE}/{br}"
-    if up["upstream_head"] and up["upstream_head"] == local.get("head"):
+    unknown = not local.get("status_ok", True)
+    if up["upstream_head"] and up["upstream_head"] == local.get("head") and not (
+            force and (local.get("dirty") or unknown)):
+        # Up to date by HEAD, but the tree decides whether the update is done: a forced cleanup cut off
+        # after its reset leaves untracked files. They are listed here, and the operator's overwrite (the
+        # forced path below, run again) finishes the cleanup it had agreed to.
+        if local.get("dirty"):
+            return {"ok": True, "already": True, "deps_changed": False, "changes": list(local_changes(system)),
+                    "message": "Already up to date, but local changes are present (modified or untracked "
+                               "files) — 'overwrite local changes' discards them."}
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if not force and not local.get("status_ok", True):
         # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing

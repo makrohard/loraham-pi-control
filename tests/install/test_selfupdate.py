@@ -366,6 +366,36 @@ def test_a_forced_cleanup_cut_off_by_its_limit_is_a_timeout_and_the_retry_finish
     assert selfupdate.apply_update(env["sys"], env["paths"]).get("already") is True
 
 
+def test_a_cleanup_cut_after_its_reset_is_listed_by_the_retry_and_finished_by_the_overwrite(env, monkeypatch):
+    """The forced reset moved HEAD to upstream, then its `clean -ffd` was cut off after removing some of
+    the untracked files: up to date by HEAD, not done by the tree. The plain retry lists what is left;
+    the overwrite, run again, finishes the cleanup the operator had agreed to."""
+    new = gitrepo.upstream_commit(env["up"])
+    w = env["work"]
+    for name in ("a.txt", "b.txt"):
+        (w / name).write_text("local\n")
+    real_git = selfupdate._git
+    cut = []
+
+    def clean_cut_after_one(system, root, args, timeout):
+        if args[:1] == ["clean"] and not cut:
+            cut.append(args)
+            (w / "a.txt").unlink()                    # the part the cut-off clean did
+            return CommandResult(124, "", "", timed_out=True)
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", clean_cut_after_one)
+    first = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert first["timed_out"] is True and gitrepo.git(w, "rev-parse", "HEAD") == new, first
+    again = selfupdate.apply_update(env["sys"], env["paths"])
+    assert again.get("already") is True and again.get("changes") == ["?? b.txt"], again
+    assert "'overwrite local changes' discards them" in again["message"], again
+    done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert done["ok"] is True and not done.get("already") and not (w / "b.txt").exists(), done
+    assert gitrepo.git(w, "status", "--porcelain") == ""
+    assert selfupdate.apply_update(env["sys"], env["paths"], force=True).get("already") is True   # clean: nothing to do
+
+
 def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):
     real_git = selfupdate._git
     seen = []
