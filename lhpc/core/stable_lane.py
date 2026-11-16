@@ -15,7 +15,8 @@ releases API, a 404 meaning "no release"); a failed read, or a release the tags 
 DEGRADED.
 
 Move (`classify`): from the installed commit I to the target S only when I is published and an ancestor of S; S in I's
-past is "not newer"; anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
+past, or a plain tag S numbered below I's highest tag (U1's floor; GitHub's release in I's future is forward), is "not
+newer"; anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
 (the user's choice) may go back, but only to a target the history places (`update_gate`).
 """
 from __future__ import annotations
@@ -56,13 +57,14 @@ def version_of(name):
 
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    winning tag (`name`, "" = the default-branch HEAD) and the history mirror."""
+    winning tag (`name`, "" = the default-branch HEAD), the history mirror, and whether `name` is GitHub's release."""
     sha: str = ""
     label: str = ""
     verified: bool = False
     why: str = ""
     name: str = ""
     history: str = ""
+    released: bool = False
 
     @property
     def key(self):
@@ -181,7 +183,7 @@ def resolve(run, remote: str, paths) -> StableRef:
         sha = tip[0]
         on_tip = [n for n in line if commits[n] == sha]
         name = release if release in on_tip else max(on_tip, key=lambda n: (version_of(n), n))   # a label, one commit
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror))
+        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror), name == release)
     head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
     if head.returncode != 0 or not head.stdout.strip():
         return StableRef(why=f"could not resolve HEAD on {remote}")
@@ -202,9 +204,11 @@ def resolver(run, paths):
     return get
 
 
-def classify(run, installed: str, ref: StableRef) -> tuple[bool | None, str]:
+def classify(run, installed: str, ref: StableRef, mine=()) -> tuple[bool | None, str]:
     """May the installed commit move to `ref`? `(older, why)`: older False = a forward move (or current), True = the
-    target is in the installed commit's past, None = refused (`why` names the reason, "" = a read failed)."""
+    target is in the installed commit's past, or a plain tag after it whose version is below the highest of the
+    installed commit's tags (the mirror's and `mine`, the checkout's: U1's floor; GitHub's release is forward), None =
+    refused (`why` names the reason, "" = a read failed)."""
     if not installed or not ref.sha or not ref.history:
         return None, ""
     if installed == ref.sha:
@@ -220,7 +224,13 @@ def classify(run, installed: str, ref: StableRef) -> tuple[bool | None, str]:
     if fwd is None:
         return None, ""
     if fwd:
-        return False, ""
+        if ref.released or ref.key is None:
+            return False, ""
+        tags = _git(run, mirror, "tag", "--points-at", installed)
+        if tags.returncode != 0 or mine is None:
+            return None, ""
+        top = max(filter(None, map(version_of, [*tags.stdout.split(), *mine])), default=None)
+        return top is not None and ref.key < top, ""
     back = _is(run, mirror, ref.sha, installed)
     if back is None:
         return None, ""
@@ -229,12 +239,13 @@ def classify(run, installed: str, ref: StableRef) -> tuple[bool | None, str]:
     return None, f"the installed commit is not in the history of the stable target ({ref.label}): refused"
 
 
-def assess(run, src, ref: StableRef, remote: str = "") -> tuple[str, bool | None]:
-    """The installed commit at `src` ("" when not read) and `classify`'s `older` for it: the one reading of the checkout
-    the update gate and the freshness check share."""
+def assess(run, src, ref: StableRef, remote: str = "") -> tuple[str, bool | None, str]:
+    """The installed commit at `src` ("" when not read) and `classify`'s `(older, why)` for it, with the checkout's own
+    tags (None when not read): the one reading of the checkout the update gate and the freshness check share."""
     head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
     installed = (head.stdout or "").strip() if head.returncode == 0 else ""
-    return installed, classify(run, installed, ref)[0]
+    tags = run(["git", "-C", str(src), "tag", "--points-at", "HEAD"], timeout=5.0)
+    return installed, *classify(run, installed, ref, tags.stdout.split() if tags.returncode == 0 else None)
 
 
 def update_gate(run, paths, items, source: str, remote_of):
@@ -251,9 +262,7 @@ def update_gate(run, paths, items, source: str, remote_of):
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
             ref = refs[c.source.path] = target(remote_of(c))
-            head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-            installed = (head.stdout or "").strip() if head.returncode == 0 else ""
-            older, why = classify(run, installed, ref)
+            installed, older, why = assess(run, src, ref)
             if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
                 if older is not None and not ref.name:                              # a release or tag target only
                     older = None

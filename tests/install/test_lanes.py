@@ -56,7 +56,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
 
     class Box:
         release = "404"
-        fail_local_tags = False
+        fail_local_tags = False                       # the checkout's `tag --points-at` exits 128
+        fail_mirror_tags = False                      # the history mirror's `tag --points-at` exits 128
         fail_head = False
         fail_fetch = False
         fail_ancestry = False                         # the history mirror's `merge-base` exits 128
@@ -68,7 +69,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
     def run(self, argv, timeout, cwd=None, env=None):
         if argv[0] == "git":
             b.git_calls.append(argv)
-        if b.fail_local_tags and argv[:2] == ["git", "-C"] and argv[3:5] == ["tag", "--points-at"]:
+        if argv[:2] == ["git", "-C"] and argv[3:5] == ["tag", "--points-at"] and (
+                b.fail_mirror_tags if "stable-history" in argv[2] else b.fail_local_tags):
             return CommandResult(128, "", "fatal: unable to read tags")
         if b.fail_head and argv[:2] == ["git", "-C"] and argv[3:5] == ["rev-parse", "HEAD"]:
             return CommandResult(128, "", "fatal: not a git repository")
@@ -1090,3 +1092,43 @@ def test_an_unchecked_target_beside_the_installed_release_reads_try_again_later(
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[1]
 
+
+@pytest.mark.parametrize("how", ["tag-upstream", "tag-withdrawn", "tagged-after-install"])
+def test_a_lower_numbered_plain_tag_after_the_installed_version_is_refused_like_before(box, capsys, how):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    if how != "tagged-after-install":
+        box.push_tag("v2.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # on v2.0, or on the default-branch HEAD
+    assert box.head() == box.c[2]
+    if how == "tag-withdrawn":
+        box.drop_tags("v2.0")                         # the checkout's own tag still counts
+    if how == "tagged-after-install":
+        box.push_tag("v2.0", box.c[2])                # only the history mirror knows it
+    box.push_tag("v1.0", box.advance())               # the installed commit's child, a lower number, no release
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0       # RED before: moved down to v1.0
+    assert NOT_NEWER in capsys.readouterr().out
+    assert box.head() == box.c[2]
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE
+    box.release = "v1.0"                              # GitHub's latest release after it: forward (plan case C2)
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[3]
+
+
+@pytest.mark.parametrize("where", ["local", "mirror"], ids=["checkout", "history-mirror"])
+def test_an_unread_tag_list_of_the_installed_commit_reads_could_not_check_before_a_plain_tag(box, capsys, where):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v2.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v3.0", box.advance())               # a higher plain tag after it: forward once its tags are read
+    setattr(box, f"fail_{where}_tags", True)
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0       # the floor cannot be read: unknown, never a move
+    assert "try again later" in capsys.readouterr().out
+    assert box.head() == box.c[2]
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR
+    setattr(box, f"fail_{where}_tags", False)
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[3]
