@@ -64,8 +64,9 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
 CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
   *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';;
   *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n';;
-  *-stop-1.txt) printf 'stop 1\\n'; XRC={stop1};; *-stop-2.txt) printf 'stop 2\\n'; XRC={stop2};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; }}
+sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
+  r={stop1}; [ "$n" = 1 ] || r={stop2}; echo "stop rc $r"; return "$r"; }}
 mtstart F6-r2; echo RC=$?"""
 
 
@@ -82,7 +83,8 @@ def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, star
 
 
 @pytest.mark.parametrize("why,count,power", [("stale", "3", "10"), ("too high", "4", "20")])
-@pytest.mark.parametrize("stop1,stop2,rc", [("0", "0", 2), ("1", "0", 2), ("1", "1", 3)])
+@pytest.mark.parametrize("stop1,stop2,rc", [("0", "0", 2), ("1", "0", 2), ("1", "1", 3), ("255", "0", 2),
+                                            ("255", "255", 3)])   # 255: ssh had no connection, also a failed stop
 def test_a_safety_stop_is_checked_retried_once_and_a_failed_one_named(tmp_path, why, count, power, stop1, stop2, rc):
     # The stop before a power STOP is checked: one retry; a stop that fails twice is its own STOP (rc 3) naming the unsafe
     # state, never the plain STOP.
@@ -93,4 +95,4 @@ def test_a_safety_stop_is_checked_retried_once_and_a_failed_one_named(tmp_path, 
         assert (evd / "F6-r2-stop-2.txt").exists()
     else:
         assert "(meshtastic@r2 stopped)" in p.stdout
-        assert (evd / "F6-r2-stop-2.txt").exists() is (stop1 == "1")
+        assert (evd / "F6-r2-stop-2.txt").exists() is (stop1 != "0")    # a retry only after a failed first stop

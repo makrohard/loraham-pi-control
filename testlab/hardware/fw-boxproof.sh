@@ -73,7 +73,8 @@ say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 stop() { say "STOP: $*"; [ "$MODE" = live ] && echo "STOP: $*" >> "$EVD/STOP.txt"; exit 2; }
 # safestop <tag> <why>: stop meshtastic@r2 (its guarded stop, checked, one retry), then STOP. A stop that fails twice is its
 #  own STOP, rc 3: the stack may still be running and its TX power is unverified.
-safestop() { local i; for i in 1 2; do X "$1-stop-$i.txt" "$(gstop meshtastic@r2)"; [ "$XRC" = 0 ] && stop "$2 (meshtastic@r2 stopped)"; done
+safestop() { local i; for i in 1 2; do capture "$1-stop-$i.txt" sshx n "$(gstop meshtastic@r2)"   # any rc but 0 (ssh 255 too) failed
+    [ "$XRC" = 0 ] && stop "$2 (meshtastic@r2 stopped)"; done
   say "STOP: $2; the stop failed twice: meshtastic@r2 may still be running, TX power unverified"
   [ "$MODE" = live ] && echo "UNSAFE: $2; meshtastic@r2 may still be running, TX power unverified" >> "$EVD/STOP.txt"; exit 3; }
 fail() { say "FAIL: $*"; [ "$MODE" = live ] && echo "$*" >> "$EVD/FAILED.txt"; }
