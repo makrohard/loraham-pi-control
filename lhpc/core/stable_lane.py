@@ -270,9 +270,10 @@ def update_refusal(ref: StableRef, installed: str, older: bool | None, why: str 
     if is_final(ref.why):
         return ref.why
     if not ref.sha or not ref.verified or older is None:
-        if why:
+        if why and ref.verified:                     # a reason about the target: only from a verified one
             return why
-        why = ref.why or ("" if older is not None else "the installed commit's history could not be read")
+        why = ref.why or ("" if older is not None or not ref.verified
+                          else "the installed commit's history could not be read")
         return TRY_LATER + (f" ({why})" if why else "")
     if older:
         return (f"the stable target ({ref.label}) is not newer than the installed version: refused; "

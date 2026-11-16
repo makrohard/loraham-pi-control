@@ -1075,3 +1075,18 @@ def test_a_switch_to_stable_checks_freshness_against_its_target_not_the_recorded
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[1]
 
+
+def test_an_unchecked_target_beside_the_installed_release_reads_try_again_later(box, capsys):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v3.0", box.side(box.c[0]))          # a plain tag beside the installed release's line
+    box.release = "503"                               # the releases API fails: the tags alone name v3.0
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0
+    out = capsys.readouterr().out
+    assert "try again later" in out and "is not in the history" not in out   # RED before: a divergence
+    assert box.head() == box.c[1]
+    box.release = "v2.8.0.7239fe8"                    # the read recovers: the release is the target, current
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[1]
+
