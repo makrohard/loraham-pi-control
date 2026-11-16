@@ -25,7 +25,7 @@ import traceback
 
 from . import binary_install as bi
 from . import binary_receipt as brx
-from . import instances, reslock, runtime_fs, source_registry, web_client
+from . import instances, reslock, runtime_fs, web_client
 from .best_effort import best_effort
 from .paths import PathContainmentError
 from .service_base import (
@@ -127,8 +127,11 @@ class BinaryOpsMixin:
                 return self._binary_already_installed(stack_id, entry, _have, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
-            if _have:
-                return self._binary_already_installed(stack_id, entry, _have, [])
+            if _have:   # the same intact artifact: what its checkout repair would move (or refuse), as the apply
+                _moves, _refuse = bi.inspect_clones(self, stack_id, spec, entry, src_cmd)
+                return _refuse if _refuse is not None else self._binary_already_installed(
+                    stack_id, entry, _have, [f"  moves the pinned source for {c.id} to {w[:9]} (run scripts)"
+                                             for c, w, _p in _moves])
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
@@ -201,61 +204,9 @@ class BinaryOpsMixin:
                 return self._binary_already_installed(stack_id, entry, _have, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
-            # HYBRID stacks: some covered components still need their PINNED clone, because the
-            # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
-            # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
-            # then cannot start on a box that never had the checkout. A clean checkout of ours at
-            # another commit is moved to the binary's commit by the same adoption (U9: the checkout
-            # follows the binary); a dirty, foreign or unproven tree is refused.
-            _moves = []                                 # (component, the binary's commit, its commit now or "")
-            if spec.clone_required:
-                st = self.stack(stack_id)
-                by_id = {c.id: c for c in (st.components if st else ())}
-                inst = self._installer()
-                for cid in spec.clone_required:
-                    comp = by_id.get(cid)
-                    if comp is None or comp.source is None:
-                        continue
-                    dest = self._paths.resolve_source(comp.source.path)
-                    want = entry.components[cid]            # U9: the commit the binary was built from
-                    if dest.is_dir():
-                        # PRESENT is not PROVEN: the artifact's binaries run scripts FROM this
-                        # checkout, so a dev/stale/foreign tree would be executed by it. Require the
-                        # binary's commit via the ownership verifier.
-                        rec, why = source_registry.verify_identity(
-                            self._paths, self._system, self.config(), comp, dest,
-                            components=(cid,))
-                        if rec is None:
-                            return ActionResult(
-                                False,
-                                f"Binary install of '{stack_id}' blocked: the existing "
-                                f"{comp.source.path} checkout is not provably ours ({why}).",
-                                next_commands=[f"lhpc install {stack_id} --source pinned --yes"],
-                                data={"binary_failed": True})
-                        stale = (rec.resolved_commit or "") != want
-                        # AT the pin is not UNMODIFIED: run.sh / gps-relay.py run FROM this tree,
-                        # so a locally edited copy would run operator code under a "pinned" install.
-                        _dirty = inst.dirty_report(dest, comp.source.path)
-                        if stale and _dirty:
-                            return ActionResult(
-                                False,
-                                f"Binary install of '{stack_id}' blocked: {comp.source.path} is at "
-                                f"{(rec.resolved_commit or '?')[:9]}, the binary was built from "
-                                f"{want[:9]} — the artifact's run scripts must come from that "
-                                "checkout.",
-                                next_commands=[f"lhpc install {stack_id} --source binary --yes"],
-                                data={"binary_failed": True})
-                        if _dirty:
-                            _ch = list(_dirty.tracked) + list(_dirty.untracked)
-                            return ActionResult(
-                                False,
-                                f"Binary install of '{stack_id}' blocked: {comp.source.path} has "
-                                "local changes — the artifact runs scripts from that checkout.",
-                                details=[f"  changed: {c}" for c in _ch[:5]],
-                                next_commands=[src_cmd], data={"binary_failed": True})
-                        if not stale:   # clean and at the binary's commit: reuse it
-                            continue
-                    _moves.append((comp, want, (rec.resolved_commit or "") if dest.is_dir() else ""))
+            _moves, _refuse = bi.inspect_clones(self, stack_id, spec, entry, src_cmd)
+            if _refuse is not None:
+                return _refuse
             # Nothing is moved here. A running stack runs its scripts from these checkouts: refused.
             if _moves and (_run := self._binary_running_refusal(stack_id)) is not None:
                 return _run

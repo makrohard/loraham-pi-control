@@ -655,6 +655,69 @@ def repair_clones(svc, stack_id: str, moves, locked: bool, old_receipt) -> tuple
     return [], why if ok else f"{why}; the previous state could not be fully restored: {rwhy}"
 
 
+def inspect_clones(svc, stack_id: str, spec, entry, src_cmd: str):
+    """(moves, refusal | None): the supporting checkouts `entry` needs moved [(component, the binary's commit, its
+    commit now or "")], or the refusal of an unproven or dirty one. Reads only: the plan and the apply (under its
+    locks) ask the same question."""
+    # HYBRID stacks: some covered components still need their PINNED clone, because the
+    # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
+    # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
+    # then cannot start on a box that never had the checkout. A clean checkout of ours at
+    # another commit is moved to the binary's commit by the same adoption (U9: the checkout
+    # follows the binary); a dirty, foreign or unproven tree is refused.
+    from .service_base import ActionResult
+    _moves = []                                 # (component, the binary's commit, its commit now or "")
+    if spec.clone_required:
+        st = svc.stack(stack_id)
+        by_id = {c.id: c for c in (st.components if st else ())}
+        inst = svc._installer()
+        for cid in spec.clone_required:
+            comp = by_id.get(cid)
+            if comp is None or comp.source is None:
+                continue
+            dest = svc._paths.resolve_source(comp.source.path)
+            want = entry.components[cid]            # U9: the commit the binary was built from
+            if dest.is_dir():
+                # PRESENT is not PROVEN: the artifact's binaries run scripts FROM this
+                # checkout, so a dev/stale/foreign tree would be executed by it. Require the
+                # binary's commit via the ownership verifier.
+                rec, why = source_registry.verify_identity(
+                    svc._paths, svc._system, svc.config(), comp, dest,
+                    components=(cid,))
+                if rec is None:
+                    return [], ActionResult(
+                        False,
+                        f"Binary install of '{stack_id}' blocked: the existing "
+                        f"{comp.source.path} checkout is not provably ours ({why}).",
+                        next_commands=[f"lhpc install {stack_id} --source pinned --yes"],
+                        data={"binary_failed": True})
+                stale = (rec.resolved_commit or "") != want
+                # AT the pin is not UNMODIFIED: run.sh / gps-relay.py run FROM this tree,
+                # so a locally edited copy would run operator code under a "pinned" install.
+                _dirty = inst.dirty_report(dest, comp.source.path)
+                if stale and _dirty:
+                    return [], ActionResult(
+                        False,
+                        f"Binary install of '{stack_id}' blocked: {comp.source.path} is at "
+                        f"{(rec.resolved_commit or '?')[:9]}, the binary was built from "
+                        f"{want[:9]} — the artifact's run scripts must come from that "
+                        "checkout.",
+                        next_commands=[f"lhpc install {stack_id} --source binary --yes"],
+                        data={"binary_failed": True})
+                if _dirty:
+                    _ch = list(_dirty.tracked) + list(_dirty.untracked)
+                    return [], ActionResult(
+                        False,
+                        f"Binary install of '{stack_id}' blocked: {comp.source.path} has "
+                        "local changes — the artifact runs scripts from that checkout.",
+                        details=[f"  changed: {c}" for c in _ch[:5]],
+                        next_commands=[src_cmd], data={"binary_failed": True})
+                if not stale:   # clean and at the binary's commit: reuse it
+                    continue
+            _moves.append((comp, want, (rec.resolved_commit or "") if dest.is_dir() else ""))
+    return _moves, None
+
+
 def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
     """Move every checkout a rolled-back binary transaction moved back to its journaled commit. One that did not
     exist before stays as adopted: nothing older to return to. Under THAT stack's source locks, taken here (sorted;

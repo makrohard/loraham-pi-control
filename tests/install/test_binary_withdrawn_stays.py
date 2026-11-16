@@ -255,7 +255,7 @@ def _moving_clone(monkeypatch, svc, commit):
 
     class _Installer:
         def dirty_report(self, d, path):
-            return DirtyReport()
+            return DirtyReport(tracked=list(state.get("dirty", ())))
 
         def adopt_source(self, c, *, pinned_expected=None, **kw):
             state["adopted"].append(pinned_expected[0])
@@ -622,3 +622,26 @@ def test_another_stacks_install_leaves_a_checkout_whose_lock_is_busy_and_names_i
     assert "lhpc install meshcom --source binary --yes moves it back" in res.summary, res.summary
     assert state["adopted"] == [] and state["commit"] == "a" * 40
     assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_the_plan_names_the_same_artifacts_checkout_repair_the_apply_makes(tmp_path, monkeypatch, binary_receipt):
+    # B intact and listed, its checkout clean at another commit: the plan says the checkout moves (a change), and
+    # moves nothing; the apply makes that move.
+    svc, state = _repair_setup(tmp_path, monkeypatch, binary_receipt)
+    plan = svc.install("meshcom", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 1, plan
+    assert f"  moves the pinned source for meshcom-qemu to {'b' * 9} (run scripts)" in plan.details, plan.details
+    assert state["adopted"] == []
+    apply = svc.install("meshcom", apply=True, source="binary")
+    assert apply.ok and apply.data["changes"] == 1 and state["adopted"] == ["b" * 40], apply
+
+
+def test_plan_and_apply_refuse_a_dirty_stale_checkout_of_the_same_artifact_alike(tmp_path, monkeypatch,
+                                                                                 binary_receipt):
+    svc, state = _repair_setup(tmp_path, monkeypatch, binary_receipt)
+    state["dirty"] = ["run.sh"]
+    plan, apply = (svc.install("meshcom", apply=a, source="binary") for a in (False, True))
+    for res in (plan, apply):
+        assert not res.ok and "the artifact's run scripts must come from that checkout" in res.summary, res.summary
+    assert plan.summary == apply.summary and plan.next_commands == apply.next_commands
+    assert state["adopted"] == []
