@@ -282,7 +282,17 @@ def test_a_cut_advance_put_back_restores_a_file_the_update_removed(env, tmp_path
     assert (env["work"] / "pyproject.toml").is_file() and (env["work"] / "lhpc" / "version.py").is_file()
 
 
-def test_a_timed_out_advance_that_cannot_be_put_back_names_the_overwrite(env, monkeypatch):
+_LOCKED = CommandResult(128, "", "fatal: Unable to create '.git/index.lock': File exists.")
+
+
+@pytest.mark.parametrize("reset, cause", [
+    (_LOCKED, "fatal: Unable to create '.git/index.lock': File exists."),
+    (CommandResult(124, "", "", timed_out=True), "git timed out after 300 s"),
+], ids=["index-lock", "put-back-timed-out"])
+def test_a_timed_out_advance_that_cannot_be_put_back_names_gits_error_then_the_overwrite(
+        env, monkeypatch, reset, cause):
+    """A put-back git cannot do (a stale index lock; a disk too slow even for that) is not cured by
+    the overwrite alone: the message carries git's own error, to clear first."""
     old = selfupdate.local_state(env["sys"])["head"]
     gitrepo.upstream_commit(env["up"])
     real_git = selfupdate._git
@@ -291,13 +301,15 @@ def test_a_timed_out_advance_that_cannot_be_put_back_names_the_overwrite(env, mo
         if args[:1] == ["merge"]:
             return CommandResult(124, "", "Updating files:  30% (1/3)", timed_out=True)
         if args[:1] == ["reset"]:
-            return CommandResult(128, "", "fatal: Unable to create '.git/index.lock': File exists.")
+            return reset
         return real_git(system, root, args, timeout)
 
     monkeypatch.setattr(selfupdate, "_git", merge_times_out_reset_fails)
     res = selfupdate.apply_update(env["sys"], env["paths"])
     assert res["ok"] is False and res["timed_out"] is True
     assert "timed out" in res["message"] and "could not be put back" in res["message"]
+    assert f"could not be put back ({cause})" in res["message"], res["message"]
+    assert res["put_back_error"] == cause
     assert "overwrite local changes" in res["message"] and "\n" not in res["message"]
     assert selfupdate.local_state(env["sys"])["head"] == old
 

@@ -646,12 +646,13 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     if getattr(m, "timed_out", False):
         # Cut off by the limit, git may have written part of the new tree: put the checkout back on
         # the commit it started from, so the same update can simply be run again.
-        back = _put_back(system, root, local.get("head", ""), up["upstream_head"])
-        return {"ok": False, "timed_out": True,
+        stuck = _put_back(system, root, local.get("head", ""), up["upstream_head"])
+        return {"ok": False, "timed_out": True, "put_back_error": stuck,
                 "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s; "
-                + ("the checkout is back on the commit it started from — run the update again."
-                   if back else "the checkout could not be put back — re-run with 'overwrite local "
-                   "changes' to discard the partly written files and update.")}
+                + (f"the checkout could not be put back ({stuck}) — clear that cause, then re-run "
+                   "with 'overwrite local changes' to discard the partly written files and update."
+                   if stuck else "the checkout is back on the commit it started from — run the "
+                   "update again.")}
     if m.returncode != 0:
         detail = _summarize_output(m.stderr)
         # THREE distinct outcomes share this branch — conflating them offered a DESTRUCTIVE remedy
@@ -686,18 +687,24 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     return out
 
 
-def _put_back(system: System, root: Path, head: str, new: str) -> bool:
-    """Put a checkout whose advance from `head` to `new` timed out back on `head`; False when it
-    cannot. Only the update's own writes are undone: a path the update changes is restored to `head`
+def _put_back(system: System, root: Path, head: str, new: str) -> str:
+    """Put a checkout whose advance from `head` to `new` timed out back on `head`: '' when done,
+    else why not (git's own error: a lock, a read-only or full disk is not cured by a retry). Only the update's own writes are undone: a path the update changes is restored to `head`
     (or, added by the update, removed) when it holds `new`'s content or is missing. Any other change
     is left as it is: a file someone created or edited while git ran is not the update's to discard,
     even though the advance began on a clean tree (or after the operator agreed to discard what was
     there then)."""
+    def why(r, args):
+        if getattr(r, "timed_out", False):
+            return f"git timed out after {_APPLY_TIMEOUT:g} s"
+        return _summarize_output(r.stderr or r.stdout) or f"git {args[0]} failed"
+
     if not head or not new:
-        return False
-    d = _git(system, root, ["diff", "--name-status", "-z", "--no-renames", head, new], _APPLY_TIMEOUT)
+        return "the commits to restore between are not known"
+    args = ["diff", "--name-status", "-z", "--no-renames", head, new]
+    d = _git(system, root, args, _APPLY_TIMEOUT)
     if d.returncode != 0:
-        return False
+        return why(d, args)
     fields = d.stdout.split("\0")[:-1]                            # -z: every field ends in NUL
     status = dict(zip(fields[1::2], fields[0::2], strict=True))   # path -> A / M / T / D
     # Against `new` in the index, `diff` lists the paths whose file is not `new`'s; against `head`,
@@ -708,7 +715,7 @@ def _put_back(system: System, root: Path, head: str, new: str) -> bool:
     for args in steps:
         r = _git(system, root, args, _APPLY_TIMEOUT)
         if r.returncode != 0:
-            return False
+            return why(r, args)
         out.append(set(r.stdout.split("\0")) - {""})
     _, not_new, _, missing = out
     written = {p for p, st in status.items() if st != "D"} - not_new
@@ -716,10 +723,11 @@ def _put_back(system: System, root: Path, head: str, new: str) -> bool:
     remove = sorted(p for p in written if status[p] == "A")
     for args, paths in ((["checkout", head, "--"], restore), (["clean", "-fq", "--"], remove)):
         for i in range(0, len(paths), 500):                       # bounded argv per call
-            chunk = [":(literal)" + p for p in paths[i:i + 500]]
-            if _git(system, root, [*args, *chunk], _APPLY_TIMEOUT).returncode != 0:
-                return False
-    return True
+            r = _git(system, root, [*args, *(":(literal)" + p for p in paths[i:i + 500])],
+                     _APPLY_TIMEOUT)
+            if r.returncode != 0:
+                return why(r, args)
+    return ""
 
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).
