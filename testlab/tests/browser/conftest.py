@@ -34,11 +34,16 @@ def _browser_ready() -> str:
 _CI_BROKEN = pytest.StashKey[str]()
 
 
+def _under_ci() -> bool:
+    """`CI` names a CI run only as 1 or true (any case); unset, empty, 0 or false is a local run."""
+    return os.environ.get("CI", "").lower() in ("1", "true")
+
+
 def pytest_collection_modifyitems(config, items):
     reason = _browser_ready()
     if not reason:
         return
-    if os.environ.get("CI") and os.environ.get("LHPC_BROWSER") == "1":
+    if _under_ci() and os.environ.get("LHPC_BROWSER") == "1":
         config.stash[_CI_BROKEN] = reason          # failed per test below: a collection-hook failure aborts the whole run
         return
     skip = pytest.mark.skip(reason=reason)
