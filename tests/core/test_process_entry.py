@@ -46,6 +46,9 @@ CASES = [
     ("meshcore-webui-other-app", "meshcore-webui", "meshcore",
      ["/home/u/other-app/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--port", "8000"],
      [OWN, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8788"]),
+    ("meshcore-webui-of-another-install", "meshcore-webui", "meshcore",   # G1 round 1's scenario
+     ["/opt/other/src/meshcore-webui/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--port", "9000"],
+     [OWN, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8788"]),
     ("meshcore-webui-path-in-an-argument", "meshcore-webui", "meshcore",
      ["/home/u/other-app/.venv/bin/python", "-m", "uvicorn", "app.main:app",
       "--root-path", "/r/src/meshcore-webui/backend/.venv/bin/python"],
