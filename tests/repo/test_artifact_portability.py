@@ -88,6 +88,14 @@ def released_tags():
     return tags
 
 
+@pytest.mark.parametrize("ci, outcome", [("0", pytest.skip.Exception), ("1", pytest.fail.Exception)])
+def test_without_release_tags_the_guard_skips_locally_and_fails_under_ci(monkeypatch, request, ci, outcome):
+    monkeypatch.setitem(globals(), "_released_tags", lambda *a: [])
+    monkeypatch.setenv("CI", ci)
+    with pytest.raises(outcome):
+        request.getfixturevalue("released_tags")
+
+
 def test_the_guard_covers_a_stack():
     assert BINARY_STACKS_WITH_INPUTS, "no binary stack records build inputs — the guard checks nothing"
 

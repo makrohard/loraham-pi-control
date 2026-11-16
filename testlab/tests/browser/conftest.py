@@ -1,6 +1,6 @@
 """Browser lane: headless Chromium (Playwright) over the same real lab server the
 acceptance lane uses. Doubly gated — LHPC_BROWSER=1 AND a usable playwright+chromium —
-so the default lane and boxes without the browser skip with a reason. Under CI (`CI` set)
+so the default lane and boxes without the browser skip with a reason. Under CI (`CI` is 1 or true)
 the lane, once asked for with LHPC_BROWSER=1, FAILS without them: CI provides Chromium, so
 its absence there is a broken lane, not a reason to skip (test rule E7)."""
 from __future__ import annotations

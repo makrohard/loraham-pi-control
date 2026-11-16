@@ -19,9 +19,13 @@ _NEEDS = ("openhop_core",)
 _NEEDS_CLIENT = {"test_companion_integration.py", "test_persistence.py", "test_two_node_sim.py"}
 
 
+def _under_ci():                    # `CI` is 1 or true (any case); unset, empty, 0 or false is a local run
+    return os.environ.get("CI", "").lower() in ("1", "true")
+
+
 class _LibraryMissing(pytest.File):
     def collect(self):
-        if os.environ.get("CI"):        # a CI lane installs the library: its absence is a broken lane
+        if _under_ci():                 # a CI lane installs the library: its absence is a broken lane
             pytest.fail(self.reason, pytrace=False)
         pytest.skip(self.reason)
 

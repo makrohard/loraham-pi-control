@@ -104,3 +104,11 @@ def test_released_manifests_still_parse():
     assert set(refused) <= {"v0.1.2", "v0.1.3", "v0.1.4"}, refused
     current = _param_keys((repo_paths.REPO / REL).read_text())
     assert historical - current, "no release tag carries a key today's manifest lacks: the guard proves nothing"
+
+
+@pytest.mark.parametrize("ci, outcome", [("0", pytest.skip.Exception), ("1", pytest.fail.Exception)])
+def test_without_release_tags_the_parse_guard_skips_locally_and_fails_under_ci(monkeypatch, ci, outcome):
+    monkeypatch.setitem(globals(), "_released_tags", lambda *a: [])
+    monkeypatch.setenv("CI", ci)
+    with pytest.raises(outcome):
+        test_released_manifests_still_parse()

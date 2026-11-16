@@ -151,7 +151,7 @@ All markers are declared in `pyproject.toml`; `--strict-markers` rejects a typo.
   wall time on CPU and runs at least 1.0 s on a serial run).
 - `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
   `no_default_display` state an environmental requirement or opt-out; `needs_git_checkout` skips in a
-  source export and fails under CI (`CI` set).
+  source export and fails under CI (`CI` is 1 or true).
 
 ## How to run
 
