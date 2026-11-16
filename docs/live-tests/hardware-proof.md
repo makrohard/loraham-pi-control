@@ -55,7 +55,8 @@ every key with a placeholder and is what dry reads:
   `~/loraham-pi-control`);
 - the radio keys, `RADIO_<KEY>="<box> <model> <band> [serial=<s>|port=<p>]"`; the three USB sticks share one USB id, so
   a stick is found by its serial, or by its port when the serial is not unique;
-- the PC peers, `PEER_<name>="<kind> <by-id name | BLE address> <hub>"` for tdeck, tracker, g2, tdpro and rnode;
+- the PC peers, `PEER_<name>="<kind> <by-id name | BLE address> <hub>"` for tdeck, tracker, g2, tdpro and rnode; the
+  RNode's also names the PC's shared rnsd, `instance=<name> port=<n> control=<n>` (no defaults, the two ports differ);
 - `OPERATOR_CALL`, the peer venvs, the shared rnsd config, the peer lock and `EVD_ROOT` (under `/home`, never `/tmp`).
 
 It holds no secret, and the runner refuses one that sets a variable named like `*PASS*`, `*PIN*` or `*SECRET*`. The box

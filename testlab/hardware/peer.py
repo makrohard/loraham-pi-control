@@ -59,12 +59,32 @@ def usage_error(a):
     return None if ok else f"{a[0]}: {' '.join(want)}"
 
 
+def peer_fields(name):
+    """The fields of `PEER_<name>` in the lab's local file (the runner exports it)."""
+    return os.environ.get(f"PEER_{name}", "").split()
+
+
 def device(name):
     """The device of peer `name` from `PEER_<name>` (its second field): a by-id name or a BLE address."""
-    fields = os.environ.get(f"PEER_{name}", "").split()
+    fields = peer_fields(name)
     if len(fields) < 2:
         raise RuntimeError(f"PEER_{name} is not set (the lab's local file names each peer)")
     return fields[1]
+
+
+def rns_instance():
+    """The PC's shared rnsd from PEER_rnode's fields instance=<name> port=<n> control=<n>: no defaults; a missing or malformed
+    one, or port = control, is refused by name."""
+    fields = dict(f.split("=", 1) for f in peer_fields("rnode")[1:] if "=" in f)
+    name, ports = fields.get("instance", ""), [fields.get(k, "") for k in ("port", "control")]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        raise RuntimeError("PEER_rnode has no valid instance=<name> (the PC's shared rnsd)")
+    for key, value in zip(("port", "control"), ports, strict=True):
+        if not re.fullmatch(r"[0-9]{1,5}", value) or not 1 <= int(value) <= 65535:
+            raise RuntimeError(f"PEER_rnode has no valid {key}=<1..65535>")
+    if ports[0] == ports[1]:
+        raise RuntimeError("PEER_rnode: port and control are the same")
+    return name, int(ports[0]), int(ports[1])
 
 
 def port(name):
@@ -339,19 +359,21 @@ def rns_exchange(inn, box_name, secs, dest_file, out, go_file):
     import shutil
     import tempfile
     device("rnode")
+    instance = rns_instance()
     d = tempfile.mkdtemp(prefix="rfproof-rns-")
     try:
-        return rns_run(d, inn, box_name, secs, dest_file, out, go_file)
+        return rns_run(d, instance, inn, box_name, secs, dest_file, out, go_file)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def rns_run(d, inn, box_name, secs, dest_file, out, go_file):
+def rns_run(d, instance, inn, box_name, secs, dest_file, out, go_file):
     import LXMF
     import RNS
     with open(os.path.join(d, "config"), "w") as f:
-        f.write("[reticulum]\n  enable_transport = False\n  share_instance = Yes\n"
-                "  instance_name = lhpc-rf-host\n  shared_instance_port = 37438\n  instance_control_port = 37439\n[interfaces]\n")   # the PC's shared rnsd (its AF_UNIX instance name; the ports are not used on Linux)
+        f.write("[reticulum]\n  enable_transport = False\n  share_instance = Yes\n"   # a client of the PC's shared rnsd
+                f"  instance_name = {instance[0]}\n  shared_instance_port = {instance[1]}\n"
+                f"  instance_control_port = {instance[2]}\n[interfaces]\n")
     r = RNS.Reticulum(configdir=d, loglevel=RNS.LOG_ERROR)
     if not getattr(r, "is_connected_to_shared_instance", False):
         raise RuntimeError("not attached to the shared rnsd (refusing to open the RNode port)")

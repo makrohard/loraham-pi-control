@@ -27,7 +27,7 @@ BOOT = b"...FREQ 433.1750 MHz TXPWR 2 dBm RXBOOST off\r\n"     # MeshCom's boot 
 
 LAB_PEERS = {"tdeck": "serial usb-Example_TDeck-if00 hub1", "tracker": "serial usb-Example_Tracker-if00 hub2",
              "g2": "serial usb-Example_G2-if00 hub2", "tdpro": "ble 00:00:5E:00:53:01 -",
-             "rnode": "rnode usb-Example_RNode-if00-port0 hub1 serial_unique=false"}
+             "rnode": "rnode usb-Example_RNode-if00-port0 hub1 serial_unique=false instance=lab-rns port=40001 control=40002"}
 
 
 @pytest.fixture(autouse=True)
@@ -259,6 +259,9 @@ def test_the_device_is_the_by_id_name_the_local_file_gives(clock, monkeypatch):
     assert opened == ["/dev/serial/by-id/usb-Example_TDeck-if00"]
 
 
+CONFIGS = []                                                     # the scratch configs the fake Reticulum was given
+
+
 # rns-exchange's second TX (the LXMF message) waits for the runner's go file; no go file = no handle_outbound
 def _fake_rns(monkeypatch, sent, box=None):
     # `box` = {"answers": True} makes the box send its LXMF message with "in1", {"confirms": True} its delivery proof
@@ -270,7 +273,7 @@ def _fake_rns(monkeypatch, sent, box=None):
         is_connected_to_shared_instance = True
 
         def __init__(self, configdir=None, loglevel=None):
-            pass
+            CONFIGS.append(pathlib.Path(configdir, "config").read_text())
     rns.Reticulum = Ret
     handlers = []
 
@@ -397,6 +400,29 @@ def test_rns_exchange_succeeds_only_with_the_boxs_message_and_its_delivery_proof
     (tmp_path / "go").write_text("")
     assert peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")]) == rc
     assert " ".join(capsys.readouterr().out.splitlines()[-1].split()[:2]) == last
+
+
+def test_the_shared_rnsd_instance_comes_from_the_local_file(rns_sent, tmp_path):
+    CONFIGS.clear()
+    (tmp_path / "go").write_text("")
+    peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
+    assert len(CONFIGS) == 1 and [line.strip() for line in CONFIGS[0].splitlines() if "instance" in line] == [
+        "share_instance = Yes", "instance_name = lab-rns", "shared_instance_port = 40001", "instance_control_port = 40002"]
+
+
+@pytest.mark.parametrize("fields,why", [
+    ("port=40001 control=40002", "no valid instance"), ("instance=a/b port=40001 control=40002", "no valid instance"),
+    ("instance=lab-rns control=40002", "no valid port"), ("instance=lab-rns port=0 control=40002", "no valid port"),
+    ("instance=lab-rns port=70000 control=40002", "no valid port"), ("instance=lab-rns port=4x control=40002", "no valid port"),
+    ("instance=lab-rns port=40001", "no valid control"), ("instance=lab-rns port=40001 control=40001", "are the same"),
+])
+def test_a_missing_or_malformed_rns_instance_is_refused_before_anything_opens(rns_sent, monkeypatch, tmp_path, fields, why):
+    made = []
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append("mkdtemp") or str(tmp_path / "scratch"))
+    monkeypatch.setenv("PEER_rnode", f"rnode usb-Example_RNode-if00-port0 hub1 {fields}")
+    with pytest.raises(RuntimeError, match=why):
+        peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
+    assert made == [] and rns_sent == []
 
 
 def test_rns_exchange_needs_the_go_file_argument(capsys):
