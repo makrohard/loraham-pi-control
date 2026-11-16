@@ -311,11 +311,21 @@ def mc_read(nonce, secs):
 
 
 def rns_exchange(inn, box_name, secs, dest_file, out, go_file):
+    """One exchange through the PC's shared rnsd, in a scratch config removed afterwards; the local file must name the
+    RNode peer (PEER_rnode) before anything is opened."""
+    import shutil
     import tempfile
+    device("rnode")
+    d = tempfile.mkdtemp(prefix="rfproof-rns-")
+    try:
+        return rns_run(d, inn, box_name, secs, dest_file, out, go_file)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
+
+def rns_run(d, inn, box_name, secs, dest_file, out, go_file):
     import LXMF
     import RNS
-    d = tempfile.mkdtemp(prefix="rfproof-rns-")
     with open(os.path.join(d, "config"), "w") as f:
         f.write("[reticulum]\n  enable_transport = False\n  share_instance = Yes\n"
                 "  instance_name = lhpc-rf-host\n  shared_instance_port = 37438\n  instance_control_port = 37439\n[interfaces]\n")   # the PC's shared rnsd (its AF_UNIX instance name; the ports are not used on Linux)

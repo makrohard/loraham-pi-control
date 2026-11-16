@@ -7,6 +7,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+import tempfile
 import types
 from typing import ClassVar
 
@@ -25,7 +26,8 @@ BOOT = b"...FREQ 433.1750 MHz TXPWR 2 dBm RXBOOST off\r\n"     # MeshCom's boot 
 
 
 LAB_PEERS = {"tdeck": "serial usb-Example_TDeck-if00 hub1", "tracker": "serial usb-Example_Tracker-if00 hub2",
-             "g2": "serial usb-Example_G2-if00 hub2", "tdpro": "ble 00:00:5E:00:53:01 -"}
+             "g2": "serial usb-Example_G2-if00 hub2", "tdpro": "ble 00:00:5E:00:53:01 -",
+             "rnode": "rnode usb-Example_RNode-if00-port0 hub1 serial_unique=false"}
 
 
 @pytest.fixture(autouse=True)
@@ -359,6 +361,24 @@ def test_rns_exchange_go_file_sends_once(rns_sent, tmp_path, capsys):
     (tmp_path / "go").write_text("")
     peer.rns_exchange("in1", "LHPC", 5, str(tmp_path / "dest"), "out1", str(tmp_path / "go"))
     assert len(rns_sent) == 1 and "TX2-NOT-GATED" not in capsys.readouterr().out
+
+
+def test_an_rnode_the_local_file_does_not_name_is_refused_before_anything_opens(rns_sent, monkeypatch, tmp_path):
+    made = []
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append("mkdtemp") or str(tmp_path / "scratch"))
+    monkeypatch.setattr(sys.modules["RNS"], "Reticulum", lambda **k: made.append("reticulum"))
+    monkeypatch.delenv("PEER_rnode")
+    with pytest.raises(RuntimeError, match="PEER_rnode is not set"):
+        peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
+    assert made == [] and rns_sent == []
+
+
+def test_rns_exchange_removes_its_scratch_config(rns_sent, monkeypatch, tmp_path):
+    made = []
+    real = tempfile.mkdtemp
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append(real(dir=tmp_path, **k)) or made[-1])
+    peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
+    assert len(made) == 1 and not os.path.exists(made[0])
 
 
 def test_rns_exchange_needs_the_go_file_argument(capsys):
