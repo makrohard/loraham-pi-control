@@ -144,3 +144,40 @@ def test_a_binary_receipt_failure_offers_install_not_build(box, web, tmp_path, m
     assert "Build required to start" not in body
     banner = body.split("Install required to start", 1)[1].split("</div>", 1)[0]   # its body and its link
     assert "Install &rarr;" in banner and "Build &rarr;" not in banner, banner
+
+
+def test_an_unsafe_daemon_receipt_names_no_build_dependency(box, web, tmp_path, monkeypatch, binary_receipt):
+    """G1-UPD-U8-CODE v2 N1: on an unsafe daemon receipt every covered component (RadioLib too) refuses by the
+    receipt's reason. RadioLib's checkout is there and unbuilt (a build-planning dependency), yet the page shows
+    no "Build this dependency first" (`lhpc build` is refused on the binary channel), only the Install banner."""
+    box((R1, R2_868))
+    for n in _UNDONE:
+        if _REAL[n] is not None:
+            monkeypatch.setattr(ControllerService, n, _REAL[n])
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    radiolib = svc.stack("daemon").component("radiolib")
+    svc._lifecycle().source_dir(radiolib).mkdir(parents=True, exist_ok=True)
+    binary_receipt(svc, "daemon", probe="loraham_daemon 0.9.0")
+    (tmp_path / svc.binary_spec("daemon").proof_paths[0]).unlink()
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert "radiolib" in svc.unbuilt_build_deps("daemon")                    # the build plan still lists it
+    assert "is gone" in dict(svc.start_readiness("daemon")[0])["radiolib"]
+    body = web().get("/stacks/daemon/body").get_data(as_text=True)
+    assert "Build this dependency first" not in body and "radiolib not built" not in body, body
+    assert "Install required to start" in body and "radiolib: binary artifact file" in body, body
+
+
+def test_an_unbuilt_source_dependency_is_named_to_build_first(box, web, tmp_path, monkeypatch):
+    """The anchor of the test above, off the binary channel: RadioLib's checkout is there and unbuilt, so its
+    start refusal is a source build's and the page names it to build first."""
+    box((R1, R2_868))
+    for n in _UNDONE:
+        if _REAL[n] is not None:
+            monkeypatch.setattr(ControllerService, n, _REAL[n])
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for cid in ("loraham-daemon", "radiolib"):
+        svc._lifecycle().source_dir(svc.stack("daemon").component(cid)).mkdir(parents=True, exist_ok=True)
+    assert dict(svc.start_readiness("daemon")[0])["radiolib"] == f"not built — run: {svc.build_remedy('daemon', 'radiolib')}"
+    body = web().get("/stacks/daemon/body").get_data(as_text=True)
+    assert "radiolib not built" in body and "Build this dependency first" in body, body
