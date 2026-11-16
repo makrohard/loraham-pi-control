@@ -325,16 +325,19 @@ def test_a_parser_failure_outside_the_named_ones_logs_its_type_only(meshchat, ra
     assert "Traceback" not in out and text not in out.lower(), out
 
 
-def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch, capsys):
+@pytest.mark.parametrize("exc", [RecursionError("maximum recursion depth exceeded CANARY_SECRET"),
+                                 KeyError("CANARY_SECRET")], ids=["recursion", "any-type"])
+def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch, capsys, exc):
     """The B2 boundary itself, on any Python: an exception none of the named excepts covers, its text
-    carrying a canary, ends as rc 1 with the fixed message and the type name only."""
+    carrying a canary, ends as rc 1 with the fixed message and the type name only. KeyError stands for
+    any type outside the two seen (ValueError, RecursionError), so the boundary is `Exception`."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("meshchat_announce_inproc3", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
     def deep(api):
-        raise RecursionError("maximum recursion depth exceeded CANARY_SECRET")
+        raise exc
     monkeypatch.setattr(mod, "announce", deep)
     import signal
     before = signal.getsignal(signal.SIGALRM)
@@ -343,7 +346,7 @@ def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch,
     finally:
         signal.signal(signal.SIGALRM, before)
     err = capsys.readouterr().err
-    assert err == "meshchat-announce: not announced — GET /api/v1/announce: RecursionError\n", err
+    assert err == "meshchat-announce: not announced — GET /api/v1/announce: " + type(exc).__name__ + "\n", err
 
 
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
