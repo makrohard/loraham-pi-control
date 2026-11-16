@@ -27,13 +27,18 @@ KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); REPO=$(git -C "$KIT" rev-pars
 LAB=$KIT/lab.local.env; [ "$MODE" = dry ] && LAB=$KIT/lab.example.env
 # shellcheck source=/dev/null
 RFPROOF_SOURCE_ONLY=1 . "$KIT/rf-proof.sh" || { echo "STOP: rf-proof.sh does not read"; exit 2; }   # its one redactor, capture
-[ -r "$LAB" ] || { echo "STOP: no $LAB"; exit 2; }
-# shellcheck source=/dev/null
-. "$LAB" || { echo "STOP: $LAB does not read"; exit 2; }
+# the lab file is data, read only by rf-proof.sh's labread (its keys' grammars checked; a key set in the environment wins)
+labread "$LAB"
+# the inputs from the environment: each against its grammar before any use, as labcheck does for the lab keys
+for k in FWSHA FWFROM FWCI FWREF LANCIDR LABNAME LABSHORT; do
+  case $k in FWSHA|FWFROM) g='^([0-9a-f]{40})?$';; FWCI) g='^[0-9]*$';; FWREF) g='^([A-Za-z0-9._][A-Za-z0-9._/-]*)?$';;
+    LANCIDR) g='^(([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2})?$';; LABNAME) g='^([A-Za-z0-9][A-Za-z0-9-]*)?$';; LABSHORT) g='^[A-Za-z0-9]*$';; esac
+  [[ ${!k:-} =~ $g ]] || stop "$k: $(printf %q "${!k}") is not of its form ($g)"; done
 [ -n "${BOX_H_HOST:-}" ] && [ -n "${EVD_ROOT:-}" ] || { echo "STOP: $LAB sets no BOX_H_HOST or EVD_ROOT"; exit 2; }
 HOSTIP=$BOX_H_HOST; HH=${BOX_H_USER:-lhpc}@$HOSTIP; EVD=${EVD_ROOT/#\~/$HOME}/fw-boxproof-$(date -u +%Y%m%dT%H%M%SZ)
 FROM=${FWFROM:-}; REF=${FWREF:-cons/b4-cln-r1}
-RTB=${BOX_H_RUNTIME:-'~/loraham-pi-control'}; LH="$RTB/venv/lhpc/bin/lhpc"; CK="$RTB/src/loraham-pi-control"; PY="cd $RTB && ./venv/lhpc/bin/python"
+RTB=$(shq "${BOX_H_RUNTIME:-~/loraham-pi-control}")   # one shell word in every box command; ~/ stays the box login's home
+LH="$RTB/venv/lhpc/bin/lhpc"; CK="$RTB/src/loraham-pi-control"; PY="cd $RTB && ./venv/lhpc/bin/python"
 FWSHA=${FWSHA:-}; FWCI=${FWCI:-}; LANCIDR=${LANCIDR:-}; LABNAME=${LABNAME:-LabH2}; LABSHORT=${LABSHORT:-LH2}
 PW=; [ "$MODE" = dry ] || IFS= read -r PW || true; exec 0< /dev/null   # stdin: one line, then closed
 [ "$MODE" = dry ] || [ -n "$PW" ] || { echo "STOP: no box H password on stdin (line 1)"; exit 2; }
@@ -162,7 +167,7 @@ undo "$PY -c '$ENABLE_PY' r4 on"; must F3-r4off.txt "$PY -c '$ENABLE_PY' r4 off"
 
 echo "== FW3a a lab node identity for meshtastic@r2 (a local node name, never a callsign)"
 undo "$LH config meshtastic@r2 --reset --yes"
-must F3a-name.txt "$LH config meshtastic@r2 node_name $LABNAME < /dev/null"; must F3a-short.txt "$LH config meshtastic@r2 node_short $LABSHORT < /dev/null"
+must F3a-name.txt "$LH config meshtastic@r2 node_name $(shq "$LABNAME") < /dev/null"; must F3a-short.txt "$LH config meshtastic@r2 node_short $(shq "$LABSHORT") < /dev/null"
 must F3a-list.txt "$LH config meshtastic@r2 list"; [ "$MODE" = dry ] || { grep -qE "node_name \* = $LABNAME( |\$)" "$EVD/F3a-list.txt" && grep -qE "node_short \* = $LABSHORT( |\$)" "$EVD/F3a-list.txt"; } || stop "FW3a: the identity does not read back"
 
 echo "== FW4 (claim 4b) one apply clears the notice"
@@ -199,7 +204,7 @@ mtstart F9-r2
 undo "$LH webserver proxy meshtastic@r2 --mode local < /dev/null && $LH webserver apply < /dev/null"
 must F9-port.txt "$PY -c '$PORT_PY'"; PORT=$(body F9-port.txt | sed -n 's/^PORT //p'); [ "$MODE" = dry ] && PORT=8450
 [[ "$PORT" =~ ^[0-9]{4,5}$ ]] && [ "$PORT" != 0 ] || stop "FW9: no allocated page port for meshtastic@r2 (the one the firewall pre-opened)"
-must F9-proxy.txt "$LH webserver proxy meshtastic@r2 --mode lan --port $PORT --cidr $LANCIDR --confirm-phrase enable-remote < /dev/null"
+must F9-proxy.txt "$LH webserver proxy meshtastic@r2 --mode lan --port $(shq "$PORT") --cidr $(shq "$LANCIDR") --confirm-phrase enable-remote < /dev/null"
 must F9-wsapply.txt "$LH webserver apply < /dev/null"; must F9-ws.txt "$LH webserver status"
 lan F9-lan.txt "$PORT"; fwstate F9-fw.txt
 if page_ok "$LANCODE" && ! { [ "$MODE" = live ] && grep -qF "Firewall: Changes pending" "$EVD/F9-fw.txt"; }; then report "3 | meshtastic@r2's page exposed, LAN code $LANCODE on :$PORT, no sudo, no change pending | PASS"

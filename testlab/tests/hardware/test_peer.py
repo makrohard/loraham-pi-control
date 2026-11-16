@@ -2,6 +2,7 @@
 `--lora` queries, each window one echo and one answer, both agreeing), every power SET exiting non-zero on a readback mismatch,
 the devices named by the lab's local file, and rns-exchange's second send waiting for the runner's go file.
 PEER=<path> picks the module under test (a red-before runs these against an older driver)."""
+import ast
 import asyncio
 import importlib.util
 import os
@@ -435,3 +436,20 @@ def test_rns_exchange_message_sent_once_no_retries(rns_sent, tmp_path):
     (tmp_path / "go").write_text("")
     peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
     assert [a for _m, a in rns_sent] == [0]
+
+
+SPAWN = {"subprocess", "pty", "pexpect", "sh"}                              # modules that start a process
+SPAWN_CALLS = ("system", "popen", "exec", "spawn", "posix_spawn", "fork")   # os.<these>, and create_subprocess_* anywhere
+
+
+@pytest.mark.parametrize("name", ["peer.py", "fake_peer.py"])
+def test_the_peer_side_starts_no_process(name):
+    # The peer driver talks to its radio in-process: no module or call that starts a process, so no PEER_* field or
+    # other lab value ever enters a shell string (a field is only an argument or a device name).
+    tree = ast.parse((pathlib.Path(PEER).parent / name).read_text())
+    mods = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    mods |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    calls = [n.func for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    spawns = [f.attr for f in calls if f.attr.startswith("create_subprocess")
+              or (isinstance(f.value, ast.Name) and f.value.id == "os" and f.attr.startswith(SPAWN_CALLS))]
+    assert mods & SPAWN == set() and spawns == []

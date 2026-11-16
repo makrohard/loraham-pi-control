@@ -164,21 +164,62 @@ def test_the_end_scan_stops_on_a_password_in_the_evidence(tmp_path):
     assert p.returncode == 2 and "the box password is in 1 evidence file(s)" in p.stdout and "CLEAN" not in p.stdout
 
 
-def test_a_password_inside_the_login_name_is_refused_before_any_box_call(tmp_path):
-    # The redactor masks the password, so a password that is part of the login name would mask the login in every
-    # capture: the live run refuses it at once, with no ssh call.
+LAB = {"BOX_H_HOST": "192.0.2.10", "BOX_H_USER": "lhpc", "BOX_H_RUNTIME": "~/loraham-pi-control", "EVD_ROOT": "{tmp}/evd"}
+INPUTS = {"OPERATOR_CALL": CALL, "FWSHA": "a" * 40, "FWFROM": "b" * 40, "FWCI": "123", "FWREF": "cons/x",
+          "LANCIDR": "192.0.2.0/24", "LABNAME": "LabH2", "LABSHORT": "LH2"}
+PROBE = "; lhpc daemon r1 --set POWER=20 --yes #"
+
+
+def live_copy(tmp_path, lab=None, env=None, stdin=f"{PW}\n", extra=""):
+    """A live run of a kit copy (a git repo, so the proof finds its REPO) with `lab` as its lab.local.env ('...' values)
+    and the lines `extra` after them, `env` added, ssh and sshpass faked: (the process, whether any ssh ran)."""
     root = tmp_path / "r"
     kit = root / "testlab" / "hardware"
     shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
     subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=60)
-    (kit / "lab.local.env").write_text(f"BOX_H_HOST=192.0.2.10\nBOX_H_USER=u{PW}x\nEVD_ROOT={tmp_path}/evd\n")
+    lab = {k: v.replace("{tmp}", str(tmp_path)) for k, v in {**LAB, **(lab or {})}.items()}
+    (kit / "lab.local.env").write_text("".join(f"{k}='{v}'\n" for k, v in lab.items()) + extra)
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     for name in ("ssh", "sshpass"):
         (bin_ / name).write_text(f"#!/bin/bash\ntouch {tmp_path}/called\n")
         (bin_ / name).chmod(0o755)
-    p = subprocess.run(["bash", str(kit / "fw-boxproof.sh"), "live"], input=f"{PW}\n", capture_output=True, text=True,
-                       cwd=tmp_path, env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TMPDIR": str(tmp_path)},
-                       check=False, timeout=60)
+    e = {k: v for k, v in os.environ.items() if k not in LAB and k not in INPUTS}
+    e.update(PATH=f"{bin_}:{os.environ['PATH']}", TMPDIR=str(tmp_path), **(env or {}))
+    p = subprocess.run(["bash", str(kit / "fw-boxproof.sh"), "live"], input=stdin, capture_output=True, text=True,
+                       cwd=tmp_path, env=e, check=False, timeout=60)
+    return p, (tmp_path / "called").exists()
+
+
+@pytest.mark.parametrize("key,where", [(k, "lab") for k in sorted(LAB)] + [("BOX_H_RUNTIME", "env")]
+                         + [(k, "env") for k in sorted(INPUTS)])
+def test_a_value_that_would_run_a_command_stops_before_any_box_call(tmp_path, key, where):
+    # Every value the proof puts into a box command comes through a grammar first: a valid value with a command after
+    # it is a STOP that names the key, before the password is read or ssh runs.
+    value = {**LAB, **INPUTS}[key].replace("{tmp}", str(tmp_path)) + PROBE
+    p, ssh = live_copy(tmp_path, lab={key: value} if where == "lab" else None,
+                       env={key: value} if where == "env" else None)
+    assert p.returncode == 2 and f"STOP: {key}: " in p.stdout + p.stderr and not ssh, p.stdout + p.stderr
+
+
+RT = '"$HOME"/loraham-pi-control'           # the default runtime path as one shell word (shq)
+RT_FORMS = (RT + "/venv/lhpc/bin/lhpc", "cd " + RT + " && ./venv/lhpc/bin/python")
+
+
+def test_the_runtime_path_enters_each_box_command_as_one_word(tmp_path):
+    p, _ = proof(tmp_path, 'printf "%s\\n" "$LH" "$PY" "$FTX"')
+    lh, py, ftx = p.stdout.splitlines()
+    assert (lh, py) == RT_FORMS and f" {RT}/logs/" in ftx, p.stderr
+
+
+def test_the_lab_file_is_never_run(tmp_path):
+    p, ssh = live_copy(tmp_path, extra=f"touch {tmp_path}/ran\n")
+    assert p.returncode == 2 and "not a KEY=VALUE line" in p.stderr and not (tmp_path / "ran").exists() and not ssh, p.stderr
+
+
+def test_a_password_inside_the_login_name_is_refused_before_any_box_call(tmp_path):
+    # The redactor masks the password, so a password that is part of the login name would mask the login in every
+    # capture: the live run refuses it at once, with no ssh call.
+    p, ssh = live_copy(tmp_path, lab={"BOX_H_USER": f"u{PW}x"})
     assert p.returncode == 2 and "STOP: the box password is part of the login name" in p.stdout, p.stdout + p.stderr
-    assert not (tmp_path / "called").exists()
+    assert not ssh
