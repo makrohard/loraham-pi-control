@@ -712,6 +712,25 @@ def test_an_unpublished_installed_commit_is_refused_by_name(box, git, capsys):
     assert box.head() == local
 
 
+def test_a_commit_only_a_tag_reaches_is_published_and_moves_forward(box, git):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    s1 = box.side(box.c[0], "old")                    # a branch the upstream later deletes
+    box.push_tag("v0.1.0", s1)
+    git(box.work, "checkout", "-q", "old")
+    (box.work / "g").write_text("2\n")
+    git(box.work, "commit", "-qam", "old 2")
+    s2 = git(box.work, "rev-parse", "HEAD")
+    git(box.work, "checkout", "-q", "main")
+    git(box.work, "push", "-q", "origin", "--delete", "old")    # only the tag reaches s1 (LoRaHAM_Daemon: 5 of 32)
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == s1
+    box.push_tag("v0.2.0", s2)
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == s2
+
+
 def test_a_commit_the_upstream_rewrote_away_is_not_published_although_the_mirror_holds_it(box, git, capsys):
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     box.push_tag("v3.0", box.c[2])
@@ -912,16 +931,17 @@ def test_tags_that_are_not_one_line_of_history_refuse_the_stable_lane_by_name(bo
     assert (box.head(), box.selector()) == (box.c[0], "pinned")
 
 
-def test_the_release_names_its_commit_beside_a_higher_plain_tag_on_it(box):
-    from lhpc.core import stable_lane
+def test_the_release_names_its_commit_beside_a_higher_plain_tag_on_it(box, capsys):
+    box.push_tag("v3.0", box.c[2])
+    box.release = "v3.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # c3
+    box.drop_tags("v3.0")
     box.push_tag("v2.9.0", box.c[1])                  # the same commit as the release v2.8.0.7239fe8
-    box.release = "v2.8.0.7239fe8"
-    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
-    assert box.head() == box.c[1]
-    svc = box.svc()
-    items = [(svc.stack("s"), c) for c in svc.stack("s").components]
-    _, refs, _ = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable", svc._effective_remote)
-    assert (refs[REL].name, refs[REL].label) == ("v2.8.0.7239fe8", f"stable v2.8.0.7239fe8 @ {box.c[1][:9]}")
+    box.release = "v2.8.0.7239fe8"                    # the release moves back to an ancestor
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    assert f"the stable target (stable v2.8.0.7239fe8 @ {box.c[1][:9]}) {NOT_NEWER}" in capsys.readouterr().out
+    assert box.head() == box.c[2]
 
 
 def test_an_installed_commit_with_only_an_unparseable_tag_reads_behind_a_release_in_its_future(box, git):
