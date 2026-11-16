@@ -37,3 +37,25 @@ def test_the_download_base_is_github_unless_overridden(tmp_path, env_extra, url)
     r, curl_args = _fetch(tmp_path, env_extra)
     assert r.returncode == 1 and "download failed" in r.stderr
     assert curl_args[-1] == url
+
+
+def test_upstream_checksum_lookup_survives_a_reader_that_stops_at_the_first_match(tmp_path):
+    """--from-upstream reads the release's checksums.txt and awk stops at the .deb's line. With
+    the line first in a long file, a pipe from printf would leave the writer to be killed by
+    SIGPIPE, and under pipefail the script would end with rc 141 and an empty stderr."""
+    sha = "a" * 64
+    ck = tmp_path / "checksums.txt"
+    ck.write_text(f"{sha}  graywolf_0.15.0_arm64.deb\n"
+                  + "".join(f"{i:064x}  graywolf_0.15.0_other{i}.tar.gz\n" for i in range(6000)))
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    for name, body in {**SHIMS, "curl": ('#!/bin/sh\ncase "$*" in *checksums.txt) cat "$CK_FILE";;'
+                                         ' *) exit 22;; esac\n')}.items():
+        (shims / name).write_text(body)
+        (shims / name).chmod(0o755)
+    r = subprocess.run(["bash", str(asset_path("scripts/graywolf-fetch.sh")), str(tmp_path / "gw"),
+                        "0.15.0", "--from-upstream"], capture_output=True, text=True, check=False,
+                       env={"PATH": f"{shims}:/usr/bin:/bin", "CK_FILE": str(ck)})
+    assert r.returncode == 1, (r.returncode, r.stderr)
+    assert f"upstream sha256 for graywolf_0.15.0_arm64.deb: {sha}" in r.stdout
+    assert "download failed" in r.stderr
