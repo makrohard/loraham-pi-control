@@ -1512,12 +1512,13 @@ def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, c
 
 
 def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path, capsys, monkeypatch):
-    """The 0.14.0 CHANGELOG Reticulum block (v2), each step in its printed form and order, on a box
-    whose Reticulum runs on r2: (1) the update is refused while it runs and names the stop; (2) after
-    `lhpc stack stop reticulum@r2 --yes` that refusal is gone; (3) `lhpc config reticulum@r2
-    rnode_framing yes`; (4) `lhpc stack start reticulum@r2` launches the node on r2, framed. An update
-    never stops a stack itself (service_maintenance.py), so the stop comes first. The running state is
-    the fixture's: the node's process and instance as the box reports them."""
+    """The 0.14.0 CHANGELOG Reticulum block (v3), each step in its printed form and order, on a box
+    whose Reticulum runs on r2: (1) the update is refused while it runs and names the stop; after
+    `lhpc stack stop reticulum@r2 --yes` (3) `lhpc config reticulum@r2 rnode_framing yes` comes before
+    (4) the update, whose running refusal is gone, so the update already plans with framing wanted;
+    (6) `lhpc stack start reticulum@r2` launches the node on r2, framed. An update never stops a stack
+    itself (service_maintenance.py), so the stop comes first. The running state is the fixture's: the
+    node's process and instance as the box reports them."""
     from lhpc.core import instances
     from lhpc.core.lifecycle import Lifecycle
     from radios_fixture import R1, R2_868
@@ -1534,6 +1535,8 @@ def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path,
     rc, out, _ = run("stop", "reticulum@r2")
     assert rc == 0, out
     running["rns"] = False                                     # the stop's effect on the box
+    assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0
+    capsys.readouterr()
     rc_up = main(["update", "reticulum", "--source", "pinned", "--yes"])
     up = capsys.readouterr()
     assert "are running" not in up.out + up.err
@@ -1541,8 +1544,6 @@ def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path,
     # because this fixture's sources are no git checkouts (rc 1); on a box it applies (live row L8b).
     assert rc_up == 1, (up.out, up.err)
     assert up.out.splitlines()[0] == "OK    Update plan for 'reticulum': refresh 2 source(s) from the remote.", up.out
-    assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0
-    capsys.readouterr()
     rc, out, launches = run("start", "reticulum@r2")
     assert rc == 0, out
     assert ("rns", "868", "r2") in launches, launches
