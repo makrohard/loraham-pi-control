@@ -170,6 +170,22 @@ def test_a_log_that_never_ends_stops_the_scan_at_the_deadline(tmp_path):
     assert p.returncode != 0 and st["outcome"] == "timeout" and st["elapsed_s"] < 10, st
 
 
+@pytest.mark.slow
+@pytest.mark.wallclock("a real main process that ends during the scan of an endless log")
+def test_the_bound_main_ending_during_an_endless_scan_is_main_gone_at_once(tmp_path):
+    main = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    with open(f"/proc/{main.pid}/stat", "rb") as f:
+        rest = f.read().rsplit(b") ", 1)[1].split()
+    binding = {"main_launch_id": "m", "main_pid": main.pid, "main_starttime": int(rest[19]),
+               "main_pgid": int(rest[2]), "main_sid": int(rest[3])}
+    try:
+        rc, st, _err = _wait(tmp_path, "/dev/zero", 8, binding=binding, after=_later(2, main.kill))
+    finally:
+        main.kill()
+        main.wait()
+    assert rc != 0 and st["outcome"] == "main-gone" and st["elapsed_s"] < 5, st      # not at the 8 s deadline
+
+
 # The wall clock steps an hour forward right after the launcher's first reading of it (a first-boot time sync): the
 # rendered launcher, run under a wrapper that replaces time.time before the launcher's own code runs.
 _JUMP = ("import runpy, sys, time\n_real, _n = time.time, [0]\n"
