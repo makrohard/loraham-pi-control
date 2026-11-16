@@ -90,16 +90,15 @@ def box(tmp_path, git, make_repo, monkeypatch):
     (rt / "config").mkdir(parents=True)
     manifest = tmp_path / "m.toml"
 
-    def use(remote, lib=False, lib_path=LIB):
-        manifest.write_text(
-            '[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
-            '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
-            'run_argv = ["true"]\nreadiness = "process"\n'
-            f'[stack.component.source]\npath = "{REL}"\nremote = "{remote}"\nbranch = "main"\n'
-            f'pin_commit = "{c1}"\n'
-            + ('[[stack.component]]\nid = "lib"\nname = "lib"\nkind = "library"\ntx_capable = false\n'
-               f'[stack.component.source]\npath = "{lib_path}"\nremote = "{remote}"\nbranch = "main"\n'
-               f'pin_commit = "{c1}"\n' if lib else ""))
+    def use(remote, lib=False, lib_path=LIB, lib_artifact=False, lib_first=False):
+        app = ('[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
+               'run_argv = ["true"]\nreadiness = "process"\n'
+               f'[stack.component.source]\npath = "{REL}"\nremote = "{remote}"\nbranch = "main"\n'
+               f'pin_commit = "{c1}"\n')
+        other = ('[[stack.component]]\nid = "lib"\nname = "lib"\nkind = "library"\ntx_capable = false\n'
+                 f'[stack.component.source]\npath = "{lib_path}"\nremote = "{remote}"\nbranch = "main"\n'
+                 f'pin_commit = "{c1}"\n' + ("artifact = true\n" if lib_artifact else "") if lib else "")
+        manifest.write_text('[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n' + (other + app if lib_first else app + other))
     use(GH)
     svc = lambda: ControllerService(manifest_path=manifest, system=RealSystem(), paths=Paths(runtime_root=rt))  # noqa: E731
     monkeypatch.setattr(cli, "ControllerService", lambda *a, **k: svc())
@@ -1049,3 +1048,17 @@ def test_a_release_named_by_a_word_is_the_upstreams_statement(box, git):
     box.release = "release-2.8.0"
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # RED before: refused NO_VERSION
     assert box.head() == box.c[1]
+
+
+# ---- G2 group 11: the release and the artifact's HEAD, the switch's dry run, an unchecked target ----------------
+
+@pytest.mark.parametrize("lib_first", [False, True], ids=["release-first", "artifact-first"])
+def test_a_release_and_an_artifacts_head_on_one_remote_never_share_a_target(box, lib_first):
+    box.release = "v2.8.0.7239fe8"                    # S = c2; the default-branch HEAD H = c3
+    box.use(GH, lib=True, lib_artifact=True, lib_first=lib_first)   # src/lib declares source.artifact
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert (box.head(), box.head(LIB)) == (box.c[1], box.c[2])   # RED before: both on S, or both on H
+    h = box.advance()                                 # a new HEAD, no new tag
+    assert box.cli("update", "s", "--yes") == 0       # the gate's S is seeded for src/app only
+    assert (box.head(), box.head(LIB)) == (box.c[1], h)          # RED before: src/lib rolled back to S
+

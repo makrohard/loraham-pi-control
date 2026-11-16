@@ -478,8 +478,8 @@ class MaintenanceOpsMixin:
                 # group, resolved HERE — adoption never performs a second lookup.
                 # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
                 # selector (incl. 'pinned' — they never use known-working entries): the
-                # plan-time commit IS this run's immutable artifact identity.
-                once = ("stable", self._effective_remote(comp)) if sel == "stable" else path
+                # plan-time commit IS this run's immutable artifact identity (keyed by its path, never the release).
+                once = ("stable", self._effective_remote(comp)) if sel == "stable" and not comp.source.artifact else path
                 (fz, why) = frozen_cache.get(once) or frozen_cache.setdefault(once, self._frozen_ref(comp, sel))
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
