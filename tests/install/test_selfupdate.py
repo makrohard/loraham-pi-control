@@ -10,6 +10,7 @@ asked to consent to nothing. The two behaviours that grew out of this one live n
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 
 import pytest
@@ -184,22 +185,25 @@ def _hanging_git(tmp_path, monkeypatch, meanwhile=":"):
     """Put a `git` first on the runner's PATH whose FIRST advance to `origin/main` (the merge, or the
     forced reset) writes the new commit's files, unstaged, runs `meanwhile` (shell, in the checkout:
     what someone else does there while git runs) and then hangs: the checkout a git cut off
-    mid-checkout leaves, HEAD still on the old commit. Every other call is the real git."""
-    bindir, flag = tmp_path / "bin", tmp_path / "hang"
+    mid-checkout leaves, HEAD still on the old commit. Every other call is the real git; each one
+    after the cut is logged by its subcommand (returned: the log's path)."""
+    bindir, flag, cut, log = tmp_path / "bin", tmp_path / "hang", tmp_path / "cut", tmp_path / "after-cut.log"
     bindir.mkdir()
     flag.touch()
     script = bindir / "git"
     script.write_text(f"""#!/bin/sh
 if [ "$5" = origin/main ] && [ -e '{flag}' ]; then
   rm -f '{flag}'
-  '{gitrepo.GIT}' -C "$2" checkout origin/main -- . && '{gitrepo.GIT}' -C "$2" reset -q && (cd "$2" && {meanwhile}) && {_HANG}
+  '{gitrepo.GIT}' -C "$2" checkout origin/main -- . && '{gitrepo.GIT}' -C "$2" reset -q && (cd "$2" && {meanwhile}) && touch '{cut}' && {_HANG}
 fi
+[ -e '{cut}' ] && echo "$3" >> '{log}'
 exec '{gitrepo.GIT}' "$@"
 """)
     script.chmod(0o755)
     from lhpc.core.probes import backends
     monkeypatch.setitem(backends._FIXED_ENV, "PATH", f"{bindir}:{backends._FIXED_ENV['PATH']}")
     monkeypatch.setattr(selfupdate, "_APPLY_TIMEOUT", 1.0, raising=False)
+    return log
 
 
 def _operator_cli(monkeypatch):
@@ -217,144 +221,134 @@ def _operator_cli(monkeypatch):
     return main
 
 
+_PARTIAL = "may have written part of the update; nothing was undone."
+_AGAIN = "the update again; if it lists changed files, 'overwrite local changes' discards them and completes the update."
+
+
 @pytest.mark.parametrize("flags", [[], ["--overwrite"]], ids=["merge", "forced-reset"])
-def test_an_advance_cut_off_by_its_limit_says_timed_out_and_a_plain_retry_updates(
+def test_an_advance_cut_off_by_its_limit_says_so_and_the_retry_lists_the_changes_then_overwrites(
         env, tmp_path, monkeypatch, capsys, flags):
-    """A git cut off mid-checkout left a half-written tree that the next update refused as local
-    changes, reported as "git refused the fast-forward". The apply puts the checkout back on the
-    commit it started from, says it timed out, and the same command run again updates."""
+    """A git cut off mid-checkout leaves a half-written tree. The apply says it timed out and that
+    nothing was undone; the plain retry refuses the tree naming its changes, and the overwrite the
+    operator then chooses completes the update."""
     old = selfupdate.local_state(env["sys"])["head"]
     new = gitrepo.upstream_commit(env["up"], version="0.1.1")
-    if flags:
-        (env["work"] / "local.txt").write_text("discarded by --overwrite\n")
     main = _operator_cli(monkeypatch)
     _hanging_git(tmp_path, monkeypatch)
     assert main(["self-update", "--apply", "--yes", *flags]) == 1
     out = capsys.readouterr().out
-    assert "git timed out after 1 s" in out and "back on the commit it started from" in out, out
-    assert "refused" not in out, out
+    assert "git timed out after 1 s" in out and _PARTIAL in out and "refused" not in out, out
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
-    # Only the update's own files are put back: the local file the overwrite was to discard is
-    # still there until an advance that completes discards it.
-    assert gitrepo.git(env["work"], "status", "--porcelain") == ("?? local.txt" if flags else "")
-    assert main(["self-update", "--apply", "--yes", *flags]) == 0, capsys.readouterr().out
+    assert main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "Local changes are present" in out and "lhpc/version.py" in out, out
+    assert main(["self-update", "--apply", "--yes", "--overwrite"]) == 0, capsys.readouterr().out
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == new
     assert gitrepo.git(env["work"], "status", "--porcelain") == ""
 
 
-def test_a_cut_advance_put_back_keeps_what_someone_else_wrote_meanwhile(env, tmp_path, monkeypatch):
-    """Files written in the checkout while git ran are not the update's: putting the checkout back
-    undoes the update's writes only, so a new file, an edit to a file the update leaves alone and an
-    edit over a file the update had just written (changed or added) all survive; a plain retry then
-    names them."""
+def test_after_a_cut_no_git_command_changes_the_checkout(env, tmp_path, monkeypatch):
+    """Nothing proves which bytes the cut git wrote (another process may write there meanwhile, even
+    the same content), so nothing is undone: after the cut only a read-only git runs, and what was
+    written meanwhile stays as it is, a new file, an edit to an untouched file and an edit over a
+    file the update had just written (changed or added) alike."""
     old = selfupdate.local_state(env["sys"])["head"]
     (env["up"] / "extra.txt").write_text("upstream extra\n")
     gitrepo.upstream_commit(env["up"], version="0.1.1")  # adds note.txt + extra.txt, changes version.py
-    _hanging_git(tmp_path, monkeypatch, meanwhile="echo mine > mine.txt && echo '# mine' >> "
-                 "pyproject.toml && echo '# mine' > lhpc/version.py && echo mine > extra.txt")
+    log = _hanging_git(tmp_path, monkeypatch, meanwhile="echo mine > mine.txt && echo '# mine' >> "
+                       "pyproject.toml && echo '# mine' > lhpc/version.py && echo mine > extra.txt")
     res = selfupdate.apply_update(env["sys"], env["paths"])
-    assert res["ok"] is False and res["timed_out"] is True, res
-    assert "back on the commit it started from" in res["message"], res["message"]
+    assert res["ok"] is False and res["timed_out"] is True and _PARTIAL in res["message"], res
+    assert log.read_text().split() == ["rev-parse"]
     w = env["work"]
     assert gitrepo.git(w, "rev-parse", "HEAD") == old
-    assert not (w / "note.txt").exists()                          # the update's own new file: gone
-    assert (w / "mine.txt").read_text() == "mine\n"
+    assert (w / "mine.txt").read_text() == "mine\n" and (w / "extra.txt").read_text() == "mine\n"
     assert (w / "pyproject.toml").read_text().endswith("# mine\n")
     assert (w / "lhpc" / "version.py").read_text() == "# mine\n"
-    assert (w / "extra.txt").read_text() == "mine\n"
-    assert {" ".join(ln.split()) for ln in gitrepo.git(w, "status", "--porcelain").splitlines()} == {
-        "M lhpc/version.py", "M pyproject.toml", "?? mine.txt", "?? extra.txt"}
-    again = selfupdate.apply_update(env["sys"], env["paths"])
-    assert again["ok"] is False and again.get("dirty") is True, again
-    assert (w / "mine.txt").exists()
+    assert (w / "note.txt").exists()                              # the cut git's own write stays too
 
 
-def test_a_cut_advance_that_left_gits_index_lock_is_put_back_and_the_lock_removed(
+@pytest.mark.parametrize("make", ["file", "symlink"])
+def test_a_lock_the_cut_left_is_named_with_its_rm_and_never_removed_or_followed(env, tmp_path, monkeypatch, make):
+    """A git killed at the limit can leave `.git/index.lock`. Whether a git still owns it cannot be
+    proven, so it is only named, with the command to remove it once no git runs there; a symlinked
+    lock is named as the link, and what it points at is never touched."""
+    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    outside = tmp_path / "important.txt"
+    outside.write_text("keep\n")
+    _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock" if make == "file"
+                 else f"ln -s '{outside}' .git/index.lock")
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    lock = env["work"] / ".git" / "index.lock"
+    assert res["timed_out"] is True and res["lock"] == str(lock), res
+    assert f"rm {shlex.quote(str(lock))}." in res["message"] and _AGAIN in res["message"], res["message"]
+    assert os.path.lexists(lock) and lock.is_symlink() == (make == "symlink")
+    assert outside.read_text() == "keep\n"
+
+
+def test_the_retry_after_a_cut_that_left_the_lock_lists_the_changes_and_the_overwrite_needs_the_lock_gone(
         env, tmp_path, monkeypatch):
-    """A git killed at the limit leaves `.git/index.lock`; no process holds it, so the put-back
-    removes it, and the checkout is back where it started with no lock left."""
-    old = selfupdate.local_state(env["sys"])["head"]
-    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    """Real git with the lock still there: the retry still reads the tree and lists the changes; the
+    overwrite fails on git's lock, naming it, and changes nothing; once the lock is removed, as the
+    message says, the overwrite completes."""
+    new = gitrepo.upstream_commit(env["up"], version="0.1.1")
     _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock")
-    res = selfupdate.apply_update(env["sys"], env["paths"])
-    assert res["ok"] is False and res["timed_out"] is True, res
-    assert "back on the commit it started from" in res["message"], res["message"]
-    assert not (env["work"] / ".git" / "index.lock").exists()
-    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
-    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+    first = selfupdate.apply_update(env["sys"], env["paths"])
+    w, lock = env["work"], env["work"] / ".git" / "index.lock"
+    assert first["timed_out"] is True and lock.exists(), first
+    again = selfupdate.apply_update(env["sys"], env["paths"])
+    assert again["ok"] is False and again.get("dirty") is True and again["changes"], again
+    before = gitrepo.git(w, "status", "--porcelain")
+    forced = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert forced["ok"] is False and "index.lock" in forced["message"], forced
+    assert gitrepo.git(w, "status", "--porcelain") == before
+    lock.unlink()
+    done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert done["ok"] is True and gitrepo.git(w, "rev-parse", "HEAD") == new, done
+    assert gitrepo.git(w, "status", "--porcelain") == ""
 
 
-def test_an_index_lock_a_process_holds_stays_and_is_named(env, tmp_path, monkeypatch):
+def test_a_status_that_fails_is_never_read_as_a_clean_tree(env, monkeypatch):
+    """The retry after a cut runs the 5 s `git status` on a half-written tree, the slowest read
+    there is: when it fails or times out, the update stops with nothing changed instead of advancing
+    over changes it could not list."""
     gitrepo.upstream_commit(env["up"], version="0.1.1")
-    _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock")
-    lock = (env["work"] / ".git" / "index.lock").resolve()
-    monkeypatch.setattr(selfupdate, "_lock_holders", lambda p: [4242] if p == lock else [])
-    res = selfupdate.apply_update(env["sys"], env["paths"])
-    assert res["ok"] is False and res["timed_out"] is True, res
-    assert lock.exists()
-    assert res["put_back_error"] == f"git's index lock {lock} is held by a running process (pid 4242)"
-    assert f"could not be put back ({res['put_back_error']})" in res["message"]
-
-
-def test_lock_holders_finds_a_process_that_has_the_lock_open(tmp_path):
-    lock = tmp_path / "index.lock"
-    lock.write_text("")
-    assert selfupdate._lock_holders(lock) == []
-    with lock.open() as held:
-        assert os.getpid() in selfupdate._lock_holders(lock), held
-
-
-def test_a_cut_advance_put_back_restores_a_file_the_update_removed(env, tmp_path, monkeypatch):
-    """git removes the files the new commit drops before it writes the rest (and replaces a file by
-    unlinking it first): a missing file the update touches is put back."""
     old = selfupdate.local_state(env["sys"])["head"]
-    gitrepo.git(env["up"], "rm", "-q", "pyproject.toml")
-    gitrepo.upstream_commit(env["up"], version="0.1.1")
-    _hanging_git(tmp_path, monkeypatch, meanwhile="rm pyproject.toml lhpc/version.py")
-    res = selfupdate.apply_update(env["sys"], env["paths"])
-    assert res["ok"] is False and res["timed_out"] is True, res
-    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
-    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
-    assert (env["work"] / "pyproject.toml").is_file() and (env["work"] / "lhpc" / "version.py").is_file()
-
-
-_LOCKED = CommandResult(128, "", "fatal: Unable to create '.git/index.lock': File exists.")
-
-
-@pytest.mark.parametrize("reset, cause", [
-    (_LOCKED, "fatal: Unable to create '.git/index.lock': File exists."),
-    (CommandResult(124, "", "", timed_out=True), "git timed out after 300 s"),
-], ids=["index-lock", "put-back-timed-out"])
-def test_a_timed_out_advance_that_cannot_be_put_back_names_gits_error_then_the_overwrite(
-        env, monkeypatch, reset, cause):
-    """A put-back git cannot do (a stale index lock; a disk too slow even for that) is not cured by
-    the overwrite alone: the message carries git's own error, to clear first."""
-    old = selfupdate.local_state(env["sys"])["head"]
-    gitrepo.upstream_commit(env["up"])
     real_git = selfupdate._git
+    seen = []
 
-    def merge_times_out_reset_fails(system, root, args, timeout):
-        if args[:1] == ["merge"]:
-            return CommandResult(124, "", "Updating files:  30% (1/3)", timed_out=True)
-        if args[:1] == ["reset"]:
-            return reset
+    def status_times_out(system, root, args, timeout):
+        seen.append(args[0])
+        if args[:1] == ["status"]:
+            return CommandResult(124, "", "", timed_out=True)
         return real_git(system, root, args, timeout)
 
-    monkeypatch.setattr(selfupdate, "_git", merge_times_out_reset_fails)
+    monkeypatch.setattr(selfupdate, "_git", status_times_out)
     res = selfupdate.apply_update(env["sys"], env["paths"])
-    assert res["ok"] is False and res["timed_out"] is True
-    assert "timed out" in res["message"] and "could not be put back" in res["message"]
-    assert f"could not be put back ({cause})" in res["message"], res["message"]
-    assert res["put_back_error"] == cause
-    assert "overwrite local changes" in res["message"] and "\n" not in res["message"]
-    assert selfupdate.local_state(env["sys"])["head"] == old
+    assert res["ok"] is False and res.get("status_unread") is True and "nothing was changed" in res["message"], res
+    assert "merge" not in seen and selfupdate.local_state(env["sys"])["head"] == old
 
 
-def test_a_forced_cleanup_cut_off_by_its_limit_is_put_back_too(env, monkeypatch):
-    """The forced path's `clean -ffd` is part of the advance: cut off, it is a timeout like the
-    reset's, not the partial "some untracked files could not be removed"."""
-    old = selfupdate.local_state(env["sys"])["head"]
+def test_the_cut_message_with_the_longest_user_name_fits_the_apply_record(env, monkeypatch):
+    """The one-click record keeps 512 characters: with a 32-character user name (the system limit) and
+    a space in the root, the whole message, its quoted rm command and its last sentence, survives."""
     gitrepo.upstream_commit(env["up"])
+    real_git = selfupdate._git
+    lock = "/home/" + "u" * 32 + "/lora ham/loraham-pi-control/.git/index.lock"     # a root with a space
+    monkeypatch.setattr(selfupdate, "_index_lock", lambda system, root: lock)
+    monkeypatch.setattr(selfupdate, "_git", lambda system, root, args, timeout: (
+        CommandResult(124, "", "", timed_out=True) if args[:1] == ["merge"] else real_git(system, root, args, timeout)))
+    msg = selfupdate.apply_update(env["sys"], env["paths"])["message"]
+    assert selfupdate.record_last_apply_strict(env["paths"], ok=False, summary=msg)
+    assert selfupdate.read_cache(env["paths"])["last_apply"]["summary"] == msg and msg.endswith(_AGAIN), msg
+    assert f"rm {shlex.quote(lock)}." in msg, msg                    # one shell word, as pasted
+
+
+def test_a_forced_cleanup_cut_off_by_its_limit_is_a_timeout_and_the_retry_finishes(env, monkeypatch):
+    """The forced path's `clean -ffd` is part of the advance: cut off, it is a timeout like the
+    reset's, not the partial "some untracked files could not be removed". The ref had moved already,
+    so the retry finds the checkout up to date (and finishes the sync)."""
+    new = gitrepo.upstream_commit(env["up"])
     real_git = selfupdate._git
     cut = []
 
@@ -367,7 +361,9 @@ def test_a_forced_cleanup_cut_off_by_its_limit_is_put_back_too(env, monkeypatch)
     monkeypatch.setattr(selfupdate, "_git", first_clean_times_out)
     res = selfupdate.apply_update(env["sys"], env["paths"], force=True)
     assert res["ok"] is False and res["timed_out"] is True and not res.get("cleanup_failed")
-    assert selfupdate.local_state(env["sys"])["head"] == old
+    assert _PARTIAL in res["message"] and _AGAIN in res["message"], res["message"]
+    assert selfupdate.local_state(env["sys"])["head"] == new
+    assert selfupdate.apply_update(env["sys"], env["paths"]).get("already") is True
 
 
 def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):

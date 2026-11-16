@@ -193,7 +193,7 @@ def local_state(system: System) -> dict:
     is not a git checkout (self-update unavailable)."""
     root = repo_root()
     st = {"is_git": root is not None, "version": __version__, "root": str(root) if root else "",
-          "head": "", "head_short": "", "branch": "", "dirty": False}
+          "head": "", "head_short": "", "branch": "", "dirty": False, "status_ok": True}
     if root is None:
         return st
     r = _git(system, root, ["rev-parse", "HEAD"], _LOCAL_TIMEOUT)
@@ -208,6 +208,7 @@ def local_state(system: System) -> dict:
     # honouring .gitignore, so ignored runtime artifacts (e.g. a `.venv/`) never count as dirty.
     s = _git(system, root, ["status", "--porcelain"], _LOCAL_TIMEOUT)
     st["dirty"] = bool(s.returncode == 0 and s.stdout.strip())
+    st["status_ok"] = s.returncode == 0 and not getattr(s, "timed_out", False)   # a failed read is not "clean"
     return st
 
 
@@ -614,6 +615,13 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     ref = f"{_REMOTE}/{br}"
     if up["upstream_head"] and up["upstream_head"] == local.get("head"):
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
+    if not force and not local.get("status_ok", True):
+        # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing
+        # about local changes: never read it as clean and advance over them.
+        return {"ok": False, "status_unread": True,
+                "message": "Could not read the checkout's state (git status failed or timed out) — nothing "
+                           "was changed. Run the update again; if this repeats, run 'git status' in the "
+                           "checkout to see why."}
     if local.get("dirty") and not force:
         # Name the paths in `changes` (the caller renders them as details). `message` stays SINGLE
         # LINE — it is flashed verbatim in the GUI, and the sanitizer contract forbids newlines.
@@ -644,15 +652,18 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     else:
         m = _git(system, root, ["merge", "--ff-only", ref], _APPLY_TIMEOUT)
     if getattr(m, "timed_out", False):
-        # Cut off by the limit, git may have written part of the new tree: put the checkout back on
-        # the commit it started from, so the same update can simply be run again.
-        stuck = _put_back(system, root, local.get("head", ""), up["upstream_head"])
-        return {"ok": False, "timed_out": True, "put_back_error": stuck,
-                "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s; "
-                + (f"the checkout could not be put back ({stuck}) — clear that cause, then re-run "
-                   "with 'overwrite local changes' to discard the partly written files and update."
-                   if stuck else "the checkout is back on the commit it started from — run the "
-                   "update again.")}
+        # Cut off by the limit, git may have written part of the new tree. Nothing proves which bytes
+        # are git's (another process may have written there meanwhile), so nothing is undone and no
+        # lock is removed: the next update lists the changes and the operator decides. Other locks a
+        # kill can leave (HEAD.lock, a ref's) are named by git's own error at that next update.
+        lock = _index_lock(system, root)
+        return {"ok": False, "timed_out": True, "lock": lock,
+                "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s and "
+                "may have written part of the update; nothing was undone."
+                + (f" Once no git runs in this checkout, remove git's leftover lock: rm {shlex.quote(lock)}."
+                   " Then run" if lock else " Run")
+                + " the update again; if it lists changed files, 'overwrite local changes' discards them "
+                "and completes the update."}
     if m.returncode != 0:
         detail = _summarize_output(m.stderr)
         # THREE distinct outcomes share this branch — conflating them offered a DESTRUCTIVE remedy
@@ -687,99 +698,14 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     return out
 
 
-def _put_back(system: System, root: Path, head: str, new: str) -> str:
-    """Put a checkout whose advance from `head` to `new` timed out back on `head`: '' when done,
-    else why not (git's own error: a lock, a read-only or full disk is not cured by a retry). Only the update's own writes are undone: a path the update changes is restored to `head`
-    (or, added by the update, removed) when it holds `new`'s content or is missing. Any other change
-    is left as it is: a file someone created or edited while git ran is not the update's to discard,
-    even though the advance began on a clean tree (or after the operator agreed to discard what was
-    there then)."""
-    def why(r, args):
-        if getattr(r, "timed_out", False):
-            return f"git timed out after {_APPLY_TIMEOUT:g} s"
-        return _summarize_output(r.stderr or r.stdout) or f"git {args[0]} failed"
-
-    if not head or not new:
-        return "the commits to restore between are not known"
-    if stale := _drop_stale_index_lock(system, root):
-        return stale
-    args = ["diff", "--name-status", "-z", "--no-renames", head, new]
-    d = _git(system, root, args, _APPLY_TIMEOUT)
-    if d.returncode != 0:
-        return why(d, args)
-    fields = d.stdout.split("\0")[:-1]                            # -z: every field ends in NUL
-    status = dict(zip(fields[1::2], fields[0::2], strict=True))   # path -> A / M / T / D
-    # Against `new` in the index, `diff` lists the paths whose file is not `new`'s; against `head`,
-    # `ls-files -d` the ones that are missing. Both compare content, so a file is judged by its bytes.
-    steps = [["reset", "-q", new], ["diff", "--name-only", "-z"], ["reset", "-q", head],
-             ["ls-files", "-d", "-z"]]
-    out = []
-    for args in steps:
-        r = _git(system, root, args, _APPLY_TIMEOUT)
-        if r.returncode != 0:
-            return why(r, args)
-        out.append(set(r.stdout.split("\0")) - {""})
-    _, not_new, _, missing = out
-    written = {p for p, st in status.items() if st != "D"} - not_new
-    restore = sorted({p for p in written if status[p] != "A"} | (missing & status.keys()))
-    remove = sorted(p for p in written if status[p] == "A")
-    for args, paths in ((["checkout", head, "--"], restore), (["clean", "-fq", "--"], remove)):
-        for i in range(0, len(paths), 500):                       # bounded argv per call
-            r = _git(system, root, [*args, *(":(literal)" + p for p in paths[i:i + 500])],
-                     _APPLY_TIMEOUT)
-            if r.returncode != 0:
-                return why(r, args)
-    return ""
-
-
-def _drop_stale_index_lock(system: System, root: Path) -> str:
-    """A git killed at the limit (KILL, when TERM did not end it in time) leaves `.git/index.lock`
-    behind, and every later git refuses to run. Remove it when no process has it open: '' when the
-    lock is gone, else why it stays (held — a running git owns it — or not removable)."""
+def _index_lock(system: System, root: Path) -> str:
+    """The path of git's index lock when a cut git left one, else ''. Only named, never removed and
+    never followed (a symlink is reported as the link): a lock in doubt is the operator's."""
     r = _git(system, root, ["rev-parse", "--git-path", "index.lock"], _LOCAL_TIMEOUT)
     if r.returncode != 0 or not r.stdout.strip():
-        return ""                                     # git's own error follows at the next step
-    lock = (root / r.stdout.strip()).resolve()
-    if not lock.exists():
         return ""
-    held = _lock_holders(lock)
-    if held:
-        return f"git's index lock {lock} is held by a running process (pid {held[0]})"
-    try:
-        lock.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        return f"git's index lock {lock} could not be removed ({exc.strerror or exc})"
-    return ""
-
-
-def _lock_holders(lock: Path) -> list[int]:
-    """The pids that have `lock` open, plus every `git` whose open files cannot be read (another
-    user's): it might hold the lock, and a lock in doubt is left alone."""
-    held = []
-    for proc in Path("/proc").iterdir():
-        if not proc.name.isdigit():
-            continue
-        try:
-            fds = list((proc / "fd").iterdir())
-        except PermissionError:
-            try:
-                if (proc / "comm").read_text().strip() == "git":
-                    held.append(int(proc.name))
-            except OSError:
-                pass
-            continue
-        except OSError:
-            continue                                  # gone meanwhile
-        for fd in fds:
-            try:
-                if Path(os.readlink(fd)) == lock:
-                    held.append(int(proc.name))
-                    break
-            except OSError:
-                continue
-    return held
+    lock = os.path.join(root, r.stdout.strip())       # relative to the checkout, or absolute
+    return lock if os.path.lexists(lock) else ""
 
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).
