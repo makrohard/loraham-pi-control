@@ -61,6 +61,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
         fail_head = False
         fail_fetch = False
         fail_ancestry = False                         # the history mirror's `merge-base` exits 128
+        fail_ancestry_to = ""                         # ... only `merge-base --is-ancestor <x> <this commit>`
         api_calls: list = []
         git_calls: list = []
     b = Box()
@@ -75,6 +76,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
         if b.fail_head and argv[:2] == ["git", "-C"] and argv[3:5] == ["rev-parse", "HEAD"]:
             return CommandResult(128, "", "fatal: not a git repository")
         if b.fail_ancestry and argv[:2] == ["git", "-C"] and "stable-history" in argv[2] and argv[3] == "merge-base":
+            return CommandResult(128, "", "fatal: could not read the history")
+        if b.fail_ancestry_to and argv[3:5] == ["merge-base", "--is-ancestor"] and argv[-1] == b.fail_ancestry_to:
             return CommandResult(128, "", "fatal: could not read the history")
         if b.fail_fetch and argv[:2] == ["git", "-C"] and argv[3] == "fetch":
             return CommandResult(128, "", "fatal: unable to access the remote")
@@ -1157,3 +1160,49 @@ def test_a_plain_tag_after_an_older_release_still_meets_the_floor(box, capsys):
     assert NOT_NEWER in capsys.readouterr().out
     assert box.head() == box.c[1]
 
+
+def _v112_then_a_release_and_a_plain_tag_after_it(box):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v112", box.c[0])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # only v112 exists: c1
+    box.push_tag("v1.4.0", box.c[1])
+    box.release = "v1.4.0"
+    box.push_tag("v1.4.1", box.c[2])                  # a tag after the release, not released yet: the target
+
+
+def test_a_box_the_floor_holds_back_is_offered_the_release_in_its_future(box, capsys):
+    _v112_then_a_release_and_a_plain_tag_after_it(box)
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                  # RED before: up to date (1.4.1 < 112, the floor)
+    assert su.view(Paths(runtime_root=box.rt))["components"]["app"]["upstream_head"] == box.c[1]   # THIS box's target
+    capsys.readouterr()
+    assert box.cli("update", "s") == 0                # the dry run
+    assert "app: upstream update-available" in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[1]                     # the release, not the plain tag the floor refused
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                  # on v1.4.0, v1.4.1 is forward
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[2]
+
+
+def test_the_release_one_checkout_falls_back_to_is_not_the_target_of_another_path(box):
+    _v112_then_a_release_and_a_plain_tag_after_it(box)
+    box.use(GH, lib=True)                             # src/lib of the same remote, not installed
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: refused, not newer
+    assert (box.head(), box.head(LIB)) == (box.c[1], box.c[2])   # src/app the release, src/lib the remote's target
+
+
+def test_an_unread_ancestry_of_the_release_fallback_reads_could_not_check(box, capsys):
+    _v112_then_a_release_and_a_plain_tag_after_it(box)
+    box.fail_ancestry_to = box.c[1]                   # only "is the release in the installed commit's future?" fails
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0
+    out = capsys.readouterr().out
+    assert "try again later" in out and "is not newer" not in out
+    assert box.head() == box.c[0]
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR
+    box.fail_ancestry_to = ""
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[1]

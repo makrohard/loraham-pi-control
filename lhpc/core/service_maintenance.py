@@ -131,10 +131,10 @@ class MaintenanceOpsMixin:
         if loc.returncode != 0 or not loc.stdout.strip():
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = loc.stdout.strip()
-        want = sref.sha if sref else stackupdates.pinned_target(
+        _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
+        want = sref.sha if sref else stackupdates.pinned_target(          # the lane's target for THIS checkout
             self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        older = local_sha != want and sref is not None and planned is None and stable_lane.assess(run, src, sref, remote)[1]
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
@@ -461,8 +461,9 @@ class MaintenanceOpsMixin:
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
-        frozen_cache = {("stable", self._effective_remote(m[1])): stable_refs[p].frozen()   # the gate's targets:
-                        for p, ms in by_path.items() if p in (stable_refs or {}) for m in ms}   # ONE per remote
+        frozen_cache = {("stable", self._effective_remote(m[1])): (stable_refs[p].canon or stable_refs[p]).frozen()  # ONE per remote
+                        for p, ms in by_path.items() if p in (stable_refs or {}) for m in ms} | {   # | each read checkout's own:
+            p: r.frozen() for p, r in (stable_refs or {}).items()}
         for path, members in by_path.items():
             idents = {m[3] for m in members}
             if len(idents) > 1:
@@ -474,12 +475,11 @@ class MaintenanceOpsMixin:
             st, comp, sel, _, resolved = members[0]
             # A stable group is resolved here also unfrozen (U1): install and update take the lane's one target.
             if (freeze or sel == "stable") and not resolved[0] and (sel != "pinned" or comp.source.artifact):
-                # FROZEN selector resolution (auto-install plan): one exact immutable commit per
-                # group, resolved HERE — adoption never performs a second lookup.
-                # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
-                # selector (incl. 'pinned' — they never use known-working entries): the
-                # plan-time commit IS this run's immutable artifact identity (keyed by its path, never the release).
-                once = ("stable", self._effective_remote(comp)) if sel == "stable" and not comp.source.artifact else path
+                # FROZEN selector resolution (auto-install plan): one exact immutable commit per group, resolved HERE —
+                # adoption never looks again. ARTIFACT sources freeze their default-branch HEAD for EVERY selector (they
+                # never use known-working entries), keyed by path, never the release. A path the gate read takes ITS
+                # target (maybe a release fallback); any other stable path the remote's ONE target.
+                once = ("stable", self._effective_remote(comp)) if sel == "stable" and not comp.source.artifact and path not in (stable_refs or {}) else path
                 (fz, why) = frozen_cache.get(once) or frozen_cache.setdefault(once, self._frozen_ref(comp, sel))
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the

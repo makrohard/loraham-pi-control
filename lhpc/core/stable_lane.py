@@ -16,7 +16,8 @@ DEGRADED.
 
 Move (`classify`): from the installed commit I to the target S only when I is published and an ancestor of S; S in I's
 past, or a plain tag S numbered below I's highest tag (U1's floor; GitHub's release in I's future is forward), is "not
-newer"; anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
+newer", and such a plain tag gives way to GitHub's release when that is in I's future (`assess`: I's own target);
+anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
 (the user's choice) may go back, but only to a target the history places (`update_gate`).
 """
 from __future__ import annotations
@@ -57,7 +58,9 @@ def version_of(name):
 
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    winning tag (`name`, "" = the default-branch HEAD), the history mirror, and whether `name` is GitHub's release."""
+    winning tag (`name`, "" = the default-branch HEAD), the history mirror, whether `name` is GitHub's release, the
+    release's own target when the target is a plain tag in its future (`fallback`), and the remote's target a fallback
+    stands in for (`canon`)."""
     sha: str = ""
     label: str = ""
     verified: bool = False
@@ -65,6 +68,8 @@ class StableRef(NamedTuple):
     name: str = ""
     history: str = ""
     released: bool = False
+    fallback: object = None
+    canon: object = None
 
     @property
     def key(self):
@@ -183,7 +188,10 @@ def resolve(run, remote: str, paths) -> StableRef:
         sha = tip[0]
         on_tip = [n for n in line if commits[n] == sha]
         name = release if release in on_tip else max(on_tip, key=lambda n: (version_of(n), n))   # a label, one commit
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror), name == release)
+        rel = release and StableRef(commits[release], f"stable {release} @ {commits[release][:9]}", True, "", release,
+                                    str(mirror), True)
+        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror), name == release,
+                         None if name == release else rel or None)
     head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
     if head.returncode != 0 or not head.stdout.strip():
         return StableRef(why=f"could not resolve HEAD on {remote}")
@@ -239,13 +247,23 @@ def classify(run, installed: str, ref: StableRef, mine=()) -> tuple[bool | None,
     return None, f"the installed commit is not in the history of the stable target ({ref.label}): refused"
 
 
-def assess(run, src, ref: StableRef, remote: str = "") -> tuple[str, bool | None, str]:
-    """The installed commit at `src` ("" when not read) and `classify`'s `(older, why)` for it, with the checkout's own
-    tags (None when not read): the one reading of the checkout the update gate and the freshness check share."""
+def assess(run, src, ref: StableRef) -> tuple[str, bool | None, str, StableRef]:
+    """The installed commit at `src` ("" when not read), `classify`'s `(older, why)` for it with the checkout's own
+    tags (None when not read), and the target for THIS checkout: the one reading of the checkout the update gate and
+    the freshness check share. A target the installed commit may not take (a plain tag the floor refuses) falls back
+    to GitHub's release when that is in the installed commit's future (`ref.fallback`, a forward move)."""
+    from pathlib import Path
     head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
     installed = (head.stdout or "").strip() if head.returncode == 0 else ""
     tags = run(["git", "-C", str(src), "tag", "--points-at", "HEAD"], timeout=5.0)
-    return installed, *classify(run, installed, ref, tags.stdout.split() if tags.returncode == 0 else None)
+    older, why = classify(run, installed, ref, tags.stdout.split() if tags.returncode == 0 else None)
+    if older and ref.fallback and installed != ref.fallback.sha:
+        fwd = _is(run, Path(ref.history), installed, ref.fallback.sha)
+        if fwd is None:
+            return installed, None, "", ref
+        if fwd:
+            return installed, False, "", ref.fallback._replace(canon=ref)
+    return installed, older, why, ref
 
 
 def update_gate(run, paths, items, source: str, remote_of):
@@ -261,8 +279,8 @@ def update_gate(run, paths, items, source: str, remote_of):
     for _, c in items:
         if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
                 paths, src := paths.resolve_source(c.source.path)):
-            ref = refs[c.source.path] = target(remote_of(c))
-            installed, older, why = assess(run, src, ref)
+            installed, older, why, refs[c.source.path] = assess(run, src, target(remote_of(c)))   # THIS checkout's
+            ref = refs[c.source.path]
             if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
                 if older is not None and not ref.name:                              # a release or tag target only
                     older = None
