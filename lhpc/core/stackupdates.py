@@ -179,12 +179,24 @@ def effective_status(entry, current_head: str, pin: str | None = None, lhpc_head
     return status
 
 
-def lane_word(fresh: dict, cid: str, status, pin: str, lhpc_head: str) -> str:
-    """`status --versions`' state column for a ComponentStatus: a clean checkout reads its lane verdict (the last
-    check, tied to this head); the probe's own facts (dirty, missing) stay; the pin is a detail, not a verdict."""
-    state = status.source_state.value
-    return (label(effective_status(fresh.get(cid), status.source_head or "", pin, lhpc_head))
-            if state in ("match", "differs") else state)
+def verdict(fresh: dict, comp, status, lhpc_head: str) -> str:
+    """The ONE lane verdict of `comp` that every surface shows: its last check, on today's head, pin and LHPC."""
+    return effective_status(fresh.get(comp.id), status.source_head or "", comp.source.pin_commit if comp.source else None,
+                            lhpc_head)
+
+
+def source_words(lane: str, status) -> tuple[str, str]:
+    """(source, profile) for `lhpc status`, `status --versions` and the info card: a clean checkout reads its lane
+    verdict and is a candidate only on "update available"; the probe's own facts (dirty, missing) stay."""
+    if status.source_state.value not in ("match", "differs"):
+        return status.source_state.value, status.profile_state.value
+    return label(lane), "candidate-available" if lane == BEHIND else status.profile_state.value
+
+
+def surface(paths: Paths):
+    """`(comp, status) -> (source, profile)` on today's check view, for the CLI readers."""
+    fresh, lhpc_head = view(paths)["components"], fetched_lhpc_head(paths)
+    return lambda comp, status: source_words(verdict(fresh, comp, status, lhpc_head), status)
 
 
 def pinned_target(paths: Paths, comp) -> str:

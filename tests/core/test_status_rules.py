@@ -191,8 +191,8 @@ def test_runtime_band_overlay_shows_actual_band_not_manifest_default(tmp_path):
     tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
     serial = next(c for c in kiss.components if c.id == "loraham-kiss-serial")
     assert ss.components["loraham-kiss-tnc"].band == "868"
-    assert "band 868" in _render_component(tnc, ss.components["loraham-kiss-tnc"])[0]
-    rendered = _render_component(serial, ss.components["loraham-kiss-serial"])
+    assert "band 868" in _render_component(tnc, ss.components["loraham-kiss-tnc"], "current")[0]
+    rendered = _render_component(serial, ss.components["loraham-kiss-serial"], "current")
     assert any("depends on loraham-kiss-tnc" in ln and "on 868 MHz" in ln for ln in rendered), rendered
 
 
@@ -206,7 +206,7 @@ def test_runtime_band_overlay_stopped_keeps_manifest_default(tmp_path):
     svc._overlay_runtime_bands(snap)
     tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
     assert ss.components["loraham-kiss-tnc"].band == ""    # no overlay
-    assert f"band {tnc.band}" in _render_component(tnc, ss.components["loraham-kiss-tnc"])[0]
+    assert f"band {tnc.band}" in _render_component(tnc, ss.components["loraham-kiss-tnc"], "current")[0]
 
 
 # --- GUI-unavailable overlay (headless truth: skipped-by-design is not "not-installed") -------

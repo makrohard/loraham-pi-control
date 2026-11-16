@@ -34,9 +34,10 @@ source (`artifact = true`) resolves every selector to the same declared artifact
 For a fetched package (the Meshtastic web client) `--source` picks the release, not a checkout:
 [the web client](#the-web-client).
 
-Every source lives under the runtime root as a managed clone. `lhpc status --versions` reads
-`match` only while the checked-out commit equals the pin: a `dev` checkout reads `differs` once
-upstream moved.
+Every source lives under the runtime root as a managed clone. `lhpc status`, `lhpc status --versions`
+and the stack page show one verdict per source against its own lane, from the last `lhpc source-check` of
+the checked-out commit: `current`, `update available`, `update LHPC first` or `could not check`
+(`unchecked` before a check). A dirty or missing checkout shows that instead. The pin is a detail, not a verdict.
 
 ## Ownership records
 

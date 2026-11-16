@@ -1069,6 +1069,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # reads `unchecked`, not a stale green/yellow.
         _fresh = service.source_check_view()
         _fresh_comps = _fresh.get("components", {})
+        _verdicts = {cid: stackupdates.verdict(_fresh_comps, c, st, _fresh.get("lhpc_head")) for cid, (c, st) in index.items()}
+        _words = {cid: stackupdates.source_words(v, index[cid][1]) for cid, v in _verdicts.items()}
         jobs_by_stack = {}
         for job in service.active_jobs():
             jobs_by_stack.setdefault(job.get("stack"), []).append(job)
@@ -1113,10 +1115,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Freshness, resolved per component against the head the verdict was computed from.
             # Scoped to the stack's OWN components: a cross-stack dependency (loraham-daemon inside
             # the chat row) belongs to its own stack's row and must not light up this one.
-            upd_states = {c.id: stackupdates.effective_status(
-                              _fresh_comps.get(c.id), ss.components[c.id].source_head or "",
-                              c.source.pin_commit if c.source else None, _fresh.get("lhpc_head"))
-                          for c in stack.components}
+            upd_states = {c.id: _verdicts[c.id] for c in stack.components}
             # Deep-link target for the row's "Update": the behind component itself. The MAIN
             # (== the stack) links to its Install section; a behind DEPENDENCY links to its own
             # #comp-<id> subsection so the operator lands on the component that actually has the update.
@@ -1141,6 +1140,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "main_status": main_status,
                 "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
                 "instance_rows": {c.id: _inst_rows[c.id] for c in stack.components if c.id in _inst_rows},
+                "source_words": _words,               # comp_id -> (source, profile): the info card's row
                 "update_states": upd_states,          # comp_id -> unchecked|unknown|up_to_date|behind|error
                 "update_main": upd_states.get(main.id, "unchecked") if main else "unchecked",
                 "update_available": any(v == "behind" for v in upd_states.values()),

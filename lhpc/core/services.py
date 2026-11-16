@@ -859,6 +859,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return self._unknown_stack(stack_id)
         snap = self.build_snapshot()
         rollup, by_inst = rollup_states(snap), instance_liveness.rows(self, snap)     # STATUS-DEAD-SOCKET: per instance
+        words = stackupdates.surface(self._paths)
         details: list[str] = [n] if (n := radio_start.no_list_notice(self._paths)) else []   # DEC-W384g
         if not stack_id:
             counts = summarize(snap)["states"]
@@ -882,7 +883,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     details.append(line)
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
-                details.extend(_render_component(comp, st) + instance_liveness.lines(by_inst.get(comp.id, ())))
+                details.extend(_render_component(comp, st, words(comp, st)[0]) + instance_liveness.lines(by_inst.get(comp.id, ())))
                 if comp.id == web_client.COMPONENT and (_wl := web_client.status(self)):
                     details.append(f"    {_wl}")
                 # Terminal post-start outcome (e.g. the MeshCom callsign push: confirmed /
@@ -993,7 +994,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def status_versions(self) -> ActionResult:
         snap = self.build_snapshot()
-        fresh, lhpc_head = stackupdates.view(self._paths)["components"], stackupdates.fetched_lhpc_head(self._paths)
+        words = stackupdates.surface(self._paths)
         details: list[str] = []
         for ss in snap.stacks:
             # package -> version -> components, to name a package the stack runs in two versions
@@ -1019,7 +1020,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if ver != "-":
                             seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
-                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st, comp.source.pin_commit, lhpc_head):17s} "
+                        f"  {comp.id:24s} {words(comp, st)[0]:17s} "
                         f"pin={pin} tag={tag}"
                         + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())
@@ -2219,13 +2220,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         )
 
 
-def _render_component(comp, status) -> list[str]:
+def _render_component(comp, status, src: str) -> list[str]:
     eff_band = status.band or comp.band       # runtime-actual band wins over the manifest default
     band = f"band {eff_band}" if eff_band else "band -"
     line = (
         f"  {comp.id:24s} {status.run_state.value:14s} "
-        f"[{comp.kind.value}] {band}  tx {status.tx_state.value}  "
-        f"src {status.source_state.value}"
+        f"[{comp.kind.value}] {band}  tx {status.tx_state.value}  src {src}"
     )
     out = [line, *([f"        {note}"] if (note := component_note(status)) else [])]      # F2: e.g. "no fix yet"
     for dep in status.dependencies:

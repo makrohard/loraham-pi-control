@@ -553,7 +553,7 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
 def _profile_from_source(source_state: SourceState) -> ProfileState:
     return {
         SourceState.MATCH: ProfileState.INSTALLED_UNVALIDATED,
-        SourceState.DIFFERS: ProfileState.CANDIDATE_AVAILABLE,
+        SourceState.DIFFERS: ProfileState.INSTALLED_UNVALIDATED,   # a candidate is the lane verdict's word
         SourceState.DIRTY: ProfileState.LOCALLY_MODIFIED,
         # A verified artifact is installed material, not a validated known-working profile.
         SourceState.BINARY: ProfileState.INSTALLED_UNVALIDATED,

@@ -19,7 +19,7 @@
 <table>
   <tbody>
     <tr><th>Run state</th><td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td></tr>
-    <tr><th>Source / profile</th><td>{{ st.source_state.value }} / {{ st.profile_state.value }}</td></tr>
+    <tr><th>Source / profile</th><td>{{ g.source_words[comp.id]|join(' / ') }}</td></tr>
     <tr><th>TX</th><td class="tx-{{ st.tx_state.value }}">{{ st.tx_state.value }}{% if comp.tx_capable %} <span class="muted">(TX-capable)</span>{% endif %}</td></tr>
     {% if st.pids %}<tr><th>PIDs</th><td class="mono">{{ st.pids|join(', ') }}</td></tr>{% endif %}
   </tbody>
