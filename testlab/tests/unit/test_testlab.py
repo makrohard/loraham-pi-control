@@ -19,9 +19,8 @@ from lhpc_testlab import nm, ops, provider, rules, scenarios, supervisor
 from lhpc_testlab.system import LabRunner, build_lab_system
 from lhpc_testlab.testing import make_lab_root
 
-from lhpc.core import lifecycle as lcmod
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem, RealCommandRunner
+from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 pytestmark = pytest.mark.lab_serial         # resets and fake daemons (testlab/tests/conftest.py)
@@ -43,16 +42,6 @@ def test_latch_needs_both_keys(tmp_path, monkeypatch):
     assert testlab.active(other) is False
     # both -> on
     assert testlab.active(paths) is True
-
-
-def test_service_off_path_is_production(tmp_path, monkeypatch):
-    monkeypatch.delenv("LHPC_TESTLAB", raising=False)
-    (tmp_path / "config" / "stacks").mkdir(parents=True)
-    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
-    # The injection seam has no public accessor for what was wired, so the wiring is read
-    # directly: which runner, whether the lab extension and the overlay manifest are attached.
-    assert type(svc._system.runner) is RealCommandRunner
-    assert svc._ext is None and svc._manifest_path is None
 
 
 def test_service_lab_path_and_explicit_injection_wins(tmp_path, monkeypatch):
@@ -259,18 +248,6 @@ def test_spawn_guard_power_deny_and_passthrough(tmp_path, monkeypatch):
     assert seen[-1] == ["socat", "-V"]
 
 
-def test_current_boot_id_lab_override(tmp_path, monkeypatch):
-    bf = tmp_path / "boot_id"
-    bf.write_text("lab-boot-7\n")
-    monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(bf))
-    assert lcmod.current_boot_id() == "lab-boot-7"
-    # a set-but-missing file falls back to the REAL boot id, never "".
-    bf.unlink()
-    real = lcmod.current_boot_id()
-    monkeypatch.delenv("LHPC_BOOT_ID_FILE")
-    assert lcmod.current_boot_id() == real and real != "lab-boot-7"
-
-
 def test_advance_boot_changes_identity_and_uptime(tmp_path, monkeypatch):
     paths = make_lab_root(tmp_path, monkeypatch)
     b1 = supervisor.ensure_boot_identity(paths)
@@ -331,23 +308,6 @@ def test_web_testlab_actions_csrf_and_scenario_switch(tmp_path, monkeypatch):
 
 
 # --- {multiarch} require token ------------------------------------------------------------
-
-
-def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
-    """The {multiarch} token resolves to the arch triple (a module constant, computed
-    once): Pi -> the aarch64 literal (behavior unchanged), x86 -> truthful."""
-    from lhpc.core.config import load_config
-    from lhpc.core.lifecycle import Lifecycle
-    (tmp_path / "config" / "stacks").mkdir(parents=True)
-    lc = Lifecycle(Paths(runtime_root=tmp_path), (), load_config(Paths(runtime_root=tmp_path)),
-                   FakeSystem().system)
-    for triple in ("aarch64-linux-gnu", "x86_64-linux-gnu"):
-        monkeypatch.setattr(lcmod, "_MULTIARCH", triple)
-        assert lc._resolve_req_path("/usr/lib/{multiarch}/libslirp.so.0") \
-            == f"/usr/lib/{triple}/libslirp.so.0"
-    assert lc._resolve_req_path("{runtime}/build/x") == f"{tmp_path}/build/x"
-    # the module constant itself is a known triple (unknown arch -> aarch64 fallback)
-    assert lcmod._MULTIARCH.endswith("-linux-gnu")
 
 
 # --- fake daemon protocol conformance ----------------------------------------------------

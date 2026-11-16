@@ -5,6 +5,7 @@ uninstall refcounting. LHPC never installs system packages itself."""
 
 import re
 
+from lhpc.core import lifecycle as lcmod
 from lhpc.core import source_registry
 from lhpc.core.manifest import ManifestError, parse_manifest
 from lhpc.core.paths import Paths
@@ -1138,3 +1139,20 @@ def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch)
     assert svc._time_source_present() is False
     seen.add(deps.FAKE_HWCLOCK_DEFAULT_PATH)
     assert svc._time_source_present() is True
+
+
+def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
+    """The {multiarch} token resolves to the arch triple (a module constant, computed
+    once): Pi -> the aarch64 literal (behavior unchanged), x86 -> truthful."""
+    from lhpc.core.config import load_config
+    from lhpc.core.lifecycle import Lifecycle
+    (tmp_path / "config" / "stacks").mkdir(parents=True)
+    lc = Lifecycle(Paths(runtime_root=tmp_path), (), load_config(Paths(runtime_root=tmp_path)),
+                   FakeSystem().system)
+    for triple in ("aarch64-linux-gnu", "x86_64-linux-gnu"):
+        monkeypatch.setattr(lcmod, "_MULTIARCH", triple)
+        assert lc._resolve_req_path("/usr/lib/{multiarch}/libslirp.so.0") \
+            == f"/usr/lib/{triple}/libslirp.so.0"
+    assert lc._resolve_req_path("{runtime}/build/x") == f"{tmp_path}/build/x"
+    # the module constant itself is a known triple (unknown arch -> aarch64 fallback)
+    assert lcmod._MULTIARCH.endswith("-linux-gnu")
