@@ -110,5 +110,6 @@ def test_released_manifests_still_parse():
 def test_without_release_tags_the_parse_guard_skips_locally_and_fails_under_ci(monkeypatch, ci, outcome):
     monkeypatch.setitem(globals(), "_released_tags", lambda *a: [])
     monkeypatch.setenv("CI", ci)
-    with pytest.raises(outcome):
+    with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as e:     # a skip must not pass a CI=1 row
         test_released_manifests_still_parse()
+    assert e.type is outcome

@@ -92,8 +92,9 @@ def released_tags():
 def test_without_release_tags_the_guard_skips_locally_and_fails_under_ci(monkeypatch, request, ci, outcome):
     monkeypatch.setitem(globals(), "_released_tags", lambda *a: [])
     monkeypatch.setenv("CI", ci)
-    with pytest.raises(outcome):
+    with pytest.raises((pytest.skip.Exception, pytest.fail.Exception)) as e:     # a skip must not pass a CI=1 row
         request.getfixturevalue("released_tags")
+    assert e.type is outcome
 
 
 def test_the_guard_covers_a_stack():
