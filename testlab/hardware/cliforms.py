@@ -21,6 +21,7 @@ from lhpc.adapters.cli.main import build_parser
 DRY = re.compile(r"^\s*\[dry\] ([^:]+): (.*)$")
 CALL = re.compile(r"(-m lhpc|/bin/lhpc|(?<![\w/.-])lhpc)\s+(?=[a-z_-])")
 OPS = set(";&|<>()`{}")
+REDIRECT_FD = re.compile(r"(?<=\s)\d+(?=[<>])")
 
 
 def lines(path):
@@ -41,6 +42,7 @@ def lines(path):
 
 
 def args_of(rest):
+    rest = REDIRECT_FD.sub("", rest)            # the fd of a redirect (`2>/dev/null`): a digit directly before < or >
     lex = shlex.shlex(rest, posix=True, punctuation_chars=True)
     lex.wordchars += "@$:,%+"
     toks = []
@@ -49,11 +51,9 @@ def args_of(rest):
     except ValueError:
         pass
     out = []
-    for i, t in enumerate(toks):
+    for t in toks:
         if set(t) <= OPS:
             break
-        if t.isdigit() and i + 1 < len(toks) and toks[i + 1][:1] in "<>":
-            break                               # the fd of a redirect (`2>/dev/null`), not an argument
         out.append(t)
     return out
 

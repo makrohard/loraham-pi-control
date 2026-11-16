@@ -63,17 +63,18 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
 
 
 CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
-  *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf '3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
-  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
+  *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf 'SIZE {size0}\\n3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
+  *-txpower.txt) printf 'SIZE {size1}\\nCOUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
   r={stop1}; [ "$n" = 1 ] || r={stop2}; echo "stop rc $r"; return "$r"; }}
 {body}; echo RC=$?"""
 
 
-def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10"):
+def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10",
+           size0="500", size1="600"):
     return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
-                                         body=body, mp=mp))
+                                         body=body, mp=mp, size0=size0, size1=size1))
 
 
 @pytest.mark.parametrize("mp,why", [("17", None), ("18", "max_power 18 above 17: no start"), ("20", "above 17"),
@@ -99,6 +100,26 @@ def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, star
     else:
         assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout
         assert "safety stop: meshtastic@r2 stopped" in p.stdout and "RC=" not in p.stdout
+
+
+@pytest.mark.parametrize("size1,count,started", [("100", "1", True), ("9000000", "1", False), ("500", "1", False),
+                                                 ("100", "0", False), ("", "1", False)])
+def test_a_start_log_the_start_capped_counts_from_0(tmp_path, size1, count, started):
+    # The start caps its log (over 8 MiB the product truncates it): a log smaller than before the start (500 bytes, 3
+    # lines) holds only this start's lines, so 1 line is this start's; a log of the same size or larger counts from 3,
+    # and a size that cannot be read counts from 3 (a STOP, never a false credit).
+    p, _ = canned(tmp_path, size1=size1, count=count)
+    if started:
+        assert "RC=0" in p.stdout and "Final Tx power 10 dBm" in p.stdout, p.stdout + p.stderr
+    else:
+        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout, p.stdout + p.stderr
+
+
+@pytest.mark.parametrize("size0", ["", "x"])
+def test_no_start_without_the_start_logs_size_before_it(tmp_path, size0):
+    p, evd = canned(tmp_path, size0=size0)
+    assert p.returncode == 2 and "no count or size of the start log before the start" in p.stdout, p.stdout + p.stderr
+    assert not (evd / "F6-r2-start.txt").exists()
 
 
 CAUSES = {"stale": {"count": "3"}, "too high": {"power": "20"}, "no power value": {"power": "x"},

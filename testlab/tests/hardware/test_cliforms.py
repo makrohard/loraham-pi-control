@@ -19,7 +19,9 @@ def verdicts(tmp_path, lines):
 
 @pytest.mark.parametrize("line,want", [
     ("~/rt/venv/lhpc/bin/lhpc rflog meshtastic@r2 --decrypt 2>/dev/null | grep -F ' RX '", "OK"),   # a redirect's fd
-    ("~/rt/venv/lhpc/bin/lhpc rflog meshtastic@r2 --decrypt 2 > /dev/null", "OK"),
+    ("~/rt/venv/lhpc/bin/lhpc rflog meshtastic@r2 --decrypt 2 > /dev/null", "UNKNOWN"),  # spaced: bash passes `2`
+    ("~/rt/venv/lhpc/bin/lhpc rflog meshtastic@r2 --decrypt 2>/dev/null 1>&2", "OK"),             # two fds
+    ("~/rt/venv/lhpc/bin/lhpc rflog $R --decrypt", "REVIEW"),                                       # a $ left unexpanded
     ("~/rt/venv/lhpc/bin/lhpc rflog meshtastic@r2 --decrypted", "UNKNOWN"),                          # a flag the head lacks
     ("~/rt/venv/lhpc/bin/lhpc nosuchverb", "UNKNOWN"),
 ])
