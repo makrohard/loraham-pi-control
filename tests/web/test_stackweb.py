@@ -2616,3 +2616,29 @@ def test_a_degraded_stack_is_started_and_its_running_instance_is_not_marked_stop
     [(name, _href, line)] = lines
     assert name == "MeshCom (QEMU) @r1"
     assert not box.within(line).find("span", **{"data-state": "instance-stopped"})
+
+
+def test_a_page_line_takes_the_raw_verdict_of_its_own_port_only(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v3 M1: meshtastic@r1 runs with two raw ports, 4403 and 9443, both on loopback; its
+    # page is not proxied, upstream 9443. The page line takes 9443's verdict; 4403 keeps its own line
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 4403, "inode": 1},
+                          {"family": "ipv4", "ip": "127.0.0.1", "port": 9443, "inode": 2}])
+    insts = [instances.parse_target(svc, "meshtastic@r1", "start")[1]]
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "meshtastic":
+            for cs in ss.components.values():
+                cs.run_state = RunState.RUNNING
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: insts if sid == "meshtastic" else None)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+
+    def verdicts(line):
+        return [a.text.strip().split(" · ")[0].rpartition(":")[2] for a in box.within(line).find("span", class_="wsaddr")]
+    page = [line for _n, _h, line in lines if box.within(line).find("a", class_="iface-web")]
+    raw = [line for _n, _h, line in lines if not box.within(line).find("a", class_="iface-web")]
+    assert [verdicts(line) for line in page] == [["9443"]]            # the page's own listener
+    assert [verdicts(line) for line in raw] == [["4403"]]             # the other port keeps its line
