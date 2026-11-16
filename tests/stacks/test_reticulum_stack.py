@@ -1406,3 +1406,47 @@ def test_a_valid_or_disabled_internet_interface_still_starts(tmp_path):
     cfgmod.load_config(svc._paths)
     svc._invalidate_config()
     assert "passphrase" not in (svc.restart("rns", apply=False).summary or "")
+
+
+def test_the_pinned_recovery_ends_on_the_manifest_pin_never_an_older_driver(tmp_path, monkeypatch, capsys):
+    """The property of the framing start gate's remedy: `lhpc update reticulum --source pinned --yes`
+    never ends on a pre-framing LoRa driver. Beside a 0.13.x known-working store that names an older
+    driver commit, the adoption is handed no planned commit, so it checks out the manifest pin (which
+    carries RNode framing); and a pinned source's freshness target is that pin, so no Update offer
+    lingers after the recovery."""
+    import json
+
+    from lhpc.adapters.cli import main as cli
+    from lhpc.adapters.cli.main import main
+    from lhpc.core import source_registry, stackupdates
+    from lhpc.core.install import Installer, PlanAction
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ActionResult, ControllerService
+    system = FakeSystem().system
+    real = ControllerService
+    monkeypatch.setattr(cli, "ControllerService",
+                        lambda *a, **k: real(system=system, paths=Paths(runtime_root=tmp_path)))
+    svc = real(system=system, paths=Paths(runtime_root=tmp_path))
+    old = "b" * 40                                             # a driver from before framing
+    store = tmp_path / "profiles" / "known-working" / "reticulum.json"
+    store.parent.mkdir(parents=True)
+    store.write_text(json.dumps({"version": 1, "compositions": [{"hash": "f" * 64, "validated": {}, "entries": {
+        c.id: {"commit": old, "selector": "pinned", "remote": svc._effective_remote(c),
+               "source_rel": c.source.path, "strategy": ""}
+        for c in svc.stack("reticulum").components if c.source is not None}}]}))
+    got = []
+
+    def adopt(self, comp, force=False, source="pinned", pinned_expected=None, locked=False):
+        got.append((comp.id, source, pinned_expected))
+        return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
+    monkeypatch.setattr(Installer, "adopt_source", adopt)
+    monkeypatch.setattr(ControllerService, "build", lambda self, *a, **k: ActionResult(True, "built"))
+    main(["update", "reticulum", "--source", "pinned", "--yes"])
+    out = capsys.readouterr().out
+    assert "rns-lora-interface" in {c for c, _s, _e in got}, (got, out)   # anchor: the driver was adopted
+    assert all(src == "pinned" and not (exp or ("",))[0] for _c, src, exp in got), got
+    drv = svc.stack("reticulum").component("rns-lora-interface")
+    assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+        drv.source.path, drv.source.remote, "pinned", "", 1.0, "", (drv.id,)))
+    assert stackupdates.pinned_target(svc._paths, drv) == drv.source.pin_commit
