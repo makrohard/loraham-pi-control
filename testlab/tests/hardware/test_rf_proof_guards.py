@@ -65,6 +65,24 @@ def test_rs_stops_when_an_undo_fails(tmp_path):
     assert stop_lines(r) == ["STOP: RS: an undo failed (UNRESOLVED.txt): the recovery runs it again"]
 
 
+# ---- a box password inside a login name stops the start; the redactor masks the literal password -------------------------
+
+def test_a_password_inside_a_login_name_stops_the_start(tmp_path):
+    # red-before (42768cef): 'lhp' for box H ran on past the start (it stopped later, at the empty FORMS_OK)
+    r = subprocess.run(["bash", str(HW / "rf-proof.sh"), "live"], input="lhp\n\n", env=_env(tmp_path, LAB_ENV=str(HW / "lab.example.env")),
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: box H's password is part of a login name ('lhpc' or BOX_<B>_USER): it cannot be masked "
+                             "in the evidence; set another password"]
+    assert "== ROW" not in r.stdout
+
+
+def test_the_redactor_masks_a_password_whatever_the_login_names(tmp_path):
+    # red-before (42768cef): with BOX_H_USER=lhpc the redactor left 'auth lhp' unmasked
+    r, _ = source_only(tmp_path, "PW_H=lhp; BOX_H_USER=lhpc; printf 'auth lhp\\n' | redact")
+    assert r.stdout == "auth <REDACTED>\n"
+
+
 # ---- every high-power form is refused, by the dispatcher and by every executor ------------------------------------------
 
 HIGH = ["--power 20", "--tx-power=20", "tx_power: 18", "txpower = 20", "--set POWER=18", "--high-power", "--highpower",
@@ -152,3 +170,30 @@ def test_an_empty_peer_key_is_an_absent_peer(tmp_path):
     r = dry(tmp_path, LANE="full", ROWS_ONLY="3", PEER_g2="")
     assert r.returncode == 0, r.stderr
     assert "NOT RUN: row 3 meshtastic box -> peer: absent: peer g2" in r.stdout
+
+
+# ---- the PC's USB snapshot is redacted; an evidence write that fails is a STOP ---------------------------------------------
+
+def test_the_pcs_by_id_list_and_kernel_log_are_redacted(tmp_path):
+    # red-before (42768cef): both were written raw, the call in them
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "journalctl").write_text("#!/bin/sh\necho 'kernel: usb N0CALL-7 n0call'\n")
+    (fake / "ls").write_text("#!/bin/sh\necho total 0\necho 'lrwxrwxrwx 1 u u 13 x y z usb-N0CALL-9-if00 -> ../../ttyUSB0'\n")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    r, evd = source_only(tmp_path, "OPERATOR_CALL=N0CALL; T0=0; usbsnap S", PATH=f"{fake}:{os.environ['PATH']}")
+    assert r.returncode == 0, r.stderr
+    assert (evd / "S-kern.txt").read_text() == "kernel: usb <CALL> <CALL>\n"
+    assert (evd / "S-byid.txt").read_text() == "usb-<CALL>-if00 ../../ttyUSB0\n"
+
+
+@pytest.mark.parametrize("script", [
+    'mkdir "$EVD/a.txt.rc"; capture a.txt true',
+    'mkdir "$EVD/results.txt"; REPORT 7 daemon b 433 p A-\\>B yes 2 PASS',
+    'mkdir "$EVD/REPORT.md"; REPORT 7 daemon b 433 p A-\\>B yes 2 PASS',
+])
+def test_an_evidence_write_that_fails_is_a_stop(tmp_path, script):
+    # red-before (42768cef): each returned normally
+    r, _ = source_only(tmp_path, script)
+    assert r.returncode == 2
