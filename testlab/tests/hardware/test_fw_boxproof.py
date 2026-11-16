@@ -56,9 +56,11 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
     assert p.stdout.split() == (["REACHABLE"] if ok else ["NOT"]), p.stderr
 
 
-CANNED = """X() {{ local f=$1; shift; case $f in
+CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
   *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';;
-  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: 10 dBm\\n';; *) printf 'ok\\n';; esac > "$EVD/$f"; XRC=0; }}
+  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n';;
+  *-stop-1.txt) printf 'stop 1\\n'; XRC={stop1};; *-stop-2.txt) printf 'stop 2\\n'; XRC={stop2};;
+  *) printf 'ok\\n';; esac > "$EVD/$f"; }}
 mtstart F6-r2; echo RC=$?"""
 
 
@@ -66,9 +68,24 @@ mtstart F6-r2; echo RC=$?"""
 def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, started):
     # Before the start the log holds 3 Final Tx power lines; the start must add one, else the last line is an older
     # start's (stale) and the run stops, the stack stopped first.
-    p, evd = proof(tmp_path, CANNED.format(count=count))
+    p, evd = proof(tmp_path, CANNED.format(count=count, power=10, stop1=0, stop2=0))
     if started:
         assert "RC=0" in p.stdout and "Final Tx power 10 dBm" in p.stdout, p.stderr
     else:
-        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout
-        assert (evd / "F6-r2-stop.txt").exists() and "RC=" not in p.stdout
+        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout and "(meshtastic@r2 stopped)" in p.stdout
+        assert (evd / "F6-r2-stop-1.txt").exists() and "RC=" not in p.stdout
+
+
+@pytest.mark.parametrize("why,count,power", [("stale", "3", "10"), ("too high", "4", "20")])
+@pytest.mark.parametrize("stop1,stop2,rc", [("0", "0", 2), ("1", "0", 2), ("1", "1", 3)])
+def test_a_safety_stop_is_checked_retried_once_and_a_failed_one_named(tmp_path, why, count, power, stop1, stop2, rc):
+    # The stop before a power STOP is checked: one retry; a stop that fails twice is its own STOP (rc 3) naming the unsafe
+    # state, never the plain STOP.
+    p, evd = proof(tmp_path, CANNED.format(count=count, power=power, stop1=stop1, stop2=stop2))
+    assert p.returncode == rc and "RC=" not in p.stdout
+    if rc == 3:
+        assert "may still be running, TX power unverified" in p.stdout and "UNSAFE" in (evd / "STOP.txt").read_text()
+        assert (evd / "F6-r2-stop-2.txt").exists()
+    else:
+        assert "(meshtastic@r2 stopped)" in p.stdout
+        assert (evd / "F6-r2-stop-2.txt").exists() is (stop1 == "1")

@@ -18,6 +18,7 @@
 #  started); the lab identity (undo: --reset); the proxy of meshtastic@r2 (undo: --mode local + webserver apply); the firewall
 #  applies (root, /etc/lhpc + nft; not undone: the state at FWSHA; a return to FWFROM's rules = reset the checkout, then the
 #  same apply sequence); one planned reboot (FW7). A STOP leaves the box as it is until the operator decides.
+# Exit: 0 done, 1 a FAIL row, 2 a STOP, 3 a STOP whose safety stop failed (meshtastic@r2 may still be running).
 # Evidence: $EVD_ROOT/fw-boxproof-<UTC time> (run.log, REPORT.md, UNDO.txt, SHA256SUMS).
 set -uo pipefail
 MODE=${1:-dry}; case "$MODE" in dry|live) ;; *) echo "usage: fw-boxproof.sh dry|live"; exit 2;; esac
@@ -70,6 +71,11 @@ LITS=("re-apply the firewall before you reboot" "firewall-apply.sh" "Firewall: A
 LOG=/dev/null; [ "$MODE" = live ] && { mkdir -p "$EVD" || exit 2; LOG=$EVD/run.log; }
 say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 stop() { say "STOP: $*"; [ "$MODE" = live ] && echo "STOP: $*" >> "$EVD/STOP.txt"; exit 2; }
+# safestop <tag> <why>: stop meshtastic@r2 (its guarded stop, checked, one retry), then STOP. A stop that fails twice is its
+#  own STOP, rc 3: the stack may still be running and its TX power is unverified.
+safestop() { local i; for i in 1 2; do X "$1-stop-$i.txt" "$(gstop meshtastic@r2)"; [ "$XRC" = 0 ] && stop "$2 (meshtastic@r2 stopped)"; done
+  say "STOP: $2; the stop failed twice: meshtastic@r2 may still be running, TX power unverified"
+  [ "$MODE" = live ] && echo "UNSAFE: $2; meshtastic@r2 may still be running, TX power unverified" >> "$EVD/STOP.txt"; exit 3; }
 fail() { say "FAIL: $*"; [ "$MODE" = live ] && echo "$*" >> "$EVD/FAILED.txt"; }
 ok() { say "ok: $*"; }
 report() { [ "$MODE" = live ] && echo "| $* |" >> "$EVD/REPORT.md"; say "REPORT | $*"; }
@@ -100,8 +106,8 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   undo "$(gstop meshtastic@r2)"; must "$1-start.txt" "$(gstart meshtastic@r2)"
   must "$1-txpower.txt" "for i in \$(seq 1 30); do [ \"\$($FTX)\" -gt ${n0:-0} ] && break; sleep 2; done; echo COUNT \$($FTX); grep -a 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log | tail -n 1"
   n1=$(body "$1-txpower.txt" | sed -n 's/^COUNT //p')   # this start wrote a new line, or the last one is an older start's
-  [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || { X "$1-stop.txt" "$(gstop meshtastic@r2)"; stop "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"; }
-  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no Final Tx power line";; esac; [ "$fp" -le 17 ] || { X "$1-stop.txt" "$(gstop meshtastic@r2)"; stop "$1: Final Tx power $fp above 17"; }; }
+  [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || safestop "$1" "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"
+  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no Final Tx power line";; esac; [ "$fp" -le 17 ] || safestop "$1" "$1: Final Tx power $fp above 17"; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence
