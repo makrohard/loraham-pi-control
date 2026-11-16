@@ -92,12 +92,14 @@ MODELS_NOT_IN_LAB = {"uputronics", "waveshare-sx1262"}
 TXMAX = 10
 TX_CALL = re.compile(r"\btx \S+ \d+ \S+ -- ")
 # The send forms as the runner uses them: a forms-table send, a helper on a box's stdin, a peer action, the chat keys and the
-# announce. Inside a `case` pattern list (the dry executor's own detector) or a single-quoted assignment (a pattern held as
-# data) a form is text, not a send; a double-quoted one may run a substitution and counts.
+# announce. Inside a `case` pattern list (the dry executor's own detector) or a quoted assignment that expands nothing (a
+# pattern held as data) a form is text, not a send.
 SEND = re.compile(r"\bform (?:tx_text|meshcom_send|mt_send|mc_send|rt_send)\b|\bXIN\b.*\$\{?(?:MCSEND_PY|GW_PY)\b"
                   r"|\b(?:meshcom|mt|mc)-send\b|\brns-exchange\b|\btmux send-keys\b|\bcurl\b.*announce")
 CASE_PATTERNS = re.compile(r"^\s*case \S+ in ")
-QUOTED_ASSIGNMENT = re.compile(r"^\s*[A-Za-z_]\w*='[^']*'\s*$")   # single quotes: nothing in them runs
+# Data: a single-quoted value, or a double-quoted one with no $, backtick or backslash (nothing in it expands or runs). The
+# runner's runtime guard still STOPs such a value when it is executed outside tx (test below).
+QUOTED_ASSIGNMENT = re.compile(r"""^\s*[A-Za-z_]\w*=(?:'[^']*'|"[^"$`\\]*")\s*$""")
 
 
 def lane_rows(lane):
@@ -287,6 +289,7 @@ def test_a_send_moved_out_of_its_tx_fails_the_dispatch_check_and_the_lint(dry, r
 
 
 @pytest.mark.parametrize("line,hit", [("PAT='tmux send-keys'", False), ("PAT='$(tmux send-keys -t x n1)'", False),
+                                      ("PAT=\"tmux send-keys -t x n1\"", False), ("PAT=\"tmux send-keys $n\"", True),
                                       ("c=\"$(tmux send-keys -t x n1)\"", True), ("c=\"`tmux send-keys -t x n1`\"", True),
                                       ("    tx H:H433 1 n1 -- must H f.txt \"tmux send-keys -t x n1\"", False)])
 def test_the_lint_reads_a_quoted_pattern_as_data_but_a_command_substitution_as_a_send(line, hit):
@@ -377,5 +380,24 @@ def test_a_raw_power_command_stops_before_anything_runs(tmp_path, call):
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False,
                        env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}, timeout=60)
     assert p.returncode == 2 and "power token" in p.stderr and "RAN-ON" not in p.stdout
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("call", ['X H s.txt "$PAT"', 'eval "XIN Z s.txt - \\"$PAT\\""'])
+def test_a_send_held_as_data_still_stops_when_it_runs_outside_tx(tmp_path, call):
+    # The lint reads PAT="tmux send-keys ..." as data only because the runtime guard backs it: run outside tx, it STOPs
+    # before the fake ssh runs.
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for name in ("ssh", "sshpass"):
+        (bin_ / name).write_text(f"#!/bin/bash\ntouch {tmp_path}/ran\n")
+        (bin_ / name).chmod(0o755)
+    evd = tmp_path / "evd"
+    evd.mkdir()
+    script = (f'set -u\nRFPROOF_SOURCE_ONLY=1 . "{RUNNER}"\nMODE=live; EVD="{evd}"; PW_H=pw-h; PW_Z=pw-z; MC_PIN=1; '
+              f'OPERATOR_CALL=XX9TST\nPAT="tmux send-keys -t rfchat n1"\n{call}\necho RAN-ON')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False,
+                       env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}, timeout=60)
+    assert p.returncode == 2 and "a send outside tx" in p.stderr and "RAN-ON" not in p.stdout
     assert not (tmp_path / "ran").exists()
 
