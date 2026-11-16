@@ -291,7 +291,7 @@ def test_same_process_claim_retries_while_ownership_is_unpublished(tmp_path, mon
 
 @pytest.mark.wallclock("a real holder process in its own interpreter; its flock is polled, bounded at 10 s (the "
                        "admission wait itself is on the fake clock)")
-def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch, fake_clock):
+def test_an_unknown_owner_fails_at_once_without_a_grace(tmp_path, monkeypatch, fake_clock):
     """An UNIDENTIFIABLE holder must not become a five-second stall: it is an external conflict and
     surfaces the typed ResourceBusy at once (service_admission._acquire_key: the old timing-based grace is
     gone). Proven with a lock held by a real external process whose owner record never appears. The
