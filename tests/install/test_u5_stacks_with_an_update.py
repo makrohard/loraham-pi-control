@@ -88,6 +88,16 @@ def test_a_stack_the_old_manifest_does_not_know_is_named_as_the_new_code_names_i
     assert "Stacks with an update: a-stack-added-by-the-update." in res.details, res.details
 
 
+def test_a_stack_whose_check_failed_is_named_and_the_update_stands(op_svc, monkeypatch, tmp_path, capsys):
+    box, sweep = _cli_sweep(tmp_path, monkeypatch, capsys, CommandResult(128, "", "fatal: unable to access"))
+    sid = box.stack_of("loraham-daemon")
+    assert sweep.returncode == 1 and json.loads(sweep.stdout)["data"]["stacks_unchecked"] == [sid], sweep
+    svc, _fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False, sweep=sweep)
+    res = svc.self_update_apply_operator()
+    assert res.ok and res.summary == "Update applied.", res
+    assert [d for d in res.details if sid in d] == [f"Could not check every source of: {sid}."], res.details
+
+
 def test_nothing_behind_lists_nothing(op_svc, monkeypatch, tmp_path):
     svc, fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False)
     res = svc.self_update_apply_operator()

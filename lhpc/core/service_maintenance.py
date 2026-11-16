@@ -218,9 +218,8 @@ class MaintenanceOpsMixin:
         stackupdates.record(self._paths, results)
         n = len(comps)
         behind, uptodate = counts[stackupdates.BEHIND], counts[stackupdates.UP_TO_DATE]
-        # What is left once the excused optionals are set aside. The SUMMARY uses these too,
-        # not the raw counts — an "ok" result whose text still says something could not be
-        # checked would just move the confusion instead of fixing it.
+        # What is left once the excused optionals are set aside. The SUMMARY uses these too, not the raw counts — an
+        # "ok" result whose text still says something could not be checked would just move the confusion.
         errs = counts[stackupdates.ERROR] - excused_counts[stackupdates.ERROR]
         unknown = counts[stackupdates.UNKNOWN] - excused_counts[stackupdates.UNKNOWN]
         excused_unresolved = sum(excused_counts.values())
@@ -248,10 +247,11 @@ class MaintenanceOpsMixin:
         else:
             summary = (f"No installed/comparable sources could be checked for '{who}' — "
                        f"{unknown} unknown/not comparable.")
+        def stacks(status):     # the stacks (THIS code's manifest) with a component in `status`
+            return sorted({self.stack_of(c) or c for c, e in results.items() if e["status"] == status})
         return ActionResult(unresolved == 0, summary, details=details,
-                            data={"counts": counts, "checked": n, "excused": sorted(excused),   # stack ids: THIS code's manifest
-                                  "stacks_behind": sorted({self.stack_of(c) or c for c, e in results.items()
-                                                           if e["status"] == stackupdates.BEHIND})})
+                            data={"counts": counts, "checked": n, "excused": sorted(excused),
+                                  "stacks_behind": stacks(stackupdates.BEHIND), "stacks_unchecked": stacks(stackupdates.ERROR)})
 
     def source_check_view(self) -> dict:
         """Cached, network-free freshness view for GET pages: `{checked_at, components, lhpc_head}` (fetched LHPC)."""

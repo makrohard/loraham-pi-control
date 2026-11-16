@@ -587,13 +587,14 @@ class SelfUpdateOpsMixin:
         return res
 
     def _stacks_with_an_update(self, python: str) -> str:
-        """ONE run of the NEW code's `lhpc source-check --json` (this process holds the old code): the stacks it
-        judged behind on their lane; "" when none, one line when it cannot finish. Never stops, starts or updates one."""
+        """ONE run of the NEW code's `lhpc source-check --json` (this process: the old code) names the stacks behind
+        on their lane and those it could not check, or that it cannot finish. Never stops, starts or updates a stack."""
         r = self._system.runner.run([python, "-m", "lhpc", "source-check", "--json"], 60.0,
                                     env={ENV_RUNTIME_ROOT: str(self._paths.runtime_root)})
         try:
-            behind = json.loads(r.stdout or "")["data"].get("stacks_behind", [])
-            return f"Stacks with an update: {', '.join(behind)}." if behind else ""
+            data = json.loads(r.stdout or "")["data"]
+            return " ".join(f"{h}: {', '.join(data[k])}." for h, k in (("Stacks with an update", "stacks_behind"),
+                            ("Could not check every source of", "stacks_unchecked")) if data.get(k))
         except (ValueError, KeyError, TypeError, AttributeError):
             why = "timed out after 60 s" if r.timed_out else f"failed (exit {r.returncode})"
             return f"Could not list the stacks with an update: `lhpc source-check` {why}."
