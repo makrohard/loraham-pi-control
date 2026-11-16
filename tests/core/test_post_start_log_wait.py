@@ -453,6 +453,8 @@ if cfg.get("virtual"):
             _kill()
         return t
     def _sleep(s):
+        if s < 0 and cfg.get("strict_sleep"):
+            raise ValueError("sleep length must be non-negative")      # the real sleep's rule
         _now[0] += max(0.0, s)
     time.monotonic, time.sleep = _mono, _sleep
     _cc = socket.create_connection
@@ -475,6 +477,7 @@ def _act(when):
             f.write(b"".join(c.encode() * k for c, k in a[2]))
 def _chunk(read):
     _n[0] += 1
+    _trace.write("read %.2f\n" % _now[0])
     _act("block")
     d = read()
     if cfg.get("virtual"):
@@ -502,6 +505,7 @@ _ropen, _rpread, _rosopen = builtins.open, os.pread, os.open
 def _open(p, *a, **k):
     if isinstance(p, str) and p in _logs:
         _trace.write("open %s\n" % p)
+        _now[0] += cfg.get("open_cost", 0.0)
     f = _ropen(p, *a, **k)
     if isinstance(p, str) and p in _logs:
         return _Log(f)
@@ -511,6 +515,7 @@ def _open(p, *a, **k):
 def _osopen(p, *a, **k):
     if isinstance(p, str) and p in _logs:
         _trace.write("open %s\n" % p)
+        _now[0] += cfg.get("open_cost", 0.0)
     return _rosopen(p, *a, **k)
 def _pread(fd, n, off):
     return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 else _rpread(fd, n, off)
@@ -567,9 +572,11 @@ def test_a_log_moved_mid_scan_is_followed_at_once_and_the_old_ones_line_never_co
     link = tmp_path / "uart-latest.log"
     _boot(tmp_path, link, "uart-1.log", a_text)
     (tmp_path / "uart-2.log").write_text(b_text)
-    rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 5)], virtual=True, read_cost=1.0, logs=[str(link)],
-                                 on_read={"1": ["retarget", str(link), "uart-2.log"]})
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(link, 5)], virtual=True, read_cost=1.0, logs=[str(link)],
+                                    on_read={"1": ["retarget", str(link), "uart-2.log"]})
     assert steps[0]["outcome"] == outcome, (steps, err)
+    if outcome == "ready":                      # the move is followed at once: two reads' cost, no sleep between
+        assert trace[-1] == "end 2.0", trace
 
 
 def test_a_group_wait_on_an_absent_log_does_not_sleep_past_its_own_deadline(tmp_path):
@@ -580,12 +587,11 @@ def test_a_group_wait_on_an_absent_log_does_not_sleep_past_its_own_deadline(tmp_
     assert (rc, [st["outcome"] for st in steps]) == (0, ["timeout", "ready"]), (steps, err)
 
 
-@pytest.mark.slow
-@pytest.mark.wallclock("the step's real deadline against a FIFO or a tty that would block an open or a read")
 @pytest.mark.parametrize("kind", ["fifo-no-writer", "fifo-held-open", "pty"])
 def test_a_path_that_is_not_a_regular_file_is_never_opened_and_the_wait_keeps_its_deadline(tmp_path, kind):
     """B3 + D1: a FIFO (no writer: open blocks; a writer holding it: a read blocks) or a tty (opening it would make it
-    the session leader's controlling terminal, a serial port's open resets a node) is never opened."""
+    the session leader's controlling terminal, a serial port's open resets a node) is never opened; it is said
+    once per step, however many polls see it."""
     held = []
     if kind == "pty":
         master, slave = os.openpty()
@@ -599,12 +605,12 @@ def test_a_path_that_is_not_a_regular_file_is_never_opened_and_the_wait_keeps_it
             os.write(w, LINE.encode())
             held.append(w)
     try:
-        rc, steps, err, trace = _hooked(tmp_path, [_lw(path, 1)], logs=[path], limit=15)
+        rc, steps, err, trace = _hooked(tmp_path, [_lw(path, 5)], logs=[path], limit=15, virtual=True)
     finally:
         for fd in held:
             os.close(fd)
-    assert (rc, steps[0]["outcome"]) == (1, "timeout") and steps[0]["elapsed_s"] < 3, (steps, err)
-    assert "not a regular file" in err and f"open {path}" not in trace, (err, trace)
+    assert (rc, steps[0]["outcome"], steps[0]["elapsed_s"]) == (1, "timeout", 5.0) and steps[0]["attempts"] >= 2, steps
+    assert err.count("is not a regular file") == 1 and f"open {path}" not in trace, (err, trace)
 
 
 @pytest.mark.slow
@@ -644,9 +650,11 @@ def test_a_log_rewritten_in_place_with_the_line_before_the_read_offset_is_read_a
     """Pin (green before the fix too: it re-read from 0 on every poll): after a full pass the log is rewritten in
     place, same inode, at least as long, with the line in its first MiB; the scan starts again at 0 and finds it."""
     log = tmp_path / "uart.log"
-    log.write_text("a" * (2 * _C1))
+    log.write_text("a" * (2 * _C1 - 1) + "\n")          # the rewrite keeps the byte before the offset: a line end
+    rest = 2 * _C1 - 1 - 100 - len(LINE)
     rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 5)], logs=[str(log)],
-                                 on_read={"3": ["rewrite", str(log), [["b", 100], [LINE, 1], ["b", 3 * _C1]]]})
+                                 on_read={"3": ["rewrite", str(log), [["b", 100], [LINE, 1], ["b", rest], ["\n", 1],
+                                                                       ["b", _C1]]]})
     assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
 
 
@@ -716,3 +724,24 @@ def test_a_tcp_connect_that_completes_after_the_deadline_is_not_ready(tmp_path):
                                                  "port": srv.getsockname()[1], "timeout": 1, "required": True}],
                                      virtual=True, connect_cost=2.0)
     assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
+
+
+@pytest.mark.parametrize("timeout", [0.6, 0.65, 0.7])
+@pytest.mark.parametrize("wait", ["log_wait", "tcp_wait"])
+def test_a_deadline_that_passes_between_the_check_and_the_sleep_still_records_the_wait(tmp_path, wait, timeout):
+    """Every clock reading costs 0.1 s and the sleep keeps the real one's rule (a negative length raises): when the
+    deadline passes between the last check and the sleep's own reading, the wait still records its timeout."""
+    first = (_lw(tmp_path / "absent.log", timeout) if wait == "log_wait" else
+             {"kind": "tcp_wait", "host": "127.0.0.1", "port": _closed_port(), "timeout": timeout, "required": True})
+    rc, steps, err, _t = _hooked(tmp_path, [first], virtual=True, delta=0.1, strict_sleep=True)
+    assert (rc, [st["outcome"] for st in steps]) == (1, ["timeout"]), (steps, err)
+
+
+def test_no_read_is_requested_after_a_slow_open_used_up_the_deadline(tmp_path):
+    """B3 (R3d): opening the log takes 2 s of a 1 s budget (a stalled mount); no read of it starts after the
+    deadline: each read's start is traced on the virtual clock."""
+    log = tmp_path / "uart.log"
+    log.write_text("x" * (3 * _C1))
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, open_cost=2.0, logs=[str(log)])
+    late = [ln for ln in trace if ln.startswith("read ") and float(ln.split()[1]) >= 1.0]
+    assert steps[0]["outcome"] == "timeout" and not late, (steps, trace, err)

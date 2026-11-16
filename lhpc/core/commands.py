@@ -993,7 +993,7 @@ def _log_scan(s, end, t0, lbl):
         why = _why_stop(end)
         if why:
             return why, tries, seen, time.monotonic()
-        time.sleep(min(2.0, end - time.monotonic()))
+        time.sleep(max(0.0, min(2.0, end - time.monotonic())))   # the deadline may pass since the check
 
 if GATED and not _armed():
     sys.exit(0)                            # detached runner never armed -> no side effects at all
@@ -1069,7 +1069,7 @@ for _si, s in enumerate(STEPS):
                 oc = _why_stop(end)
                 if oc:
                     break
-                time.sleep(min(2.0, end - time.monotonic()))
+                time.sleep(max(0.0, min(2.0, end - time.monotonic())))   # may pass since the check
             _record({"kind": "tcp_wait", "label": _lbl, "host": s["host"], "port": s["port"],
                      "outcome": oc, "attempts": tries, "elapsed_s": round(time.monotonic() - t0, 1)})
             if oc == "main-gone":
