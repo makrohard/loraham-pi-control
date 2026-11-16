@@ -480,6 +480,9 @@ coverage() {   # one line per item (a model, a stack, a check), row and directio
     case "$seen" in *" $m "*) ;; *) covline "$m" model - - "not present" "no row carries this model";; esac; done; }
 
 # ---- 10. R0 (what is present) and R1 (stop what runs) -----------------------------------------------------------------------
+radios_ok() {   # radios_ok <file>: exactly one 'STATE valid' line, and every other line a well-formed ROW (blank lines aside)
+  local t; t=$(body "$1" | grep -v '^[[:space:]]*$'); [ "$(printf '%s\n' "$t" | grep -c '^STATE ')" = 1 ] && printf '%s\n' "$t" | grep -qx 'STATE valid' \
+    && ! printf '%s\n' "$t" | grep -vxE 'STATE valid|ROW r[1-9][0-9]? [a-z0-9][a-z0-9-]* (433|868) (True|False) serial=[^ ]* port=[^ ]* hp=(None|True|False)' | grep -q .; }
 radiokey() {   # radiokey <KEY>: resolve RADIO_<KEY> to exactly one enabled radio of its box -> rid, or a why (absent/ambiguous)
   local v="RADIO_$1" b m bd sel rows n; read -r b m bd sel <<< "${!v:-}"
   [ -n "$b" ] || { echo "why absent: radio $1"; return; }; [ -z "${ABSENT[$b]:-}" ] || { echo "why ${ABSENT[$b]}"; return; }
@@ -512,6 +515,7 @@ row_R0() {
     must $b "R0-$b-clock.txt" "date -u +%s"; [ "$MODE" = dry ] || { [[ "$(body "R0-$b-clock.txt")" =~ ^[0-9]+$ ]] || stop "R0 $b: no clock"; keep "T0_$b" "$(body "R0-$b-clock.txt")"; }
     must $b "R0-$b-usb.txt" "$USBLIST"; boxkern $b "R0-$b-kern.txt"                       # the box's USB baseline; its kernel log readable as root (uid 0)
     must $b "R0-$b-radios.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'"
+    radios_ok "R0-$b-radios.txt" || stop "R0 $b: the hardware list is not valid (want exactly one 'STATE valid' and well-formed ROW lines): $(body "R0-$b-radios.txt" | grep -v '^ROW ' | head -n 1)"
     if [ "$MODE" = dry ]; then echo "  [dry] PC > R0-$b-caps.txt: the repo's radio_models (dry uses the repo copy)"; python3 -I -c "$CAPS_PY" "$REPO" > "$OUT/R0-$b-caps.txt" 2>&1 || stop "R0 $b: the repo's radio_models cannot be read"
     else must $b "R0-$b-caps.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'"; fi   # the installed copy (its loader); unreadable = STOP
     grep -qE '^CAP [a-z0-9-]+ [0-9]+$' "$OUT/R0-$b-caps.txt" || stop "R0 $b: no model power cap read (R0-$b-caps.txt)"
