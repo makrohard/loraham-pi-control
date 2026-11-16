@@ -542,3 +542,129 @@ def test_a_min_endpoint_that_does_not_read_back_the_minimum_stops_before_the_sen
     assert r.returncode == rc, r.stderr
     if rc == 2:
         assert stop_lines(r) == [f"STOP: row 7: H:r1 reads back '{rb}' dBm after POWER=2: no TX"]
+
+
+# ---- R0's refusals: a disabled radio, a high-power grant, an invalid hardware list, the wrong box, a missing serial peer ----
+
+RADIOS_H = ("STATE valid\nROW r1 loraham 433 True serial= port= hp=None\nROW r2 loraham 868 True serial= port= hp=None\n"
+            "ROW r3 ch341-rfm98pw-433 433 True serial=STICK433A port=1-2 hp=False\n"
+            "ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=False\nROW r5 meshstick-1262 868 True serial=MSTICK01 port=1-3 hp=False")
+
+
+def _null_peer(tmp_path):
+    fake = tmp_path / "nullpeer.py"
+    fake.write_text("import sys\n")
+    return str(fake)
+
+
+def test_a_disabled_radio_is_absent(tmp_path):
+    # mutant K2: a disabled radio (ROW ... False) still resolved
+    r = dry(tmp_path, LANE="fast", DRY_RADIOS_H=RADIOS_H.replace("r1 loraham 433 True", "r1 loraham 433 False"))
+    assert r.returncode == 0, r.stderr
+    assert "NOT RUN: row 7 daemon A->B: absent: radio H433" in r.stdout, r.stdout
+
+
+def test_a_high_power_grant_at_r0_stops_before_anything_starts(tmp_path):
+    # mutant K32: the grant was not a STOP (in dry this is the only grant check)
+    r = dry(tmp_path, LANE="fast", DRY_RADIOS_H=RADIOS_H.replace("r1 loraham 433 True serial= port= hp=None",
+                                                                 "r1 loraham 433 True serial= port= hp=True"))
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: R0: row 7, H433 = r1: the high-power grant of r1 is 'True' (want None or False): nothing starts"]
+    assert "== ROW R1" not in r.stdout
+
+
+@pytest.mark.parametrize("radios, first", [("STATE invalid\nROW r1 loraham 433 True serial= port= hp=None", "STATE invalid"),
+                                           (RADIOS_H.replace("STATE valid", "STATE valid\nSTATE valid"), "STATE valid"),
+                                           (RADIOS_H + "\nROW r9 loraham 433 maybe serial= port= hp=None", "STATE valid")])
+def test_an_invalid_hardware_list_stops_r0(tmp_path, radios, first):
+    # mutant K33: the list's state was not checked (the fix of 6f484fc8 had no kept test)
+    r = dry(tmp_path, LANE="fast", DRY_RADIOS_H=radios)
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: R0 H: the hardware list is not valid (want exactly one 'STATE valid' and well-formed ROW lines): "
+                             + first], r.stderr
+
+
+def test_an_endpoint_on_the_other_box_stops_r0(tmp_path):
+    # mutant K34: RADIO_H433 naming box Z was taken for row 7's box-H endpoint
+    r = dry(tmp_path, LANE="fast", RADIO_H433="Z loraham 433")
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: row 7: H433 is on box Z, the table says H"]
+
+
+def test_a_serial_peer_missing_from_the_pcs_by_id_list_is_absent(tmp_path):
+    # mutant K35: the by-id check was skipped, the peer read as present
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="3", FAKE_PEER=_null_peer(tmp_path), DRY_BYID="usb-Example_TDeck_MeshCom-if00")
+    assert r.returncode == 0, r.stderr
+    assert "NOT RUN: row 3 meshtastic box -> peer: absent: peer g2" in r.stdout
+
+
+# ---- rows and the end scan: an ACK from another call, row 5's control files, the operator's call ---------------------------
+
+@pytest.mark.parametrize("lines, want", [
+    ("ACKED t msg 1\nCALL-DIFF", "row 2 peer -> box: the ACK frame's source differs from the given call (not the tracker's ACK)"),
+    ("ACKED t msg 1\nNO-ACK-FRAME", "row 2 peer -> box: Graywolf has 'n1' acked, but no ACK frame in the rf log"),
+    ("ACKED t msg 1\nCALL-MATCH", None),
+])
+def test_an_ack_from_another_call_is_a_row_fail(tmp_path, lines, want):
+    # mutant K36: CALL-DIFF was not a FAIL (the fix of 3e2fa79c had no kept test)
+    r, evd = source_only(tmp_path, f'printf "%s\\n" "{lines}" > "$EVD/2-box-send.txt"; ackjudge 2-box-send.txt n1')
+    assert r.returncode == (0 if want is None else 1), r.stderr
+    if want:
+        assert (evd / "rowfail.txt").read_text() == want + "\n"
+
+
+def test_row_5s_control_files_stay_in_the_private_scratch(tmp_path):
+    # mutant K37: the release and destination files were in the evidence directory again (the second half of c033d2e6)
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="5", FAKE_PEER=_null_peer(tmp_path))
+    assert r.returncode == 0, r.stderr
+    paths = [w for line in r.stdout.splitlines() for w in line.split() if w.endswith(("/5-tx2.go", "/5-pcdest.txt"))]
+    assert {Path(w).name for w in paths} == {"5-tx2.go", "5-pcdest.txt"}, r.stdout
+    assert all(Path(w).parent.parent == tmp_path for w in paths), paths   # the scratch (TMPDIR/rf-proof.*), not its out/
+
+
+def test_the_end_scan_finds_the_operators_call(tmp_path):
+    # mutant K12: RE no longer scanned for the call
+    r, evd = source_only(tmp_path, 'OPERATOR_CALL=N0CALL; TRACKER_CALL=; printf "de n0call-7 k\\n" > "$EVD/x.txt"; secret_scan')
+    assert r.returncode == 1
+    assert (evd / "rowfail.txt").read_text() == "RE: the operator's call (any SSID) in the evidence\n"
+
+
+def test_the_end_scan_passes_clean_evidence(tmp_path):
+    r, _ = source_only(tmp_path, 'OPERATOR_CALL=N0CALL; TRACKER_CALL=; printf "nothing here\\n" > "$EVD/x.txt"; secret_scan')
+    assert r.returncode == 0, r.stderr
+
+
+# ---- the start's refusals --------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("env, want", [
+    ({"OPERATOR_CALL": "N0CALL-7"}, "STOP: OPERATOR_CALL is not a callsign without an SSID (3..8 of A-Z 0-9)"),
+    ({"OPERATOR_CALL": "n0call"}, "STOP: OPERATOR_CALL is not a callsign without an SSID (3..8 of A-Z 0-9)"),
+    ({"EVD_ROOT": "/tmp/rf"}, "STOP: EVD_ROOT is under /tmp: the evidence lives under /home"),
+    ({"EVD_ROOT": "/tmp"}, "STOP: EVD_ROOT is under /tmp: the evidence lives under /home"),
+    ({"EVD_ROOT": "rf"}, "STOP: EVD_ROOT is not an absolute path"),
+])
+def test_a_bad_call_or_evidence_root_stops_the_start(tmp_path, env, want):
+    # mutants K13, K16: neither was refused
+    r = dry(tmp_path, LANE="fast", **env)
+    assert r.returncode == 2
+    assert stop_lines(r) == [want]
+    assert "== ROW" not in r.stdout
+
+
+@pytest.mark.parametrize("line", ["RADIO_PW=x", "PEER_pin=1234", "DRY_SECRET=x", "BOX_H_PASSWORD=x"])
+def test_a_secret_name_in_the_lab_file_stops_the_start(tmp_path, line):
+    # mutant K15: the lab file's secret names were not refused
+    lab, _ = _lab_with(tmp_path, line)
+    r = dry(tmp_path, LANE="fast", LAB_ENV=str(lab))
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: {lab} sets a *PASS*/*PIN*/*SECRET* variable: secrets come on stdin only"]
+
+
+def test_an_incomplete_forms_ok_stops_a_live_start(tmp_path):
+    # mutant K17: the missing forms were printed and the run went on; both password lines empty, so no box is reached
+    r = subprocess.run(["bash", str(HW / "rf-proof.sh"), "live"], input="\n\n",
+                       env=_env(tmp_path, LAB_ENV=str(HW / "lab.example.env"), LANE="fast", FORMS_OK="start"),
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: form not confirmed: dset rx_rf stop tx_text (FORMS_OK must hold every form of the chosen rows)"]
+    assert "== ROW" not in r.stdout

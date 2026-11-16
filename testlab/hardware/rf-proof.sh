@@ -691,11 +691,13 @@ row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): bo
   result 2-peer-read.txt "$n" || fail "not heard: $n"
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "box -> peer" yes "$(getk "P_R2-$b-$r" as-is) dBm (as-is)" PASS
   [ "$MODE" = dry ] || { [ "$grc" = 0 ] && grep -q '^ACKED ' "$OUT/2-box-send.txt"; } || fail "row 2 peer -> box: no ACK: call not verified ('$n', graywolf rc $grc)"
-  if [ "$MODE" != dry ]; then
-    ! grep -qx CALL-DIFF "$OUT/2-box-send.txt" || fail "row 2 peer -> box: the ACK frame's source differs from the given call (not the tracker's ACK)"
-    grep -qx CALL-MATCH "$OUT/2-box-send.txt" || fail "row 2 peer -> box: Graywolf has '$n' acked, but no ACK frame in the rf log"; fi
+  [ "$MODE" = dry ] || ackjudge 2-box-send.txt "$n"
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "peer -> box" "the tracker's ACK (acked in Graywolf; the frame's source = the given call)" "the tracker's $TRACKER_DBM dBm, from its portal (not read)" PASS
   undo_to "$m"; }
+
+ackjudge() {   # ackjudge <file> <nonce>: row 2 peer -> box: the Graywolf helper found the ACK frame from the given call, else FAIL
+  ! grep -qx CALL-DIFF "$OUT/$1" || fail "row 2 peer -> box: the ACK frame's source differs from the given call (not the tracker's ACK)"
+  grep -qx CALL-MATCH "$OUT/$1" || fail "row 2 peer -> box: Graywolf has '$2' acked, but no ACK frame in the rf log"; }
 
 row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set to 1, its lowest, restored after)
   local b=${1%%:*} k=${1#*:}
