@@ -17,19 +17,18 @@ from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
 
 SWEEP = (sys.executable, "-m", "lhpc", "source-check", "--json")
-DAEMON_REMOTE, DAEMON_SRC = "https://github.com/makrohard/LoRaHAM_Daemon.git", "src/loraham-daemon"
 
 
 def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head):
-    """What `lhpc source-check --json` prints on a box whose daemon checkout is at a*40 and whose
-    remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check."""
-    root = tmp_path / "box"
-    src = root / DAEMON_SRC
+    """What `lhpc source-check --json` prints on a box whose daemon checkout (the manifest's) is at a*40 and
+    whose remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check."""
+    paths, cmds = Paths(runtime_root=tmp_path / "box"), {}
+    box = ControllerService(system=FakeSystem(commands=cmds).system, paths=paths)
+    spec = next(c for s in box.stacks() for c in s.components if c.id == "loraham-daemon").source
+    src = paths.resolve_source(spec.path)
     src.mkdir(parents=True)
-    box = ControllerService(system=FakeSystem(commands={
-        ("git", "ls-remote", DAEMON_REMOTE, "main"): remote_head,
-        ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", "")}).system,
-        paths=Paths(runtime_root=root))
+    cmds.update({("git", "ls-remote", spec.remote, spec.branch or "HEAD"): remote_head,
+                 ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", "")})
     with monkeypatch.context() as m:
         m.setattr(cli_main, "ControllerService", lambda *a, **k: box)
         rc = cli_main.main(["source-check", "--json"])
