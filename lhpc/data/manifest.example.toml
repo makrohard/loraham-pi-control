@@ -1181,6 +1181,7 @@ main = "meshtastic"
     [stack.component.process]
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshtastic"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
+    entry = "lhpc.adapters.cli.main"
     all_args = ["_gps-bridge", "meshtastic"]
 
     # SOFT + CONDITIONAL: only reported when the global source is a gpsd on THIS box. With a
@@ -1900,6 +1901,7 @@ main = "meshcom-qemu"
     [stack.component.process]
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcom"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
+    entry = "lhpc.adapters.cli.main"
     all_args = ["_gps-bridge", "meshcom"]
 
     # ONE feed may own the QEMU UART at a time. Production and fixture both write the SAME
@@ -1965,7 +1967,7 @@ main = "meshcom-qemu"
     [stack.component.process]
     instance_arg = ["--uart", ".run/{instance_index_dir}gps-uart1.sock"]   # A §2.3: this instance's exact argv token pair (K7: its own guest's UART, run.sh .run/<n>/)
     exec_name = "python3"
-    all_args = ["gps-relay.py"]
+    entry = "gps-relay.py"
 
     # ONE feed may own the QEMU UART at a time. Production and fixture both write the SAME
     # socket, so side by side the node would receive a synthetic position interleaved with the
@@ -2312,6 +2314,7 @@ main = "meshcore-node"
     [stack.component.process]
     instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcore"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
+    entry = "lhpc.adapters.cli.main"
     all_args = ["_gps-bridge", "meshcore"]
 
   [[stack.component]]
@@ -2702,7 +2705,7 @@ main = "meshcore-node"
     [stack.component.process]
     instance_arg = ["meshcore_host", "{runtime}/config/files/{instance_dir}meshcore.toml"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
-    all_args = ["meshcore_host"]
+    entry = "meshcore_host"
 
     [[stack.component.endpoint]]
     kind = "tcp"
@@ -2829,7 +2832,8 @@ main = "meshcore-node"
     [stack.component.process]
     instance_arg = ["--port", "{port:8788}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
-    all_args = ["uvicorn", "app.main:app"]
+    entry = "uvicorn"
+    all_args = ["app.main:app"]
 
     # Loopback backend the LHPC proxy sits in front of. `client=true` + `scheme=http` is what
     # marks it as a proxied web UI (service_webserver.stack_web_upstream). Firewall DENY-DEFAULT:
@@ -3838,7 +3842,7 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   # the component STOPPED while the UI is serving — a listening socket alone does not count.
   [stack.component.process]
   exec_name = "python"
-  all_args = ["meshchat.py"]
+  entry = "meshchat.py"
 
   # The LXMF IDENTITY lives here, not a cache: losing it silently changes the node's address.
   # It must stay outside the checkout, which a reinstall purges.

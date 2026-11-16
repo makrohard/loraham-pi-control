@@ -962,11 +962,15 @@ def _parse_process(raw: dict | None) -> ProcessSpec | None:
     if inst != [] and not (isinstance(inst, list) and len(inst) == 2      # only [] (or absent) is "none"
                      and all(isinstance(t, str) and t for t in inst)):
         raise ManifestError(f"process.instance_arg must be [<option>, <value>], got {inst!r}")
+    entry = raw.get("entry", "")
+    if not isinstance(entry, str):
+        raise ManifestError(f"process.entry must be a string, got {entry!r}")
     return ProcessSpec(
         exec_name=raw["exec_name"],
         all_args=tuple(raw.get("all_args", [])),
         any_args=tuple(raw.get("any_args", [])),
         instance_arg=tuple(inst),
+        entry=entry,
     )
 
 

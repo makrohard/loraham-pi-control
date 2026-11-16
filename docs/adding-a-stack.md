@@ -126,6 +126,10 @@ cannot run, refused as a direct start target.
     exec_name = "meshcom-loraham-bridge"   # identity for ownership + stop
 ```
 
+A component run by an interpreter (`exec_name = "python3"`) also sets `process.entry`: the
+module after `-m`, or the script's file name, compared whole. Then a test, linter or editor run
+that only names the module or script path is not taken for the component.
+
 **Slow starters** set `readiness_timeout` (seconds, 0 = default, at most 600), e.g.
 `meshcore-node` uses `120.0`. `reads_position = true` marks a component that consumes the
 global position ([GPS](gps.md)).

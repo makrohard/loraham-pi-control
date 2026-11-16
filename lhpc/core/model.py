@@ -189,8 +189,9 @@ class ProcessSpec:
     """Structured process-identity match (never a bare substring match).
 
     A process matches when its executable basename equals `exec_name`, ALL of
-    `all_args` appear among its argv, and (if `any_args` is non-empty) at least
-    one of `any_args` appears.
+    `all_args` appear among its argv, (if `any_args` is non-empty) at least
+    one of `any_args` appears, and (if `entry` is set) the interpreter runs that
+    program.
     """
 
     exec_name: str
@@ -199,6 +200,9 @@ class ProcessSpec:
     # The instance's identity in argv: (option, value-template), resolved per instance and matched
     # as WHOLE tokens only (`probes.process.has_instance_token`); () = none declared.
     instance_arg: tuple[str, ...] = ()
+    # The program an interpreter runs, compared WHOLE (`probes.process.matches`): `-m <entry>` as
+    # its first two arguments, or a script argument whose basename is <entry>; "" = not checked.
+    entry: str = ""
 
 
 @dataclass(frozen=True)

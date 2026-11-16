@@ -32,6 +32,19 @@ def test_process_match_python_script():
     assert matches(spec, argv)
 
 
+def test_process_entry_is_the_interpreters_own_program():
+    module = ProcessSpec(exec_name="python", entry="meshcore_host")
+    assert matches(module, ["/v/bin/python", "-m", "meshcore_host", "/r/meshcore.toml"])
+    assert not matches(module, ["/v/bin/python", "-m", "pytest", "-m", "meshcore_host"])     # pytest's own -m
+    assert not matches(module, ["/v/bin/python", "-m", "meshcore_host.openhop_file"])        # whole token
+    assert not matches(module, ["/v/bin/python", "tools/check.py", "lhpc/data/meshcore_host"])  # names the path
+    assert not matches(module, ["/v/bin/python"])
+    script = ProcessSpec(exec_name="python3", entry="gps-relay.py")
+    assert matches(script, ["python3", "scripts/gps-relay.py", "--mode", "fixture"])
+    assert not matches(script, ["python3", "-m", "pyflakes", "scripts/gps-relay.py"])
+    assert not matches(script, ["python3", "scripts/old-gps-relay.py"])                      # exact basename
+
+
 def test_process_match_requires_exec_basename():
     spec = ProcessSpec(exec_name="loraham_daemon", any_args=("433", "both"))
     assert matches(spec, ["/usr/local/bin/loraham_daemon", "--radio", "433"])

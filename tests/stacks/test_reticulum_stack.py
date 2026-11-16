@@ -936,7 +936,7 @@ def test_meshchat_reports_running_and_built_truthfully():
     while the UI serves; and `.venv/bin/python` exists long before pip and the UI copy finish,
     so without a marker a half-built tree reads as a completed build."""
     m = _comp("meshchat")
-    assert m.process and m.process.exec_name and m.process.all_args
+    assert m.process and m.process.exec_name and m.process.entry
     assert m.build_marker and m.bin
     assert m.readiness == "endpoint", "readiness must be the listener, not a status route"
 

@@ -4,6 +4,7 @@ rendered Home page, each assertion scoped to one instance's `data-stack="meshcom
 never satisfy it. Two instances run: meshcom@r1 and meshcom@r3, each with its own ports."""
 import radios_fixture
 from htmlq import parse
+from seams import entry_args
 
 from lhpc.core import commands, config, instances, radios
 from lhpc.core.lifecycle import Lifecycle
@@ -172,7 +173,7 @@ def _mc(tmp_path, running, ports=()):
         for cid in comps:
             comp = plain.stack("meshcore").component(cid)
             opt, val = instances._token(plain, comp, inst, "868")
-            table[700 + len(table)] = [comp.process.exec_name, *[a for a in comp.process.all_args if a != opt], opt, val]
+            table[700 + len(table)] = [comp.process.exec_name, *entry_args(comp.process), *[a for a in comp.process.all_args if a != opt], opt, val]
     fake = FakeSystem(cmdlines_data=table, listeners=[Listener("ipv4", "127.0.0.1", p, p) for p in ports])
     return ControllerService(system=fake.system, paths=paths)
 

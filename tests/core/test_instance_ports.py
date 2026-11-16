@@ -169,5 +169,5 @@ def test_k7_meshcoms_fixture_relay_names_its_own_guests_uart(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     stack = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack("meshcom")
-    relay = next(c for c in stack.components if c.process and "gps-relay.py" in c.process.all_args)
+    relay = next(c for c in stack.components if c.process and c.process.entry == "gps-relay.py")
     assert [Instance("r2").subst(t) for t in relay.process.instance_arg] == ["--uart", ".run/1/gps-uart1.sock"]
