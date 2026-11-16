@@ -224,14 +224,19 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
     - A stack that is not `started` runs no instance: only its page rows with a listener up (marked `stopped`) and
       its raw rows whose listener is not absent stay, so a live socket still counts in the security pill
       (SECOND-READ-CODE-UI-U3-DELTA-v1 N1).
+    - `rows` holds a raw row for EVERY instance, running or not (G2-PRELAND7B10-R2 §UI-U3); the running state only
+      labels them. A running instance's raw row (and a started stack's radio-less one) stays; any other stays while
+      its listener is not absent, marked `stopped` where the running set is known. An unknown running set brings
+      the radio-less row of the stack's unattributed processes: an instance row on its component and port is the
+      same socket and goes.
     - A not-proxied page row and a raw row that are the SAME effective listener — component + radio + the live
       socket's bind address + port (G2-N2; the Zero's meshcom@r1 :18083 was listed twice) — show as one line.
       Only a live, verified, single-address listener merges: a raw row's `bind` is "" otherwise (absent,
       unverified, or two bind addresses on the port). Both rows read the same port from the same listener
-      snapshot, so the raw row's bind address is the page's too. A not-started stack's raw row has no radio (no
-      running set): it merges with the page row of the same component and port (SECOND-READ-CODE-UI-U3-DELTA-v2 M1).
+      snapshot, so the raw row's bind address is the page's too.
     - Every raw row stays in the list, so the security pill still counts it: a merged one is marked `merged`, its
-      page row names it by `raw_key`, and the adapter attaches it."""
+      page row names it by `raw_key`, and the adapter attaches it. Only a not-running instance's raw row with its
+      listener confirmed absent goes, and an absent listener counts for nothing in the pill (security_pill)."""
     running = set() if not started else None if insts is None else {i.rid for i in insts} | {""}
     pages = []
     for r in (r for r in rows if r["kind"] == "stack"):
@@ -239,11 +244,14 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
             pages.append(r)
         elif r["live"] or r["direct_scope"] not in ("absent", None, ""):
             pages.append({**r, "stopped": True})
-    ports = [r for r in rows if r["kind"] == "port" and (started or r["live_scope"] != "absent")]
+    kept = {""} if running is None else running        # raw rows kept whatever their listener
+    raws = [r for r in rows if r["kind"] == "port"]
+    unattributed = {(r["component"], r["port"]) for r in raws if running is None and not r["rid"]}
+    ports = [r if r["rid"] in kept or running is None else {**r, "stopped": True} for r in raws
+             if r["rid"] in kept or (r["live_scope"] != "absent" and (r["component"], r["port"]) not in unattributed)]
     for r in ports:
         p = next((p for p in pages if r["bind"] and not p.get("raw_key") and not p["posture"]
-                  and (p["component"], p["direct_port"]) == (r["component"], r["port"])
-                  and (p["rid"] == r["rid"] or not (started or r["rid"]))), None)
+                  and (p["component"], p["direct_port"], p["rid"]) == (r["component"], r["port"], r["rid"])), None)
         if p is not None:
             p["raw_key"] = r["merge_key"] = f"{r['component']}@{r['rid']} {r['bind']}:{r['port']}"
             r["merged"] = True

@@ -954,7 +954,8 @@ class WebserverOpsMixin:
             insts = instances.running_insts(self, stk.id) if started else None   # K8f S4-4b1 (D3 B3): per running instance
             stack_rows += [self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=ss.components.get(comp.id),
                                                     get_argvs=_argvs, inst=i, pages=pages)     # every OTHER open port (no-auth tcp)
-                           for comp in stk.components for ep in comp.endpoints if self._is_raw_endpoint(ep) for i in insts or [None]]
+                           for every in [instances.listener_insts(self, stk, insts, started)]   # once per stack
+                           for comp in stk.components for ep in comp.endpoints if self._is_raw_endpoint(ep) for i in every]
             rows.extend(_ws.home_rows(stack_rows, insts, started=started))   # U3 (K2)
         return rows
 

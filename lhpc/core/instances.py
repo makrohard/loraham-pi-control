@@ -115,6 +115,13 @@ def running_insts(svc, sid: str):
 
 
 
+def listener_insts(svc, stack, running, started: bool) -> list:
+    """The instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2 §UI-U3): every one the
+    stack has (`commands.stack_instances`) and any running one (`running`, None: unknown), by rid; [None] without
+    one. A started stack's unknown running set adds None, the radio-less read of its unattributed processes."""
+    every = list({i.rid: i for i in (*commands.stack_instances(stack, svc._paths), *(running or ()))}.values())
+    return every + ([None] if not every or (started and running is None) else [])
+
 def recorded(svc, sid: str) -> set:
     """The radios `sid`'s running instances were launched on, by their verified launch records (13.16): a running
     instance keeps its radio, whatever the hardware list says now."""

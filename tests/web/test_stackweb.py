@@ -2470,9 +2470,9 @@ def test_one_port_on_two_bind_addresses_stays_two_lines_and_the_public_one_is_re
 
 def test_an_unverified_listener_is_never_merged(tmp_path, monkeypatch, web):
     from lhpc.core.services import ControllerService as CS
-    real = CS._endpoint_live_port        # only the running meshcom's port is unverified (a stopped stack has no pids)
+    real = CS._endpoint_live_port        # only running meshcom@r1's port is unverified (a not-running one has no pids)
     monkeypatch.setattr(CS, "_endpoint_live_port", lambda self, comp, ep, pids, get_argvs: (18083, False)
-                        if comp.id == "meshcom-qemu" else real(self, comp, ep, pids, get_argvs))
+                        if (comp.id, ep.address[-6:]) == ("meshcom-qemu", ":18083") else real(self, comp, ep, pids, get_argvs))
     svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")])
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
     assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r1"]
@@ -2596,7 +2596,8 @@ def test_an_idle_home_page_reads_the_process_table_no_more_often_than_before_n1(
 
 def test_a_stopped_stacks_one_listener_is_one_line(tmp_path, monkeypatch, web):
     # SECOND-READ-CODE-UI-U3-DELTA-v2 M1 + M2 (N5): meshcom not started, its :18083 still listens on loopback; the
-    # raw row (no radio: no running set) and r1's page row are one listener -> one line with the raw verdict
+    # raw row of r1 (every instance has one, G2-PRELAND7B10-R2) and r1's page row are one listener -> one line with
+    # the raw verdict
     # red on b2a1aa18: two lines
     svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")], run=None, state="STOPPED")
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
@@ -2642,3 +2643,55 @@ def test_a_page_line_takes_the_raw_verdict_of_its_own_port_only(tmp_path, monkey
     raw = [line for _n, _h, line in lines if not box.within(line).find("a", class_="iface-web")]
     assert [verdicts(line) for line in page] == [["9443"]]            # the page's own listener
     assert [verdicts(line) for line in raw] == [["4403"]]             # the other port keeps its line
+
+
+@pytest.mark.parametrize("run, state", [(("r1",), "RUNNING"), (None, "RUNNING"), (None, "STOPPED")],
+                         ids=["r1-runs", "running-set-unknown", "stack-not-started"])
+def test_a_stopped_instances_live_raw_listener_keeps_its_line_and_the_box_pill(tmp_path, monkeypatch, web, run, state):
+    # G2-PRELAND7B10-R2 §UI-U3: kiss@r2 does not run (or its running state is unknown), its own :8134 still listens on
+    # every address. Every instance's raw listener is in the box before the running state is read. red on 8870459b:
+    # no r2 line (rows only for the running set, or one radio-less row at the template's :8001) and the pill "secure"
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8134, "inode": 1}])
+    insts = None if run is None else [instances.parse_target(svc, f"kiss@{r}", "start")[1] for r in run]
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "kiss":
+            for cs in ss.components.values():
+                cs.run_state = RunState[state]
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: insts if sid == "kiss" else None)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [r2] = [line for n, _h, line in lines if n == "LoRaHAM KISS TNC @r2"]
+    [addr] = box.within(r2).find("span", class_="wsaddr")
+    assert addr.text.strip() == "localhost:8134 · public" and "pill-bad" in addr.classes
+    # the instance state only labels it: stopped where it is known not to run
+    assert bool(box.within(r2).find("span", **{"data-state": "instance-stopped"})) == (run is not None or state == "STOPPED")
+    assert _box_pill(box) == "exposed"
+
+
+def test_a_running_instance_on_a_radio_disabled_since_keeps_its_raw_line(tmp_path, monkeypatch, web):
+    # the Home box reads the running instances too, not only the radios the hardware list enables now: kiss@r2 still
+    # runs after r2 was disabled, its :8134 listens on every address -> its line, not marked stopped
+    import dataclasses
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=False)))
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8134, "inode": 1}])
+    insts = [instances.parse_target(svc, "kiss@r1", "start")[1], instances.copy_of(svc, "kiss", "r2")[0]]
+    assert insts[1] is not None and insts[1].rid == "r2"
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "kiss":
+            for cs in ss.components.values():
+                cs.run_state = RunState.RUNNING
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: insts if sid == "kiss" else None)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [r2] = [line for n, _h, line in lines if n == "LoRaHAM KISS TNC @r2"]
+    [addr] = box.within(r2).find("span", class_="wsaddr")
+    assert addr.text.strip() == "localhost:8134 · public" and "pill-bad" in addr.classes
+    assert not box.within(r2).find("span", **{"data-state": "instance-stopped"})
+    assert _box_pill(box) == "exposed"
