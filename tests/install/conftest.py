@@ -105,6 +105,9 @@ def op_svc(tmp_path, monkeypatch):
         monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: checkout))
         table = {tuple(argv): CommandResult(0, "", "")
                  for argv in selfupdate.venv_sync_argvs(sys.executable, checkout)}
+        # The new code's freshness sweep after a synced advance: nothing behind, so nothing listed.
+        table[(sys.executable, "-m", "lhpc", "source-check")] = CommandResult(
+            0, "OK    All checked sources are up to date for 'all'.\n", "")
         table.update(cmds or {})
         fake = FakeSystem(commands=table)
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=rt))

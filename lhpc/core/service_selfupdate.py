@@ -10,7 +10,7 @@ from os.path import join as _op_join
 from typing import ClassVar
 
 from . import proxy_rerender
-from .paths import PathContainmentError
+from .paths import ENV_RUNTIME_ROOT, PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
 from .snapshot_memo import invalidates_snapshot
 
@@ -444,27 +444,17 @@ class SelfUpdateOpsMixin:
                                          "the box's operator checks state/locks/, then retries"])
 
     def _refresh_units_post_update(self):
-        """VERIFY the managed units against the NEW checkout, out of process. Returns
-        (ok, detail).
+        """VERIFY the managed units against the NEW checkout, out of process (the running interpreter
+        still holds the PRE-update `updater_units`: an in-process check renders the OLD templates and
+        approves stale units). Returns (ok, detail).
 
-        Verification is a subprocess because it MUST be: the running interpreter still
-        holds the PRE-update `updater_units`, so an in-process check renders the OLD
-        templates and cheerfully approves stale units.
-
-        The repair attempt below is deliberately best-effort and is NOT a migration
-        mechanism. It runs in-process, so it too renders pre-update templates; and on the
-        systemd-helper route it cannot write at all (`ProtectHome=read-only` — verified:
-        `touch ~/.config/systemd/user/...` -> EROFS). It therefore only ever fixes units
-        that drifted for some OTHER reason, never units whose template changed in the
-        update being applied.
-
-        What makes that acceptable TODAY is an invariant, not a mechanism: no release so far
-        has changed any unit's bytes (see tests/test_updater_units.py::
-        test_unit_bytes_are_the_frozen_render). The moment a release does change them,
-        this is not enough — a real two-stage migration is required, and until it exists
-        the verification below is what turns a silent boot-restore outage into a visible
-        partial update. See docs/backlog.md.
-        """
+        The repair attempt below is best-effort, NOT a migration: it runs in-process (pre-update templates)
+        and cannot write on the systemd-helper route (`ProtectHome=read-only`: `touch ~/.config/systemd/user/...`
+        -> EROFS), so it only fixes units that drifted for some OTHER reason, never a template this update changed.
+        That is acceptable TODAY by an invariant, not a mechanism: no release so far has changed a unit's bytes
+        (tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render). A release that does needs a real
+        two-stage migration; until then this verification turns a silent boot-restore outage into a visible
+        partial update. See docs/backlog.md."""
         import subprocess
         import sys as _sys
 
@@ -543,12 +533,11 @@ class SelfUpdateOpsMixin:
         return summary + self._CLEANUP_NOTE if res.data.get("cleanup_failed") else summary
 
     def _apply_and_sync(self, force: bool) -> ActionResult:
-        """Apply the source update, then — ONLY on a REAL advance — synchronize the editable venv install
-        with the SAME `sys.executable -m pip install -e <repo-root>` the managed helper runs, so a
-        dependency change never leaves the install unusable. MUST be called with task admission already
-        HELD (the operator flow, the one-click unit) so nothing starts between apply and sync. A no-op/already-current or a
-        failed/refused apply runs NO pip. On a real advance the result carries `update_applied=True`; a
-        pip failure returns `ok=False` + `venv_sync_failed=True`, preserving the apply-result data."""
+        """Apply the source update, then — ONLY on a REAL advance — sync the editable venv install with the SAME
+        `sys.executable -m pip install -e <repo-root>` the managed helper runs (a dependency change never leaves the
+        install unusable). MUST be called with task admission HELD (the operator flow, the one-click unit), so nothing
+        starts between apply and sync. A no-op/already-current or failed/refused apply runs NO pip. A real advance
+        carries `update_applied=True`; a pip failure `ok=False` + `venv_sync_failed=True`, the apply data kept."""
         import dataclasses as _dc
         import sys as _sys
         import time as _time
@@ -574,13 +563,10 @@ class SelfUpdateOpsMixin:
                 return _dc.replace(res, ok=False, summary=summary, next_commands=nxt,
                                    data={**res.data, "venv_sync_failed": True, **extra})
 
-        # Re-render the managed units. An update whose new version changes a unit TEMPLATE
-        # leaves the installed unit non-canonical, and boot restore then refuses to run —
-        # the box comes back from a power cycle with NOTHING started, and nothing points at
-        # the updater as the cause. Boot restore cannot repair it itself (it runs with
-        # ProtectHome=read-only and cannot write unit files), so the updater — which caused
-        # the drift and has the context — must leave them canonical. Only when they are
-        # provably ours; no restart here (the update flow owns that).
+        # Re-render the managed units: a changed unit TEMPLATE leaves the installed unit non-canonical,
+        # boot restore then refuses to run (a power cycle starts NOTHING, nothing points at the updater),
+        # and it cannot repair them itself (ProtectHome=read-only), so the updater that caused the drift
+        # leaves them canonical. Only when they are provably ours; no restart here (the update flow owns it).
         ok_units, unit_detail = proxy_rerender.after_advance(self)   # units, then CO-14's re-render
         res = _dc.replace(res, data={**res.data, "units_refreshed": ok_units,
                                      "units_refresh_detail": unit_detail})
@@ -593,11 +579,25 @@ class SelfUpdateOpsMixin:
                 next_commands=nxt,
                 summary=summary)
         else:
-            # Only now is the update finished: `venv-unsynced` stays recorded until the units are
-            # refreshed too, so an interruption between the sync and the refresh leaves a record
-            # the next `--apply` resumes from (`_resumes_sync`).
+            # Only now is the update finished: `venv-unsynced` stays recorded until the units are refreshed
+            # too, so an interruption in between leaves a record the next `--apply` resumes from (`_resumes_sync`).
             res = self._clear_incomplete_states(res, ("venv-unsynced", "units-stale")) or res
+        if root is not None and (line := self._stacks_with_an_update(_sys.executable)):
+            res = _dc.replace(res, details=[*res.details, line], data={**res.data, "stack_updates": line})
         return res
+
+    def _stacks_with_an_update(self, python: str) -> str:
+        """ONE run of the NEW code's `lhpc source-check` (this process holds the old code) names the stacks with
+        an update on their lane; "" when none, one line when it cannot finish. Never stops, starts or updates one."""
+        r = self._system.runner.run([python, "-m", "lhpc", "source-check"], 60.0,
+                                    env={ENV_RUNTIME_ROOT: str(self._paths.runtime_root)})
+        out = (r.stdout or "").splitlines()
+        if not out or not out[0].startswith(("OK ", "ERR ")):
+            why = "timed out after 60 s" if r.timed_out else f"failed (exit {r.returncode})"
+            return f"Could not list the stacks with an update: `lhpc source-check` {why}."
+        ids = {ln.split(":")[0].strip() for ln in out[1:] if ln.partition(": ")[2].startswith("behind")}
+        owner = {c.id: s.id for s in self.stacks() for c in s.components}
+        return f"Stacks with an update: {', '.join(sorted({owner.get(i, i) for i in ids}))}." if ids else ""
 
     @invalidates_snapshot
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
@@ -1118,10 +1118,9 @@ class SelfUpdateOpsMixin:
         from . import runtime_fs, selfupdate, updater_units
         req_path = self._paths.under(*updater_units.REQUEST_REL)
         inflight = self._paths.under(*updater_units.INFLIGHT_REL)
-        # CLAIM: atomic NO-OVERWRITE rename request -> inflight. Absent request = stray start ->
-        # clean no-op. A pre-existing in-flight record (prior interrupted run) means the claim
-        # fails closed (FileExistsError) and BOTH markers are preserved for recovery — the helper
-        # is the security boundary and never clobbers in-flight evidence.
+        # CLAIM: atomic NO-OVERWRITE rename request -> inflight. Absent request = stray start -> clean no-op.
+        # A pre-existing in-flight record (prior interrupted run) fails the claim closed (FileExistsError), BOTH
+        # markers preserved for recovery — the helper is the security boundary, never clobbering that evidence.
         try:
             runtime_fs.rename_leaf(self._paths, req_path, inflight, replace=False)
         except FileNotFoundError:
@@ -1150,9 +1149,8 @@ class SelfUpdateOpsMixin:
                                 next_commands=["lhpc self-update --recover-request"])
         force = (mode == "overwrite")
         runtime_fs.write_marker(self._paths, inflight, json.dumps(self._helper_identity(mode)))
-        # PROVE this exact helper owns the in-flight record it just wrote (durable PID + /proc start
-        # time) — defends against a concurrent clobber between claim and write, and against a foreign/
-        # forged/PID-reused owner. Unproven -> block, retain evidence, recovery required.
+        # PROVE this exact helper owns the in-flight record it just wrote (durable PID + /proc start time) against
+        # a clobber between claim and write and a foreign/forged/PID-reused owner. Unproven -> block, keep evidence.
         if not self._helper_owns_inflight():
             selfupdate.record_last_apply_strict(
                 self._paths, ok=False,
@@ -1193,6 +1191,8 @@ class SelfUpdateOpsMixin:
             if "pip_sync_s" in res.data:  # the slow-target budget's L4 quantity (docs/test-matrix.md#slow-target-baseline)
                 print(f"[selfupdate] pip sync {res.data['pip_sync_s']:.1f} s", file=sys.stderr, flush=True)
             res = self._oneclick_outcome(res)
+            if res.data.get("stack_updates"):                # the record keeps the summary only
+                res = _dc.replace(res, summary=f"{res.summary} {res.data['stack_updates']}")
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the
@@ -1476,7 +1476,6 @@ class SelfUpdateOpsMixin:
         return res
 
     # ---- the named states an applied self-update can leave -------------------------------------
-    #
     # The checkout moved, but a step after it failed. Undoing the update is not one existing
     # operation (the previous checkout, its venv and the config migrations already run would all
     # have to come back), so the update ends in a NAMED state instead — journaled here, shown by
