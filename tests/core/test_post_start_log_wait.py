@@ -163,16 +163,44 @@ _JUMP = ("import runpy, sys, time\n_real, _n = time.time, [0]\n"
          "time.time = _stepped\nrunpy.run_path(sys.argv[1], run_name='__main__')\n")
 
 
-def _jumped(tmp_path, steps):
-    """The steps in a real launcher under a forward wall-clock step: (rc, the step records, stderr)."""
+# A virtual monotonic clock: it moves only by the launcher's own sleeps, so a schedule of minutes runs at once.
+_VIRTUAL = ("import runpy, sys, time\n_now = [0.0]\n"
+            "def _sleep(s):\n    _now[0] += s\n"
+            "time.monotonic, time.sleep = (lambda: _now[0]), _sleep\nrunpy.run_path(sys.argv[1], run_name='__main__')\n")
+
+
+def _jumped(tmp_path, steps, wrapper=_JUMP):
+    """The steps in a real launcher under `wrapper` (default: a forward wall-clock step): (rc, the step records,
+    stderr)."""
     root = tmp_path / "rt"
     (root / "state" / "post").mkdir(parents=True, exist_ok=True)
     rp = root / "state" / "post" / "r.json"
     (tmp_path / "launcher.py").write_text(commands.render_post_launcher(steps, _C(), {}, _Op(), str(root),
                                                                         str(tmp_path), "", result_path=str(rp)))
-    p = subprocess.run([sys.executable, "-c", _JUMP, str(tmp_path / "launcher.py")], capture_output=True, text=True,
+    p = subprocess.run([sys.executable, "-c", wrapper, str(tmp_path / "launcher.py")], capture_output=True, text=True,
                        timeout=60, check=False)
     return p.returncode, json.loads(rp.read_text())["steps"], p.stderr
+
+
+@pytest.mark.parametrize("first, second, elapsed", [("g", "g", 40.0), ("g", "h", 100.0), (None, None, 100.0)],
+                         ids=["one-group", "two-groups", "no-group"])
+def test_waits_that_share_a_clock_end_by_the_groups_one_deadline(tmp_path, first, second, elapsed):
+    """Two waits of one `shares_clock` group: the second ends by the first's start + its timeout (60 s of the 100 s
+    went on a delay between them), so the group counts once in the post-start budget; other waits keep their own."""
+    (tmp_path / "boot.log").write_text(LINE)
+
+    def wait(path, clock):
+        return {"kind": "log_wait", "path": str(path), "pattern": "Console started on port 2323", "timeout": 100,
+                "optional": True, **({"shares_clock": clock} if clock else {})}
+    rc, steps, err = _jumped(tmp_path, [wait(tmp_path / "boot.log", first), {"kind": "delay", "seconds": 60},
+                                        wait(tmp_path / "marker", second)], wrapper=_VIRTUAL)
+    assert [st["outcome"] for st in steps] == ["ready", "timeout"] and steps[1]["elapsed_s"] == elapsed, (steps, err)
+
+
+def test_a_shares_clock_that_is_not_a_name_is_refused():
+    with pytest.raises(commands.CommandError, match="shares_clock"):
+        commands.render_post_launcher([{"kind": "log_wait", "path": "/x", "pattern": "p", "timeout": 5,
+                                        "shares_clock": ""}], _C(), {}, _Op(), "/rt", "/src", "")
 
 
 def test_a_wall_clock_step_does_not_end_a_log_wait(tmp_path):

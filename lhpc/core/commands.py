@@ -650,9 +650,13 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 raise CommandError("log_wait: pattern must be a non-empty string")
             if type(timeout) not in (int, float) or not 0 < timeout <= REQUIRED_POST_TIMEOUT_S:
                 raise CommandError(f"log_wait: timeout must be > 0 and <= {REQUIRED_POST_TIMEOUT_S:.0f} s")
+            clock = step.get("shares_clock")
+            if clock is not None and (not isinstance(clock, str) or not clock):
+                raise CommandError("log_wait: shares_clock must be a non-empty string")
             resolved.append({"kind": "log_wait", "path": _paths_subst(path, runtime, source, band, inst),
                              "pattern": pattern, "timeout": float(timeout), "label": _post_label(step.get("label") or "log"),
-                             "optional": (bool(step.get("optional")) and not step.get("required")) and not require_all})
+                             "optional": (bool(step.get("optional")) and not step.get("required")) and not require_all,
+                             **({"clock": clock} if clock else {})})
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
     # DESCRIPTOR-SAFE sidecar location, validated HERE so the standalone runner never has to trust
@@ -711,6 +715,7 @@ META = __META__
 ROOT = __ROOT__
 RESULT_REL = __RESULT_REL__
 RESULTS = []
+_CLOCKS = {}                               # shares_clock group -> the monotonic start of its first wait
 _MAX_RECORDS = 32
 _MAX_DETAIL = 200
 
@@ -963,6 +968,8 @@ for _si, s in enumerate(STEPS):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])
             end, ok, tries, seen, nxt = t0 + s["timeout"], False, 0, "", t0 + 30
+            if s.get("clock"):                    # one clock per group: no wait ends later than the group's start + its timeout
+                end = min(end, _CLOCKS.setdefault(s["clock"], t0) + s["timeout"])
             while time.monotonic() < end and _main_ok():   # ONE clock: a reboot re-reads, never restarts it
                 tries += 1
                 try:
