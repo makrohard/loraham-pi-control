@@ -993,9 +993,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             out["complog"] = service.hmac_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
-    def _effective_freshness(entry, current_head: str) -> str:
+    def _effective_freshness(entry, current_head: str, pin: str | None = None) -> str:
         from lhpc.core import stackupdates
-        return stackupdates.effective_status(entry, current_head or "")
+        return stackupdates.effective_status(entry, current_head or "", pin)
 
     def _checked_ago(checked_at: int) -> str:
         """'Last checked' as a short human string — Jinja has no time formatter here."""
@@ -1117,8 +1117,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Freshness, resolved per component against the head the verdict was computed from.
             # Scoped to the stack's OWN components: a cross-stack dependency (loraham-daemon inside
             # the chat row) belongs to its own stack's row and must not light up this one.
-            upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id),
-                                                     ss.components[c.id].source_head)
+            upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id), ss.components[c.id].source_head,
+                                                     c.source.pin_commit if c.source else None)
                           for c in stack.components}
             # Deep-link target for the row's "Update": the behind component itself. The MAIN
             # (== the stack) links to its Install section; a behind DEPENDENCY links to its own

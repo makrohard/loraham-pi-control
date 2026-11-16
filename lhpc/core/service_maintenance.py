@@ -77,8 +77,7 @@ class MaintenanceOpsMixin:
         entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
         sid = (self.stack_of(comp.id) or comp.id) if comp is not None else ""
         spec = self.binary_spec(sid) if comp is not None and getattr(self, "binary_spec", None) else None
-        if spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe":
-            return {**entry, "status": stackupdates.ERROR}      # the start refuses it too: could not check
+        unsafe = spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe"
         # A binary-covered component answers from the binary lane's target (the index, U9), not its clone.
         if (comp is not None and getattr(comp, "source", None) is not None
                 and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
@@ -115,7 +114,13 @@ class MaintenanceOpsMixin:
         if loc.returncode != 0 or not loc.stdout.strip():
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         local_sha = entry["local_head_at_check"] = loc.stdout.strip()
-        if planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact):
+        if unsafe:                                     # the start refuses it too: could not check, at the clone's head
+            return {**entry, "status": stackupdates.ERROR}
+        stable = planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact)
+        pinned = "" if stable else stackupdates.pinned_target(self._paths, comp)
+        if pinned:                                     # the pinned lane is local: its target is this manifest's pin
+            sref, remote_sha, entry["pin_at_check"] = None, "", pinned
+        elif stable:
             sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
             if not (sref.sha and sref.verified):
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
@@ -126,16 +131,12 @@ class MaintenanceOpsMixin:
                 return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
             remote_sha = rem.stdout.split()[0]
         _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
-        pinned = "" if sref else stackupdates.pinned_target(self._paths, comp)
         want = sref.sha if sref else pinned or remote_sha
         entry["upstream_head"] = want
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
-        if pinned and local_sha == pinned:                         # only the known-working lane (plan row U6)
-            if not hasattr(self, "_next_pins"):
-                self._next_pins = stackupdates.next_lhpc_pins(self._paths, run)
-            if self._next_pins.get(comp.id, pinned) != pinned:
-                entry["status"] = stackupdates.LHPC_FIRST
+        if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run).get(comp.id, pinned) != pinned:
+            entry["status"] = stackupdates.LHPC_FIRST              # only the known-working lane (plan row U6)
         return entry
 
     def update_status(self, comp, stable_ref=None) -> str:

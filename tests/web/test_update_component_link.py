@@ -24,7 +24,7 @@ B = "b" * 40
 def _fake_freshness(monkeypatch):
     # resolve a cached entry straight to our injected status (bypass the head-match check).
     monkeypatch.setattr(su, "effective_status",
-                        lambda entry, head: (entry or {}).get("k", "unchecked"))
+                        lambda entry, head, pin=None: (entry or {}).get("k", "unchecked"))
 
 
 def _ids(tmp_path):

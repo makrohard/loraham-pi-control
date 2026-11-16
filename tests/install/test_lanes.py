@@ -1395,7 +1395,7 @@ def test_a_second_check_of_one_service_reads_the_newer_self_update_check(box, gi
     assert box.status() == su.LHPC_FIRST                          # RED before: the first read was kept
 
 
-def test_a_moved_manifest_pin_turns_a_stored_verdict_unchecked(box, capsys, git, make_repo, monkeypatch):
+def test_a_moved_manifest_pin_turns_a_stored_verdict_unchecked(box, capsys, git, make_repo, monkeypatch, web):
     """G1 B3: after the LHPC update applied the new pin (this checkout unchanged), the verdict stored against the
     old pin no longer describes the source: `status --versions` and the page read "unchecked" until a check."""
     assert box.cli("install", "s", "--yes") == 0
@@ -1404,6 +1404,7 @@ def test_a_moved_manifest_pin_turns_a_stored_verdict_unchecked(box, capsys, git,
     box.manifest.write_text(box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{box.c[1]}"'))
     line = _versions_line(box, capsys)
     assert "unchecked" in line.split(), line                      # RED before: "update LHPC first"
+    assert _install_pill(box, web) == ""                          # the page: no lane pill, "unchecked"
 
 
 def test_a_pinned_source_needs_no_remote_read(box, capsys, git, make_repo, monkeypatch):

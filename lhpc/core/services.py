@@ -1019,7 +1019,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if ver != "-":
                             seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
-                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st):17s} "
+                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st, comp.source.pin_commit):17s} "
                         f"pin={pin} tag={tag}"
                         + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())

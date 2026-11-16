@@ -77,7 +77,7 @@ def _valid_entry(e) -> bool:
         return False
     if e.get("status") not in _STORED:
         return False
-    for k in ("local_head_at_check", "upstream_head"):
+    for k in ("local_head_at_check", "upstream_head", "pin_at_check"):
         if k in e and not (_is_str(e[k]) and (e[k] == "" or _HEX.match(e[k]))):
             return False
     for k in ("remote", "source_path"):
@@ -145,12 +145,14 @@ def view(paths: Paths) -> dict:
             "components": _clean_components(data.get("components"))}
 
 
-def effective_status(entry, current_head: str) -> str:
+def effective_status(entry, current_head: str, pin: str | None = None) -> str:
     """Resolve a cached entry against the component's CURRENT local head.
 
     The verdict was computed against `local_head_at_check`. If the source has moved since (the
     operator ran Update, or Clean re-cloned it), the stored verdict describes a commit that is no
     longer installed and must NOT be shown — neither its green nor its yellow. Returns `unchecked`.
+    A pinned-lane verdict also records the manifest pin it used (`pin_at_check`): once the manifest pin moved
+    (an LHPC update applied), it describes the old pin and reads `unchecked` too (`pin`: the current one).
     """
     if not isinstance(entry, dict):
         return UNCHECKED
@@ -162,14 +164,16 @@ def effective_status(entry, current_head: str) -> str:
     at = entry.get("local_head_at_check") or ""
     if not at or not current_head or at != current_head:
         return UNCHECKED
+    if pin is not None and entry.get("pin_at_check") and entry["pin_at_check"] != pin:
+        return UNCHECKED
     return status
 
 
-def lane_word(fresh: dict, cid: str, status) -> str:
+def lane_word(fresh: dict, cid: str, status, pin: str = "") -> str:
     """`status --versions`' state column for a ComponentStatus: a clean checkout reads its lane verdict (the last
     check, tied to this head); the probe's own facts (dirty, missing) stay; the pin is a detail, not a verdict."""
     state = status.source_state.value
-    return label(effective_status(fresh.get(cid), status.source_head or "")) if state in ("match", "differs") else state
+    return label(effective_status(fresh.get(cid), status.source_head or "", pin)) if state in ("match", "differs") else state
 
 
 def pinned_target(paths: Paths, comp) -> str:
@@ -221,7 +225,10 @@ def next_lhpc_pins(paths: Paths, run) -> dict:
     from .manifest import ManifestError, parse_manifest
     head = (selfupdate.read_cache(paths).get("upstream") or {}).get("upstream_head") or ""
     root = selfupdate.repo_root()
-    if root is None or not re.fullmatch(r"[0-9a-f]{40}", head) or run(
+    if root is None or not re.fullmatch(r"[0-9a-f]{40}", head):
+        return {}
+    here = run(["git", "-C", str(root), "rev-parse", "HEAD"], timeout=5.0)
+    if here.returncode != 0 or here.stdout.strip() == head or run(          # strictly ahead: a newer LHPC
             ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", head], timeout=5.0).returncode != 0:
         return {}
     shown = run(["git", "-C", str(root), "show", f"{head}:lhpc/data/manifest.example.toml"], timeout=10.0)
