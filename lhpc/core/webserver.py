@@ -228,7 +228,8 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
       socket's bind address + port (G2-N2; the Zero's meshcom@r1 :18083 was listed twice) — show as one line.
       Only a live, verified, single-address listener merges: a raw row's `bind` is "" otherwise (absent,
       unverified, or two bind addresses on the port). Both rows read the same port from the same listener
-      snapshot, so the raw row's bind address is the page's too.
+      snapshot, so the raw row's bind address is the page's too. A not-started stack's raw row has no radio (no
+      running set): it merges with the page row of the same component and port (SECOND-READ-CODE-UI-U3-DELTA-v2 M1).
     - Every raw row stays in the list, so the security pill still counts it: a merged one is marked `merged`, its
       page row names it by `raw_key`, and the adapter attaches it."""
     running = set() if not started else None if insts is None else {i.rid for i in insts} | {""}
@@ -241,7 +242,8 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
     ports = [r for r in rows if r["kind"] == "port" and (started or r["live_scope"] != "absent")]
     for r in ports:
         p = next((p for p in pages if r["bind"] and not p.get("raw_key") and not p["posture"]
-                  and (p["component"], p["rid"], p["direct_port"]) == (r["component"], r["rid"], r["port"])), None)
+                  and (p["component"], p["direct_port"]) == (r["component"], r["port"])
+                  and (p["rid"] == r["rid"] or not (started or r["rid"]))), None)
         if p is not None:
             p["raw_key"] = r["merge_key"] = f"{r['component']}@{r['rid']} {r['bind']}:{r['port']}"
             r["merged"] = True

@@ -2569,3 +2569,50 @@ def test_a_stopped_stacks_live_public_proxy_keeps_its_line_and_the_box_pill_is_n
     assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r2"]        # only what still listens (no absent raw rows)
     assert box.within(lines[0][2]).find("span", **{"data-state": "instance-stopped"})
     assert _box_pill(box) == "exposed"
+
+
+def test_an_idle_home_page_reads_the_process_table_no_more_often_than_before_n1(tmp_path):
+    # SECOND-READ-CODE-UI-U3-DELTA-v2 B1: a stack that is not started needs no running set; the idle box is back to
+    # the scan count before N1 (7ddf7323). red on b2a1aa18: running_insts ran for every stack, 28 scans
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _svc(tmp_path)
+    n = {"running_insts": 0, "cmdlines": 0}
+    real_ri, pf = instances.running_insts, svc._system.procfs
+    real_cm = pf.cmdlines
+
+    def count(key, fn):
+        def counted(*a, **k):
+            n[key] += 1
+            return fn(*a, **k)
+        return counted
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(instances, "running_insts", count("running_insts", real_ri))
+        mp.setattr(pf, "cmdlines", count("cmdlines", real_cm))
+        rows = svc.dashboard_webservers()
+    assert [r["kind"] for r in rows] == ["console"]                   # nothing started, nothing listens
+    assert n == {"running_insts": 0, "cmdlines": 10}
+
+
+def test_a_stopped_stacks_one_listener_is_one_line(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v2 M1 + M2 (N5): meshcom not started, its :18083 still listens on loopback; the
+    # raw row (no radio: no running set) and r1's page row are one listener -> one line with the raw verdict
+    # red on b2a1aa18: two lines
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")], run=None, state="STOPPED")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [(name, _href, line)] = lines
+    assert name == "MeshCom (QEMU) @r1"
+    one = box.within(line)
+    assert one.find("span", **{"data-state": "instance-stopped"})
+    [addr] = one.find("span", class_="wsaddr")                         # the loopback raw row, attached to the line
+    assert ":18083" in addr.text and "local" in addr.text
+    assert _box_pill(box) == "secure"
+
+
+def test_a_degraded_stack_is_started_and_its_running_instance_is_not_marked_stopped(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v2 M2 (N7): DEGRADED is running (the `up` states), so r1's line has no stopped pill
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")], state="DEGRADED")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [(name, _href, line)] = lines
+    assert name == "MeshCom (QEMU) @r1"
+    assert not box.within(line).find("span", **{"data-state": "instance-stopped"})
