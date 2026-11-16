@@ -230,8 +230,12 @@ dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le "$PCAP" ]; }
 # or the one reader (pread); anything else carrying one is a STOP at the X/XIN/peer boundary (guard).
 pnorm() { printf '%s' "$1" | tr -d "\"'\\\\[:space:]" | tr '[:upper:]' '[:lower:]'; }
 ptoken() { local t; t=$(pnorm "$1"); [[ $t == *power* || $t == *txp* || $t == *settx* ]]; }
-# pover: rc 0 when a text carries a high-power flag or a value after a power token above the cap (as an integer, any zeros)
-pover() { local t n; t=$(pnorm "$1"); [[ $t == *highpower* || $t == *high-power* || $t == *high_power* ]] && return 0
+# pover <text> [read]: rc 0 when a text carries a high-power flag or a value after a power token above the cap (as an integer,
+# any zeros); with `read` (the one reader's context) also any set form of a power (a read never sets one); the attribute
+# high_power is read by the radios read, so it counts only outside `read`
+pover() { local t n; t=$(pnorm "$1"); [[ $t == *highpower* || $t == *high-power* ]] && return 0
+  if [ "${2:-}" = read ]; then [[ $t =~ --set[a-z0-9_.]*(power|txp) || $t =~ set[-_]?power || $t == *settx* ]] && return 0
+  else [[ $t == *high_power* ]] && return 0; fi
   for n in $(printf '%s' "$t" | grep -oE '(power|txp|settx)[^0-9a-z]{0,3}-?[0-9]+' | grep -oE '[0-9]+$'); do n=${n#"${n%%[!0]*}"}
     [ "${#n}" -le 2 ] && [ "${n:-0}" -le "$PCAP" ] || return 0; done; return 1; }
 # issend: rc 0 when a command (or its stdin) is a send form: the frame, Meshtastic, MeshCore and MeshChat sends, the chat
@@ -274,7 +278,11 @@ capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and 
   local f=$1 o=${OUT:-$EVD} s; shift; "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
   [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc" || stop "$f.rc: not written"; }
 boxvar() { local v="BOX_${1}_$2" d=; case $2 in USER) d=lhpc;; RUNTIME) d='~/loraham-pi-control';; esac; printf '%s' "${!v:-$d}"; }
-rt() { [ "$1" = PC ] && { [[ $2 != *"{RT}"* ]] || stop "a PC command names a box path ({RT})"; printf '%s' "$2"; return; }; local t=$2; printf '%s' "${t//\{RT\}/$(boxvar "$1" RUNTIME)}"; }
+# shq <value>: the value as one shell word (printf %q); a leading ~/ stays the login's home on the box ("$HOME"/...)
+shq() { case "$1" in "~/"*) printf '"$HOME"/%s' "$(printf %q "${1#\~/}")";; *) printf %q "$1";; esac; }
+# rt <box|PC> <text> [raw]: {RT} -> the box's runtime path, quoted for a shell command (raw: as it is, for a script's text on stdin)
+rt() { [ "$1" = PC ] && { [[ $2 != *"{RT}"* ]] || stop "a PC command names a box path ({RT})"; printf '%s' "$2"; return; }
+  local t=$2 r; r=$(boxvar "$1" RUNTIME); [ "${3:-}" = raw ] || r=$(shq "$r"); printf '%s' "${t//\{RT\}/$r}"; }
 sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
   if [ "$in" = - ]; then SSHPASS=$pw sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"
   else printf '%s\n' "$in" | SSHPASS=$pw sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"; fi; }
@@ -284,7 +292,7 @@ X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; return 0; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
-XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3"); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
+XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
   guard "$f" "$c" "$in"
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: (stdin) $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" "$in"; return 0; fi
   capture "$f" sshrun "$w" "$in" "$c"; [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
@@ -294,7 +302,8 @@ guard() {   # guard <file> <command> <stdin|->: THE runtime boundary of X, XIN a
   if [ -z "${PCTX:-}" ]; then ! ptoken "$c" || stop "$f: a power token outside the one power setter/reader: never run"
     [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
       || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"   # the box password (sudo -S) is not a command
-  elif [ "$PCTX" = set ]; then ! pover "$c" || stop "$f: the setter's command carries a power above $PCAP dBm or a high-power flag: never run"; fi
+  elif [ "$PCTX" = set ]; then ! pover "$c" || stop "$f: the setter's command carries a power above $PCAP dBm or a high-power flag: never run"
+  elif [ "$PCTX" = read ]; then ! pover "$c" read || stop "$f: the reader's command carries a power set, a high-power flag or a power above $PCAP dBm: never run"; fi
   ! issend "$c" "$([ "$in" = - ] || printf '%s' "$in")" || [ "${TXCTX:-}" = 1 ] || stop "$f: a send outside tx: never run"; }
 pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument,
   # leading zeros stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP. --restore (the undo replay):
@@ -326,14 +335,14 @@ pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixe
     mt_pget|rt_pget|mt_cap) X "$w" "$f" "$(form "$n" rid="$r")";;
     radios) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'";;
     caps) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'";;
-    hpower) X PC "$f" "python3 -I $SCRATCH/hpower.py $RNSCFG $(dirname "$VRNS")/rnstatus";;
+    hpower) X PC "$f" "python3 -I $(shq "$SCRATCH/hpower.py") $(shq "$RNSCFG") $(shq "$(dirname "$VRNS")/rnstatus")";;
     mt-power|meshcom-power) peer "$f" "$VMT" "$n";;
     mc-power) peerpin "$f" mc-power;;
     *) stop "pread: '$n' is not a power read";; esac; }
 pmust() { pread "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
 declare -A SPAWNF=()
 peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a peer process starts (dry: fake_peer.py, empty stdin)
-  local f=$1 pin=$2 py=$3; shift 3; local c="flock -n -E 75 $LOCK $py -I $PEER $(printf '%q ' "$@")"
+  local f=$1 pin=$2 py=$3; shift 3; local c="flock -n -E 75 $(shq "$LOCK") $(shq "$py") -I $(shq "$PEER") $(printf '%q ' "$@")"
   guard "$f" "$*" -
   if [ "$pin" = pin ]; then drylog "CMD[${PCTX:-}] PC: (PIN on stdin) peer.py $*"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: peer.py $* (the PIN on stdin)"
   else drylog "CMD[${PCTX:-}] PC: $c"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: $c"; fi
@@ -598,7 +607,7 @@ row_R0() {
   local r e ep k o why devs= pr bud; declare -A SUM=()
   for r in $RUN; do why=; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in -) continue;; esac
       if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
-        k="PEER_${ep#*:}"; read -r _ pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs /dev/serial/by-id/$pr"
+        k="PEER_${ep#*:}"; read -r _ pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
       else k=${ep#*:}; radiokey "$k"; o=$RK; case "$o" in "why "*) why="$why${o#why }; ";;
           rid*) read -r _ v bb m <<< "$o"; [ "$bb" = "${ep%%:*}" ] || stop "row $r: $k is on box $bb, the table says ${ep%%:*}"
             [[ "$v" =~ ^r([1-9]|[1-9][0-9])$ ]] || stop "R0: $k = '$v' is not a radio id"; keep "$k" "$v"; keep "MODEL_${bb}_$v" "$m"; data "R0: row $r: $k = $bb:$v ($m)";; esac; fi; done
@@ -625,8 +634,8 @@ row_R1() { local b i keys rev; for b in $BOXES; do   # instance keys; starts jou
 # ---- 11. the rows -------------------------------------------------------------------------------------------------------------
 usbcheck() {   # usbcheck <file> <KEY>: a USB radio (serial= or port= in its key) is still there after a frame, else STOP
   local v="RADIO_$2" b m bd sel; read -r b m bd sel <<< "${!v}"; case "$sel" in
-    serial=*) must "$b" "$1" "grep -lxF -- '${sel#serial=}' /sys/bus/usb/devices/*/serial 2>/dev/null | wc -l";;
-    port=*) must "$b" "$1" "test -e /sys/bus/usb/devices/${sel#port=}/idVendor && echo 1 || echo 0";; *) return 0;; esac
+    serial=*) must "$b" "$1" "grep -lxF -- $(shq "${sel#serial=}") /sys/bus/usb/devices/*/serial 2>/dev/null | wc -l";;
+    port=*) must "$b" "$1" "test -e /sys/bus/usb/devices/$(shq "${sel#port=}")/idVendor && echo 1 || echo 0";; *) return 0;; esac
   [ "$MODE" = dry ] || [ "$(body "$1")" = 1 ] || stop "$2 ($b) is gone after a frame (brown-out / re-enumeration)"; }
 frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the daemons of both radios, one nonce frame each way
   local id=$1 pa=${4%,*} pb=${4#*,} fl=$5 m ka=${2#*:} kb=${3#*:} ba=${2%%:*} bb=${3%%:*} ra rb e x n
@@ -993,7 +1002,19 @@ labread() {   # labread <file>: blank and # lines, else one KEY=VALUE entry, KEY
     elif [[ $v == '"'* ]]; then [[ $v =~ $rd ]] || stop "$f:$n: $k: a \"...\" value is one line without \$ \` \\ or \""
     else [[ $v =~ $rb ]] || stop "$f:$n: $k: an unquoted value is one word of [A-Za-z0-9_.,:/@+=-] (quote it)"; fi
     v=${BASH_REMATCH[1]}; case "$env" in *" $k "*) ;; *) printf -v "$k" '%s' "$v";; esac
-  done < "$f"; }
+  done < "$f"; labcheck; }
+# labcheck: every lab key's value (from the file or the environment) against its key's grammar, else a STOP before R0. A field
+# is - or [A-Za-z0-9._/@:+=-] not starting with -: no blank, quote, ; | & $ ` # \ or newline (DRY_*: lines of fields)
+labcheck() { local k v w g fd='(-|[A-Za-z0-9._/@:+=][A-Za-z0-9._/@:+=-]*)'
+  for k in $(compgen -v); do [[ $k =~ $LABKEYS ]] || continue; v=${!k}
+    case "$k" in
+      BOX_?_RUNTIME|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT) w="a path (or empty)"; g='^((~/)?[A-Za-z0-9._/@:+][A-Za-z0-9._/@:+-]*)?$';;
+      BOX_?_HOST) w="a host (or empty)"; g='^([A-Za-z0-9][A-Za-z0-9._:-]*)?$';;
+      BOX_?_USER) w="a login (or empty)"; g='^([A-Za-z0-9_][A-Za-z0-9._-]*)?$';;
+      OPERATOR_CALL) w="a call"; g='^[A-Za-z0-9-]*$';;   # its exact form is checked at the start
+      *) w="fields (or empty)"; g="^($fd( $fd)*)?\$";; esac   # RADIO_*, PEER_*, and each line of a DRY_* value
+    while IFS= read -r v; do [[ $v =~ $g ]] || stop "$k: $(printf %q "${!k}") is not $w: a lab value is [A-Za-z0-9._/@:+=-] words only"
+    done < <(if [[ $k == DRY_* ]]; then printf '%s\n' "$v"; else printf '%s' "$v" | tr '\n' '\r'; echo; fi); done; }
 # The guard's two context flags come only from tx (TXCTX) and the one setter/reader (PCTX), each local to its one call.
 # One inherited from the environment would open the guard: STOP (also before the test-only return below).
 [ -z "${PCTX:-}${TXCTX:-}" ] || stop "PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"

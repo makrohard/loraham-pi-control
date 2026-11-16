@@ -353,7 +353,8 @@ def test_a_key_in_the_environment_wins_over_the_lab_file(tmp_path):
 # ---- the setter's own command: no power above the cap and no high-power flag, whatever its form says ---------------------
 
 @pytest.mark.parametrize("form", ["{LH} daemon {rid} --set POWER=20 --yes", "{LH} daemon {rid} --set POWER={p} --high-power --yes",
-                                  "{LH} daemon {rid} --set POWER={p} --set TXPOWER=018 --yes"])
+                                  "{LH} daemon {rid} --set POWER={p} --set TXPOWER=018 --yes",
+                                  "{LH} daemon {rid} --set POWER={p} --set high_power=True --yes"])
 def test_a_setter_form_with_a_power_above_the_cap_is_a_stop(tmp_path, form):
     # red-before (7bed19a0): under the setter's context the guard checked no power: POWER=20 reached the box
     r, evd = source_only(tmp_path, f"F[dset]='{form}'; keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; "
@@ -718,3 +719,87 @@ def test_the_same_box_frame_row_proves_stop_isolation(tmp_path):
     assert "COVERAGE | stop-isolation | check | 7 | - | rehearsed | -" in r.stdout.splitlines()
     assert ("REPORT | 7 | daemon | H (r1, r3) | 433 | — | stop-isolation | stop r3: r1 runs on; stop r1: r3 runs on | — | DRY-PASS"
             in r.stdout.splitlines())
+
+
+# ---- a lab value is words of [A-Za-z0-9._/@:+=-], checked per key at the start; every value spliced into a shell is quoted ---
+
+def _q(value):
+    return subprocess.run(["bash", "-c", 'printf %q "$1"', "_", value], capture_output=True, text=True, check=True).stdout
+
+
+GRAMMAR = "a lab value is [A-Za-z0-9._/@:+=-] words only"
+INJECT = ["~/x; lhpc daemon r1 --set POWER=20 --yes #", "~/x y", "~/x$(touch $TMPDIR/ran)", "~/x\nlhpc daemon r1 --set POWER=20 --yes",
+          "~/x; lhpc daemon r1 --set POW$(printf E)R=20 --yes; cd ~/loraham-pi-control",   # the delta read's V1
+          "~/x\n~/y"]   # two lines, each a path on its own
+
+
+@pytest.mark.parametrize("value", INJECT)
+@pytest.mark.parametrize("key", ["VENV_MT", "PEER_LOCK", "RNS_CONFIG", "BOX_H_RUNTIME", "VENV_RNS", "EVD_ROOT"])
+def test_a_path_value_that_is_not_one_word_stops_the_start(tmp_path, key, value):
+    # red-before (146a815a): '…' took any text, and the path reached peerrun's bash -c, hpower's read and every box command
+    lab, _ = _lab_with(tmp_path, f"{key}='{value}'")
+    r = dry(tmp_path, LANE="fast", LAB_ENV=str(lab))
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: {key}: {_q(value)} is not a path (or empty): {GRAMMAR}"], r.stderr
+    assert "== ROW" not in r.stdout
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("key, value, kind", [
+    ("VENV_MT", "~/x; touch ran", "a path (or empty)"), ("BOX_H_RUNTIME", "-x", "a path (or empty)"),
+    ("BOX_H_HOST", "-oProxyCommand=x", "a host (or empty)"), ("BOX_H_USER", "u;x", "a login (or empty)"),
+    ("RADIO_HSTK", "H ch341-rfm98pw-433 433 serial=S'1", "fields (or empty)"), ("PEER_g2", "meshtastic usb-x hubB;id", "fields (or empty)"),
+    ("DRY_RADIOS_H", "STATE valid\nROW r1 loraham 433 True serial=$(id) port= hp=None", "fields (or empty)"),
+])
+def test_a_lab_key_from_the_environment_meets_the_same_grammar(tmp_path, key, value, kind):
+    # red-before (146a815a): a key set in the environment won over the file unchecked
+    r = dry(tmp_path, LANE="fast", **{key: value})
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: {key}: {_q(value)} is not {kind}: {GRAMMAR}"], r.stderr
+
+
+def test_the_peer_process_command_quotes_its_lock_python_and_script(tmp_path):
+    # red-before (146a815a): `flock -n -E 75 $LOCK $py -I $PEER` split the lock path at the blank and ran `touch ran2`
+    r, evd = source_only(tmp_path, 'ln -s "$(command -v python3)" "$EVD/py thon"; LOCK="$EVD/l ock;touch ran2"; '
+                                   'PEER="$EVD/p eer.py"; printf "import sys\\nprint(\\"PEER-RAN\\", sys.argv[1:])\\n" > "$PEER"; '
+                                   'peer f.txt "$EVD/py thon" aprs-read x; cat "$EVD/f.txt"')
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "PEER-RAN ['aprs-read', 'x']\n"
+    assert not (evd / "ran2").exists()
+
+
+def test_the_rns_read_quotes_its_paths(tmp_path):
+    # red-before (146a815a): `python3 -I hpower.py $RNSCFG $(dirname $VRNS)/rnstatus` split the paths and ran `touch ran2`
+    r, evd = source_only(tmp_path, 'SCRATCH="$EVD"; printf "import sys\\nprint(sys.argv[1:])\\n" > "$EVD/hpower.py"; '
+                                   'RNSCFG="$EVD/rns cfg;touch ran2"; VRNS="$EVD/v env/bin/python"; pread PC f.txt hpower; cat "$EVD/f.txt"')
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == f"['{evd}/rns cfg;touch ran2', '{evd}/v env/bin/rnstatus']\n"
+    assert not (evd / "ran2").exists()
+
+
+def test_the_box_runtime_path_is_one_word_in_a_command_and_as_is_in_a_script(tmp_path):
+    # red-before (146a815a): {RT} went into the box command as it was: `cd ~/rt dir && true`
+    r, evd = source_only(tmp_path, 'BOX_H_RUNTIME="~/rt dir"; sshrun() { printf "%s\\n" "$3" >> "$EVD/cmds"; printf "%s\\n" "$2" >> "$EVD/ins"; }; '
+                                   'X H a.txt "cd {RT} && true"; XIN H b.txt "x = \'{RT}\'" "cat"')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "cmds").read_text() == 'cd "$HOME"/rt\\ dir && true\ncat\n'
+    assert (evd / "ins").read_text() == "-\nx = '~/rt dir'\n"   # a python text on stdin: the path as is
+
+
+# ---- the power check under the one reader: a read form carries no power set ----------------------------------------------
+
+@pytest.mark.parametrize("cmd", ["lhpc daemon r1 --set POWER=20 --yes", "lhpc daemon r1 --set POWER=10 --yes", "x --high-power",
+                                 "lhpc meshtastic@r1 --set lora.tx_power 1", "meshcom set tx 5", "x --set HIGHPOWER=1"])
+def test_a_power_set_under_the_readers_context_is_a_stop(tmp_path, cmd):
+    # red-before (146a815a): under PCTX=read the guard checked nothing: a set form reached the box
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; f() {{ local PCTX=read; X H f.txt "{cmd}"; }}; f')
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: f.txt: the reader's command carries a power set, a high-power flag or a power above 17 dBm: never run"]
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("name", ["radios", "caps", "mt_pget", "rt_pget", "mt_cap"])
+def test_the_readers_own_forms_pass_its_check(tmp_path, name):
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; pread H f.txt {name} r1')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "ran").exists()
