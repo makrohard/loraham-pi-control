@@ -191,7 +191,8 @@ in full, the line links to it. The mark after a rule says what enforces it:
 - **A3** A new or renamed test file sits in a layer folder, a `testlab/tests/` lane or one of the two in-package
   suites. **CI HARD**
 - **A4** `testlab/tests/unit` tests the simulator itself, `acceptance` the real server and executable, `browser`
-  the console in headless Chromium, `release` a release's evidence, `slowbuild` the throttled target.
+  the console in headless Chromium, `release` a release's evidence, `slowbuild` the throttled target, `hardware` the
+  hardware test line's runner (`testlab/hardware`) without hardware: its dry run and its guards.
 - **A5** Test the cheapest stable seam that proves the behaviour; a browser test that re-proves core logic is
   misplaced.
 - **A6** One canonical owner per behaviour ([rule 3](#the-rules)).

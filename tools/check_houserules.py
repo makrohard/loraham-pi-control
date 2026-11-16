@@ -39,7 +39,7 @@ LAYERS = (
     ("tests/repo/", "repo"), ("tests/golden/", "golden"),
     ("testlab/tests/unit/", "testlab"), ("testlab/tests/acceptance/", "testlab"),
     ("testlab/tests/browser/", "testlab"), ("testlab/tests/release/", "testlab"),
-    ("testlab/tests/slowbuild/", "testlab"),
+    ("testlab/tests/slowbuild/", "testlab"), ("testlab/tests/hardware/", "testlab"),
     ("lhpc/data/meshcore_host/tests/", "in-package"), ("lhpc/data/rfdecode/tests/", "in-package"),
 )
 BUDGET_FILE = "tests/repo/test_module_budgets.py"
