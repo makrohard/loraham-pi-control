@@ -108,7 +108,7 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   must "$1-txpower.txt" "for i in \$(seq 1 30); do [ \"\$($FTX)\" -gt ${n0:-0} ] && break; sleep 2; done; echo COUNT \$($FTX); grep -a 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log | tail -n 1"
   n1=$(body "$1-txpower.txt" | sed -n 's/^COUNT //p')   # this start wrote a new line, or the last one is an older start's
   [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || safestop "$1" "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"
-  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no Final Tx power line";; esac; [ "$fp" -le 17 ] || safestop "$1" "$1: Final Tx power $fp above 17"; }
+  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) safestop "$1" "$1: no power value in this start's Final Tx power line";; esac; [ "$fp" -le 17 ] || safestop "$1" "$1: Final Tx power $fp above 17"; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence

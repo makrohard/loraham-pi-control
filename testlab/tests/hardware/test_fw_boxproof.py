@@ -82,7 +82,7 @@ def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, star
         assert (evd / "F6-r2-stop-1.txt").exists() and "RC=" not in p.stdout
 
 
-@pytest.mark.parametrize("why,count,power", [("stale", "3", "10"), ("too high", "4", "20")])
+@pytest.mark.parametrize("why,count,power", [("stale", "3", "10"), ("too high", "4", "20"), ("no power value", "4", "x")])
 @pytest.mark.parametrize("stop1,stop2,rc", [("0", "0", 2), ("1", "0", 2), ("1", "1", 3), ("255", "0", 2),
                                             ("255", "255", 3)])   # 255: ssh had no connection, also a failed stop
 def test_a_safety_stop_is_checked_retried_once_and_a_failed_one_named(tmp_path, why, count, power, stop1, stop2, rc):
