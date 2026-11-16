@@ -372,7 +372,10 @@ def rns_run(d, inn, box_name, secs, dest_file, out, go_file):
     router.handle_outbound(msg)
     while time.monotonic() < end and not (done and hit):
         time.sleep(0.5)
-    print(f"DELIVERED {out} {done[0]}" if done else f"NOT-DELIVERED {out}")
+    if not done:                                   # the box never confirmed our message: the exchange failed
+        print(f"NOT-DELIVERED {out}")
+        return None
+    print(f"DELIVERED {out} {done[0]}")
     return hit[0] if hit else None
 
 

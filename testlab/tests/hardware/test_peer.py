@@ -260,7 +260,8 @@ def test_the_device_is_the_by_id_name_the_local_file_gives(clock, monkeypatch):
 
 
 # rns-exchange's second TX (the LXMF message) waits for the runner's go file; no go file = no handle_outbound
-def _fake_rns(monkeypatch, sent):
+def _fake_rns(monkeypatch, sent, box=None):
+    # `box` = {"answers": True} makes the box send its LXMF message with "in1", {"confirms": True} its delivery proof
     rns = types.ModuleType("RNS")
     lxmf = types.ModuleType("LXMF")
     rns.LOG_ERROR = 0
@@ -307,7 +308,7 @@ def _fake_rns(monkeypatch, sent):
             return Me()
 
         def register_delivery_callback(self, cb):
-            pass
+            self.incoming = cb
 
         def announce(self, h):
             for x in handlers:                                   # the box's announce is heard at once
@@ -317,6 +318,10 @@ def _fake_rns(monkeypatch, sent):
 
         def handle_outbound(self, m):
             sent.append((m, lxmf.LXMRouter.MAX_DELIVERY_ATTEMPTS))
+            if (box or {}).get("confirms"):
+                m.proof(m)
+            if (box or {}).get("answers"):
+                self.incoming(types.SimpleNamespace(content=b"in1"))
     lxmf.LXMRouter = Router
     lxmf.display_name_from_app_data = lambda d: "LHPC"
 
@@ -327,7 +332,7 @@ def _fake_rns(monkeypatch, sent):
             pass
 
         def register_delivery_callback(self, cb):
-            pass
+            self.proof = cb
     lxmf.LXMessage = Msg
     monkeypatch.setitem(sys.modules, "RNS", rns)
     monkeypatch.setitem(sys.modules, "LXMF", lxmf)
@@ -379,6 +384,19 @@ def test_rns_exchange_removes_its_scratch_config(rns_sent, monkeypatch, tmp_path
     monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append(real(dir=tmp_path, **k)) or made[-1])
     peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")])
     assert len(made) == 1 and not os.path.exists(made[0])
+
+
+@pytest.mark.parametrize("box,rc,last", [({"answers": True, "confirms": True}, 0, "SEEN in1"),
+                                         ({"answers": True}, 3, "NOT-SEEN"),          # heard, but our message unconfirmed
+                                         ({"confirms": True}, 3, "NOT-SEEN")])
+def test_rns_exchange_succeeds_only_with_the_boxs_message_and_its_delivery_proof(monkeypatch, tmp_path, capsys, box, rc, last):
+    sent, c = [], FastClock()
+    _fake_rns(monkeypatch, sent, box)
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    assert peer.main(["rns-exchange", "in1", "LHPC", "5", str(tmp_path / "dest"), "out1", str(tmp_path / "go")]) == rc
+    assert " ".join(capsys.readouterr().out.splitlines()[-1].split()[:2]) == last
 
 
 def test_rns_exchange_needs_the_go_file_argument(capsys):
