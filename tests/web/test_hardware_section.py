@@ -94,7 +94,8 @@ def test_the_dashboard_has_a_card_per_radio_in_its_band(web, tmp_path, monkeypat
 
 def test_the_page_names_the_shared_band_rule_in_the_refusals_words(web, tmp_path, monkeypatch):
     # PKT-D20 item 5 / item 16: the Hardware page says what a band-addressed refusal of a shared band says, rendered,
-    # and the command it names exists (`lhpc stack stop daemon@rN`, DEC-W384ci: the canonical form; test_16_radio_stop.py).
+    # and the command it names exists (`lhpc stack stop daemon@rN`, DEC-W384ci: the canonical form;
+    # tests/core/test_radio_daemon_stop.py).
     import html
     page = html.unescape(_text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)))
     assert ("Two radios on one band each run their own daemon: address one by its radio id "
