@@ -271,6 +271,29 @@ def test_an_alarm_pending_at_the_disarm_never_turns_a_success_into_a_failure(mon
         signal.signal(signal.SIGALRM, before)
 
 
+def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys):
+    """Its sibling: the arm itself is faked to deliver SIGALRM at once. The timer is armed inside the
+    protected region, so main returns the named failure (rc 1) — nothing escapes (SR delta note)."""
+    import importlib.util
+    import signal
+    spec = importlib.util.spec_from_file_location("meshchat_announce_inproc2", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    real = signal.setitimer
+
+    def setitimer(which, seconds, *rest):
+        real(which, 0)                                                   # never a real timer here
+        if seconds > 0:
+            signal.raise_signal(signal.SIGALRM)                          # the alarm lands at the arm
+    monkeypatch.setattr(mod.signal, "setitimer", setitimer)
+    before = signal.getsignal(signal.SIGALRM)
+    try:
+        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
+    finally:
+        signal.signal(signal.SIGALRM, before)
+    assert "not announced — announce timed out" in capsys.readouterr().err
+
+
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
     rc, out, _s = _script(meshchat(chunked=True).api)
     assert rc == 0 and "announced" in out, out
