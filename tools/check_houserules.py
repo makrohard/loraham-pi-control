@@ -708,7 +708,7 @@ def _check(args, base: str, head: str) -> int:
         load_profile(base)
         rows = check(base, head, args.fact, args.correction)
     except subprocess.CalledProcessError as exc:
-        print(f"git failed: {' '.join(exc.cmd)}: {exc.stderr.decode("utf-8", "replace").strip()}", file=sys.stderr)
+        print(f"git failed: {' '.join(exc.cmd)}: {exc.stderr.decode('utf-8', 'replace').strip()}", file=sys.stderr)
         return 2
     except ProfileError as exc:
         print(f".houserules.toml: {exc}", file=sys.stderr)
