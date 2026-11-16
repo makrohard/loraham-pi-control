@@ -1262,7 +1262,7 @@ class Lifecycle:
         one whose rid is no instance id (r1..r99; G1-STATUS-DEAD-SOCKET NOTE)."""
         boot = current_boot_id()
         return [rec for rec in self.owned_inventory()[0]
-                if boot and rec.get("role", "") == "" and commands._RID_RE.fullmatch(str(rec.get("rid") or ""))
+                if boot and rec.get("role", "") == "" and commands.is_rid(rec.get("rid"))
                 and str(rec.get("boot_id") or "") == boot
                 and not self.verify_owned(rec)[0] and self._original_ceased(rec)]
 

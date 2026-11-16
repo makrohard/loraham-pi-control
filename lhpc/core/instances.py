@@ -129,7 +129,7 @@ def recorded_bands(svc, sid: str) -> dict:
     stack = svc.stack(sid)
     fixed = fixed_band(stack) if stack is not None else ""
     for rec in life.owned_inventory()[0]:
-        if rec.get("rid") and not rec.get("role") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
+        if commands.is_rid(rec.get("rid")) and not rec.get("role") and (rec.get("stack") or svc.stack_of(rec.get("component", ""))) == sid \
                 and life.verify_owned(rec)[0]:
             band = str(rec.get("band") or "") or fixed
             out[rec["rid"]] = band if out.setdefault(rec["rid"], band) == band else ""   # G1-K4B-RE 3: disagree -> ""
@@ -316,7 +316,7 @@ def instance_processes(svc, table: dict) -> list:
     from .probes.process import matches
     life, out = svc._lifecycle(), set()
     for rec in life.owned_inventory()[0]:
-        if rec.get("rid") and not rec.get("role") and life.verify_owned(rec)[0]:   # a post runner is no instance process
+        if commands.is_rid(rec.get("rid")) and not rec.get("role") and life.verify_owned(rec)[0]:   # a post runner is no instance process
             cid = rec.get("component", "")
             out.add((rec.get("stack") or svc.stack_of(cid) or "", rec["rid"], cid, rec["pid"]))
     # a hand-started instance without a record: its own token, rendered only for a spec a process matches (a token

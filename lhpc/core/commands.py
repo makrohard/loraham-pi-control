@@ -47,6 +47,12 @@ class CommandError(Exception):
 
 PORT_STEP, PORT_RADIOS = 133, 64     # DEC-W348: rN's port is base + 133 x (n - 1), for r1..r64
 _RID_RE = re.compile(r"r[1-9][0-9]?")
+
+
+def is_rid(value) -> bool:
+    """`value` is an instance's radio id (r1..r99), the one rule an Instance is built under. A launch record's rid is
+    read through it: a record with another rid is no instance's (STATUS-DEAD-SOCKET: a malformed one crashed status)."""
+    return isinstance(value, str) and bool(_RID_RE.fullmatch(value))
 _PORT_RE = re.compile(r"\{port:(\d{1,5})\}")
 _PORT_OF_RE = re.compile(r"\{port_of:([a-z][a-z0-9_-]*):(\d{1,5})\}")
 
