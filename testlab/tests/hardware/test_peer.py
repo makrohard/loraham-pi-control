@@ -415,6 +415,7 @@ def test_the_shared_rnsd_instance_comes_from_the_local_file(rns_sent, tmp_path):
     ("instance=lab-rns control=40002", "no valid port"), ("instance=lab-rns port=0 control=40002", "no valid port"),
     ("instance=lab-rns port=70000 control=40002", "no valid port"), ("instance=lab-rns port=4x control=40002", "no valid port"),
     ("instance=lab-rns port=40001", "no valid control"), ("instance=lab-rns port=40001 control=40001", "are the same"),
+    ("instance=lab-rns port=04001 control=4001", "are the same"),
 ])
 def test_a_missing_or_malformed_rns_instance_is_refused_before_anything_opens(rns_sent, monkeypatch, tmp_path, fields, why):
     made = []

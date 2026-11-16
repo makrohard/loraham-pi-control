@@ -82,9 +82,10 @@ def rns_instance():
     for key, value in zip(("port", "control"), ports, strict=True):
         if not re.fullmatch(r"[0-9]{1,5}", value) or not 1 <= int(value) <= 65535:
             raise RuntimeError(f"PEER_rnode has no valid {key}=<1..65535>")
-    if ports[0] == ports[1]:
+    port, control = int(ports[0]), int(ports[1])          # compared as numbers: 04001 is 4001
+    if port == control:
         raise RuntimeError("PEER_rnode: port and control are the same")
-    return name, int(ports[0]), int(ports[1])
+    return name, port, control
 
 
 def port(name):
