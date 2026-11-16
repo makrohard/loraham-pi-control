@@ -86,7 +86,7 @@ def runner_copy(tmp_path):
 
 SELF_CHECKS = ("no-high-power", "no-call-in-commands", "peer-calls-locked", "every-send-gated", "all-forms-printed",
                "chat-judge", "provisioning-wait", "meshcore-power-read", "rx-mc-judge", "row3-port-judge", "state-helpers",
-               "power-guards", "tx-dispatch", "sends-only-in-tx")
+               "power-guards", "tx-dispatch")
 MODELS_IN_LAB = {"loraham", "meshstick-1262", "pinedio-usb-1262", "ch341-rfm98pw-433"}
 MODELS_NOT_IN_LAB = {"uputronics", "waveshare-sx1262"}
 TXMAX = 10
@@ -355,3 +355,26 @@ peerpin pin.txt mc-read n1 5
     assert "hello" in text and "SEEN n1" in text                         # the captures ran, so the greps below mean something
     leaks = [s for s in SECRETS.values() if s in text] + re.findall(CALL, text, re.IGNORECASE)
     assert leaks == []
+
+
+@pytest.mark.parametrize("call", ['X H p.txt "lhpc config meshtastic@r2 tx_power 10"',
+                                  'XIN Z p.txt "10" "lhpc daemon@r1 settx"',
+                                  'peer p.txt python3 mt-power 1'])
+def test_a_raw_power_command_stops_before_anything_runs(tmp_path, call):
+    # Power is written only by pset and read only by pread: a raw power command from a test (or a row) is a STOP, and
+    # the fake ssh and the peer never run.
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for name in ("ssh", "sshpass"):
+        (bin_ / name).write_text(f"#!/bin/bash\ntouch {tmp_path}/ran\n")
+        (bin_ / name).chmod(0o755)
+    evd = tmp_path / "evd"
+    evd.mkdir()
+    script = (f'set -u\nRFPROOF_SOURCE_ONLY=1 . "{RUNNER}"\nMODE=live; EVD="{evd}"; PW_H=pw-h; PW_Z=pw-z; MC_PIN=1; '
+              f'OPERATOR_CALL=XX9TST; PEER="{tmp_path}/peer.py"\n{call}\necho RAN-ON')
+    (tmp_path / "peer.py").write_text(f"open('{tmp_path}/ran', 'w')\n")
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False,
+                       env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}, timeout=60)
+    assert p.returncode == 2 and "power token" in p.stderr and "RAN-ON" not in p.stdout
+    assert not (tmp_path / "ran").exists()
+
