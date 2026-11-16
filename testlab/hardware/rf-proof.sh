@@ -368,7 +368,8 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
       echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id ran but is not recorded as run" || true; rc=1; }; fi
     sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
     n=$((n - 1)); done; return $rc; }
-recover() { trap - EXIT INT TERM; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
+ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX; done; }   # every scope's flag: an exit inside pset/pread/tx keeps its local
+recover() { trap - EXIT INT TERM; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
   ( secret_scan ) || rec "recover: the evidence scan found a secret or failed: do not publish $EVD" || lost=1
   [ -s "$EVD/UNRESOLVED.txt" ] && echo "RECOVERY: unresolved, for the coordinator: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")" >&2
@@ -942,6 +943,10 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
     ( tx K 2 control --reserve ) >/dev/null 2>&1 || exit 1; [ "$(wc -l < "$OUT/ran")" = 1 ] && [ "$(getk TXR_PC_g2)" = 2 ] ) || sc tx-dispatch "a refused send ran, or a good one did not"
   scok tx-dispatch
   echo "dry self-check: all $SCN OK"; }
+# The guard's two context flags come only from tx (TXCTX) and the one setter/reader (PCTX), each local to its one call.
+# One inherited from the environment would open the guard: STOP (also before the test-only return below).
+[ -z "${PCTX:-}${TXCTX:-}" ] || stop "PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"
+unset PCTX TXCTX
 [ "${RFPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions and constants only; no args, stdin, lab file, box or peer
 
 # ==== the run ==================================================================================================================
@@ -955,6 +960,8 @@ LABKEYS='^(BOX_[HZ]_(HOST|USER|RUNTIME)|RADIO_[A-Z0-9]+|PEER_[a-z0-9]+|OPERATOR_
 _saved=$(for _v in $(compgen -v); do [[ $_v =~ $LABKEYS ]] && [ -n "${!_v+x}" ] && declare -p "$_v"; done)
 . "$LAB_ENV" || stop "$LAB_ENV: not readable"
 eval "$_saved"; unset _saved _v
+[ -z "${PCTX:-}${TXCTX:-}" ] || stop "$LAB_ENV sets PCTX/TXCTX: the guard's context comes only from tx, pset and pread"
+unset PCTX TXCTX
 for b in H Z; do for v in USER:lhpc RUNTIME:'~/loraham-pi-control'; do n="BOX_${b}_${v%%:*}"; [ -n "${!n:-}" ] || declare "$n=${v#*:}"; done; done
 OPERATOR_CALL=${OPERATOR_CALL:-}; [[ "$OPERATOR_CALL" =~ ^[A-Z0-9]{3,8}$ ]] || stop "OPERATOR_CALL is not a callsign without an SSID (3..8 of A-Z 0-9)"
 declare +x OPERATOR_CALL

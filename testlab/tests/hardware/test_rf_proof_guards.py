@@ -271,3 +271,46 @@ def test_an_evidence_write_that_fails_is_a_stop(tmp_path, script):
     # red-before (42768cef): each returned normally
     r, _ = source_only(tmp_path, script)
     assert r.returncode == 2
+
+
+# ---- the guard's context flags come only from tx, pset and pread, never from the environment or the lab file ---------------
+
+CTX_STOP = "STOP: PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"
+
+
+@pytest.mark.parametrize("flag", [{"PCTX": "read"}, {"PCTX": "set"}, {"TXCTX": "1"}])
+def test_an_inherited_context_flag_stops_the_start(tmp_path, flag):
+    # red-before (3416e029): the dry run went on with the flag in the environment (and the guard open)
+    r = dry(tmp_path, LANE="fast", **flag)
+    assert r.returncode == 2
+    assert stop_lines(r) == [CTX_STOP]
+    assert "== ROW" not in r.stdout
+
+
+@pytest.mark.parametrize("line", ["PCTX=read", "TXCTX=1"])
+def test_a_context_flag_in_the_lab_file_stops_the_start(tmp_path, line):
+    # red-before (3416e029): a lab file that set the flag opened the guard for the whole run
+    lab = tmp_path / "lab.env"
+    lab.write_text((HW / "lab.example.env").read_text() + line + "\n")
+    r = dry(tmp_path, LANE="fast", LAB_ENV=str(lab))
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: {lab} sets PCTX/TXCTX: the guard's context comes only from tx, pset and pread"]
+
+
+@pytest.mark.parametrize("cmd", ["X PC f.txt 'touch \"$RAN\"; : --set POWER=20'", "X PC f.txt 'touch \"$RAN\"; : --high-power'",
+                                 "X H f.txt 'tmux send-keys -t rfchat-r1 -- x Enter'"])
+@pytest.mark.parametrize("flag", [{"PCTX": "set"}, {"TXCTX": "1"}])
+def test_an_inherited_context_flag_opens_nothing_even_when_sourced(tmp_path, cmd, flag):
+    # red-before (3416e029): with PCTX exported the power commands ran, with TXCTX exported the send ran (the probe's P2, P3, P5)
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$RAN"; }}; {cmd}', **flag)
+    assert r.returncode == 2
+    assert stop_lines(r) == [CTX_STOP]
+    assert not (evd / "ran").exists()
+
+
+def test_the_recovery_runs_with_the_context_cleared(tmp_path):
+    # red-before (3416e029): an exit inside pread/pset/tx left its local flag visible, so the recovery's undos ran with the
+    # guard open (here: a power command in the journal ran)
+    r, evd = source_only(tmp_path, ': > "$EVD/undo.done"; printf "u1\\tPC\\ttouch \\"\\$RAN\\"; : POWER=20\\n" > "$EVD/undo.list"; '
+                                   'f() { local PCTX=set; recover; }; f')
+    assert not (evd / "ran").exists(), r.stderr
