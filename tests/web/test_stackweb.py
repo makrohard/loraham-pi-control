@@ -2487,3 +2487,46 @@ def test_a_raw_listener_of_no_known_instance_keeps_its_warning_without_a_radio(t
     [addr] = box.within(line).find("span", class_="wsaddr")
     assert "public" in addr.text and "pill-bad" in addr.classes
     assert sorted(n for n, _h, _l in lines) == ["MeshCom (QEMU)", "MeshCom (QEMU) @r1", "MeshCom (QEMU) @r2"]
+
+
+def _r2_public_proxy(svc):
+    """meshcom@r2's page behind an enabled public proxy on :8578."""
+    assert svc.stack_web_configure("meshcom@r2", mode="public", port=8578, cidrs=["0.0.0.0/0"],
+                                   confirm=True, confirm_public=True).ok
+
+
+def test_a_stopped_instance_whose_proxy_still_listens_keeps_its_line_marked_instance_stopped(tmp_path, monkeypatch, web):
+    # G2-PRELAND7B10 §UI-U3: r2's app is stopped, its public proxy :8578 still listens -> its line stays and says so
+    # red on beab3100: the r2 line is absent (the running filter drops it)
+    proxy = {"family": "ipv4", "ip": "0.0.0.0", "port": 8578, "inode": 3}
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1"), proxy])
+    _r2_public_proxy(svc)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    by_name = {n: (h, line) for n, h, line in lines}
+    assert "MeshCom (QEMU) @r1" in by_name                             # anchor: the running instance's line
+    href, line = by_name["MeshCom (QEMU) @r2"]
+    assert href == "/stacks?open=meshcom&radio=r2#stack-webserver-meshcom@r2"     # the link names its radio
+    one = box.within(line)
+    assert [p.text.strip() for p in one.find("span", class_="pill", **{"data-state": "instance-stopped"})] \
+        == ["instance stopped"]
+    assert [a["href"] for a in one.find("a", class_="wsurl")] == ["https://localhost:8578"]   # the live proxy address
+    # the r1 line of the running instance carries no stopped pill
+    assert not box.within(by_name["MeshCom (QEMU) @r1"][1]).find("span", **{"data-state": "instance-stopped"})
+
+
+def test_a_stopped_instance_whose_direct_web_ui_still_listens_keeps_its_line_marked_instance_stopped(tmp_path, monkeypatch, web):
+    # not proxied: r2's own upstream :18216 (18083 + 133) still listens while the instance is not running
+    # red on beab3100: the r2 line is absent
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1"), _mc_listener("127.0.0.1", 4) | {"port": 18216}])
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    r2 = [line for n, _h, line in lines if n == "MeshCom (QEMU) @r2"]
+    assert [box.within(line).find("span", **{"data-state": "instance-stopped"}) != [] for line in r2] == [True]
+    assert "MeshCom (QEMU) @r1" in [n for n, _h, _l in lines]
+
+
+def test_a_stopped_instance_with_nothing_listening_stays_off_home(tmp_path, monkeypatch, web):
+    # the K2 filter holds: an enabled proxy of a stopped instance whose socket is down has no line
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1")])
+    _r2_public_proxy(svc)
+    _doc, _box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, _l in lines] == ["MeshCom (QEMU) @r1"]

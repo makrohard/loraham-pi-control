@@ -464,6 +464,7 @@
               <a class="pill wsurl" href="{{ wl }}" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it">{{ w.direct_scheme }} · local only · not proxied</a>
             {% endif %}
           {% else %}<a class="pill wsurl" href="{{ wl }}">not proxied</a>{% endif %}
+          {% if w.stopped %}<span class="pill pill-warn" title="This radio's instance is stopped, but its page still listens — start the instance, or disable its proxy and Apply." data-state="instance-stopped">instance stopped</span>{% endif %}
           {% if w.raw %}{{ raw_pills(w.raw) }}{% endif %}
         </div>
       {% endfor %}
