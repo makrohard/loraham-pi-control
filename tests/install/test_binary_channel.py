@@ -1373,7 +1373,7 @@ def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_de
     _QEMU = "qemu-system-xtensa (headless"      # PROVISIONED *and* a receipt proof path
     _PIO = "PlatformIO CLI"                     # PROVISIONED build tool, never shipped
     before = _unmet(svc, "meshcom")
-    assert any(lbl.startswith(_QEMU) for lbl in before), before
+    assert any(lbl.startswith(_QEMU) for lbl in before), before    # rule-10: a dependency label's name; its version text varies
 
     binary_receipt(svc, "meshcom")
     svc.invalidate_snapshot()
@@ -1381,7 +1381,7 @@ def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_de
     report = [d for g in svc.deps_report("meshcom").values() for d in g]
     after = [d.label for d in report if not d.satisfied]
 
-    assert not any(lbl.startswith(_PIO) for lbl in after), after      # build-only -> irrelevant
+    assert not any(lbl.startswith(_PIO) for lbl in after), after    # rule-10: absence over a namespace; no value is compared by its prefix; build-only -> irrelevant
     comp_q = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
     pio_req = next(r for r in comp_q.requires if (r.note or "").startswith(_PIO))
     assert svc.binary_requirement_class("meshcom-qemu", pio_req) == "irrelevant"
@@ -1394,7 +1394,7 @@ def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_de
     blocking = svc.start_blocking_requirements(comp_q)
     qreq = next(r for r in blocking if (r.note or "").startswith("binary-managed runtime"))
     assert qreq.install == qemu.install_cmd
-    assert not any((r.note or "").startswith("PlatformIO") for r in blocking)
+    assert not any((r.note or "").startswith("PlatformIO") for r in blocking)    # rule-10: absence over a namespace; no value is compared by its prefix
     assert any("libpixman-1-dev" in lbl for lbl in after)   # plain packages untouched
 
 
@@ -1402,7 +1402,7 @@ def test_source_channel_still_demands_its_build_inputs(tmp_path, monkeypatch):
     """The suppression is conditional — a source-channel stack must still be told what it needs."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert any("radiolib source checkout" in lbl for lbl in _unmet(svc, "daemon"))
-    assert any(lbl.startswith("qemu-system-xtensa (headless")
+    assert any(lbl.startswith("qemu-system-xtensa (headless")    # rule-10: a dependency label's name; its version text varies
                for lbl in _unmet(svc, "meshcom"))
 
 

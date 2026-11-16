@@ -31,8 +31,8 @@ def test_none_compatible_names_self_update_first_then_source(tmp_path, monkeypat
                                "lhpc install daemon --source pinned --yes"]
     assert r.data.get("pin_mismatch") == {}
     assert r.data.get("binary_refusal") == "none_compatible"
-    assert r.details[0].strip().startswith("1. Update LHPC first")
-    assert r.details[1].strip().startswith("2. Or build from source")
+    assert r.details[0].strip().startswith("1. Update LHPC first")    # rule-10: a sentence's opening; the result carries no typed field
+    assert r.details[1].strip().startswith("2. Or build from source")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_other_refusals_keep_the_source_offer_only(tmp_path, monkeypatch):

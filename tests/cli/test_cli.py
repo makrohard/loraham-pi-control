@@ -779,12 +779,12 @@ def test_identity_hint_points_at_a_real_command(tmp_path, monkeypatch):
     # callsign-identities: the hint leads with the LOCAL field in BOTH regimes (the operator
     # asked for this stack); the optional global command rides along as a comment.
     hint = svc._identity_config_hints("chat")[0]
-    assert hint.startswith("lhpc config chat ")
+    assert hint.startswith("lhpc config chat ")    # rule-10: a command template's lead; parses() below checks the command
     assert "lhpc config operator --callsign" in hint         # the global option, second
     parses(hint.split("   #", 1)[0])
     save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
     hint2 = svc._identity_config_hints("chat")[0]
-    assert hint2.startswith("lhpc config chat ")
+    assert hint2.startswith("lhpc config chat ")    # rule-10: a command template's lead; parses() below checks the command
     parses(hint2.split("   #", 1)[0])
 
 
@@ -1025,7 +1025,7 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
     rc = main(["webserver"])
     err = capsys.readouterr().err
     assert rc == 2
-    assert err.startswith("usage: lhpc webserver")
+    assert err.split()[:3] == ["usage:", "lhpc", "webserver"]
 
 
 
@@ -1142,7 +1142,7 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
 def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(argv) == 2
-    assert capsys.readouterr().out.startswith("ERR")
+    assert capsys.readouterr().out.split(maxsplit=1)[0] == "ERR"
 
 
 @pytest.mark.parametrize("argv", [["rflog"],                                    # a stack, --all or --clear-all
@@ -1152,7 +1152,7 @@ def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
 def test_rflog_bulk_flags_take_no_stack_and_exclude_each_other(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(argv) == 2
-    assert capsys.readouterr().err.startswith("usage:")
+    assert capsys.readouterr().err.split(maxsplit=1)[0] == "usage:"
     assert not (tmp_path / "rt" / "config" / "stacks").exists()
 
 
@@ -1173,7 +1173,7 @@ def test_rflog_all_and_clear_all_reach_every_registered_log(tmp_path, monkeypatc
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
     assert main(["rflog", "--all", "off"]) == 0
-    assert capsys.readouterr().out.startswith("OK")
+    assert capsys.readouterr().out.split(maxsplit=1)[0] == "OK"
     from lhpc.core.commands import stack_instances      # K6 (DEC-W384k): every instance's own switch
     from lhpc.core.manifest import load_manifest
     stacks = {s.id: s for s in load_manifest()}
@@ -1246,7 +1246,7 @@ def test_rflog_decrypt_is_refused_on_plaintext_logs(tmp_path, monkeypatch, capsy
     for surface in ("graywolf@r1", "meshcom@r1"):
         assert main(["rflog", surface, "--decrypt"]) == 2
         out = capsys.readouterr().out
-        assert out.startswith("ERR") and "plaintext already" in out   # the CLI has no typed field; the sentence is the contract
+        assert out.split(maxsplit=1)[0] == "ERR" and "plaintext already" in out   # the status token; the sentence is the contract
     assert main(["rflog", "daemon", "--band", "433", "--decrypt"]) == 2
 
 
@@ -1276,7 +1276,8 @@ def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypat
     monkeypatch.setattr(ControllerService, "rflog_decode",
                         lambda self, t, j, recs: _decoded([], "reticulum is not built — nothing to decode with"))
     assert main(["rflog", "reticulum", "--decrypt"]) == 1
-    assert capsys.readouterr().out.startswith("ERR   reticulum is not built")
+    out = capsys.readouterr().out
+    assert out.split(maxsplit=1)[0] == "ERR" and "reticulum is not built" in out
 
 
 def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, capsys):

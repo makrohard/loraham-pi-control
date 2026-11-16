@@ -20,7 +20,7 @@ def test_packaged_config_bases_are_not_unseeded_runtime_files():
              for st in stacks for c in st.components if getattr(c, "config_file", None)}
     assert bases.get("meshcore-node") == "{asset}/bases/meshcore.toml"
     for cid, base in bases.items():
-        assert not base.startswith("{runtime}/config/files/"), (cid, base)
+        assert not base.startswith("{runtime}/config/files/"), (cid, base)    # rule-10: absence over a namespace; no value is compared by its prefix
 
 
 def test_packaged_meshcom_host_test_is_recognized_at_component_level():

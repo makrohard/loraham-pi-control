@@ -2,12 +2,13 @@
 Saves atomically propagate a remote to every consumer (disclosed); conflicting submissions
 are rejected; legacy divergent configuration blocks update/uninstall/clean with a typed result and zero source mutation."""
 
-import time
-
 from lhpc.core import source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
+
 
 _URL_A = "https://github.com/fork-a/loraham-kiss-tnc.git"
 _URL_B = "https://github.com/fork-b/loraham-kiss-tnc.git"
@@ -98,7 +99,7 @@ def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
     dest.mkdir(parents=True)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", time.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", ADOPTED_AT,
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     res = _svc(tmp_path).uninstall("kiss", apply=True)
     assert not res.ok

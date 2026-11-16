@@ -153,7 +153,7 @@ def test_any_other_index_error_is_a_plain_failure_not_the_typed_refusal(tmp_path
                 raise urllib.error.URLError("network unreachable")
         monkeypatch.setattr(bi, "_http_get", _REAL_HTTP_GET)          # the real fetch, its network down
         monkeypatch.setattr(bi, "_open_stream", _REAL_OPEN_STREAM)
-        monkeypatch.setattr(bi.urllib.request, "build_opener", lambda *a: _Down())
+        monkeypatch.setattr(bi.urllib.request, "build_opener", lambda *a: _Down())    # rule-4: no network, the opener refuses
     if cause == "no-zstd":
         monkeypatch.setattr(bi, "require_zstd", real_zstd)
         monkeypatch.setattr(bi.shutil, "which", lambda name: None)

@@ -130,7 +130,7 @@ def test_a_saved_but_unapplied_proxy_edit_is_not_pushed_live_by_the_update(tmp_p
     svc().self_update_apply_operator()
     assert _deployed(paths) == previous
     why = proxy_rerender.pending(paths)
-    assert why is not None and why.startswith("the saved webserver settings are not applied")
+    assert why is not None and why.startswith("the saved webserver settings are not applied")    # rule-10: a sentence's opening; the result carries no typed field
 
 
 def test_an_unreadable_deployed_config_keeps_the_marker_and_the_update_still_reports(tmp_path, monkeypatch):

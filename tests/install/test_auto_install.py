@@ -16,6 +16,8 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService, ActionResult
 
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
+
 
 def _sel(svc, source="pinned", tests=True, tx=False):
     """A uniform per-stack selection over the full auto-install scope (all stacks installed, one
@@ -135,7 +137,7 @@ def test_dry_run_names_scope_and_flags(tmp_path):
     # EVERY manifest stack is in scope — the manifest is authoritative. A package-managed stack
     # (meshtastic) is a normal row that gets provisioned and validated, not a silent omission.
     assert r.ok and r.data["changes"] == len(svc.stacks())
-    assert r.details[0].startswith("  [install] daemon:")       # dependency order, daemon first
+    assert r.details[0].startswith("  [install] daemon:")    # rule-10: a sentence's opening; the result carries no typed field; dependency order, daemon first
     assert any("TX test: off" in d for d in r.details)
 
 
@@ -333,7 +335,7 @@ def test_reconcile_absent_installs_unowned_blocks_orphan_blocks(tmp_path):
     import shutil
     shutil.rmtree(dest)                                          # orphaned record
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "pinned", "", time.time(), "",
+        "src/loraham-kiss-tnc", "", "pinned", "", ADOPTED_AT, "",
         ("loraham-kiss-tnc",)))
     action, why = svc._reconcile_group("src/loraham-kiss-tnc", comp)
     assert action == "blocked" and "orphaned" in why.lower()
@@ -346,7 +348,7 @@ def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     head = _make_repo(dest, remote=remote)
     paths = Paths(runtime_root=tmp_path)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", remote, "pinned", head, time.time(), "",
+        "src/loraham-kiss-tnc", remote, "pinned", head, ADOPTED_AT, "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=paths)
     comp = next(c for s in svc.stacks() if s.id == "kiss"
@@ -769,7 +771,6 @@ def _dead_ident():
 
 
 @pytest.mark.needs_session
-@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monkeypatch):
     # The reservation is bound to the CHILD after spawn: a child that dies before claiming
     # becomes DEAD and acknowledgeable even though the web-server/spawner process (this
@@ -793,14 +794,7 @@ def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monke
     assert st == "valid" and res["phase"] == "spawned"
     assert res["pid"] == calls[0]                                # bound to the CHILD
     os.kill(calls[0], 9)                                         # child dies pre-claim
-    import time as _t
-    for _ in range(50):
-        try:
-            os.kill(calls[0], 0)
-            _t.sleep(0.05)
-        except OSError:
-            break
-    os.waitpid(calls[0], 0)                                      # reap the zombie
+    os.waitpid(calls[0], 0)                                      # its death, reaped (the event)
     gate = svc._auto_install_gate()
     assert "died holding its reservation" in gate                # dead despite live spawner
     ack = svc.auto_install_ack()
@@ -1208,6 +1202,7 @@ def test_unverified_tracking_is_orphan_risk_whatever_its_message_says(tmp_path, 
 
 @pytest.mark.needs_session
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+@pytest.mark.wallclock("a real child process arms SIG_IGN; the handshake loop is a hang guard")
 def test_rebind_write_failure_yields_orphan_risk(tmp_path, monkeypatch):
     # bind persistence fails AND cessation is unproven (SIGTERM-ignoring child):
     # orphan-risk evidence with the pid; recovery only through the confirmed path.
@@ -2386,7 +2381,7 @@ def test_auto_install_none_compatible_row_leads_with_self_update_and_names_no_ov
     sel["meshtastic"]["version"] = "binary"
     assert not svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None).ok
     detail = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]["detail"]
-    assert detail.split(" — ", 1)[1].startswith("update LHPC first (lhpc self-update --apply)")
+    assert detail.split(" — ", 1)[1].startswith("update LHPC first (lhpc self-update --apply)")    # rule-10: a sentence's opening; the result carries no typed field
     assert detail.endswith("install from source with: lhpc install meshtastic --source pinned --yes")
     assert "--accept-pin-mismatch" not in detail
 

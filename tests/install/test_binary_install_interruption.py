@@ -130,7 +130,7 @@ def test_an_interrupted_reinstall_recovers_and_retries(tmp_path, box, point, fai
     assert svc.binary_recover()[0]
     # (b) v1 or v2 whole, each with its own receipt; no journal, backup or staging directory left
     state = tree(root, skip=LOCKS + (RECEIPT,))
-    assert not [p for p in state if p.startswith(("state/binary/.backup-", "state/lhpc-binary-"))
+    assert not [p for p in state if p.startswith(("state/binary/.backup-", "state/lhpc-binary-"))    # rule-10: absence over a namespace; no value is compared by its prefix
                 or p == "state/binary/install.journal.json"]
     assert (state[BIN], _receipt(root)) in ((b"v1", v1_receipt), (b"v2", v2_receipt))
     assert svc.binary_receipt_state("daemon")[0] == "valid"

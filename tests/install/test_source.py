@@ -25,6 +25,8 @@ from lhpc.core.install import Installer
 from lhpc.core.model import Component, ComponentKind, SourceSpec, SourceState
 from lhpc.core.probes import RealSystem
 
+ADOPTED_AT = 1_700_000_000.0    # a record's adoption time: data no product path compares with now
+
 
 def _bind_unix_socket(directory, name):
     """Create an AF_UNIX socket at `directory/name`, addressed through the directory's fd.
@@ -457,6 +459,7 @@ def test_an_empty_directory_that_is_not_the_recorded_inode_is_kept_and_named(tmp
     assert any(str(staging) in m and "kept" in m for m in msgs), msgs
 
 
+@pytest.mark.wallclock("a 50 ms gap orders the directory's real ctime before or after its record's")
 @pytest.mark.parametrize("when", ["before the record", "after the record"])
 def test_an_unrecorded_candidate_is_retained_and_named(tmp_path, installer, when):
     # No identity recorded (a stop between the candidate's creation and its record): nothing
@@ -1087,7 +1090,7 @@ def test_recovery_finishes_an_activation_interrupted_right_after_the_archive_ren
     dest, prev, staging, new_head = _journal_before_rename(git, tmp_path, inst, "planned")
     dest.rename(prev)
     msgs = inst.recover_source_activations()
-    assert any(m.startswith("recovered app") for m in msgs), msgs
+    assert any(m.startswith("recovered app") for m in msgs), msgs    # rule-10: a sentence's opening; the result carries no typed field
     assert (dest / "file.txt").is_file()                              # an active source again
     assert not inst._journal_path(dest).exists()                       # nothing blocks the box
 
@@ -1103,7 +1106,7 @@ def test_recovery_clears_an_activation_interrupted_right_after_promotion(tmp_pat
     dest, prev, staging, new_head = _journal_before_rename(git, tmp_path, inst, "prior-archived")
     staging.rename(dest)
     msgs = inst.recover_source_activations()
-    assert any(m.startswith("recovered app") for m in msgs), msgs
+    assert any(m.startswith("recovered app") for m in msgs), msgs    # rule-10: a sentence's opening; the result carries no typed field
     assert not prev.exists() and not inst._journal_path(dest).exists()
     assert (dest / "file.txt").read_text() == "v2\n" and _rec(inst).resolved_commit == new_head
 
@@ -1228,7 +1231,7 @@ def test_symlink_at_source_destination_is_refused(tmp_path, make_repo, installer
     assert rec is None and "no ownership record" in why
     assert source_registry.read_record(inst.paths, "src/app") is None      # nothing registered
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "https://github.com/x/y.git", "pinned", "", time.time(), "", ("app",)))
+        "src/app", "https://github.com/x/y.git", "pinned", "", ADOPTED_AT, "", ("app",)))
     rec2, why2 = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                  comp, dest)
     assert rec2 is None and "identity drift" in why2 and "symlink" in why2
@@ -1514,7 +1517,7 @@ def test_non_git_directory_is_never_destructively_authorized(tmp_path, installer
     dest.mkdir(parents=True)
     (dest / "replaced.txt").write_text("manually placed")
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "pinned", "", time.time(), "", ("app",)))
+        "src/app", "", "pinned", "", ADOPTED_AT, "", ("app",)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
     assert rec is None and "unprovable" in why
@@ -2401,7 +2404,7 @@ def _register_tree(git, inst, dest, comp, remote="", files=None):
     head = git(dest, "rev-parse", "HEAD")
     rel = str(dest.relative_to(inst.paths.runtime_root))
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        rel, remote, "pinned", head, time.time(), "", (comp.id,)))
+        rel, remote, "pinned", head, ADOPTED_AT, "", (comp.id,)))
     return head
 
 
@@ -2473,7 +2476,7 @@ def test_same_basename_sources_get_distinct_journals(tmp_path, installer):
     root = inst.paths.runtime_root
     ja = inst._journal_path(root / "src" / "a" / "app")
     jb = inst._journal_path(root / "src" / "b" / "app")
-    assert ja.name != jb.name and ja.name.startswith("app-") and jb.name.startswith("app-")
+    assert ja.name != jb.name and ja.name.startswith("app-") and jb.name.startswith("app-")    # rule-10: a generated name: its fixed part, the rest is random
 
 
 def test_legacy_basename_journal_is_retained_and_blocks(tmp_path, installer):
@@ -2926,7 +2929,7 @@ def _svc_env(tmp_path):
     (dest / "code.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", time.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", ADOPTED_AT,
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     fake = FakeSystem()
     runner = _OriginOf(fake, dest, "https://github.com/makrohard/loraham-kiss-tnc.git")
@@ -3364,7 +3367,7 @@ def _registered_kiss_checkout(git, make_repo, tmp_path):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "pinned", head, time.time(), "",
+                                       "pinned", head, ADOPTED_AT, "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     return dest
 
@@ -3818,7 +3821,7 @@ def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypat
     action = inst.adopt_source(comp, force=True, source="dev")
     assert fired["done"]
     assert action.status == "failed"                       # NEVER a successful update
-    assert action.detail.startswith("prior-dirty:")
+    assert action.detail.startswith("prior-dirty:")    # rule-10: a sentence's opening; the result carries no typed field
     assert ".app.prev" in action.detail                    # names the retained path
     assert (prev / "file.txt").read_text() == "late operator edit\n"   # the EDIT survives
     assert (dest / "file.txt").read_text() == "v2\n"       # NEW source stays active
@@ -4048,7 +4051,7 @@ def test_activation_keeps_a_prior_edited_after_the_final_scan(tmp_path, monkeypa
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert fired["done"]
-    assert action.status == "failed" and action.detail.startswith("prior-dirty:")
+    assert action.status == "failed" and action.detail.startswith("prior-dirty:")    # rule-10: a sentence's opening; the result carries no typed field
     assert (prev / "file.txt").read_text() == "late operator edit\n"
     assert (dest / "file.txt").read_text() == "v2\n"
     assert json.loads(inst._journal_path(dest).read_text())["state"] == "prior-dirty-retained"
@@ -4259,7 +4262,7 @@ def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, m
 
     assert fired["done"]
     assert action.status == "failed"                        # never reported as a clean update
-    assert action.detail.startswith("prior-dirty:")
+    assert action.detail.startswith("prior-dirty:")    # rule-10: a sentence's opening; the result carries no typed field
     assert "late.log" in action.detail                      # names the file that is at risk
     assert (prev / "late.log").read_text() == "written after the carry\n"   # NOT deleted
     assert prev.is_dir()                                    # the archive is retained whole
@@ -4655,7 +4658,7 @@ def test_a_prior_kept_in_use_is_removed_by_the_next_command_or_named_prior_dirty
          str(dest / "log.txt")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     assert holder.stdout.readline() == "open\n"
     action = inst.adopt_source(comp, force=True, source="dev")
-    assert action.status == "failed" and action.detail.startswith("prior-in-use:"), action.detail
+    assert action.status == "failed" and action.detail.startswith("prior-in-use:"), action.detail    # rule-10: a sentence's opening; the result carries no typed field
     assert f"pid {holder.pid}" in action.detail and "lhpc update app --yes" in action.detail
     assert [w for _r, w, _h in inst.pending_states()] == ["prior-in-use"]
     holder.communicate("write\n" if wrote else "done\n", timeout=10)
@@ -4702,7 +4705,7 @@ def test_an_activated_journal_reads_prior_in_use_only_while_the_probe_finds_a_ho
     # The journal stays `activated` either way; the word comes from the in-use probe at the
     # moment `status` asks: a holder — `prior-in-use`; none — `update-interrupted`.
     inst, _, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
-    assert action.detail.startswith("prior-in-use:"), action.detail
+    assert action.detail.startswith("prior-in-use:"), action.detail    # rule-10: a sentence's opening; the result carries no typed field
     [(rel, word, how)] = inst.pending_states()
     assert (rel, word) == ("src/app", "prior-in-use") and f"pid {holder.pid}" in how, how
     holder.communicate("\n", timeout=10)
@@ -4747,8 +4750,8 @@ def test_a_journal_that_cannot_record_the_kept_prior_ends_recovery_required(
         _seam(monkeypatch, "pre-prev-cleanup",
               lambda _p: (prev / "file.txt").write_text("late operator edit\n"))
         action = inst.adopt_source(comp, force=True, source="dev")
-    assert action.status == "failed" and action.detail.startswith("recovery-required"), \
-        action.detail
+    assert action.status == "failed" and action.detail.startswith("recovery-required"), (    # rule-10: a sentence's opening; the result carries no typed field
+        action.detail)
     assert "could not record that" in action.detail and "nothing was deleted" in action.detail
     assert inst.paths.under("src", ".app.prev").is_dir()
     if why == "in use":
@@ -4764,13 +4767,13 @@ def test_recovery_that_cannot_record_the_kept_prior_says_recovery_required(
     # The same in recovery: a prior still in use, and the journal rewrite fails.
     from lhpc.core import runtime_fs
     inst, _c, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
-    assert action.detail.startswith("prior-in-use:")
+    assert action.detail.startswith("prior-in-use:")    # rule-10: a sentence's opening; the result carries no typed field
     monkeypatch.setattr(runtime_fs.OwnedMarker, "rewrite", lambda self, text: False)
     try:
         msgs = inst.recover_source_activations()
     finally:
         holder.communicate("\n", timeout=10)
-    assert any(m.startswith("recovery-required for app: the update activated the new source")
+    assert any(m.startswith("recovery-required for app: the update activated the new source")    # rule-10: a sentence's opening; the result carries no typed field
                and "could not record that" in m for m in msgs), msgs
     assert not any("prior-in-use" in m for m in msgs), msgs
     assert inst.paths.under("src", ".app.prev").is_dir()
@@ -5321,7 +5324,6 @@ class _GitRunner:
 def test_leftover_prev_refusal_names_the_folder_and_the_command(tmp_path):
     """An update blocked by a `.prev` folder an interrupted update left behind (measured on a
     Pi Zero 2 W): the refusal names that folder and the command to run after moving it."""
-    import time
 
     from lhpc.core import source_registry
     from lhpc.core.config import Config
@@ -5338,7 +5340,7 @@ def test_leftover_prev_refusal_names_the_folder_and_the_command(tmp_path):
                                        remote="https://example/repo.git", branch="main"))
     paths = Paths(runtime_root=rt)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/repo", "https://example/repo.git", "dev", "abc123", time.time(), "", ("c",)))
+        "src/repo", "https://example/repo.git", "dev", "abc123", ADOPTED_AT, "", ("c",)))
     system = FakeSystem().system
     system.runner = _GitRunner()
     inst = Installer(paths, (Stack(id="s", name="s", main="c", components=(comp,)),),
