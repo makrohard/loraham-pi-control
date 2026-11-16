@@ -676,3 +676,45 @@ def test_row_2_alone_needs_only_the_forms_it_renders(tmp_path):
     r = dry(tmp_path, LANE="full", ROWS_ONLY="2", FAKE_PEER=_null_peer(tmp_path))
     assert r.returncode == 0, r.stderr
     assert "dry self-check OK all-forms-printed" in r.stdout
+
+
+# ---- what H2's dry tests pinned alone: an ambiguous key, row 5's worst case, the tracker's ACK, COVERAGE, stop-isolation ---
+
+def test_a_key_matching_two_radios_is_ambiguous_not_the_first(tmp_path):
+    # mutant K1: the first match was taken
+    r = dry(tmp_path, LANE="fast", DRY_RADIOS_Z="STATE valid\nROW r1 loraham 433 True serial= port= hp=None\n"
+                                                "ROW r2 loraham 868 True serial= port= hp=None\nROW r3 loraham 868 True serial= port= hp=None")
+    assert r.returncode == 0, r.stderr
+    assert [line for line in r.stdout.splitlines() if line.split(": ", 1)[0] == "NOT RUN"] == [
+        f"NOT RUN: row {n} daemon {d}: ambiguous: radio Z868 (2 match)" for n in (8, 9, 11) for d in ("A->B", "B->A")]
+
+
+def test_row_5s_worst_case_is_three_frames_each_end(tmp_path):
+    # mutant K5: row 5 counted one frame per end (its announce, delivery proof and own send; the RNode's three)
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="5", FAKE_PEER=_null_peer(tmp_path))
+    assert r.returncode == 0, r.stderr
+    r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0]
+    assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 3 | 10", "BUDGET | Z:r2 | 3 | 10"]
+
+
+def test_the_fake_box_frames_the_trackers_ack(tmp_path):
+    # mutant K14: the dry box printed no FRAME for the tracker's ACK, so its reservation was never exercised
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="2", FAKE_PEER=_null_peer(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert "FRAME | PC:tracker | control" in r.stdout.splitlines()
+
+
+def test_coverage_names_the_models_no_chosen_row_carries(tmp_path):
+    # mutant K21: the "not present" lines were dropped
+    r = dry(tmp_path, LANE="fast", ROWS_ONLY="11")
+    assert r.returncode == 0, r.stderr
+    assert "COVERAGE | meshstick-1262 | model | - | - | not present | no row carries this model" in r.stdout.splitlines()
+
+
+def test_the_same_box_frame_row_proves_stop_isolation(tmp_path):
+    # mutant K22: row 7's stop-isolation direction was gone from its directions (COVERAGE, and the FAIL marking)
+    r = dry(tmp_path, LANE="fast", ROWS_ONLY="7")
+    assert r.returncode == 0, r.stderr
+    assert "COVERAGE | stop-isolation | check | 7 | - | rehearsed | -" in r.stdout.splitlines()
+    assert ("REPORT | 7 | daemon | H (r1, r3) | 433 | — | stop-isolation | stop r3: r1 runs on; stop r1: r3 runs on | — | DRY-PASS"
+            in r.stdout.splitlines())
