@@ -315,16 +315,19 @@ undo_push() { [ "$MODE" = dry ] && { echo "  [dry] undo += $1: $(rt "$1" "$2")";
   n=$(( $(cat "$EVD/undo.seq" 2>/dev/null || echo 0) + 1 )) && echo "$n" > "$EVD/undo.seq" || stop "undo journal: id counter not written ('$2' not dispatched)"
   printf 'u%s\t%s\t%s\n' "$n" "$1" "$2" >> "$EVD/undo.list" || stop "undo journal: append failed for '$2' (not dispatched)"; }
 undo_mark() { [ "$MODE" = dry ] && { echo 0; return; }; local n; n=$(wc -l < "$EVD/undo.list") || { echo "undo journal: unreadable (no mark)" >&2; return 1; }; echo "$n"; }
-undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest first; a failing undo goes to UNRESOLVED.txt
+undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest first; rc 1 if one failed (every caller STOPs)
+  # A failing undo goes to UNRESOLVED.txt, stays in the journal and is not marked done, so the recovery runs it again.
   [ "$MODE" = dry ] && { echo "  [dry] undo back to $1"; return 0; }; local n id w c rc=0
   n=$(wc -l < "$EVD/undo.list") && [[ "$1" =~ ^[0-9]+$ ]] || {
     rec "undo journal: unreadable or bad mark '$1' at undo_to: the undos above it did NOT run" || true
     [ "${RECOVERING:-0}" = 1 ] && return 1; stop "undo journal: unreadable or bad mark '$1'"; }
   while [ "$n" -gt "$1" ]; do IFS=$'\t' read -r id w c < <(sed -n "${n}p" "$EVD/undo.list")
     if grep -qxF -- "$id" "$EVD/undo.done" 2>/dev/null; then echo "undo journal: $id already ran (its removal had failed), not run again" >&2
-    else echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id not recorded as run" || rc=1; }
-      XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c"; [ "$XRC" = 0 ] || rec "$w: $c (rc $XRC)" || rc=1; fi
-    sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || rc=1; }
+    else echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id not recorded as run" || true; rc=1; }
+      XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c"
+      if [ "$XRC" != 0 ]; then rec "$w: $c (rc $XRC)" || true; rc=1
+        sed -i "/^$id\$/d" "$EVD/undo.done" || rec "undo journal: $id not unmarked after its failure" || true; n=$((n - 1)); continue; fi; fi
+    sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
     n=$((n - 1)); done; return $rc; }
 recover() { trap - EXIT INT TERM; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
@@ -746,7 +749,7 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
   usbguard "post-$r"; }
 
 row_RS() {
-  undo_to 0; [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved undo(s): $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
+  undo_to 0 || stop "RS: an undo failed (UNRESOLVED.txt): the recovery runs it again"; [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved undo(s): $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   verify_set || fail "RS: the recorded running set is not back ($(tr '\n' '|' < "$EVD/UNRESOLVED.txt" 2>/dev/null))"
   [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved after verify: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
