@@ -224,10 +224,19 @@ HPY
 )
 
 dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le 17 ]; }
-# a command that asks for high power or 18 dBm or more, in any spelling (--high-power, --highpower, POWER=, --power, --tx-power,
-# tx_power, txpower, set tx), any case: the dispatcher refuses it and the dry self-check fails on it
-HIPOWER_RE='-?-high-?power|(^|[^a-z0-9])(power|tx[-_]?power|txp)[ =:]+\+?(1[89]|[2-9][0-9]|[1-9][0-9]{2,})([^0-9]|$)|set tx (1[89]|[2-9][0-9]|[1-9][0-9]{2,})'
-hipower() { printf '%s\n' "$*" | grep -qiE -- "$HIPOWER_RE"; }
+# the send forms of the contract's lint (the dry self-check sends-only-in-tx: each only inside a tx call); the two
+# python send helpers (the MeshCom console, Graywolf) span lines in declare -f: every-send-gated checks them by their FRAMEs
+SENDS_RE='form (tx_text|meshcom_send|mt_send|mc_send|rt_send)|tmux send-keys|/api/v1/announce|rns-exchange|(mt|mc|meshcom)-send'
+# hipower <text>: rc 0 (refuse) when the text asks for high power (--high-power, --highpower, any case) or sets a power at
+# 18 dBm or more: every power key (power, tx-power, tx_power, txpower, txp, 'set tx') followed by = : or blanks has its value
+# taken, quotes stripped and compared as a base-10 integer (leading zeros, a sign). A value that is not an integer is refused
+# too; a key with no value (the end, or a shell operator: a read like 'txpower | sed') is no setting. Every executor runs it.
+hipower() {
+  local t rest v; t=$(printf '%s' "$*" | tr '[:upper:]' '[:lower:]'); [[ $t =~ (^|[^a-z0-9])-?-high-?power ]] && return 0; rest=$t
+  while [[ $rest =~ (^|[^a-z0-9])(power|tx[-_]?power|txp|set\ tx)[\ =:]+([^\ \|\;\&\<\>]*) ]]; do
+    rest=${rest#*"${BASH_REMATCH[0]}"}; v=${BASH_REMATCH[3]//[\'\"]/}; [ -n "$v" ] || continue
+    [[ $v =~ ^[+-]?[0-9]+$ ]] || return 0; v=${v#+}; [ "${v:0:1}" = - ] && continue; [ "$((10#$v))" -ge 18 ] && return 0; done
+  return 1; }
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
 fail() { echo "FAIL: $*" >&2; printf '%s\n' "$*" > "$OUT/rowfail.txt"; exit 1; }   # a row FAIL (the marker); its undos run
@@ -269,16 +278,19 @@ sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
   else printf '%s\n' "$in" | SSHPASS=$pw sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"; fi; }
 drylog() { [ "$MODE" = dry ] && printf '%s\n' "$*" >> "$DRYLOG"; return 0; }
 X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD $w: $c"
+  ! hipower "$c" || stop "$f: the command asks for high power or 18 dBm or more: never run"
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; return 0; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
 XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3"); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD $w: (stdin) $c"
+  ! hipower "$c" || stop "$f: the command asks for high power or 18 dBm or more: never run"
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: (stdin) $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" "$in"; return 0; fi
   capture "$f" sshrun "$w" "$in" "$c"; [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
 declare -A SPAWNF=()
 peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a peer process starts (dry: fake_peer.py, empty stdin)
   local f=$1 pin=$2 py=$3; shift 3; local c="flock -n -E 75 $LOCK $py -I $PEER $(printf '%q ' "$@")"
+  ! hipower "$*" || stop "$f: the peer action asks for high power or 18 dBm or more: never run"
   if [ "$pin" = pin ]; then drylog "CMD PC: (PIN on stdin) peer.py $*"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: peer.py $* (the PIN on stdin)"
   else drylog "CMD PC: $c"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: $c"; fi
   local -a run; if [ "$MODE" = dry ]; then run=(python3 -I "$FAKE_PEER" "$@")
@@ -795,7 +807,7 @@ row_RE() { [ "$MODE" = dry ] && { echo "  [dry] RE: secret and peer-data scans (
 selfcheck() {
   local SCN=0; scok() { echo "dry self-check OK $1"; SCN=$((SCN + 1)); }; sc() { stop "dry self-check $1: $2"; }
   local n c t L G g p w st
-  n=$(grep '^CMD ' "$DRYLOG" | grep -ciE -- "$HIPOWER_RE") || true
+  n=0; while IFS= read -r t; do ! hipower "$t" || n=$((n + 1)); done < <(grep '^CMD ' "$DRYLOG")
   [ "$n" = 0 ] || sc no-high-power "$n printed command(s) carry --high-power or a power of 18 dBm or more"; scok no-high-power
   c=$(grep '^CMD ' "$DRYLOG" | grep -ciE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b") || true; [ "$c" = 0 ] || sc no-call-in-commands "the operator's call is in $c logged command(s)"
   [ -z "$TRACKER_CALL" ] || { c=$(grep -ciF -- "$TRACKER_CALL" "$DRYLOG") || true; [ "$c" = 0 ] || sc no-call-in-commands "the tracker call is in the command log ($c)"; }; scok no-call-in-commands
@@ -809,6 +821,10 @@ selfcheck() {
       if (r == "" || cr[r] < 1) {print "FRAME " $2 " (line " NR ") without a TX credit"; exit}; cr[r]--}
     want && NR == want && $1 != "CMD" {print "TX on line " NR - 1 " is not followed by its command"; exit}' "$DRYLOG")
   [ -z "$t" ] || sc every-send-gated "$t"; scok every-send-gated
+  # the static twin: in every function of this script, a send form appears only on a tx line (`tx ... -- <executor> ...`)
+  local fn; t=$(for fn in $(declare -F | awk '{print $3}'); do case $fn in dryframes|selfcheck|frame) continue;; esac
+      declare -f "$fn" | grep -E "$SENDS_RE" | grep -vE '(^|[^a-zA-Z0-9_])tx [^|]* -- ' | sed "s/^ */$fn: /"; done)
+  [ -z "$t" ] || sc sends-only-in-tx "a send outside tx: $(printf '%s' "$t" | head -n 3 | tr '\n' '|')"; scok sends-only-in-tx
   t=$(sort -u "$SCRATCH/needed" 2>/dev/null | grep -vxF -f <(sort -u "$SCRATCH/formed" 2>/dev/null) | grep -vx rt_send | tr '\n' ' ') || true
   [ -z "$t" ] || sc all-forms-printed "needed but never printed: $t"; scok all-forms-printed
   ( MODE=live; body() { printf '%s\n' "  [manual] loraham-chat is interactive — the daemon is ensured, then run it yourself in a terminal:" "    $CC"; }
