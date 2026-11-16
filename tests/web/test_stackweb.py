@@ -2695,3 +2695,26 @@ def test_a_running_instance_on_a_radio_disabled_since_keeps_its_raw_line(tmp_pat
     assert addr.text.strip() == "localhost:8134 · public" and "pill-bad" in addr.classes
     assert not box.within(r2).find("span", **{"data-state": "instance-stopped"})
     assert _box_pill(box) == "exposed"
+
+
+@pytest.mark.parametrize("state", ["STOPPED", "RUNNING"])
+def test_a_stack_with_no_instance_keeps_its_live_raw_listener(tmp_path, monkeypatch, web, state):
+    # SECOND-READ-CODE-UI-U3-DELTA-v4 M1: every radio is disabled, so kiss has no instance; a kiss process left over
+    # still listens on :8001 on every address. Its radio-less line stays and the box pill is not "secure"
+    import dataclasses
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    radios_fixture.write(tmp_path, tuple(dataclasses.replace(r, enabled=False) for r in (radios_fixture.R1, radios_fixture.R2)))
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8001, "inode": 1}])
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "kiss":
+            for cs in ss.components.values():
+                cs.run_state = RunState[state]
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, sid: [] if sid == "kiss" else None)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    [line] = [line for n, _h, line in lines if n == "LoRaHAM KISS TNC"]
+    [addr] = box.within(line).find("span", class_="wsaddr")
+    assert addr.text.strip() == "localhost:8001 · public" and "pill-bad" in addr.classes
+    assert _box_pill(box) == "exposed"
