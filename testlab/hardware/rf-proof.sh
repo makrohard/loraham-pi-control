@@ -253,7 +253,6 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 redact() {   # the passwords, the PIN, the tracker call and the operator's call (any SSID or none, any case) -> masked
   local t s c=${OPERATOR_CALL:-}; t=$(cat; echo x); t=${t%x}
   for s in "${PW_H:-}" "${PW_Z:-}" "${MC_PIN:-}" "${TRACKER_CALL:-}"; do [ -n "$s" ] || continue
-    case " lhpc ${BOX_H_USER:-} ${BOX_Z_USER:-} " in *"$s"*) continue;; esac   # a password inside a login name: RE's shapes scan
     t=${t//"$s"/<REDACTED>}; done
   [[ "$c" =~ ^[A-Za-z0-9]+$ ]] || { printf '%s' "$t"; return; }; printf '%s' "$t" | sed -E "s/\\b$c(-[0-9]{1,2})?\\b/<CALL>/Ig"; }
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
@@ -768,8 +767,7 @@ check_listener() {
   LP=$pids; }
 secret_scan() {
   scan() { local w=$1 rc=0; shift; grep -rlq "$@" "$EVD" || rc=$?; case $rc in 0) fail "RE: $w in the evidence";; 1) ok "RE: no $w";; *) stop "RE: the scan for $w failed (rc $rc)";; esac; }
-  local pw; for pw in "${PW_H:-}" "${PW_Z:-}"; do [ -n "$pw" ] || continue; case " lhpc $BOX_H_USER $BOX_Z_USER " in *"$pw"*)
-      scan "box password (leak shapes)" -E -- "(sshpass +-p *|SSHPASS=|PW_[HZ]=|password: *)['\"]?$pw['\"]?( |$)";; *) scan "box password" -F -- "$pw";; esac; done
+  local pw; for pw in "${PW_H:-}" "${PW_Z:-}"; do [ -z "$pw" ] || scan "box password" -F -- "$pw"; done
   [ -z "${MC_PIN:-}" ] || scan "PIN" -F -- "$MC_PIN"
   scan "the operator's call (any SSID)" -iE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b"; [ -z "${TRACKER_CALL:-}" ] || scan "tracker call" -iF -- "$TRACKER_CALL"
   scan "full node id" -E -- '![0-9a-f]{8}'; coords; }
@@ -932,6 +930,8 @@ if [ "$MODE" = live ]; then
   case " $RUN " in *" 4 "*) IFS= read -r MC_PIN || MC_PIN=;; *) MC_PIN=;; esac
 else PW_H=; PW_Z=; MC_PIN=; fi
 declare +x PW_H PW_Z MC_PIN; exec </dev/null
+for b in H Z; do p="PW_$b"; [ -n "${!p}" ] || continue   # a password inside a fixed name could not be masked or scanned: STOP before anything
+  case " lhpc $(boxvar H USER) $(boxvar Z USER) " in *"${!p}"*) stop "box $b's password is part of a login name ('lhpc' or BOX_<B>_USER): it cannot be masked in the evidence; set another password";; esac; done
 BOXES=; declare -A ABSENT=()
 for b in H Z; do h="BOX_${b}_HOST"; p="PW_$b"
   if [ "$MODE" = dry ]; then [ -n "${!h:-}" ] && BOXES="$BOXES $b" || ABSENT[$b]="absent: box $b"
