@@ -23,9 +23,9 @@ def _argv(comp):
     """The real argv of the process the spec matches, as a band-addressed start renders it, default params."""
     argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=_inst0(comp))
     if comp.id == "meshcore-webui":
-        # meshcore-webui-run.sh:68 execs `"$venv/bin/python" -m uvicorn app.main:app --host
-        # "$bind" --port "$port"`, with bind/port the wrapper's last two arguments.
-        return ["/v/bin/python", "-m", "uvicorn", "app.main:app", "--host", argv[-2], "--port", argv[-1]]
+        # meshcore-webui-run.sh:71 execs `"$venv/bin/python" -m uvicorn app.main:app --host
+        # "$bind" --port "$port"` (venv = <source>/backend/.venv), bind/port the wrapper's last two arguments.
+        return ["/rt/src/meshcore-webui/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", argv[-2], "--port", argv[-1]]
     if comp.id == "meshcore-cli":
         # meshcli-run.sh :12 shifts the lock path off and :25 runs `"$@"`: meshcli's own argv is
         # the wrapper's after its script and lock path.

@@ -14,6 +14,7 @@ from lhpc.core.services import ControllerService
 
 PY = "/home/u/.venv/bin/python"
 PY3 = "/home/u/.venv/bin/python3"
+WEBUI_PY = "/r/src/meshcore-webui/backend/.venv/bin/python"
 
 # (component, its stack, an argv that only names the component's program, the component's real argv)
 CASES = [
@@ -34,12 +35,15 @@ CASES = [
      ["python3", "scripts/gps-relay.py", "--mode", "fixture", "--uart", ".run/gps-uart1.sock"]),
     ("meshcore-webui", "meshcore",
      [PY, "-m", "pytest", "-q", "-k", "uvicorn and app.main:app"],
-     ["/v/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8788"]),
+     [WEBUI_PY, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8788"]),
+    ("meshcore-webui", "meshcore",       # another FastAPI app: only its interpreter differs
+     ["/home/u/other-app/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--port", "8000"],
+     [WEBUI_PY, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8788"]),
     ("meshchat", "reticulum",
      [PY, "-m", "pytest", "-q", "tests/test_meshchat.py"],
      [".venv/bin/python", "meshchat.py", "--headless", "--host", "127.0.0.1", "--port", "8790"]),
 ]
-IDS = [c[0] for c in CASES]
+IDS = [c[0] for c in CASES[:6]] + ["meshcore-webui-other-app", "meshchat"]
 
 
 def _svc(tmp_path, argv):

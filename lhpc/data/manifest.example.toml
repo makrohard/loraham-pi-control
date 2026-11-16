@@ -2833,7 +2833,9 @@ main = "meshcore-node"
     instance_arg = ["--port", "{port:8788}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     entry = "uvicorn"
-    all_args = ["app.main:app"]
+    # its venv's interpreter (meshcore-webui-run.sh execs "$src/backend/.venv/bin/python"): another
+    # FastAPI app run as `python -m uvicorn app.main:app` has every other token of this argv
+    all_args = ["app.main:app", "src/meshcore-webui/backend/.venv/bin/python"]
 
     # Loopback backend the LHPC proxy sits in front of. `client=true` + `scheme=http` is what
     # marks it as a proxied web UI (service_webserver.stack_web_upstream). Firewall DENY-DEFAULT:

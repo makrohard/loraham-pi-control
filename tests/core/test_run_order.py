@@ -1354,7 +1354,7 @@ def test_an_advisory_claim_never_blocks_a_start(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    fake = FakeSystem(cmdlines_data={300: ["python", "-m", "uvicorn", "app.main:app"]})
+    fake = FakeSystem(cmdlines_data={300: ["/r/src/meshcore-webui/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app"]})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     webui = svc.build_snapshot().stack("meshcore").components["meshcore-webui"]
     assert webui.run_state in (RunState.RUNNING, RunState.DEGRADED)       # the premise: it runs
