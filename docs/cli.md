@@ -116,8 +116,9 @@ Pi Zero 2W and a Pi 5; QEMU and PlatformIO come later with `lhpc build`. The shi
 this script: [what CI enforces](maintenance.md#what-ci-enforces).
 
 ### source-check
-`lhpc source-check [<target>]` — check managed sources for upstream updates (network;
-refreshes only `state/stackupdates.json`).
+`lhpc source-check [<target>] [--json]` — check managed sources for upstream updates (network;
+refreshes only `state/stackupdates.json`). `--json` prints `{"ok", "summary", "data"}`; `data` names
+`stacks_behind` and `stacks_unchecked` (the stacks a self-update reports).
 
 ---
 

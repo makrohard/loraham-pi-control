@@ -907,6 +907,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sc = sub.add_parser("source-check",
                           help="Check managed sources for available upstream updates (read-only)")
     p_sc.add_argument("target", nargs="?", default="", help="Limit to one stack/component")
+    p_sc.add_argument("--json", action="store_true", help="Print the result as JSON (incl. the stacks behind)")
 
     p_sec = sub.add_parser("secrets", help="Back up or restore the box's certificates, secrets and "
                                            "stack identities (one plain file)")
@@ -1748,7 +1749,12 @@ def _run(argv: list[str] | None = None) -> int:
             lambda a: svc.test(args.target, tx=args.tx, apply=a),
             yes=args.yes)
     if args.command == "source-check":
-        return _render(svc.source_check(args.target))
+        res = svc.source_check(args.target)
+        if args.json:
+            import json as _json
+            print(_json.dumps({"ok": res.ok, "summary": res.summary, "data": res.data}))
+            return 0 if res.ok else 1
+        return _render(res)
     if args.command == "self-update":
         if args.run_service:
             # Unit plumbing (non-interactive) — mode is read from the claimed request marker.

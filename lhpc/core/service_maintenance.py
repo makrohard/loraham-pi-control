@@ -249,8 +249,9 @@ class MaintenanceOpsMixin:
             summary = (f"No installed/comparable sources could be checked for '{who}' — "
                        f"{unknown} unknown/not comparable.")
         return ActionResult(unresolved == 0, summary, details=details,
-                            data={"counts": counts, "checked": n,
-                                  "excused": sorted(excused)})
+                            data={"counts": counts, "checked": n, "excused": sorted(excused),   # stack ids: THIS code's manifest
+                                  "stacks_behind": sorted({self.stack_of(c) or c for c, e in results.items()
+                                                           if e["status"] == stackupdates.BEHIND})})
 
     def source_check_view(self) -> dict:
         """Cached, network-free freshness view for GET pages: `{checked_at, components, lhpc_head}` (fetched LHPC)."""

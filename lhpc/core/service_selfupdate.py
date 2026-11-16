@@ -587,17 +587,16 @@ class SelfUpdateOpsMixin:
         return res
 
     def _stacks_with_an_update(self, python: str) -> str:
-        """ONE run of the NEW code's `lhpc source-check` (this process holds the old code) names the stacks with
-        an update on their lane; "" when none, one line when it cannot finish. Never stops, starts or updates one."""
-        r = self._system.runner.run([python, "-m", "lhpc", "source-check"], 60.0,
+        """ONE run of the NEW code's `lhpc source-check --json` (this process holds the old code): the stacks it
+        judged behind on their lane; "" when none, one line when it cannot finish. Never stops, starts or updates one."""
+        r = self._system.runner.run([python, "-m", "lhpc", "source-check", "--json"], 60.0,
                                     env={ENV_RUNTIME_ROOT: str(self._paths.runtime_root)})
-        out = (r.stdout or "").splitlines()
-        if not out or not out[0].startswith(("OK ", "ERR ")):
+        try:
+            behind = json.loads(r.stdout or "")["data"].get("stacks_behind", [])
+            return f"Stacks with an update: {', '.join(behind)}." if behind else ""
+        except (ValueError, KeyError, TypeError, AttributeError):
             why = "timed out after 60 s" if r.timed_out else f"failed (exit {r.returncode})"
             return f"Could not list the stacks with an update: `lhpc source-check` {why}."
-        ids = {ln.split(":")[0].strip() for ln in out[1:] if ln.partition(": ")[2].startswith("behind")}
-        owner = {c.id: s.id for s in self.stacks() for c in s.components}
-        return f"Stacks with an update: {', '.join(sorted({owner.get(i, i) for i in ids}))}." if ids else ""
 
     @invalidates_snapshot
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
