@@ -51,6 +51,18 @@ def _instances(svc, sid):
     return out
 
 
+def _by_component(svc, sid):
+    """{component id: [`<stack>@<rid>` of each instance line under it]}, in the order `lhpc status <sid>` prints them."""
+    out, comp = {}, None
+    for ln in svc.status(sid).details:
+        words = ln.split()
+        if ln[:2] == "  " and ln[2:3] != " " and words:
+            comp = words[0]
+        elif words[:1] == ["instance"]:
+            out.setdefault(comp, []).append(words[1].rstrip(":"))
+    return out
+
+
 def _sock(rid):
     return f"/tmp/loraconf-{rid}.sock"
 
@@ -129,6 +141,9 @@ def test_every_stack_follows_the_rule(tmp_path, monkeypatch):
     assert got["meshcom@r1"] == ("running", "")
     assert got["meshcom@r3"] == ("degraded", "listener absent: 127.0.0.1:18349")
     assert got["meshcom@r4"][0] == "not running"
+    # each line sits under its own component (second read M1: a merge by key alone hid a component filter's loss)
+    assert _by_component(svc, "meshcom") == {"meshcom-bridge": ["meshcom@r4"],
+                                             "meshcom-qemu": ["meshcom@r1", "meshcom@r3"]}
 
 
 def test_a_record_of_another_boot_is_not_an_ended_instance(tmp_path, monkeypatch):
