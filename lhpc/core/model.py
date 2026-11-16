@@ -75,7 +75,6 @@ class ResourceKind(str, Enum):
     UNIX_SOCKET = "unix-socket"
     SERIAL = "serial"                    # serial.<device>
     INTERACTIVE_UI = "interactive-ui"    # voice.ui-<rid>: one instance's GTK app or terminal variant (DEC-W351)
-    AUDIO = "audio"                      # a released (pre-0.14.0) manifest's, parsed by the self-update migration only
     GPSD = "gpsd"                        # gpsd.local
     SPI_BUS = "spi-bus"                  # /dev/spidev0.0 + <runtime>/state/loraham/spi0.lock
     GPIO = "gpio"                        # /dev/gpiochip0

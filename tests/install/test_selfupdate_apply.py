@@ -178,6 +178,26 @@ def test_the_update_and_the_status_agree_on_the_firewall_reapply(tmp_path, monke
     assert not any("re-apply" in d for d in res.details)
 
 
+def test_a_refusing_firewall_preflight_stops_the_apply_before_the_checkout_moves(tmp_path, monkeypatch):
+    """FW P1-2C through the public apply: when the nginx preflight refuses, the apply returns that
+    refusal, the checkout stays where it was and no post-update follow-up is recorded."""
+    from lhpc.core import proxy_rerender
+    from lhpc.core.service_base import ActionResult
+    _o, work, up = gitrepo.repos(tmp_path)
+    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch)
+    gitrepo.upstream_commit(up)
+    before = _head(work)
+    refusal = ActionResult(False, "Refusing to self-update: the nginx boot gate cannot be brought current.")
+    monkeypatch.setattr(svc, "firewall_update_nginx_preflight", lambda: refusal)
+    marks = []
+    monkeypatch.setattr(svc, "_fw_mark_post_update", lambda: marks.append("fw") or "")
+    monkeypatch.setattr(proxy_rerender, "mark", lambda paths: marks.append("proxy") or "")
+    res = svc.self_update_apply()
+    assert res is refusal
+    assert _head(work) == before
+    assert marks == []
+
+
 @pytest.mark.parametrize("path", ["one-click", "one-click-sync-failed", "one-click-units-failed",
                                   "cli", "cli-cleanup-failed"])
 def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_path, monkeypatch, path):
