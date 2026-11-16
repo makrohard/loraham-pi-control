@@ -386,7 +386,7 @@ jobs:
           echo "IMG=$IMG" >> "$GITHUB_ENV"
 
       - name: Size the CPU quota from this runner
-        # SLOW_CPUS = min(0.25, floor_3dp(0.85 x W1 / Z_cpu)): W1 is the calibration's cpu build in
+        # SLOW_CPUS = min(0.25, floor_2dp(0.85 x W1 / Z_cpu)): W1 is the calibration's cpu build in
         # this image at --cpus 1 (about its CPU time on this runner), Z_cpu the Zero's cpu_s of the
         # current workload. The throttled build then takes the Zero's time with the ~15 % margin;
         # 0.25 stays the ceiling (a throttle only ever gets tighter). test_slow_build_calibrated

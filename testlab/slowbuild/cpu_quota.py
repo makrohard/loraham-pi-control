@@ -7,11 +7,17 @@ test_slow_build_calibrated failed (testlab 43626338096). This times the same bui
 (W1, about its CPU time on this runner) and sizes the quota so the throttled build takes the Zero's cpu_s with a
 15 % margin:
 
-    SLOW_CPUS = min(0.25, floor_3dp(0.85 * W1 / Z_cpu))
+    SLOW_CPUS = min(0.25, floor_2dp(0.85 * W1 / Z_cpu))
+
+Two places: the engine enforces --cpus in whole hundredths (testlab 43852504845: --cpus 0.236 became cpu.max
+24000 100000, a looser throttle, and the lane's own check refused it), so the quota is floored to a value it enforces
+as given.
 
 Z_cpu is the newest zero2w [[calibration]] cpu_s of the current workload (the hash calibrate.sh prints). 0.25 stays the
 ceiling: the throttle only ever gets tighter. Nothing here is hashed into the workload, and calibrate.sh is not run:
-the calibrated case still judges the throttled run on its own.
+the calibrated case still judges the throttled run on its own. The timed build runs as root, as the lane's container
+does (the image's default user cannot enter a work dir it does not own), and a build that fails or hangs is a STOP
+that names the command and its output, never a time.
 
     python3 testlab/slowbuild/cpu_quota.py --image IMG     # prints SLOW_CPUS=<q>; the reasoning to stderr
 """
@@ -32,6 +38,7 @@ BASELINE = HERE.parent.parent / "tests" / "data" / "slow-target-builds.toml"
 CEILING = 0.25
 MARGIN = 0.85
 IO_MB = 256                         # calibrate.sh's default: the lane runs it without --io-mb
+BUILD_TIMEOUT_S = 900               # the timed build takes ~30 s at --cpus 1 on the arm runner; a hang is a STOP
 
 
 def inputs() -> list[str]:
@@ -60,22 +67,33 @@ def zero_cpu_s(calibrations: list, work: str) -> float:
 
 
 def quota(w1: float, z_cpu: float) -> float:
-    return min(CEILING, math.floor(MARGIN * w1 / z_cpu * 1000) / 1000)
+    return min(CEILING, math.floor(MARGIN * w1 / z_cpu * 100) / 100)
 
 
-def measure_w1(image: str) -> float:
+def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S) -> float:
     """Wall seconds of the calibration's cpu build in `image` at --cpus 1, timed inside, as calibrate.sh times it."""
     with tempfile.TemporaryDirectory() as tmp:
         for name in inputs():
             shutil.copy2(HERE / name, Path(tmp) / Path(name).name)
-        r = subprocess.run(["docker", "run", "--rm", "--network", "none", "--cpus", "1", "-v", f"{tmp}:/w",
-                            image, "bash", "-c",
-                            't0=$EPOCHREALTIME; make -s -C /w -j"$(nproc)" >/dev/null; echo "$t0 $EPOCHREALTIME"'],
-                           capture_output=True, text=True, check=False)
+        argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "1", "--user", "root", "-v", f"{tmp}:/w",
+                image, "bash", "-c",
+                'set -e; t0=$EPOCHREALTIME; make -s -C /w -j"$(nproc)" >/dev/null; echo "$t0 $EPOCHREALTIME"']
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            raise SystemExit(f"cpu_quota: the timed build did not end within {timeout:g} s: {' '.join(argv)}\n"
+                             f"stdout: {_tail(e.stdout)}\nstderr: {_tail(e.stderr)}") from None
     if r.returncode != 0:
-        raise SystemExit(f"cpu_quota: the timed build failed (rc {r.returncode}): {r.stderr[-500:]}")
+        raise SystemExit(f"cpu_quota: the timed build failed (rc {r.returncode}): {' '.join(argv)}\n"
+                         f"stdout: {_tail(r.stdout)}\nstderr: {_tail(r.stderr)}")
     t0, t1 = map(float, r.stdout.split()[-2:])
     return t1 - t0
+
+
+def _tail(out) -> str:
+    if isinstance(out, bytes):
+        out = out.decode(errors="replace")
+    return (out or "")[-500:]
 
 
 def main(argv=None) -> int:
@@ -89,7 +107,7 @@ def main(argv=None) -> int:
     if q <= 0:
         raise SystemExit(f"cpu_quota: W1 {w1:.1f} s gives no positive quota against the Zero's {z_cpu} s")
     print(f"cpu_quota: W1 {w1:.1f} s at --cpus 1, Zero cpu_s {z_cpu} s ({work}): "
-          f"min({CEILING}, floor_3dp({MARGIN} x {w1:.1f} / {z_cpu})) = {q}", file=sys.stderr)
+          f"min({CEILING}, floor_2dp({MARGIN} x {w1:.1f} / {z_cpu})) = {q}", file=sys.stderr)
     print(f"SLOW_CPUS={q}")
     return 0
 
