@@ -261,7 +261,7 @@ redact() {   # the passwords, the PIN, the tracker call and the operator's call 
   [[ "$c" =~ ^[A-Za-z0-9]+$ ]] || { printf '%s' "$t"; return; }; printf '%s' "$t" | sed -E "s/\\b$c(-[0-9]{1,2})?\\b/<CALL>/Ig"; }
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
   local f=$1 o=${OUT:-$EVD} s; shift; "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
-  [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc"; }
+  [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc" || stop "$f.rc: not written"; }
 boxvar() { local v="BOX_${1}_$2" d=; case $2 in USER) d=lhpc;; RUNTIME) d='~/loraham-pi-control';; esac; printf '%s' "${!v:-$d}"; }
 rt() { [ "$1" = PC ] && { [[ $2 != *"{RT}"* ]] || stop "a PC command names a box path ({RT})"; printf '%s' "$2"; return; }; local t=$2; printf '%s' "${t//\{RT\}/$(boxvar "$1" RUNTIME)}"; }
 sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
@@ -449,7 +449,8 @@ started() { undo_push "$1" "$(gstop "$3")"; must "$1" "$2" "$(form start inst="$
 REPORT() {   # REPORT <id> <stack> <box (rid)> <band> <peer> <direction> <nonce seen> <power used> <result>
   [ "$MODE" = live ] || [ "$9" != PASS ] || set -- "${@:1:8}" DRY-PASS   # dry never says PASS: a rehearsal
   local line; line=$(IFS='|'; echo "$*" | sed 's/|/ | /g'); say "REPORT | $line"
-  printf '%s|%s|%s\n' "$1" "$6" "$9" >> "$OUT/results.txt"; [ "$MODE" = dry ] || echo "| $line |" >> "$EVD/REPORT.md"; }
+  printf '%s|%s|%s\n' "$1" "$6" "$9" >> "$OUT/results.txt" || stop "results.txt: append failed"
+  [ "$MODE" = dry ] || echo "| $line |" >> "$EVD/REPORT.md" || stop "REPORT.md: append failed"; }
 notrun() {   # notrun <id> <direction> <why>
   REPORT "$1" "$(rowname "$1")" — — — "$(dirtext "$2")" — — "NOT RUN: $3"; say "NOT RUN: row $1 $(rowname "$1") $(dirtext "$2"): $3"
   [ "$MODE" = dry ] || echo "row $1 $(dirtext "$2"): $3" >> "$EVD/NOT-RUN.txt"; }
