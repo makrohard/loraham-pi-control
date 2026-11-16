@@ -156,6 +156,20 @@ def test_the_line_is_found_anywhere_in_a_log(tmp_path, before):
     assert (rc, st["outcome"]) == (0, "ready"), err
 
 
+@pytest.mark.slow                       # the 2 s budget runs on the real clock
+def test_a_log_that_never_ends_stops_the_scan_at_the_deadline(tmp_path):
+    """An endless log (/dev/zero: every read returns a full MiB) with no line in it: the scan stops at the step's
+    deadline and the wait records its timeout, instead of reading past it."""
+    p, rp = _launch(tmp_path, [{"kind": "log_wait", "path": "/dev/zero", "pattern": "Console started on port 2323",
+                                "timeout": 2, "label": "firmware boot", "required": True}])
+    try:
+        p.communicate(timeout=20)
+    finally:
+        p.kill()
+    st = json.loads(rp.read_text())["steps"][0]
+    assert p.returncode != 0 and st["outcome"] == "timeout" and st["elapsed_s"] < 10, st
+
+
 # The wall clock steps an hour forward right after the launcher's first reading of it (a first-boot time sync): the
 # rendered launcher, run under a wrapper that replaces time.time before the launcher's own code runs.
 _JUMP = ("import runpy, sys, time\n_real, _n = time.time, [0]\n"

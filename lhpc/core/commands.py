@@ -977,6 +977,8 @@ for _si, s in enumerate(STEPS):
                         seen = os.path.basename(os.path.realpath(s["path"]))
                         pat, tail = s["pattern"].encode(), b""
                         for chunk in iter(lambda: f.read(1 << 20), b""):   # the whole file, 1 MiB at a time
+                            if time.monotonic() >= end:
+                                break                     # the scan keeps the step's deadline: an endless log ends it
                             if pat in tail + chunk:
                                 ok = True
                                 break
