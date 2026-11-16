@@ -250,9 +250,10 @@ def _kiss_svc(tmp_path, argv, listeners, fw=None, monkeypatch=None):
     return svc
 
 
-def _kiss_row(svc):
+def _kiss_row(svc, rid=None):
+    """kiss's first raw row, or its row of radio `rid` ("": the radio-less row of a process no instance resolves)."""
     return next((r for r in svc.dashboard_webservers()
-                 if r["kind"] == "port" and r["sid"] == "kiss"), None)
+                 if r["kind"] == "port" and r["sid"] == "kiss" and rid in (None, r["rid"])), None)
 
 
 def _argv(port="8001", host="127.0.0.1", *, equals=False):
@@ -329,12 +330,14 @@ def test_a_live_loopback_listener_is_local(tmp_path):
 def test_an_unresolvable_live_port_is_unverified_never_green(tmp_path, name, argv):
     # The component IS running, so this is not "absent"; the port is in doubt, so it is not safe.
     # Falling back to the static port would have attached a firewall verdict to a socket that may
-    # not be the one this process opened.
+    # not be the one this process opened. (No hardware list: the process has no radio; the socket on r1's :8001
+    # also gets r1's row, G2-UIU3-R3; the process's own row stays unverified, and the status is not green.)
     svc = _kiss_svc(tmp_path, argv, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8001,
                                       "inode": 1}])
-    row = _kiss_row(svc)
+    row = _kiss_row(svc, rid="")
     assert row is not None and row["live_scope"] == "unverified", name
     assert row["exposure"] == {"level": "warn", "label": "unverified"}, name
+    assert svc.security_pill(svc.dashboard_webservers())["level"] != "ok", name
 
 
 def test_disagreeing_live_pids_are_unverified(tmp_path):
@@ -344,8 +347,9 @@ def test_disagreeing_live_pids_are_unverified(tmp_path):
     fake = FakeSystem(cmdlines_data={42: _argv("8001"), 43: _argv("9001")},
                       listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)])
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    row = _kiss_row(svc)
+    row = _kiss_row(svc, rid="")                                    # the processes' own row (no hardware list)
     assert row["live_scope"] == "unverified" and row["exposure"]["level"] == "warn"
+    assert svc.security_pill(svc.dashboard_webservers())["level"] != "ok"
 
 
 def test_an_absent_listener_does_not_make_the_dashboard_claim_exposure(tmp_path):

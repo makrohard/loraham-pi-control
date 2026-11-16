@@ -226,9 +226,10 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
       (SECOND-READ-CODE-UI-U3-DELTA-v1 N1).
     - `rows` holds a raw row for EVERY instance, running or not (G2-PRELAND7B10-R2 §UI-U3); the running state only
       labels them. A running instance's raw row (and a started stack's radio-less one) stays; any other stays while
-      its listener is not absent, marked `stopped` where the running set is known. An unknown running set brings
-      the radio-less row of the stack's unattributed processes: an instance row on its component and port is the
-      same socket and goes.
+      its listener is not absent, marked `stopped` where the running set is known. Rows go only as EQUAL verified
+      listeners (G2-UIU3-R3): same component, bind address, port, scope and verdict; the one kept is a running
+      instance's, else a stopped one's, else the radio-less fallback's. A fallback row only adds: an unverified one,
+      or one with another verdict, never stands for a verified row.
     - A not-proxied page row and a raw row that are the SAME effective listener — component + radio + the live
       socket's bind address + port (G2-N2; the Zero's meshcom@r1 :18083 was listed twice) — show as one line.
       Only a live, verified, single-address listener merges: a raw row's `bind` is "" otherwise (absent,
@@ -236,7 +237,8 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
       snapshot, so the raw row's bind address is the page's too.
     - Every raw row stays in the list, so the security pill still counts it: a merged one is marked `merged`, its
       page row names it by `raw_key`, and the adapter attaches it. Only a not-running instance's raw row with its
-      listener confirmed absent goes, and an absent listener counts for nothing in the pill (security_pill)."""
+      listener confirmed absent goes (an absent listener counts for nothing in the pill, security_pill), and the
+      EQUAL duplicate of a kept verified row (the same verdict, counted once)."""
     running = set() if not started else None if insts is None else {i.rid for i in insts} | {""}
     pages = []
     for r in (r for r in rows if r["kind"] == "stack"):
@@ -245,10 +247,16 @@ def home_rows(rows: list, insts, started: bool = True) -> list:
         elif r["live"] or r["direct_scope"] not in ("absent", None, ""):
             pages.append({**r, "stopped": True})
     kept = {""} if running is None else running        # raw rows kept whatever their listener
-    raws = [r for r in rows if r["kind"] == "port"]
-    unattributed = {(r["component"], r["port"]) for r in raws if running is None and not r["rid"]}
-    ports = [r if r["rid"] in kept or running is None else {**r, "stopped": True} for r in raws
-             if r["rid"] in kept or (r["live_scope"] != "absent" and (r["component"], r["port"]) not in unattributed)]
+    ports = [r if r["rid"] in kept or running is None else {**r, "stopped": True}
+             for r in rows if r["kind"] == "port" and (r["rid"] in kept or r["live_scope"] != "absent")]
+    # EQUAL verified listeners are one row: a running instance's, else a stopped one's, else the radio-less fallback's
+    keyed = [((r["component"], r["bind"], r["port"], r["live_scope"], r["exposure"]["level"], r["exposure"]["label"]), r)
+             for r in ports]
+    best: dict = {}
+    for k, r in keyed:
+        if r["bind"]:
+            best[k] = min(best.get(k, r), r, key=lambda x: (x.get("stopped", False), not x["rid"]))
+    ports = [r for k, r in keyed if not r["bind"] or best[k] is r]
     for r in ports:
         p = next((p for p in pages if r["bind"] and not p.get("raw_key") and not p["posture"]
                   and (p["component"], p["direct_port"], p["rid"]) == (r["component"], r["port"], r["rid"])), None)

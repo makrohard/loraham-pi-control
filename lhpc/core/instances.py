@@ -115,12 +115,28 @@ def running_insts(svc, sid: str):
 
 
 
-def listener_insts(svc, stack, running, started: bool) -> list:
-    """The instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2 §UI-U3): every one the
-    stack has (`commands.stack_instances`) and any running one (`running`, None: unknown), by rid; [None] without
-    one. A started stack's unknown running set adds None, the radio-less read of its unattributed processes."""
-    every = list({i.rid: i for i in (*commands.stack_instances(stack, svc._paths), *(running or ()))}.values())
+def listener_insts(svc, stack, running, started: bool, live_ports=()) -> list:
+    """The instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2, G2-UIU3-R3): every radio of
+    the stack's bands, a disabled one too (saved_insts), its instances and any running one (`running`, None: unknown),
+    by rid. Without one: the radios whose own port of an endpoint has a live listener (`live_ports`, observed_insts),
+    one row each, else None. A started stack's unknown running set adds None, the radio-less read of its unattributed
+    processes: a fallback that only adds a row, never stands for an instance's."""
+    every = list({i.rid: i for i in (*commands.stack_instances(stack, svc._paths), *filter(None, saved_insts(svc, stack.id)),
+                                     *(running or ()))}.values()) or observed_insts(stack, live_ports)
     return every + ([None] if not every or (started and running is None) else [])
+
+
+def observed_insts(stack, live_ports) -> list:
+    """rN for each live port that is rN's own port of one of `stack`'s templated endpoints (commands.rid_port read
+    backwards from r1's), by rid: a listener left with no radio to name it still gets its own row."""
+    rids = set()
+    for e in (e for c in stack.components for e in c.endpoints if getattr(e, "address_template", "")):
+        base = commands.Instance("r1").subst(e.address_template).rsplit(":", 1)[-1]
+        if base.isdigit():
+            rids |= {f"r{(p - int(base)) // commands.PORT_STEP + 1}" for p in live_ports if isinstance(p, int)
+                     and 0 <= p - int(base) < commands.PORT_STEP * commands.PORT_RADIOS and (p - int(base)) % commands.PORT_STEP == 0}
+    return [commands.Instance(r) for r in sorted(rids, key=lambda x: int(x[1:]))]
+
 
 def recorded(svc, sid: str) -> set:
     """The radios `sid`'s running instances were launched on, by their verified launch records (13.16): a running

@@ -2479,17 +2479,55 @@ def test_an_unverified_listener_is_never_merged(tmp_path, monkeypatch, web):
     assert any(":18083 · port unverified" in line.text for _n, _h, line in lines)
 
 
-def test_a_raw_listener_of_no_known_instance_keeps_its_warning_without_a_radio(tmp_path, monkeypatch, web):
-    # an unknown running set: the raw row is the stack's (no radio invented, G2-B3), linked to its Settings; the pages
-    # keep the rule before K2 (every page of the started stack)
+def test_an_unknown_sets_fallback_row_equal_to_a_verified_row_is_one_line(tmp_path, monkeypatch, web):
+    # an unknown running set: the radio-less fallback reads the same public :18083 as r1's own row (same address, port,
+    # verdict) -> one line, r1's; the pages keep the rule before K2 (every page of the started stack). The fallback only
+    # adds: it never stands for the verified row (G2-UIU3-R3)
     svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("0.0.0.0")], run=None)
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
-    raw = [(n, h, line) for n, h, line in lines if box.within(line).find("span", class_="wsaddr")]
-    [(name, href, line)] = raw
-    assert (name, href) == ("MeshCom (QEMU)", "/stacks?open=meshcom&cfg=meshcom#stack-settings-meshcom")
+    raw = [(n, line) for n, _h, line in lines if box.within(line).find("span", class_="wsaddr")]
+    [(name, line)] = raw
+    assert name == "MeshCom (QEMU) @r1"
     [addr] = box.within(line).find("span", class_="wsaddr")
-    assert "public" in addr.text and "pill-bad" in addr.classes
-    assert sorted(n for n, _h, _l in lines) == ["MeshCom (QEMU)", "MeshCom (QEMU) @r1", "MeshCom (QEMU) @r2"]
+    assert addr.text.strip() == "localhost:18083 · public" and "pill-bad" in addr.classes
+    assert sorted(n for n, _h, _l in lines) == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r2"]
+
+
+def _kiss_box(tmp_path, monkeypatch, listeners, run, state, pids=(), sid="kiss"):
+    """Stack `sid` (kiss) with each of its components in `state` and the running set `run` (None: unknown), the live
+    sockets, and `pids` for each component with no readable argv."""
+    from lhpc.core import instances
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path, listeners)
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == sid:
+            for cs in ss.components.values():
+                cs.run_state, cs.pids = RunState[state], list(pids)
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    monkeypatch.setattr(instances, "running_insts", lambda s, i: run if i == sid else None)
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {})
+    return svc
+
+
+def _public(port, inode=1):
+    return {"family": "ipv4", "ip": "0.0.0.0", "port": port, "inode": inode}
+
+
+def test_an_unresolved_fallback_row_never_hides_a_verified_public_listener(tmp_path, monkeypatch, web):
+    # G2-UIU3-R3 B1: kiss is started, its running set unknown, a kiss process (pid 101) with no readable argv. r1's own
+    # :8001 is verified public; the radio-less fallback for pid 101 reads :8001 unverified. Both stay: the fallback
+    # only adds. red on d40902c3: r1's verified row went for the fallback's port, only "port unverified" and "review"
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8001)], run=None, state="RUNNING", pids=(101,))
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    by_name = {n: (h, line) for n, h, line in lines}
+    [addr] = box.within(by_name["LoRaHAM KISS TNC @r1"][1]).find("span", class_="wsaddr")
+    assert addr.text.strip() == "localhost:8001 · public" and "pill-bad" in addr.classes
+    href, line = by_name["LoRaHAM KISS TNC"]                           # the fallback: no radio, the stack's Settings
+    assert href == "/stacks?open=kiss&cfg=kiss#stack-settings-kiss" and ":8001 · port unverified" in line.text
+    assert _box_pill(box) == "exposed"
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"     # the status, not only the box
 
 
 def _r2_public_proxy(svc):
@@ -2697,24 +2735,47 @@ def test_a_running_instance_on_a_radio_disabled_since_keeps_its_raw_line(tmp_pat
     assert _box_pill(box) == "exposed"
 
 
+@pytest.mark.parametrize("hardware", ["disabled", "r2-disabled", pytest.param("none", marks=pytest.mark.no_default_hardware)])
 @pytest.mark.parametrize("state", ["STOPPED", "RUNNING"])
-def test_a_stack_with_no_instance_keeps_its_live_raw_listener(tmp_path, monkeypatch, web, state):
-    # SECOND-READ-CODE-UI-U3-DELTA-v4 M1: every radio is disabled, so kiss has no instance; a kiss process left over
-    # still listens on :8001 on every address. Its radio-less line stays and the box pill is not "secure"
+def test_every_residual_listener_of_a_stack_with_no_instance_has_its_own_line(tmp_path, monkeypatch, web, hardware, state):
+    # G2-UIU3-R3 B2 (and SECOND-READ-CODE-UI-U3-DELTA-v4 M1): kiss has no instance (every radio disabled or no hardware
+    # list at all) or r1 only, r2 disabled; kiss processes left over still listen on r1's :8001 and r2's :8134, both
+    # on every address. Each is its own line and the box pill is not "secure". red on d40902c3: one radio-less row read
+    # :8001 only (no instance), or r1's row only (r2 disabled): :8134 was lost
     import dataclasses
-    from lhpc.core import instances
-    from lhpc.core.model import RunState
-    radios_fixture.write(tmp_path, tuple(dataclasses.replace(r, enabled=False) for r in (radios_fixture.R1, radios_fixture.R2)))
-    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8001, "inode": 1}])
-    snap = svc.build_snapshot()
-    for ss in snap.stacks:
-        if ss.stack.id == "kiss":
-            for cs in ss.components.values():
-                cs.run_state = RunState[state]
-    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
-    monkeypatch.setattr(instances, "running_insts", lambda s, sid: [] if sid == "kiss" else None)
+    if hardware != "none":                                             # r2-disabled: r1 is kiss's one instance
+        radios_fixture.write(tmp_path, (radios_fixture.R1 if hardware == "r2-disabled" else dataclasses.replace(
+            radios_fixture.R1, enabled=False), dataclasses.replace(radios_fixture.R2, enabled=False)))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8001), _public(8134, 2)], run=[], state=state)
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
-    [line] = [line for n, _h, line in lines if n == "LoRaHAM KISS TNC"]
-    [addr] = box.within(line).find("span", class_="wsaddr")
-    assert addr.text.strip() == "localhost:8001 · public" and "pill-bad" in addr.classes
+    got = {n: [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")] for n, _h, line in lines}
+    assert got == {"LoRaHAM KISS TNC @r1": ["localhost:8001 · public"], "LoRaHAM KISS TNC @r2": ["localhost:8134 · public"]}
     assert _box_pill(box) == "exposed"
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
+@pytest.mark.parametrize("runs", ["r1", "r2"])
+def test_a_fixed_port_listener_is_one_line_on_the_running_radio(tmp_path, monkeypatch, web, runs):
+    # Reticulum's ports are fixed (one set serves whichever radio it runs on): r1 and r2 both read the same sockets
+    # :4242 and :8790. Each is one line, the running radio's, never marked stopped and never joined to the other
+    # radio's page line; the box pill is "exposed"
+    from lhpc.core import commands
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(4242), _public(8790, 2)], run=[commands.Instance(runs)],
+                    state="RUNNING", sid="reticulum")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = sorted((n, [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")],
+                  "instance stopped" in line.text) for n, _h, line in lines if n.startswith("Reticulum"))
+    name = f"Reticulum (RNS) @{runs}"
+    assert [g for g in got if g[1]] == [(name, ["localhost:4242 · public"], False),
+                                        (name, ["localhost:8790 · public"], False)]
+    assert [g for g in got if not g[1]] == ([] if runs == "r1" else [("Reticulum (RNS) @r1", [], True)])   # r1's page
+    assert _box_pill(box) == "exposed"
+
+
+def test_observed_ports_name_only_radio_ports(tmp_path):
+    # The ports a stack with no instance still listens on name a radio only on its own port (base + 133 x (n - 1)):
+    # kiss's :8001 is r1, :8267 r3; :8139 (r2's :8134 + 5) and :7999 (below the base) name none
+    from lhpc.core import instances
+    stack = _svc(tmp_path).stack("kiss")
+    assert [i.rid for i in instances.observed_insts(stack, {8001, 8267, 8139, 7999, "x"})] == ["r1", "r3"]
