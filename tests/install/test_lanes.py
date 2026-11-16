@@ -1062,3 +1062,16 @@ def test_a_release_and_an_artifacts_head_on_one_remote_never_share_a_target(box,
     assert box.cli("update", "s", "--yes") == 0       # the gate's S is seeded for src/app only
     assert (box.head(), box.head(LIB)) == (box.c[1], h)          # RED before: src/lib rolled back to S
 
+
+def test_a_switch_to_stable_checks_freshness_against_its_target_not_the_recorded_lane(box, capsys):
+    box.release = "v2.8.0.7239fe8"                    # S = c2, an ancestor of the dev tip D = c3
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2]
+    capsys.readouterr()
+    assert box.cli("update", "s", "--source", "stable") == 0       # the dry run
+    out = capsys.readouterr().out
+    assert "app: upstream update-available" in out    # RED before: up-to-date (D against the dev branch's tip)
+    assert box.head() == box.c[2]
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+

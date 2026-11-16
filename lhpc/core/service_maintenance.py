@@ -68,7 +68,7 @@ def _upstream_cache_path(paths, stack_id: str):
 
 class MaintenanceOpsMixin:
 
-    def _update_probe(self, comp, stable_target=None) -> dict:
+    def _update_probe(self, comp, stable_target=None, planned=None) -> dict:
         """NETWORK. Bounded `git ls-remote` freshness probe for ONE component — no fetch, no
         mutation. Returns a `stackupdates` entry: status + the evidence it was computed from.
 
@@ -117,8 +117,8 @@ class MaintenanceOpsMixin:
         ref = comp.source.branch or "HEAD"
         run = self._system.runner.run
         rec = source_registry.read_record(self._paths, comp.source.path)
-        if rec is not None and rec.selector == "stable" and not comp.source.artifact:
-            sref = (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: the lane's target, one per remote
+        if planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact):
+            sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
             if not (sref.sha and sref.verified):
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
             remote_sha = sref.sha
@@ -134,7 +134,7 @@ class MaintenanceOpsMixin:
         want = sref.sha if sref else stackupdates.pinned_target(
             self._paths, self.stack(self.stack_of(comp.id) or ""), comp, self._effective_remote) or remote_sha
         entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
-        older = local_sha != want and sref is not None and stable_lane.assess(run, src, sref, remote)[1]
+        older = local_sha != want and sref is not None and planned is None and stable_lane.assess(run, src, sref, remote)[1]
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
         return entry
@@ -142,12 +142,12 @@ class MaintenanceOpsMixin:
     def update_status(self, comp, stable_ref=None) -> str:
         """Is the installed source up to date with its GitHub remote branch?
         Returns "up-to-date", "update-available", or "unknown" (no remote/git/net).
-        Uses a bounded `git ls-remote` — no fetch, no mutation.
+        `stable_ref`: the operation's stable target (the dry run), compared whatever lane is recorded.
 
         Thin wrapper over `_update_probe`, preserving the 3-value contract its callers expect
         (`update()`'s dry-run): a probe ERROR collapses back to "unknown" here."""
         from . import stackupdates
-        status = self._update_probe(comp, stable_ref and (lambda _remote: stable_ref))["status"]   # the gate's read
+        status = self._update_probe(comp, planned=stable_ref)["status"]   # the operation's stable target, the gate's read
         if status == stackupdates.UP_TO_DATE:
             return "up-to-date"
         if status == stackupdates.BEHIND:
