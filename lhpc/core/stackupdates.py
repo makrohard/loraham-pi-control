@@ -34,8 +34,18 @@ UNKNOWN = "unknown"                  # nothing to compare: no remote / not insta
 UP_TO_DATE = "up_to_date"
 BEHIND = "behind"
 ERROR = "error"                      # the probe RAN and failed (ls-remote / rev-parse) — not "unknown"
+LHPC_FIRST = "lhpc_first"            # at this LHPC's pin, and the fetched next LHPC pins another commit
 
-_STORED = frozenset({UNKNOWN, UP_TO_DATE, BEHIND, ERROR})
+_STORED = frozenset({UNKNOWN, UP_TO_DATE, BEHIND, ERROR, LHPC_FIRST})
+
+# The lane verdict as the operator reads it (CLI detail, stack page, `status --versions`), one wording.
+_LABELS = {UP_TO_DATE: "current", BEHIND: "update available", LHPC_FIRST: "update LHPC first",
+           ERROR: "could not check", UNKNOWN: "unknown", UNCHECKED: "unchecked"}
+
+
+def label(status: str) -> str:
+    """The words for a stored or derived verdict."""
+    return _LABELS.get(status, UNCHECKED)
 
 _STR_MAX = 512
 _HEX = re.compile(r"\A[0-9a-f]{4,64}\Z")
@@ -155,6 +165,13 @@ def effective_status(entry, current_head: str) -> str:
     return status
 
 
+def lane_word(fresh: dict, cid: str, status) -> str:
+    """`status --versions`' state column for a ComponentStatus: a clean checkout reads its lane verdict (the last
+    check, tied to this head); the probe's own facts (dirty, missing) stay; the pin is a detail, not a verdict."""
+    state = status.source_state.value
+    return label(effective_status(fresh.get(cid), status.source_head or "")) if state in ("match", "differs") else state
+
+
 def pinned_target(paths: Paths, comp) -> str:
     """The commit a bare Update installs for `comp` when its source follows the PIN, else "".
 
@@ -191,3 +208,25 @@ def record(paths: Paths, results: dict, now: int | None = None) -> dict:
         out = {"schema_version": CACHE_SCHEMA_VERSION, "checked_at": stamp, "components": comps}
         write_cache(paths, out)
     return out
+
+
+def next_lhpc_pins(paths: Paths, run) -> dict:
+    """{component id: pin} of the LHPC the last self-update check fetched: the shipped manifest at the self-update
+    cache's `upstream_head`, read with `git show` in this checkout (local, no network), only when that head is
+    ahead of the running checkout. {} for no cache, no checkout, a head not ahead, or a manifest that cannot be
+    read: no hint, never "could not check" (plan row U6)."""
+    import tomllib
+
+    from . import selfupdate
+    from .manifest import ManifestError, parse_manifest
+    head = (selfupdate.read_cache(paths).get("upstream") or {}).get("upstream_head") or ""
+    root = selfupdate.repo_root()
+    if root is None or not re.fullmatch(r"[0-9a-f]{40}", head) or run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", head], timeout=5.0).returncode != 0:
+        return {}
+    shown = run(["git", "-C", str(root), "show", f"{head}:lhpc/data/manifest.example.toml"], timeout=10.0)
+    try:
+        return {c.id: c.source.pin_commit for st in parse_manifest(tomllib.loads(shown.stdout))
+                for c in st.components if c.source is not None and c.source.pin_commit} if shown.returncode == 0 else {}
+    except (ManifestError, ValueError, KeyError, TypeError):
+        return {}

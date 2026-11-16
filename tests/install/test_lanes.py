@@ -1333,3 +1333,38 @@ def test_an_unreadable_upstream_manifest_gives_no_hint(box, capsys, git, make_re
                            {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
                             "upstream": {"ok": True, "upstream_head": later, "upstream_head_short": later[:9]}})
     assert _check_detail(box, capsys)[0] == "current"            # no hint, never "could not check"
+
+
+def test_a_cached_head_not_ahead_of_this_checkout_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
+    """A self-update check older than the running checkout (it moved on since) names no next LHPC."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    repo = box.rt.parent / "lhpc-checkout"
+    (repo / "later.txt").write_text("x\n")
+    git(repo, "add", "later.txt")
+    git(repo, "commit", "-qm", "the running checkout is ahead of the cached head")
+    assert _check_detail(box, capsys)[0] == "current"
+
+
+def test_the_update_plan_of_a_source_waiting_for_lhpc_says_nothing_to_fetch(box, capsys, git, make_repo,
+                                                                            monkeypatch):
+    """`lhpc update s` (the plan) reads "update LHPC first" as up to date: the source is at this LHPC's pin."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    capsys.readouterr()
+    box.cli("update", "s")
+    assert "app: upstream up-to-date" in capsys.readouterr().out
+
+
+def test_a_malformed_upstream_manifest_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    repo = box.rt.parent / "lhpc-checkout"
+    (repo / "lhpc" / "data" / "manifest.example.toml").write_text("[[stack]\\nid = broken\n")
+    git(repo, "commit", "-qam", "a manifest that does not parse")
+    from lhpc.core import selfupdate
+    head = git(repo, "rev-parse", "HEAD")
+    selfupdate.write_cache(Paths(runtime_root=box.rt),
+                           {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
+                            "upstream": {"ok": True, "upstream_head": head, "upstream_head_short": head[:9]}})
+    assert _check_detail(box, capsys)[0] == "current"

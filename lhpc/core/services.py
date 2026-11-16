@@ -23,7 +23,7 @@ from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import commands as _commands
 from . import config as _cfgmod
-from . import instance_liveness, instances, radio_start, spi_mode
+from . import instance_liveness, instances, radio_start, spi_mode, stackupdates
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
 from .config import (
@@ -993,6 +993,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def status_versions(self) -> ActionResult:
         snap = self.build_snapshot()
+        fresh = stackupdates.view(self._paths)["components"]
         details: list[str] = []
         for ss in snap.stacks:
             # package -> version -> components, to name a package the stack runs in two versions
@@ -1018,7 +1019,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if ver != "-":
                             seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
-                        f"  {comp.id:24s} {st.source_state.value:12s} "
+                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st):17s} "
                         f"pin={pin} tag={tag}"
                         + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())
@@ -1029,8 +1030,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         f"{v} ({', '.join(ids)})" for v, ids in sorted(by_ver.items())))
         return ActionResult(
             ok=True,
-            summary="Source/pin status (local git only; no fetch). "
-            "A pin match is NOT a confirmed-working judgement.",
+            summary="Source/lane status (local git and the last source-check only; no fetch).",
             details=details,
             next_commands=["lhpc status", "lhpc doctor"],
         )

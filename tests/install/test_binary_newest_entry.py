@@ -11,7 +11,7 @@ import time
 from lhpc.core import binary_install as bi, stackupdates
 from lhpc.core.install import Installer
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ActionResult, ControllerService
 
 TARGET = "aarch64-trixie"
@@ -51,7 +51,7 @@ def _checked(svc, cid="loraham-daemon"):
 
 
 def _is(status):
-    return status.replace("_", " ")
+    return stackupdates.label(status)
 
 
 def _names(plan, sha):
@@ -222,12 +222,21 @@ def test_a_clean_checkout_at_the_pin_is_moved_to_the_entrys_commit_under_the_loc
 
 def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_receipt):
     """U6: a binary-install transaction in an unreadable state makes the receipt unsafe; the lane cannot be
-    judged, so the check says so instead of answering from the source checkout."""
-    svc = _svc(tmp_path, monkeypatch)
+    judged, so the check says so. Its clone would answer "current" (the remote and the checkout at one commit):
+    the verdict must not come from the source checkout."""
+    fake = FakeSystem()
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: TARGET)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     _installed(svc, binary_receipt, "2026-11-09T17:54:53Z")
     _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    comp = svc.stack("daemon").component("loraham-daemon")
+    src = svc._paths.resolve_source(comp.source.path)
+    src.mkdir(parents=True, exist_ok=True)
+    fake.commands[("git", "ls-remote", comp.source.remote, comp.source.branch or "HEAD")] = \
+        CommandResult(0, comp.source.pin_commit + "\tHEAD\n", "")
+    fake.commands[("git", "-C", str(src), "rev-parse", "HEAD")] = CommandResult(0, comp.source.pin_commit + "\n", "")
     jp = bi.journal_path(svc._paths)
     jp.parent.mkdir(parents=True, exist_ok=True)
     jp.write_text("{ not json")
     assert svc.binary_receipt_state("daemon")[0] == "unsafe"
-    assert _checked(svc) == "could not check"                     # RED before: not a lane verdict
+    assert _checked(svc) == "could not check"                     # the clone alone says "current"

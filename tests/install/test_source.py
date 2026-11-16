@@ -136,7 +136,7 @@ def test_behind_with_an_unknown_sibling_is_qualified_and_not_green(tmp_path):
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, B), **_git_src(ds, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
     # libch341 is optional and not adopted: excused, not "not comparable"
-    assert "1 of 3 source(s) behind" in res.summary and "1 not comparable" in res.summary
+    assert "1 of 3 source(s) have an update" in res.summary and "1 not comparable" in res.summary
     assert res.data["excused"] == ["libch341"]
     assert not res.ok
 
@@ -146,7 +146,7 @@ def test_behind_records_both_heads(tmp_path):
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, B), **_git_src(src, A)}
     svc = _svc(tmp_path, cmds)
     res = svc.source_check("loraham-daemon")
-    assert res.ok and "1 of 1 source(s) behind" in res.summary
+    assert res.ok and "1 of 1 source(s) have an update" in res.summary
     e = su.view(Paths(runtime_root=tmp_path))["components"]["loraham-daemon"]
     assert e["status"] == su.BEHIND
     assert e["local_head_at_check"] == A and e["upstream_head"] == B
@@ -5027,7 +5027,7 @@ def test_the_consoles_update_leaves_the_build_to_its_detached_job(tmp_path, git,
     res = svc.update("s", apply=True, source="dev", build=False)
     assert res.ok and res.data["needs_build"] == ["s"]
     assert svc.unbuilt_components("s") == ["c"]
-    assert any(d.split()[:2] == ["c", "match"] and d.endswith(" needs-rebuild")
+    assert any(d.split()[:2] == ["c", "unchecked"] and d.endswith(" needs-rebuild")
                for d in svc.status_versions().details), svc.status_versions().details
 
 

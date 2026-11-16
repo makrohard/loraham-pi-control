@@ -69,30 +69,23 @@ def _upstream_cache_path(paths, stack_id: str):
 class MaintenanceOpsMixin:
 
     def _update_probe(self, comp, stable_target=None, planned=None) -> dict:
-        """NETWORK. Bounded `git ls-remote` freshness probe for ONE component — no fetch, no
-        mutation. Returns a `stackupdates` entry: status + the evidence it was computed from.
-
-        `local_head_at_check` is what ties the verdict to the source it describes (a later
-        Update/Clean invalidates it) — it costs nothing, the probe already runs `rev-parse HEAD`.
-
-        UNKNOWN vs ERROR: "no remote / not installed / invalid remote" is `unknown` (nothing to
-        compare), while a probe that RAN and failed (ls-remote or rev-parse) is `error`. Collapsing both — as `update_status` does — reports an unreachable network as "nothing to
-        compare", which reads far too much like "fine".
-        """
+        """NETWORK. The lane verdict of ONE component (plan rule R4), bounded, no fetch, no mutation: a
+        `stackupdates` entry, status + its evidence. `local_head_at_check` ties it to the checkout it describes
+        (a later Update/Clean invalidates it). `unknown` = nothing to compare (no remote, not installed, an
+        invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
         from . import stackupdates
         entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
-        # A binary-covered component has no meaningful REMOTE comparison: meshcom keeps its
-        # clone, so the ordinary probe would report "update available" for a stack whose
-        # channel is binary. Answer from the binary lane's target instead (the index, U9). (Uses
-        # the SAME entry shape/status vocabulary as every other return here.)
+        sid = (self.stack_of(comp.id) or comp.id) if comp is not None else ""
+        spec = self.binary_spec(sid) if comp is not None and getattr(self, "binary_spec", None) else None
+        if spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe":
+            return {**entry, "status": stackupdates.ERROR}      # the start refuses it too: could not check
+        # A binary-covered component answers from the binary lane's target (the index, U9), not its clone.
         if (comp is not None and getattr(comp, "source", None) is not None
                 and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
             sid = self.stack_of(comp.id) or comp.id
             fresh = self.binary_freshness(sid)
             _st, rec, _why = self.binary_receipt_state(sid)
-            # The verdict is tied to the head it was computed against; on the binary channel
-            # that is the receipt's component commit (the status probe reports the same one),
-            # else effective_status() downgrades the entry to "unchecked" and nothing renders.
+            # Tied to the receipt's component commit (what the status probe reports), else it renders "unchecked".
             return {**entry, "source_path": comp.source.path, "channel": "binary",
                     "local_head_at_check": rec.components.get(comp.id, "") if rec else "",
                     "status": {"behind": stackupdates.BEHIND, "error": stackupdates.ERROR}.get(
@@ -117,6 +110,11 @@ class MaintenanceOpsMixin:
         ref = comp.source.branch or "HEAD"
         run = self._system.runner.run
         rec = source_registry.read_record(self._paths, comp.source.path)
+        # The local head first: a remote check that fails is then tied to this checkout too ("could not check").
+        loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+        if loc.returncode != 0 or not loc.stdout.strip():
+            return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
+        local_sha = entry["local_head_at_check"] = loc.stdout.strip()
         if planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact):
             sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
             if not (sref.sha and sref.verified):
@@ -127,27 +125,26 @@ class MaintenanceOpsMixin:
             if rem.returncode != 0 or not rem.stdout.strip():
                 return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
             remote_sha = rem.stdout.split()[0]
-        loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-        if loc.returncode != 0 or not loc.stdout.strip():
-            return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
-        local_sha = loc.stdout.strip()
         _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
-        want = sref.sha if sref else stackupdates.pinned_target(self._paths, comp) or remote_sha
-        entry["upstream_head"], entry["local_head_at_check"] = want, local_sha
+        pinned = "" if sref else stackupdates.pinned_target(self._paths, comp)
+        want = sref.sha if sref else pinned or remote_sha
+        entry["upstream_head"] = want
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
+        if pinned and local_sha == pinned:                         # only the known-working lane (plan row U6)
+            if not hasattr(self, "_next_pins"):
+                self._next_pins = stackupdates.next_lhpc_pins(self._paths, run)
+            if self._next_pins.get(comp.id, pinned) != pinned:
+                entry["status"] = stackupdates.LHPC_FIRST
         return entry
 
     def update_status(self, comp, stable_ref=None) -> str:
-        """Is the installed source up to date with its GitHub remote branch?
-        Returns "up-to-date", "update-available", or "unknown" (no remote/git/net).
-        `stable_ref`: the operation's stable target (the dry run), compared whatever lane is recorded.
-
-        Thin wrapper over `_update_probe`, preserving the 3-value contract its callers expect
-        (`update()`'s dry-run): a probe ERROR collapses back to "unknown" here."""
+        """`_update_probe` in the 3 values `update()`'s plan prints: "up-to-date", "update-available" or
+        "unknown" (an ERROR too). `stable_ref`: the operation's stable target (the dry run), whatever lane is
+        recorded."""
         from . import stackupdates
         status = self._update_probe(comp, planned=stable_ref)["status"]   # the operation's stable target, the gate's read
-        if status == stackupdates.UP_TO_DATE:
+        if status in (stackupdates.UP_TO_DATE, stackupdates.LHPC_FIRST):   # at its pin: no source update here
             return "up-to-date"
         if status == stackupdates.BEHIND:
             return "update-available"
@@ -204,14 +201,14 @@ class MaintenanceOpsMixin:
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
             excused = {c.id for c in comps if not self._stack_scope_keeps(c, required)}
         results, details, stable_target = {}, [], stable_lane.resolver(self._system.runner.run, self._paths)
-        counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
+        counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0, stackupdates.LHPC_FIRST: 0,
                   stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
         excused_counts = {stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
         for c in comps:
             entry = self._update_probe(c, stable_target)
             results[c.id] = entry
             counts[entry["status"]] = counts.get(entry["status"], 0) + 1
-            note = entry["status"].replace("_", " ")
+            note = stackupdates.label(entry["status"])
             if c.id in excused:
                 if entry["status"] in excused_counts:
                     excused_counts[entry["status"]] += 1
@@ -232,13 +229,15 @@ class MaintenanceOpsMixin:
         # a passing check, and must never be summarized as, or flashed green like, "up to date".
         # `ok` therefore means "every component yielded a real comparison": a single unknown or
         # error downgrades the flash to a warning, even when nothing is behind.
-        if errs:
-            summary = (f"{errs} of {n} source(s) could not be checked for '{who}' — see details."
-                       + (f" {behind} behind." if behind else ""))
-        elif behind:
-            summary = f"{behind} of {n} source(s) behind their remote for '{who}'."
-            if unknown:
-                summary += f" {unknown} not comparable."
+        # Plan rule R4's order: update available > update LHPC first > could not check > current.
+        first = counts[stackupdates.LHPC_FIRST]
+        rest = ((f" {first} need LHPC updated first." if behind and first else "") + (
+            f" {errs} could not be checked — see details." if errs else f" {unknown} not comparable." if unknown else ""))
+        if behind or first:
+            summary = (f"{behind} of {n} source(s) have an update for '{who}'." if behind else
+                       f"{first} of {n} source(s) need LHPC updated first for '{who}' (lhpc self-update --apply).") + rest
+        elif errs:
+            summary = f"{errs} of {n} source(s) could not be checked for '{who}' — see details."
         elif uptodate and unknown:
             summary = f"{uptodate} up to date, {unknown} unknown/not comparable for '{who}'."
         elif uptodate:

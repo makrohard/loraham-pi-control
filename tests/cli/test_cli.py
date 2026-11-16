@@ -38,7 +38,7 @@ def test_explain_shows_the_managed_tx_requirement(capsys):
 
 def test_status_versions_exits_zero(capsys):
     assert main(["status", "--versions"]) == 0
-    assert "confirmed-working judgement" in capsys.readouterr().out
+    assert "Source/lane status" in capsys.readouterr().out
 
 
 def test_update_shows_plan(capsys):
