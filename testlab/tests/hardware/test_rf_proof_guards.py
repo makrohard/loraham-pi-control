@@ -184,7 +184,8 @@ def test_the_setter_and_reader_run_the_peers_power_actions(tmp_path):
 SENDS = [("X H f.txt", None),   # None: the forms table's own tx_text (the frame send), rendered by the script
          ("X H f.txt", "tmux send-keys -t rfchat-r1 -- 'rfkit 0000aaaa' Enter"),
          ("X H f.txt", "~/x/lhpc meshtastic@r1 --sendtext \"rfkit 0000aaaa\" --ack"),
-         ("XIN H f.txt \"Type --help for commands\"", "python3 - 'rfkit 0000aaaa' 12323")]
+         ("XIN H f.txt \"Type --help for commands\"", "python3 - 'rfkit 0000aaaa' 12323"),
+         ("X H f.txt", "LHPC_PROOF=Z:meshchat@r2 printf '%s\\n' 'rfkit 0000aaaa' > ~/x/5-tx2.go")]   # row 5's release
 
 
 @pytest.mark.parametrize("executor, cmd", SENDS)
@@ -489,3 +490,55 @@ def test_a_single_frame_row_with_a_freq_mismatch_fails_with_rc_0_in_dry(tmp_path
     results = [line.split(" | ")[-1] for line in r.stdout.splitlines() if line.split(" | ")[:2] == ["REPORT", row]]
     assert results == [f"FAIL: incompatible: FREQ {freqs}"] * 2, r.stdout   # both directions
     assert "dry self-check OK all-forms-printed" in r.stdout
+
+
+# ---- the dispatcher's checks after the power read: boot id, the PC's by-id list, the sending box's USB list ----------------
+
+TXH = ('BOXES=H; CURROW=9; printf "%s\\n" "rfkit 0000aaaa" > "$EVD/nonces"; keep RAD_K H:r1; keep PWROW_H_r1 9; keep BOOT_H B1; '
+       'printf "usb-a\\n" > "$EVD/R0-H-usb.txt"; printf "by-a\\n" > "$EVD/R0-usb-byid.txt"; '
+       'usbsnap() { printf "%s\\n" "${BYID:-by-a}" > "$EVD/$1-byid.txt"; : > "$EVD/$1-kern.txt"; }; '
+       'sshrun() { case "$3" in *boot_id*) echo "${BOOT:-B1}";; *) echo "${USB:-usb-a}";; esac; }; '
+       'tx K 1 "rfkit 0000aaaa" -- X PC f.txt "touch \\"\\$RAN\\"; : rfkit 0000aaaa"')
+
+
+def test_a_send_with_the_box_and_the_pc_unchanged_runs(tmp_path):
+    r, evd = source_only(tmp_path, TXH)
+    assert r.returncode == 0, r.stderr
+    assert (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("env, want", [
+    ({"BOOT": "B2"}, "STOP: tx K: box H rebooted (boot id changed)"),
+    ({"USB": "usb-b"}, "STOP: tx K: box H's USB device list changed since R0"),
+    ({"BYID": "by-b"}, "STOP: tx K: a PC peer re-enumerated or vanished"),
+])
+def test_a_changed_boot_id_or_usb_list_stops_the_send(tmp_path, env, want):
+    # mutants K7, K8, K9 of the second read: each check replaced by `true`, and the send ran
+    r, evd = source_only(tmp_path, TXH, **env)
+    assert r.returncode == 2
+    assert stop_lines(r) == [want]
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("sel, answer, rc", [("serial=S1", "1", 0), ("serial=S1", "0", 2), ("port=1-2", "1", 0), ("port=1-2", "0", 2),
+                                            ("serial=S1", "2", 2)])
+def test_a_usb_radio_gone_after_a_frame_is_a_stop(tmp_path, sel, answer, rc):
+    # mutant K10: the check after each frame never stopped
+    r, _ = source_only(tmp_path, f'RADIO_HSTK="H ch341-rfm98pw-433 433 {sel}"; sshrun() {{ echo {answer}; }}; usbcheck f.txt HSTK')
+    assert r.returncode == rc, r.stderr
+    assert stop_lines(r) == ([] if rc == 0 else ["STOP: HSTK (H) is gone after a frame (brown-out / re-enumeration)"])
+
+
+FRAME_MIN = ('keep H433 r1; keep HSTK r3; needs() { :; }; undo_mark() { echo 0; }; started() { :; }; jpower() { :; }; '
+             'pset() { XRC=0; SET=1; }; '
+             'dpower() { local p=10; [ -z "${SET:-}" ] || p=$RB; printf "STATUS FREQ=433.1 SF=11 POWER=%s\\n" "$p" > "$OUT/PW-$3.txt"; '
+             'keep "P_$3" "$p"; }; tx() { exit 7; }; frame_row 7 H:H433 H:HSTK min,min same-box')
+
+
+@pytest.mark.parametrize("rb, rc", [("2", 7), ("5", 2), ("", 2)])
+def test_a_min_endpoint_that_does_not_read_back_the_minimum_stops_before_the_send(tmp_path, rb, rc):
+    # mutant K25: the readback after the set was not checked (rc 7 = the stub tx: the row reached its send)
+    r, _ = source_only(tmp_path, FRAME_MIN, RB=rb)
+    assert r.returncode == rc, r.stderr
+    if rc == 2:
+        assert stop_lines(r) == [f"STOP: row 7: H:r1 reads back '{rb}' dBm after POWER=2: no TX"]
