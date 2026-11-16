@@ -17,13 +17,13 @@ echo "argv $*"; echo "env $SSHPASS"; cat 2>/dev/null; echo "{PW} {CALL}-7 {CALL.
 """
 
 
-def proof(tmp_path, body, path_bin=None):
+def proof(tmp_path, body, path_bin=None, env=None):
     """Run `body` in bash after sourcing fw-boxproof.sh (source-only), as a live run with evidence in tmp_path/evd."""
     evd = tmp_path / "evd"
     evd.mkdir(exist_ok=True)
     script = (f'FWPROOF_SOURCE_ONLY=1; . "{PROOF}"\n'
               f'MODE=live; EVD="{evd}"; PW="{PW}"; PW_H="{PW}"; OPERATOR_CALL="{CALL}"\n{body}\n')
-    env = {**os.environ, "TMPDIR": str(tmp_path)}
+    env = {**os.environ, "TMPDIR": str(tmp_path), **(env or {})}
     if path_bin:
         env["PATH"] = f"{path_bin}:{os.environ['PATH']}"
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=tmp_path,
@@ -47,6 +47,15 @@ def test_no_password_or_call_reaches_the_evidence(tmp_path):
     text = "\n".join(f.read_text(errors="replace") for f in files)
     assert "argv" in text and "to stderr" in text                  # the captures ran, stderr included
     assert [s for s in (PW,) if s in text] + re.findall(CALL, text, re.IGNORECASE) == []
+
+
+def test_an_inherited_out_does_not_steer_the_captures(tmp_path):
+    # rf-proof.sh's capture writes to ${OUT:-$EVD}: an OUT from the environment would put the evidence outside the run's
+    # directory (and outside the end scan); the proof unsets it.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    p, evd = proof(tmp_path, 'X x.txt "echo hello"', fake_ssh(tmp_path), env={"OUT": str(elsewhere)})
+    assert (evd / "x.txt").exists() and list(elsewhere.iterdir()) == [], p.stderr
 
 
 def test_a_stdin_payload_of_a_dash_is_delivered(tmp_path):
@@ -204,6 +213,13 @@ def test_a_value_that_would_run_a_command_stops_before_any_box_call(tmp_path, ke
 
 RT = '"$HOME"/loraham-pi-control'           # the default runtime path as one shell word (shq)
 RT_FORMS = (RT + "/venv/lhpc/bin/lhpc", "cd " + RT + " && ./venv/lhpc/bin/python")
+
+
+@pytest.mark.parametrize("ref", ["--all", "--upload-pack=touch {tmp}/ran"])   # --all: only its leading - is wrong
+def test_a_ref_that_is_an_option_stops_before_any_box_call(tmp_path, ref):
+    # FWREF reaches git fetch: a value starting with - would be an option there (--upload-pack runs a command).
+    p, ssh = live_copy(tmp_path, env={"FWREF": ref.replace("{tmp}", str(tmp_path))})
+    assert p.returncode == 2 and "STOP: FWREF: " in p.stderr and not ssh and not (tmp_path / "ran").exists(), p.stderr
 
 
 def test_the_runtime_path_enters_each_box_command_as_one_word(tmp_path):

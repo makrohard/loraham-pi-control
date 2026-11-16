@@ -27,6 +27,7 @@ KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); REPO=$(git -C "$KIT" rev-pars
 LAB=$KIT/lab.local.env; [ "$MODE" = dry ] && LAB=$KIT/lab.example.env
 # shellcheck source=/dev/null
 RFPROOF_SOURCE_ONLY=1 . "$KIT/rf-proof.sh" || { echo "STOP: rf-proof.sh does not read"; exit 2; }   # its one redactor, capture
+unset OUT XRC   # inherited, OUT would send rf-proof.sh's captures (${OUT:-$EVD}) out of this run's evidence; the redactor's values are set below
 # the lab file is data, read only by rf-proof.sh's labread (its keys' grammars checked; a key set in the environment wins)
 labread "$LAB"
 # the inputs from the environment: each against its grammar before any use, as labcheck does for the lab keys

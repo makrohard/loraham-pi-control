@@ -442,14 +442,44 @@ SPAWN = {"subprocess", "pty", "pexpect", "sh"}                              # mo
 SPAWN_CALLS = ("system", "popen", "exec", "spawn", "posix_spawn", "fork")   # os.<these>, and create_subprocess_* anywhere
 
 
+def spawns(src):
+    """What in a Python source starts a process: an import of a SPAWN module, a spawn function of os (or posix) by its
+    module, by an alias of it or imported by name, or a create_subprocess_* call."""
+    tree, out = ast.parse(src), []
+    osnames = {"os", "posix"}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            out += [a.name for a in n.names if a.name.split(".")[0] in SPAWN]
+            osnames |= {a.asname for a in n.names if a.name in ("os", "posix") and a.asname}
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            if n.module.split(".")[0] in SPAWN:
+                out.append(n.module)
+            elif n.module in ("os", "posix"):
+                out += [a.name for a in n.names if a.name.startswith(SPAWN_CALLS) or a.name == "*"]
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            f = n.func
+            if f.attr.startswith("create_subprocess") or (isinstance(f.value, ast.Name) and f.value.id in osnames
+                                                           and f.attr.startswith(SPAWN_CALLS)):
+                out.append(f.attr)
+    return out
+
+
+@pytest.mark.parametrize("src", [
+    "import subprocess", "import subprocess as sp", "from subprocess import run", "import pty",
+    "import os\nos.system('x')", "import os as o\no.popen('x')", "from os import system\nsystem('x')",
+    "from os import system as s\ns('x')", "from os import execv", "from os import *", "import posix\nposix.fork()",
+    "import asyncio\nasyncio.create_subprocess_exec('x')"])
+def test_the_spawn_scan_finds_each_form(src):
+    assert spawns(src)
+
+
+def test_the_spawn_scan_passes_a_module_loader():
+    assert spawns("import importlib.util\nspec.loader.exec_module(m)\nimport os\nos.environ.get('x')") == []
+
+
 @pytest.mark.parametrize("name", ["peer.py", "fake_peer.py"])
 def test_the_peer_side_starts_no_process(name):
     # The peer driver talks to its radio in-process: no module or call that starts a process, so no PEER_* field or
     # other lab value ever enters a shell string (a field is only an argument or a device name).
-    tree = ast.parse((pathlib.Path(PEER).parent / name).read_text())
-    mods = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    mods |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    calls = [n.func for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
-    spawns = [f.attr for f in calls if f.attr.startswith("create_subprocess")
-              or (isinstance(f.value, ast.Name) and f.value.id == "os" and f.attr.startswith(SPAWN_CALLS))]
-    assert mods & SPAWN == set() and spawns == []
+    assert spawns((pathlib.Path(PEER).parent / name).read_text()) == []
