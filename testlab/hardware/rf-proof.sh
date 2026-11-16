@@ -483,18 +483,19 @@ coverage() {   # one line per item (a model, a stack, a check), row and directio
 radios_ok() {   # radios_ok <file>: exactly one 'STATE valid' line, and every other line a well-formed ROW (blank lines aside)
   local t; t=$(body "$1" | grep -v '^[[:space:]]*$'); [ "$(printf '%s\n' "$t" | grep -c '^STATE ')" = 1 ] && printf '%s\n' "$t" | grep -qx 'STATE valid' \
     && ! printf '%s\n' "$t" | grep -vxE 'STATE valid|ROW r[1-9][0-9]? [a-z0-9][a-z0-9-]* (433|868) (True|False) serial=[^ ]* port=[^ ]* hp=(None|True|False)' | grep -q .; }
-radiokey() {   # radiokey <KEY>: resolve RADIO_<KEY> to exactly one enabled radio of its box -> rid, or a why (absent/ambiguous)
+radiokey() {   # radiokey <KEY>: RK = "rid <rid> <box> <model>", or "why <reason>" (absent/ambiguous); called directly, so its STOP ends the run
   local v="RADIO_$1" b m bd sel rows n; read -r b m bd sel <<< "${!v:-}"
-  [ -n "$b" ] || { echo "why absent: radio $1"; return; }; [ -z "${ABSENT[$b]:-}" ] || { echo "why ${ABSENT[$b]}"; return; }
+  [ -n "$b" ] || { RK="why absent: radio $1"; return 0; }; [ -z "${ABSENT[$b]:-}" ] || { RK="why ${ABSENT[$b]}"; return 0; }
   rows=$(body "R0-$b-radios.txt" | awk -v m="$m" -v bd="$bd" '$1 == "ROW" && $3 == m && $4 == bd && $5 == "True"')
   case "$sel" in serial=*|port=*) rows=$(printf '%s\n' "$rows" | grep -F " $sel ");; '') ;; *) stop "RADIO_$1: '$sel' (want serial=<s> or port=<p>)";; esac
-  n=$(printf '%s\n' "$rows" | grep -c .); case "$n" in 0) echo "why absent: radio $1";; 1) echo "rid $(printf '%s\n' "$rows" | cut -d' ' -f2) $b $m";; *) echo "why ambiguous: radio $1 ($n match)";; esac; }
-peerok() {   # peerok <name>: "" when the peer is present, else the why
-  local v="PEER_$1" kind id rest; read -r kind id rest <<< "${!v:-}"; [ -n "$id" ] || { echo "absent: peer $1"; return; }
+  n=$(printf '%s\n' "$rows" | grep -c .); case "$n" in 0) RK="why absent: radio $1";; 1) RK="rid $(printf '%s\n' "$rows" | cut -d' ' -f2) $b $m";; *) RK="why ambiguous: radio $1 ($n match)";; esac; }
+peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; called directly, so its STOP ends the run
+  local v="PEER_$1" kind id rest; read -r kind id rest <<< "${!v:-}"; PK=; [ -n "$id" ] || { PK="absent: peer $1"; return 0; }
+  case "$kind" in meshcom|aprs|meshtastic|meshcore-ble|rnode) ;; *) stop "PEER_$1: unknown kind '$kind' (want meshcom, aprs, meshtastic, meshcore-ble or rnode)";; esac
   if [ "$kind" = meshcore-ble ]; then
-    if [ "$MODE" = dry ]; then case " ${DRY_BLE:-} " in *" $id "*) ;; *) echo "absent: peer $1";; esac
-    else peerpin "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || echo "absent: peer $1"; fi   # its read-only power read: the connect
-  else grep -q "^$id " "$OUT/R0-usb-byid.txt" || echo "absent: peer $1"; fi; }
+    if [ "$MODE" = dry ]; then case " ${DRY_BLE:-} " in *" $id "*) ;; *) PK="absent: peer $1";; esac
+    else peerpin "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || PK="absent: peer $1"; fi   # its read-only power read: the connect
+  else grep -q "^$id " "$OUT/R0-usb-byid.txt" || PK="absent: peer $1"; fi; }
 row_R0() {
   [ "$MODE" = dry ] || { [ ! -e "$EVD" ] || stop "$EVD exists"; mkdir -p "$EVD" || stop "$EVD: mkdir"; : > "$EVD/state.env"; : > "$EVD/undo.list"; : > "$EVD/undo.done"
     printf '| row | stack | box | band | peer | direction | nonce seen | power used | result |\n|---|---|---|---|---|---|---|---|---|\n' > "$EVD/REPORT.md"; }
@@ -532,9 +533,9 @@ row_R0() {
   done
   local r e ep k o why devs= pr bud; declare -A SUM=()
   for r in $RUN; do why=; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in -) continue;; esac
-      if [ "${ep%%:*}" = peer ]; then o=$(peerok "${ep#*:}"); [ -z "$o" ] || why="$why$o; "
+      if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
         k="PEER_${ep#*:}"; read -r _ pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs /dev/serial/by-id/$pr"
-      else k=${ep#*:}; o=$(radiokey "$k"); case "$o" in "why "*) why="$why${o#why }; ";;
+      else k=${ep#*:}; radiokey "$k"; o=$RK; case "$o" in "why "*) why="$why${o#why }; ";;
           rid*) read -r _ v bb m <<< "$o"; [ "$bb" = "${ep%%:*}" ] || stop "row $r: $k is on box $bb, the table says ${ep%%:*}"
             [[ "$v" =~ ^r([1-9]|[1-9][0-9])$ ]] || stop "R0: $k = '$v' is not a radio id"; keep "$k" "$v"; keep "MODEL_${bb}_$v" "$m"; data "R0: row $r: $k = $bb:$v ($m)";; esac; fi; done
     [ -z "$why" ] || { keep "SKIP_$r" "$(printf '%s' "${why%; }" | awk -v RS='; ' '!s[$0]++' | paste -sd ';' | sed 's/;/; /g')"; continue; }
