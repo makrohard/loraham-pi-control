@@ -224,19 +224,16 @@ HPY
 )
 
 dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le 17 ]; }
-# the send forms of the contract's lint (the dry self-check sends-only-in-tx: each only inside a tx call); the two
-# python send helpers (the MeshCom console, Graywolf) span lines in declare -f: every-send-gated checks them by their FRAMEs
-SENDS_RE='form (tx_text|meshcom_send|mt_send|mc_send|rt_send)|tmux send-keys|/api/v1/announce|rns-exchange|(mt|mc|meshcom)-send'
-# hipower <text>: rc 0 (refuse) when the text asks for high power (--high-power, --highpower, any case) or sets a power at
-# 18 dBm or more: every power key (power, tx-power, tx_power, txpower, txp, 'set tx') followed by = : or blanks has its value
-# taken, quotes stripped and compared as a base-10 integer (leading zeros, a sign). A value that is not an integer is refused
-# too; a key with no value (the end, or a shell operator: a read like 'txpower | sed') is no setting. Every executor runs it.
-hipower() {
-  local t rest v; t=$(printf '%s' "$*" | tr '[:upper:]' '[:lower:]'); [[ $t =~ (^|[^a-z0-9])-?-high-?power ]] && return 0; rest=$t
-  while [[ $rest =~ (^|[^a-z0-9])(power|tx[-_]?power|txp|set\ tx)[\ =:]+([^\ \|\;\&\<\>]*) ]]; do
-    rest=${rest#*"${BASH_REMATCH[0]}"}; v=${BASH_REMATCH[3]//[\'\"]/}; [ -n "$v" ] || continue
-    [[ $v =~ ^[+-]?[0-9]+$ ]] || return 0; v=${v#+}; [ "${v:0:1}" = - ] && continue; [ "$((10#$v))" -ge 18 ] && return 0; done
-  return 1; }
+# THE power boundary. pnorm: a text normalised (every quote, backslash and blank removed, lowercase), so no quoting, tab or
+# escape can split a key. A normalised text with a power token (power, txp, settx) runs only through the one setter (pset)
+# or the one reader (pread); anything else carrying one is a STOP at the X/XIN/peer boundary (guard).
+pnorm() { printf '%s' "$1" | tr -d "\"'\\\\[:space:]" | tr '[:upper:]' '[:lower:]'; }
+ptoken() { local t; t=$(pnorm "$1"); [[ $t == *power* || $t == *txp* || $t == *settx* ]]; }
+# issend: rc 0 when a command (or its stdin) is a send form: the frame, Meshtastic, MeshCore and MeshChat sends, the chat
+# line, the MeshChat announce, the row-5 release, the MeshCom console and Graywolf helpers, a peer's send or exchange
+issend() { local t i; t=$(pnorm "$1"); i=$(pnorm "${2:-}")
+  case "$t" in *loraf-*struct.pack*|*--sendtext*|*meshcore-cli*public*|*meshchat@r*send*|*tmuxsend-keys*|*/api/v1/announce*|*5-tx2.go*|*"::+sys.argv"*|*mt-send*|*mc-send*|*meshcom-send*|*rns-exchange*) return 0;; esac
+  case "$i" in *type--helpforcommands*|*/api/messages*) return 0;; esac; return 1; }
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
 fail() { echo "FAIL: $*" >&2; printf '%s\n' "$*" > "$OUT/rowfail.txt"; exit 1; }   # a row FAIL (the marker); its undos run
@@ -277,22 +274,48 @@ sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
   if [ "$in" = - ]; then SSHPASS=$pw sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"
   else printf '%s\n' "$in" | SSHPASS=$pw sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"; fi; }
 drylog() { [ "$MODE" = dry ] && printf '%s\n' "$*" >> "$DRYLOG"; return 0; }
-X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD $w: $c"
-  ! hipower "$c" || stop "$f: the command asks for high power or 18 dBm or more: never run"
+X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: $c"
+  guard "$f" "$c" -
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; return 0; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
-XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3"); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD $w: (stdin) $c"
-  ! hipower "$c" || stop "$f: the command asks for high power or 18 dBm or more: never run"
+XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3"); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
+  guard "$f" "$c" "$in"
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: (stdin) $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" "$in"; return 0; fi
   capture "$f" sshrun "$w" "$in" "$c"; [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
+guard() {   # guard <file> <command> <stdin|->: THE runtime boundary of X, XIN and the peer process, before anything runs
+  local f=$1 c=$2 in=$3
+  if [ -z "${PCTX:-}" ]; then ! ptoken "$c" || stop "$f: a power token outside the one power setter/reader: never run"
+    [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
+      || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"; fi   # the box password (sudo -S) is not a command
+  ! issend "$c" "$([ "$in" = - ] || printf '%s' "$in")" || [ "${TXCTX:-}" = 1 ] || stop "$f: a send outside tx: never run"; }
+pset() {   # pset <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument, leading zeros
+  # stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP; it also replays the power undos (@pset)
+  local w=$1 f=$2 tg=$3 v=$4 cap=17 m c
+  [[ $v =~ ^[0-9]+$ ]] || stop "$f: power value '$v' is not ASCII digits"; v=${v#"${v%%[!0]*}"}; v=${v:-0}
+  [[ $v =~ ^[0-9]{1,2}$ ]] || stop "$f: power value '$4' has more than 2 digits"
+  if [ "$w" != PC ]; then m=$(getk "MODEL_${w}_$tg"); c=$(getk "CAP_${w}_$m"); [[ $c =~ ^[0-9]{1,2}$ ]] || stop "$f: no model cap for $w:$tg ('$m')"
+    { [ "${#c}" -lt 2 ] || [[ ! "$c" > 17 ]]; } || c=17; cap=$c; fi
+  { [ "${#v}" -lt "${#cap}" ] || { [ "${#v}" = "${#cap}" ] && [[ ! "$v" > "$cap" ]]; }; } || stop "$f: power $v above the cap $cap dBm"
+  local PCTX=set; if [ "$w" = PC ]; then peer "$f" "$VMT" "$tg" "$v"; else X "$w" "$f" "$(form dset rid="$tg" p="$v")"; fi; }
+pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixed read form, rendered here from its name
+  local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read
+  case "$n" in
+    mt_pget|rt_pget|mt_cap) X "$w" "$f" "$(form "$n" rid="$r")";;
+    radios) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'";;
+    caps) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'";;
+    hpower) X PC "$f" "python3 -I $SCRATCH/hpower.py $RNSCFG $(dirname "$VRNS")/rnstatus";;
+    mt-power|meshcom-power) peer "$f" "$VMT" "$n";;
+    mc-power) peerpin "$f" mc-power;;
+    *) stop "pread: '$n' is not a power read";; esac; }
+pmust() { pread "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
 declare -A SPAWNF=()
 peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a peer process starts (dry: fake_peer.py, empty stdin)
   local f=$1 pin=$2 py=$3; shift 3; local c="flock -n -E 75 $LOCK $py -I $PEER $(printf '%q ' "$@")"
-  ! hipower "$*" || stop "$f: the peer action asks for high power or 18 dBm or more: never run"
-  if [ "$pin" = pin ]; then drylog "CMD PC: (PIN on stdin) peer.py $*"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: peer.py $* (the PIN on stdin)"
-  else drylog "CMD PC: $c"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: $c"; fi
+  guard "$f" "$*" -
+  if [ "$pin" = pin ]; then drylog "CMD[${PCTX:-}] PC: (PIN on stdin) peer.py $*"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: peer.py $* (the PIN on stdin)"
+  else drylog "CMD[${PCTX:-}] PC: $c"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: $c"; fi
   local -a run; if [ "$MODE" = dry ]; then run=(python3 -I "$FAKE_PEER" "$@")
   elif [ "$pin" = pin ]; then run=(pinrun "$py" "$@"); else run=(bash -c "$c"); fi
   if [ "${BG:-0}" = 1 ]; then ( capture "$f" "${run[@]}" < /dev/null ) & SPAWN=$!; SPAWNF[$SPAWN]=$f
@@ -326,7 +349,7 @@ dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form,
 # ---- 7. the ONE journal and the ONE recovery path -----------------------------------------------------------------------------
 rec() { printf '%s\n' "$*" >> "$OUT/UNRESOLVED.txt" && return 0
   echo "STOP: unresolved and NOT RECORDED (UNRESOLVED.txt not writable): $*" >&2; [ "${RECOVERING:-0}" = 1 ] && return 1; exit 2; }
-undo_push() { [ "$MODE" = dry ] && { echo "  [dry] undo += $1: $(rt "$1" "$2")"; return 0; }; local n
+undo_push() { [ "$MODE" = dry ] && { echo "  [dry] undo += $1: $([[ $2 == "@pset "* ]] && printf '%s' "$2" || rt "$1" "$2")"; return 0; }; local n
   n=$(( $(cat "$EVD/undo.seq" 2>/dev/null || echo 0) + 1 )) && echo "$n" > "$EVD/undo.seq" || stop "undo journal: id counter not written ('$2' not dispatched)"
   printf 'u%s\t%s\t%s\n' "$n" "$1" "$2" >> "$EVD/undo.list" || stop "undo journal: append failed for '$2' (not dispatched)"; }
 undo_mark() { [ "$MODE" = dry ] && { echo 0; return; }; local n; n=$(wc -l < "$EVD/undo.list") || { echo "undo journal: unreadable (no mark)" >&2; return 1; }; echo "$n"; }
@@ -340,7 +363,7 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
     [ "${RECOVERING:-0}" = 1 ] && return 1; stop "undo journal: unreadable or bad mark '$1'"; }
   while [ "$n" -gt "$1" ]; do IFS=$'\t' read -r id w c < <(sed -n "${n}p" "$EVD/undo.list")
     if grep -qxF -- "$id" "$EVD/undo.done" 2>/dev/null; then echo "undo journal: $id already ran (its removal had failed), not run again" >&2
-    else XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c"
+    else case "$c" in "@pset "*) read -r _ uw ut uv <<< "$c"; XNOSTOP=1 pset "$uw" "UNDO-$id.txt" "$ut" "$uv";; *) XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c";; esac
       if [ "$XRC" != 0 ]; then rec "$w: $c (rc $XRC)" || true; rc=1; n=$((n - 1)); continue; fi
       echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id ran but is not recorded as run" || true; rc=1; }; fi
     sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
@@ -373,7 +396,7 @@ tx() { local k=$1 c=$2 cls=$3 sep=${4:-} rad n e f b
     --reserve) [ "$cls" = control ] && [ $# = 4 ] || stop "tx $k: a reservation is 'tx <key> <frames> control --reserve'"; shift 4; e=reserve;;
     *) stop "tx $k: '$sep' (want -- or --reserve)";; esac
   rad=$(getk "RAD_$k"); [ -n "$rad" ] || stop "tx $k: the key resolves to no radio (no power read for it): no TX"
-  ! hipower "$*" || stop "tx $k: the command carries --high-power or a power of 18 dBm or more: no TX"
+  ! ptoken "$*" || stop "tx $k: a send carries a power token (power is set only by the one setter): no TX"
   [ "$(getk "PWROW_${rad//:/_}")" = "${CURROW:-}" ] && [ -n "${CURROW:-}" ] || stop "tx $k: $rad has no verified power in this row: no TX"
   if [ "$cls" != control ]; then [ "${#cls}" -le 16 ] && grep -qxF -- "$cls" "$OUT/nonces" 2>/dev/null || stop "tx $k: '$cls' is not a nonce of this run"
     [[ "$*" == *"$cls"* ]] || stop "tx $k: the command does not carry its nonce '$cls'"; fi
@@ -383,7 +406,7 @@ tx() { local k=$1 c=$2 cls=$3 sep=${4:-} rad n e f b
     ! grep -qiE "$USBEV" "$OUT/TXG-usb-kern.txt" || stop "tx $k: a USB event in the PC's kernel log since R0 (TXG-usb-kern.txt)"; }
   case "$rad" in [HZ]:*) b=${rad%%:*}; must "$b" "TXG-$b-usb.txt" "$USBLIST"; [ "$MODE" = dry ] || cmp -s "$OUT/R0-$b-usb.txt" "$OUT/TXG-$b-usb.txt" || stop "tx $k: box $b's USB device list changed since R0";; esac
   say "TX | $rad | $c | $cls | $([ "$e" = reserve ] && echo reserve || echo "$e $f")"; drylog "TX $rad $c $cls $e"
-  [ "$e" = reserve ] || "$@"; }
+  [ "$e" = reserve ] || { local TXCTX=1; "$@"; }; }
 usbsnap() { if [ "$MODE" = dry ]; then echo "  [dry] PC USB snapshot $1"; printf '%s\n' ${DRY_BYID:-} | awk '{print $1, "../../dry"}' > "$OUT/$1-byid.txt"; : > "$OUT/$1-kern.txt"; return 0; fi
   capture "$1-byid.txt" bash -c "ls -l /dev/serial/by-id/ 2>/dev/null | awk 'NR > 1 {print \$9, \$11}'"   # both through the redactor
   capture "$1-kern.txt" journalctl -k --since "@$T0" --no-pager -o short-iso; [ "$XRC" = 0 ] || stop "journalctl -k (rc $XRC)"; }
@@ -427,7 +450,7 @@ pnum() {
       [ "$(printf '%s\n' "$all" | grep -c .)" = 1 ] || return 0; v=$(printf '%s\n' "$all" | grep -xE -- '-?[0-9]+');;
     *) [ "$(printf '%s\n' "$all" | grep -c .)" = 1 ] || return 0; v=$(printf '%s\n' "$all" | grep -xE -- '-?[0-9]+');;
   esac; printf '%s' "$v"; }
-hpgrant() { must "$1" "HG-$3.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'"; [ "$MODE" = dry ] && return 0
+hpgrant() { pmust "$1" "HG-$3.txt" radios; [ "$MODE" = dry ] && return 0
   local o; o=$(jgrant "$(body "HG-$3.txt")" "$2") || stop "$3: $o: no TX"; }
 dpower() {   # dpower <box> <rid> <key>: the daemon's STATUS of that radio: POWER <= min(17, model cap), HIGHPOWER=0, no grant
   hpgrant "$1" "$2" "$3"; must "$1" "PW-$3.txt" "{RT}/venv/lhpc/bin/python -c '$STATUS_PY' $2"; radk "$3" "$1:$2"; [ "$MODE" = dry ] && { pwok "$1:$2"; return 0; }
@@ -435,20 +458,20 @@ dpower() {   # dpower <box> <rid> <key>: the daemon's STATUS of that radio: POWE
   keep "P_$3" "$p"; pwok "$1:$2"; ok "$3: power as-is $p dBm, HIGHPOWER=0, no high-power grant, within its model's cap"; }
 spower() {   # spower <box> <form> <rid> <key>: a stack's own power value (MeshCore transmits through the daemon: its STATUS too)
   hpgrant "$1" "$3" "$4"; [ "$2" != mc_pget ] || dpower "$1" "$3" "${4}D"
-  must "$1" "PW-$4.txt" "$(form "$2" rid="$3")"; radk "$4" "$1:$3"; [ "$MODE" = dry ] && { pwok "$1:$3"; return 0; }
+  if [ "$2" = mc_pget ]; then must "$1" "PW-$4.txt" "$(form "$2" rid="$3")"; else pmust "$1" "PW-$4.txt" "$2" "$3"; fi; radk "$4" "$1:$3"; [ "$MODE" = dry ] && { pwok "$1:$3"; return 0; }
   local p o; p=$(jspower "$2" "$(pnum "PW-$4.txt" "$2")") || stop "$4: $p (raw output in PW-$4.txt): no TX"; o=$(jmodel "$1" "$3" "$p") || stop "$4: $o: no TX"
   keep "P_$4" "$p"; pwok "$1:$3"; ok "$4: power as-is $p dBm, within its model's cap"; }
 ppower() {   # ppower <key> <peer> <action> <low>: a PC peer set LOW for its row (the original journalled first), read back low
   local k=$1 pr=$2 a=$3 lo=$4 o r; dbm_ok "$lo" || stop "$k: the row's low power '$lo' is not <= 17"; radk "$k" "PC:$pr"
-  peer "PP-$k-0.txt" "$VMT" "$a"; [ "$XRC" = 0 ] || stop "$k: the peer power read failed (rc $XRC)"; o=$(body "PP-$k-0.txt" | sed -n 's/^POWER //p' | tail -n 1)
+  pread PC "PP-$k-0.txt" "$a"; [ "$XRC" = 0 ] || stop "$k: the peer power read failed (rc $XRC)"; o=$(body "PP-$k-0.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || case "$o" in ''|*[!0-9-]*) stop "$k: no power readback";; esac
-  undo_push PC "flock -E 75 $LOCK $VMT -I $PEER $a ${o:-10}"
-  peer "PP-$k-1.txt" "$VMT" "$a" "$lo"; [ "$XRC" = 0 ] || stop "$k: the peer power set failed (rc $XRC)"; r=$(body "PP-$k-1.txt" | sed -n 's/^POWER //p' | tail -n 1)
+  undo_push PC "@pset PC $a ${o:-10}"
+  pset PC "PP-$k-1.txt" "$a" "$lo"; [ "$XRC" = 0 ] || stop "$k: the peer power set failed (rc $XRC)"; r=$(body "PP-$k-1.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || [ "$r" = "$lo" ] || stop "$k: the peer reads back '$r', not the low power $lo: no TX"; keep "P_$k" "$lo"; pwok "PC:$pr"; data "$k: peer power ${o:-?} -> $lo for the row"; }
 hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd: <= 7 dBm, the running rnsd's config, Up; else STOP
   local k=$1 f=${2:-5-rnode-power.txt}; radk "$k" PC:rnode
   [ "$MODE" = dry ] && { echo "  [dry] PC > $f: hpower (rns-host config txpower, one rnsd started after its mtime, rnstatus Up)"; pwok PC:rnode; return 0; }
-  printf '%s\n' "$HPOWER_PY" > "$SCRATCH/hpower.py"; X PC "$f" "python3 -I $SCRATCH/hpower.py $RNSCFG $(dirname "$VRNS")/rnstatus"
+  printf '%s\n' "$HPOWER_PY" > "$SCRATCH/hpower.py"; pread PC "$f" hpower
   [ "$XRC" = 0 ] || stop "rnode: the shared RNode's power cannot be read now ($(tr '\n' ' ' < "$OUT/$f")): no TX"
   local tp nw up; tp=$(sed -n 's/^TXPOWER //p' "$OUT/$f"); nw=$(sed -n 's/^NEWER //p' "$OUT/$f"); up=$(sed -n 's/^UP //p' "$OUT/$f")
   [[ "$tp" =~ ^-?[0-9]{1,2}$ ]] || stop "rnode: no TXPOWER in the read ($f): no TX"
@@ -510,7 +533,7 @@ peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; ca
   [ -n "$id" ] || stop "PEER_$1: kind '$kind' without its by-id name or BLE address (an empty or unset key = the peer is absent)"
   if [ "$kind" = meshcore-ble ]; then
     if [ "$MODE" = dry ]; then case " ${DRY_BLE:-} " in *" $id "*) ;; *) PK="absent: peer $1";; esac
-    else peerpin "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || PK="absent: peer $1"; fi   # its read-only power read: the connect
+    else pread PC "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || PK="absent: peer $1"; fi   # its read-only power read: the connect
   else grep -q "^$id " "$OUT/R0-usb-byid.txt" || PK="absent: peer $1"; fi; }
 row_R0() {
   [ "$MODE" = dry ] || { [ ! -e "$EVD" ] || stop "$EVD exists"; mkdir -p "$EVD" || stop "$EVD: mkdir"; : > "$EVD/state.env"; : > "$EVD/undo.list"; : > "$EVD/undo.done"
@@ -531,10 +554,10 @@ row_R0() {
     must $b "R0-$b-ssh.txt" "ss -Htn state established '( sport = :22 )' | wc -l"; [ "$MODE" = dry ] || eq "R0 $b: exactly one ssh connection (ours)" "$(body "R0-$b-ssh.txt")" 1
     must $b "R0-$b-clock.txt" "date -u +%s"; [ "$MODE" = dry ] || { [[ "$(body "R0-$b-clock.txt")" =~ ^[0-9]+$ ]] || stop "R0 $b: no clock"; keep "T0_$b" "$(body "R0-$b-clock.txt")"; }
     must $b "R0-$b-usb.txt" "$USBLIST"; boxkern $b "R0-$b-kern.txt"                       # the box's USB baseline; its kernel log readable as root (uid 0)
-    must $b "R0-$b-radios.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'"
+    pmust $b "R0-$b-radios.txt" radios
     radios_ok "R0-$b-radios.txt" || stop "R0 $b: the hardware list is not valid (want exactly one 'STATE valid' and well-formed ROW lines): $(body "R0-$b-radios.txt" | grep -v '^ROW ' | head -n 1)"
     if [ "$MODE" = dry ]; then echo "  [dry] PC > R0-$b-caps.txt: the repo's radio_models (dry uses the repo copy)"; python3 -I -c "$CAPS_PY" "$REPO" > "$OUT/R0-$b-caps.txt" 2>&1 || stop "R0 $b: the repo's radio_models cannot be read"
-    else must $b "R0-$b-caps.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'"; fi   # the installed copy (its loader); unreadable = STOP
+    else pmust $b "R0-$b-caps.txt" caps; fi   # the installed copy (its loader); unreadable = STOP
     grep -qE '^CAP [a-z0-9-]+ [0-9]+$' "$OUT/R0-$b-caps.txt" || stop "R0 $b: no model power cap read (R0-$b-caps.txt)"
     while read -r _ m c; do keep "CAP_${b}_$m" "$c"; done < <(grep -E '^CAP ' "$OUT/R0-$b-caps.txt")
     must $b "R0-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
@@ -591,7 +614,7 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     [ "$x" = "$n" ] || fail "incompatible: $f $x vs $n"; done
   data "row $id: FREQ and SF match ($(jfield "$la" FREQ), SF $(jfield "$la" SF)); BW, CR and the sync word are not in the daemon's STATUS: not compared"
   for e in "a $ba $ra $qa $pa" "b $bb $rb $qb $pb"; do set -- $e; [ "$5" = min ] || continue
-    undo_push "$2" "$(form dset rid="$3" p="$(getk "P_$4" 10)")"; must "$2" "$id-set-$1.txt" "$(form dset rid="$3" p=$STICK_MIN)"; dpower "$2" "$3" "$4"
+    undo_push "$2" "@pset $2 $3 $(getk "P_$4" 10)"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
     [ "$MODE" = dry ] || [ "$(getk "P_$4")" = "$STICK_MIN" ] || stop "row $id: $2:$3 reads back '$(getk "P_$4")' dBm after POWER=$STICK_MIN: no TX"; done
   local sa sb; sa=$([ "$pa" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qa" as-is) dBm (as-is)"); sb=$([ "$pb" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qb" as-is) dBm (as-is)")
   for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce)
@@ -653,7 +676,7 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 3) || { notrun_row 3 "form not confirmed: $NEEDS_MISSING"; return 0; }
   local m r n1 n2 cap ap wp got pr; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
-  must "$b" 3-cap.txt "$(form mt_cap rid="$r")"; cap=$(body 3-cap.txt | tail -n 1)   # the cap every frame of the node is clamped to
+  pmust "$b" 3-cap.txt mt_cap "$r"; cap=$(body 3-cap.txt | tail -n 1)   # the cap every frame of the node is clamped to
   [ "$MODE" = dry ] || jcap "$cap" || stop "row 3: meshtastic@$r max_power '$cap' is not 1..17: nothing starts"
   started "$b" 3-start.txt "meshtastic@$r"
   ap=$(rport 4403 "$r"); wp=$(rport 9443 "$r")
@@ -684,7 +707,7 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   must "$b" 4-listener.txt "ps -o pgid= -p ${LP:-0} | tr -d ' '"; [ "$MODE" = dry ] || body 4-cport.txt | grep -qx "OWNED $(body 4-listener.txt)" \
     || stop "row 4: the listener pid $LP on $cp is not in a live owned meshcore-node group of meshcore@$r"
   spower "$b" mc_pget "$r" "R4-$b-$r"
-  peerpin 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write
+  pread PC 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write
   tp=$(body 4-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || { [[ "$tp" =~ ^-?[0-9]+$ ]] && [ "$tp" -le 17 ]; } || stop "row 4: the T-Deck Pro reads '${tp}' dBm (above 17 or unreadable); its power is never changed: no TX"
   keep P_R4-tdpro "${tp:-dry}"; radk R4-tdpro PC:tdpro; pwok PC:tdpro; data "row 4: the T-Deck Pro at its own ${tp:-dry} dBm, not changed"
@@ -808,24 +831,20 @@ row_RE() { [ "$MODE" = dry ] && { echo "  [dry] RE: secret and peer-data scans (
 selfcheck() {
   local SCN=0; scok() { echo "dry self-check OK $1"; SCN=$((SCN + 1)); }; sc() { stop "dry self-check $1: $2"; }
   local n c t L G g p w st
-  n=0; while IFS= read -r t; do ! hipower "$t" || n=$((n + 1)); done < <(grep '^CMD ' "$DRYLOG")
+  n=0; while IFS= read -r t; do ! ptoken "$t" || n=$((n + 1)); done < <(grep '^CMD\[\] ' "$DRYLOG")   # outside the setter/reader
   [ "$n" = 0 ] || sc no-high-power "$n printed command(s) carry --high-power or a power of 18 dBm or more"; scok no-high-power
-  c=$(grep '^CMD ' "$DRYLOG" | grep -ciE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b") || true; [ "$c" = 0 ] || sc no-call-in-commands "the operator's call is in $c logged command(s)"
+  c=$(grep '^CMD' "$DRYLOG" | grep -ciE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b") || true; [ "$c" = 0 ] || sc no-call-in-commands "the operator's call is in $c logged command(s)"
   [ -z "$TRACKER_CALL" ] || { c=$(grep -ciF -- "$TRACKER_CALL" "$DRYLOG") || true; [ "$c" = 0 ] || sc no-call-in-commands "the tracker call is in the command log ($c)"; }; scok no-call-in-commands
-  n=$(grep '^CMD ' "$DRYLOG" | grep -c 'peer.py') || true; w=$(grep '^CMD ' "$DRYLOG" | grep -c 'flock -n -E 75') || true; p=$(grep '^CMD ' "$DRYLOG" | grep -c '(PIN on stdin)') || true
+  n=$(grep '^CMD' "$DRYLOG" | grep -c 'peer.py') || true; w=$(grep '^CMD' "$DRYLOG" | grep -c 'flock -n -E 75') || true; p=$(grep '^CMD' "$DRYLOG" | grep -c '(PIN on stdin)') || true
   [ $((w + p)) = "$n" ] || sc peer-calls-locked "$((n - w - p)) peer call(s) outside the lock"; scok peer-calls-locked
   # every FRAME is covered by an earlier TX of its radio (a '*' rid: any credit on that box), and every TX with an executor is
   # directly followed by that executor's command
   t=$(awk '$1 == "TX" {cr[$2] += $3; if ($5 != "reserve") want = NR + 1; next}
-    $1 == "CMD" {want = 0; next}
+    $1 ~ /^CMD/ {want = 0; next}
     $1 == "FRAME" {r = $2; if (r ~ /:\*$/) {b = substr(r, 1, 2); r = ""; for (k in cr) if (index(k, b) == 1 && cr[k] > 0) {r = k; break}}
       if (r == "" || cr[r] < 1) {print "FRAME " $2 " (line " NR ") without a TX credit"; exit}; cr[r]--}
-    want && NR == want && $1 != "CMD" {print "TX on line " NR - 1 " is not followed by its command"; exit}' "$DRYLOG")
+    want && NR == want && $1 !~ /^CMD/ {print "TX on line " NR - 1 " is not followed by its command"; exit}' "$DRYLOG")
   [ -z "$t" ] || sc every-send-gated "$t"; scok every-send-gated
-  # the static twin: in every function of this script, a send form appears only on a tx line (`tx ... -- <executor> ...`)
-  local fn; t=$(for fn in $(declare -F | awk '{print $3}'); do case $fn in dryframes|selfcheck|frame) continue;; esac
-      declare -f "$fn" | grep -E "$SENDS_RE" | grep -vE '(^|[^a-zA-Z0-9_])tx [^|]* -- ' | sed "s/^ */$fn: /"; done)
-  [ -z "$t" ] || sc sends-only-in-tx "a send outside tx: $(printf '%s' "$t" | head -n 3 | tr '\n' '|')"; scok sends-only-in-tx
   t=$(sort -u "$SCRATCH/needed" 2>/dev/null | grep -vxF -f <(sort -u "$SCRATCH/formed" 2>/dev/null) | grep -vx rt_send | tr '\n' ' ') || true
   [ -z "$t" ] || sc all-forms-printed "needed but never printed: $t"; scok all-forms-printed
   ( MODE=live; body() { printf '%s\n' "  [manual] loraham-chat is interactive — the daemon is ensured, then run it yourself in a terminal:" "    $CC"; }
@@ -899,7 +918,7 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
     hp 'no read' 1; [ $? = 2 ] ) || sc power-guards "dpower/spower/hpower: a bad power, grant, cap or read is not a STOP"
   ! declare -f | grep -nE 'notrun[_a-z]* [0-9].*(power|HIGHPOWER|above (7|17))' | grep -v -e TRACKER_DBM -e 'serial answers' | grep -q . || sc power-guards "a power guard ends in NOT RUN"
   before() { case "$(declare -f "$1")" in *"$2"*"$3"*) return 0;; *) return 1;; esac; }
-  before row_1 'R1-$b-$r-d' 1-start.txt && before row_2 'R2-$b-$r-d' 2-start.txt && before row_3 'form mt_cap' 3-start.txt && before row_4 'R4-$b-$r-d' 4-start.txt \
+  before row_1 'R1-$b-$r-d' 1-start.txt && before row_2 'R2-$b-$r-d' 2-start.txt && before row_3 'pmust "$b" 3-cap.txt mt_cap' 3-start.txt && before row_4 'R4-$b-$r-d' 4-start.txt \
     || sc power-guards "a stack starts before its power read"
   before row_5 'tx R5-rnode 1 control --reserve' '5-tx2-go.txt' && before row_5 'tx "$q" 1 control --reserve' '5-tx2-go.txt' && before row_2 'tx R2-tracker 1 control --reserve' '2-box-send.txt' \
     || sc power-guards "an automatic send is not reserved before the send that triggers it"

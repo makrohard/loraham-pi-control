@@ -2,14 +2,12 @@
 live run, and the source-only mode (RFPROOF_SOURCE_ONLY=1: the functions, no stdin, lab file, box or peer). No box, no peer,
 no radio: a box or PC command runs as a fake on PATH or as a plain shell command in a temporary evidence directory."""
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 HW = Path(__file__).resolve().parents[2] / "hardware"
-REPO = HW.parents[1]
 
 
 def _env(tmp_path, **extra):
@@ -22,8 +20,11 @@ def source_only(tmp_path, script, **extra):
     """`script` after sourcing rf-proof.sh in source-only mode, in live mode, with $EVD a fresh evidence directory."""
     evd = tmp_path / "evd"
     evd.mkdir()
-    prelude = (f'RFPROOF_SOURCE_ONLY=1 . "{HW}/rf-proof.sh"; EVD="{evd}"; OUT=$EVD; MODE=live; : > "$EVD/state.env"\n')
-    r = subprocess.run(["bash", "-c", prelude + script], env=_env(tmp_path, **extra), stdin=subprocess.DEVNULL,
+    # RAN: the marker a command creates when it runs; commands name it as "$RAN" (expanded only when they run), so the
+    # guard never sees the temporary path (it carries the test's name, and a name like "power" would be refused)
+    prelude = (f'RFPROOF_SOURCE_ONLY=1 . "{HW}/rf-proof.sh"; EVD="{evd}"; OUT=$EVD; MODE=live; : > "$EVD/state.env"; '
+               'export RAN="$EVD/ran"\n')
+    r = subprocess.run(["bash", "-c", prelude + script], env=_env(tmp_path, **extra), stdin=subprocess.DEVNULL, cwd=evd,
                        capture_output=True, text=True, timeout=120, check=False)
     return r, evd
 
@@ -83,67 +84,140 @@ def test_the_redactor_masks_a_password_whatever_the_login_names(tmp_path):
     assert r.stdout == "auth <REDACTED>\n"
 
 
-# ---- every high-power form is refused, by the dispatcher and by every executor ------------------------------------------
+# ---- power is set only by the one setter and read only by the one reader; sends run only inside tx -----------------------
 
-HIGH = ["--power 20", "--tx-power=20", "tx_power: 18", "txpower = 20", "--set POWER=18", "--high-power", "--highpower",
-        "-High-Power", "--power=020", "--tx-power=018", "POWER=00018", "set tx 018", "--power='20'", '--power "20"',
-        "--power x", "POWER=17.5", "TXPOWER=100"]
 TX_SETUP = ('BOXES=; CURROW=9; printf "%s\\n" "rfkit 0000aaaa" > "$EVD/nonces"; usbsnap() { :; }; '
             ': > "$EVD/R0-usb-byid.txt"; : > "$EVD/TXG-usb-byid.txt"; : > "$EVD/TXG-usb-kern.txt"; '
             'keep RAD_K PC:g2; keep PWROW_PC_g2 9; ')
+# every spelling G1 found, and their class: a power token anywhere in a command, however it is quoted, escaped or spaced
+BYPASS = ["--power 20", "--tx-power=20", "tx_power: 18", "txpower = 20", "--set POWER=18", "--high-power", "--highpower",
+          "-High-Power", "--power=020", "POWER=00018", "set tx 018", "--power='20'", '--power "20"', "--power x",
+          "--power\t20", '--po"wer"=20', "--po\\wer=20", "--power=9223372036854775809", "--set HIGHPOWER=1", "--set POWER=2", "--txp 20"]
 
 
-@pytest.mark.parametrize("form", HIGH)
-def test_the_dispatcher_refuses_every_high_power_form(tmp_path, form):
-    # red-before: '--power 20', '--tx-power=20', 'txpower = 20', '--highpower' ran on 42768cef; the zero-padded and
-    # quoted values and a non-numeric value ran on f797c66b
-    r, evd = source_only(tmp_path, TX_SETUP + 'tx K 1 control -- X PC f.txt "touch $EVD/ran; : $FORM"', FORM=form)
+@pytest.mark.parametrize("form", BYPASS)
+@pytest.mark.parametrize("executor", ["X PC f.txt", "XIN H f.txt -", "tx K 1 control -- X PC f.txt"])
+def test_a_power_token_outside_the_setter_and_reader_is_a_stop(tmp_path, form, executor):
+    # red-before (06eeb15a): the TAB, the quote fragment, the backslash and the 20-digit value ran (and every power token
+    # outside tx ran before f797c66b)
+    r, evd = source_only(tmp_path, TX_SETUP + f'sshrun() {{ touch "$EVD/ran"; }}; {executor} "touch \\"\\$RAN\\"; : $FORM"', FORM=form)
     assert r.returncode == 2
     assert not (evd / "ran").exists()
 
 
-@pytest.mark.parametrize("form", ["--power=020", "--highpower", "POWER=18"])
-@pytest.mark.parametrize("executor", ["X PC f.txt", "XIN H f.txt -"])
-def test_every_executor_refuses_a_high_power_command_outside_tx(tmp_path, form, executor):
-    # red-before (f797c66b): an executor called without tx ran the command
-    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; {executor} "touch $EVD/ran; : $FORM"', FORM=form)
+def test_a_power_token_in_the_stdin_payload_is_a_stop(tmp_path):
+    # red-before (06eeb15a): XIN checked its command, not its stdin: 'radio --power=20' ran as bash -s input
+    r, evd = source_only(tmp_path, 'sshrun() { touch "$EVD/ran"; }; XIN H f.txt "radio --power=20" "bash -s"')
     assert r.returncode == 2
     assert not (evd / "ran").exists()
 
 
-@pytest.mark.parametrize("form", ["--set POWER=17 HIGHPOWER=0", "max_power | sed -n x", "txpower | sed", "--get lora.tx_power",
-                                  "mt-power 1", "POWER=-9", "--power='2'"])
-def test_a_low_power_or_a_power_read_runs(tmp_path, form):
-    r, evd = source_only(tmp_path, TX_SETUP + 'tx K 1 control -- X PC f.txt "touch $EVD/ran; : $FORM"', FORM=form)
+def test_the_box_password_on_stdin_is_not_a_command(tmp_path):
+    r, evd = source_only(tmp_path, 'PW_H=power99; sshrun() { touch "$EVD/ran"; }; XIN H f.txt "$PW_H" "sudo -S true"')
     assert r.returncode == 0, r.stderr
     assert (evd / "ran").exists()
 
 
-@pytest.mark.parametrize("args, runs", [("mt-power 20", False), ("mt-power 018", False), ("mt-power 1", True)])
-def test_the_peer_process_refuses_a_high_power_action(tmp_path, args, runs):
+@pytest.mark.parametrize("value, sent", [("2", "2"), ("17", "17"), ("017", "17"), ("07", "7"), ("0", "0")])
+def test_the_setter_sets_a_low_power(tmp_path, value, sent):
+    r, evd = source_only(tmp_path, f'keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; '
+                                   f'sshrun() {{ printf "%s\\n" "$3" > "$EVD/sent"; }}; pset H set.txt r1 {value}')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "sent").read_text().split()[1:] == ["daemon", "r1", "--set", f"POWER={sent}", "--yes"]   # after the lhpc binary
+
+
+@pytest.mark.parametrize("value", ["18", "20", "100", "0018", "9223372036854775809", "x", "-1", "+5", "", "1 7"])
+def test_the_setter_refuses_a_high_or_malformed_power(tmp_path, value):
+    r, evd = source_only(tmp_path, f'keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; sshrun() {{ touch "$EVD/ran"; }}; '
+                                   f'pset H set.txt r1 "{value}"')
+    assert r.returncode == 2
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("value", ["100", "9223372036854775809"])
+def test_the_setter_names_a_value_of_more_than_two_digits(tmp_path, value):
+    r, _ = source_only(tmp_path, f'keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; pset H set.txt r1 {value}')
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: set.txt: power value '{value}' has more than 2 digits"]
+
+
+def test_the_setter_keeps_a_models_lower_cap(tmp_path):
+    r, evd = source_only(tmp_path, 'keep MODEL_H_r4 pinedio-usb-1262; keep CAP_H_pinedio-usb-1262 14; '
+                                   'sshrun() { touch "$EVD/ran"; }; pset H set.txt r4 15')
+    assert r.returncode == 2
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("name", ["mt_pget", "rt_pget", "mt_cap", "radios", "caps"])
+def test_the_reader_runs_its_fixed_read_forms(tmp_path, name):
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; pread H read.txt {name} r2')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "ran").exists()
+
+
+def test_the_reader_refuses_any_other_name(tmp_path):
+    r, evd = source_only(tmp_path, 'sshrun() { touch "$EVD/ran"; }; pread H read.txt dset r2')
+    assert r.returncode == 2
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("args, runs", [("mt-power 20", False), ("mt-power 1", False), ("mt-power", False)])
+def test_the_peer_process_refuses_a_power_action_outside_the_setter_and_reader(tmp_path, args, runs):
     # red-before (f797c66b): the peer process ran 'mt-power 20'
     marker = tmp_path / "ran"
     fake = tmp_path / "peer.py"
     fake.write_text(f"open({str(marker)!r}, 'w').close()\nprint('POWER 1')\n")
-    r, _ = source_only(tmp_path, f'LOCK="$EVD/lock"; peer p.txt python3 {args}', PEER=str(fake))
+    r, _ = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; ' + f'peer p.txt python3 {args}', FAKE=str(fake))
     assert (r.returncode, marker.exists()) == ((0, True) if runs else (2, False)), r.stderr
 
 
-def test_a_send_outside_tx_fails_the_dry_self_check(tmp_path):
-    # the static twin of the dispatch check: a planted send form outside tx (in a function the dry run never calls)
-    hw = tmp_path / "repo" / "testlab" / "hardware"
-    hw.mkdir(parents=True)
-    (tmp_path / "repo" / "lhpc").symlink_to(REPO / "lhpc")
-    for f in ("zstatus.sh", "lab.example.env"):
-        shutil.copy(HW / f, hw / f)
-    text = (HW / "rf-proof.sh").read_text()
-    anchor = '[ "${RFPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0'
-    assert text.count(anchor) == 1
-    (hw / "rf-proof.sh").write_text(text.replace(anchor, 'planted() { must H p.txt "$(form tx_text rid=r1 n=x)"; }\n' + anchor))
-    r = dry(tmp_path, hw=hw, LANE="fast")
+def test_the_setter_and_reader_run_the_peers_power_actions(tmp_path):
+    marker = tmp_path / "ran"
+    fake = tmp_path / "peer.py"
+    fake.write_text(f"import sys\nopen({str(marker)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\nprint('POWER 1')\n")
+    r, _ = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; '
+                       'pread PC r.txt mt-power; pset PC s.txt mt-power 1', FAKE=str(fake))
+    assert r.returncode == 0, r.stderr
+    assert marker.read_text() == "mt-power\nmt-power 1\n"
+
+
+SENDS = [("X H f.txt", None),   # None: the forms table's own tx_text (the frame send), rendered by the script
+         ("X H f.txt", "tmux send-keys -t rfchat-r1 -- 'rfkit 0000aaaa' Enter"),
+         ("X H f.txt", "~/x/lhpc meshtastic@r1 --sendtext \"rfkit 0000aaaa\" --ack"),
+         ("XIN H f.txt \"Type --help for commands\"", "python3 - 'rfkit 0000aaaa' 12323")]
+
+
+@pytest.mark.parametrize("executor, cmd", SENDS)
+def test_a_send_outside_tx_is_a_stop_in_every_executor(tmp_path, executor, cmd):
+    # red-before (06eeb15a): an executor ran a send form outside tx
+    send = '"$(form tx_text rid=r1 n="rfkit 0000aaaa")"' if cmd is None else '"$CMD"'
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; {executor} {send}', CMD=cmd or "")
     assert r.returncode == 2
-    assert stop_lines(r) == ['STOP: dry self-check sends-only-in-tx: a send outside tx: planted: must H p.txt "$(form tx_text rid=r1 n=x)"']
-    assert "dry self-check OK every-send-gated" in r.stdout          # anchor: the dynamic check ran and passed
+    assert not (evd / "ran").exists()
+
+
+def test_a_peer_send_outside_tx_is_a_stop(tmp_path):
+    marker = tmp_path / "ran"
+    fake = tmp_path / "peer.py"
+    fake.write_text(f"open({str(marker)!r}, 'w').close()\n")
+    r, _ = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; '
+                       'peer p.txt python3 mt-send "rfkit 0000aaaa"', FAKE=str(fake))
+    assert (r.returncode, marker.exists()) == (2, False)
+
+
+@pytest.mark.parametrize("chain", ["&&", ";", "|"])
+def test_a_send_chained_after_a_tx_on_the_same_line_is_a_stop(tmp_path, chain):
+    # red-before (06eeb15a): the static scanner passed a line with a tx and a chained second send
+    r, evd = source_only(tmp_path, TX_SETUP + f'sshrun() {{ touch "$EVD/ran"; }}; '
+                         f'tx K 1 control -- X PC a.txt true {chain} X H b.txt "tmux send-keys -t rfchat-r1 -- x Enter"')
+    assert r.returncode == 2
+    assert not (evd / "ran").exists()
+
+
+def test_a_send_inside_tx_runs(tmp_path):
+    r, evd = source_only(tmp_path, TX_SETUP + 'tx K 1 "rfkit 0000aaaa" -- X PC f.txt "touch \\"\\$RAN\\"; : tmux send-keys -t rfchat-r1 -- \'rfkit 0000aaaa\'"')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "ran").exists()
 
 
 # ---- a STOP inside R0's radio and peer checks ends the run; a malformed peer key is a STOP ---------------------------------
