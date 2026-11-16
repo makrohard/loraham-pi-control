@@ -27,7 +27,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -597,20 +596,26 @@ fi
 exec '{git}' "$@"
 """
 
-# The "Upgrading from 0.13.x" step, as the CHANGELOG gives it (the checkout's path filled in): a
-# lock no git holds is removed, the half-written files are overwritten with the new commit's (git
-# deletes nothing it does not track), and the update run again syncs the venv and the units.
-UPGRADE_STEP_0138 = ("pgrep -x git || rm -f {checkout}/.git/index.lock",
+# The "Upgrading from 0.13.x" step, as the CHANGELOG gives it (the checkout's path filled in):
+# `status` shows what the cut wrote and any file of the operator's the reset would replace; the
+# reset writes the new commit over the half-written files; the update run again syncs the venv and
+# the units. If the reset fails on git's lock (UPGRADE_LOCK_0138: the text, then the line), the
+# operator, once no git runs in this checkout, removes it and runs the reset again.
+UPGRADE_STEP_0138 = ("git -C {checkout} status --short",
                      "git -C {checkout} reset --hard origin/main",
                      "lhpc self-update --apply --yes")
+UPGRADE_LOCK_0138 = ("index.lock': File exists", "rm {checkout}/.git/index.lock")
 
 
 @pytest.mark.slow
 def test_slow_build_selfupdate_cut_from_0138(tmp_path):
     """The "Upgrading from 0.13.x" step, run as written: 0.13.8's one-click helper cuts the merge
     off ("git refused the fast-forward"; the half-written tree and git's lock left behind) early,
-    halfway through `lhpc/` and late; each time the step's git lines leave this commit checked out,
-    clean, with no lock, and after the last its `lhpc self-update --apply --yes` syncs the venv."""
+    halfway through `lhpc/` and late; each time `status` names what is there (halfway: also an
+    untracked file of the operator's at a path the new commit adds), the reset fails on the lock,
+    the lock line and the reset again leave this commit checked out, clean, with no lock, while
+    another git runs elsewhere on the box; after the last cut `lhpc self-update --apply --yes`
+    syncs the venv."""
     cand = _git("-C", str(REPO), "rev-parse", "HEAD")
     root, env, co, venv = _box_at(tmp_path, V0138, cand)
     old = _git("-C", str(co), "rev-parse", "HEAD")
@@ -631,14 +636,19 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
     path = env.get("PATH", os.environ["PATH"])
     cut_env = {**env, "PATH": f"{bindir}:{path}"}
     op_env = {**env, "PATH": f"{venv / 'bin'}:{path}"}           # the operator's shell on the box
-    assert shutil.which("pgrep", path=op_env["PATH"]), "the step's `pgrep` is not on this box"
     lhpc, lock = str(venv / "bin" / "lhpc"), co / ".git" / "index.lock"
     steps = [ln.format(checkout=shlex.quote(str(co))) for ln in UPGRADE_STEP_0138]
+    lock_text, lock_line = UPGRADE_LOCK_0138[0], UPGRADE_LOCK_0138[1].format(checkout=shlex.quote(str(co)))
+    added = [ln.split("\t", 1)[1] for ln in changed if ln.startswith("A")]
+    # another git, elsewhere on the box, alive through every step: the step never looks at it
+    other = subprocess.Popen([real, "-C", str(tmp_path / "remote.git"), "cat-file", "--batch"],
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
 
-    def run(line):
+    def run(line, ok=True):
         r = subprocess.run(["sh", "-c", line], env=op_env, capture_output=True, text=True,
                            timeout=HARNESS_S, check=False)
-        assert r.returncode == 0, f"{line}: {(r.stdout + r.stderr)[-1500:]}"
+        assert (r.returncode == 0) == ok, f"{line}: {(r.stdout + r.stderr)[-1500:]}"
+        return r.stdout + r.stderr
 
     for name, k in cuts.items():
         _git("-C", str(co), "reset", "--quiet", "--hard", old)      # back on 0.13.8, clean
@@ -654,11 +664,22 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
         assert _git("-C", str(co), "rev-parse", "HEAD") == old, name
         assert _git("-C", str(co), "status", "--porcelain"), f"{name}: the cut left no files"
         assert lock.exists(), f"{name}: the killed git left no index lock"
-        for line in steps[:2]:
-            run(line)
+        mine = next(p for p in added if p not in write[:k]) if name == "lhpc-half" else ""
+        if mine:                                    # the operator's file where the new commit adds one
+            (co / mine).parent.mkdir(parents=True, exist_ok=True)
+            (co / mine).write_text("mine\n")
+        shown = [ln[3:] for ln in run(steps[0]).splitlines() if ln.startswith("?? ")]
+        assert not mine or any(mine == e or (e.endswith("/") and mine.startswith(e)) for e in shown), \
+            f"{name}: `status` does not name {mine}: {shown}"
+        assert lock_text in run(steps[1], ok=False), name     # the lock stops the reset, unchanged
+        run(lock_line)
+        run(steps[1])
+        assert other.poll() is None, "the other git ended early"
         assert _git("-C", str(co), "rev-parse", "HEAD") == cand, name
         assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == "", name
         assert not lock.exists(), name
+    other.kill()
+    other.wait()
     run(steps[2])
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand
     assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == ""
