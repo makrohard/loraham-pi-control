@@ -112,3 +112,35 @@ def test_a_provider_with_changed_inputs_is_still_rebuilt_before_its_dependent(bo
     assert "rns" in svc.unbuilt_build_deps("reticulum")             # the build order is unchanged
     blocked, rebuild = svc.start_readiness("reticulum")
     assert blocked == [] and "rns" in rebuild                       # the start is not refused
+
+
+def test_a_provider_with_changed_inputs_shows_no_dependency_warning(box, web, tmp_path, monkeypatch):
+    """G1-UPD-U8-CODE N1: the provider starts as built, so the page offers the rebuild and names no
+    dependency that must be built first (that warning follows the start readiness, not the build plan)."""
+    box((R1, R2_868))
+    svc = _built(tmp_path, monkeypatch, "reticulum", "scripts/rns-wheel.sh")
+    assert "rns" in svc.unbuilt_build_deps("reticulum")
+    body = web().get("/stacks/reticulum/body").get_data(as_text=True)
+    assert "Rebuild available" in body, body
+    assert "Build this dependency first" not in body and "rns not built" not in body, body
+
+
+def test_a_binary_receipt_failure_offers_install_not_build(box, web, tmp_path, monkeypatch, binary_receipt):
+    """G1-UPD-U8-CODE N2: `lhpc build` is refused on the binary channel, so a refusal by the receipt
+    (here a recorded file gone) links to the Install section as an install, never "Build"."""
+    box((R1, R2_868))
+    for n in _UNDONE:
+        if _REAL[n] is not None:
+            monkeypatch.setattr(ControllerService, n, _REAL[n])
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    binary_receipt(svc, "meshtastic")
+    (tmp_path / svc.binary_spec("meshtastic").proof_paths[0]).unlink()
+    blocked = dict(ControllerService(system=FakeSystem().system,
+                                     paths=Paths(runtime_root=tmp_path)).start_readiness("meshtastic")[0])
+    assert "is gone" in blocked.get("meshtastic", ""), blocked
+    body = web().get("/stacks/meshtastic/body").get_data(as_text=True)
+    assert "Install required to start" in body and "meshtastic: binary artifact file" in body, body
+    assert "Build required to start" not in body
+    banner = body.split("Install required to start", 1)[1].split("</div>", 1)[0]   # its body and its link
+    assert "Install &rarr;" in banner and "Build &rarr;" not in banner, banner

@@ -802,14 +802,14 @@ class BuildOpsMixin:
 
     def start_readiness(self, target: str) -> tuple[list[tuple[str, str]], list[str]]:
         """(blocked, rebuild) for the web start gate and the stack page: `blocked` = [(id, `install_blocker`
-        reason)], what refuses a start; `rebuild` = the source-built ids that start but whose recorded build
-        inputs changed (`_build_complete`, not `_inputs_current`): a rebuild picks them up. An absent
-        checkout or GUI toolkit (`unbuilt_components`) is in neither."""
+        reason)], what refuses a start; `rebuild` = source-built ids that start with changed build inputs (a
+        rebuild picks them up). An absent checkout off a binary, or GUI toolkit, is in neither."""
         s = self.stack(target)
         gui_dropped = set(self.gui_unavailable_components(s)) if s else set()
         blocked, rebuild = [], []
         for c in (s.components if s else ()):
-            if (c.id in gui_dropped and (c.optional or c.gui_optional)) or (c.source and not self._source_present(c)):
+            if (c.id in gui_dropped and (c.optional or c.gui_optional)) or (
+                    c.source and self._binary_ready(c) is None and not self._source_present(c)):
                 continue
             if (why := self.install_blocker(c)):
                 blocked.append((c.id, why))

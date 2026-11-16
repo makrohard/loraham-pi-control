@@ -1212,8 +1212,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
                     # U8: what refuses a start ([(cid, reason)]) and what starts but has a rebuild available
-                    "start_ready": service.start_readiness(stack.id),
-                    "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
+                    "start_ready": (_sr := service.start_readiness(stack.id)),
+                    # a provider to build BEFORE the main, and only one that refuses the start (N1)
+                    "needs_build_deps": [c for c in service.unbuilt_build_deps(stack.id) if c in dict(_sr[0])],
                     "daemon_params": service.daemon_params_view(stack.id, rid=_dp_rid(stack.id, _live_radios, _inst)),
                     "kw_offer": service.known_working_offer(stack.id, snapshot),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.

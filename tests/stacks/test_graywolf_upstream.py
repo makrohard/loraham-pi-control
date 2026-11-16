@@ -143,7 +143,7 @@ def test_ver_tuple_orders_prerelease_and_short_versions():
 def test_a_rollback_pin_still_surfaces_via_needs_build(tmp_path):
     """REVIEW-FOUND #3: the forward-only has_update pill does not show a pin ROLLBACK — but a
     rollback changes the version-named build marker path, so is_built goes False and the
-    operator gets the 'Build needed' banner + Build button instead. The signal exists."""
+    operator gets the 'Build required to start' banner + Build link instead. The signal exists."""
     svc = _svc(tmp_path, installed="0.14.12")           # tree at 0.14.12, marker present
     main = svc.stack("graywolf").main_component
     assert svc.is_built(main) is True

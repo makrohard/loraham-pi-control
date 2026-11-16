@@ -1278,8 +1278,10 @@ class LifecycleOpsMixin:
             # A receipt-bearing component whose consumed sources moved since its last
             # build must not launch: the venv still holds the OLD driver, and starting
             # it would run code the manifest no longer describes (changed build inputs
-            # alone do not refuse: `install_blocker`).
-            if comp.build_marker and comp.build_requires and not self._build_complete(comp):
+            # alone do not refuse: `install_blocker`). The source branch only: on an installed binary
+            # the receipt decides (`_binary_ready`).
+            if comp.build_marker and comp.build_requires and self._binary_ready(comp) is None \
+                    and not self._build_complete(comp):
                 record(comp, stack, Outcome.BLOCKED,
                        "its sources changed since the last build — rebuild first "
                        f"({self.build_remedy(stack.id, comp.id, st_index[comp.id].source_state)})")
@@ -1311,8 +1313,8 @@ class LifecycleOpsMixin:
                        "needs a graphical session; none is running on this box "
                        "(start it from the desktop, not over SSH)")
                 continue
-            if comp.source and not self._source_present(comp):
-                record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
+            if comp.source and not self._source_present(comp) and (_why := self.install_blocker(comp)):
+                record(comp, stack, Outcome.BLOCKED, _why)
                 continue
             if comp.interactive:
                 # Never auto-start an interactive TUI — the operator runs it in a terminal.
@@ -2027,9 +2029,6 @@ class LifecycleOpsMixin:
                          f"still holds the radio — not relaunched (resolve the stuck instance first)")
         failed: set = set()
         if absent:
-            if comp.source and not self._source_present(comp):
-                lines.append("  [BLOCKED] daemon: not installed (lhpc install daemon)")
-                return lines, False, ""
             # The daemon takes this separate path: the same start readiness as the generic start,
             # whether the daemon itself or a dependent stack asked for it.
             if (_why := self.install_blocker(comp)):

@@ -221,7 +221,7 @@ def test_radiolib_built_state_is_honest(tmp_path):
     radiolib = svc.stack("daemon").component("radiolib")
     (tmp_path / "src" / "RadioLib").mkdir(parents=True)          # checkout present, not built
     assert not svc.is_built(radiolib)
-    assert "radiolib" in svc.unbuilt_components("daemon")        # honest "Build needed: RadioLib"
+    assert "radiolib" in svc.unbuilt_components("daemon")        # honest "radiolib not built" banner
     art = tmp_path / "src" / "RadioLib" / "build" / "libRadioLib.a"
     art.parent.mkdir(parents=True)
     art.write_bytes(b"")

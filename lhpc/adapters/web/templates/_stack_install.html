@@ -42,8 +42,11 @@
            (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
         {% call(part) banner('bad', title=g.needs_build_deps|join(', ') ~ ' not built') %}{% if part == 'body' %}Build this dependency first.{% else %}<a href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0] }}">Build &rarr;</a>{% endif %}{% endcall %}
       {% elif g.start_ready[0] %}
-        {# U8: what refuses a start, each component with its own reason and remedy. #}
-        {% call(part) banner('warn', title='Build required to start') %}{% if part == 'body' %}{% for cid, why in g.start_ready[0] %}{{ cid }}: {{ why }}{{ '; ' if not loop.last }}{% endfor %}.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">Build &rarr;</a>{% endif %}{% endcall %}
+        {# U8: what refuses a start, each component with its own reason and remedy. The action follows the
+           remedy: Build only when every refusal is a source build's; else Install (a missing checkout, or a
+           binary install to repair or update — `lhpc build` is refused on the binary channel). #}
+        {% set _ns = namespace(build=true) %}{% for _cid, why in g.start_ready[0] if not why.startswith('not built') %}{% set _ns.build = false %}{% endfor %}{% set _act = 'Build' if _ns.build else 'Install' %}
+        {% call(part) banner('warn', title=_act ~ ' required to start') %}{% if part == 'body' %}{% for cid, why in g.start_ready[0] %}{{ cid }}: {{ why }}{{ '; ' if not loop.last }}{% endfor %}.{% else %}<a href="{{ url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id }}">{{ _act }} &rarr;</a>{% endif %}{% endcall %}
       {% endif %}
       {% if g.start_ready[1] %}
         {# U8: changed build inputs only (an LHPC update shipped new ones): the stack starts as it is. #}

@@ -250,7 +250,7 @@ main = "loraham-daemon"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build", "-j", "2"], attributable = true } ]
   # The built artifact is the static lib the daemon links — declaring it as `bin` makes lhpc's
   # `is_built` HONEST (a fresh clone has no build/, so RadioLib correctly reads "not built" and the
-  # daemon's "Build needed" banner names it; Build compiles it first via build_requires ordering).
+  # daemon's "radiolib not built" banner names it; Build compiles it first via build_requires ordering).
   bin = "build/libRadioLib.a"
   # `optional` here means "not runnable / not started with the stack" — the daemon's
   # build_requires edge makes it a hard install/update/uninstall reference.

@@ -48,7 +48,8 @@ def test_a_receipt_whose_recorded_file_is_gone_refuses_the_start(short_tmp_path,
     why = _refused(svc, spawned)
     assert f"binary artifact file {rel!r} is gone" in why, why          # its reason, not a source build
     assert "lhpc build" not in why
-    assert svc.start_readiness("daemon")[0] == [(DAEMON, svc.install_blocker(svc.stack("daemon").component(DAEMON)))]
+    why = svc.install_blocker(svc.stack("daemon").component(DAEMON))
+    assert svc.start_readiness("daemon")[0] == [(c, why) for c in svc.binary_spec("daemon").covers]   # each by the receipt
 
 
 def test_an_interrupted_binary_transaction_refuses_the_start(short_tmp_path, monkeypatch, binary_receipt):
@@ -139,3 +140,63 @@ def test_a_receipt_that_is_not_valid_is_never_read_as_ready(tmp_path, monkeypatc
     monkeypatch.setattr(ControllerService, "binary_receipt_state", lambda self, sid: (state, rec, why))
     monkeypatch.setattr(ControllerService, "_build_complete", lambda self, comp: False)   # a source build would say so
     assert svc.install_blocker(daemon) == expected
+
+
+def _meshtastic_box(tmp_path, monkeypatch, binary_receipt, *, clone):
+    """A meshtastic artifact installed (receipt valid, recording the component), the hardware and
+    node config saved, the host's packages and the spawn stubbed: (svc, spawned)."""
+    from lhpc.core.lifecycle import StartLaunch
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.save_config_bundle("meshtastic", values={"node_name": "LHPC test", "node_short": "LHPT"}).ok
+    comp = svc.stack("meshtastic").component("meshtastic")
+    if clone:
+        (tmp_path / comp.source.path).mkdir(parents=True, exist_ok=True)
+    binary_receipt(svc, "meshtastic")
+    monkeypatch.setattr(ControllerService, "start_blocking_requirements", lambda self, comp: [])
+    spawned = []
+    monkeypatch.setattr(type(svc._lifecycle()), "start", lambda self, stack, comp, *a, **k: spawned.append(
+        comp.id) or StartLaunch(False, "", "stubbed spawn"))
+    return svc, spawned
+
+
+def test_a_valid_receipt_starts_without_a_clone(tmp_path, monkeypatch, binary_receipt):
+    """G1-UPD-U8-CODE B2: the meshtastic artifact's proof files live outside its checkout, so a binary
+    install needs no clone. The generic start asks the receipt, not the absent source directory."""
+    svc, spawned = _meshtastic_box(tmp_path, monkeypatch, binary_receipt, clone=False)
+    comp = svc.stack("meshtastic").component("meshtastic")
+    assert svc.on_binary_channel("meshtastic") and not svc._source_present(comp)
+    r = svc.start("meshtastic", apply=True)
+    assert spawned == ["meshtastic"], r.details                     # past every readiness gate
+    assert "meshtastic" not in dict(svc.start_readiness("meshtastic")[0])   # (its web client is a separate fetch)
+
+
+def test_a_valid_receipt_outranks_a_source_build_marker(tmp_path, monkeypatch, binary_receipt):
+    """G1-UPD-U8-CODE B1: a covered component that also declares `build_requires` and has no source-build
+    marker (none of today's covered components has both: the shape is made here) starts on its valid
+    receipt; the source-build marker check belongs to the source branch."""
+    svc, spawned = _meshtastic_box(tmp_path, monkeypatch, binary_receipt, clone=True)
+    svc._stacks = [dataclasses.replace(s, components=tuple(
+        dataclasses.replace(c, build_requires=("meshtastic-web",)) if c.id == "meshtastic" else c
+        for c in s.components)) if s.id == "meshtastic" else s for s in svc.stacks()]
+    comp = svc.stack("meshtastic").component("meshtastic")
+    assert comp.build_marker and comp.build_requires and not svc._build_complete(comp)
+    r = svc.start("meshtastic", apply=True)
+    assert spawned == ["meshtastic"], r.details
+    assert "sources changed since the last build" not in r.details
+
+
+def test_an_unsafe_receipt_without_its_checkout_refuses_by_its_reason(short_tmp_path, monkeypatch, binary_receipt):
+    """G1-UPD-U8-CODE B2: the daemon's recorded files live in its checkout; with the checkout removed
+    the receipt is unsafe. `start daemon` and the page name that reason, never "not installed"."""
+    svc, spawned = _daemon_box(short_tmp_path, monkeypatch, binary_receipt)
+    daemon = svc.stack("daemon").component(DAEMON)
+    import shutil
+    shutil.rmtree(short_tmp_path / daemon.source.path)
+    svc.invalidate_snapshot()
+    assert svc.binary_receipt_state("daemon")[0] == "unsafe" and not svc._source_present(daemon)
+    why = _refused(svc, spawned)
+    assert "is gone" in why and "not installed" not in why, why
+    assert svc.start_readiness("daemon")[0] == [(c, svc.install_blocker(daemon)) for c in svc.binary_spec("daemon").covers]

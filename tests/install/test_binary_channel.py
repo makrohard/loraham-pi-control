@@ -1676,7 +1676,7 @@ def test_a_daemon_that_is_not_installed_names_that_as_the_reason(short_tmp_path,
     assert not svc._source_present(svc.stack("daemon").component("loraham-daemon"))
     r = svc.start(target, apply=True)
     dres = [x for x in r.results if x.component == "loraham-daemon"]
-    assert not r.ok and dres and dres[0].summary == "daemon: not installed (lhpc install daemon)"
+    assert not r.ok and dres and dres[0].summary == "daemon: not installed — run: lhpc install daemon"
 
 
 @pytest.mark.parametrize("state", ["unsafe", "absent"])
