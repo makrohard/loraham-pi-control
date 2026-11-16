@@ -34,7 +34,7 @@ def test_each_running_instance_has_its_own_port_row(tmp_path, monkeypatch, web, 
     svc = _box(tmp_path, monkeypatch, values)
     rows = [(w["name"], w.get("rid", ""), w["port"], w["exposure"]) for w in svc.dashboard_webservers(fw_status={})
             if w["kind"] == "port"]
-    # U3 (K2): one label form "<stack> @rN" (his yes "mock ok", MOCK-WEB-v1: "(rN)" -> "@rN")
+    # U3 (K2): one label form "<stack> @rN" (mock approved in the UI plan, MOCK-WEB-v1: "(rN)" -> "@rN")
     assert rows == [("LoRaHAM KISS TNC @r1", "r1", "8001", {"level": "ok", "label": "local"}),
                     ("LoRaHAM KISS TNC @r2", "r2", "8134", r2_exposure)], rows
     page = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
