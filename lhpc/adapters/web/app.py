@@ -50,7 +50,7 @@ from markupsafe import Markup
 from lhpc.adapters.web import submenus as _submenus
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
-from lhpc.core import auto_install_form, jobresult, web_client
+from lhpc.core import auto_install_form, jobresult, stackupdates, web_client
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
 from lhpc.core import instances as _instances
@@ -993,10 +993,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             out["complog"] = service.hmac_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
-    def _effective_freshness(entry, current_head: str, pin: str | None = None) -> str:
-        from lhpc.core import stackupdates
-        return stackupdates.effective_status(entry, current_head or "", pin)
-
     def _checked_ago(checked_at: int) -> str:
         """'Last checked' as a short human string — Jinja has no time formatter here."""
         if not checked_at:
@@ -1117,8 +1113,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Freshness, resolved per component against the head the verdict was computed from.
             # Scoped to the stack's OWN components: a cross-stack dependency (loraham-daemon inside
             # the chat row) belongs to its own stack's row and must not light up this one.
-            upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id), ss.components[c.id].source_head,
-                                                     c.source.pin_commit if c.source else None)
+            upd_states = {c.id: stackupdates.effective_status(
+                              _fresh_comps.get(c.id), ss.components[c.id].source_head or "",
+                              c.source.pin_commit if c.source else None, _fresh.get("lhpc_head"))
                           for c in stack.components}
             # Deep-link target for the row's "Update": the behind component itself. The MAIN
             # (== the stack) links to its Install section; a behind DEPENDENCY links to its own

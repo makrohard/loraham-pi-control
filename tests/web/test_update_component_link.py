@@ -24,7 +24,7 @@ B = "b" * 40
 def _fake_freshness(monkeypatch):
     # resolve a cached entry straight to our injected status (bypass the head-match check).
     monkeypatch.setattr(su, "effective_status",
-                        lambda entry, head, pin=None: (entry or {}).get("k", "unchecked"))
+                        lambda entry, head, pin=None, lhpc_head=None: (entry or {}).get("k", "unchecked"))
 
 
 def _ids(tmp_path):
@@ -107,7 +107,8 @@ def _fs_paths(*dirs):
 
 def _entry_for(status, at):
     return {"remote": DAEMON_REMOTE, "source_path": "src/x",
-            "local_head_at_check": at, "upstream_head": B, "status": status}
+            "local_head_at_check": at, "upstream_head": B, "status": status,
+            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
 
 
 def _seed(tmp_path, entries, now=1000):

@@ -993,7 +993,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def status_versions(self) -> ActionResult:
         snap = self.build_snapshot()
-        fresh = stackupdates.view(self._paths)["components"]
+        fresh, lhpc_head = stackupdates.view(self._paths)["components"], stackupdates.fetched_lhpc_head(self._paths)
         details: list[str] = []
         for ss in snap.stacks:
             # package -> version -> components, to name a package the stack runs in two versions
@@ -1019,7 +1019,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if ver != "-":
                             seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
-                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st, comp.source.pin_commit):17s} "
+                        f"  {comp.id:24s} {stackupdates.lane_word(fresh, comp.id, st, comp.source.pin_commit, lhpc_head):17s} "
                         f"pin={pin} tag={tag}"
                         + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())

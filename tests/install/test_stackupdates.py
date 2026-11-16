@@ -24,7 +24,8 @@ def _paths(tmp_path):
 
 def _entry(status, at=A, up=B):
     return {"remote": "https://example.invalid/x.git", "source_path": "src/x",
-            "local_head_at_check": at, "upstream_head": up, "status": status}
+            "local_head_at_check": at, "upstream_head": up, "status": status,
+            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
 
 
 def _write_raw(tmp_path, text):

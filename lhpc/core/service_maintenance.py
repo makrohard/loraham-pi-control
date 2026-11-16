@@ -74,7 +74,7 @@ class MaintenanceOpsMixin:
         (a later Update/Clean invalidates it). `unknown` = nothing to compare (no remote, not installed, an
         invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
         from . import stackupdates
-        entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
+        entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": "", "pin_at_check": "", "lhpc_head_at_check": ""}
         sid = (self.stack_of(comp.id) or comp.id) if comp is not None else ""
         spec = self.binary_spec(sid) if comp is not None and getattr(self, "binary_spec", None) else None
         unsafe = spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe"
@@ -119,7 +119,7 @@ class MaintenanceOpsMixin:
         stable = planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact)
         pinned = "" if stable else stackupdates.pinned_target(self._paths, comp)
         if pinned:                                     # the pinned lane is local: its target is this manifest's pin
-            sref, remote_sha, entry["pin_at_check"] = None, "", pinned
+            sref, remote_sha, entry["pin_at_check"], entry["lhpc_head_at_check"] = None, "", pinned, stackupdates.fetched_lhpc_head(self._paths)
         elif stable:
             sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
             if not (sref.sha and sref.verified):
@@ -135,7 +135,7 @@ class MaintenanceOpsMixin:
         entry["upstream_head"] = want
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
-        if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run).get(comp.id, pinned) != pinned:
+        if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run, entry["lhpc_head_at_check"]).get(comp.id, pinned) != pinned:
             entry["status"] = stackupdates.LHPC_FIRST              # only the known-working lane (plan row U6)
         return entry
 
@@ -253,9 +253,9 @@ class MaintenanceOpsMixin:
                                   "excused": sorted(excused)})
 
     def source_check_view(self) -> dict:
-        """Cached, network-free freshness view for GET pages. `{checked_at, components}`."""
+        """Cached, network-free freshness view for GET pages: `{checked_at, components, lhpc_head}` (fetched LHPC)."""
         from . import stackupdates
-        return stackupdates.view(self._paths)
+        return {**stackupdates.view(self._paths), "lhpc_head": stackupdates.fetched_lhpc_head(self._paths)}
 
 
     def _with_source(self, target: str):

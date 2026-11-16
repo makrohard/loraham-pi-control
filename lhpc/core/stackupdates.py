@@ -77,7 +77,7 @@ def _valid_entry(e) -> bool:
         return False
     if e.get("status") not in _STORED:
         return False
-    for k in ("local_head_at_check", "upstream_head", "pin_at_check"):
+    for k in ("local_head_at_check", "upstream_head", "pin_at_check", "lhpc_head_at_check"):
         if k in e and not (_is_str(e[k]) and (e[k] == "" or _HEX.match(e[k]))):
             return False
     for k in ("remote", "source_path"):
@@ -145,14 +145,22 @@ def view(paths: Paths) -> dict:
             "components": _clean_components(data.get("components"))}
 
 
-def effective_status(entry, current_head: str, pin: str | None = None) -> str:
+def fetched_lhpc_head(paths: Paths) -> str:
+    """The LHPC head the last self-update check fetched (its cache), "" without one."""
+    from . import selfupdate
+    return (selfupdate.read_cache(paths).get("upstream") or {}).get("upstream_head") or ""
+
+
+def effective_status(entry, current_head: str, pin: str | None = None, lhpc_head: str | None = None) -> str:
     """Resolve a cached entry against the component's CURRENT local head.
 
     The verdict was computed against `local_head_at_check`. If the source has moved since (the
     operator ran Update, or Clean re-cloned it), the stored verdict describes a commit that is no
     longer installed and must NOT be shown — neither its green nor its yellow. Returns `unchecked`.
-    A pinned-lane verdict also records the manifest pin it used (`pin_at_check`): once the manifest pin moved
-    (an LHPC update applied), it describes the old pin and reads `unchecked` too (`pin`: the current one).
+    The ONE rule for every reader (the page, `status --versions`): a verdict stands only on all the evidence it
+    was computed from. A pinned-lane verdict also records the manifest pin (`pin_at_check`) and the LHPC head the
+    self-update check had fetched (`lhpc_head_at_check`); once either moved (`pin`, `lhpc_head`: today's), it
+    reads `unchecked`. An entry without that evidence (written before one verdict per lane) reads `unchecked`.
     """
     if not isinstance(entry, dict):
         return UNCHECKED
@@ -164,16 +172,19 @@ def effective_status(entry, current_head: str, pin: str | None = None) -> str:
     at = entry.get("local_head_at_check") or ""
     if not at or not current_head or at != current_head:
         return UNCHECKED
-    if pin is not None and entry.get("pin_at_check") and entry["pin_at_check"] != pin:
+    if "pin_at_check" not in entry or "lhpc_head_at_check" not in entry:
+        return UNCHECKED
+    if entry["pin_at_check"] and (entry["pin_at_check"] != pin or entry["lhpc_head_at_check"] != (lhpc_head or "")):
         return UNCHECKED
     return status
 
 
-def lane_word(fresh: dict, cid: str, status, pin: str = "") -> str:
+def lane_word(fresh: dict, cid: str, status, pin: str, lhpc_head: str) -> str:
     """`status --versions`' state column for a ComponentStatus: a clean checkout reads its lane verdict (the last
     check, tied to this head); the probe's own facts (dirty, missing) stay; the pin is a detail, not a verdict."""
     state = status.source_state.value
-    return label(effective_status(fresh.get(cid), status.source_head or "", pin)) if state in ("match", "differs") else state
+    return (label(effective_status(fresh.get(cid), status.source_head or "", pin, lhpc_head))
+            if state in ("match", "differs") else state)
 
 
 def pinned_target(paths: Paths, comp) -> str:
@@ -214,16 +225,15 @@ def record(paths: Paths, results: dict, now: int | None = None) -> dict:
     return out
 
 
-def next_lhpc_pins(paths: Paths, run) -> dict:
-    """{component id: pin} of the LHPC the last self-update check fetched: the shipped manifest at the self-update
-    cache's `upstream_head`, read with `git show` in this checkout (local, no network), only when that head is
+def next_lhpc_pins(paths: Paths, run, head: str) -> dict:
+    """{component id: pin} of the LHPC the last self-update check fetched: the shipped manifest at `head` (that
+    check's `upstream_head`, `fetched_lhpc_head`), read with `git show` in this checkout (local, no network), only when that head is
     ahead of the running checkout. {} for no cache, no checkout, a head not ahead, or a manifest that cannot be
     read: no hint, never "could not check" (plan row U6)."""
     import tomllib
 
     from . import selfupdate
     from .manifest import ManifestError, parse_manifest
-    head = (selfupdate.read_cache(paths).get("upstream") or {}).get("upstream_head") or ""
     root = selfupdate.repo_root()
     if root is None or not re.fullmatch(r"[0-9a-f]{40}", head):
         return {}

@@ -1329,10 +1329,13 @@ def _lhpc_upstream(box, git, make_repo, monkeypatch, pin=None, text=None, ahead=
 
 
 def test_a_pinned_source_whose_next_lhpc_pins_another_commit_reads_update_lhpc_first(box, capsys, git,
-                                                                                    make_repo, monkeypatch):
+                                                                                    make_repo, monkeypatch, web):
     assert box.cli("install", "s", "--yes") == 0                 # at this LHPC's pin c1
     _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
     assert _check_detail(box, capsys)[0] == "update LHPC first"   # RED before: "up to date"
+    # the same verdict on every reader while its evidence holds (today's pin and fetched LHPC passed to the rule)
+    assert "update LHPC first" in _versions_line(box, capsys)
+    assert _install_pill(box, web) == "update LHPC first"
 
 
 def test_control_the_same_pin_upstream_gives_no_hint(box, capsys, git, make_repo, monkeypatch):

@@ -44,7 +44,8 @@ def _fs_paths(*dirs):
 
 def _entry_for(status, at):
     return {"remote": DAEMON_REMOTE, "source_path": "src/x",
-            "local_head_at_check": at, "upstream_head": B, "status": status}
+            "local_head_at_check": at, "upstream_head": B, "status": status,
+            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
 
 
 def _probed(fake):
