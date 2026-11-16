@@ -704,7 +704,7 @@ def _post_data(template: str, comp, params, op, runtime, source, band, inst: Ins
 
 
 _POST_RUNNER = '''\
-import os, re as _re, select, socket, stat, sys, time, subprocess
+import os, re as _re, select, socket, stat, sys, threading, time, subprocess
 STEPS = __STEPS__
 # Exact position values THIS launcher passes to a child, so a failing step's error text
 # cannot echo them back into the log. Filled by the renderer; empty when no GPS step runs.
@@ -885,6 +885,116 @@ def _main_gone_stop(rest):
         _record(entry)
     sys.exit(1 if req else 0)
 
+class _Stop(Exception):
+    pass                                   # a wait's stop reason ("timeout" | "main-gone") from inside a call
+
+def _why_stop(end):
+    # THE exit test of every wait: the bound main gone, else the step's deadline passed; None = go on.
+    if not _main_ok():
+        return "main-gone"
+    return "timeout" if time.monotonic() >= end else None
+
+def _bounded(fn, end):
+    # One blocking call (a stat/open/read of a log on a stalled NFS/FUSE mount, a name lookup + connect) in a
+    # daemon thread, so the wait keeps its deadline and its bound main. A stop abandons the call, never joins it:
+    # a stop ends the step, so one call per step at most (one stuck in an uninterruptible read only delays the
+    # reap at exit; nothing waits on this detached runner). The result counts only if no stop arose meanwhile.
+    why = _why_stop(end)
+    if why:
+        raise _Stop(why)
+    box = []
+    def run():
+        try:
+            box.append((True, fn()))
+        except Exception as e:
+            box.append((False, e))
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    while True:
+        th.join(max(0.0, min(0.2, end - time.monotonic())))
+        why = _why_stop(end)
+        if why:
+            raise _Stop(why)
+        if not th.is_alive():
+            break
+    good, val = box[0]
+    if not good:
+        raise val
+    return val
+
+def _ident(path, end):
+    try:
+        st = _bounded(lambda: os.stat(path), end)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+def _log_scan(s, end, t0, lbl):
+    # ONE cancellable scan: every call, chunk, sleep and the commit go through _why_stop. The log is followed by
+    # its identity and offset: a moved symlink is read at once from its start, a file truncated or rewritten in
+    # place (the last bytes read are no longer before the offset) from 0. A match counts only if the current file
+    # holds it contiguously, the path still names that file, and the deadline and the bound main still hold.
+    # A path that is not a regular file (a FIFO, a tty, a serial port) is never opened: "not yet".
+    path, pat = s["path"], s["pattern"].encode()
+    ident, off, tail, anchor = None, 0, b"", b""
+    tries, seen, nxt, warned = 0, "", t0 + 30, False
+    while True:
+        why = _why_stop(end)
+        if why:
+            return why, tries, seen, time.monotonic()
+        tries += 1
+        fd, again = None, False
+        try:
+            st = _bounded(lambda: os.stat(path), end)
+            if not stat.S_ISREG(st.st_mode):
+                if not warned:
+                    sys.stderr.write("log_wait %s: %s is not a regular file\\n" % (lbl, path))
+                    warned = True
+            else:
+                fd = _bounded(lambda: os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC), end)
+                fst = _bounded(lambda: os.fstat(fd), end)
+                cur = (fst.st_dev, fst.st_ino)
+                seen = os.path.basename(os.readlink("/proc/self/fd/%d" % fd))
+                if cur != (st.st_dev, st.st_ino):
+                    again = True                  # moved between the stat and the open: look again at once
+                elif (cur != ident or fst.st_size < off or anchor and _bounded(
+                        lambda: os.pread(fd, len(anchor), off - len(anchor)), end) != anchor):
+                    ident, off, tail, anchor = cur, 0, b"", b""      # another log, or this one rewritten: from 0
+                while not again:
+                    if _ident(path, end) != ident:
+                        again = True              # the path names another log now: follow it at once
+                        break
+                    chunk = _bounded(lambda: os.pread(fd, 1 << 20, off), end)
+                    if not chunk:
+                        break                     # the end of the log, for now
+                    buf = tail + chunk
+                    i = buf.find(pat)
+                    if i >= 0:
+                        p = off - len(tail) + i
+                        if (_bounded(lambda: os.pread(fd, len(pat), p), end) == pat
+                                and _ident(path, end) == ident):
+                            return "ready", tries, seen, time.monotonic()   # both calls held deadline + main
+                        ident, again = None, True  # old and new bytes joined: the file changed, read it again
+                        break
+                    off += len(chunk)
+                    tail = buf[1 - len(pat):] if len(pat) > 1 else b""
+                    anchor = buf[-64:]
+        except _Stop as e:
+            return e.args[0], tries, seen, time.monotonic()   # fd left to a call that may still run
+        except OSError:
+            pass                                  # absent (a guest provisioning) or unreadable: not yet
+        if fd is not None:
+            os.close(fd)
+        if again:
+            continue
+        if time.monotonic() >= nxt:
+            sys.stderr.write("log_wait %s: waiting %d s (%s)\\n" % (lbl, time.monotonic() - t0, seen or "no log yet"))
+            nxt += 30
+        why = _why_stop(end)
+        if why:
+            return why, tries, seen, time.monotonic()
+        time.sleep(min(2.0, end - time.monotonic()))
+
 if GATED and not _armed():
     sys.exit(0)                            # detached runner never armed -> no side effects at all
 
@@ -940,23 +1050,33 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])   # bound main already gone -> do not even wait
-            end = time.monotonic() + s["timeout"]
-            ok = False
-            tries = 0
-            while time.monotonic() < end:
-                if not _main_ok():
-                    break               # main gone/zombie mid-wait -> no connection attempt
+            end, tries = t0 + s["timeout"], 0
+            while True:                 # the scan's exits: _why_stop before each try, sleep and the commit
+                oc = _why_stop(end)
+                if oc:
+                    break
                 tries += 1
-                try:
-                    with socket.create_connection((s["host"], s["port"]), 2):
-                        ok = True
-                        break
+                try:                    # the name lookup + connect; _bounded returns only while neither stop holds
+                    _bounded(lambda: socket.create_connection(
+                        (s["host"], s["port"]), max(0.01, min(2.0, end - time.monotonic()))).close(), end)
+                    oc = "ready"
+                    break
+                except _Stop as e:
+                    oc = e.args[0]
+                    break
                 except OSError:
-                    time.sleep(2)
+                    pass
+                oc = _why_stop(end)
+                if oc:
+                    break
+                time.sleep(min(2.0, end - time.monotonic()))
             _record({"kind": "tcp_wait", "label": _lbl, "host": s["host"], "port": s["port"],
-                     "outcome": ("ready" if ok else "timeout"), "attempts": tries,
-                     "elapsed_s": round(time.monotonic() - t0, 1)})
-            if not ok and not s.get("optional", True):
+                     "outcome": oc, "attempts": tries, "elapsed_s": round(time.monotonic() - t0, 1)})
+            if oc == "main-gone":
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])   # main lost mid-wait: no further step runs
+            if oc != "ready" and not s.get("optional", True):
                 sys.exit(1)             # a required endpoint that never appears fails
         elif k == "log_wait":
             t0 = time.monotonic()
@@ -967,36 +1087,20 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])
-            end, ok, tries, seen, nxt = t0 + s["timeout"], False, 0, "", t0 + 30
-            if s.get("clock"):                    # one clock per group: no wait ends later than the group's start + its timeout
-                end = min(end, _CLOCKS.setdefault(s["clock"], t0) + s["timeout"])
-            while time.monotonic() < end and _main_ok():   # ONE clock: a reboot re-reads, never restarts it
-                tries += 1
-                try:
-                    with open(s["path"], "rb") as f:   # fresh each poll: follows the symlink to the current boot
-                        seen = os.path.basename(os.path.realpath(s["path"]))
-                        pat, tail = s["pattern"].encode(), b""
-                        for chunk in iter(lambda: f.read(1 << 20), b""):   # the whole file, 1 MiB at a time
-                            if time.monotonic() >= end or not _main_ok():
-                                break                     # the scan keeps the step's deadline and its bound main
-                            if pat in tail + chunk:
-                                ok = True
-                                break
-                            tail = (tail + chunk)[1 - len(pat):] if len(pat) > 1 else b""   # a line across the edge
-                except OSError:
-                    pass                          # absent (a guest provisioning): not yet
-                if ok:
-                    break
-                if time.monotonic() >= nxt:
-                    sys.stderr.write("log_wait %s: waiting %d s (%s)\\n" % (_lbl, time.monotonic() - t0, seen or "no log yet"))
-                    nxt += 30
-                time.sleep(2)
-            oc = "ready" if ok else ("timeout" if _main_ok() else "main-gone")
+            # ONE clock per step (a reboot re-reads, never restarts it); a shares_clock group's waits all end by
+            # the group's start + their timeout (the stored start is never later than this one's)
+            end = (_CLOCKS.setdefault(s["clock"], t0) if s.get("clock") else t0) + s["timeout"]
+            oc, tries, seen, now = _log_scan(s, end, t0, _lbl)
             _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": oc, "attempts": tries,
-                     "elapsed_s": round(time.monotonic() - t0, 1)})
-            sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, time.monotonic() - t0) if ok else
-                             "log_wait %s: not ready after %d s (log %s)\\n" % (_lbl, time.monotonic() - t0, s["path"]))
-            if not ok and not s.get("optional", True):
+                     "elapsed_s": round(now - t0, 1)})
+            sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, now - t0) if oc == "ready" else
+                             "log_wait %s: %s after %d s (log %s)\\n" % (_lbl, "not ready" if oc == "timeout" else oc,
+                                                                       now - t0, s["path"]))
+            if oc == "main-gone":
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])   # main lost mid-wait: no further step runs
+            if oc != "ready" and not s.get("optional", True):
                 sys.exit(1)                       # a required line that never appears fails the launcher
         elif k == "tcp_send":
             reps = s.get("repeat", 1)

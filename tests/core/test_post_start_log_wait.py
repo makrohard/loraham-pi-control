@@ -156,11 +156,19 @@ def test_the_line_is_found_anywhere_in_a_log(tmp_path, before):
     assert (rc, st["outcome"]) == (0, "ready"), err
 
 
+def _endless(tmp_path):
+    """A log no scan reaches the end of within a test's deadline, and a regular file (a device is never opened)."""
+    path = tmp_path / "endless.log"
+    with open(path, "wb") as f:
+        f.truncate(1 << 40)
+    return str(path)
+
+
 @pytest.mark.slow                       # the 2 s budget runs on the real clock
 def test_a_log_that_never_ends_stops_the_scan_at_the_deadline(tmp_path):
-    """An endless log (/dev/zero: every read returns a full MiB) with no line in it: the scan stops at the step's
-    deadline and the wait records its timeout, instead of reading past it."""
-    p, rp = _launch(tmp_path, [{"kind": "log_wait", "path": "/dev/zero", "pattern": "Console started on port 2323",
+    """An endless log (a 1 TiB sparse regular file: every read returns a full MiB) with no line in it: the scan stops
+    at the step's deadline and the wait records its timeout, instead of reading past it."""
+    p, rp = _launch(tmp_path, [{"kind": "log_wait", "path": _endless(tmp_path), "pattern": "Console started on port 2323",
                                 "timeout": 2, "label": "firmware boot", "required": True}])
     try:
         p.communicate(timeout=20)
@@ -179,7 +187,7 @@ def test_the_bound_main_ending_during_an_endless_scan_is_main_gone_at_once(tmp_p
     binding = {"main_launch_id": "m", "main_pid": main.pid, "main_starttime": int(rest[19]),
                "main_pgid": int(rest[2]), "main_sid": int(rest[3])}
     try:
-        rc, st, _err = _wait(tmp_path, "/dev/zero", 8, binding=binding, after=_later(2, main.kill))
+        rc, st, _err = _wait(tmp_path, _endless(tmp_path), 8, binding=binding, after=_later(2, main.kill))
     finally:
         main.kill()
         main.wait()
@@ -412,3 +420,299 @@ def test_meshcoms_guest_gets_the_longer_provisioning_deadline(tmp_path):
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
     env = commands.build_env(comp.run_env, str(tmp_path), "/src/mc", "", inst=commands.Instance("r1"))
     assert env.get("PROVISION_TIMEOUT") == "1200"
+
+
+# ---- One cancellable scan (gate-2 R3): the rendered launcher under a hook wrapper. The wrapper counts every chunk read
+# of the log (a read of 64 KiB or more, through open().read or os.pread alike), can act before or after the n-th one
+# (block it, move the symlink, rewrite the file in place), can run a virtual monotonic clock (moved by sleeps, by a
+# cost per chunk read, per connect and per clock reading), can kill the bound main at a virtual time or right after the
+# first main check that follows the chunk read holding the line, and writes the opens of the log path and its virtual
+# end to a trace file.
+_HOOKED = r'''
+import builtins, json, os, runpy, signal, socket, sys, threading, time
+cfg = json.loads(sys.argv[2])
+_now, _n, _hit, _killed = [0.0], [0], [False], [False]
+_main, _logs, _pat = cfg.get("main_pid"), set(cfg.get("logs", [])), cfg.get("pattern", "").encode()
+_trace = open(cfg["trace"], "a", buffering=1)
+def _kill():
+    if _main and not _killed[0]:
+        _killed[0] = True
+        os.kill(_main, signal.SIGKILL)
+        for _ in range(100000):                     # until the kernel shows it dead: the virtual clock never waits
+            try:
+                with _ropen("/proc/%d/stat" % _main, "rb") as f:
+                    if f.read().rsplit(b") ", 1)[1].split()[0] in (b"Z", b"X"):
+                        break
+            except OSError:
+                break
+if cfg.get("virtual"):
+    def _mono():
+        t = _now[0]
+        _now[0] += cfg.get("delta", 0.0)
+        if cfg.get("kill_at") is not None and t >= cfg["kill_at"]:
+            _kill()
+        return t
+    def _sleep(s):
+        _now[0] += max(0.0, s)
+    time.monotonic, time.sleep = _mono, _sleep
+    _cc = socket.create_connection
+    def _connect(*a, **k):
+        _now[0] += cfg.get("connect_cost", 0.0)
+        return _cc(*a, **k)
+    socket.create_connection = _connect
+def _act(when):
+    a = cfg.get("on_read", {}).get(str(_n[0]))
+    if not a or (a[0] == "block") != (when == "block"):
+        return
+    if a[0] == "block":
+        threading.Event().wait()
+    elif a[0] == "retarget":
+        os.symlink(a[2], a[1] + ".next")
+        os.replace(a[1] + ".next", a[1])
+    elif a[0] == "rewrite":
+        with _ropen(a[1], "r+b") as f:
+            f.truncate(0)
+            f.write(b"".join(c.encode() * k for c, k in a[2]))
+def _chunk(read):
+    _n[0] += 1
+    _act("block")
+    d = read()
+    if cfg.get("virtual"):
+        _now[0] += cfg.get("read_cost", 0.0)
+    if _pat and _pat in d:
+        _hit[0] = True
+    _act("after")
+    return d
+class _Log:
+    def __init__(s, f): s.f = f
+    def read(s, n=-1): return _chunk(lambda: s.f.read(n)) if n < 0 or n >= 65536 else s.f.read(n)
+    def __enter__(s): return s
+    def __exit__(s, *a): s.f.close()
+    def __getattr__(s, k): return getattr(s.f, k)
+class _Stat:
+    def __init__(s, f): s.f = f
+    def read(s, n=-1):
+        d = s.f.read(n)
+        _kill()
+        return d
+    def __enter__(s): return s
+    def __exit__(s, *a): s.f.close()
+    def __getattr__(s, k): return getattr(s.f, k)
+_ropen, _rpread, _rosopen = builtins.open, os.pread, os.open
+def _open(p, *a, **k):
+    if isinstance(p, str) and p in _logs:
+        _trace.write("open %s\n" % p)
+    f = _ropen(p, *a, **k)
+    if isinstance(p, str) and p in _logs:
+        return _Log(f)
+    if _main and cfg.get("kill_after_hit") and _hit[0] and p == "/proc/%d/stat" % _main:
+        return _Stat(f)
+    return f
+def _osopen(p, *a, **k):
+    if isinstance(p, str) and p in _logs:
+        _trace.write("open %s\n" % p)
+    return _rosopen(p, *a, **k)
+def _pread(fd, n, off):
+    return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 else _rpread(fd, n, off)
+builtins.open, os.open, os.pread = _open, _osopen, _pread
+import atexit
+atexit.register(lambda: _trace.write("end %.1f\n" % _now[0]))
+runpy.run_path(sys.argv[1], run_name="__main__")
+'''
+
+
+def _hooked(tmp_path, steps, binding=None, limit=20, **cfg):
+    """The steps in a real launcher under the hook wrapper: (rc, the step records, stderr, the trace lines). A launcher
+    that is still running at `limit` s is a hang: the test fails on it."""
+    root = tmp_path / "rt"
+    (root / "state" / "post").mkdir(parents=True, exist_ok=True)
+    rp = root / "state" / "post" / "r.json"
+    (tmp_path / "launcher.py").write_text(commands.render_post_launcher(steps, _C(), {}, _Op(), str(root),
+                                                                        str(tmp_path), "", result_path=str(rp),
+                                                                        binding=binding))
+    trace = tmp_path / "trace"
+    cfg = {"trace": str(trace), **cfg}
+    if binding:
+        cfg["main_pid"] = binding["main_pid"]
+    try:
+        p = subprocess.run([sys.executable, "-c", _HOOKED, str(tmp_path / "launcher.py"), json.dumps(cfg)],
+                           capture_output=True, text=True, timeout=limit, check=False)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"the launcher still ran after {limit} s (a hang)")
+    return p.returncode, json.loads(rp.read_text())["steps"], p.stderr, trace.read_text().splitlines()
+
+
+def _bound_main():
+    main = subprocess.Popen(["sleep", "60"], start_new_session=True)  # wallclock: a main to bind to; killed, never waited out
+    with open(f"/proc/{main.pid}/stat", "rb") as f:
+        rest = f.read().rsplit(b") ", 1)[1].split()
+    return main, {"main_launch_id": "m", "main_pid": main.pid, "main_starttime": int(rest[19]),
+                  "main_pgid": int(rest[2]), "main_sid": int(rest[3])}
+
+
+def _lw(path, timeout, pattern="Console started on port 2323", **kw):
+    return {"kind": "log_wait", "path": str(path), "pattern": pattern, "timeout": timeout, "label": "firmware boot",
+            **({"optional": True} if kw.pop("optional", False) else {"required": True}), **kw}
+
+
+_C1 = 1 << 20
+
+
+@pytest.mark.parametrize("a_text, b_text, outcome", [
+    ("x" * (10 * _C1), LINE, "ready"),                             # B1: the old log would eat the budget
+    ("x" * (_C1 + 100) + LINE, "rst:0x1\n", "timeout"),            # B1 converse: the old log's line is obsolete
+    (LINE, "rst:0x1\n", "timeout"),                                 # ... also when the chunk read holds it
+], ids=["moved-to-the-ready-log", "obsolete-line-in-the-old-log", "obsolete-line-in-the-chunk-read"])
+def test_a_log_moved_mid_scan_is_followed_at_once_and_the_old_ones_line_never_counts(tmp_path, a_text, b_text, outcome):
+    link = tmp_path / "uart-latest.log"
+    _boot(tmp_path, link, "uart-1.log", a_text)
+    (tmp_path / "uart-2.log").write_text(b_text)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 5)], virtual=True, read_cost=1.0, logs=[str(link)],
+                                 on_read={"1": ["retarget", str(link), "uart-2.log"]})
+    assert steps[0]["outcome"] == outcome, (steps, err)
+
+
+def test_a_group_wait_on_an_absent_log_does_not_sleep_past_its_own_deadline(tmp_path):
+    """B2: the first wait of group g ends by its 0.1 s, so the second, which shares g's 1 s, still reads its log."""
+    (tmp_path / "boot.log").write_text(LINE)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(tmp_path / "absent.log", 0.1, optional=True, shares_clock="g"),
+                                            _lw(tmp_path / "boot.log", 1, shares_clock="g")], virtual=True)
+    assert (rc, [st["outcome"] for st in steps]) == (0, ["timeout", "ready"]), (steps, err)
+
+
+@pytest.mark.slow
+@pytest.mark.wallclock("the step's real deadline against a FIFO or a tty that would block an open or a read")
+@pytest.mark.parametrize("kind", ["fifo-no-writer", "fifo-held-open", "pty"])
+def test_a_path_that_is_not_a_regular_file_is_never_opened_and_the_wait_keeps_its_deadline(tmp_path, kind):
+    """B3 + D1: a FIFO (no writer: open blocks; a writer holding it: a read blocks) or a tty (opening it would make it
+    the session leader's controlling terminal, a serial port's open resets a node) is never opened."""
+    held = []
+    if kind == "pty":
+        master, slave = os.openpty()
+        held += [master, slave]
+        path = os.ttyname(slave)
+    else:
+        path = str(tmp_path / "uart.log")
+        os.mkfifo(path)
+        if kind == "fifo-held-open":
+            w = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+            os.write(w, LINE.encode())
+            held.append(w)
+    try:
+        rc, steps, err, trace = _hooked(tmp_path, [_lw(path, 1)], logs=[path], limit=15)
+    finally:
+        for fd in held:
+            os.close(fd)
+    assert (rc, steps[0]["outcome"]) == (1, "timeout") and steps[0]["elapsed_s"] < 3, (steps, err)
+    assert "not a regular file" in err and f"open {path}" not in trace, (err, trace)
+
+
+@pytest.mark.slow
+@pytest.mark.wallclock("a read that never returns against the step's real deadline and a real main's exit")
+@pytest.mark.parametrize("main_dies", [False, True], ids=["deadline", "main-gone"])
+def test_a_read_that_never_returns_does_not_hold_the_wait_past_its_deadline_or_main(tmp_path, main_dies):
+    """B3: a stalled read (NFS/FUSE) of the log's second MiB; the wait still ends by its deadline, or as soon as the
+    bound main is gone."""
+    link = tmp_path / "uart-latest.log"
+    _boot(tmp_path, link, "uart-1.log", "x" * (3 * _C1))
+    main, binding = _bound_main() if main_dies else (None, None)
+    if main:
+        threading.Thread(target=_later(1.5, main.kill), daemon=True).start()
+    try:
+        rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 8 if main_dies else 1)], binding=binding, logs=[str(link)],
+                                     on_read={"2": ["block"]}, limit=15)
+    finally:
+        if main:
+            main.kill()
+            main.wait()
+    assert steps[0]["outcome"] == ("main-gone" if main_dies else "timeout") and steps[0]["elapsed_s"] < 4, (steps, err)
+
+
+@pytest.mark.wallclock("a 3 s real deadline bounds the scan of the rewritten log")
+def test_a_log_truncated_and_regrown_in_place_never_joins_old_and_new_bytes(tmp_path):
+    """B4: the first MiB ends in READY; then the file is rewritten in place to C bytes of y + OK. Neither version
+    holds READYOK; the old tail plus the new chunk would."""
+    log = tmp_path / "uart.log"
+    log.write_text("x" * (_C1 - 5) + "READY")
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3, pattern="READYOK")], logs=[str(log)],
+                                 on_read={"1": ["rewrite", str(log), [["y", _C1], ["OK", 1]]]})
+    assert steps[0]["outcome"] == "timeout", (steps, err)
+
+
+@pytest.mark.wallclock("a 5 s real deadline bounds the wait")
+def test_a_log_rewritten_in_place_with_the_line_before_the_read_offset_is_read_again(tmp_path):
+    """Pin (green before the fix too: it re-read from 0 on every poll): after a full pass the log is rewritten in
+    place, same inode, at least as long, with the line in its first MiB; the scan starts again at 0 and finds it."""
+    log = tmp_path / "uart.log"
+    log.write_text("a" * (2 * _C1))
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 5)], logs=[str(log)],
+                                 on_read={"3": ["rewrite", str(log), [["b", 100], [LINE, 1], ["b", 3 * _C1]]]})
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_a_line_found_only_after_the_deadline_is_not_ready(tmp_path):
+    """B5: every clock reading costs 0.4 s, so the line is found after the 1 s deadline: the wait timed out."""
+    (tmp_path / "boot.log").write_text(LINE)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(tmp_path / "boot.log", 1)], virtual=True, delta=0.4)
+    assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
+
+
+@pytest.mark.slow
+@pytest.mark.wallclock("a real main process that dies between the last check and the commit")
+def test_a_line_found_after_main_died_is_not_ready(tmp_path):
+    """B5: the bound main dies right after the first main check that follows the read holding the line; a later
+    check, before the ready is committed, must see it."""
+    (tmp_path / "boot.log").write_text(LINE)
+    main, binding = _bound_main()
+    try:
+        rc, steps, err, _t = _hooked(tmp_path, [_lw(tmp_path / "boot.log", 5)], binding=binding,
+                                     logs=[str(tmp_path / "boot.log")], pattern="Console started on port 2323",
+                                     kill_after_hit=True)
+    finally:
+        main.kill()
+        main.wait()
+    assert (rc, steps[0]["outcome"]) == (1, "main-gone"), (steps, err)
+
+
+@pytest.mark.parametrize("wait", ["log_wait", "tcp_wait"])
+def test_main_lost_mid_wait_stops_the_rest_at_once(tmp_path, wait):
+    """B6 (+ the same shape in tcp_wait): an optional wait, a 60 s delay, a required exec; main dies at virtual t=1.
+    The wait records main-gone, the delay never runs, the exec is recorded as never run, and the launcher fails."""
+    main, binding = _bound_main()
+    port = _closed_port()
+    first = (_lw(tmp_path / "absent.log", 10, optional=True) if wait == "log_wait" else
+             {"kind": "tcp_wait", "host": "127.0.0.1", "port": port, "timeout": 10, "optional": True})
+    try:
+        rc, steps, err, trace = _hooked(tmp_path, [first, {"kind": "delay", "seconds": 60},
+                                                   {"kind": "exec", "argv": ["true"], "label": "after",
+                                                    "required": True}],
+                                        binding=binding, virtual=True, kill_at=1.0)
+    finally:
+        main.kill()
+        main.wait()
+    end = float(trace[-1].split()[1])
+    assert rc == 1 and [st["outcome"] for st in steps] == ["main-gone", "main-gone"] and end < 5, (steps, trace, err)
+
+
+def _closed_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_a_tcp_wait_does_not_sleep_past_its_deadline(tmp_path):
+    rc, steps, err, _t = _hooked(tmp_path, [{"kind": "tcp_wait", "host": "127.0.0.1", "port": _closed_port(),
+                                             "timeout": 1, "required": True}], virtual=True)
+    assert (steps[0]["outcome"], steps[0]["elapsed_s"]) == ("timeout", 1.0), (steps, err)
+
+
+def test_a_tcp_connect_that_completes_after_the_deadline_is_not_ready(tmp_path):
+    import socket
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(4)
+        rc, steps, err, _t = _hooked(tmp_path, [{"kind": "tcp_wait", "host": "127.0.0.1",
+                                                 "port": srv.getsockname()[1], "timeout": 1, "required": True}],
+                                     virtual=True, connect_cost=2.0)
+    assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
