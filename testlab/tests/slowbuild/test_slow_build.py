@@ -38,7 +38,7 @@ from lhpc_testlab.release import external_unavailable, on_binary
 from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
 
 from lhpc.core import slow_target as stt
-from lhpc.core.manifest import default_manifest_path, load_controller, load_manifest
+from lhpc.core.manifest import default_manifest_path, load_manifest, parse_controller
 from lhpc.version import __version__
 
 pytestmark = pytest.mark.slow
@@ -543,8 +543,10 @@ def test_slow_build_selfupdate(tmp_path):
     _harden_box(root, co)
     # A box's origin is the approved canonical remote, which the helper's controller-identity
     # check demands of an in-root checkout; the lane serves it from the local candidate remote
-    # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box.
-    canonical = load_controller(co / "lhpc" / "data" / "manifest.example.toml").remote
+    # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box. Only the
+    # previous release's `[controller]` table is read: its stacks are that release's, not this parser's.
+    prev_manifest = tomllib.loads((co / "lhpc" / "data" / "manifest.example.toml").read_text())
+    canonical = parse_controller(prev_manifest).remote
     _git("-C", str(co), "remote", "set-url", "origin", canonical)
     _git("-C", str(co), "config", f"url.{remote}.insteadOf", canonical)
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=600)
