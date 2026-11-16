@@ -1263,6 +1263,61 @@ def test_control_a_pinned_source_at_its_pin_reads_current_in_both(box, capsys):
     assert "current" in _versions_line(box, capsys).split()
 
 
+def _status_src(box, capsys, cid="app"):
+    """The `src` word of the component's line in `lhpc status s`."""
+    capsys.readouterr()
+    box.cli("status", "s")
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.split()[:1] == [cid]]
+    assert len(lines) == 1, lines
+    return lines[0].split(" src ", 1)[1].strip()
+
+
+def _info_card(box, web):
+    """The "Source / profile" row of stack s's info card, from the rendered stack body."""
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    doc = htmlq.parse(client.get("/stacks/s/body").get_data(as_text=True))
+    card = doc.within(doc.by_id("stack-info-s"))
+    rows = [card.within(tr).find("td")[0].text for tr in card.find("tr")
+            if [th.text for th in card.within(tr).find("th")] == ["Source / profile"]]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+@pytest.mark.parametrize("lane", ["dev", "stable"])
+def test_a_source_at_its_lane_target_reads_current_in_status_and_on_the_info_card(box, capsys, web, lane):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", lane, "--yes") == 0
+    assert box.head() != box.c[0]                    # not at the pin
+    assert _check_detail(box, capsys)[0] == "current"
+    assert _status_src(box, capsys) == "current"                         # RED before: "differs"
+    assert _info_card(box, web) == "current / installed-unvalidated"     # RED before: "differs / candidate-available"
+
+
+def test_a_dev_source_behind_its_tip_offers_the_candidate_on_every_surface(box, capsys, web):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    box.advance()
+    assert _check_detail(box, capsys)[0] == "update available"
+    assert "update available" in _versions_line(box, capsys)
+    assert _status_src(box, capsys) == "update available"                # RED before: "differs"
+    assert _info_card(box, web) == "update available / candidate-available"
+    assert _install_pill(box, web) == "update available"
+
+
+def test_a_source_not_yet_checked_reads_unchecked_not_a_candidate(box, capsys, web):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0      # no source-check ran
+    assert _status_src(box, capsys) == "unchecked"                       # RED before: "differs"
+    assert _info_card(box, web) == "unchecked / installed-unvalidated"   # RED before: "differs / candidate-available"
+
+
+def test_control_a_dirty_checkout_keeps_its_probe_fact_on_every_surface(box, capsys, web):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    _check_detail(box, capsys)
+    (box.dest / "f").write_text("local edit\n")
+    assert _status_src(box, capsys) == "dirty"
+    assert "dirty" in _versions_line(box, capsys).split()
+    assert _info_card(box, web) == "dirty / locally-modified"
+
+
 def _fail_branch_probe(monkeypatch):
     """`git ls-remote <remote> main` (the dev and pinned probe) fails; the tag reads of the stable lane do not."""
     inner = backends.RealCommandRunner.run
@@ -1336,6 +1391,25 @@ def test_a_pinned_source_whose_next_lhpc_pins_another_commit_reads_update_lhpc_f
     # the same verdict on every reader while its evidence holds (today's pin and fetched LHPC passed to the rule)
     assert "update LHPC first" in _versions_line(box, capsys)
     assert _install_pill(box, web) == "update LHPC first"
+
+
+def test_a_pinned_source_behind_its_own_pin_reads_update_available_beside_a_next_lhpc(box, capsys, git, make_repo,
+                                                                                     monkeypatch):
+    assert box.cli("install", "s", "--yes") == 0                 # at c1
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[2])   # the next LHPC pins c3
+    box.manifest.write_text(box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{box.c[1]}"'))
+    assert _check_detail(box, capsys)[0] == "update available"   # this LHPC pins c2: the update is here, not next
+
+
+def test_a_summary_without_an_update_leads_with_lhpc_first_before_could_not_check(box, capsys, git, make_repo,
+                                                                                   monkeypatch):
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--yes") == 0                 # app and lib pinned at c1
+    assert box.cli("update", "lib", "--source", "dev", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])   # app: update LHPC first
+    _fail_branch_probe(monkeypatch)                              # lib (dev): could not check
+    first = _check_detail(box, capsys, "lib")[1].splitlines()[0]
+    assert "need LHPC updated first" in first and first.find("LHPC") < first.find("could not be checked"), first
 
 
 def test_control_the_same_pin_upstream_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
