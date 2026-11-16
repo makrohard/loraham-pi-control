@@ -33,6 +33,7 @@ import http.client
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -608,15 +609,14 @@ def record_clone(paths: Paths, comp_id: str, commit: str | None) -> None:
     _journal_update(paths, clones=clones if commit is None else {**clones, comp_id: commit})
 
 
-def move_clones(svc, stack_id: str, moves, locked: bool, txn: bool = False) -> tuple[list, str]:
+def move_clones(svc, stack_id: str, moves, locked: bool) -> tuple[list, str]:
     """Adopt each supporting checkout in `moves` [(component, the binary's commit, its commit now or "")] at
-    the binary's commit, under the held locks: (notes, "") or (notes so far, why it failed). In a binary
-    transaction (`txn`) each checkout's commit is journaled BEFORE it is moved, so the rollback (in-process or
-    the next recovery) moves it back: a failed install never leaves the old binary with new run scripts."""
+    the binary's commit, under the held locks, inside an open binary transaction: (notes, "") or (notes so far, why
+    it failed). Each checkout's commit is journaled BEFORE it is moved, so the rollback (in-process or the next
+    recovery) moves it back: a failed install never leaves the old binary with new run scripts."""
     inst, notes = svc._installer(), []
     for comp, want, prev in moves:
-        if txn:
-            record_clone(svc._paths, comp.id, prev)
+        record_clone(svc._paths, comp.id, prev)
         # The source lock of this path is held by an OUTER boundary (the auto-install run, `locked`) or by
         # THIS install's own guard over `_binary_source_paths`: re-acquiring it would self-contend.
         held = locked or comp.source.path in set(svc._binary_source_paths(stack_id))
@@ -624,12 +624,35 @@ def move_clones(svc, stack_id: str, moves, locked: bool, txn: bool = False) -> t
                                 force=svc._paths.resolve_source(comp.source.path).is_dir(),
                                 pinned_expected=(want, "the binary artifact's commit"))   # exact, not the pin (U9)
         if act.status == "failed":                 # the adoption changes nothing when it fails
-            if txn:
-                record_clone(svc._paths, comp.id, None)
+            record_clone(svc._paths, comp.id, None)
             return notes, (f"{comp.id} needs its source checkout (run scripts live there) and it could not "
                            f"be adopted ({act.detail}).")
         notes.append(f"  adopted pinned source for {comp.id} (run scripts)")
     return notes, ""
+
+
+def repair_clones(svc, stack_id: str, moves, locked: bool, old_receipt) -> tuple[list, str]:
+    """The same intact artifact's repair: its supporting checkouts move to the binary's commit and its receipt's
+    baseline is re-read for them, in ONE binary transaction journaled before the move (as an install's), so a
+    failure or an interrupt moves them back and restores the receipt (here, or in the next binary install)."""
+    from .best_effort import best_effort
+    try:
+        open_txn(svc._paths, stack_id, secrets.token_hex(8), old_receipt=old_receipt)
+        notes, why = move_clones(svc, stack_id, moves, locked)
+        why = why or rebase_receipt(svc, stack_id, [c.id for c, _w, _p in moves])
+        if not why and not commit(svc._paths):
+            why = "could not commit the binary transaction"
+    except Exception as exc:                       # a journal write, a filesystem error, anything: unwound below
+        notes, why = [], exc.message if isinstance(exc, BinaryInstallError) else f"unexpected {type(exc).__name__}"
+    except BaseException:                          # Ctrl-C: unwind now, then let it propagate
+        best_effort(lambda: svc.binary_recover(sources_locked=True),
+                    what=f"checkout repair of '{stack_id}': the unwind after the interrupt failed — the next "
+                         "binary install recovers it")
+        raise
+    if not why:
+        return notes, ""
+    ok, rwhy = svc.binary_recover(sources_locked=True)
+    return [], why if ok else f"{why}; the previous state could not be fully restored: {rwhy}"
 
 
 def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:

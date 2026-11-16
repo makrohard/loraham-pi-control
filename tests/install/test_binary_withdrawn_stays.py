@@ -507,16 +507,53 @@ def test_a_damaged_ownership_record_refuses_the_install_before_anything_changes(
     assert state["adopted"] == [] and bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_a_repair_whose_receipt_cannot_be_rewritten_is_refused_by_name(tmp_path, monkeypatch, binary_receipt):
+def _repair_setup(tmp_path, monkeypatch, binary_receipt):
+    """B installed and intact (its receipt owning meshcom-qemu at "at-install"), the checkout left at another
+    commit: installing B again is the checkout repair."""
     svc = _svc(tmp_path, monkeypatch)
     _installed(svc, binary_receipt, "meshcom")
-    _moving_clone(monkeypatch, svc, "c" * 40)
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
     _owned_at_install(svc)
     _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))
-    monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: False)
+    return svc, state
+
+
+def _repaired_back(svc, state):
+    # moved to B's commit, then back; B's receipt valid again (the move back is the binary's own); no journal
+    assert state["adopted"] == ["b" * 40, "c" * 40] and state["commit"] == "c" * 40, state
+    st, _rec, why = brx.receipt_state(svc._paths, "meshcom")
+    assert st == "valid", why
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_a_repair_whose_receipt_cannot_be_rewritten_is_refused_by_name_and_moves_the_checkout_back(
+        tmp_path, monkeypatch, binary_receipt):
+    # The repair moved the checkout, then the receipt cannot be rewritten (a full disk): refused by name, and the
+    # repair is undone like a failed install: the old checkout is back and B's receipt is valid.
+    svc, state = _repair_setup(tmp_path, monkeypatch, binary_receipt)
+    real, calls = brx.write_receipt, []
+    monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: bool(calls.append(1) or len(calls) > 1) and real(*a, **k))
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "the binary receipt could not be rewritten after its checkout moved" in res.summary, (
         res.summary)
+    _repaired_back(svc, state)
+
+
+def test_a_repair_interrupted_after_the_move_moves_the_checkout_back(tmp_path, monkeypatch, binary_receipt):
+    # Ctrl-C between the move and the receipt rewrite: unwound before the interrupt propagates.
+    svc, state = _repair_setup(tmp_path, monkeypatch, binary_receipt)
+    real, calls = bi.rebase_receipt, []
+
+    def interrupted(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return real(*a, **k)
+    monkeypatch.setattr(bi, "rebase_receipt", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        svc.install("meshcom", apply=True, source="binary")
+    _repaired_back(svc, state)
+
 
 
 def test_a_restore_whose_receipt_cannot_be_rewritten_keeps_the_journal(tmp_path, monkeypatch, binary_receipt):

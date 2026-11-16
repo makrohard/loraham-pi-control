@@ -259,10 +259,8 @@ class BinaryOpsMixin:
             # Nothing is moved here. A running stack runs its scripts from these checkouts: refused.
             if _moves and (_run := self._binary_running_refusal(stack_id)) is not None:
                 return _run
-            if _have:   # the same artifact, intact: only its checkouts may need the repair, no binary change
-                notes, _cerr = bi.move_clones(self, stack_id, _moves, locked)
-                _rerr = bi.rebase_receipt(self, stack_id, [c.id for c, _w, _p in _moves])   # read after the move
-                _cerr = _cerr or _rerr
+            if _have:   # the same artifact, intact: only its checkouts may need the repair (journaled, undoable)
+                notes, _cerr = bi.repair_clones(self, stack_id, _moves, locked, prev_receipt_raw) if _moves else ([], "")
                 if _cerr:
                     return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_cerr}",
                                         next_commands=[src_cmd], data={"binary_failed": True})
@@ -327,7 +325,7 @@ class BinaryOpsMixin:
                             raise bi.BinaryInstallError(f"could not switch the mesh password of {k} off ({_r.summary})")
                     _auth_restore = auth_journal["previous"]
                 # The supporting checkouts move WITH the binary swap, inside this transaction (journaled first).
-                clone_notes, _cerr = bi.move_clones(self, stack_id, _moves, locked, txn=True)
+                clone_notes, _cerr = bi.move_clones(self, stack_id, _moves, locked)
                 if _cerr:
                     raise bi.BinaryInstallError(_cerr)
                 # The receipt's ownership baseline is read AFTER the moves: they are the binary's, not a source adoption.
