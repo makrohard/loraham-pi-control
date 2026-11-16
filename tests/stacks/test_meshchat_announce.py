@@ -398,7 +398,7 @@ def box(tmp_path, monkeypatch, capsys):
         radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
         seed_framing_driver(tmp_path)
         for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
-                            ("binary_behind", lambda self, c: ""), ("is_built", lambda self, c: True),
+                            ("is_built", lambda self, c: True), ("_build_complete", lambda self, c: True),
                             ("_source_present", lambda self, c: True)):
             monkeypatch.setattr(ControllerService, name, value)
         monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])   # the PC has no SPI
