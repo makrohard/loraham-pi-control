@@ -65,8 +65,9 @@ is the next line, read only when row 4 runs. Stdin is then closed.
 
 ## Safety
 
-- Box radios run at most 17 dBm and never with `--high-power` or a high-power grant; a stick at most its model's own
-  maximum. A peer transmits only after its power read back low, or as one of the as-is peers named above.
+- Every box radio, sticks included, runs at most min(17, its model's maximum) dBm (the PineDio 14), never with
+  `--high-power` or a high-power grant. A peer transmits only after its power read back low, or as one of the as-is
+  peers named above.
 - Every transmission goes through one dispatcher, `tx <radio> <frames> <nonce|control> -- <executor> <args>`, which checks
   the command, the radio's power read in this row, the message (the row's nonce only, at most 16 characters), the
   budget, both boxes' boot ids and the USB lists, and only then runs the send. An automatic send of a protocol endpoint

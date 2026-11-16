@@ -72,14 +72,18 @@ def dry(tmp_path):
 @pytest.fixture
 def runner_copy(tmp_path):
     """runner_copy(name, edit) -> rf-proof.sh of a copy of the kit whose file `name` is changed by `edit(text) -> text` (a
-    planted defect)."""
+    planted defect; `edit=None` leaves the copy unchanged). The copy sits at `<tmp>/r/testlab/hardware` beside a link
+    `<tmp>/r/lhpc` to this checkout's package, so its REPO is a repo and its dry run reaches the rows."""
     def make(name, edit):
-        kit = tmp_path / "kit"
+        root = tmp_path / f"r{len(list(tmp_path.glob('r*')))}"
+        kit = root / "testlab" / "hardware"
         shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
-        text = (kit / name).read_text()
-        changed = edit(text)
-        assert changed != text, "the planted edit changed nothing"
-        (kit / name).write_text(changed)
+        (root / "lhpc").symlink_to(KIT.parents[1] / "lhpc")
+        if edit is not None:
+            text = (kit / name).read_text()
+            changed = edit(text)
+            assert changed != text, "the planted edit changed nothing"
+            (kit / name).write_text(changed)
         return kit / "rf-proof.sh"
     return make
 
@@ -282,10 +286,11 @@ def test_a_peer_that_sends_twice_under_one_tx_fails_the_dispatch_check(dry, tmp_
 
 
 def test_a_send_moved_out_of_its_tx_fails_the_dispatch_check_and_the_lint(dry, runner_copy):
+    assert dry("full", script=runner_copy("rf-proof.sh", None)).rc == 0, "the unchanged copy must run through"
     script = runner_copy("rf-proof.sh", lambda t: TX_CALL.sub("", t, count=1))
     assert bypasses(script.read_text())
     d = dry("full", script=script)
-    assert uncovered(d.lines) or d.rc == 2
+    assert d.rc == 2 and "a send outside tx: never run" in d.err
 
 
 @pytest.mark.parametrize("line,hit", [("PAT='tmux send-keys'", False), ("PAT='$(tmux send-keys -t x n1)'", False),

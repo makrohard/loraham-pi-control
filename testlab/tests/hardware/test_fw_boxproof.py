@@ -3,6 +3,7 @@
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -62,7 +63,7 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
 
 
 CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
-  *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
+  *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf '3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
   *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
@@ -70,9 +71,22 @@ sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); 
 {body}; echo RC=$?"""
 
 
-def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2"):
+def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10"):
     return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
-                                         body=body))
+                                         body=body, mp=mp))
+
+
+@pytest.mark.parametrize("mp,why", [("17", None), ("18", "max_power 18 above 17: no start"), ("20", "above 17"),
+                                    ("", "no max_power value")])
+def test_the_stack_starts_only_with_a_max_power_of_at_most_17(tmp_path, mp, why):
+    # The power gate before the start: the stack's max_power is read first; above 17, or no value, is a STOP, and no
+    # start command is sent.
+    p, evd = canned(tmp_path, mp=mp)
+    if why is None:
+        assert "RC=0" in p.stdout and (evd / "F6-r2-start.txt").exists(), p.stdout + p.stderr
+    else:
+        assert p.returncode == 2 and why in p.stdout and "RC=" not in p.stdout, p.stdout + p.stderr
+        assert not (evd / "F6-r2-start.txt").exists() and not list(evd.glob("SAFESTOP-*.txt"))
 
 
 @pytest.mark.parametrize("count,started", [("4", True), ("3", False), ("", False)])
@@ -116,3 +130,34 @@ def test_a_stack_stopped_by_its_row_is_not_stopped_again(tmp_path):
     p, evd = canned(tmp_path, body="started meshtastic@r2; stopped meshtastic@r2; stop 'a later STOP'")
     assert p.returncode == 2 and not list(evd.glob("SAFESTOP-*.txt"))
 
+
+def test_the_end_scan_passes_redacted_evidence(tmp_path):
+    p, _ = proof(tmp_path, 'X x.txt "echo hello"; endscan; echo CLEAN', fake_ssh(tmp_path))
+    assert p.returncode == 0 and "CLEAN" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_end_scan_stops_on_a_password_in_the_evidence(tmp_path):
+    # RE: a file that holds the password (a capture that missed the redactor) stops the run before the SHA256SUMS.
+    p, _ = proof(tmp_path, f'X x.txt "echo hello"; printf "%s\\n" "{PW}" > "$EVD/planted.txt"; endscan; echo CLEAN',
+                 fake_ssh(tmp_path))
+    assert p.returncode == 2 and "the box password is in 1 evidence file(s)" in p.stdout and "CLEAN" not in p.stdout
+
+
+def test_a_password_inside_the_login_name_is_refused_before_any_box_call(tmp_path):
+    # The redactor masks the password, so a password that is part of the login name would mask the login in every
+    # capture: the live run refuses it at once, with no ssh call.
+    root = tmp_path / "r"
+    kit = root / "testlab" / "hardware"
+    shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
+    subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=60)
+    (kit / "lab.local.env").write_text(f"BOX_H_HOST=192.0.2.10\nBOX_H_USER=u{PW}x\nEVD_ROOT={tmp_path}/evd\n")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for name in ("ssh", "sshpass"):
+        (bin_ / name).write_text(f"#!/bin/bash\ntouch {tmp_path}/called\n")
+        (bin_ / name).chmod(0o755)
+    p = subprocess.run(["bash", str(kit / "fw-boxproof.sh"), "live"], input=f"{PW}\n", capture_output=True, text=True,
+                       cwd=tmp_path, env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TMPDIR": str(tmp_path)},
+                       check=False, timeout=60)
+    assert p.returncode == 2 and "STOP: the box password is part of the login name" in p.stdout, p.stdout + p.stderr
+    assert not (tmp_path / "called").exists()

@@ -119,6 +119,9 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no power value in this start's Final Tx power line";; esac; [ "$fp" -le 17 ] || stop "$1: Final Tx power $fp above 17"; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
+endscan() {   # RE: the captures are redacted, so any occurrence of the password in the evidence is a leak
+  local c; c=$(grep -rlF -- "$PW" "$EVD" | wc -l); [ "$c" = 0 ] || stop "RE: the box password is in $c evidence file(s): do not publish"; }
+
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence
 echo "== PREP (the PC; no box touched)"
 [[ "$FWSHA" =~ ^[0-9a-f]{40}$ ]] || stop "FWSHA is not a 40-hex sha"; [[ "$FROM" =~ ^[0-9a-f]{40}$ ]] || stop "FWFROM is not a 40-hex sha"; [ -n "$FWCI" ] || stop "FWCI is not set"
@@ -209,8 +212,7 @@ fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; p
 
 echo "== RE"
 if [ "$MODE" = live ]; then
-  c=$(grep -rlF -- "$PW" "$EVD" | wc -l)                   # the captures are redacted: any occurrence is a leak
-  [ "$c" = 0 ] || stop "RE: the box password is in $c evidence file(s): do not publish"
+  endscan
   ( cd "$EVD" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS ); say "evidence $EVD, SHA256SUMS $(sha256sum "$EVD/SHA256SUMS" | cut -c1-8)"
   [ ! -s "$EVD/FAILED.txt" ] || { say "FAILED rows: $(tr '\n' '|' < "$EVD/FAILED.txt")"; exit 1; }
 fi
