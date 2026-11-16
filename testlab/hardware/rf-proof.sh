@@ -372,7 +372,8 @@ tx() { local k=$1 c=$2 cls=$3 sep=${4:-} rad n e f b
   say "TX | $rad | $c | $cls | $([ "$e" = reserve ] && echo reserve || echo "$e $f")"; drylog "TX $rad $c $cls $e"
   [ "$e" = reserve ] || "$@"; }
 usbsnap() { if [ "$MODE" = dry ]; then echo "  [dry] PC USB snapshot $1"; printf '%s\n' ${DRY_BYID:-} | awk '{print $1, "../../dry"}' > "$OUT/$1-byid.txt"; : > "$OUT/$1-kern.txt"; return 0; fi
-  ls -l /dev/serial/by-id/ 2>/dev/null | awk 'NR > 1 {print $9, $11}' > "$OUT/$1-byid.txt"; journalctl -k --since "@$T0" --no-pager -o short-iso > "$OUT/$1-kern.txt" 2>&1 || stop "journalctl -k"; }
+  capture "$1-byid.txt" bash -c "ls -l /dev/serial/by-id/ 2>/dev/null | awk 'NR > 1 {print \$9, \$11}'"   # both through the redactor
+  capture "$1-kern.txt" journalctl -k --since "@$T0" --no-pager -o short-iso; [ "$XRC" = 0 ] || stop "journalctl -k (rc $XRC)"; }
 boxkern() {   # boxkern <box> <file>: the box's kernel log since its R0 clock, as root (sudo -S, the password on stdin); first line uid 0
   local pw; [ "$1" = H ] && pw=$PW_H || pw=$PW_Z
   XIN "$1" "$2" "$pw" "sudo -S -p '' sh -c 'id -u; journalctl -k --since @$(getk "T0_$1" 0) --no-pager -o short-iso'"; [ "$MODE" = dry ] && return 0
@@ -687,23 +688,23 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 5) || { notrun_row 5 "form not confirmed: $NEEDS_MISSING"; return 0; }
   local m r n1 n2 o pr mp dest prc; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
-  local q="R5-$b-$r"
+  local q="R5-$b-$r" go=$SCRATCH/5-tx2.go pcd=$SCRATCH/5-pcdest.txt   # the peer's control files: private scratch, never the evidence
   must "$b" 5-framing0.txt "$(form rt_get rid="$r" k=rnode_framing)"; o=$(body 5-framing0.txt | tail -n 1)
   [ "$MODE" = dry ] || case "$o" in yes|no) ;; *) stop "row 5: rnode_framing read '$o'";; esac
   undo_push "$b" "$(form rt_set rid="$r" k=rnode_framing v="${o:-no}")"; must "$b" 5-framing1.txt "$(form rt_set rid="$r" k=rnode_framing v=yes)"
   spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"; started "$b" 5-start.txt "meshchat@$r"
   hpower R5-rnode 5-rnode-power.txt
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists
-  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 240 "$OUT/5-pcdest.txt" "$n1" "$GO"; pr=$SPAWN
+  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 240 "$pcd" "$n1" "$go"; pr=$SPAWN
   mp=$(mcport 5-start.txt); [ "$MODE" = dry ] && mp=8790
   [[ "$mp" =~ ^[0-9]{2,5}$ ]] || stop "row 5: no MeshChat ready endpoint port in 5-start.txt"
   [ "$MODE" = dry ] || sleep 10
   tx "$q" 1 control -- must "$b" 5-announce.txt "LHPC_INST=meshchat@$r curl -fsS --max-time 15 http://127.0.0.1:$mp/api/v1/announce"   # 3. the box's announce
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
   hpower R5-rnode 5-rnode-power-2.txt; tx R5-rnode 1 control --reserve; tx "$q" 1 control --reserve
-  tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $GO"
-  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$GO" || stop "row 5: the dry release file"   # dry: right after its tx
-  if needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$OUT/5-pcdest.txt" 2>/dev/null || echo dry)
+  tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $go"
+  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row 5: the dry release file"   # dry: right after its tx
+  if needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no PC destination hash"
     tx "$q" 1 "$n2" -- must "$b" 5-box-send.txt "$(form rt_send rid="$r" dest="$dest" n="$n2")"; fi
   reap "$pr"; prc=$XRC
@@ -960,7 +961,6 @@ else FORMS_OK=${FORMS_OK:-}; FORMS_HEAD=${FORMS_HEAD:-}; [ -n "$FORMS_OK" ] || s
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rf-proof.XXXXXX") || stop "mktemp"; DRYLOG=$SCRATCH/commands.log; : > "$DRYLOG"
 if [ "$MODE" = dry ]; then OUT=$SCRATCH/out; EVD=$EVDROOT/rf-proof-dry; mkdir -p "$OUT" || stop "scratch"
 else EVD=$EVDROOT/rf-proof-$(date -u +%Y%m%dT%H%M%SZ)-$LANE; OUT=$EVD; fi
-GO=$OUT/5-tx2.go   # row 5's release file (dry: in the scratch directory, for the fake peer)
 trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap 'exit 130' INT TERM
 
 [ "$MODE" = dry ] || echo "LIVE: this run transmits. It needs the transmit and lab permission and the GO for this run, with the hardware connected, reachable and set up."
