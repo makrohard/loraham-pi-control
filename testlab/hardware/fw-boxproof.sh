@@ -81,13 +81,13 @@ ok() { say "ok: $*"; }
 report() { [ "$MODE" = live ] && echo "| $* |" >> "$EVD/REPORT.md"; say "REPORT | $*"; }
 # X <file> <command>: on box H, output in $EVD/<file>, rc in XRC. XIN <file> <stdin> <command>: the same with stdin.
 # The output goes through rf-proof.sh's capture: redacted (the password, the call) before it is written.
-sshx() { local in=$1; shift
-  if [ "$in" = - ]; then SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"
-  else printf '%s\n' "$in" | SSHPASS=$PW sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"; fi; }
+sshx() { local how=$1; shift   # sshx n <command> (no stdin) | sshx i <stdin> <command>
+  if [ "$how" = n ]; then SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"
+  else local in=$1; shift; printf '%s\n' "$in" | SSHPASS=$PW sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"; fi; }
 X() { local f=$1; shift; if [ "$MODE" = dry ]; then echo "  [dry] H > $f: $*"; XRC=0; return 0; fi
-  capture "$f" sshx - "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
+  capture "$f" sshx n "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
 XIN() { local f=$1 in=$2; shift 2; if [ "$MODE" = dry ]; then echo "  [dry] H > $f: (stdin) $*"; XRC=0; return 0; fi
-  capture "$f" sshx "$in" "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
+  capture "$f" sshx i "$in" "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$1: rc $XRC"; }
 body() { [ "$MODE" = dry ] && return 0; cat "$EVD/$1"; }
 has() { [ "$MODE" = dry ] && return 0; grep -qF -- "$2" "$EVD/$1"; }

@@ -92,12 +92,12 @@ MODELS_NOT_IN_LAB = {"uputronics", "waveshare-sx1262"}
 TXMAX = 10
 TX_CALL = re.compile(r"\btx \S+ \d+ \S+ -- ")
 # The send forms as the runner uses them: a forms-table send, a helper on a box's stdin, a peer action, the chat keys and the
-# announce. Inside a `case` pattern list (the dry executor's own detector) or a quoted assignment (a pattern held as
-# data) a form is text, not a send.
+# announce. Inside a `case` pattern list (the dry executor's own detector) or a single-quoted assignment (a pattern held as
+# data) a form is text, not a send; a double-quoted one may run a substitution and counts.
 SEND = re.compile(r"\bform (?:tx_text|meshcom_send|mt_send|mc_send|rt_send)\b|\bXIN\b.*\$\{?(?:MCSEND_PY|GW_PY)\b"
                   r"|\b(?:meshcom|mt|mc)-send\b|\brns-exchange\b|\btmux send-keys\b|\bcurl\b.*announce")
 CASE_PATTERNS = re.compile(r"^\s*case \S+ in ")
-QUOTED_ASSIGNMENT = re.compile(r"""^\s*[A-Za-z_]\w*=(['"])(?:(?!\$\().)*\1\s*$""")   # no command substitution
+QUOTED_ASSIGNMENT = re.compile(r"^\s*[A-Za-z_]\w*='[^']*'\s*$")   # single quotes: nothing in them runs
 
 
 def lane_rows(lane):
@@ -286,7 +286,8 @@ def test_a_send_moved_out_of_its_tx_fails_the_dispatch_check_and_the_lint(dry, r
     assert uncovered(d.lines) or d.rc == 2
 
 
-@pytest.mark.parametrize("line,hit", [("PAT='tmux send-keys'", False), ("c=\"$(tmux send-keys -t x n1)\"", True),
+@pytest.mark.parametrize("line,hit", [("PAT='tmux send-keys'", False), ("PAT='$(tmux send-keys -t x n1)'", False),
+                                      ("c=\"$(tmux send-keys -t x n1)\"", True), ("c=\"`tmux send-keys -t x n1`\"", True),
                                       ("    tx H:H433 1 n1 -- must H f.txt \"tmux send-keys -t x n1\"", False)])
 def test_the_lint_reads_a_quoted_pattern_as_data_but_a_command_substitution_as_a_send(line, hit):
     assert bool(bypasses(line)) is hit

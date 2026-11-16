@@ -48,6 +48,11 @@ def test_no_password_or_call_reaches_the_evidence(tmp_path):
     assert [s for s in (PW,) if s in text] + re.findall(CALL, text, re.IGNORECASE) == []
 
 
+def test_a_stdin_payload_of_a_dash_is_delivered(tmp_path):
+    p, evd = proof(tmp_path, 'XIN dash.txt "-" "cat"', fake_ssh(tmp_path))
+    assert "-" in (evd / "dash.txt").read_text().splitlines(), p.stderr
+
+
 @pytest.mark.parametrize("code,ok", [("200", True), ("302", True), ("000", False), ("403", False), ("404", False),
                                      ("500", False), ("", False), ("2000", False)])
 def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
