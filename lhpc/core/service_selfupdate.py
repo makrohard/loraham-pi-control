@@ -582,7 +582,7 @@ class SelfUpdateOpsMixin:
             # Only now is the update finished: `venv-unsynced` stays recorded until the units are refreshed
             # too, so an interruption in between leaves a record the next `--apply` resumes from (`_resumes_sync`).
             res = self._clear_incomplete_states(res, ("venv-unsynced", "units-stale")) or res
-        if root is not None and (line := self._stacks_with_an_update(_sys.executable)):
+        if line := self._stacks_with_an_update(_sys.executable):
             res = _dc.replace(res, details=[*res.details, line], data={**res.data, "stack_updates": line})
         return res
 

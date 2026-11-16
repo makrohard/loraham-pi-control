@@ -19,23 +19,26 @@ from lhpc.core.services import ControllerService
 SWEEP = (sys.executable, "-m", "lhpc", "source-check", "--json")
 
 
-def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head, local_toml=""):
-    """What `lhpc source-check --json` prints on a box whose daemon checkout (the manifest's) is at a*40 and
-    whose remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check;
-    `local_toml` is the box's runtime-local config."""
+def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head, local_toml="", journal="", cid="loraham-daemon",
+               checkout=True, target=()):
+    """What `lhpc source-check [target] --json` prints on a box whose `cid` checkout (the manifest's) is at a*40
+    and whose remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check;
+    `local_toml` is the box's runtime-local config, `journal` its binary install journal."""
     paths, cmds = Paths(runtime_root=tmp_path / "box"), {}
-    if local_toml:
-        (tmp_path / "box" / "config").mkdir(parents=True)
-        (tmp_path / "box" / "config" / "local.toml").write_text(local_toml)
+    for rel, text in (("config/local.toml", local_toml), ("state/binary/install.journal.json", journal)):
+        if text:
+            (tmp_path / "box" / rel).parent.mkdir(parents=True)
+            (tmp_path / "box" / rel).write_text(text)
     box = ControllerService(system=FakeSystem(commands=cmds).system, paths=paths)
-    spec = next(c for s in box.stacks() for c in s.components if c.id == "loraham-daemon").source
+    spec = next(c for s in box.stacks() for c in s.components if c.id == cid).source
     src = paths.resolve_source(spec.path)
-    src.mkdir(parents=True)
+    if checkout:
+        src.mkdir(parents=True)
     cmds.update({("git", "ls-remote", spec.remote, spec.branch or "HEAD"): remote_head,
                  ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", "")})
     with monkeypatch.context() as m:
         m.setattr(cli_main, "ControllerService", lambda *a, **k: box)
-        rc = cli_main.main(["source-check", "--json"])
+        rc = cli_main.main(["source-check", *target, "--json"])
     return box, CommandResult(rc, capsys.readouterr().out, "")
 
 
@@ -117,6 +120,31 @@ def test_an_installed_source_with_an_invalid_remote_is_named_and_uninstalled_one
         f"Could not check every source of: {sid}."], res.details
 
 
+def test_a_stack_whose_binary_install_is_unsafe_is_named_and_the_others_are_not(op_svc, monkeypatch, tmp_path, capsys):
+    # A binary-installed daemon has no checkout; an interrupted install journal for it makes its receipt unsafe
+    # (the start refuses it). The probe answers `unknown` there, as for a source never installed.
+    journal = json.dumps({"state": "prepared", "stack": "daemon", "txn": "t1", "roots": [], "backups": {}})
+    box, sweep = _cli_sweep(tmp_path, monkeypatch, capsys, CommandResult(0, "", ""), journal=journal,
+                            checkout=False)
+    assert box.binary_receipt_state("daemon")[0] == "unsafe" and box.binary_receipt_state("meshcom")[0] != "unsafe"
+    assert json.loads(sweep.stdout)["data"]["stacks_unchecked"] == ["daemon"], sweep
+    svc, _fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False, sweep=sweep)
+    res = svc.self_update_apply_operator()
+    assert res.ok and [d for d in res.details if "Could not" in d] == ["Could not check every source of: daemon."]
+
+
+def test_an_unsafe_receipt_leaves_a_source_its_binary_does_not_cover_checked(tmp_path, monkeypatch, capsys):
+    # meshcom's binary does not cover its GPS relay: a source-installed relay is compared on its own lane even
+    # while the meshcom receipt is unsafe (an interrupted install journal).
+    journal = json.dumps({"state": "prepared", "stack": "meshcom", "txn": "t1", "roots": [], "backups": {}})
+    box, sweep = _cli_sweep(tmp_path, monkeypatch, capsys, CommandResult(0, "a" * 40 + "\trefs/heads/main\n", ""),
+                            journal=journal, cid="meshcom-gps-relay", target=("meshcom-gps-relay",))
+    assert box.binary_receipt_state("meshcom")[0] == "unsafe" and "meshcom-gps-relay" not in box.binary_spec(
+        "meshcom").covers
+    data = json.loads(sweep.stdout)["data"]
+    assert data["counts"]["error"] == 0 and data["stacks_unchecked"] == [], sweep
+
+
 def test_nothing_behind_lists_nothing(op_svc, monkeypatch, tmp_path):
     svc, fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False)
     res = svc.self_update_apply_operator()
@@ -127,7 +155,9 @@ def test_nothing_behind_lists_nothing(op_svc, monkeypatch, tmp_path):
 def test_a_sweep_that_cannot_finish_is_one_line_and_the_update_stands(op_svc, monkeypatch, tmp_path):
     for sweep, why in ((CommandResult(124, "", "", timed_out=True), "timed out after 60 s"),
                        (CommandResult(1, "", "Traceback (most recent call last):\n"), "failed (exit 1)"),
-                       (CommandResult(2, "", "usage: lhpc [-h] {status,list} ...\n"), "failed (exit 2)")):
+                       (CommandResult(2, "", "usage: lhpc [-h] {status,list} ...\n"), "failed (exit 2)"),
+                       *((CommandResult(0, other, ""), "failed (exit 0)")       # JSON, not the result's shape
+                         for other in ('{"ok": true}\n', "null\n", '{"data": null}\n', "[1]\n"))):
         svc, _fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False, sweep=sweep)
         res = svc.self_update_apply_operator()
         assert res.ok and res.summary == "Update applied.", res

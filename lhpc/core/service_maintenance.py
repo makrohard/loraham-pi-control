@@ -68,6 +68,10 @@ def _upstream_cache_path(paths, stack_id: str):
 
 class MaintenanceOpsMixin:
 
+    def _binary_unsafe(self, comp) -> bool:    # binary-covered, its stack's receipt unsafe: the start refuses it
+        spec = self.binary_spec(sid := self.stack_of(comp.id) or comp.id) if getattr(self, "binary_spec", None) else None
+        return spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe"
+
     def _update_probe(self, comp, stable_target=None, planned=None) -> dict:
         """NETWORK. The lane verdict of ONE component (plan rule R4), bounded, no fetch, no mutation: a
         `stackupdates` entry, status + its evidence. `local_head_at_check` ties it to the checkout it describes
@@ -75,9 +79,7 @@ class MaintenanceOpsMixin:
         invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
         from . import stackupdates
         entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": "", "pin_at_check": "", "lhpc_head_at_check": ""}
-        sid = (self.stack_of(comp.id) or comp.id) if comp is not None else ""
-        spec = self.binary_spec(sid) if comp is not None and getattr(self, "binary_spec", None) else None
-        unsafe = spec is not None and comp.id in spec.covers and self.binary_receipt_state(sid)[0] == "unsafe"
+        unsafe = comp is not None and self._binary_unsafe(comp)
         # A binary-covered component answers from the binary lane's target (the index, U9), not its clone.
         if (comp is not None and getattr(comp, "source", None) is not None
                 and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
@@ -176,8 +178,7 @@ class MaintenanceOpsMixin:
         """NETWORK (explicit): probe each component's remote and refresh the cached freshness marker. The ONLY
         writer of `state/stackupdates.json`, and never reached from a GET route (P0.6) — it is called by the
         `/source-check/<target>` POST and the background check thread. An uninstalled source costs no network at
-        all (`_update_probe` returns UNKNOWN before any git call), so a sweep over a mostly-uninstalled box is nearly
-        free."""
+        all (`_update_probe` returns UNKNOWN before any git call), so sweeping a mostly-uninstalled box is nearly free."""
         from . import stackupdates
         comps, err = self._source_check_targets(target)
         if err:
@@ -186,16 +187,14 @@ class MaintenanceOpsMixin:
             return ActionResult(True, f"Nothing to check for '{target or 'all'}' — "
                                       "no component declares a source remote.")
         # An OPTIONAL component that was never installed has nothing to compare, and that is not a fault of the
-        # stack: it must not make `lhpc source-check meshcore` report ERR. It is still probed, still listed and still
-        # recorded — only excused from the pass/fail verdict. A component asked for BY NAME is never excused (the
-        # operator wants that component's real answer), and an optional source that IS installed but unreadable
-        # stays a genuine error.
+        # stack: it must not make `lhpc source-check meshcore` report ERR. It is still probed, listed and recorded —
+        # only excused from the pass/fail verdict. A component asked for BY NAME is never excused (the operator wants
+        # its real answer), and an optional source that IS installed but unreadable stays a genuine error.
         named_component = bool(target) and self.stack(target) is None
         excused = set()
         if not named_component:
-            # The line `update()` draws too (`_stack_scope_keeps`): an optional component that was never installed
-            # is excused; a hard build dependency never is — RadioLib is `optional`, yet an absent RadioLib is a real
-            # gap in an installed daemon.
+            # The line `update()` draws too (`_stack_scope_keeps`): a never-installed optional component is excused;
+            # a hard build dependency never is — RadioLib is `optional`, yet its absence is a gap in an installed daemon.
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
             excused = {c.id for c in comps if not self._stack_scope_keeps(c, required)}
         results, details, stable_target = {}, [], stable_lane.resolver(self._system.runner.run, self._paths)
@@ -246,9 +245,9 @@ class MaintenanceOpsMixin:
                        f"{unknown} unknown/not comparable.")
         def stacks(hit):        # the stacks (THIS code's manifest) with a component `hit(status, c)` selects
             return sorted({self.stack_of(c.id) or c.id for c in comps if hit(results[c.id]["status"], c)})
-        def unchecked(status, c):   # the probe failed, or an INSTALLED source had nothing valid to compare
-            return status == stackupdates.ERROR or (status == stackupdates.UNKNOWN and source_fs.source_present(
-                self._paths, self._paths.resolve_source(c.source.path)))        # (an uninstalled one: nothing to update)
+        def unchecked(status, c):   # the probe failed, or an INSTALLED source (or unsafe binary) had nothing to compare
+            return status == stackupdates.ERROR or (status == stackupdates.UNKNOWN and (self._binary_unsafe(c) or
+                source_fs.source_present(self._paths, self._paths.resolve_source(c.source.path))))
         return ActionResult(unresolved == 0, summary, details=details, data={
             "counts": counts, "checked": n, "excused": sorted(excused), "stacks_unchecked": stacks(unchecked),
             "stacks_behind": stacks(lambda status, _c: status == stackupdates.BEHIND)})
