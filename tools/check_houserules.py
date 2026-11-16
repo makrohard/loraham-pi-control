@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import codecs
 import fnmatch
 import io
 import os
@@ -99,7 +98,37 @@ DEFAULTS = {"layers": LAYERS, "test_files": TEST_FILES, "test_def": TEST_DEF.pat
 
 
 def git(*args: str) -> str:
-    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+    """git's output as text: UTF-8, an invalid byte read as U+FFFD, every line end kept as git wrote it."""
+    return subprocess.run(["git", *args], check=True, capture_output=True).stdout.decode("utf-8", "replace")
+
+
+# Every diff the rows read is git's real one, whatever the repository's or the user's git config says
+# (G2-CATTR1-R3): no colour, no external diff or text conversion, every file as text (binary, "-diff"), the b/
+# prefix, no context line joining two hunks (the parsers count one all the same). Each caller names its rename
+# detection.
+PATCH = ("--no-color", "--no-ext-diff", "--no-textconv", "--text", "--dst-prefix=b/", "--unified=0",
+         "--inter-hunk-context=0")
+# Where Python ends a line; git ends one only at "\n".
+PY_EOL = re.compile(r"\r\n|\r|\n")
+UNQUOTE = {b"a": b"\a", b"b": b"\b", b"t": b"\t", b"n": b"\n", b"v": b"\v", b"f": b"\f", b"r": b"\r"}
+
+
+def patch(cmd: str, *args: str) -> str:
+    return git(cmd, *PATCH, *args)
+
+
+def lf_lines(text: str) -> list[str]:
+    """The lines of a text as git counts them: split at "\n" only (str.splitlines also splits at "\r", "\v", "\f"...)."""
+    lines = text.split("\n")
+    return lines[:-1] if lines[-1] == "" else lines
+
+
+def name_status(out: str) -> list[list[str]]:
+    """`--name-status -z` output as [status, path(, new path)]: NUL-separated, so no path is quoted."""
+    rows, fields = [], iter(out.split("\0")[:-1])
+    for status in fields:
+        rows.append([status, *(next(fields, "") for _ in range(2 if status[:1] in "RC" else 1))])
+    return rows
 
 
 def show(rev: str, path: str) -> str | None:
@@ -111,29 +140,43 @@ def show(rev: str, path: str) -> str | None:
 
 
 def header_path(header: str) -> str | None:
-    """The path a `+++ ` header names: git's C-quoted form ("b/\\303\\274.md") decoded, the tab git appends after a
-    path with a space dropped, the b/ prefix removed; None for /dev/null. Any other form is kept whole, so its lines
-    still count."""
-    header = header.removesuffix("\t")     # git's tab after a path with a space, quoted or not
+    """The path a `+++ ` header names: the tab git appends after a path with a space dropped, git's C-quoted form
+    ("b/\\303\\274.md") decoded, the b/ prefix removed; None for /dev/null."""
+    header = header.removesuffix("\t")
     if header.startswith('"') and header.endswith('"'):
-        header = codecs.escape_decode(header[1:-1].encode())[0].decode("utf-8", "replace")
-    return None if header == "/dev/null" else header[2:] if header.startswith("b/") else header
+        raw = re.sub(rb"\\([0-3][0-7]{2}|.)", lambda m: bytes([int(m[1], 8)]) if len(m[1]) == 3
+                     else UNQUOTE.get(m[1], m[1]), header[1:-1].encode())
+        header = raw.decode("utf-8", "replace")
+    return None if header == "/dev/null" else header.removeprefix("b/")
 
 
 def added_lines(diff: str) -> list[tuple[str, int, str]]:
-    """(path, new line number, text) of every added line in a `--unified=0` diff. A "+++ " line is the file header
-    only outside a hunk: inside one it is an added line that starts with "++ "."""
-    out, path, n, hunk = [], None, 0, False
-    for line in diff.splitlines():
+    """(path, new line number, text) of every added line in a `PATCH` diff, read at "\n" only. A "+++ " line is the
+    file header only outside a hunk: inside one it is an added line that starts with "++ ". In a merge's combined
+    diff ("@@@", a column per parent) a line is added when it is new against every parent."""
+    out, path, n, cols = [], None, 0, 0
+    for line in lf_lines(diff):
         if line.startswith("diff "):
-            hunk = False
-        elif line.startswith("+++ ") and not hunk:
+            cols = 0
+        elif line.startswith("+++ ") and not cols:
             path = header_path(line[4:])
-        elif line.startswith("@@"):
-            n, hunk = int(re.search(r"\+(\d+)", line).group(1)), True
-        elif line.startswith("+") and path:
-            out.append((path, n, line[1:]))
+        elif m := re.match(r"(@@+) .*?\+(\d+)", line):
+            n, cols = int(m[2]), len(m[1]) - 1
+        elif cols and path and line[:1] in " +-" and "-" not in line[:cols]:     # a line of the new file
+            if line[:cols] == "+" * cols:
+                out.append((path, n, line[cols:]))
             n += 1
+    return out
+
+
+def py_lines(src: str, lines: set[int]) -> set[int]:
+    """The Python line numbers on the given git lines of `src` (Python also ends a line at a lone "\r")."""
+    out, first = set(), 1
+    for g, text in enumerate(src.split("\n"), 1):
+        k = len(PY_EOL.findall(text.removesuffix("\r"))) + 1
+        if g in lines:
+            out.update(range(first, first + k))
+        first += k
     return out
 
 
@@ -262,7 +305,7 @@ def budgets(source: str | None) -> dict | None:
 
 def changelog_sections(rev: str) -> tuple[int, int]:
     """(the line of the second `## ` heading, the top section's length) of CHANGELOG at `rev`."""
-    lines = (show(rev, CHANGELOG) or "").splitlines() if CHANGELOG else []
+    lines = lf_lines(show(rev, CHANGELOG) or "") if CHANGELOG else []
     heads = [i + 1 for i, line in enumerate(lines) if line.startswith("## ")]
     second = heads[1] if len(heads) > 1 else len(lines) + 1
     return second, (second - heads[0] - 1) if heads else 0
@@ -291,27 +334,28 @@ def own_diff(sha: str, *args: str) -> str:
     in; a root commit: against nothing)."""
     parents = git("rev-list", "--parents", "-n", "1", sha).split()[1:]
     if not parents:
-        return git("show", "--no-renames", "--format=", *args, sha)
-    return git("diff", "--no-renames", *args, parents[0], sha)
+        return patch("show", "--no-renames", "--format=", *args, sha)
+    return patch("diff", "--no-renames", *args, parents[0], sha)
 
 
 def deleted_lines(diff: str) -> list[int]:
-    """The old line number of every deleted line in a `--unified=0` diff."""
+    """The old line number of every deleted line in a two-tree `PATCH` diff, read at "\n" only."""
     out, n, hunk = [], 0, False
-    for line in diff.splitlines():
+    for line in lf_lines(diff):
         if line.startswith("diff --git"):
             hunk = False
-        elif line.startswith("@@"):
-            n, hunk = int(re.search(r"-(\d+)", line).group(1)), True
-        elif hunk and line.startswith("-"):
-            out.append(n)
+        elif m := re.match(r"@@ -(\d+)", line):
+            n, hunk = int(m[1]), True
+        elif hunk and line[:1] in "- ":      # a deleted or a context line of the old file
+            if line[0] == "-":
+                out.append(n)
             n += 1
     return out
 
 
 def top_section(rev: str) -> tuple[int, int] | None:
     """CHANGELOG's top `## ` section at `rev`: (its heading's line, the line after its end); None without a heading."""
-    lines = (show(rev, CHANGELOG) or "").splitlines()
+    lines = lf_lines(show(rev, CHANGELOG) or "")
     heads = [i + 1 for i, line in enumerate(lines) if line.startswith("## ")]
     return (heads[0], heads[1] if len(heads) > 1 else len(lines) + 1) if heads else None
 
@@ -322,10 +366,10 @@ def release_section_commit(sha: str) -> bool:
     line lies inside its top `## ` section, every deleted one inside its parent's. Any other commit is held to it."""
     if len(git("rev-list", "--parents", "-n", "1", sha).split()) != 2:      # a merge or a root commit
         return False
-    if own_diff(sha, "--name-status").splitlines() != [f"M\t{CHANGELOG}"]:
+    if name_status(own_diff(sha, "--name-status", "-z")) != [["M", CHANGELOG]]:
         return False
     new, old = top_section(sha), top_section(f"{sha}^1")
-    diff = own_diff(sha, "--unified=0")
+    diff = own_diff(sha)
     added = added_lines(diff)
     return (new is not None and any(t.startswith("- ") for _, _, t in added)
             and all(new[0] <= n < new[1] for _, n, _ in added)
@@ -423,12 +467,13 @@ def exemption(pattern: str, text: str) -> str | None:
 
 def check(base: str, head: str, facts: list[str], correction: bool = False) -> list[tuple[str, str, str]]:
     rng = f"{base}..{head}"
-    added = added_lines(git("diff", "--unified=0", rng))
-    status = [line.split("\t") for line in git("diff", "--name-status", "-M", rng).splitlines()]
+    added = added_lines(patch("diff", "-M", rng))
+    status = name_status(patch("diff", "-M", "--name-status", "-z", rng))
     new_files = {p[-1] for p in status if p[0][0] in "ARC"}     # a renamed or copied test file is placed anew
     changed = {p[-1] for p in status}
-    commits = [c.strip("\n").split("\x00", 2)
-               for c in git("log", "--format=%H%x00%an%x00%B%x1e", rng).split("\x1e") if c.strip()]
+    # one commit at a time: a message may hold any byte but NUL, so no separator could split the log safely
+    commits = [(sha, *git("log", "-1", "--no-color", "--format=%an%x00%B", sha).rstrip("\n").split("\x00", 1))
+               for sha in git("rev-list", rng).split()]
     rows = []
 
     if ".houserules.toml" in changed:      # alone: reviewed on its own; with other files: it would gate itself
@@ -444,7 +489,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     second, top = changelog_sections(head)
     bullets, below = changelog_bullets(added, second)
     release = {sha for sha, _, _ in commits if release_section_commit(sha)}
-    most = max((len(changelog_bullets(added_lines(own_diff(sha, "--unified=0")), second)[0])
+    most = max((len(changelog_bullets(added_lines(own_diff(sha)), second)[0])
                 for sha, _, _ in commits if sha not in release), default=0) if CHANGELOG else 0
     long_bullet = any(b > 2 for b in bullets)
     # `--correction`: an item that only corrects a released section says so, and its bullets
@@ -460,9 +505,9 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     doc_lines = sum(1 for p, _, _ in added if p in docs)
     found, repeated = [], False
     for fact in facts:
-        r = subprocess.run(["git", "grep", "-lF", "--", fact, head, "--", "docs", "README.md"],
-                           capture_output=True, text=True, check=False)
-        files = sorted({line.split(":", 1)[1] for line in r.stdout.splitlines()})
+        r = subprocess.run(["git", "grep", "--no-color", "-lzF", "--", fact, head, "--", "docs", "README.md"],
+                           capture_output=True, check=False)
+        files = sorted({x.split(":", 1)[1] for x in r.stdout.decode("utf-8", "replace").split("\0") if x})
         found.append(f'fact "{fact}" -> {",".join(files) or "none"}')
         repeated = repeated or len(files) > 1
     v = "WARN" if (docs and not facts) or repeated else "OK"
@@ -474,7 +519,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     layers = sorted({f"{p.rsplit('/', 1)[0]}={layer_of(p) or 'NONE'}" for p in changed if is_test_file(p)})
     with_tests = stated = 0
     for sha, _, msg in commits:
-        own = added_lines(git("show", "--unified=0", "--format=", sha))
+        own = added_lines(patch("show", "-M", "--format=", sha))
         if any(is_test_file(p) and TEST_DEF.match(t) for p, _, t in own):
             with_tests += 1
             stated += bool(RED_BEFORE.search(msg))
@@ -510,6 +555,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     by_file: dict[str, set[int]] = {}
     for p, n, _ in in_tests:
         by_file.setdefault(p, set()).add(n)
+    by_file = {p: py_lines(show(head, p) or "", lines) for p, lines in by_file.items()}   # as Python numbers them
     for p, lines in by_file.items():
         src = show(head, p)
         try:
@@ -561,7 +607,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # Every added line counts, wherever its text was before; only a file renamed with identical content (-M100%: no
     # hunk, whatever diff.renames says) adds none. The row names where each word is, for the review of the WARN.
     texts = [(f"commit {sha[:8]}", msg) for sha, _, msg in commits]
-    texts += [(f"{path}:{n}", t) for path, n, t in added_lines(git("diff", "--unified=0", "-M100%", rng))]
+    texts += [(f"{path}:{n}", t) for path, n, t in added_lines(patch("diff", "-M100%", rng))]
     hits = [(where, c) for where, t in texts
             if (c := sum(name.lower() in t.lower() for name in ATTRIBUTION) + len(WORDS.findall(WORD_EXEMPT.sub("", t))))]
     words = sum(c for _, c in hits)
@@ -662,7 +708,7 @@ def _check(args, base: str, head: str) -> int:
         load_profile(base)
         rows = check(base, head, args.fact, args.correction)
     except subprocess.CalledProcessError as exc:
-        print(f"git failed: {' '.join(exc.cmd)}: {exc.stderr.strip()}", file=sys.stderr)
+        print(f"git failed: {' '.join(exc.cmd)}: {exc.stderr.decode("utf-8", "replace").strip()}", file=sys.stderr)
         return 2
     except ProfileError as exc:
         print(f".houserules.toml: {exc}", file=sys.stderr)

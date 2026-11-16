@@ -46,7 +46,7 @@ def _write(repo, files):
             p.unlink()
             continue
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        p.write_bytes(text) if isinstance(text, bytes) else p.write_text(text)
 
 
 @pytest.fixture
@@ -305,23 +305,36 @@ def test_an_added_line_starting_with_plus_plus_hides_no_line(repo, case, files, 
     assert (rc, rows[line]) == ({"WARN": 0, "HARD": 1}[verdict], verdict)
 
 
-def test_a_merges_combined_diff_keeps_each_files_path(repo, monkeypatch):
-    # The per-commit test count reads `git show` of each commit; for a merge that is a combined diff ("diff --cc"),
-    # which the CLI rows cannot show apart, so added_lines() is read directly. The merge's own lines in two files:
-    # the second file's "+++ b/" header must close the first file's hunk.
-    import importlib.util
+def _merge(repo, side, merged, msg="merge\n"):
+    """A merge of a side branch whose one commit writes `side`; the merge commit writes `merged`."""
     _git(repo, "checkout", "-q", "-b", "side")
-    _commit(repo, {"notes.txt": "side\n"})
+    _commit(repo, side)
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
-    _commit(repo, {"docs/a.md": "Alpha fact.\none\n", "docs/b.md": "Beta.\ntwo\n"}, msg="merge\n")
+    _commit(repo, merged, msg=msg)
+
+
+def test_a_merges_combined_diff_keeps_each_files_path(repo, monkeypatch):
+    # The per-commit test count reads `git show` of each commit; for a merge that is a combined diff ("diff --cc", a
+    # column per parent), read here directly. Added is what is new against every parent ("++"): the side's line the
+    # merge brings in ("+ ") is not, yet it moves the line count. The second file's header closes the first's hunk.
+    import importlib.util
+    _merge(repo, {"docs/a.md": "Alpha fact.\nside\n"}, {"docs/a.md": "Alpha fact.\nside\none\n", "docs/b.md": "Beta.\ntwo\n"})
     spec = importlib.util.spec_from_file_location("check_houserules_cc", CHECKER)
     hr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hr)
     monkeypatch.chdir(repo)
-    diff = hr.git("show", "--unified=0", "--format=", "HEAD")
-    assert "diff --cc docs/b.md" in diff         # anchor: git wrote the combined form for both files
-    assert [(p, t.lstrip("+")) for p, _, t in hr.added_lines(diff)] == [("docs/a.md", "one"), ("docs/b.md", "two")]
+    diff = hr.patch("show", "-M", "--format=", "HEAD")
+    assert "diff --cc docs/b.md" in diff and "\n+ side\n" in diff     # anchor: the combined form, a mixed column
+    assert hr.added_lines(diff) == [("docs/a.md", 3, "one"), ("docs/b.md", 2, "two")]
+
+
+def test_a_merge_that_adds_a_test_itself_needs_its_red_before(repo):
+    # The side's test comes in with the side's commit (red-before stated there); the test the merge adds against both
+    # parents is the merge's own. Red before: the merge's "++def test_" line read "+def test_", no test.
+    side = BASE["tests/core/test_ok.py"] + "\ndef test_side():\n    assert 2\n"
+    _merge(repo, {"tests/core/test_ok.py": side}, {"tests/core/test_ok.py": side + "\ndef test_three():\n    assert 3\n"})
+    assert _line(repo, "tests").endswith("red-before 1/2 WARN")
 
 
 def test_a_clean_range_passes_with_every_line_ok(repo):
@@ -429,6 +442,119 @@ def test_a_file_renamed_unchanged_adds_no_word(repo, edited):
     _git(repo, "mv", "docs/a.md", "docs/c.md")
     _commit(repo, {"docs/c.md": f"Alpha fact.\nOne {W} line.\n" + ("Omega.\n" if edited else "")})
     assert _attribution(repo) == ((0, "WARN", "1 at docs/c.md:2") if edited else (0, "OK", "0"))
+
+
+def _line(repo, name, *extra):
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD", *extra], cwd=repo, capture_output=True,
+                       text=True, check=False)
+    assert p.returncode in (0, 1), p.stderr
+    return " ".join(next(x for x in p.stdout.splitlines() if x.startswith(name)).split())
+
+
+# G2-CATTR1-R3: the rows read git's real diff, whatever the repository's git config or a file's bytes say.
+# name: (git config, files at <base>, files the range writes, where the word is). Red before: each read OK ("0"),
+# or the place shown is wrong, or the checker stopped with a traceback.
+REAL_DIFF = {
+    "a -diff attribute (B3)": ({}, {".gitattributes": "x.md -diff\n"}, {"x.md": f"Reviewed by {W}\n"}, "x.md:1"),
+    "a binary file (B3)": ({}, {}, {"x.bin": f"\0\nReviewed by {W}\n".encode()}, "x.bin:2"),
+    "a text conversion (B3)": ({"diff.empty.textconv": "true"}, {".gitattributes": "x.md diff=empty\n"},
+                               {"x.md": f"Reviewed by {W}\n"}, "x.md:1"),
+    "color.diff=always (B4)": ({"color.diff": "always"}, {}, {"x.md": f"Reviewed by {W}\n"}, "x.md:1"),
+    "diff.external (B4)": ({"diff.external": "true"}, {}, {"x.md": f"Reviewed by {W}\n"}, "x.md:1"),
+    "a vertical tab in the line (B2)": ({}, {}, {"x.md": f"plain\x0bReviewed by {W}\n"}, "x.md:1"),
+    "a carriage return in the line (B2)": ({}, {}, {"x.md": f"plain\rReviewed by {W}\n"}, "x.md:1"),
+    "a byte that is not UTF-8 (B2)": ({}, {}, {"x.md": f"\xff Reviewed by {W}\n".encode("latin-1")}, "x.md:1"),
+    "a forged header after a vertical tab (B2)": ({}, {}, {"x.md": b'plain\x0bdiff x\x0b+++ "b/\\x"\n'}, None),
+    "deleted text after a vertical tab (B2)": ({}, {"x.md": f"old\x0b+Reviewed by {W}\n"}, {"x.md": "clean\n"}, None),
+    "two hunks joined by a context line (N1)": ({"diff.interHunkContext": "1"}, {"x.md": "a\nb\nc\n"},
+                                                {"x.md": f"A\nb\nReviewed by {W}\n"}, "x.md:3"),
+    "a prefixless path that starts with b/ (N2)": ({"diff.noprefix": "true"}, {}, {"b/credits.md": f"Reviewed by {W}\n"},
+                                                   "b/credits.md:1"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REAL_DIFF))
+def test_the_attribution_reads_gits_real_diff(repo, name):
+    config, before, after, where = REAL_DIFF[name]
+    if before:
+        _commit(repo, before)
+        _git(repo, "tag", "-f", "base")
+    for key, value in config.items():
+        _git(repo, "config", key, value)
+    _commit(repo, after)
+    assert _attribution(repo) == ((0, "WARN", f"1 at {where}") if where else (0, "OK", "0"))
+
+
+@pytest.mark.parametrize("key, value", [("color.diff", "always"), ("diff.external", "true")])
+def test_every_row_reads_gits_real_diff(repo, key, value):
+    # The same diff feeds the other rows: an added `assert True` in a test stays a HARD pattern.
+    _git(repo, "config", key, value)
+    _commit(repo, _test("\ndef test_two():\n    assert True\n"))
+    assert _run(repo)[1]["patterns"] == "HARD"
+
+
+def test_a_commit_message_with_a_record_separator_is_read_whole(repo):
+    # Red before: the log was split at \x1e, the message's own one cut a commit in two (a traceback).
+    _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, msg=RED + "x\x1e" + "written in one " + "ses" + "sion\n")
+    sha = subprocess.run(["git", "rev-parse", "--short=8", "HEAD"], cwd=repo, capture_output=True, text=True,
+                         check=True).stdout.strip()
+    assert _attribution(repo) == (0, "WARN", f"1 at commit {sha}")
+
+
+def test_a_new_test_file_with_a_quoted_name_is_still_layered(repo):
+    # Red before: --name-status quoted "tests/misc/test_\303\274.py", which is no test file, so no layer was asked.
+    _commit(repo, {"tests/misc/test_\u00fc.py": "def test_x():\n    assert 1\n"})
+    assert _run(repo)[1]["tests"] == "HARD"
+
+
+def test_a_fact_is_found_in_a_quoted_name_without_colour(repo):
+    # Red before: git grep quoted the name and color.grep=always wrapped it in escapes.
+    _git(repo, "config", "color.grep", "always")
+    _commit(repo, {"docs/\u00fcber.md": "Gamma fact.\n"})
+    assert _line(repo, "docs", "--fact", "Gamma fact.").endswith('fact "Gamma fact." -> docs/\u00fcber.md OK')
+
+
+def test_a_rename_is_found_whatever_diff_renames_says(repo):
+    # A test file moved unchanged adds no test, in the range and in its commit. Red before: with diff.renames=false
+    # the whole file read as added: "1 new tests", and its commit (no red-before wording) "red-before 0/1".
+    _git(repo, "config", "diff.renames", "false")
+    _git(repo, "mv", "tests/core/test_ok.py", "tests/core/test_ok2.py")
+    _commit(repo, {}, msg="item\n")
+    assert _line(repo, "tests") == "tests 0 new tests; layers tests/core=core; red-before 0/0 OK"
+
+
+def test_changelog_lines_are_counted_as_git_counts_them(repo):
+    # A bullet under the released section, after a line with vertical tabs: str.splitlines() counted three lines
+    # there and put the second heading below the bullet. Red before: OK.
+    _commit(repo, {"CHANGELOG.md": "# Changelog\n\n## Unreleased\n- x\x0by\x0bz\n\n## 0.1.0\n- late\n\n- old entry\n"})
+    assert _run(repo)[1]["changelog"] == "HARD"
+
+
+def test_the_release_section_is_found_as_git_counts_lines(repo):
+    # Three bullets in the top section, below a title with vertical tabs: the release's section commit, not capped.
+    # Red before: the top heading counted two lines lower, the first bullet outside it, the cap applied (HARD).
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("# Changelog\n", "# Changelog\x0bi\x0bj\n")})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("# Changelog\n", "# Changelog\x0bi\x0bj\n").replace(
+        "## Unreleased\n", "## Unreleased\n- a\n- b\n- c\n")})
+    assert _run(repo)[1]["changelog"] == "OK"
+
+
+def test_a_clock_after_a_lone_carriage_return_is_found(repo):
+    # git ends a line at "\n" only, Python also at a lone "\r": the clock on the Python line after the "\r" is on
+    # an added git line. Guards the LF-only reading (with git's lines taken as Python's, it read OK).
+    _commit(repo, _test("\ndef test_two():\n    import time\n    assert 2\r    " + TSL + "(0)\n"))
+    assert _run(repo)[1]["wallclock"] == "HARD"
+
+
+def test_a_crlf_line_is_one_python_line(repo):
+    # "\r\n" ends one line for git and for Python: the edited line 2 is not the clock's line 4 (counting the "\r"
+    # of each "\r\n" once more would put git's line 2 on Python's 3 and 4).
+    crlf = "import time\r\nX = {}\r\ndef test_one():\r\n    " + TSL + "(0)\r\n"
+    _commit(repo, {"tests/core/test_ok.py": crlf.format(1)})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"tests/core/test_ok.py": crlf.format(2)})
+    assert _run(repo)[1]["wallclock"] == "OK"
 
 
 def test_an_indented_line_after_a_gap_does_not_lengthen_a_bullet(repo):
