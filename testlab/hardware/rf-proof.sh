@@ -515,7 +515,7 @@ notrun() {   # notrun <id> <direction> <why>
   REPORT "$1" "$(rowname "$1")" — — — "$(dirtext "$2")" — — "NOT RUN: $3"; say "NOT RUN: row $1 $(rowname "$1") $(dirtext "$2"): $3"
   [ "$MODE" = dry ] || echo "row $1 $(dirtext "$2"): $3" >> "$EVD/NOT-RUN.txt"; }
 notrun_row() { local d; for d in $(dirs "$1"); do notrun "$1" "$d" "$2"; done; }
-needs() { local f m=; for f in "$@"; do [ "$MODE" = live ] || echo "$f" >> "$SCRATCH/needed"; case " $FORMS_OK " in *" $f "*) ;; *) m="$m $f";; esac; done
+needs() { local f m=; for f in "$@"; do [ "$MODE" = live ] || echo "${CURROW:-0} $f" >> "$SCRATCH/needed"; case " $FORMS_OK " in *" $f "*) ;; *) m="$m $f";; esac; done
   [ -z "$m" ] && return 0; NEEDS_MISSING=${m# }; return 1; }
 nonce() { local n; while :; do n="$NPREFIX $(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
   grep -qxF -- "$n" "$OUT/nonces" 2>/dev/null && continue; echo "$n" >> "$OUT/nonces" || stop "nonces: append failed"; echo "$n"; return; done; }
@@ -815,6 +815,8 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
     for d in $(dirs "$r"); do grep -qF "$r|$(dirtext "$d")|" "$OUT/results.txt" 2>/dev/null && continue
       REPORT "$r" "$(rowname "$r")" — — — "$(dirtext "$d")" no — "FAIL: $(head -n 1 "$OUT/rowfail.txt")"; done
     [ "$MODE" = dry ] || echo "row $r: $(head -n 1 "$OUT/rowfail.txt")" >> "$EVD/FAILED.txt" || stop "FAILED.txt: append failed"
+    [ "$MODE" = live ] || [ ! -f "$SCRATCH/needed" ] || { awk -v r="$r" '$1 != r' "$SCRATCH/needed" > "$SCRATCH/needed.n" \
+      && mv -f "$SCRATCH/needed.n" "$SCRATCH/needed"; } || stop "needed: not rewritten"   # a FAILed row renders no later forms
     say "FAIL: row $r (its undos run now; the next row follows)"; undo_to "$m" || stop "row $r: its undos did not all run (UNRESOLVED.txt)"
   elif [ "$rc" != 0 ]; then stop "row $r ended rc $rc (a STOP or a shell error, see above): the run ends"; fi
   usbguard "post-$r"; }
@@ -872,7 +874,7 @@ selfcheck() {
       if (r == "" || cr[r] < 1) {print "FRAME " $2 " (line " NR ") without a TX credit"; exit}; cr[r]--}
     want && NR == want && $1 !~ /^CMD/ {print "TX on line " NR - 1 " is not followed by its command"; exit}' "$DRYLOG")
   [ -z "$t" ] || sc every-send-gated "$t"; scok every-send-gated
-  t=$(sort -u "$SCRATCH/needed" 2>/dev/null | grep -vxF -f <(sort -u "$SCRATCH/formed" 2>/dev/null) | grep -vx rt_send | tr '\n' ' ') || true
+  t=$(cut -d' ' -f2 "$SCRATCH/needed" 2>/dev/null | sort -u | grep -vxF -f <(sort -u "$SCRATCH/formed" 2>/dev/null) | grep -vx rt_send | tr '\n' ' ') || true
   [ -z "$t" ] || sc all-forms-printed "needed but never printed: $t"; scok all-forms-printed
   ( MODE=live; body() { printf '%s\n' "  [manual] loraham-chat is interactive — the daemon is ensured, then run it yourself in a terminal:" "    $CC"; }
     CC="cd /home/u/loraham-pi-control/config/files/r1/ && /home/u/loraham-pi-control/src/LoRaHAM_Daemon/loraham_chat --data-socket /tmp/lora-r1.sock --conf-socket /tmp/loraconf-r1.sock; stty sane 2>/dev/null"

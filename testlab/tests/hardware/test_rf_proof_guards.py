@@ -470,3 +470,22 @@ def test_a_valid_rns_instance_passes_r0(tmp_path):
     r = dry(tmp_path, LANE="full", ROWS_ONLY="5")       # the example's instance=lhpc-rf-host port=37438 control=37439
     assert "== ROW R1" in r.stdout, r.stderr
     assert not [line for line in stop_lines(r) if "PEER_rnode" in line]
+
+
+# ---- a dry FAIL is rc 0: a FAILed row's later forms are not "needed but never printed" -------------------------------------
+
+STATUS_868 = ("STATUS RADIO=READY TX=0 TXMODE=MANAGED TXQUEUE=1 RXREADY=1 HIGHPOWER=0 CHIPFAMILY=SX127x OCP=100 USBWAIT=- "
+              "BOUND=- ID=r2 FREQ=868.000 SF=11 POWER=10")
+
+
+@pytest.mark.parametrize("row, key, freqs", [("11", "DRY_STATUS_Z_r2", "869.525000 vs 868.000"),
+                                             ("10", "DRY_STATUS_Z_r1", "433.775000 vs 433.775")])
+def test_a_single_frame_row_with_a_freq_mismatch_fails_with_rc_0_in_dry(tmp_path, row, key, freqs):
+    # red-before (7bed19a0): the all-forms-printed self-check found the FAILed row's later forms missing: STOP, rc 2
+    status = STATUS_868 if key.endswith("r2") else STATUS_868.replace("ID=r2 FREQ=868.000", "ID=r1 FREQ=433.775")
+    r = dry(tmp_path, LANE="fast", ROWS_ONLY=row, **{key: status})
+    assert r.returncode == 0, r.stderr
+    assert stop_lines(r) == []
+    results = [line.split(" | ")[-1] for line in r.stdout.splitlines() if line.split(" | ")[:2] == ["REPORT", row]]
+    assert results == [f"FAIL: incompatible: FREQ {freqs}"] * 2, r.stdout   # both directions
+    assert "dry self-check OK all-forms-printed" in r.stdout
