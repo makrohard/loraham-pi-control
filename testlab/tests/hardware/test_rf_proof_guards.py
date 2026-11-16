@@ -290,11 +290,89 @@ def test_an_inherited_context_flag_stops_the_start(tmp_path, flag):
 @pytest.mark.parametrize("line", ["PCTX=read", "TXCTX=1"])
 def test_a_context_flag_in_the_lab_file_stops_the_start(tmp_path, line):
     # red-before (3416e029): a lab file that set the flag opened the guard for the whole run
-    lab = tmp_path / "lab.env"
-    lab.write_text((HW / "lab.example.env").read_text() + line + "\n")
+    lab, n = _lab_with(tmp_path, line)
     r = dry(tmp_path, LANE="fast", LAB_ENV=str(lab))
     assert r.returncode == 2
-    assert stop_lines(r) == [f"STOP: {lab} sets PCTX/TXCTX: the guard's context comes only from tx, pset and pread"]
+    assert stop_lines(r) == [f"STOP: {lab}:{n}: '{line.split('=')[0]}' is not a lab key"]
+
+
+# ---- the lab file is data: KEY=VALUE entries of the lab keys only, never run as code -------------------------------------
+
+def _lab_with(tmp_path, line):
+    """The example lab file with one more line; returns the file and that line's number."""
+    text = (HW / "lab.example.env").read_text()
+    lab = tmp_path / "lab.env"
+    lab.write_text(text + line + "\n")
+    return lab, text.count("\n") + 1
+
+
+KV = "not a KEY=VALUE line (the lab file is data, never run)"
+UQ = "an unquoted value is one word of [A-Za-z0-9_.,:/@+=-] (quote it)"
+
+
+@pytest.mark.parametrize("line, why", [
+    ("F[dset]='{LH} daemon {rid} --set POWER=20 --yes'", KV),   # a form (the second read's P1a: the dry run ended "all 13 OK")
+    ("TXMAX=50", "'TXMAX' is not a lab key"), ("PCAP=20", "'PCAP' is not a lab key"),   # the script's constants
+    ("STICK_MIN=20", "'STICK_MIN' is not a lab key"),
+    ("SSHPASS=x", "'SSHPASS' is not a lab key"), ("BOXPW=x", "'BOXPW' is not a lab key"),   # secret-like names the name
+    ("MCPIN=x", "'MCPIN' is not a lab key"),                                                # rule does not catch
+    ("pset() { :; }", KV), ("export RADIO_H433='H loraham 433'", KV), ("touch /nonexistent/ran", KV),
+    ('RADIO_H433="H loraham $(touch $TMPDIR/ran)"', 'RADIO_H433: a "..." value is one line without $ ` \\ or "'),
+    ("RADIO_H433=`touch $TMPDIR/ran`", "RADIO_H433: " + UQ),
+    ("RADIO_H433='H loraham 433'; touch $TMPDIR/ran", "RADIO_H433: text after its closing quote"),
+    ("RADIO_H433=~/x", "RADIO_H433: " + UQ), ("RADIO_H433='H loraham 433", "the quote of RADIO_H433 is not closed"),
+    ("BOX_H_HOST=a b", "BOX_H_HOST: " + UQ),
+])
+def test_a_lab_file_line_that_is_not_a_lab_key_value_stops_the_start(tmp_path, line, why):
+    # red-before (7bed19a0): the lab file was sourced: the form, the constants, the names and the commands were taken
+    lab, n = _lab_with(tmp_path, line)
+    r = dry(tmp_path, LANE="fast", LAB_ENV=str(lab))
+    assert r.returncode == 2
+    assert stop_lines(r) == [f"STOP: {lab}:{n}: {why}"], r.stderr
+    assert "== ROW" not in r.stdout
+    assert not (tmp_path / "ran").exists()
+
+
+def test_the_lab_reader_gives_the_values_the_example_file_means(tmp_path):
+    keys = 'for k in $(compgen -v); do [[ $k =~ $LABKEYS ]] && printf "%s=%q\\n" "$k" "${!k}"; done; true'
+    r, _ = source_only(tmp_path, f'labread "{HW}/lab.example.env"; {keys}')
+    assert r.returncode == 0, r.stderr
+    # what bash makes of the same file (sourced in a separate shell, only to compare)
+    want = subprocess.run(["bash", "-c", f'RFPROOF_SOURCE_ONLY=1 . "{HW}/rf-proof.sh"; . "{HW}/lab.example.env"; {keys}'],
+                          env=_env(tmp_path, RFPROOF_SOURCE_ONLY="1"), capture_output=True, text=True, check=True)
+    assert sorted(r.stdout.splitlines()) == sorted(want.stdout.splitlines())
+    assert "DRY_RADIOS_Z=$'STATE valid\\nROW r1 loraham 433" in r.stdout
+
+
+def test_a_key_in_the_environment_wins_over_the_lab_file(tmp_path):
+    r, _ = source_only(tmp_path, f'labread "{HW}/lab.example.env"; echo "$OPERATOR_CALL $BOX_H_HOST"', OPERATOR_CALL="DL0ENV")
+    assert r.stdout == "DL0ENV box-h.example\n", r.stderr
+
+
+# ---- the setter's own command: no power above the cap and no high-power flag, whatever its form says ---------------------
+
+@pytest.mark.parametrize("form", ["{LH} daemon {rid} --set POWER=20 --yes", "{LH} daemon {rid} --set POWER={p} --high-power --yes",
+                                  "{LH} daemon {rid} --set POWER={p} --set TXPOWER=018 --yes"])
+def test_a_setter_form_with_a_power_above_the_cap_is_a_stop(tmp_path, form):
+    # red-before (7bed19a0): under the setter's context the guard checked no power: POWER=20 reached the box
+    r, evd = source_only(tmp_path, f"F[dset]='{form}'; keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; "
+                                   'sshrun() { touch "$EVD/ran"; }; pset H set.txt r1 10')
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: set.txt: the setter's command carries a power above 17 dBm or a high-power flag: never run"]
+    assert not (evd / "ran").exists()
+
+
+def test_the_dry_self_check_fails_on_a_setter_command_above_the_cap(tmp_path):
+    # red-before (7bed19a0): the no-high-power self-check scanned only the commands outside the setter and reader
+    r, _ = source_only(tmp_path, 'DRYLOG=$EVD/dry.log; printf "%s\\n" "CMD[set] H: lhpc daemon r1 --set POWER=20 --yes" '
+                                 '"CMD[set] H: lhpc daemon r2 --set POWER=10 --yes" > "$DRYLOG"; selfcheck')
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: dry self-check no-high-power: 1 setter command(s) carry a high-power flag or a power above 17 dBm"]
+
+
+def test_the_power_cap_is_a_constant(tmp_path):
+    r, _ = source_only(tmp_path, 'PCAP=20')
+    assert r.returncode != 0 and "readonly" in r.stderr
 
 
 @pytest.mark.parametrize("cmd", ["X PC f.txt 'touch \"$RAN\"; : --set POWER=20'", "X PC f.txt 'touch \"$RAN\"; : --high-power'",

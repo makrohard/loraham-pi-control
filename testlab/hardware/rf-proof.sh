@@ -29,7 +29,8 @@
 # EXIT: 0 = every run row PASS or NOT RUN; 1 = a FAIL; 2 = a STOP. Dry exits 0 or 2.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 2; REPO=$(cd "$HERE/../.." && pwd) || exit 2
-TXMAX=10; STICK_MIN=2; WEBPORT=8443; NPREFIX=${NONCE_PREFIX:-rfkit}
+readonly PCAP=17 TXMAX=10   # THE power cap (dBm) and the frames per physical radio: constants, never an input
+STICK_MIN=2; WEBPORT=8443; NPREFIX=${NONCE_PREFIX:-rfkit}
 PEER=${PEER:-$HERE/peer.py}; FAKE_PEER=${FAKE_PEER:-$HERE/fake_peer.py}; VMT=${VMT:-python3}; VRNS=${VRNS:-python3}; LOCK=${LOCK:-${TMPDIR:-/tmp}/rf-proof-peer.lock}
 # ---- 1. the ONE row table (the table order is the run order) ---------------------------------------------------------------
 # id lane kind  endpoint A    endpoint B    power        flags
@@ -223,12 +224,16 @@ print("UP", "yes" if len(up) == 1 and up[0].get("status") is True else "no")
 HPY
 )
 
-dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le 17 ]; }
+dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le "$PCAP" ]; }
 # THE power boundary. pnorm: a text normalised (every quote, backslash and blank removed, lowercase), so no quoting, tab or
 # escape can split a key. A normalised text with a power token (power, txp, settx) runs only through the one setter (pset)
 # or the one reader (pread); anything else carrying one is a STOP at the X/XIN/peer boundary (guard).
 pnorm() { printf '%s' "$1" | tr -d "\"'\\\\[:space:]" | tr '[:upper:]' '[:lower:]'; }
 ptoken() { local t; t=$(pnorm "$1"); [[ $t == *power* || $t == *txp* || $t == *settx* ]]; }
+# pover: rc 0 when a text carries a high-power flag or a value after a power token above the cap (as an integer, any zeros)
+pover() { local t n; t=$(pnorm "$1"); [[ $t == *highpower* || $t == *high-power* || $t == *high_power* ]] && return 0
+  for n in $(printf '%s' "$t" | grep -oE '(power|txp|settx)[^0-9a-z]{0,3}-?[0-9]+' | grep -oE '[0-9]+$'); do n=${n#"${n%%[!0]*}"}
+    [ "${#n}" -le 2 ] && [ "${n:-0}" -le "$PCAP" ] || return 0; done; return 1; }
 # issend: rc 0 when a command (or its stdin) is a send form: the frame, Meshtastic, MeshCore and MeshChat sends, the chat
 # line, the MeshChat announce, the row-5 release, the MeshCom console and Graywolf helpers, a peer's send or exchange
 issend() { local t i; t=$(pnorm "$1"); i=$(pnorm "${2:-}")
@@ -288,21 +293,23 @@ guard() {   # guard <file> <command> <stdin|->: THE runtime boundary of X, XIN a
   local f=$1 c=$2 in=$3
   if [ -z "${PCTX:-}" ]; then ! ptoken "$c" || stop "$f: a power token outside the one power setter/reader: never run"
     [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
-      || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"; fi   # the box password (sudo -S) is not a command
+      || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"   # the box password (sudo -S) is not a command
+  elif [ "$PCTX" = set ]; then ! pover "$c" || stop "$f: the setter's command carries a power above $PCAP dBm or a high-power flag: never run"; fi
   ! issend "$c" "$([ "$in" = - ] || printf '%s' "$in")" || [ "${TXCTX:-}" = 1 ] || stop "$f: a send outside tx: never run"; }
 pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument,
   # leading zeros stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP. --restore (the undo replay):
   # exactly the pre-state value journalled for that radio when the row changed it (PRE_<box|PC>_<target>), and nothing else
   local restore=; [ "$1" = --restore ] && { restore=1; shift; }
-  local w=$1 f=$2 tg=$3 v=$4 cap=17 m c pre
+  local w=$1 f=$2 tg=$3 v=$4 cap=$PCAP m c pre
   [[ $v =~ ^[0-9]+$ ]] || stop "$f: power value '$v' is not ASCII digits"; v=${v#"${v%%[!0]*}"}; v=${v:-0}
   [[ $v =~ ^[0-9]{1,2}$ ]] || stop "$f: power value '$4' has more than 2 digits"
   if [ -n "$restore" ]; then pre=$(getk "PRE_${w}_$tg"); pre=${pre#"${pre%%[!0]*}"}
     [ -n "$(getk "PRE_${w}_$tg")" ] && [ "${pre:-0}" = "$v" ] || stop "$f: restore $w $tg to $v: not its journalled pre-state ('$(getk "PRE_${w}_$tg")')"
   elif [ "$w" != PC ]; then m=$(getk "MODEL_${w}_$tg"); c=$(getk "CAP_${w}_$m"); [[ $c =~ ^[0-9]{1,2}$ ]] || stop "$f: no model cap for $w:$tg ('$m')"
-    { [ "${#c}" -lt 2 ] || [[ ! "$c" > 17 ]]; } || c=17; cap=$c; fi
+    { [ "${#c}" -lt 2 ] || [[ ! "$c" > "$PCAP" ]]; } || c=$PCAP; cap=$c; fi
   [ -n "$restore" ] || { [ "${#v}" -lt "${#cap}" ] || { [ "${#v}" = "${#cap}" ] && [[ ! "$v" > "$cap" ]]; }; } || stop "$f: power $v above the cap $cap dBm"
-  local PCTX=set; if [ "$w" = PC ]; then peer "$f" "$VMT" "$tg" "$v"; else X "$w" "$f" "$(form dset rid="$tg" p="$v")"; fi; }
+  local PCTX=set; [ -z "$restore" ] || PCTX=restore   # restore: the journalled pre-state, checked above
+  if [ "$w" = PC ]; then peer "$f" "$VMT" "$tg" "$v"; else X "$w" "$f" "$(form dset rid="$tg" p="$v")"; fi; }
 jpower() {   # jpower <box|PC> <rid|peer-action> <value>: journal a radio's pre-state power before the row changes it: the
   # value the restore may set (PRE_<box|PC>_<target>) and its undo (@pset, replayed by pset --restore)
   keep "PRE_$1_$2" "$3"; undo_push "$1" "@pset $1 $2 $3"; }
@@ -444,7 +451,7 @@ jstatus() {   # jstatus "<daemon STATUS line>": exactly one POWER in -9..17 and 
   local -a ws; local w p= h= np=0 nh=0; read -ra ws <<< "$1"
   for w in "${ws[@]}"; do case "$w" in POWER=*) p=${w#POWER=}; np=$((np + 1));; HIGHPOWER=*) h=${w#HIGHPOWER=}; nh=$((nh + 1));; esac; done
   [ "$np" = 1 ] || { echo "$np POWER field(s) in the STATUS (want 1)"; return 1; }; [ "$nh" = 1 ] || { echo "$nh HIGHPOWER field(s) in the STATUS (want 1)"; return 1; }
-  [[ "$p" =~ ^-?[0-9]{1,2}$ ]] || { echo "POWER '$p' is not a number"; return 1; }; [ "$p" -ge -9 ] && [ "$p" -le 17 ] || { echo "POWER=$p outside -9..17"; return 1; }
+  [[ "$p" =~ ^-?[0-9]{1,2}$ ]] || { echo "POWER '$p' is not a number"; return 1; }; [ "$p" -ge -9 ] && [ "$p" -le "$PCAP" ] || { echo "POWER=$p outside -9..17"; return 1; }
   [ "$h" = 0 ] || { echo "HIGHPOWER is '$h', not 0"; return 1; }; echo "$p"; }
 jfield() { local -a ws; local w v= n=0; read -ra ws <<< "$1"; for w in "${ws[@]}"; do case "$w" in "$2="*) v=${w#*=}; n=$((n + 1));; esac; done
   [ "$n" = 1 ] && [ -n "$v" ] || { echo "$n $2 field(s) in the STATUS (want 1)"; return 1; }; echo "$v"; }
@@ -453,12 +460,12 @@ jgrant() {   # jgrant "<radio rows>" <rid>: exactly one row of the rid, its high
   [ "$n" = 1 ] || { echo "$n hardware row(s) of $2 (want 1)"; return 1; }; hp=$(printf '%s\n' "$rows" | grep -oE ' hp=[^ ]*$' | cut -d= -f2)
   case "$hp" in None|False) echo "$hp";; *) echo "the high-power grant of $2 is '$hp' (want None or False)"; return 1;; esac; }
 jspower() {   # jspower <form> <value>: a stack's own power value in -9..17; Meshtastic's 0 means the firmware's maximum
-  [[ "$2" =~ ^-?[0-9]{1,2}$ ]] || { echo "no strict power value ('$2')"; return 1; }; [ "$2" -ge -9 ] && [ "$2" -le 17 ] || { echo "power $2 outside -9..17"; return 1; }
+  [[ "$2" =~ ^-?[0-9]{1,2}$ ]] || { echo "no strict power value ('$2')"; return 1; }; [ "$2" -ge -9 ] && [ "$2" -le "$PCAP" ] || { echo "power $2 outside -9..17"; return 1; }
   [ "$1" != mt_pget ] || [ "$2" -ge 1 ] || { echo "Meshtastic tx_power $2 (0 = the firmware's maximum)"; return 1; }; echo "$2"; }
-jcap() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 17 ]; }   # Meshtastic's max_power cap, 1..17
+jcap() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$PCAP" ]; }   # Meshtastic's max_power cap, 1..17
 jmodel() {   # jmodel <box> <rid> <value>: the value <= min(17, the radio's model's power_max_dbm on that box), else the reason
   local m c; m=$(getk "MODEL_$1_$2"); c=$(getk "CAP_$1_$m"); [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { echo "no model cap for $1:$2 ('$m' '$c')"; return 1; }
-  [ "$c" -gt 17 ] && c=17; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_max_dbm))"; return 1; }; echo "$3"; }
+  [ "$c" -gt "$PCAP" ] && c=$PCAP; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_max_dbm))"; return 1; }; echo "$3"; }
 pnum() {
   local all v; all=$(body "$1" | grep -v '^[[:space:]]*$')
   case $2 in mt_pget) v=$(printf '%s\n' "$all" | sed -nE 's/^lora\.(tx_power|txPower): (-?[0-9]+)$/\2/p')
@@ -727,7 +734,7 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   spower "$b" mc_pget "$r" "R4-$b-$r"
   pread PC 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write
   tp=$(body 4-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
-  [ "$MODE" = dry ] || { [[ "$tp" =~ ^-?[0-9]+$ ]] && [ "$tp" -le 17 ]; } || stop "row 4: the T-Deck Pro reads '${tp}' dBm (above 17 or unreadable); its power is never changed: no TX"
+  [ "$MODE" = dry ] || { [[ "$tp" =~ ^-?[0-9]{1,2}$ ]] && [ "$tp" -le "$PCAP" ]; } || stop "row 4: the T-Deck Pro reads '${tp}' dBm (above 17 or unreadable); its power is never changed: no TX"
   keep P_R4-tdpro "${tp:-dry}"; radk R4-tdpro PC:tdpro; pwok PC:tdpro; data "row 4: the T-Deck Pro at its own ${tp:-dry} dBm, not changed"
   tx R4-tdpro 1 "$n1" -- peerpin 4-peer-send.txt mc-send "$n1"; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro send failed"
   boxrx "$b" 4-box-rx.txt rx_mc "$r" "$n1" 90 || fail "not heard: $n1"
@@ -850,7 +857,9 @@ selfcheck() {
   local SCN=0; scok() { echo "dry self-check OK $1"; SCN=$((SCN + 1)); }; sc() { stop "dry self-check $1: $2"; }
   local n c t L G g p w st
   n=0; while IFS= read -r t; do ! ptoken "$t" || n=$((n + 1)); done < <(grep '^CMD\[\] ' "$DRYLOG")   # outside the setter/reader
-  [ "$n" = 0 ] || sc no-high-power "$n printed command(s) carry --high-power or a power of 18 dBm or more"; scok no-high-power
+  [ "$n" = 0 ] || sc no-high-power "$n printed command(s) outside the setter/reader carry a power token"
+  n=0; while IFS= read -r t; do ! pover "$t" || n=$((n + 1)); done < <(grep '^CMD\[set\] ' "$DRYLOG")   # the setter's own
+  [ "$n" = 0 ] || sc no-high-power "$n setter command(s) carry a high-power flag or a power above $PCAP dBm"; scok no-high-power
   c=$(grep '^CMD' "$DRYLOG" | grep -ciE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b") || true; [ "$c" = 0 ] || sc no-call-in-commands "the operator's call is in $c logged command(s)"
   [ -z "$TRACKER_CALL" ] || { c=$(grep -ciF -- "$TRACKER_CALL" "$DRYLOG") || true; [ "$c" = 0 ] || sc no-call-in-commands "the tracker call is in the command log ($c)"; }; scok no-call-in-commands
   n=$(grep '^CMD' "$DRYLOG" | grep -c 'peer.py') || true; w=$(grep '^CMD' "$DRYLOG" | grep -c 'flock -n -E 75') || true; p=$(grep '^CMD' "$DRYLOG" | grep -c '(PIN on stdin)') || true
@@ -960,6 +969,27 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
     ( tx K 2 control --reserve ) >/dev/null 2>&1 || exit 1; [ "$(wc -l < "$OUT/ran")" = 1 ] && [ "$(getk TXR_PC_g2)" = 2 ] ) || sc tx-dispatch "a refused send ran, or a good one did not"
   scok tx-dispatch
   echo "dry self-check: all $SCN OK"; }
+# ---- the lab file: DATA, never run ---------------------------------------------------------------------------------------
+LABKEYS='^(BOX_[HZ]_(HOST|USER|RUNTIME)|RADIO_[A-Z0-9]+|PEER_[a-z0-9]+|OPERATOR_CALL|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT|DRY_[A-Za-z0-9_]+)$'
+labread() {   # labread <file>: blank and # lines, else one KEY=VALUE entry, KEY a lab key (LABKEYS), VALUE one of: a bare word of
+  # [A-Za-z0-9_.,:/@+=-], '...' (may span lines), "..." (one line, no $ ` \ "), each with an optional ' # comment' after it.
+  # Anything else is a STOP: no form, constant, table, function or command of the script can come from the lab file. A key
+  # already set in the environment wins.
+  local f=$1 l k v n=0 env=" " rb rs rd
+  rb='^([A-Za-z0-9_.,:/@+=-]*)([[:space:]]+#.*)?$'; rs="^'([^']*)'([[:space:]]+#.*)?\$"; rd='^"([^"$`\\]*)"([[:space:]]+#.*)?$'
+  for k in $(compgen -v); do [[ $k =~ $LABKEYS ]] && env+="$k "; done
+  [ -f "$f" ] && [ -r "$f" ] || stop "$f: not readable"
+  while IFS= read -r l || [ -n "$l" ]; do n=$((n + 1))
+    [[ $l =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ $l =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || stop "$f:$n: not a KEY=VALUE line (the lab file is data, never run)"
+    k=${BASH_REMATCH[1]}; v=${BASH_REMATCH[2]}
+    [[ $k =~ $LABKEYS ]] || stop "$f:$n: '$k' is not a lab key"
+    if [[ $v == "'"* ]]; then while [[ ${v:1} != *"'"* ]]; do IFS= read -r l || stop "$f:$n: the quote of $k is not closed"; n=$((n + 1)); v+=$'\n'$l; done
+      [[ $v =~ $rs ]] || stop "$f:$n: $k: text after its closing quote"
+    elif [[ $v == '"'* ]]; then [[ $v =~ $rd ]] || stop "$f:$n: $k: a \"...\" value is one line without \$ \` \\ or \""
+    else [[ $v =~ $rb ]] || stop "$f:$n: $k: an unquoted value is one word of [A-Za-z0-9_.,:/@+=-] (quote it)"; fi
+    v=${BASH_REMATCH[1]}; case "$env" in *" $k "*) ;; *) printf -v "$k" '%s' "$v";; esac
+  done < "$f"; }
 # The guard's two context flags come only from tx (TXCTX) and the one setter/reader (PCTX), each local to its one call.
 # One inherited from the environment would open the guard: STOP (also before the test-only return below).
 [ -z "${PCTX:-}${TXCTX:-}" ] || stop "PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"
@@ -973,12 +1003,7 @@ LAB_ENV=${LAB_ENV:-$HERE/lab.$([ "$MODE" = dry ] && echo example || echo local).
 [ -f "$LAB_ENV" ] || stop "no lab file $LAB_ENV (copy lab.example.env to lab.local.env and fill it in)"
 ! grep -qiE '^[[:space:]]*(export[[:space:]]+)?([A-Za-z0-9]+_)*(PASS|PASSWD|PASSWORD|PW|PIN|SECRET)(_[A-Za-z0-9]+)*=' "$LAB_ENV" \
   || stop "$LAB_ENV sets a *PASS*/*PIN*/*SECRET* variable: secrets come on stdin only"
-LABKEYS='^(BOX_[HZ]_(HOST|USER|RUNTIME)|RADIO_[A-Z0-9]+|PEER_[a-z0-9]+|OPERATOR_CALL|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT|DRY_[A-Za-z0-9_]+)$'
-_saved=$(for _v in $(compgen -v); do [[ $_v =~ $LABKEYS ]] && [ -n "${!_v+x}" ] && declare -p "$_v"; done)
-. "$LAB_ENV" || stop "$LAB_ENV: not readable"
-eval "$_saved"; unset _saved _v
-[ -z "${PCTX:-}${TXCTX:-}" ] || stop "$LAB_ENV sets PCTX/TXCTX: the guard's context comes only from tx, pset and pread"
-unset PCTX TXCTX
+labread "$LAB_ENV"
 for b in H Z; do for v in USER:lhpc RUNTIME:'~/loraham-pi-control'; do n="BOX_${b}_${v%%:*}"; [ -n "${!n:-}" ] || declare "$n=${v#*:}"; done; done
 OPERATOR_CALL=${OPERATOR_CALL:-}; [[ "$OPERATOR_CALL" =~ ^[A-Z0-9]{3,8}$ ]] || stop "OPERATOR_CALL is not a callsign without an SSID (3..8 of A-Z 0-9)"
 declare +x OPERATOR_CALL
