@@ -626,6 +626,7 @@ jobs:
               return "passed", ""
           rowc = sorted(n for n in cases if n.startswith("test_slow_build_stack["))
           need = ["test_slow_build_env", *rowc, "test_slow_build_selfupdate",
+                  "test_slow_build_selfupdate_cut_from_0138",
                   "test_slow_build_calibrated", "test_slow_build_budget"]
           bad = [] if rowc else ["test_slow_build_stack[*] (missing)"]
           for n in need:

@@ -531,6 +531,21 @@ def test_slow_build_selfupdate(tmp_path):
     has no evidence, by name (L4_INTRODUCING), and the budget case says so."""
     cand = _git("-C", str(REPO), "rev-parse", "HEAD")
     prev = _prev_tag()
+    root, env, co, venv = _box_at(tmp_path, prev, cand)
+    (root / "state" / "selfupdate.request").write_text("normal\n")
+    seconds, out = _helper(venv / "bin" / "lhpc", env)
+    assert _git("-C", str(co), "rev-parse", "HEAD") == cand, f"{prev} was not updated to {cand}"
+    _record(stt.SELFUPDATE_COMPONENT, "selfupdate-helper", seconds)
+    sync = _PIP_SYNC.findall(out)
+    if not sync and _introducing(prev):
+        print(f"{L4_INTRODUCING} ({prev} has no pip sync line)")
+        return
+    assert sync, "no `[selfupdate] pip sync <n> s` line from the helper — not evidence"
+    _record(stt.SELFUPDATE_COMPONENT, "selfupdate-pip", max(map(float, sync)))
+
+
+def _box_at(tmp_path: Path, prev: str, cand: str) -> tuple[Path, dict, Path, Path]:
+    """A box on release `prev` whose origin serves `cand`: (runtime root, env, checkout, venv)."""
     root = tmp_path / "runtime"
     LabServer(root).init_and_reset()
     env = _box_env(root, tmp_path / "home")
@@ -555,18 +570,65 @@ def test_slow_build_selfupdate(tmp_path):
         subprocess.run([*pip, "-e", str(target)], check=True, timeout=HARNESS_S)
     _install_units(venv / "bin" / "python", root, env)
     _release1_overlay(venv / "bin" / "python", root, env)
-    (root / "state" / "selfupdate.request").write_text("normal\n")
     if WHEELS:
         env = _offline(_local_pip(env, tmp_path / "pipconf"))
-    seconds, out = _helper(venv / "bin" / "lhpc", env)
-    assert _git("-C", str(co), "rev-parse", "HEAD") == cand, f"{prev} was not updated to {cand}"
-    _record(stt.SELFUPDATE_COMPONENT, "selfupdate-helper", seconds)
-    sync = _PIP_SYNC.findall(out)
-    if not sync and _introducing(prev):
-        print(f"{L4_INTRODUCING} ({prev} has no pip sync line)")
-        return
-    assert sync, "no `[selfupdate] pip sync <n> s` line from the helper — not evidence"
-    _record(stt.SELFUPDATE_COMPONENT, "selfupdate-pip", max(map(float, sync)))
+    return root, env, co, venv
+
+
+# The release "Upgrading from 0.13.x" (CHANGELOG) starts from: its helper cut git off after 5 s.
+V0138 = "v0.13.8"
+
+# A git first on the helper's PATH whose first `merge` writes the new commit's files outside the
+# two packages, unstaged, then hangs past the helper's limit: the checkout 0.13.8's helper leaves on
+# a slow card (HEAD on the old commit, part of the new tree written). The packages stay 0.13.8's,
+# so the command under proof is 0.13.8's own.
+_HANG = "exec sleep 600"  # wallclock: the git must outlast 0.13.8's real 5 s limit, which cuts it off
+_CUT_MERGE = """#!/bin/sh
+if [ "$3" = merge ] && [ -e '{flag}' ]; then
+  rm -f '{flag}'
+  '{git}' -C "$2" checkout "$5" -- . ':(exclude)lhpc' ':(exclude)testlab' && '{git}' -C "$2" reset -q && {hang}
+fi
+exec '{git}' "$@"
+"""
+
+
+@pytest.mark.slow
+def test_slow_build_selfupdate_cut_from_0138(tmp_path):
+    """The "Upgrading from 0.13.x" step, run as written with 0.13.8's own code: its one-click
+    helper cuts the merge off ("git refused the fast-forward", the half-written tree left behind),
+    then 0.13.8's `lhpc self-update --apply --overwrite --yes` ends on this commit with a clean tree
+    and the venv synced to it."""
+    cand = _git("-C", str(REPO), "rev-parse", "HEAD")
+    root, env, co, venv = _box_at(tmp_path, V0138, cand)
+    old = _git("-C", str(co), "rev-parse", "HEAD")
+    bindir, flag = tmp_path / "cutgit", tmp_path / "cut"
+    bindir.mkdir()
+    flag.touch()
+    real = subprocess.run(["sh", "-c", "command -v git"], check=True, capture_output=True,
+                          text=True).stdout.strip()
+    (bindir / "git").write_text(_CUT_MERGE.format(flag=flag, git=real, hang=_HANG))
+    (bindir / "git").chmod(0o755)
+    env = {**env, "PATH": f"{bindir}:{env.get('PATH', os.environ['PATH'])}"}
+    lhpc = str(venv / "bin" / "lhpc")
+    (root / "state" / "selfupdate.request").write_text("normal\n")
+    r = subprocess.run([lhpc, "self-update", "--run-service"],
+                       env={**env, "INVOCATION_ID": "slow-build-lane"},
+                       capture_output=True, text=True, timeout=HARNESS_S, check=False)
+    cut = r.stdout + r.stderr
+    assert not flag.exists(), f"the helper never ran the merge: {cut[-1500:]}"
+    assert "git refused the fast-forward" in cut, cut[-1500:]
+    assert _git("-C", str(co), "rev-parse", "HEAD") == old
+    assert _git("-C", str(co), "status", "--porcelain"), "the cut merge left no files behind"
+    env.pop("INVOCATION_ID", None)
+    r = subprocess.run([lhpc, "self-update", "--apply", "--overwrite", "--yes"], env=env,
+                       capture_output=True, text=True, timeout=HARNESS_S, check=False)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
+    assert _git("-C", str(co), "rev-parse", "HEAD") == cand
+    assert _git("-C", str(co), "status", "--porcelain") == ""
+    have = subprocess.run([str(venv / "bin" / "python"), "-c", "from importlib.metadata import "
+                           "version; print(version('loraham-pi-control'))"], env=env,
+                          check=True, capture_output=True, text=True, timeout=600).stdout.strip()
+    assert have == __version__, f"the venv records {have}, the checkout is {__version__}"
 
 
 def test_slow_build_calibrated():

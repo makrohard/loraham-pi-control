@@ -54,7 +54,8 @@ def _run(tmp_path: Path, cases: list[str], baseline: str) -> subprocess.Complete
 def _row_c(state: str = "passed", msg: str = "") -> list[str]:
     return ([_case("test_slow_build_env", state, msg)]
             + [_case(f"test_slow_build_stack[{s}]", state, msg) for s in STACKS]
-            + [_case("test_slow_build_selfupdate", state, msg)])
+            + [_case("test_slow_build_selfupdate", state, msg),
+               _case("test_slow_build_selfupdate_cut_from_0138", state, msg)])
 
 
 def _judging(state: str = "passed", msg: str = "") -> list[str]:
@@ -92,6 +93,13 @@ def test_a_failed_or_missing_row_c_case_is_refused(tmp_path):
     assert r.returncode == 1 and "test_slow_build_stack[kiss] (failure)" in r.stdout, r.stdout
     r = _run(tmp_path, _row_c()[:1] + _judging(), MEASURED)
     assert r.returncode == 1 and "test_slow_build_stack[*] (missing)" in r.stdout, r.stdout
+
+
+def test_the_cut_update_from_0138_is_a_required_case(tmp_path):
+    """The proof of the "Upgrading from 0.13.x" step is a row-C case like the rest: missing, it
+    fails the job instead of passing unseen."""
+    r = _run(tmp_path, _row_c()[:-1] + _judging(), MEASURED)
+    assert r.returncode == 1 and "test_slow_build_selfupdate_cut_from_0138 (missing)" in r.stdout, r.stdout
 
 
 def test_a_fully_passed_run_is_accepted(tmp_path):
