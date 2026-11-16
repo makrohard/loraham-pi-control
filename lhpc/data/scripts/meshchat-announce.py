@@ -94,6 +94,9 @@ def main(argv=None) -> int:
     except Failure as exc:                                       # also an alarm in the inner finally
         print(f"meshchat-announce: not announced — {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:                                     # any other parser failure: its type only,
+        print(f"meshchat-announce: not announced — GET {ROUTE}: {type(exc).__name__}", file=sys.stderr)
+        return 1                                                 # never its text, never a traceback
     print("meshchat-announce: announced")
     return 0
 

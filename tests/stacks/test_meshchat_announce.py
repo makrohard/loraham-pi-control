@@ -307,6 +307,45 @@ def test_a_failed_announce_never_logs_meshchats_answer(meshchat, kw):
     assert "CANARY" not in out, out
 
 
+_CHUNKED_HEAD = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+
+
+@pytest.mark.parametrize("raw, kind, text", [
+    pytest.param(_CHUNKED_HEAD + b"-2\r\nxx\r\n0\r\n\r\n", "ValueError", "read length must", id="chunk-size-minus-2"),
+    pytest.param(b"HTTP/1.1 200 OK\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" + b"[" * 10000 + b"]" * 10000,
+                 "", "recursion depth", id="nested-json"),
+])
+def test_a_parser_failure_outside_the_named_ones_logs_its_type_only(meshchat, raw, kind, text):
+    """G2-GROUP11 round 3 B2: a parser failure no named except covers (a negative chunk size, JSON
+    nested past the recursion limit) ends as the fixed message plus the exception type — never the
+    exception's text, never a traceback. The nested JSON raises RecursionError up to Python 3.13; 3.14
+    parses it (a list: "did not confirm"), so its kind is not asserted; the boundary test below is."""
+    rc, out, _s = _script(meshchat(raw=raw).api)
+    assert rc == 1 and "not announced — GET /api/v1/announce: " + kind in out, out
+    assert "Traceback" not in out and text not in out.lower(), out
+
+
+def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch, capsys):
+    """The B2 boundary itself, on any Python: an exception none of the named excepts covers, its text
+    carrying a canary, ends as rc 1 with the fixed message and the type name only."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("meshchat_announce_inproc3", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    def deep(api):
+        raise RecursionError("maximum recursion depth exceeded CANARY_SECRET")
+    monkeypatch.setattr(mod, "announce", deep)
+    import signal
+    before = signal.getsignal(signal.SIGALRM)
+    try:
+        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
+    finally:
+        signal.signal(signal.SIGALRM, before)
+    err = capsys.readouterr().err
+    assert err == "meshchat-announce: not announced — GET /api/v1/announce: RecursionError\n", err
+
+
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
     rc, out, _s = _script(meshchat(chunked=True).api)
     assert rc == 0 and "announced" in out, out
