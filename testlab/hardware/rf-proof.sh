@@ -628,7 +628,7 @@ row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): bo
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "box -> peer" yes "$(getk "P_R2-$b-$r" as-is) dBm (as-is)" PASS
   [ "$MODE" = dry ] || { [ "$grc" = 0 ] && grep -q '^ACKED ' "$OUT/2-box-send.txt"; } || fail "row 2 peer -> box: no ACK: call not verified ('$n', graywolf rc $grc)"
   if [ "$MODE" != dry ]; then
-    if grep -qx CALL-DIFF "$OUT/2-box-send.txt"; then notrun 2 peer-\>box "the ACK frame's source differs from the given call: not the tracker's ACK"; undo_to "$m"; return 0; fi
+    ! grep -qx CALL-DIFF "$OUT/2-box-send.txt" || fail "row 2 peer -> box: the ACK frame's source differs from the given call (not the tracker's ACK)"
     grep -qx CALL-MATCH "$OUT/2-box-send.txt" || fail "row 2 peer -> box: Graywolf has '$n' acked, but no ACK frame in the rf log"; fi
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "peer -> box" "the tracker's ACK (acked in Graywolf; the frame's source = the given call)" "the tracker's $TRACKER_DBM dBm, from its portal (not read)" PASS
   undo_to "$m"; }
