@@ -32,7 +32,7 @@ def test_no_tracked_kit_file_holds_a_box_login_or_a_lan_address():
 
 @pytest.mark.parametrize("text,hit", [
     ("ssh " + "lhpc" + "@box-h.example", True), ("10.0" + ".0.7", True), ("172.16" + ".4.1", True), ("172.31" + ".255.1", True),
-    ("192.168" + ".178.95", True), ("192.0.2.10", False), ("172.32.0.1", False), ("meshtastic@r2", False),
+    ("192.168" + ".1.5", True), ("192.0.2.10", False), ("172.32.0.1", False), ("meshtastic@r2", False),
     ("FREQ=433.174988", False), ("1.10.0.7.1", False),
 ])
 def test_the_pattern_finds_a_login_and_private_addresses_only(text, hit):
