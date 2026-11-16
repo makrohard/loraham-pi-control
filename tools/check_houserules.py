@@ -110,7 +110,13 @@ PATCH = ("--no-color", "--no-ext-diff", "--no-textconv", "--text", "--dst-prefix
          "--inter-hunk-context=0")
 # Where Python ends a line; git ends one only at "\n".
 PY_EOL = re.compile(r"\r\n|\r|\n")
+# A control character in a row (a file name with a newline or a tab) is shown as \xNN: one row stays one line.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 UNQUOTE = {b"a": b"\a", b"b": b"\b", b"t": b"\t", b"n": b"\n", b"v": b"\v", b"f": b"\f", b"r": b"\r"}
+
+
+def shown(text: str) -> str:
+    return CONTROL.sub(lambda m: f"\\x{ord(m[0]):02x}", text)
 
 
 def patch(cmd: str, *args: str) -> str:
@@ -724,7 +730,7 @@ def _check(args, base: str, head: str) -> int:
     warn = sum(v == "WARN" for _, _, v in rows)
     print(f"HOUSE RULES KEPT  {args.range}")
     for name, text, verdict in rows:
-        print(f"{name:<12} {text}   {verdict}")
+        print(f"{name:<12} {shown(text)}   {verdict}")
     print(f"{'VERDICT':<12} {'FAIL' if hard else 'PASS'}  (hard {hard}, warn {warn})")
     return 1 if hard else 0
 

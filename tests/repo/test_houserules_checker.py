@@ -601,6 +601,12 @@ def test_a_crlf_line_is_one_python_line(repo):
     assert _run(repo)[1]["wallclock"] == "OK"
 
 
+def test_a_name_with_a_newline_keeps_the_row_on_one_line(repo):
+    # Red before: the decoded newline split the attribution row in two (its location read "docs/a").
+    _commit(repo, {"docs/a\nb.md": f"Reviewed by {W}\n"})
+    assert _attribution(repo) == (0, "WARN", "1 at docs/a\\x0ab.md:1")
+
+
 def test_an_indented_line_after_a_gap_does_not_lengthen_a_bullet(repo):
     # A continuation is contiguous: three indented lines after an unindented one are not the bullet's.
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace(
