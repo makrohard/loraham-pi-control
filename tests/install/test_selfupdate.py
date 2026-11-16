@@ -9,6 +9,7 @@ asked to consent to nothing. The two behaviours that grew out of this one live n
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -266,6 +267,41 @@ def test_a_cut_advance_put_back_keeps_what_someone_else_wrote_meanwhile(env, tmp
     again = selfupdate.apply_update(env["sys"], env["paths"])
     assert again["ok"] is False and again.get("dirty") is True, again
     assert (w / "mine.txt").exists()
+
+
+def test_a_cut_advance_that_left_gits_index_lock_is_put_back_and_the_lock_removed(
+        env, tmp_path, monkeypatch):
+    """A git killed at the limit leaves `.git/index.lock`; no process holds it, so the put-back
+    removes it, and the checkout is back where it started with no lock left."""
+    old = selfupdate.local_state(env["sys"])["head"]
+    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock")
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res["timed_out"] is True, res
+    assert "back on the commit it started from" in res["message"], res["message"]
+    assert not (env["work"] / ".git" / "index.lock").exists()
+    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
+    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+
+
+def test_an_index_lock_a_process_holds_stays_and_is_named(env, tmp_path, monkeypatch):
+    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock")
+    lock = (env["work"] / ".git" / "index.lock").resolve()
+    monkeypatch.setattr(selfupdate, "_lock_holders", lambda p: [4242] if p == lock else [])
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res["timed_out"] is True, res
+    assert lock.exists()
+    assert res["put_back_error"] == f"git's index lock {lock} is held by a running process (pid 4242)"
+    assert f"could not be put back ({res['put_back_error']})" in res["message"]
+
+
+def test_lock_holders_finds_a_process_that_has_the_lock_open(tmp_path):
+    lock = tmp_path / "index.lock"
+    lock.write_text("")
+    assert selfupdate._lock_holders(lock) == []
+    with lock.open() as held:
+        assert os.getpid() in selfupdate._lock_holders(lock), held
 
 
 def test_a_cut_advance_put_back_restores_a_file_the_update_removed(env, tmp_path, monkeypatch):

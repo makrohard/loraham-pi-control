@@ -701,6 +701,8 @@ def _put_back(system: System, root: Path, head: str, new: str) -> str:
 
     if not head or not new:
         return "the commits to restore between are not known"
+    if stale := _drop_stale_index_lock(system, root):
+        return stale
     args = ["diff", "--name-status", "-z", "--no-renames", head, new]
     d = _git(system, root, args, _APPLY_TIMEOUT)
     if d.returncode != 0:
@@ -728,6 +730,56 @@ def _put_back(system: System, root: Path, head: str, new: str) -> str:
             if r.returncode != 0:
                 return why(r, args)
     return ""
+
+
+def _drop_stale_index_lock(system: System, root: Path) -> str:
+    """A git killed at the limit (KILL, when TERM did not end it in time) leaves `.git/index.lock`
+    behind, and every later git refuses to run. Remove it when no process has it open: '' when the
+    lock is gone, else why it stays (held — a running git owns it — or not removable)."""
+    r = _git(system, root, ["rev-parse", "--git-path", "index.lock"], _LOCAL_TIMEOUT)
+    if r.returncode != 0 or not r.stdout.strip():
+        return ""                                     # git's own error follows at the next step
+    lock = (root / r.stdout.strip()).resolve()
+    if not lock.exists():
+        return ""
+    held = _lock_holders(lock)
+    if held:
+        return f"git's index lock {lock} is held by a running process (pid {held[0]})"
+    try:
+        lock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return f"git's index lock {lock} could not be removed ({exc.strerror or exc})"
+    return ""
+
+
+def _lock_holders(lock: Path) -> list[int]:
+    """The pids that have `lock` open, plus every `git` whose open files cannot be read (another
+    user's): it might hold the lock, and a lock in doubt is left alone."""
+    held = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            fds = list((proc / "fd").iterdir())
+        except PermissionError:
+            try:
+                if (proc / "comm").read_text().strip() == "git":
+                    held.append(int(proc.name))
+            except OSError:
+                pass
+            continue
+        except OSError:
+            continue                                  # gone meanwhile
+        for fd in fds:
+            try:
+                if Path(os.readlink(fd)) == lock:
+                    held.append(int(proc.name))
+                    break
+            except OSError:
+                continue
+    return held
 
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).
