@@ -17,7 +17,8 @@ Z_cpu is the newest zero2w [[calibration]] cpu_s of the current workload (the ha
 ceiling: the throttle only ever gets tighter. Nothing here is hashed into the workload, and calibrate.sh is not run:
 the calibrated case still judges the throttled run on its own. The timed build runs as root, as the lane's container
 does (the image's default user cannot enter a work dir it does not own), and a build that fails or hangs is a STOP
-that names the command and its output, never a time.
+that names the command and its output, never a time. The container is named: one whose build outlives the bound is
+removed by that name (ending the docker client does not end its container).
 
     python3 testlab/slowbuild/cpu_quota.py --image IMG     # prints SLOW_CPUS=<q>; the reasoning to stderr
 """
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -75,14 +77,20 @@ def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S) -> float:
     with tempfile.TemporaryDirectory() as tmp:
         for name in inputs():
             shutil.copy2(HERE / name, Path(tmp) / Path(name).name)
-        argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "1", "--user", "root", "-v", f"{tmp}:/w",
-                image, "bash", "-c",
+        name = f"lhpc-cpu-quota-{os.getpid()}"
+        argv = ["docker", "run", "--rm", "--name", name, "--network", "none", "--cpus", "1", "--user", "root",
+                "-v", f"{tmp}:/w", image, "bash", "-c",
                 'set -e; t0=$EPOCHREALTIME; make -s -C /w -j"$(nproc)" >/dev/null; echo "$t0 $EPOCHREALTIME"']
         try:
             r = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
-        except subprocess.TimeoutExpired as e:
-            raise SystemExit(f"cpu_quota: the timed build did not end within {timeout:g} s: {' '.join(argv)}\n"
-                             f"stdout: {_tail(e.stdout)}\nstderr: {_tail(e.stderr)}") from None
+        except BaseException as e:
+            # Ending the client does not end its container (--rm removes it only once it exits): remove it by name.
+            # It is absent if it never started, or ended meanwhile.
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=60)
+            if isinstance(e, subprocess.TimeoutExpired):
+                raise SystemExit(f"cpu_quota: the timed build did not end within {timeout:g} s: {' '.join(argv)}\n"
+                                 f"stdout: {_tail(e.stdout)}\nstderr: {_tail(e.stderr)}") from None
+            raise
     if r.returncode != 0:
         raise SystemExit(f"cpu_quota: the timed build failed (rc {r.returncode}): {' '.join(argv)}\n"
                          f"stdout: {_tail(r.stdout)}\nstderr: {_tail(r.stderr)}")

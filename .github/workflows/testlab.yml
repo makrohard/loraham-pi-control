@@ -68,7 +68,8 @@ jobs:
 
       - name: Prove the mirror is complete (no network)
         run: |
-          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --network none -v "$PWD/srcmirror":/srcmirror:ro \
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
 
       - name: Acquire the binaries the lanes install (mirror, transfer backoff)
@@ -80,9 +81,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           . .github/scripts/retry.sh
           # Outside the checkout: the lane copies /repo, and 178 MiB more there could fill the disk first.
-          target="aarch64-$(docker run --rm "$IMG" sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')"
+          target="aarch64-$(crun "$IMG" sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')"
           mirror="$RUNNER_TEMP/binmirror"
           echo "BIN_TARGET=$target" >> "$GITHUB_ENV"
           echo "BIN_MIRROR=$mirror" >> "$GITHUB_ENV"
@@ -96,7 +98,8 @@ jobs:
 
       - name: Prove the binary mirror is complete (no network)
         run: |
-          docker run --rm --network none -v "$BIN_MIRROR":/binmirror:ro \
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --network none -v "$BIN_MIRROR":/binmirror:ro \
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" \
             python3 /scripts/mirror-binaries.py verify /binmirror "$BIN_TARGET" meshcom meshtastic
 
@@ -107,13 +110,14 @@ jobs:
         # and again by the product). The product's own pip steps still fetch from PyPI, as for a user.
         # In the lab image: its Python and target.
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           . .github/scripts/retry.sh
           mkdir -p xfer/meshtastic-web
           read -r web_url web_sha < <(python3 .github/scripts/mirror-sources.py web-tarball lhpc/data/manifest.example.toml)
           backoff curl -fsSL -o xfer/meshtastic-web/build.tar "$web_url"
           echo "$web_sha  xfer/meshtastic-web/build.tar" | sha256sum -c -
           # From a COPY of the checkout: setuptools writes egg-info into a tree it builds, /repo is read-only.
-          docker run --rm --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer \
+          crun --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer \
             "$IMG" bash -lc "
               set -e
               . /repo/.github/scripts/retry.sh
@@ -129,7 +133,8 @@ jobs:
         # launch, in a container with no network: anything the acquisition missed fails here,
         # before the lane.
         run: |
-          docker run --rm --network none --user root -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer:ro "$IMG" bash -lc "
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --network none --user root -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer:ro "$IMG" bash -lc "
             set -e
             cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
             su lhpclab -c '
@@ -143,7 +148,8 @@ jobs:
         # Root copies the checkout in and DROPS to the unprivileged lab user — the
         # same privilege boundary users get (uid mapping of -v mounts is not assumed).
         run: |
-          docker run --rm --user root -v "$PWD":/repo:ro \
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --user root -v "$PWD":/repo:ro \
             -v "$PWD/srcmirror":/srcmirror:ro -v "$BIN_MIRROR":/binmirror:ro -v "$PWD/xfer":/xfer:ro \
             -v lhpc_lab_tmp:/tmp "$IMG" bash -lc '
               set -e
@@ -190,8 +196,9 @@ jobs:
         # failed. Named per job — two jobs uploading `testlab-logs` would collide.
         if: always()
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           mkdir -p labevidence
-          docker run --rm --user root -v lhpc_lab_tmp:/tmp -v "$PWD/labevidence":/out \
+          crun --user root -v lhpc_lab_tmp:/tmp -v "$PWD/labevidence":/out \
             "${IMG:-lhpc-testlab:ci}" bash -lc '
               set +e
               find /tmp -maxdepth 6 \( -type d -name logs -o -type d -name testlab \) \
@@ -254,7 +261,8 @@ jobs:
 
       - name: Prove the mirror is complete (no network)
         run: |
-          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --network none -v "$PWD/srcmirror":/srcmirror:ro \
             -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
 
       # The lane's script is written to a FILE and run, never nested inside quoted strings.
@@ -268,6 +276,7 @@ jobs:
       # terminal variant through the production start path.
       - name: Release verification
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           mkdir -p releaseevidence
           cat > lane.sh <<'LANE'
           set -e
@@ -296,7 +305,7 @@ jobs:
             python -m pytest testlab/tests/release -q -rs -x \
               --junitxml=/out/junit-release.xml
           LANE
-          docker run --rm --user root -v "$PWD":/repo:ro -v "$PWD/srcmirror":/srcmirror:ro \
+          crun --user root -v "$PWD":/repo:ro -v "$PWD/srcmirror":/srcmirror:ro \
             -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
             "$IMG" bash -lc '
               set -e
@@ -310,7 +319,8 @@ jobs:
       - name: Collect the lab's own logs (also on failure)
         if: always()
         run: |
-          docker run --rm --user root -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
+          crun --user root -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
             "${IMG:-lhpc-testlab:ci}" bash -lc '
               set +e
               find /tmp -maxdepth 7 \( -type d -name logs -o -type d -name testlab \
@@ -404,6 +414,7 @@ jobs:
         # backoff, each timed into transfers.toml; the lane then times those operations
         # against these local copies. Still inside a timed build: the graywolf build's .deb.
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           . .github/scripts/retry.sh
           mkdir -p srcmirror xfer/graywolf xfer/wheels slowevidence
           timed() {  # timed <what> <argv...>: run it, append its wall time to transfers.toml
@@ -428,16 +439,16 @@ jobs:
           cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml)
           # The self-update sync installs requirements.lock with no index: these wheels are the files the
           # lock names, hash-checked. The download below resolves the newest versions, which drift from it.
-          timed "wheels: requirements.lock" docker run --rm --user root \
+          timed "wheels: requirements.lock" crun --user root \
             -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
             ". /repo/.github/scripts/retry.sh && backoff python3 -m pip download -q --require-hashes --no-deps -r /repo/requirements.lock -d /xfer/wheels"
-          timed "wheels: $cli setuptools>=68 ./ (this checkout)" docker run --rm --user root \
+          timed "wheels: $cli setuptools>=68 ./ (this checkout)" crun --user root \
             -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
             ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src /tmp/src/testlab pytest"
           # The pip install of every timed build (build-wheels.py times each component itself).
           # Both fetch from a COPY of the checkout: setuptools writes egg-info into a source tree
           # it builds, and /repo is mounted read-only.
-          docker run --rm --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro \
+          crun --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro \
             -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/xfer":/xfer -v "$PWD/slowevidence":/out \
             "$IMG" bash -lc "cp -r /repo /tmp/src && python3 /tmp/src/.github/scripts/build-wheels.py fetch \
               /tmp/src/lhpc/data/manifest.example.toml /tmp/src/tests/data/slow-target-builds.toml \
@@ -521,6 +532,7 @@ jobs:
       # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.
       - name: Slow-target build
         run: |
+          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           mkdir -p slowevidence
           cat > lane.sh <<'LANE'
           set -e
@@ -544,7 +556,7 @@ jobs:
               --junitxml=/out/junit-slow-build.xml
           LANE
           # shellcheck disable=SC2086  # SLOW_IO_FLAGS is a word list by design
-          docker run --rm --user root \
+          crun --user root \
             --cpus="$SLOW_CPUS" --memory="$SLOW_MEM" --memory-swap="$SLOW_SWAP" $SLOW_IO_FLAGS \
             -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS -e SLOW_IO_ROOT_DISK \
             -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

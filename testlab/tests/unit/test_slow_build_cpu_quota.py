@@ -80,22 +80,24 @@ def test_the_step_prints_the_quota_for_the_job_env(monkeypatch, capsys):
 
 
 def _docker(tmp_path, monkeypatch, body: str):
-    """A stand-in `docker` first on PATH: it records its argv, then runs `body`."""
+    """A stand-in `docker` first on PATH: it records each call's argv (one line each); `run` then runs `body`, any
+    other subcommand (the `rm -f` of a container) just returns."""
     exe = tmp_path / "bin" / "docker"
     exe.parent.mkdir()
-    exe.write_text(f"#!{sys.executable}\nimport sys\nopen({str(tmp_path / 'argv')!r}, 'w').write('\\0'.join(sys.argv[1:]))\n"
-                   f"{body}")
+    exe.write_text(f"#!{sys.executable}\nimport sys\n"
+                   f"open({str(tmp_path / 'calls')!r}, 'a').write('\\0'.join(sys.argv[1:]) + '\\n')\n"
+                   f"if sys.argv[1] != 'run':\n    sys.exit(0)\n{body}")
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{exe.parent}:{__import__('os').environ['PATH']}")
-    return lambda: (tmp_path / "argv").read_text().split("\0")
+    return lambda: [line.split("\0") for line in (tmp_path / "calls").read_text().splitlines()]
 
 
 def test_the_timed_build_runs_as_root_and_a_failed_make_ends_the_script(tmp_path, monkeypatch):
     """The lane's container runs as root; the image's default user could not enter the 0700 work dir, and a make that
     failed there still printed a time (W1 0.01 s with a non-root image). Now root, and `set -e` before the timing."""
-    argv = _docker(tmp_path, monkeypatch, "print('100.0 127.5')\n")
+    calls = _docker(tmp_path, monkeypatch, "print('100.0 127.5')\n")
     assert cpu_quota.measure_w1("img") == 27.5
-    got = argv()
+    [got] = calls()                                   # one run, nothing to remove
     assert got[got.index("--user") + 1] == "root" and got.index("--user") < got.index("img")
     assert got[-1].split("; ")[0] == "set -e"
 
@@ -111,9 +113,13 @@ def test_a_failed_timed_build_is_a_stop_naming_the_command_and_its_output(tmp_pa
 
 
 @pytest.mark.wallclock("a real stand-in hangs past the step's bound (0.5 s here)")
-def test_a_timed_build_that_hangs_is_a_stop_after_its_bound(tmp_path, monkeypatch):
-    _docker(tmp_path, monkeypatch, "import time\nprint('started', flush=True)\ntime.sleep(60)\n")
+def test_a_timed_build_that_hangs_is_a_stop_after_its_bound_and_its_container_is_removed(tmp_path, monkeypatch):
+    """Ending the client does not end its container (G1-TC-T3-RE B1: it kept building after the STOP): the run is
+    named, and that name is removed after the bound."""
+    calls = _docker(tmp_path, monkeypatch, "import time\nprint('started', flush=True)\ntime.sleep(60)\n")
     with pytest.raises(SystemExit) as stop:
         cpu_quota.measure_w1("img", timeout=0.5)
     why = str(stop.value)
     assert "the timed build did not end within 0.5 s: docker run " in why and "stdout: started" in why
+    run, rm = calls()
+    assert run[0] == "run" and rm == ["rm", "-f", run[run.index("--name") + 1]]

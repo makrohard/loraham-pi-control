@@ -117,7 +117,7 @@ def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
     sizing = job.index('q=$(python3 testlab/slowbuild/cpu_quota.py --image "$IMG")\n'
                        '          echo "$q" >> "$GITHUB_ENV"\n')
     assert job.index('echo "IMG=$IMG" >> "$GITHUB_ENV"') < sizing < job.index("- name: Slow-target build")
-    run = text[text.index("docker run --rm --user root"):text.index("test -s slowevidence")]
+    run = job[job.index("crun --user root \\\n            --cpus="):job.index("test -s slowevidence")]
     for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',
                  "$SLOW_IO_FLAGS", "-e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS",
                  "-e SLOW_IO_ROOT_DISK",
