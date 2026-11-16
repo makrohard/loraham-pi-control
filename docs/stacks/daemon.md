@@ -6,7 +6,7 @@ one `loraham_daemon` process per enabled radio of the hardware list (433/868 MHz
 | | |
 |---|---|
 | Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — the CH341 library (the project's fork of pine64's), which the daemon's build turns into `lib/libloraham-ch341.so` for the [USB radios](../usb-radios.md); an optional build input (source checkout), adopted by default; never started |
-| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `makrohard/libch341-spi-userspace`, the fork carrying the serial/port selection fix, at 98b656bf (the commit in the daemon's `.github/ci/libpinedio.lock`) |
+| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `makrohard/libch341-spi-userspace`, the fork carrying the serial/port selection fix, at aeed7554 (the commit in the daemon's `.github/ci/libpinedio.lock`) |
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/<rid>/rf-daemon.log --id <rid> [--usb-port <port>]` — one process per radio; lhpc computes every value at spawn |
 | Sockets (per radio) | `/tmp/loraconf-<rid>.sock` (CONF / status), `/tmp/loraf-<rid>.sock` (framed), `/tmp/lora-<rid>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
