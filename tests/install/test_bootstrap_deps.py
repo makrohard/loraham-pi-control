@@ -782,6 +782,20 @@ def test_wifi_symlink_leaf_refused_untouched(tmp_path):
     assert "is a symlink or non-regular file - NOT touching it" in r.stderr   # warning goes to stderr
 
 
+def test_wifi_device_table_read_survives_a_reader_that_stops_at_the_first_match(tmp_path):
+    # The device table is fed to the Wi-Fi pick and the default-route type through a pipe whose reader
+    # stops at its first match. bash's printf writes a multi-line value one line per write(), so a
+    # reader that exits after line 1 leaves the writer writing into a closed pipe: SIGPIPE, and under
+    # `set -euo pipefail` the whole script exits 141 (CI 43804887901, two-line table, timing-dependent).
+    # A table larger than a pipe buffer makes the early exit certain; it must not matter.
+    rows = "\n".join(f"veth{i:05d}:ethernet" for i in range(6000))   # ~108 KB > the 64 KiB pipe buffer
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              nm_devs="wlan0:wifi\n" + rows, defroute_dev="wlan0")
+    assert r.returncode == 0, (r.returncode, r.stderr[-400:])
+    assert "Wi-Fi: DISABLING power-save on wlan0" in r.stdout
+    assert (tmp_path / "wifi-nopowersave.conf").exists()
+
+
 def test_wifi_live_apply_failure_says_after_reboot(tmp_path):
     # The persistent write and the live apply are reported separately: when the live `iw` apply fails,
     # the section says it takes effect after reboot — never that power-save is disabled now.
@@ -1072,6 +1086,16 @@ def test_swap_size_bounds_are_enforced(tmp_path):
         assert frag in r.stderr, (bad, r.stderr)
         assert apt == "" and um == ""                     # rejected before any mutation
 
+
+
+def test_swap_size_is_checked_as_one_whole_value(tmp_path):
+    # The check is a whole-string test, not `printf | grep -q`: a per-line grep accepted a value whose
+    # FIRST line is a number (and, under pipefail, its early exit could SIGPIPE the writer and flip it).
+    for bad in ("512\nx", "512\n" + "x" * 100_000):            # small: grep reads both; large: early exit
+        r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "skip", "--swap-size", bad])
+        assert r.returncode == 2, (len(bad), r.returncode, r.stdout[-300:])
+        assert "positive integer" in r.stderr, (len(bad), r.stderr[-300:])
+        assert apt == "" and um == ""                     # rejected before any mutation
 
 # --- headless-safe default: GUI dependencies are OPT-IN (Item K) -----------------------------------
 # Field defect: on a Trixie LITE image the bootstrap pulled libgtk-3-dev, dragging the whole

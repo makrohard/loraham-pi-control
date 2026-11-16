@@ -253,12 +253,14 @@ case "$SPI_MODE" in
 	*) echo "ERROR: unknown --spi-mode: $SPI_MODE (soft-cs | hardware-cs | skip)." >&2; exit 2 ;;
 esac
 if [ -n "$SWAP_SIZE_MB" ]; then
-	if ! printf "%s" "$SWAP_SIZE_MB" | grep -qE "^[1-9][0-9]*$"; then
+	# Whole-string tests, no pipe: under pipefail an early-exiting `grep -q` reader can kill its
+	# writer (SIGPIPE, 141) and invert the test; a per-line grep also passed a multi-line value.
+	if ! [[ "$SWAP_SIZE_MB" =~ ^[1-9][0-9]*$ ]]; then
 		echo "ERROR: --swap-size must be a positive integer number of MB: $SWAP_SIZE_MB" >&2; exit 2
 	fi
 	# Digit CAP first: a 20-digit argument would overflow the `[ -gt ]` arithmetic below,
 	# so bound the LENGTH before the value is ever compared numerically.
-	if ! printf "%s" "$SWAP_SIZE_MB" | grep -qE "^[0-9]{1,5}$" \
+	if ! [[ "$SWAP_SIZE_MB" =~ ^[0-9]{1,5}$ ]] \
 			|| [ "$SWAP_SIZE_MB" -lt 64 ] || [ "$SWAP_SIZE_MB" -gt 16384 ]; then
 		echo "ERROR: --swap-size out of range (64-16384 MB): $SWAP_SIZE_MB" >&2; exit 2
 	fi
@@ -1175,9 +1177,11 @@ WIFI_PSAVE_CONF="${WIFI_PSAVE_CONF:-/etc/NetworkManager/conf.d/wifi-nopowersave.
 # ONE nmcli call feeds presence, device pick AND default-route classification — all TYPE-based,
 # never a wlan* name glob (predictable-naming Wi-Fi like wlp2s0 must not be mis-read as LAN).
 _NM_DEVS="$(nmcli -t -f DEVICE,TYPE device 2>/dev/null || true)"
-WIFI_DEV="$(printf '%s\n' "$_NM_DEVS" | awk -F: '$2=="wifi"{print $1; exit}')"
+# The table goes to awk as a here-string, not through a pipe: awk exits at its first match, and a
+# writer still writing (printf writes one line per write()) would die of SIGPIPE -> rc 141 under pipefail.
+WIFI_DEV="$(awk -F: '$2=="wifi"{print $1; exit}' <<<"$_NM_DEVS")"
 WIFI_DEFROUTE_DEV="$(ip -o route show default 2>/dev/null | awk '{for(i=1;i<NF;i++) if ($i=="dev") {print $(i+1); exit}}' || true)"
-WIFI_DEFROUTE_TYPE="$(printf '%s\n' "$_NM_DEVS" | awk -F: -v d="$WIFI_DEFROUTE_DEV" '$1==d{print $2; exit}')"
+WIFI_DEFROUTE_TYPE="$(awk -F: -v d="$WIFI_DEFROUTE_DEV" '$1==d{print $2; exit}' <<<"$_NM_DEVS")"
 if [ -n "$KEEP_WIFI" ]; then
 	echo "[bootstrap-deps] Wi-Fi: left untouched (--keep-wifi-powersave)."
 	echo "[bootstrap-deps]   WARNING: with power-save ON, a Pi Zero 2W can DROP Wi-Fi (the wlan"
