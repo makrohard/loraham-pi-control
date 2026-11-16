@@ -1414,3 +1414,43 @@ def test_a_pinned_source_needs_no_remote_read(box, capsys, git, make_repo, monke
     _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
     _fail_branch_probe(monkeypatch)
     assert _check_detail(box, capsys)[0] == "update LHPC first"   # RED before: "could not check"
+
+
+# ---- U6 gate-1 round 2: one rule for every stored verdict (head, manifest pin, the fetched LHPC) ----
+
+def test_a_stored_verdict_reads_unchecked_once_the_self_update_check_fetched_another_lhpc(box, capsys, git,
+                                                                                       make_repo, monkeypatch, web):
+    """G1 R2 B1(A): "update LHPC first" stands on the self-update check that produced it. A later self-update check
+    that fetched another LHPC (this one pins the same commit) leaves the stored verdict without its evidence:
+    `status --versions` and the page read "unchecked" until a check, never the old hint."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    assert _check_detail(box, capsys)[0] == "update LHPC first"
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[0])   # the self-update check fetched again
+    line = _versions_line(box, capsys)
+    assert "unchecked" in line.split(), line                      # RED before: "update LHPC first"
+    assert _install_pill(box, web) == ""                          # the page: no lane pill, "unchecked"
+    assert _check_detail(box, capsys)[0] == "current"             # a check computes it again
+
+
+def test_a_verdict_stored_before_u6_reads_unchecked(box, capsys, web):
+    """G1 R2 B1(B): an entry without the evidence its verdict needs (written before one verdict per lane: no
+    manifest pin, no fetched LHPC) is not shown as a verdict: "unchecked" until the next check."""
+    assert box.cli("install", "s", "--yes") == 0
+    su.record(Paths(runtime_root=box.rt), {"app": {"remote": GH, "source_path": REL, "local_head_at_check": box.c[0],
+                                                   "upstream_head": box.c[0], "status": su.UP_TO_DATE}})
+    line = _versions_line(box, capsys)
+    assert "unchecked" in line.split(), line                      # RED before: "current"
+    assert _install_pill(box, web) == ""                          # RED before: "current"
+
+
+def test_a_component_without_a_source_is_listed_by_status_versions(box, capsys):
+    """G1 R2 B2 (pinned, green before): `status --versions` reads a component's pin only behind its source check;
+    a component without a source is skipped, the command succeeds."""
+    box.manifest.write_text(box.manifest.read_text() + '[[stack.component]]\nid = "tool"\nname = "tool"\n'
+                            'kind = "service"\nrun_argv = ["true"]\nreadiness = "process"\n')
+    assert box.cli("install", "s", "--yes") == 0
+    capsys.readouterr()
+    assert box.cli("status", "--versions") == 0
+    out = capsys.readouterr().out
+    assert any(ln.split()[:1] == ["app"] for ln in out.splitlines()) and "tool " not in out, out
