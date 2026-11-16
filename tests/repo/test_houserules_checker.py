@@ -305,6 +305,25 @@ def test_an_added_line_starting_with_plus_plus_hides_no_line(repo, case, files, 
     assert (rc, rows[line]) == ({"WARN": 0, "HARD": 1}[verdict], verdict)
 
 
+def test_a_merges_combined_diff_keeps_each_files_path(repo, monkeypatch):
+    # The per-commit test count reads `git show` of each commit; for a merge that is a combined diff ("diff --cc"),
+    # which the CLI rows cannot show apart, so added_lines() is read directly. The merge's own lines in two files:
+    # the second file's "+++ b/" header must close the first file's hunk.
+    import importlib.util
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, {"notes.txt": "side\n"})
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
+    _commit(repo, {"docs/a.md": "Alpha fact.\none\n", "docs/b.md": "Beta.\ntwo\n"}, msg="merge\n")
+    spec = importlib.util.spec_from_file_location("check_houserules_cc", CHECKER)
+    hr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hr)
+    monkeypatch.chdir(repo)
+    diff = hr.git("show", "--unified=0", "--format=", "HEAD")
+    assert "diff --cc docs/b.md" in diff         # anchor: git wrote the combined form for both files
+    assert [(p, t.lstrip("+")) for p, _, t in hr.added_lines(diff)] == [("docs/a.md", "one"), ("docs/b.md", "two")]
+
+
 def test_a_clean_range_passes_with_every_line_ok(repo):
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- one line\n"),
                    "docs/a.md": "Alpha fact.\nGamma.\n",
