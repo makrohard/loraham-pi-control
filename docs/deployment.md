@@ -37,6 +37,8 @@ The layout is [the runtime root](architecture.md#the-runtime-root). The unit set
 `LHPC_RUNTIME_ROOT=~/loraham-pi-control` explicitly, runs `venv/lhpc/bin/lhpc web --socket`, and works from
 `src/loraham-pi-control`. The venv sits outside the checkout so self-update's `git clean` cannot
 reach it.
+The runtime root and the stacks' source roots are on local storage: a network filesystem there is out of scope
+(the post-start waits read their logs there with no timeout of their own).
 
 `lhpc status` shows a `[controller]` row with its cached version / update / identity state; the
 identity verdicts: [controller identity](architecture.md#controller-identity--self-update).

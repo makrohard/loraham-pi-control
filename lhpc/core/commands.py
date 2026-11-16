@@ -27,6 +27,7 @@ change the executable/cwd/env, or become shell syntax. Tokens are executed with
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import re
@@ -571,7 +572,12 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                              "label": (_post_label(step["label"]) if step.get("label")
                                        else os.path.basename(argv[0]) or "exec")})
         elif kind in ("tcp_wait", "tcp_send"):
-            d = {"kind": kind, "host": step.get("host", "127.0.0.1"),
+            host = step.get("host", "127.0.0.1")
+            try:
+                ipaddress.ip_address(host)            # no name lookup: nothing outside a wait's deadline
+            except ValueError:
+                raise CommandError(f"{kind}: host must be an IP address, not {host!r}") from None
+            d = {"kind": kind, "host": host,
                  "port": int(inst.subst(str(step["port"]))),
                  "optional": (bool(step.get("optional")) and not step.get("required"))
                              and not require_all}
@@ -653,7 +659,14 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             clock = step.get("shares_clock")
             if clock is not None and (not isinstance(clock, str) or not clock):
                 raise CommandError("log_wait: shares_clock must be a non-empty string")
-            resolved.append({"kind": "log_wait", "path": _paths_subst(path, runtime, source, band, inst),
+            full = _paths_subst(path, runtime, source, band, inst)
+            roots = tuple(r.rstrip("/") + "/" for r in (runtime, source) if r.rstrip("/"))
+            if not full.startswith(roots) or ".." in full.split("/"):
+                # LHPC's own files only, under its runtime or source root (both on local storage: a network
+                # filesystem there is out of scope, docs/deployment.md)
+                raise CommandError(f"log_wait: path must lie under the runtime or source root: {path!r}")
+            resolved.append({"kind": "log_wait", "path": full,
+                             "roots": [os.path.realpath(r) for r in (runtime, source) if r.rstrip("/")],
                              "pattern": pattern, "timeout": float(timeout), "label": _post_label(step.get("label") or "log"),
                              "optional": (bool(step.get("optional")) and not step.get("required")) and not require_all,
                              **({"clock": clock} if clock else {})})
@@ -704,7 +717,7 @@ def _post_data(template: str, comp, params, op, runtime, source, band, inst: Ins
 
 
 _POST_RUNNER = '''\
-import os, re as _re, select, socket, stat, sys, threading, time, subprocess
+import os, re as _re, select, socket, stat, sys, time, subprocess
 STEPS = __STEPS__
 # Exact position values THIS launcher passes to a child, so a failing step's error text
 # cannot echo them back into the log. Filled by the renderer; empty when no GPS step runs.
@@ -885,106 +898,60 @@ def _main_gone_stop(rest):
         _record(entry)
     sys.exit(1 if req else 0)
 
-class _Stop(Exception):
-    pass                                   # a wait's stop reason ("timeout" | "main-gone") from inside a call
-
 def _why_stop(end):
     # THE exit test of every wait: the bound main gone, else the step's deadline passed; None = go on.
     if not _main_ok():
         return "main-gone"
     return "timeout" if time.monotonic() >= end else None
 
-def _bounded(fn, end):
-    # One blocking call (a stat/open/read of a log on a stalled NFS/FUSE mount, a name lookup + connect) in a
-    # daemon thread, so the wait keeps its deadline and its bound main. A stop abandons the call, never joins it:
-    # a stop ends the step, so one call per step at most (one stuck in an uninterruptible read only delays the
-    # reap at exit; nothing waits on this detached runner). The result counts only if no stop arose meanwhile.
-    why = _why_stop(end)
-    if why:
-        raise _Stop(why)
-    box = []
-    def run():
-        try:
-            box.append((True, fn()))
-        except Exception as e:
-            box.append((False, e))
-    th = threading.Thread(target=run, daemon=True)
-    th.start()
-    while True:
-        th.join(max(0.0, min(0.2, end - time.monotonic())))
-        why = _why_stop(end)
-        if why:
-            raise _Stop(why)
-        if not th.is_alive():
-            break
-    good, val = box[0]
-    if not good:
-        raise val
-    return val
-
-def _ident(path, end):
-    try:
-        st = _bounded(lambda: os.stat(path), end)
-    except OSError:
-        return None
-    return (st.st_dev, st.st_ino)
+_CAP = 16 << 20                            # a log is read from its start up to this; a larger one is said so
 
 def _log_scan(s, end, t0, lbl):
-    # ONE cancellable scan: every call, chunk, sleep and the commit go through _why_stop. The log is followed by
-    # its identity and offset: a moved symlink is read at once from its start, a file truncated or rewritten in
-    # place (the last bytes read are no longer before the offset) from 0. A match counts only if the current file
-    # holds it contiguously, the path still names that file, and the deadline and the bound main still hold.
-    # A path that is not a regular file (a FIFO, a tty, a serial port) is never opened: "not yet".
+    # ONE pass per poll and no state between passes. The path's file is pinned with O_PATH, which opens no device
+    # (a FIFO, a tty or a serial port is never opened), must be a regular file, and is read from its start in ONE
+    # pread through the pin; a hit counts only if the path still names that file afterwards and the deadline and
+    # the bound main still hold. Both descriptors are closed on every exit. The files are LHPC's own, under its
+    # runtime and source roots on local storage: a stalled network filesystem there is out of scope.
     path, pat = s["path"], s["pattern"].encode()
-    ident, off, tail, anchor = None, 0, b"", b""
-    tries, seen, nxt, warned = 0, "", t0 + 30, False
+    tries, seen, nxt, warned, big = 0, "", t0 + 30, False, False
     while True:
         why = _why_stop(end)
         if why:
-            return why, tries, seen, time.monotonic()
+            return why, tries, seen, time.monotonic(), big
         tries += 1
-        fd, again = None, False
+        hit = again = False
+        pfd = rfd = None
         try:
-            st = _bounded(lambda: os.stat(path), end)
-            if not stat.S_ISREG(st.st_mode):
-                if not warned:
-                    sys.stderr.write("log_wait %s: %s is not a regular file\\n" % (lbl, path))
+            pfd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+            st = os.fstat(pfd)
+            real = os.readlink("/proc/self/fd/%d" % pfd)
+            seen = os.path.basename(real)
+            outside = not real.startswith(tuple(r.rstrip("/") + "/" for r in s["roots"]))
+            if outside or not stat.S_ISREG(st.st_mode):
+                if not warned:                    # the pinned file itself, wherever the path's symlinks led
+                    sys.stderr.write("log_wait %s: %s %s\\n" % (lbl, path, "is outside the runtime and source roots"
+                                                                  if outside else "is not a regular file"))
                     warned = True
-            else:
-                fd = _bounded(lambda: os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC), end)
-                fst = _bounded(lambda: os.fstat(fd), end)
-                cur = (fst.st_dev, fst.st_ino)
-                seen = os.path.basename(os.readlink("/proc/self/fd/%d" % fd))
-                if cur != (st.st_dev, st.st_ino):
-                    again = True                  # moved between the stat and the open: look again at once
-                elif (cur != ident or fst.st_size < off or anchor and _bounded(
-                        lambda: os.pread(fd, len(anchor), off - len(anchor)), end) != anchor):
-                    ident, off, tail, anchor = cur, 0, b"", b""      # another log, or this one rewritten: from 0
-                while not again:
-                    if _ident(path, end) != ident:
-                        again = True              # the path names another log now: follow it at once
-                        break
-                    chunk = _bounded(lambda: os.pread(fd, 1 << 20, off), end)
-                    if not chunk:
-                        break                     # the end of the log, for now
-                    buf = tail + chunk
-                    i = buf.find(pat)
-                    if i >= 0:
-                        p = off - len(tail) + i
-                        if (_bounded(lambda: os.pread(fd, len(pat), p), end) == pat
-                                and _ident(path, end) == ident):
-                            return "ready", tries, seen, time.monotonic()   # both calls held deadline + main
-                        ident, again = None, True  # old and new bytes joined: the file changed, read it again
-                        break
-                    off += len(chunk)
-                    tail = buf[1 - len(pat):] if len(pat) > 1 else b""
-                    anchor = buf[-64:]
-        except _Stop as e:
-            return e.args[0], tries, seen, time.monotonic()   # fd left to a call that may still run
+            elif not _why_stop(end):              # no read starts once a stop holds
+                rfd = os.open("/proc/self/fd/%d" % pfd, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
+                want = min(st.st_size, _CAP)
+                big = st.st_size > _CAP
+                data = os.pread(rfd, want, 0)
+                if len(data) < want:
+                    again = True                  # a short read (truncated meanwhile): look again at once
+                elif pat in data:
+                    cur = os.stat(path)
+                    hit = (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino)
+                    again = not hit               # the path names another file now: read that one at once
         except OSError:
             pass                                  # absent (a guest provisioning) or unreadable: not yet
-        if fd is not None:
-            os.close(fd)
+        finally:
+            for fd in (rfd, pfd):
+                if fd is not None:
+                    os.close(fd)
+        if hit:
+            now = time.monotonic()
+            return _why_stop(end) or "ready", tries, seen, now, big
         if again:
             continue
         if time.monotonic() >= nxt:
@@ -992,7 +959,7 @@ def _log_scan(s, end, t0, lbl):
             nxt += 30
         why = _why_stop(end)
         if why:
-            return why, tries, seen, time.monotonic()
+            return why, tries, seen, time.monotonic(), big
         time.sleep(max(0.0, min(2.0, end - time.monotonic())))   # the deadline may pass since the check
 
 if GATED and not _armed():
@@ -1056,13 +1023,10 @@ for _si, s in enumerate(STEPS):
                 if oc:
                     break
                 tries += 1
-                try:                    # the name lookup + connect; _bounded returns only while neither stop holds
-                    _bounded(lambda: socket.create_connection(
-                        (s["host"], s["port"]), max(0.01, min(2.0, end - time.monotonic()))).close(), end)
-                    oc = "ready"
-                    break
-                except _Stop as e:
-                    oc = e.args[0]
+                try:                    # an IP address (the resolver's rule): no name lookup, only the connect
+                    socket.create_connection((s["host"], s["port"]),
+                                             max(0.01, min(2.0, end - time.monotonic()))).close()
+                    oc = _why_stop(end) or "ready"
                     break
                 except OSError:
                     pass
@@ -1090,12 +1054,15 @@ for _si, s in enumerate(STEPS):
             # ONE clock per step (a reboot re-reads, never restarts it); a shares_clock group's waits all end by
             # the group's start + their timeout (the stored start is never later than this one's)
             end = (_CLOCKS.setdefault(s["clock"], t0) if s.get("clock") else t0) + s["timeout"]
-            oc, tries, seen, now = _log_scan(s, end, t0, _lbl)
+            oc, tries, seen, now, big = _log_scan(s, end, t0, _lbl)
             _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": oc, "attempts": tries,
-                     "elapsed_s": round(now - t0, 1)})
+                     "elapsed_s": round(now - t0, 1),
+                     **({"detail": "scanned the first %d MiB of a larger log" % (_CAP >> 20)} if big else {})})
             sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, now - t0) if oc == "ready" else
-                             "log_wait %s: %s after %d s (log %s)\\n" % (_lbl, "not ready" if oc == "timeout" else oc,
-                                                                       now - t0, s["path"]))
+                             "log_wait %s: %s after %d s (log %s%s)\\n" % (_lbl, "not ready" if oc == "timeout" else oc,
+                                                                         now - t0, s["path"],
+                                                                         "; scanned the first %d MiB of a larger log"
+                                                                         % (_CAP >> 20) if big else ""))
             if oc == "main-gone":
                 if not s.get("optional", True):
                     sys.exit(1)

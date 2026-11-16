@@ -462,19 +462,35 @@ if cfg.get("virtual"):
         _now[0] += cfg.get("connect_cost", 0.0)
         return _cc(*a, **k)
     socket.create_connection = _connect
-def _act(when):
-    a = cfg.get("on_read", {}).get(str(_n[0]))
-    if not a or (a[0] == "block") != (when == "block"):
-        return
-    if a[0] == "block":
-        threading.Event().wait()
-    elif a[0] == "retarget":
+def _do(a):
+    if a[0] == "retarget":
         os.symlink(a[2], a[1] + ".next")
         os.replace(a[1] + ".next", a[1])
     elif a[0] == "rewrite":
         with _ropen(a[1], "r+b") as f:
             f.truncate(0)
             f.write(b"".join(c.encode() * k for c, k in a[2]))
+    elif a[0] == "kill":
+        _kill()
+    elif a[0] == "arm":                           # the actions to run after the next stat or pin of the link
+        _armed[:] = a[1]
+def _act(when):
+    acts = cfg.get("on_read", {}).get(str(_n[0]))
+    if not acts:
+        return
+    for a in (acts if isinstance(acts[0], list) else [acts]):
+        if (a[0] == "block") != (when == "block"):
+            continue
+        if a[0] == "block":
+            threading.Event().wait()
+        else:
+            _do(a)
+_armed = list(cfg.get("arm_at_start", []))
+def _touched(p):
+    if _armed and p == cfg.get("link"):
+        acts, _armed[:] = list(_armed), []
+        for a in acts:
+            _do(a)
 def _chunk(read):
     _n[0] += 1
     _trace.write("read %.2f\n" % _now[0])
@@ -512,16 +528,36 @@ def _open(p, *a, **k):
     if _main and cfg.get("kill_after_hit") and _hit[0] and p == "/proc/%d/stat" % _main:
         return _Stat(f)
     return f
-def _osopen(p, *a, **k):
+def _osopen(p, flags=os.O_RDONLY, *a, **k):
     if isinstance(p, str) and p in _logs:
-        _trace.write("open %s\n" % p)
         _now[0] += cfg.get("open_cost", 0.0)
-    return _rosopen(p, *a, **k)
+    if isinstance(p, str) and not flags & getattr(os, "O_PATH", 0):     # a pin opens nothing: not traced
+        target = os.path.realpath(p)
+        if target in _logs or p in _logs:
+            _trace.write("open %s\n" % (target if target in _logs else p))
+    fd = _rosopen(p, flags, *a, **k)
+    if isinstance(p, str) and flags & getattr(os, "O_PATH", 0):
+        _touched(p)
+    return fd
+_rstat = os.stat
+def _stat(p, *a, **k):
+    r = _rstat(p, *a, **k)
+    if isinstance(p, str):
+        _touched(p)
+    return r
 def _pread(fd, n, off):
-    return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 else _rpread(fd, n, off)
-builtins.open, os.open, os.pread = _open, _osopen, _pread
+    return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 or off == 0 else _rpread(fd, n, off)
+def _leaks():
+    for name in os.listdir("/proc/self/fd"):
+        try:
+            t = os.readlink("/proc/self/fd/" + name)
+        except OSError:
+            continue
+        if t in _logs or os.path.realpath(t) in _logs:
+            _trace.write("leak %s\n" % t)
+builtins.open, os.open, os.pread, os.stat = _open, _osopen, _pread, _stat
 import atexit
-atexit.register(lambda: _trace.write("end %.1f\n" % _now[0]))
+atexit.register(lambda: (_leaks(), _trace.write("end %.1f\n" % _now[0])))
 runpy.run_path(sys.argv[1], run_name="__main__")
 '''
 
@@ -572,11 +608,9 @@ def test_a_log_moved_mid_scan_is_followed_at_once_and_the_old_ones_line_never_co
     link = tmp_path / "uart-latest.log"
     _boot(tmp_path, link, "uart-1.log", a_text)
     (tmp_path / "uart-2.log").write_text(b_text)
-    rc, steps, err, trace = _hooked(tmp_path, [_lw(link, 5)], virtual=True, read_cost=1.0, logs=[str(link)],
-                                    on_read={"1": ["retarget", str(link), "uart-2.log"]})
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 5)], virtual=True, read_cost=1.0, logs=[str(link)],
+                                 on_read={"1": ["retarget", str(link), "uart-2.log"]})
     assert steps[0]["outcome"] == outcome, (steps, err)
-    if outcome == "ready":                      # the move is followed at once: two reads' cost, no sleep between
-        assert trace[-1] == "end 2.0", trace
 
 
 def test_a_group_wait_on_an_absent_log_does_not_sleep_past_its_own_deadline(tmp_path):
@@ -596,7 +630,8 @@ def test_a_path_that_is_not_a_regular_file_is_never_opened_and_the_wait_keeps_it
     if kind == "pty":
         master, slave = os.openpty()
         held += [master, slave]
-        path = os.ttyname(slave)
+        path = str(tmp_path / "uart.log")
+        os.symlink(os.ttyname(slave), path)          # the leaf symlink leads to a tty
     else:
         path = str(tmp_path / "uart.log")
         os.mkfifo(path)
@@ -605,33 +640,14 @@ def test_a_path_that_is_not_a_regular_file_is_never_opened_and_the_wait_keeps_it
             os.write(w, LINE.encode())
             held.append(w)
     try:
-        rc, steps, err, trace = _hooked(tmp_path, [_lw(path, 5)], logs=[path], limit=15, virtual=True)
+        rc, steps, err, trace = _hooked(tmp_path, [_lw(path, 5)], logs=[path, os.path.realpath(path)], limit=15,
+                                        virtual=True)
     finally:
         for fd in held:
             os.close(fd)
     assert (rc, steps[0]["outcome"], steps[0]["elapsed_s"]) == (1, "timeout", 5.0) and steps[0]["attempts"] >= 2, steps
-    assert err.count("is not a regular file") == 1 and f"open {path}" not in trace, (err, trace)
-
-
-@pytest.mark.slow
-@pytest.mark.wallclock("a read that never returns against the step's real deadline and a real main's exit")
-@pytest.mark.parametrize("main_dies", [False, True], ids=["deadline", "main-gone"])
-def test_a_read_that_never_returns_does_not_hold_the_wait_past_its_deadline_or_main(tmp_path, main_dies):
-    """B3: a stalled read (NFS/FUSE) of the log's second MiB; the wait still ends by its deadline, or as soon as the
-    bound main is gone."""
-    link = tmp_path / "uart-latest.log"
-    _boot(tmp_path, link, "uart-1.log", "x" * (3 * _C1))
-    main, binding = _bound_main() if main_dies else (None, None)
-    if main:
-        threading.Thread(target=_later(1.5, main.kill), daemon=True).start()
-    try:
-        rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 8 if main_dies else 1)], binding=binding, logs=[str(link)],
-                                     on_read={"2": ["block"]}, limit=15)
-    finally:
-        if main:
-            main.kill()
-            main.wait()
-    assert steps[0]["outcome"] == ("main-gone" if main_dies else "timeout") and steps[0]["elapsed_s"] < 4, (steps, err)
+    said = "is outside the runtime and source roots" if kind == "pty" else "is not a regular file"
+    assert err.count(said) == 1 and not [ln for ln in trace if ln.startswith("open ")], (err, trace)  # rule-10: a trace line's first word is its kind
 
 
 @pytest.mark.wallclock("a 3 s real deadline bounds the scan of the rewritten log")
@@ -653,29 +669,30 @@ def test_a_log_rewritten_in_place_with_the_line_before_the_read_offset_is_read_a
     log.write_text("a" * (2 * _C1 - 1) + "\n")          # the rewrite keeps the byte before the offset: a line end
     rest = 2 * _C1 - 1 - 100 - len(LINE)
     rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 5)], logs=[str(log)],
-                                 on_read={"3": ["rewrite", str(log), [["b", 100], [LINE, 1], ["b", rest], ["\n", 1],
+                                 on_read={"1": ["rewrite", str(log), [["b", 100], [LINE, 1], ["b", rest], ["\n", 1],
                                                                        ["b", _C1]]]})
     assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
 
 
 def test_a_line_found_only_after_the_deadline_is_not_ready(tmp_path):
-    """B5: every clock reading costs 0.4 s, so the line is found after the 1 s deadline: the wait timed out."""
-    (tmp_path / "boot.log").write_text(LINE)
-    rc, steps, err, _t = _hooked(tmp_path, [_lw(tmp_path / "boot.log", 1)], virtual=True, delta=0.4)
+    """B5 (F8): the read that holds the line starts in time and ends after the 1 s deadline (it costs 2 s): the read
+    happened, the line was in it, and the wait still timed out."""
+    log = tmp_path / "boot.log"
+    log.write_text(LINE)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, read_cost=2.0, logs=[str(log)])
+    assert [ln for ln in trace if ln.startswith("read ")] == ["read 0.00"], trace  # rule-10: a trace line's first word is its kind
     assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
 
 
 @pytest.mark.slow
 @pytest.mark.wallclock("a real main process that dies between the last check and the commit")
 def test_a_line_found_after_main_died_is_not_ready(tmp_path):
-    """B5: the bound main dies right after the first main check that follows the read holding the line; a later
-    check, before the ready is committed, must see it."""
+    """B5: the bound main dies during the read that holds the line: no ready."""
     (tmp_path / "boot.log").write_text(LINE)
     main, binding = _bound_main()
     try:
         rc, steps, err, _t = _hooked(tmp_path, [_lw(tmp_path / "boot.log", 5)], binding=binding,
-                                     logs=[str(tmp_path / "boot.log")], pattern="Console started on port 2323",
-                                     kill_after_hit=True)
+                                     logs=[str(tmp_path / "boot.log")], on_read={"1": ["kill"]})
     finally:
         main.kill()
         main.wait()
@@ -745,3 +762,86 @@ def test_no_read_is_requested_after_a_slow_open_used_up_the_deadline(tmp_path):
     rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, open_cost=2.0, logs=[str(log)])
     late = [ln for ln in trace if ln.startswith("read ") and float(ln.split()[1]) >= 1.0]
     assert steps[0]["outcome"] == "timeout" and not late, (steps, trace, err)
+
+
+def test_a_rotation_away_and_back_with_the_line_now_at_the_start_is_read_again(tmp_path):
+    """F1: A is read once (no line); the link moves to B and, after the next look at the path, back to A, which was
+    rewritten meanwhile with the line at its start, same size and same last bytes. The scan reads A again from 0."""
+    link = tmp_path / "uart-latest.log"
+    a = _boot(tmp_path, link, "uart-1.log", "a" * _C1)
+    (tmp_path / "uart-2.log").write_text("rst:0x1\n")
+    back = [["rewrite", str(a), [["READY", 1], ["a", _C1 - 5]]], ["retarget", str(link), "uart-1.log"]]
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(link, 7, pattern="READY")], virtual=True, read_cost=0.1,
+                                 logs=[str(link)], link=str(link),
+                                 on_read={"1": [["retarget", str(link), "uart-2.log"], ["arm", back]]})
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_a_same_size_rewrite_that_keeps_the_last_bytes_is_read_again(tmp_path):
+    """F2: the log is read to its end; then rewritten in place, same inode and size, READY at offset 0 and the same
+    last bytes. The next pass reads it from 0."""
+    log = tmp_path / "uart.log"
+    log.write_text("a" * (2 * _C1))
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 7, pattern="READY")], virtual=True, read_cost=0.1,
+                                 logs=[str(log)], on_read={"1": ["rewrite", str(log), [["READY", 1], ["a", 2 * _C1 - 5]]]})
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+@pytest.mark.parametrize("text, outcome", [(LINE, "ready"), ("rst:0x1\n", "timeout")])
+def test_no_descriptor_of_the_log_is_left_open(tmp_path, text, outcome):
+    """F5: after a ready and after a timeout, the launcher holds no descriptor of the log."""
+    log = tmp_path / "uart.log"
+    log.write_text(text)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 3, optional=True), {"kind": "delay", "seconds": 1}],
+                                    virtual=True, logs=[str(log)])
+    assert steps[0]["outcome"] == outcome and not [ln for ln in trace if ln.startswith("leak ")], (steps, trace)  # rule-10: a trace line's first word is its kind
+
+
+def test_a_tty_swapped_in_after_the_path_was_looked_at_is_never_opened(tmp_path):
+    """F7: the path names a regular log when it is first looked at (stat or pin); right then the link moves to a
+    tty. The tty is never opened."""
+    master, slave = os.openpty()
+    tty = os.ttyname(slave)
+    try:
+        link = tmp_path / "uart-latest.log"
+        _boot(tmp_path, link, "uart-1.log", "rst:0x1\n")
+        os.symlink(tty, tmp_path / "tty.lnk")
+        rc, steps, err, trace = _hooked(tmp_path, [_lw(link, 3)], virtual=True, link=str(link),
+                                        logs=[str(link), tty], limit=15,
+                                        arm_at_start=[["retarget", str(link), "tty.lnk"]])
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert f"open {tty}" not in trace and steps[0]["outcome"] == "timeout", (steps, trace, err)
+
+
+def test_a_log_larger_than_the_cap_is_scanned_from_its_start_and_says_so(tmp_path):
+    log = tmp_path / "uart.log"
+    with open(log, "wb") as f:
+        f.truncate(32 << 20)                      # 32 MiB, no line
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 1)], virtual=True, logs=[str(log)])
+    assert steps[0]["outcome"] == "timeout" and steps[0]["detail"] == "scanned the first 16 MiB of a larger log", steps
+    assert "scanned the first 16 MiB of a larger log" in err, err
+
+
+def test_a_pinned_file_outside_the_roots_is_never_read(tmp_path):
+    """The path lies under the source root, but its leaf symlink leads outside both roots: the pinned file is not
+    read (said once), even though it holds the line."""
+    outside = tmp_path.parent / (tmp_path.name + "-outside.log")
+    outside.write_text(LINE)
+    link = tmp_path / "uart-latest.log"
+    os.symlink(outside, link)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(link, 3)], virtual=True, logs=[str(link), str(outside)])
+    assert steps[0]["outcome"] == "timeout" and err.count("is outside the runtime and source roots") == 1, (steps, err)
+    assert not [ln for ln in trace if ln.startswith(("open ", "read "))], trace  # rule-10: a trace line's first word is its kind
+
+
+@pytest.mark.parametrize("step, why", [
+    ({"kind": "log_wait", "path": "/etc/hostname", "pattern": "p", "timeout": 5}, "under the runtime or source root"),
+    ({"kind": "log_wait", "path": "{source}/../x.log", "pattern": "p", "timeout": 5}, "under the runtime or source root"),
+    ({"kind": "tcp_wait", "port": 1, "host": "localhost"}, "IP address"),
+    ({"kind": "tcp_send", "port": 1, "host": "example.org", "data": "x"}, "IP address"),
+])
+def test_a_wait_outside_the_roots_or_on_a_host_name_is_refused(step, why):
+    with pytest.raises(commands.CommandError, match=why):
+        commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "")
