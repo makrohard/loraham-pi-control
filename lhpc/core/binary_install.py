@@ -41,9 +41,9 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from . import runtime_fs, validators
+from . import runtime_fs, source_registry, validators
 from .paths import PathContainmentError, Paths
 
 INDEX_SCHEMA = 3                  # index-v3: a list of entries per stack, newest first
@@ -645,6 +645,37 @@ def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str]:
         if act.status == "failed":
             return False, f"the {comp.source.path} checkout could not be moved back to {prev[:9]} ({act.detail})"
     return True, ""
+
+
+def registry_baseline(paths: Paths, rels) -> tuple[dict, str]:
+    """({source_rel: its ownership record's txn id now, "" = no record}, error). Every path reads it AFTER the
+    binary's own checkout moves (install, same-artifact repair, rollback restore), so the receipt holds those
+    moves and only a later source adoption reads as superseded. An UNSAFE record is the error: supersession
+    could not be judged later."""
+    baseline = {}
+    for rel in rels:
+        state, rec, why = source_registry.record_state(paths, rel)
+        if state == "unsafe":
+            return {}, why
+        baseline[rel] = rec.txn_id if (state == "valid" and rec) else ""
+    return baseline, ""
+
+
+def rebase_receipt(svc, stack_id: str, comp_ids) -> str:
+    """After the binary's own move of these components' checkouts outside an install's receipt write (the
+    same-artifact repair, the rollback restore): the installed receipt's baseline for their paths is read again.
+    "" when done (or no receipt to keep), else why not."""
+    from . import binary_receipt as brx
+    rec = brx.receipt_state(svc._paths, stack_id)[1]
+    st = svc.stack(stack_id)
+    rels = [c.source.path for c in (st.components if st else ()) if c.id in comp_ids and c.source is not None
+            and rec is not None and c.source.path in rec.registry_baseline]
+    now, why = registry_baseline(svc._paths, rels)
+    if why or not now:
+        return why
+    if not brx.write_receipt(svc._paths, replace(rec, registry_baseline={**rec.registry_baseline, **now})):
+        return "the binary receipt could not be rewritten after its checkout moved"
+    return ""
 
 
 def backup_path(txn: str, rel: str) -> str:

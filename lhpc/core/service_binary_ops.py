@@ -77,17 +77,6 @@ class BinaryOpsMixin:
         return bool(getattr(res, "returncode", 1) == 0
                     and "install ok installed" in (res.stdout or ""))
 
-    def _binary_registry_baseline(self, stack_id: str) -> tuple:
-        """({source_rel: txn_id}, error). An UNSAFE ownership record blocks the install: we
-        must be able to record a trustworthy baseline or supersession cannot be judged later."""
-        baseline = {}
-        for rel in self._binary_source_paths(stack_id):
-            state, rec, why = source_registry.record_state(self._paths, rel)
-            if state == "unsafe":
-                return {}, why
-            baseline[rel] = rec.txn_id if (state == "valid" and rec) else ""
-        return baseline, ""
-
     # ---- install -----------------------------------------------------------------------------
 
     @invalidates_snapshot
@@ -272,12 +261,14 @@ class BinaryOpsMixin:
                 return _run
             if _have:   # the same artifact, intact: only its checkouts may need the repair, no binary change
                 notes, _cerr = bi.move_clones(self, stack_id, _moves, locked)
+                _rerr = bi.rebase_receipt(self, stack_id, [c.id for c, _w, _p in _moves])   # read after the move
+                _cerr = _cerr or _rerr
                 if _cerr:
                     return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_cerr}",
                                         next_commands=[src_cmd], data={"binary_failed": True})
                 return self._binary_already_installed(stack_id, entry, _have, notes)
 
-            baseline, berr = self._binary_registry_baseline(stack_id)
+            baseline, berr = bi.registry_baseline(self._paths, self._binary_source_paths(stack_id))
             if berr:
                 return ActionResult(False, f"Binary install of '{stack_id}' blocked: {berr}",
                                     details=["  nothing to run here — the source ownership record "
@@ -339,6 +330,10 @@ class BinaryOpsMixin:
                 clone_notes, _cerr = bi.move_clones(self, stack_id, _moves, locked, txn=True)
                 if _cerr:
                     raise bi.BinaryInstallError(_cerr)
+                # The receipt's ownership baseline is read AFTER the moves: they are the binary's, not a source adoption.
+                baseline, _berr = bi.registry_baseline(self._paths, self._binary_source_paths(stack_id))
+                if _berr:
+                    raise bi.BinaryInstallError(_berr)
                 # The transaction stays OPEN across promotion, probes and the receipt write:
                 # the journal carries the displaced files, the newly created ones, the PREVIOUS
                 # receipt and the previous auth value, so any failure below restores the old
@@ -538,6 +533,8 @@ class BinaryOpsMixin:
         if old_receipt:
             if not brx.write_raw(self._paths, stack_id, old_receipt):
                 return False, "the previous binary receipt could not be restored"
+            if clones and (_why := bi.rebase_receipt(self, stack_id, clones)):
+                return False, _why               # journal RETAINED: read after the checkouts moved back
         elif not brx.remove_receipt(self._paths, stack_id):
             # There was no receipt before this run, so the failed install's one must go. If it
             # cannot, the journal and backups MUST stay: dropping them would discard the only

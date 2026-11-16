@@ -4,6 +4,7 @@ and its files are verified whatever the published entry's age; changed files are
 replacement), with the source install as the way out. Driven through the public install / update paths."""
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -238,7 +239,8 @@ def test_a_newer_entrys_missing_packages_are_refused_before_any_download(tmp_pat
 
 def _moving_clone(monkeypatch, svc, commit):
     """meshcom-qemu's checkout present, proven ours, clean, at `commit`; the adoption really moves it (to its
-    `pinned_expected` commit) and is recorded."""
+    `pinned_expected` commit), is recorded, and writes the path's ownership record with a new transaction id, as
+    the real adoption does."""
     comp = svc.stack("meshcom").component("meshcom-qemu")
     svc._paths.resolve_source(comp.source.path).mkdir(parents=True, exist_ok=True)
     state = {"commit": commit, "adopted": []}
@@ -260,6 +262,11 @@ def _moving_clone(monkeypatch, svc, commit):
             if state.get("refuse"):                 # a failed adoption changes nothing
                 return type("_Failed", (), {"status": "failed", "detail": state["refuse"]})()
             state["commit"] = pinned_expected[0]
+            assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+                source_rel=c.source.path, remote="", selector="pinned", resolved_commit=pinned_expected[0],
+                adopted_at=1.0, txn_id=f"adopt-{len(state['adopted'])}", components=(c.id,)))
+            if state.get("corrupt"):                 # the record this move wrote is damaged
+                _corrupt_record(svc, c.source.path)
             return _Done()
 
         def _index_key(self):
@@ -276,6 +283,24 @@ def _moving_clone(monkeypatch, svc, commit):
     return state
 
 
+def _corrupt_record(svc, rel):
+    path = source_registry.record_path(svc._paths, rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{")
+
+
+def _owned_at_install(svc):
+    """The installed receipt's ownership baseline as the real install records it: meshcom-qemu's checkout owned by
+    the source transaction "at-install" (written, then read back into the receipt)."""
+    rel = svc.stack("meshcom").component("meshcom-qemu").source.path
+    assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+        source_rel=rel, remote="", selector="pinned", resolved_commit="b" * 40, adopted_at=1.0,
+        txn_id="at-install", components=("meshcom-qemu",)))
+    rec = brx.receipt_state(svc._paths, "meshcom")[1]
+    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, registry_baseline={rel: "at-install"}))
+    assert brx.receipt_state(svc._paths, "meshcom")[0] == "valid"
+
+
 def _fail(what):
     def _raise(*a, **k):
         raise bi.BinaryInstallError(what)
@@ -290,6 +315,7 @@ def test_a_failed_install_leaves_the_binary_and_its_checkout_as_before(tmp_path,
     rec = _installed(svc, binary_receipt, "meshcom")
     files = {rel: (tmp_path / rel).read_bytes() for rel in rec.files}
     state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _owned_at_install(svc)
     _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
     monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
     monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
@@ -298,7 +324,9 @@ def test_a_failed_install_leaves_the_binary_and_its_checkout_as_before(tmp_path,
     assert not res.ok and f"{step} FAILED" in res.summary and res.data["rolled_back"], res
     assert state["commit"] == "b" * 40
     assert state["adopted"] == ([] if step != "publish" else ["a" * 40, "b" * 40])   # staged first, moved back
-    assert brx.receipt_state(svc._paths, "meshcom")[1].artifact_sha256 == "b" * 64
+    # B is still installed and VALID: moving the checkout back is the binary's own move, not a source adoption
+    st, back, why = brx.receipt_state(svc._paths, "meshcom")
+    assert st == "valid" and back.artifact_sha256 == "b" * 64, why
     assert {rel: (tmp_path / rel).read_bytes() for rel in rec.files} == files
     assert bi.read_journal(svc._paths)[1] == "absent"
 
@@ -343,11 +371,14 @@ def test_the_same_intact_artifact_moves_a_stale_checkout_to_its_commit_and_touch
     rec = _installed(svc, binary_receipt, "meshcom")
     files = {rel: (tmp_path / rel).read_bytes() for rel in rec.files}
     state = _moving_clone(monkeypatch, svc, "c" * 40)
+    _owned_at_install(svc)
     _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))   # downloads refuse
     res = svc.install("meshcom", apply=True, source="binary")
     assert res.ok and res.data["changes"] == 1 and "nothing to download" in res.summary, res.summary   # the move
     assert "  adopted pinned source for meshcom-qemu (run scripts)" in res.details, res.details
     assert state["adopted"] == ["b" * 40] and state["commit"] == "b" * 40
+    st, _rec, why = brx.receipt_state(svc._paths, "meshcom")
+    assert st == "valid", why                    # the repair is the binary's own move: B is not superseded
     assert {rel: (tmp_path / rel).read_bytes() for rel in rec.files} == files
     assert bi.read_journal(svc._paths)[1] == "absent"
 
@@ -380,3 +411,128 @@ def test_a_checkout_that_cannot_be_moved_back_blocks_the_next_install_by_name_an
     assert not res.ok and f"the {path} checkout could not be moved back to {'b' * 9} (disk full)" in res.summary, (
         res.summary)
     assert bi.read_journal(svc._paths)[1] == "valid" and state["commit"] == "a" * 40
+
+
+def test_a_binary_install_that_moves_its_checkout_writes_a_receipt_that_reads_back_valid(tmp_path, monkeypatch):
+    # The lab reset's meshcom install (testlab 43789810157 on e68dd3dd): the checkout is moved inside the
+    # transaction, and its adoption writes a new ownership record. The receipt's baseline is read after that move,
+    # so the written receipt reads back valid (it was "superseded": the install failed and rolled back).
+    import os
+    svc = _svc(tmp_path, monkeypatch)
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+
+    def stage(tar, stage_dir, roots):
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write("staged")
+        return files
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "validate_and_extract", stage)
+    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert res.ok, res.summary
+    assert state["adopted"] == ["a" * 40] and state["commit"] == "a" * 40
+    st, rec, why = brx.receipt_state(svc._paths, "meshcom")
+    assert st == "valid" and rec.artifact_sha256 == "a" * 64, why
+    rel = svc.stack("meshcom").component("meshcom-qemu").source.path
+    assert rec.registry_baseline[rel] == "adopt-1"          # the record the move wrote, read after it
+
+
+def _staged_to_commit(monkeypatch, svc):
+    # the install runs to its receipt: proof and probe files staged and published for real, probes answered
+    import os
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+
+    def stage(tar, stage_dir, roots):
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write("staged")
+        return files
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "validate_and_extract", stage)
+    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+
+
+def test_an_ownership_record_damaged_by_the_move_fails_the_install_and_rolls_it_back(tmp_path, monkeypatch):
+    # The baseline read after the move refuses a damaged record (supersession could not be judged later): the
+    # install fails, rolled back, and no receipt is left.
+    svc = _svc(tmp_path, monkeypatch)
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
+    state["corrupt"] = True
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    _staged_to_commit(monkeypatch, svc)
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and res.data.get("rolled_back") and "src/meshcom-qemu-raspi" in res.summary, res.summary
+    assert brx.receipt_state(svc._paths, "meshcom")[0] == "absent"
+
+
+def test_a_damaged_ownership_record_refuses_the_install_before_anything_changes(tmp_path, monkeypatch):
+    # A covered path's record is damaged before the install: refused by name, nothing downloaded or moved.
+    svc = _svc(tmp_path, monkeypatch)
+    state = _moving_clone(monkeypatch, svc, "c" * 40)
+    _corrupt_record(svc, "src/MeshCom-Firmware")
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))      # a download refuses
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "src/MeshCom-Firmware" in res.summary and "DOWNLOAD-REACHED" not in res.summary, res
+    assert any("source ownership record named above is damaged" in d for d in res.details), res.details
+    assert state["adopted"] == [] and bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_a_repair_whose_receipt_cannot_be_rewritten_is_refused_by_name(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _moving_clone(monkeypatch, svc, "c" * 40)
+    _owned_at_install(svc)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))
+    monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: False)
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "the binary receipt could not be rewritten after its checkout moved" in res.summary, (
+        res.summary)
+
+
+def test_a_restore_whose_receipt_cannot_be_rewritten_keeps_the_journal(tmp_path, monkeypatch, binary_receipt):
+    # The failed swap moved the checkout and back; the restored receipt cannot take the re-read baseline: the
+    # rollback is not finished, the journal stays for the next install, and the reason is named.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _moving_clone(monkeypatch, svc, "b" * 40)
+    _owned_at_install(svc)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
+    monkeypatch.setattr(bi, "publish", _fail("publish FAILED"))
+    monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: False)
+    res = svc.update("meshcom", apply=True, source="binary")
+    text = " ".join([res.summary, *res.details])
+    assert not res.ok and "the binary receipt could not be rewritten after its checkout moved" in text, text
+    assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_the_rebase_rereads_only_the_moved_paths_so_a_source_adoption_elsewhere_stays_visible(
+        tmp_path, monkeypatch, binary_receipt):
+    # The receipt owned the firmware checkout at "fw-at-install"; the source channel adopted it since ("fw-later").
+    # Re-reading the baseline after the binary's own move of meshcom-qemu leaves the firmware's baseline: the
+    # receipt reads superseded by that source adoption.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _owned_at_install(svc)
+    rec = brx.receipt_state(svc._paths, "meshcom")[1]
+    fw = "src/MeshCom-Firmware"
+    for txn in ("fw-at-install", "fw-later"):
+        assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+            source_rel=fw, remote="", selector="pinned", resolved_commit="f" * 40, adopted_at=1.0, txn_id=txn,
+            components=("meshcom-firmware",)))
+        if txn == "fw-at-install":
+            assert brx.write_receipt(svc._paths, dataclasses.replace(
+                rec, registry_baseline={**rec.registry_baseline, fw: txn}))
+    assert bi.rebase_receipt(svc, "meshcom", ["meshcom-qemu"]) == ""
+    st, _rec, why = brx.receipt_state(svc._paths, "meshcom")
+    assert st == "superseded" and fw in why, (st, why)
