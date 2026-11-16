@@ -71,9 +71,11 @@ def _step(tmp_path, body: str, creates: str = "running", cwd: Path | None = None
     it records its pid, says it started (a line on stdout, and a byte into tmp/ready when that FIFO exists), and stays;
     like a real attached client it ignores TERM and INT (it forwards them), so only KILL ends it. Its container:
     `running` exists at once; `being-created` does not exist yet, and nothing but the client's death stops it;
-    `late` is a create the daemon already holds: it lands right after the first `rm -f` of its name (which found
-    nothing), from a detached daemon side that says so into tmp/created;
-    `exits` ends at once with 0. `rm -f` ends a container that exists; `container inspect` says whether it does
+    `late` is a create the daemon already holds: it lands at the removal's second check (more than two check
+    intervals after the kill: the first removal and the first check found nothing), from a detached daemon side that
+    says so into tmp/created;
+    `exits` ends at once with 0. A `run` of a name that is in use is refused (125), as docker refuses it. `rm -f`
+    ends a container that exists; `container inspect` says whether it does
     (always yes with tmp/stuck: a container the daemon will not remove)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -87,15 +89,20 @@ def _step(tmp_path, body: str, creates: str = "running", cwd: Path | None = None
     (bin_dir / "docker").write_text(f"""#!/bin/bash
 echo "$*" >> {t}/calls
 case "$1" in
-  run)       name=$4; echo $$ > {t}/client.pid; {create}echo started; [ -p {t}/ready ] && echo r > {t}/ready; {stay} ;;
+  run)       name=$4
+             if [ -f {t}/$name.pid ] && kill -0 "$(cat {t}/$name.pid)" 2>/dev/null; then
+               echo "Conflict. The container name \\"/$name\\" is already in use" >&2; exit 125; fi
+             echo $$ > {t}/client.pid; {create}echo started; [ -p {t}/ready ] && echo r > {t}/ready; {stay} ;;
   rm)        [ -f {t}/rm-fails ] && {{ cat {t}/rm-fails >&2; exit 1; }}
              for n in "${{@:3}}"; do
-               if [ -f {t}/$n.pid ]; then kill -KILL "$(cat {t}/$n.pid)" 2>/dev/null; rm -f {t}/$n.pid
-               elif [ "$(cat {t}/pending 2>/dev/null)" = "$n" ]; then rm -f {t}/pending
-                 setsid bash -c "echo \\$\\$ > {t}/daemon.pid; echo \\$\\$ > {t}/$n.pid; [ -p {t}/created ] && echo c > {t}/created; exec tail -f /dev/null" </dev/null >/dev/null 2>&1 &
-               fi
+               [ -f {t}/$n.pid ] && kill -KILL "$(cat {t}/$n.pid)" 2>/dev/null; rm -f {t}/$n.pid
              done; true ;;
-  container) [ -f {t}/stuck ] || {{ [ -f {t}/$3.pid ] && kill -0 "$(cat {t}/$3.pid)" 2>/dev/null; }} ;;
+  container) n=$3; echo x >> {t}/inspected
+             if [ "$(wc -l < {t}/inspected)" -eq 2 ] && [ "$(cat {t}/pending 2>/dev/null)" = "$n" ]; then rm -f {t}/pending
+               setsid bash -c "echo \\$\\$ > {t}/daemon.pid; echo \\$\\$ > {t}/$n.pid; [ -p {t}/created ] && echo c > {t}/created; exec tail -f /dev/null >/dev/null" </dev/null >/dev/null 2>&1 &
+               exit 1                                 # not there yet: it lands after this second check
+             fi
+             [ -f {t}/stuck ] || {{ [ -f {t}/$n.pid ] && kill -0 "$(cat {t}/$n.pid)" 2>/dev/null; }} ;;
 esac
 """)
     (bin_dir / "docker").chmod(0o755)
@@ -106,6 +113,11 @@ esac
                GITHUB_ENV=str(t / "github_env"))
     return subprocess.Popen(["bash", "-e", str(step)], stdout=subprocess.PIPE, env=env, cwd=cwd or t,
                             start_new_session=True)
+
+
+def _run_name(tmp_path) -> str:
+    """The name the step's `docker run` used."""
+    return next(c.split()[3] for c in (tmp_path / "calls").read_text().splitlines() if c.startswith("run "))  # rule-10: selection
 
 
 def _alive(pid: int) -> bool:
@@ -156,7 +168,7 @@ def test_a_signalled_step_ends_its_client_and_removes_its_container(tmp_path, si
         assert not _alive(client), "the client outlived its step: it can still create its container"
         if creates == "late":
             assert select.select([created], [], [], 10)[0], "the late create never landed"
-        name = (tmp_path / "calls").read_text().split()[3]
+        name = _run_name(tmp_path)
         assert subprocess.run([str(tmp_path / "bin" / "docker"), "container", "inspect", name]).returncode == 1, \
             f"{name} is still there"
         assert not (tmp_path / "after").exists()
@@ -195,8 +207,8 @@ def test_the_quota_step_signalled_mid_create_leaves_no_client_and_no_container(t
         assert proc.wait(10) == 143
         assert not _alive(client), "the program's docker client outlived the step"
         calls = (tmp_path / "calls").read_text().splitlines()
-        name = calls[0].split()[3]
-        assert re.fullmatch(r"lhpc-ci-quota-\d+", name) and f"rm -f {name}" in calls, calls
+        name = _run_name(tmp_path)
+        assert re.fullmatch(r"lhpc-ci-quota-\d+", name) and calls.count(f"rm -f {name}") >= 2, calls   # before + after
         assert not (tmp_path / "after").exists()
     finally:
         os.close(fd)
@@ -207,11 +219,11 @@ def test_the_quota_step_signalled_mid_create_leaves_no_client_and_no_container(t
 @pytest.mark.parametrize("why, said", [("Error: No such container: x", False), ("Cannot connect to the Docker daemon", True)])
 def test_a_removal_that_fails_is_said_unless_the_container_is_gone(tmp_path, why, said):
     proc = _step(tmp_path, "crun img sleep 600")
-    (tmp_path / "rm-fails").write_text(why + "\n")
-    if said:
-        (tmp_path / "stuck").touch()                       # the daemon cannot remove it: it stays
     try:
-        _started(tmp_path, proc)
+        _started(tmp_path, proc)                           # past the pre-clean: only the step's end meets the failure
+        (tmp_path / "rm-fails").write_text(why + "\n")
+        if said:
+            (tmp_path / "stuck").touch()                   # the daemon cannot remove it: it stays
         proc.send_signal(signal.SIGTERM)
         assert proc.wait(10) == 143
         out = os.read(proc.stdout.fileno(), 65536).decode() if select.select([proc.stdout], [], [], 10)[0] else ""
@@ -219,3 +231,18 @@ def test_a_removal_that_fails_is_said_unless_the_container_is_gone(tmp_path, why
         assert ("is still there after the step's removals" in out) is said, out    # it survived: said once more
     finally:
         _end(tmp_path, proc)
+
+
+def test_a_leftover_under_the_name_never_blocks_the_next_create(tmp_path):
+    """A create that landed after a step's checks leaves a container under its name (r7 delta read N4). The next use of
+    that name removes it first, so its create is not refused ("name already in use") and the step succeeds."""
+    leftover = subprocess.Popen(["tail", "-f", "/dev/null"], stdout=subprocess.DEVNULL, start_new_session=True)
+    (tmp_path / "fixed-x.pid").write_text(f"{leftover.pid}\n")
+    proc = _step(tmp_path, "lhpc_wait_for fixed-x docker run --rm --name fixed-x img true", creates="exits")
+    try:
+        assert proc.wait(10) == 0
+        assert (tmp_path / "calls").read_text().splitlines()[:2] == ["rm -f fixed-x", "run --rm --name fixed-x img true"]
+    finally:
+        _end(tmp_path, proc)
+        leftover.kill()
+        leftover.wait()
