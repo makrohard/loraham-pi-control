@@ -290,15 +290,22 @@ guard() {   # guard <file> <command> <stdin|->: THE runtime boundary of X, XIN a
     [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
       || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"; fi   # the box password (sudo -S) is not a command
   ! issend "$c" "$([ "$in" = - ] || printf '%s' "$in")" || [ "${TXCTX:-}" = 1 ] || stop "$f: a send outside tx: never run"; }
-pset() {   # pset <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument, leading zeros
-  # stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP; it also replays the power undos (@pset)
-  local w=$1 f=$2 tg=$3 v=$4 cap=17 m c
+pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument,
+  # leading zeros stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP. --restore (the undo replay):
+  # exactly the pre-state value journalled for that radio when the row changed it (PRE_<box|PC>_<target>), and nothing else
+  local restore=; [ "$1" = --restore ] && { restore=1; shift; }
+  local w=$1 f=$2 tg=$3 v=$4 cap=17 m c pre
   [[ $v =~ ^[0-9]+$ ]] || stop "$f: power value '$v' is not ASCII digits"; v=${v#"${v%%[!0]*}"}; v=${v:-0}
   [[ $v =~ ^[0-9]{1,2}$ ]] || stop "$f: power value '$4' has more than 2 digits"
-  if [ "$w" != PC ]; then m=$(getk "MODEL_${w}_$tg"); c=$(getk "CAP_${w}_$m"); [[ $c =~ ^[0-9]{1,2}$ ]] || stop "$f: no model cap for $w:$tg ('$m')"
+  if [ -n "$restore" ]; then pre=$(getk "PRE_${w}_$tg"); pre=${pre#"${pre%%[!0]*}"}
+    [ -n "$(getk "PRE_${w}_$tg")" ] && [ "${pre:-0}" = "$v" ] || stop "$f: restore $w $tg to $v: not its journalled pre-state ('$(getk "PRE_${w}_$tg")')"
+  elif [ "$w" != PC ]; then m=$(getk "MODEL_${w}_$tg"); c=$(getk "CAP_${w}_$m"); [[ $c =~ ^[0-9]{1,2}$ ]] || stop "$f: no model cap for $w:$tg ('$m')"
     { [ "${#c}" -lt 2 ] || [[ ! "$c" > 17 ]]; } || c=17; cap=$c; fi
-  { [ "${#v}" -lt "${#cap}" ] || { [ "${#v}" = "${#cap}" ] && [[ ! "$v" > "$cap" ]]; }; } || stop "$f: power $v above the cap $cap dBm"
+  [ -n "$restore" ] || { [ "${#v}" -lt "${#cap}" ] || { [ "${#v}" = "${#cap}" ] && [[ ! "$v" > "$cap" ]]; }; } || stop "$f: power $v above the cap $cap dBm"
   local PCTX=set; if [ "$w" = PC ]; then peer "$f" "$VMT" "$tg" "$v"; else X "$w" "$f" "$(form dset rid="$tg" p="$v")"; fi; }
+jpower() {   # jpower <box|PC> <rid|peer-action> <value>: journal a radio's pre-state power before the row changes it: the
+  # value the restore may set (PRE_<box|PC>_<target>) and its undo (@pset, replayed by pset --restore)
+  keep "PRE_$1_$2" "$3"; undo_push "$1" "@pset $1 $2 $3"; }
 pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixed read form, rendered here from its name
   local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read
   case "$n" in
@@ -363,8 +370,10 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
     [ "${RECOVERING:-0}" = 1 ] && return 1; stop "undo journal: unreadable or bad mark '$1'"; }
   while [ "$n" -gt "$1" ]; do IFS=$'\t' read -r id w c < <(sed -n "${n}p" "$EVD/undo.list")
     if grep -qxF -- "$id" "$EVD/undo.done" 2>/dev/null; then echo "undo journal: $id already ran (its removal had failed), not run again" >&2
-    else case "$c" in "@pset "*) read -r _ uw ut uv <<< "$c"; XNOSTOP=1 pset "$uw" "UNDO-$id.txt" "$ut" "$uv";; *) XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c";; esac
-      if [ "$XRC" != 0 ]; then rec "$w: $c (rc $XRC)" || true; rc=1; n=$((n - 1)); continue; fi
+    else local urc; case "$c" in   # each undo in a subshell: a refused or failed one is reported, the older ones still run
+        "@pset "*) read -r _ uw ut uv <<< "$c"; ( XNOSTOP=1 pset --restore "$uw" "UNDO-$id.txt" "$ut" "$uv"; exit "${XRC:-1}" ); urc=$?;;
+        *) ( XNOSTOP=1 X "$w" "UNDO-$id.txt" "$c"; exit "$XRC" ); urc=$?;; esac
+      if [ "$urc" != 0 ]; then rec "$w: $c (rc $urc)" || true; rc=1; n=$((n - 1)); continue; fi
       echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id ran but is not recorded as run" || true; rc=1; }; fi
     sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
     n=$((n - 1)); done; return $rc; }
@@ -466,7 +475,7 @@ ppower() {   # ppower <key> <peer> <action> <low>: a PC peer set LOW for its row
   local k=$1 pr=$2 a=$3 lo=$4 o r; dbm_ok "$lo" || stop "$k: the row's low power '$lo' is not <= 17"; radk "$k" "PC:$pr"
   pread PC "PP-$k-0.txt" "$a"; [ "$XRC" = 0 ] || stop "$k: the peer power read failed (rc $XRC)"; o=$(body "PP-$k-0.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || case "$o" in ''|*[!0-9-]*) stop "$k: no power readback";; esac
-  undo_push PC "@pset PC $a ${o:-10}"
+  jpower PC "$a" "${o:-10}"
   pset PC "PP-$k-1.txt" "$a" "$lo"; [ "$XRC" = 0 ] || stop "$k: the peer power set failed (rc $XRC)"; r=$(body "PP-$k-1.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || [ "$r" = "$lo" ] || stop "$k: the peer reads back '$r', not the low power $lo: no TX"; keep "P_$k" "$lo"; pwok "PC:$pr"; data "$k: peer power ${o:-?} -> $lo for the row"; }
 hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd: <= 7 dBm, the running rnsd's config, Up; else STOP
@@ -615,7 +624,7 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     [ "$x" = "$n" ] || fail "incompatible: $f $x vs $n"; done
   data "row $id: FREQ and SF match ($(jfield "$la" FREQ), SF $(jfield "$la" SF)); BW, CR and the sync word are not in the daemon's STATUS: not compared"
   for e in "a $ba $ra $qa $pa" "b $bb $rb $qb $pb"; do set -- $e; [ "$5" = min ] || continue
-    undo_push "$2" "@pset $2 $3 $(getk "P_$4" 10)"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
+    jpower "$2" "$3" "$(getk "P_$4" 10)"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
     [ "$MODE" = dry ] || [ "$(getk "P_$4")" = "$STICK_MIN" ] || stop "row $id: $2:$3 reads back '$(getk "P_$4")' dBm after POWER=$STICK_MIN: no TX"; done
   local sa sb; sa=$([ "$pa" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qa" as-is) dBm (as-is)"); sb=$([ "$pb" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qb" as-is) dBm (as-is)")
   for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce)

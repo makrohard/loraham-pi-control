@@ -314,3 +314,55 @@ def test_the_recovery_runs_with_the_context_cleared(tmp_path):
     r, evd = source_only(tmp_path, ': > "$EVD/undo.done"; printf "u1\\tPC\\ttouch \\"\\$RAN\\"; : POWER=20\\n" > "$EVD/undo.list"; '
                                    'f() { local PCTX=set; recover; }; f')
     assert not (evd / "ran").exists(), r.stderr
+
+
+# ---- a power restore sets exactly the journalled pre-state; a refused or failed undo leaves the others running -------------
+
+def _peer_fake(tmp_path):
+    marker = tmp_path / "peer-args"
+    fake = tmp_path / "peer.py"
+    fake.write_text(f"import sys\nopen({str(marker)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\nprint('POWER 1')\n")
+    return marker, fake
+
+
+def test_a_peer_restore_sets_its_journalled_pre_state_above_17(tmp_path):
+    # red-before (d20b8c41): the replay went through the 17 cap and STOPped: the peer stayed at its row power
+    marker, fake = _peer_fake(tmp_path)
+    r, _ = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; keep PRE_PC_mt-power 30; '
+                                   ': > "$EVD/undo.done"; printf "u1\\tPC\\t@pset PC mt-power 30\\n" > "$EVD/undo.list"; undo_to 0',
+                         FAKE=str(fake))
+    assert r.returncode == 0, r.stderr
+    assert marker.read_text() == "mt-power 30\n"
+
+
+def test_a_box_restore_sets_its_journalled_pre_state(tmp_path):
+    r, evd = source_only(tmp_path, 'keep PRE_H_r1 12; sshrun() { printf "%s\\n" "$3" > "$EVD/sent"; }; : > "$EVD/undo.done"; '
+                                   'printf "u1\\tH\\t@pset H r1 12\\n" > "$EVD/undo.list"; undo_to 0')
+    assert r.returncode == 0, r.stderr
+    assert (evd / "sent").read_text().split()[1:] == ["daemon", "r1", "--set", "POWER=12", "--yes"]   # after the lhpc binary
+
+
+@pytest.mark.parametrize("pre", ["20", ""])
+def test_a_restore_of_another_value_is_refused_reported_and_the_older_undos_still_run(tmp_path, pre):
+    # red-before (d20b8c41): the refused replay STOPped undo_to: the older undo (u1) never ran and nothing was reported
+    marker, fake = _peer_fake(tmp_path)
+    keep = f"keep PRE_PC_mt-power {pre}; " if pre else ""
+    r, evd = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; ' + keep +
+                         ': > "$EVD/undo.done"; printf "u1\\tPC\\ttouch \\"\\$RAN\\"\\nu2\\tPC\\t@pset PC mt-power 30\\n" > "$EVD/undo.list"; '
+                         'undo_to 0', FAKE=str(fake))
+    assert r.returncode == 1
+    assert not marker.exists()                                    # the peer never got mt-power 30
+    assert (evd / "ran").exists()                                 # u1 ran after u2 was refused
+    assert "PC: @pset PC mt-power 30 (rc 2)" in (evd / "UNRESOLVED.txt").read_text().splitlines()
+    assert (evd / "undo.list").read_text() == "u2\tPC\t@pset PC mt-power 30\n"   # kept for the recovery
+
+
+def test_a_peer_power_change_journals_its_pre_state_and_its_restore(tmp_path):
+    # the pre-state the restore may set is the value read before the row set the peer low
+    marker, fake = _peer_fake(tmp_path)
+    r, evd = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; : > "$EVD/undo.list"; '
+                                   'echo 0 > "$EVD/undo.seq"; CURROW=3; ppower R3-g2 g2 mt-power 1', FAKE=str(fake))
+    assert r.returncode == 0, r.stderr
+    assert "PRE_PC_mt-power=1" in (evd / "state.env").read_text().splitlines()
+    assert (evd / "undo.list").read_text() == "u1\tPC\t@pset PC mt-power 1\n"
+    assert marker.read_text() == "mt-power\nmt-power 1\n"
