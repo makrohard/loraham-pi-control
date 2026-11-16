@@ -188,7 +188,7 @@ def test_a_record_with_a_malformed_rid_is_not_an_ended_instance(tmp_path, monkey
 def test_a_live_record_with_a_malformed_rid_is_no_instance(tmp_path, monkeypatch):
     # second read N1, the same class as the NOTE: a LIVE process under a verified record whose rid is no instance id
     # ("rX") is no instance (instances.instance_processes, recorded_bands); status renders, its process stays the
-    # component's (an unclaimed one: the snapshot judges it). red-before (1ab54b4c): ValueError from the rid sort in
+    # component's (an unclaimed one: the snapshot judges it). red-before (5575cf41): ValueError from the rid sort in
     # instances.status_endpoints, `lhpc status` crashes
     launch_record(tmp_path, "daemon", "loraham-daemon", "rX", "433", NO_PID + 50)
     live_records(monkeypatch, [NO_PID + 50])
