@@ -240,3 +240,7 @@ def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_r
     jp.write_text("{ not json")
     assert svc.binary_receipt_state("daemon")[0] == "unsafe"
     assert _checked(svc) == "could not check"                     # the clone alone says "current"
+    # G1 B1: the stored verdict is tied to the checkout head the status probe reports for an unsafe receipt (the
+    # clone's), so the page and `status --versions`, which read it through `effective_status`, show it too
+    entry = stackupdates.view(svc._paths)["components"]["loraham-daemon"]
+    assert stackupdates.effective_status(entry, comp.source.pin_commit) == stackupdates.ERROR, entry  # RED: unchecked

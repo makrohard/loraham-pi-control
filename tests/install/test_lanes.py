@@ -1294,13 +1294,33 @@ def test_an_update_beside_a_failed_check_leads_the_summary(box, capsys, monkeypa
     assert detail == "update available"
 
 
-def _lhpc_upstream(box, git, make_repo, monkeypatch, pin):
-    """A local LHPC checkout whose fetched upstream head ships a manifest pinning `app` at `pin`, and the
-    self-update cache naming that head (what `lhpc self-update` records after its fetch)."""
+def _lhpc_upstream(box, git, make_repo, monkeypatch, pin=None, text=None, ahead=True):
+    """A local LHPC checkout (HEAD ships this LHPC's manifest) and the self-update cache naming the head its last
+    check fetched: a commit AHEAD of HEAD on a side branch whose shipped manifest pins `app` at `pin` (or holds
+    `text`; `text=""` removes the file). `ahead=False`: the fetched head IS HEAD, its manifest pinning `pin`
+    (a box whose own manifest differs from the shipped one). Returns the fetched head."""
     from lhpc.core import selfupdate
-    repo = box.rt.parent / "lhpc-checkout"
-    text = box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{pin}"')
-    head = make_repo(repo, {"lhpc/data/manifest.example.toml": text})
+    rel, n = "lhpc/data/manifest.example.toml", 0
+    while (box.rt.parent / f"lhpc-checkout-{n}").exists():          # each call: its own checkout
+        n += 1
+    repo = box.lhpc_repo = box.rt.parent / f"lhpc-checkout-{n}"
+    pinned = lambda c: box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{c}"')  # noqa: E731
+    shipped = pinned(pin) if text is None else text
+    if not ahead:
+        head = make_repo(repo, {rel: shipped})
+    else:
+        make_repo(repo, {rel: pinned(box.c[0])})
+        git(repo, "checkout", "-q", "-b", "up")
+        (repo / "NEXT").write_text("the next LHPC\n")                  # never an empty commit
+        git(repo, "add", "NEXT")
+        if shipped == "":
+            git(repo, "rm", "-q", rel)
+        else:
+            (repo / rel).write_text(shipped)
+            git(repo, "add", rel)
+        git(repo, "commit", "-qm", "the next LHPC")
+        head = git(repo, "rev-parse", "HEAD")
+        git(repo, "checkout", "-q", "-")
     monkeypatch.setattr(selfupdate, "repo_root", lambda: repo)
     selfupdate.write_cache(Paths(runtime_root=box.rt),
                            {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
@@ -1323,15 +1343,7 @@ def test_control_the_same_pin_upstream_gives_no_hint(box, capsys, git, make_repo
 
 def test_an_unreadable_upstream_manifest_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
     assert box.cli("install", "s", "--yes") == 0
-    head = _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
-    git(box.rt.parent / "lhpc-checkout", "rm", "-q", "lhpc/data/manifest.example.toml")
-    git(box.rt.parent / "lhpc-checkout", "commit", "-qm", "gone")
-    from lhpc.core import selfupdate
-    later = git(box.rt.parent / "lhpc-checkout", "rev-parse", "HEAD")
-    assert later != head
-    selfupdate.write_cache(Paths(runtime_root=box.rt),
-                           {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
-                            "upstream": {"ok": True, "upstream_head": later, "upstream_head_short": later[:9]}})
+    _lhpc_upstream(box, git, make_repo, monkeypatch, text="")    # the fetched head ships no manifest
     assert _check_detail(box, capsys)[0] == "current"            # no hint, never "could not check"
 
 
@@ -1339,11 +1351,19 @@ def test_a_cached_head_not_ahead_of_this_checkout_gives_no_hint(box, capsys, git
     """A self-update check older than the running checkout (it moved on since) names no next LHPC."""
     assert box.cli("install", "s", "--yes") == 0
     _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
-    repo = box.rt.parent / "lhpc-checkout"
+    repo = box.lhpc_repo
     (repo / "later.txt").write_text("x\n")
     git(repo, "add", "later.txt")
-    git(repo, "commit", "-qm", "the running checkout is ahead of the cached head")
+    git(repo, "commit", "-qm", "the running checkout moved on, not over the cached head")
     assert _check_detail(box, capsys)[0] == "current"
+
+
+def test_a_cached_head_equal_to_this_checkout_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
+    """G1 B4: the fetched head is the running checkout itself (nothing newer) while this box's manifest pins
+    differently from the shipped one: no next LHPC exists, so no hint."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1], ahead=False)
+    assert _check_detail(box, capsys)[0] == "current"            # RED before: "update LHPC first"
 
 
 def test_the_update_plan_of_a_source_waiting_for_lhpc_says_nothing_to_fetch(box, capsys, git, make_repo,
@@ -1358,13 +1378,38 @@ def test_the_update_plan_of_a_source_waiting_for_lhpc_says_nothing_to_fetch(box,
 
 def test_a_malformed_upstream_manifest_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
     assert box.cli("install", "s", "--yes") == 0
-    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
-    repo = box.rt.parent / "lhpc-checkout"
-    (repo / "lhpc" / "data" / "manifest.example.toml").write_text("[[stack]\\nid = broken\n")
-    git(repo, "commit", "-qam", "a manifest that does not parse")
-    from lhpc.core import selfupdate
-    head = git(repo, "rev-parse", "HEAD")
-    selfupdate.write_cache(Paths(runtime_root=box.rt),
-                           {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
-                            "upstream": {"ok": True, "upstream_head": head, "upstream_head_short": head[:9]}})
+    _lhpc_upstream(box, git, make_repo, monkeypatch, text="[[stack]\nid = broken\n")
     assert _check_detail(box, capsys)[0] == "current"
+
+
+def test_a_second_check_of_one_service_reads_the_newer_self_update_check(box, git, make_repo, monkeypatch):
+    """G1 B2: one service checks twice; the self-update check between them fetched an LHPC with another pin.
+    The second check must read it (a service the web keeps for its background checks lives that long)."""
+    assert box.cli("install", "s", "--yes") == 0
+    svc = box.svc()
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[0])
+    svc.source_check("s")
+    assert box.status() == su.UP_TO_DATE
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    svc.source_check("s")
+    assert box.status() == su.LHPC_FIRST                          # RED before: the first read was kept
+
+
+def test_a_moved_manifest_pin_turns_a_stored_verdict_unchecked(box, capsys, git, make_repo, monkeypatch):
+    """G1 B3: after the LHPC update applied the new pin (this checkout unchanged), the verdict stored against the
+    old pin no longer describes the source: `status --versions` and the page read "unchecked" until a check."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    assert _check_detail(box, capsys)[0] == "update LHPC first"
+    box.manifest.write_text(box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{box.c[1]}"'))
+    line = _versions_line(box, capsys)
+    assert "unchecked" in line.split(), line                      # RED before: "update LHPC first"
+
+
+def test_a_pinned_source_needs_no_remote_read(box, capsys, git, make_repo, monkeypatch):
+    """G1 N1: the pinned lane's target is this LHPC's manifest pin, so its verdict is local: a remote that
+    cannot be read does not hide "update LHPC first" (or "current") behind "could not check"."""
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    _fail_branch_probe(monkeypatch)
+    assert _check_detail(box, capsys)[0] == "update LHPC first"   # RED before: "could not check"
