@@ -889,7 +889,7 @@ for _si, s in enumerate(STEPS):
         if k == "delay":
             time.sleep(s["seconds"])
         elif k == "exec":
-            t0 = time.time()
+            t0 = time.monotonic()
             if not _main_ok():
                 _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "main-gone",
                          "rc": None, "attempts": 0, "elapsed_s": 0.0})
@@ -908,26 +908,26 @@ for _si, s in enumerate(STEPS):
                     sys.stderr.write(err if err.endswith("\\n") else err + "\\n")
             except subprocess.TimeoutExpired:
                 _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "timeout",
-                         "rc": None, "attempts": 1, "elapsed_s": round(time.time() - t0, 1),
+                         "rc": None, "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1),
                          "detail": ""})
                 if not s.get("optional", True):
                     sys.exit(1)
                 continue
             except OSError as e:        # ENOENT: the binary is not there at all
                 _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "failed",
-                         "rc": None, "attempts": 1, "elapsed_s": round(time.time() - t0, 1),
+                         "rc": None, "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1),
                          "detail": _clean(str(e))})
                 if not s.get("optional", True):
                     sys.exit(1)
                 continue
             _record({"kind": "exec", "label": s.get("label", "exec"),
                      "outcome": ("ok" if rc == 0 else "failed"), "rc": rc, "attempts": 1,
-                     "elapsed_s": round(time.time() - t0, 1),
+                     "elapsed_s": round(time.monotonic() - t0, 1),
                      "detail": ("" if rc == 0 else _clean(err))})
             if rc != 0 and not s.get("optional", True):
                 sys.exit(rc)            # a required exec that fails fails the launcher
         elif k == "tcp_wait":
-            t0 = time.time()
+            t0 = time.monotonic()
             _lbl = s.get("label", "%s:%s" % (s["host"], s["port"]))
             if not _main_ok():
                 _record({"kind": "tcp_wait", "label": _lbl, "host": s["host"], "port": s["port"],
@@ -935,10 +935,10 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])   # bound main already gone -> do not even wait
-            end = time.time() + s["timeout"]
+            end = time.monotonic() + s["timeout"]
             ok = False
             tries = 0
-            while time.time() < end:
+            while time.monotonic() < end:
                 if not _main_ok():
                     break               # main gone/zombie mid-wait -> no connection attempt
                 tries += 1
@@ -950,11 +950,11 @@ for _si, s in enumerate(STEPS):
                     time.sleep(2)
             _record({"kind": "tcp_wait", "label": _lbl, "host": s["host"], "port": s["port"],
                      "outcome": ("ready" if ok else "timeout"), "attempts": tries,
-                     "elapsed_s": round(time.time() - t0, 1)})
+                     "elapsed_s": round(time.monotonic() - t0, 1)})
             if not ok and not s.get("optional", True):
                 sys.exit(1)             # a required endpoint that never appears fails
         elif k == "log_wait":
-            t0 = time.time()
+            t0 = time.monotonic()
             _lbl = s.get("label", "log")
             if not _main_ok():
                 _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": "main-gone",
@@ -963,44 +963,49 @@ for _si, s in enumerate(STEPS):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])
             end, ok, tries, seen, nxt = t0 + s["timeout"], False, 0, "", t0 + 30
-            while time.time() < end and _main_ok():   # ONE clock: a reboot re-reads, never restarts it
+            while time.monotonic() < end and _main_ok():   # ONE clock: a reboot re-reads, never restarts it
                 tries += 1
                 try:
                     with open(s["path"], "rb") as f:   # fresh each poll: follows the symlink to the current boot
                         seen = os.path.basename(os.path.realpath(s["path"]))
-                        ok = s["pattern"].encode() in f.read(1 << 20)
+                        pat, tail = s["pattern"].encode(), b""
+                        for chunk in iter(lambda: f.read(1 << 20), b""):   # the whole file, 1 MiB at a time
+                            if pat in tail + chunk:
+                                ok = True
+                                break
+                            tail = (tail + chunk)[1 - len(pat):] if len(pat) > 1 else b""   # a line across the edge
                 except OSError:
                     pass                          # absent (a guest provisioning): not yet
                 if ok:
                     break
-                if time.time() >= nxt:
-                    sys.stderr.write("log_wait %s: waiting %d s (%s)\\n" % (_lbl, time.time() - t0, seen or "no log yet"))
+                if time.monotonic() >= nxt:
+                    sys.stderr.write("log_wait %s: waiting %d s (%s)\\n" % (_lbl, time.monotonic() - t0, seen or "no log yet"))
                     nxt += 30
                 time.sleep(2)
             oc = "ready" if ok else ("timeout" if _main_ok() else "main-gone")
             _record({"kind": "log_wait", "label": _lbl, "path": s["path"], "outcome": oc, "attempts": tries,
-                     "elapsed_s": round(time.time() - t0, 1)})
-            sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, time.time() - t0) if ok else
-                             "log_wait %s: not ready after %d s (log %s)\\n" % (_lbl, time.time() - t0, s["path"]))
+                     "elapsed_s": round(time.monotonic() - t0, 1)})
+            sys.stderr.write("log_wait %s: ready after %d s\\n" % (_lbl, time.monotonic() - t0) if ok else
+                             "log_wait %s: not ready after %d s (log %s)\\n" % (_lbl, time.monotonic() - t0, s["path"]))
             if not ok and not s.get("optional", True):
                 sys.exit(1)                       # a required line that never appears fails the launcher
         elif k == "tcp_send":
             reps = s.get("repeat", 1)
             sent = 0
-            t0 = time.time()
+            t0 = time.monotonic()
             def _done(oc, n):
                 _record({"kind": "tcp_send",
                          "label": s.get("label", "%s:%s" % (s["host"], s["port"])),
                          "host": s["host"], "port": s["port"], "outcome": oc,
-                         "attempts": n, "elapsed_s": round(time.time() - t0, 1)})
+                         "attempts": n, "elapsed_s": round(time.monotonic() - t0, 1)})
             def _read(conn, done):
                 # ONE answer, read to its end: a slow guest (QEMU on a Zero 2 W) may take many
                 # seconds for its first byte and pause between chunks. Up to 30 s for the first
                 # byte, then at most 2 s of silence; stop as soon as `done` holds.
                 buf = b""
-                end2 = time.time() + 30.0
+                end2 = time.monotonic() + 30.0
                 while len(buf) < 4096:
-                    left = end2 - time.time()
+                    left = end2 - time.monotonic()
                     if left <= 0:
                         break
                     conn.settimeout(min(left, 2.0) if buf else left)
@@ -1088,9 +1093,9 @@ for _si, s in enumerate(STEPS):
                 if i + 1 < reps:
                     # Decided BEFORE sleeping, so the last on-time attempt is never lost to the
                     # sleep's own overshoot. A zero-length window (plain `repeat`) has no clock.
-                    if window_end > t0 and time.time() > window_end:
+                    if window_end > t0 and time.monotonic() > window_end:
                         break
-                    wait = t0 + sum(ivs[:i + 1]) - time.time()
+                    wait = t0 + sum(ivs[:i + 1]) - time.monotonic()
                     if wait > 0:
                         time.sleep(wait)
             if skipped:

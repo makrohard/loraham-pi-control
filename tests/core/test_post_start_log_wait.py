@@ -1,7 +1,8 @@
 """The post-step kind `log_wait` (B2a, his C): ready when a line of the log file at `path` contains `pattern`. The path
 is opened fresh on every poll, so a guest reboot that moves the `uart-latest.log` symlink is read from its new
-boot; an absent file is "not yet"; one budget runs from the step's start and a reboot never restarts it; only the
-first 1 MB of a file is read. MeshCom's start waits on its firmware's console line, and the bounds nest."""
+boot; an absent file is "not yet"; one budget runs from the step's start and a reboot never restarts it; the whole
+file is read, in bounded chunks; the waits run on the monotonic clock, so a wall-clock step does not end them.
+MeshCom's start waits on its firmware's console line, and the bounds nest."""
 from __future__ import annotations
 
 import json
@@ -146,13 +147,64 @@ def test_a_main_gone_before_a_log_wait_records_it_as_never_run(tmp_path):
                                                              ("exec", "main-gone")], steps
 
 
-@pytest.mark.parametrize("before, outcome", [
-    (100, "ready"), pytest.param((1 << 20) + 100, "timeout", marks=pytest.mark.slow)])  # the timeout case waits
-def test_only_the_first_megabyte_of_a_log_is_read(tmp_path, before, outcome):
+@pytest.mark.parametrize("before", [100, (1 << 20) + 100, (1 << 20) - LINE.index("Console") - 10],
+                         ids=["first-chunk", "after-the-first-mib", "across-the-chunk-edge"])
+def test_the_line_is_found_anywhere_in_a_log(tmp_path, before):
     link = tmp_path / "uart-latest.log"
     _boot(tmp_path, link, "uart-1.log", "x" * before + LINE + "y" * (1 << 20))
-    _rc, st, _err = _wait(tmp_path, link, 3, required=False)
-    assert st["outcome"] == outcome
+    rc, st, err = _wait(tmp_path, link, 3)
+    assert (rc, st["outcome"]) == (0, "ready"), err
+
+
+# The wall clock steps an hour forward right after the launcher's first reading of it (a first-boot time sync): the
+# rendered launcher, run under a wrapper that replaces time.time before the launcher's own code runs.
+_JUMP = ("import runpy, sys, time\n_real, _n = time.time, [0]\n"
+         "def _stepped():\n    _n[0] += 1\n    return _real() + (3600 if _n[0] > 1 else 0)\n"
+         "time.time = _stepped\nrunpy.run_path(sys.argv[1], run_name='__main__')\n")
+
+
+def _jumped(tmp_path, steps):
+    """The steps in a real launcher under a forward wall-clock step: (rc, the step records, stderr)."""
+    root = tmp_path / "rt"
+    (root / "state" / "post").mkdir(parents=True, exist_ok=True)
+    rp = root / "state" / "post" / "r.json"
+    (tmp_path / "launcher.py").write_text(commands.render_post_launcher(steps, _C(), {}, _Op(), str(root),
+                                                                        str(tmp_path), "", result_path=str(rp)))
+    p = subprocess.run([sys.executable, "-c", _JUMP, str(tmp_path / "launcher.py")], capture_output=True, text=True,
+                       timeout=60, check=False)
+    return p.returncode, json.loads(rp.read_text())["steps"], p.stderr
+
+
+def test_a_wall_clock_step_does_not_end_a_log_wait(tmp_path):
+    (tmp_path / "uart.log").write_text(LINE)
+    rc, steps, err = _jumped(tmp_path, [{"kind": "log_wait", "path": str(tmp_path / "uart.log"), "timeout": 20,
+                                         "pattern": "Console started on port 2323", "required": True}])
+    assert (rc, steps[0]["outcome"]) == (0, "ready") and steps[0]["elapsed_s"] < 20, (steps, err)
+
+
+def test_a_wall_clock_step_does_not_stretch_an_execs_elapsed_time(tmp_path):
+    rc, steps, err = _jumped(tmp_path, [{"kind": "exec", "argv": ["true"], "label": "probe", "required": True}])
+    assert (rc, steps[0]["outcome"]) == (0, "ok") and steps[0]["elapsed_s"] < 20, (steps, err)
+
+
+def test_a_wall_clock_step_does_not_end_a_tcp_wait(tmp_path):
+    import socket
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(4)
+        rc, steps, err = _jumped(tmp_path, [{"kind": "tcp_wait", "host": "127.0.0.1", "port": srv.getsockname()[1],
+                                             "timeout": 20, "required": True}])
+    assert (rc, steps[0]["outcome"]) == (0, "ready") and steps[0]["elapsed_s"] < 20, (steps, err)
+
+
+def test_a_wall_clock_step_does_not_end_a_tcp_sends_window(tmp_path):
+    srv, seen = _console("ok\r\n")
+    try:
+        rc, steps, err = _jumped(tmp_path, [{"kind": "tcp_send", "host": "127.0.0.1", "port": srv.getsockname()[1],
+                                             "data": "x\n", "repeat": 2, "interval": 0.5, "required": True}])
+    finally:
+        srv.close()
+    assert (rc, steps[0]["attempts"], len(seen)) == (0, 2, 2) and steps[0]["elapsed_s"] < 20, (steps, err)
 
 
 def _meshcom_steps(rid="r1"):
