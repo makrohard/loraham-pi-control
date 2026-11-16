@@ -21,7 +21,6 @@ from typing import ClassVar
 
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
-from . import commands as _commands
 from . import config as _cfgmod
 from . import instance_liveness, instances, radio_start, spi_mode, stackupdates
 from . import manifest as manifest_mod
@@ -29,9 +28,7 @@ from . import meshcore_mode as _meshcore_mode
 from .config import (
     HW_SETUPS,
     Config,
-    ConfigError,
     _stack_config_path,
-    conditional_clear_stack_config,
     load_config,
     load_stack_config,
 )
@@ -2083,51 +2080,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # Web-exposed actions -> the same gated service methods the CLI calls.
     WEB_ACTIONS = ("install", "update", "uninstall", "start", "stop", "restart",
                    "build", "test", "test-tx", "clean")
-
-    def _run_migration(self, candidates: list, from_head: str) -> tuple:
-        """Migrate one PROVEN transition's candidates race-safely. `from_head` is the TRANSITION
-        record's pre-update commit; a key is deleted ONLY when its current stored value — canonicalised
-        with the OLD (pre-update) parameter definition — equals that param's OLD default, both parsed
-        from the manifest at `from_head` (`_prove_candidate`). The candidate's own `from_head`/`expected`
-        never select the manifest or authorise deletion. Returns (migrated_count, remaining_candidates);
-        an unprovable candidate is kept pending (never raw-value-deleted); a file whose write FAILS
-        keeps all its candidates for retry."""
-        from collections import defaultdict
-
-        from .paths import PathContainmentError
-        by_file: dict = defaultdict(dict)                                # (stack, band) -> {key: old_default}
-        meta: dict = {}                                                  # (stack, band, key) -> (cand, old_param)
-        remaining: list = []
-        for cand in candidates:
-            # IDENTITY params are never stale-default candidates. Filtered HERE, at the point of
-            # use, and not only where candidates are chosen: the candidates may have been chosen
-            # by pre-update code without this exclusion, so a
-            # deliberately pinned local callsign equal to the global would be deleted by the very
-            # update that ships this rule. Dropping it here is silent and correct —
-            # the value simply stays as the operator set it.
-            if self._is_identity_candidate(cand):
-                continue
-            proven = self._prove_candidate(cand, from_head)
-            if proven is None:
-                remaining.append(cand)                                   # unprovable -> keep pending, never delete
-                continue
-            old_param, old_default = proven
-            fkey = (cand["stack"], cand["band"], cand.get("rid", ""))     # K6: the instance's own file (rid)
-            by_file[fkey][cand["key"]] = old_default
-            meta[(*fkey, cand["key"])] = (cand, old_param)
-        migrated = 0
-        for (stack_id, cfg_band, rid), expected in by_file.items():
-            def _matches(key, raw, exp, _s=stack_id, _b=cfg_band, _r=rid):
-                _cand, old_param = meta[(_s, _b, _r, key)]
-                return self._canon_value(old_param, raw) == exp          # BOTH sides: OLD param semantics
-            try:
-                migrated += conditional_clear_stack_config(self._paths, stack_id, cfg_band, expected, _matches,
-                                                           inst=_commands.Instance(rid) if rid else None)
-            except (OSError, ConfigError, PathContainmentError, ValueError):
-                remaining.extend(meta[(stack_id, cfg_band, rid, k)][0] for k in expected)   # keep pending
-        if migrated:
-            self._invalidate_config()
-        return migrated, remaining
 
     RADIO_BANDS = ALLOWED_BANDS   # the FULL band universe — detection/read/manage (never narrowed)
 

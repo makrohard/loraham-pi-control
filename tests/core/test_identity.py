@@ -236,18 +236,6 @@ def test_tx_identity_resolves_per_band(tmp_path):
     assert svc.effective_identity("voice", "868") == "XX0XXA"  # other band inherits global
 
 
-def test_deliberate_local_pin_equal_to_global_survives_migration_snapshot(tmp_path):
-    # AUDIT-FOUND (P2): the self-update stale-default migration compared identity params
-    # against the substituted {callsign} default, so a deliberate local pin EQUAL to the
-    # global was snapshotted and later removed — silently reverting the stack to inherit.
-    svc = _svc(tmp_path)
-    assert svc.set_operator_identity(callsign="XX0XXA").ok
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}).ok
-    assert svc.identity_resolution("chat")[0]["source"] == "local"       # a real pin
-    cands = svc._migration_candidates()
-    assert not [c for c in cands if c["stack"] == "chat" and "call" in c["key"]], cands
-
-
 # ===== external-audit regressions =====
 
 def test_start_refuses_identity_before_boot_hook_and_feed_clear(tmp_path, monkeypatch):
@@ -1212,51 +1200,6 @@ def test_the_apply_hint_agrees_with_the_restart_marker(tmp_path, monkeypatch):
     marked = svc.restart_required("chat") is not None
     said_restart = any("Restart the stack to apply" in d for d in r.details)
     assert marked and said_restart, (marked, r.details)
-
-
-def test_an_old_versions_candidate_cannot_delete_a_pinned_identity(tmp_path):
-    """AUDIT-FOUND: the identity exclusion lived only where candidates are CHOSEN. On the real
-    old-version -> this-version crossing the choosing is done by the OLD code, which has no such rule,
-    so a deliberately pinned local callsign equal to the global was deleted by the very update
-    that ships the rule. The applier must drop it.
-
-    Covers EVERY legacy representation an old version could emit — scoped and flat, run and file, banded
-    and band-less — and asserts that unrelated parameters are NOT exempted."""
-    svc = _svc(tmp_path)
-    assert svc.set_operator_identity(callsign="XX0XXA").ok
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}).ok    # deliberate pin
-
-    def cand(**kw):
-        base = {"stack": "chat", "band": "", "expected": "XX0XXA", "from_head": "dead"}
-        return {**base, **kw}
-
-    # 1) the full triple, file-kind (chat's `call` is a config-file param)
-    assert svc._is_identity_candidate(
-        cand(kind="f", comp="loraham-chat", name="call", key="file_call")) is True
-    # 2) run-kind identity on another stack, banded config
-    assert svc._is_identity_candidate(
-        cand(stack="meshtastic", band="868", kind="r", comp="meshtastic",
-             name="node_name", key="node_name")) is True
-    # 3) key-only fallback (a candidate predating kind/comp/name), all three spellings
-    for key in ("file_call", svc._scoped_key("f", "loraham-chat", "call")):
-        assert svc._is_identity_candidate({"stack": "chat", "key": key}) is True, key
-    assert svc._is_identity_candidate(
-        {"stack": "meshtastic", "key": "node_name"}) is True
-    # 4) unrelated parameters are NOT exempted, in any spelling
-    for c in (cand(kind="f", comp="loraham-chat", name="tx_freq", key="file_tx_freq"),
-              cand(kind="r", comp="loraham-chat", name="tx_freq", key="tx_freq"),
-              {"stack": "chat", "key": "file_tx_freq"},
-              {"stack": "chat", "key": svc._scoped_key("f", "loraham-chat", "tx_freq")}):
-        assert svc._is_identity_candidate(c) is False, c
-    # 5) a name that matches an identity field on a DIFFERENT component is not exempted
-    assert svc._is_identity_candidate(
-        cand(kind="f", comp="some-other-comp", name="call", key="file_call")) is False
-
-    # ...and end to end: the applier drops the identity candidate and keeps the pin
-    migrated, _rem = svc._run_migration(
-        [cand(kind="f", comp="loraham-chat", name="call", key="file_call")], "dead")
-    assert migrated == 0, migrated
-    assert svc._stored_param_value("chat", "file", "loraham-chat", "call") == "XX0XXA"
 
 
 def test_required_post_start_runs_under_the_documented_cap(tmp_path):

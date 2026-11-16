@@ -149,17 +149,19 @@ def test_a_render_reads_firewall_status_and_listeners_once(tmp_path, monkeypatch
 
 def test_stack_config_is_loaded_once_per_stack_and_band_per_request(tmp_path, monkeypatch):
     # 467 `load_stack_config` reads per render (every parameter row) collapse to one per
-    # (stack, band) through the thread-local request memo.
-    from lhpc.core import service_params as _sp
+    # (stack, band, instance) through the thread-local request memo (`services._stack_config_cached`'s read).
+    from lhpc.core import services as _sp
     n = []
     orig = _sp.load_stack_config
     monkeypatch.setattr(_sp, "load_stack_config",
-                        lambda *a, **k: (n.append((a[1], a[2] if len(a) > 2 else k.get("band", ""))),
+                        lambda *a, **k: (n.append((a[1], a[2] if len(a) > 2 else k.get("band", ""),
+                                                   getattr(a[3] if len(a) > 3 else k.get("inst"), "rid", ""))),
                                          orig(*a, **k))[1])
     svc = _svc(tmp_path)
     c = create_app(lambda: svc).test_client()
     n.clear(); assert c.get("/stacks").status_code == 200
-    assert len(n) == len(set(n)), "the same (stack, band) file was read more than once in a render"
+    assert n, "the render read no stack config through the memo: the count proves nothing"
+    assert len(n) == len(set(n)), "the same (stack, band, instance) file was read more than once in a render"
     assert len(n) <= 3 * len(svc.stacks())
 
 

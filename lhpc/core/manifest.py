@@ -900,8 +900,7 @@ def _parse_component(raw: dict) -> Component:
 
 _PARAM_KEYS = frozenset((
     "name", "kind", "choices", "default", "flag", "label",
-    "choice_labels",   # accepted and ignored: the config-default migration parses the previous
-                       # release's manifest (service_params), which carries it
+    "choice_labels",   # accepted and ignored: an older release's manifest carries it
     "min", "max", "advanced", "arg", "apply_mode", "band_defaults",
     "validator", "group",
 ))

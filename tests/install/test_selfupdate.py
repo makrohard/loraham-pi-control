@@ -4,7 +4,7 @@ operator-driven apply does to the running console.
 Divergence, a dirty tree and untracked files are all REFUSALS with an explicit override, and the
 override has to disclose exactly what it would discard — an operator who cannot see that is being
 asked to consent to nothing. The two behaviours that grew out of this one live next door:
-`test_selfupdate_migration.py` (config migration after a successful advance) and
+`test_selfupdate_apply.py` (the overwrite's cleanup, the firewall follow-up, the lock) and
 `test_selfupdate_service.py` (the one-click updater the web console triggers).
 """
 from __future__ import annotations

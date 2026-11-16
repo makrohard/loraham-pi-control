@@ -294,36 +294,10 @@ class SelfUpdateOpsMixin:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so
         the footer/pages reflect it. Serialized with apply through the self-update lock: if an apply is
         in progress it DEFERS (nonfatal) with the last cached status instead of racing its refs/cache.
-        Under the lock it applies the SAME pure recovery-state gate as apply (`classify_journal`)
-        BEFORE `refresh_cache`/`check_upstream`/fetch/cache write: an unreadable/corrupt/unsafe OR
-        recovery-blocked journal blocks the check with NO fetch and NO cache/journal/config/source
-        mutation. Fail-soft."""
+        Fail-soft."""
         from . import selfupdate
         try:
             with selfupdate.update_lock(self._paths):
-                status, _env, _head = selfupdate.classify_journal(self._paths, self._system)  # BEFORE any fetch
-                if status == "blocked":
-                    return ActionResult(False, "Self-update check blocked: the migration journal is "
-                                        "unreadable, corrupt or unsafe. No upstream check was made — "
-                                        "recovery needed (inspect state/selfupdate-migrate.json).",
-                                        data={"journal_corrupt": True,
-                                              **selfupdate.status_view(self._paths)},
-                                        details=["  nothing to run here — "
-                                                 "state/selfupdate-migrate.json is damaged; the "
-                                                 "box's operator inspects it and removes it, then "
-                                                 "retries"])
-                if status == "recovery_required":
-                    return ActionResult(False, "Self-update check blocked: the checkout is at an "
-                                        "unexpected commit for a recorded migration transition. No "
-                                        "upstream check was made — recovery required (inspect "
-                                        "state/selfupdate-migrate.json).",
-                                        data={"recovery_required": True,
-                                              **selfupdate.status_view(self._paths)},
-                                        details=["  nothing to run here — the checkout is not at "
-                                                 "the commit state/selfupdate-migrate.json "
-                                                 "records (it was moved by hand); the box's "
-                                                 "operator inspects that file and the checkout "
-                                                 "before anything else"])
                 # Embed the LIVE controller-identity verdict into the SAME atomic envelope
                 # write (a separate field could be dropped by a later refresh). GET/status
                 # then renders the cached verdict only.
@@ -370,12 +344,10 @@ class SelfUpdateOpsMixin:
     @invalidates_snapshot
     def self_update_apply(self, *, force: bool = False) -> ActionResult:
         """Apply the update as ONE serialized, fail-closed transaction (the interprocess self-update
-        lock covers candidate capture, journal persistence, fetch/ref resolution, merge/reset/clean,
-        cache writes, config migration and journal finalization). BLOCKED while an lhpc job is active;
-        a concurrent apply returns 'busy' with zero mutation. A DIRTY tree is refused unless
-        `force=True`. Default-equal config is migrated to the new defaults only when the source
-        transition it was captured against actually completed — recorded DURABLY before source changes
-        and recovered from the journal after a crash. Cleanup failure on force is a truthful partial."""
+        lock covers fetch/ref resolution, merge/reset/clean and cache writes). BLOCKED while an lhpc
+        job is active; a concurrent apply returns 'busy' with zero mutation. A DIRTY tree is refused
+        unless `force=True`. Saved configuration is never changed: a value saved equal to an old
+        default keeps that value. Cleanup failure on force is a truthful partial."""
         from . import reslock, selfupdate
         from .service_base import AdmissionRefused, admission_refusal
         # LOCK ORDER: (1) task admission FIRST — held across the WHOLE mutation so no task can be
@@ -704,79 +676,12 @@ class SelfUpdateOpsMixin:
 
     def _self_update_locked(self, force: bool) -> ActionResult:
         from . import selfupdate
-        # 1. PURE classification of the untrusted envelope against the ACTUAL head (shared with the
-        #    freshness check). A blocked/recovery-required state stops here BEFORE any fetch / source /
-        #    cache / config / journal mutation.
-        status, env, head_now = selfupdate.classify_journal(self._paths, self._system)
-        if status == "blocked":
-            return ActionResult(False, "Self-update blocked: the migration journal is missing-but-"
-                                "present-unreadable, corrupt or unsafe. No changes were made — recovery "
-                                "needed (inspect / remove state/selfupdate-migrate.json).",
-                                data={"journal_corrupt": True},
-                                details=["  nothing to run here — state/selfupdate-migrate.json "
-                                         "is damaged; the box's operator inspects it and removes "
-                                         "it, then retries"])
-        if status == "recovery_required":
-            return ActionResult(False, "Self-update blocked: the checkout is at an unexpected commit for "
-                                "a recorded migration transition. No changes were made — recovery "
-                                "required (inspect state/selfupdate-migrate.json).",
-                                data={"recovery_required": True},
-                                details=["  nothing to run here — the checkout is not at the "
-                                         "commit state/selfupdate-migrate.json records (it was "
-                                         "moved by hand); the box's operator inspects that file "
-                                         "and the checkout before anything else"])
-        completed = env.get("completed") if env else None
-        prepared = env.get("prepared") if env else None
-
-        # 2. Reconcile a prior PREPARED attempt (classifier verified its ANCHOR + endpoint): its to_head
-        #    reached -> promote (carrying the anchor txid); still at from_head -> the git never happened,
-        #    so delete its anchor and drop it, keeping the prior completed intact.
-        if prepared:
-            if head_now == prepared["to_head"]:
-                completed = self._promote(prepared)          # keep the anchor for the completed slot
-                self._write_envelope(completed, None)
-            elif selfupdate.clear_migration_journal(self._paths):       # git never happened -> drop stale
-                selfupdate.delete_anchor(self._system, prepared.get("txid"))   # prepared + its anchor
-
-        # 3. Migrate the PRIOR completed transition FIRST, obtaining AUTHORITATIVE from_head + candidate
-        #    payload from its durable ANCHOR (never the journal fields alone). The journal/anchor are
-        #    IMMUTABLE while pending — migration is idempotent (already-removed keys no-op) — and are
-        #    cleared only once fully resolved; otherwise the update is DEFERRED.
-        migrated = 0
-        if completed and completed["pending"]:
-            anchor = selfupdate.anchored_record(self._system, completed)
-            if anchor is None:                                           # defensive (classifier verified)
-                return ActionResult(False, "Self-update blocked: the recorded migration transition is "
-                                    "not authorised by a matching durable anchor. No changes were made "
-                                    "— recovery required.", data={"recovery_required": True},
-                                    details=["  nothing to run here — the migration recorded in "
-                                             "state/selfupdate-migrate.json has no matching "
-                                             "record in the checkout's git; the box's operator "
-                                             "inspects that file before anything else"])
-            m, remaining = self._run_migration(anchor["pending"], anchor["from_head"])
-            migrated += m
-            if remaining:
-                return ActionResult(True, "Prior config migration is incomplete — deferring the update "
-                                    "until it completes; it will be retried on the next self-update.",
-                                    data={"migrated": migrated, "pending_migrations": len(remaining),
-                                          "deferred_recovery": True})
-            if selfupdate.clear_migration_journal(self._paths):         # clear FIRST; drop anchor only if
-                selfupdate.delete_anchor(self._system, completed.get("txid"))   # the journal is really gone
-
-        # An anchor the journal no longer names (a stop before the journal write, a failed delete)
-        # is reached by nothing else: drop it before a new attempt anchors its own.
-        selfupdate.sweep_anchors(self._system, {r.get("txid") for r in (completed, prepared) if r})
-
-        # 4. Attempt a NEW update. Fail-closed PREPARE hook creates the durable git ANCHOR, then the
-        #    runtime journal referencing it, BOTH atomically BEFORE the checkout is advanced.
-        new_candidates = self._migration_candidates()
-        hook = {"written": False, "from": "", "to": "", "branch": "", "intent": [], "txid": ""}
 
         class _FWAbort(Exception):
             def __init__(self, result):
                 self.result = result
 
-        def _before_mutation(from_head, to_head, branch, _deps):
+        def _before_mutation(_from_head, _to_head, _branch, _deps):
             # FW P1-2C: BEFORE the checkout advances, refuse if the managed firewall is installed,
             # remote web is exposed, and the nginx unit carrying the boot gate cannot be brought
             # current this run — otherwise a reboot could start remote nginx ungated.
@@ -792,55 +697,12 @@ class SelfUpdateOpsMixin:
                     data={"fw_mark_failed": True}, next_commands=["lhpc self-update --apply"],
                     details=[f"  a state/ marker could not be written ({cause}); "
                              "fix that, then run the update again"]))
-            intent = self._stamp(new_candidates, from_head)
-            hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
-            if not intent:
-                return
-            txid = selfupdate.new_txid()
-            payload = {"from_head": from_head, "to_head": to_head, "branch": branch, "pending": intent}
-            if not selfupdate.create_anchor(self._system, txid, payload):     # durable provenance FIRST
-                raise selfupdate.JournalPersistError()
-            rec = {**payload, "txid": txid}
-            if not selfupdate.write_migration_journal(self._paths, {"completed": None, "prepared": rec}):
-                selfupdate.delete_anchor(self._system, txid)
-                raise selfupdate.JournalPersistError()
-            hook.update(written=True, txid=txid)
 
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
                                           before_mutation=_before_mutation)
         except _FWAbort as abort:                            # firewall preflight refused the advance
             return abort.result
-        except selfupdate.JournalPersistError:
-            return ActionResult(False, "Refusing to self-update: could not durably record the config-"
-                                "migration intent before changing source. No changes were made.",
-                                data={"journal_write_failed": True},
-                                details=["  nothing to run here — the migration journal "
-                                         "(state/selfupdate-migrate.json) or its git anchor in "
-                                         "the checkout could not be written; the box's operator "
-                                         "checks state/ and the checkout's .git, then retries"])
-
-        # 5. On a REAL advance WITH candidates (hook.written -> a valid anchor + journal exist), promote
-        #    the prepared transition to `completed` (keeping the anchor), then migrate. Fully resolved ->
-        #    clear journal + delete anchor; else keep for retry. A NO-CANDIDATE advance wrote no anchor
-        #    and no journal, so there is nothing to promote (never write a record with an empty txid).
-        #    Failed/refused leaves config untouched and drops the fresh anchor + journal.
-        remaining: list = []
-        if res.get("ok") and not res.get("already") and hook["written"]:
-            rec = {"from_head": hook["from"], "to_head": hook["to"], "branch": hook["branch"],
-                   "pending": hook["intent"], "txid": hook["txid"]}
-            self._write_envelope(rec, None)                              # promote prepared -> completed
-            m, remaining = self._run_migration(hook["intent"], hook["from"])
-            migrated += m
-            if not remaining and selfupdate.clear_migration_journal(self._paths):
-                selfupdate.delete_anchor(self._system, hook["txid"])
-        # Git failed after prepare -> drop anchor+journal, only when HEAD is positively still at from_head
-        # (git never moved the ref): a git killed AFTER the ref moved left HEAD at to_head, and an unreadable
-        # HEAD proves nothing, so either keeps this record for the next run to promote and migrate, or report.
-        elif (not res.get("ok") and hook["written"]
-                and selfupdate.local_state(self._system).get("head", "") == hook["from"]
-                and selfupdate.clear_migration_journal(self._paths)):
-            selfupdate.delete_anchor(self._system, hook["txid"])
 
         # FW P1-2 B/C: on a real advance, the firewall scripts + LHPC-owned nginx unit must be
         # regenerated with the NEW templates. This process imported the old modules BEFORE the
@@ -868,11 +730,7 @@ class SelfUpdateOpsMixin:
 
         instr = selfupdate.restart_instructions(res.get("deps_changed", False),
                                                 self._controller_deps_sync_cmd())
-        data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining),
-                "firewall_reapply_required": data_fw}
-        migrated_note = f"{migrated} default(s) migrated to the new defaults." if migrated else ""
-        pending_note = (f"{len(remaining)} config default migration(s) could NOT be completed and will "
-                        "be retried on the next self-update.") if remaining else ""
+        data = {**res, "restart": instr, "firewall_reapply_required": data_fw}
 
         if not res["ok"]:                                    # git failure: dirty refusal / diverged / fetch
             # On a DIRTY refusal, name the paths a force would discard. `message` stays single-line
@@ -899,18 +757,15 @@ class SelfUpdateOpsMixin:
             details = [res.get("cleanup_error", ""), instr.get("note", ""),
                        "Restart the web console after cleaning up:"]
             details += ["  " + c for c in instr["commands"]]
-            details += [n for n in (migrated_note, pending_note) if n]
             details += list(fw_notes)
             return ActionResult(False, res["message"], data=data,
                                 details=tuple(d for d in details if d),
                                 next_commands=list(instr["commands"]))
-        if res.get("already"):                               # nothing to update; may have recovered pending
-            details = tuple(n for n in (migrated_note, pending_note) if n)
-            return ActionResult(True, res["message"], data=data, details=details)
+        if res.get("already"):                               # nothing to update
+            return ActionResult(True, res["message"], data=data)
         details = [n for n in (instr.get("note", ""),) if n]
         details += ["Restart the web console to load the new version:"]
         details += ["  " + c for c in instr["commands"]]
-        details += [n for n in (migrated_note, pending_note) if n]
         details += list(fw_notes)
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
@@ -1477,7 +1332,7 @@ class SelfUpdateOpsMixin:
 
     # ---- the named states an applied self-update can leave -------------------------------------
     # The checkout moved, but a step after it failed. Undoing the update is not one existing
-    # operation (the previous checkout, its venv and the config migrations already run would all
+    # operation (the previous checkout and its venv would both
     # have to come back), so the update ends in a NAMED state instead — journaled here, shown by
     # `lhpc status` with its word, resolved by exactly one command, whose success clears it:
     #   * `venv-unsynced` — the venv sync failed: `lhpc self-update --apply` (an apply finding the
@@ -1886,23 +1741,3 @@ class SelfUpdateOpsMixin:
         payload = json.dumps({"schema_version": 1, "root": str(self._paths.runtime_root),
                               "created": int(_time.time())})
         runtime_fs.write_marker(self._paths, self._paths.under(updater_units.ROOT_MARKER), payload)
-
-    def _write_envelope(self, completed, prepared) -> None:
-        """Persist the two-slot envelope (or clear it when both slots are empty). Best-effort at
-        finalization: a failed write is self-healed on the next invocation's prepared-reconciliation,
-        so a still-pending `completed` is never silently lost."""
-        from . import selfupdate
-        if not completed and not prepared:
-            selfupdate.clear_migration_journal(self._paths)
-        else:
-            selfupdate.write_migration_journal(self._paths, {"completed": completed,
-                                                             "prepared": prepared})
-
-    @staticmethod
-    def _promote(prepared) -> dict:
-        """Promote a prepared transition whose git DID complete (head reached its to_head) into the
-        completed slot, carrying its durable-anchor `txid` and its (immutable, anchor-matched) pending
-        payload. The classifier's invariant guarantees no prior completed pending coexists."""
-        return {"from_head": prepared["from_head"], "to_head": prepared["to_head"],
-                "branch": prepared["branch"], "pending": prepared["pending"],
-                "txid": prepared.get("txid")}

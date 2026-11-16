@@ -181,7 +181,7 @@ DYNAMIC = {
         "`nxt` is set per refusal kind (where it stays empty the details say nothing to run here); "
         "the restart instructions always carry their commands",
         ("tests/install/test_selfupdate.py::test_a_detached_checkout_is_refused_with_the_switch_back",
-         "tests/install/test_selfupdate_migration.py::test_service_maps_cleanup_failure_to_partial")),
+         "tests/install/test_selfupdate_apply.py::test_service_maps_cleanup_failure_to_partial")),
     ("lhpc/core/service_selfupdate.py", "self_update_trigger"): (1,
         "`_identity_remedy` returns the remedy commands, or the refusal's details say nothing to run",
         ("tests/install/test_selfupdate_service.py::test_trigger_preflight_passes_or_refuses_without_a_request_marker",)),

@@ -873,7 +873,9 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
     service_path_result = ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE,
         details=(instr["note"], "Restart the web console to load the new version:",
-                 *("  " + c for c in instr["commands"]), "2 default(s) migrated to the new defaults."),
+                 *("  " + c for c in instr["commands"]),
+                 "Firewall integration will be refreshed automatically when the "
+                 "console restarts under the new version."),
         next_commands=list(instr["commands"]),
         data={"restart": instr, "deps_changed": True})
     monkeypatch.setattr(ControllerService, "self_update_apply",
@@ -886,7 +888,7 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
     assert "Dependencies changed" not in text, text
     assert res.next_commands == [], text
     assert res.summary == "Update applied.", text
-    assert "2 default(s) migrated" in text                     # real information stays
+    assert "Firewall integration will be refreshed" in text     # real information stays
     if web == "running":
         assert "The web console was restarted on the new version." in res.details
     else:

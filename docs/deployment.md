@@ -94,8 +94,6 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   message names — a stray symlink in the chain, wrong ownership/mode (`chmod 700`, `chown` to
   yourself), a detached/renamed branch (`git -C … checkout main`), or a changed `origin` — then
   re-check.
-- **Failed / interrupted update**: inspect `state/selfupdate-migrate.json` as the message directs.
-  Nothing is applied on a blocked or recovery-required journal.
 - **Stuck one-click request** (`update recovery required` in the console): run
   `lhpc self-update --recover-request`. It clears a never-claimed request outright, and an
   in-flight record only after proving the helper process has stopped (a missing/unreadable

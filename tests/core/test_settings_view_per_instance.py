@@ -42,13 +42,3 @@ def test_an_instances_view_says_whether_that_instance_runs(tmp_path, monkeypatch
             st.run_state = RunState.RUNNING if ss.stack.id == "kiss" else RunState.STOPPED
     svc.build_snapshot = lambda fresh=False: snap
     assert (svc.config_view("kiss", rid="r1")["running"], svc.config_view("kiss", rid="r2")["running"]) == (True, False)
-
-
-def test_a_configured_box_without_a_radio_for_the_stack_has_no_template_candidate(tmp_path):
-    # G1-K8F-S4-D3 B1: r1 + r2 on 433 and an 868-only stack (meshcore) with a default-equal value in its global file:
-    # no migration candidate (the global file is the no-list template). red on a3dce2ea: ('meshcore', 'use_gps')
-    from lhpc.core import config as _cfg
-    svc, _ins = _box(tmp_path)
-    _cfg.save_stack_config(svc._paths, "meshcore", {"use_gps": "on"})
-    svc._invalidate_config()
-    assert [c["key"] for c in svc._migration_candidates() if c["stack"] == "meshcore"] == []

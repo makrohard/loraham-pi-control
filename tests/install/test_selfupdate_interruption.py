@@ -1,16 +1,13 @@
-"""A self-update interrupted at every durable write is recovered by the next apply.
+"""A self-update interrupted at every durable write is recovered by the next apply, and no update
+changes saved configuration.
 
 The self-update transaction (`service_selfupdate._self_update_locked`, `selfupdate.py`) takes the
-controller admission marker, binds the migration intent to a git anchor
-(`refs/lhpc/selfupdate/<txid>`) and the journal `state/selfupdate-migrate.json` BEFORE the
-checkout moves, advances the checkout, refreshes the status cache, promotes the journal, migrates
-the config value that still equals the old default, clears the journal, deletes the anchor and
-marks the firewall post-update check. The journal, cache and config go through `runtime_fs`;
-the anchor writes and the advance are git calls, gated as one point each. Each case fails ONE
-write (disk full, I/O error, Ctrl-C) during an update whose new manifest changes a default the
-saved config still holds, and proves: what is left is never a journal the gate blocks on
-(`classify_journal`), and the next apply — the recovery path — ends at the new commit with the
-value migrated, no journal and no anchor.
+controller admission marker, marks the firewall and proxy follow-ups BEFORE the checkout moves,
+advances the checkout and refreshes the status cache. The markers and the cache go through
+`runtime_fs`; the advance is a git call, gated as one point. Each case fails ONE write (disk full,
+I/O error, Ctrl-C) during an update whose new manifest changes a default the saved config holds,
+and proves: the next apply — the recovery path — ends at the new commit with the saved value as
+saved, no migration journal and no git anchor.
 """
 from __future__ import annotations
 
@@ -36,22 +33,14 @@ MANIFEST = ('[[stack]]\nid="s"\nname="S"\nmain="c"\n'
 # The checkout's advance (`merge --ff-only`) is a git call among many reads: routed through its
 # own name so the harness gates it, and only it, as one point.
 GIT = types.SimpleNamespace(__name__="git", advance=None)
-RAW = [(selfupdate, "create_anchor", lambda e: False),   # reports False, never raises
-       (selfupdate, "delete_anchor", lambda e: None),    # best effort, never raises
-       (GIT, "advance")]
+RAW = [(GIT, "advance")]
 # The apply's durable writes, in order.
 POINTS = [
     ("write_marker", "state/locks/controller-task-admission.owner"),
     ("write_marker", "state/firewall-postupdate.pending"),   # the firewall follow-up, before any move
     ("write_marker", "state/webserver-render.pending"),      # the proxies' re-render, before any move
-    ("selfupdate.create_anchor", "*"),                       # the git anchor of the intent
-    ("write_marker", "state/selfupdate-migrate.json"),       # prepared
     ("git.advance", "merge"),                                # the checkout moves
     ("write_marker", "state/selfupdate.json"),               # status cache
-    ("write_marker", "state/selfupdate-migrate.json"),       # completed
-    ("atomic_write", "config/stacks/s@r1.toml"),             # the migration (K6: s@r1's own file)
-    ("unlink", "state/selfupdate-migrate.json"),
-    ("selfupdate.delete_anchor", "*"),
     ("unlink", "state/locks/controller-task-admission.owner"),
 ]
 
@@ -59,7 +48,7 @@ POINTS = [
 @pytest.fixture
 def box(tmp_path, monkeypatch):
     """A self-hosted checkout at a manifest whose `ropt` defaults to OLD, the saved config holding
-    OLD, and an upstream commit changing that default to NEW. Returns (service factory, work)."""
+    OLD, and an upstream commit changing that default to NEW. Returns (service factory, work, rt)."""
     _origin, work, up = gitrepo.repos(tmp_path)
     monkeypatch.setattr(selfupdate, "repo_root", lambda: work)
     (work / "manifest.toml").write_text(MANIFEST.format("OLD"))
@@ -94,6 +83,48 @@ def test_the_apply_writes_exactly_the_pinned_points(box):
     assert [(w, "merge" if w == "git.advance" else p) for w, p in log] == POINTS
 
 
+def _kept_as_saved(svc, rt, work):
+    """The saved `ropt` is still OLD, though the new manifest's default is NEW; no migration journal
+    and no git anchor were written."""
+    from stores_fixture import inst_of
+    assert cfgmod.load_stack_config(svc()._paths, "s", inst=inst_of(svc(), "s"))["ropt"] == "OLD"
+    assert svc().stack_config("s")["ropt"] == "OLD"
+    assert not (rt / "state" / "selfupdate-migrate.json").exists()
+    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
+
+
+def test_an_update_keeps_a_value_saved_at_the_old_default(box):
+    """The update moves the checkout to a manifest whose default changed; the value saved equal to
+    the old default stays saved, and the stack keeps it (no config default migration)."""
+    svc, work, rt = box
+    res = svc().self_update_apply()
+    assert res.ok, res.summary
+    assert gitrepo.git(work, "rev-parse", "HEAD") == gitrepo.git(work, "rev-parse", "origin/main")
+    assert not any("migrat" in d for d in res.details), res.details
+    _kept_as_saved(svc, rt, work)
+
+
+@pytest.mark.parametrize("journal", ["{not json", '{"completed": null, "prepared": null, "v": 3}'])
+def test_a_left_journal_and_anchor_are_not_read(box, journal):
+    """An older release's migration journal (damaged, or well formed) and its git anchor are left as
+    they are: the check and the apply neither block on them nor change them."""
+    svc, work, rt = box
+    (rt / "state").mkdir(parents=True, exist_ok=True)
+    left = rt / "state" / "selfupdate-migrate.json"
+    left.write_text(journal)
+    head = gitrepo.git(work, "rev-parse", "HEAD")
+    gitrepo.git(work, "update-ref", "refs/lhpc/selfupdate/" + "a" * 32, head)
+    assert svc().self_update_check().ok
+    res = svc().self_update_apply()
+    assert res.ok, res.summary
+    assert gitrepo.git(work, "rev-parse", "HEAD") == gitrepo.git(work, "rev-parse", "origin/main")
+    assert left.read_text() == journal
+    assert gitrepo.git(work, "for-each-ref", "--format=%(refname)", "refs/lhpc") == (
+        "refs/lhpc/selfupdate/" + "a" * 32)
+    from stores_fixture import inst_of
+    assert cfgmod.load_stack_config(svc()._paths, "s", inst=inst_of(svc(), "s"))["ropt"] == "OLD"
+
+
 CASES = [pytest.param(k, f, id=f"{w}:{p}-{f}")
          for k, (w, p) in enumerate(POINTS) for f in sorted(FAILURES)]
 
@@ -104,16 +135,11 @@ def test_an_interrupted_apply_is_finished_by_the_next(box, point, failure):
     first = svc()
     run_interrupted(rt, first.self_update_apply, fail_at=point, exc=FAILURES[failure], raw=RAW)
 
-    # (a) never a journal the gate blocks on
-    assert selfupdate.classify_journal(first._paths, first._system)[0] != "blocked"
-    # (b)+(c) the next apply recovers and finishes: new commit, value migrated, no journal/anchor
+    # the next apply recovers and finishes: new commit, the saved value as saved, no journal/anchor
     nxt = svc()
     assert nxt.self_update_apply().ok
     assert gitrepo.git(work, "rev-parse", "HEAD") == gitrepo.git(work, "rev-parse", "origin/main")
-    assert "ropt" not in cfgmod.load_stack_config(nxt._paths, "s")
-    assert svc().stack_config("s")["ropt"] == "NEW"              # follows the new default
-    assert selfupdate.read_migration_journal(nxt._paths) == (None, False)
-    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
+    _kept_as_saved(svc, rt, work)
     assert not (rt / "state" / "locks" / "controller-task-admission.owner").exists()
     # (d) the checkout moved, so its firewall follow-up is recorded for the next console start
     assert (rt / "state" / "firewall-postupdate.pending").exists()
@@ -165,8 +191,7 @@ def test_a_firewall_marker_that_cannot_be_written_stops_the_update_before_it_mov
     assert "state/firewall-postupdate.pending" in res.details[0]     # the cause names its marker
     assert res.next_commands == ["lhpc self-update --apply"]
     assert gitrepo.git(work, "rev-parse", "HEAD") == head
-    assert selfupdate.read_migration_journal(svc()._paths) == (None, False)
-    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
+    _kept_as_saved(svc, rt, work)
 
 
 def test_a_render_marker_that_cannot_be_written_stops_the_update_before_it_moves(
@@ -187,5 +212,4 @@ def test_a_render_marker_that_cannot_be_written_stops_the_update_before_it_moves
     assert not res.ok and res.data.get("fw_mark_failed")   # the one follow-up branch
     assert "state/webserver-render.pending" in res.details[0]
     assert gitrepo.git(work, "rev-parse", "HEAD") == head
-    assert selfupdate.read_migration_journal(svc()._paths) == (None, False)
-    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
+    _kept_as_saved(svc, rt, work)
