@@ -1,5 +1,4 @@
 """testlab/hardware/cliforms.py: every lhpc call of a dry output, parsed by this head's own argparse."""
-import os
 import pathlib
 import subprocess
 import sys
@@ -14,7 +13,7 @@ def verdicts(tmp_path, lines):
     f = tmp_path / "x.dry.txt"
     f.write_text("".join(f"  [dry] Z > f{i}.txt: {line}\n" for i, line in enumerate(lines)))
     p = subprocess.run([sys.executable, "-I", str(KIT / "cliforms.py"), str(f)], capture_output=True, text=True,
-                       env={**os.environ, "PYTHONPATH": str(REPO)}, cwd=REPO, check=True, timeout=60)
+                       cwd=REPO, check=True, timeout=60)
     return [row.split("\t")[4] for row in p.stdout.splitlines()[1:]]
 
 

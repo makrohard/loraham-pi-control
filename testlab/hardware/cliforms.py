@@ -1,6 +1,6 @@
 """Every lhpc call of the hardware runners, parsed by the CLI's own argparse at a head.
 
-usage: PYTHONPATH=<checkout at the head> python -I cliforms.py <file>...   (TSV on stdout)
+usage: python -I testlab/hardware/cliforms.py <file>...   (TSV on stdout; the parser is this checkout's)
 A `<name>.dry.txt` file (a runner's dry output, every remote command printed with its variables expanded) is read from
 its `[dry] <host> > <file>: <command>` lines; any other file (a .md checklist) from its code blocks. A call is
 `python -m lhpc ARGS` / `.../bin/lhpc ARGS` (a scratch runtime at the topic head: CHECKED) or a bare `lhpc ARGS`
@@ -10,10 +10,12 @@ a `$` left unexpanded: read by hand); INSTALLED. Reads its inputs only.
 """
 import contextlib
 import io
+import pathlib
 import re
 import shlex
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))   # this checkout's lhpc: `python -I` drops PYTHONPATH
 from lhpc.adapters.cli.main import build_parser
 
 DRY = re.compile(r"^\s*\[dry\] ([^:]+): (.*)$")

@@ -34,8 +34,11 @@ class Dry:
         return [fields(line) for line in self.lines if line.startswith(f"{kind} |")]
 
     def report(self):
-        """{(row id, direction): result} of the REPORT lines (fields: id stack box band peer direction seen power result)."""
-        return {(r[0], r[5]): r[8] for r in self.rows("REPORT")}
+        """{(row id, direction): result} of the REPORT lines (fields: id stack box band peer direction seen power result);
+        a row and direction reported twice is an error, never a silent overwrite."""
+        rows = [((r[0], r[5]), r[8]) for r in self.rows("REPORT")]
+        assert len(rows) == len(dict(rows)), f"a row and direction reported twice: {rows}"
+        return dict(rows)
 
 
 def table_rows(script=RUNNER):
@@ -94,7 +97,7 @@ TX_CALL = re.compile(r"\btx \S+ \d+ \S+ -- ")
 SEND = re.compile(r"\bform (?:tx_text|meshcom_send|mt_send|mc_send|rt_send)\b|\bXIN\b.*\$\{?(?:MCSEND_PY|GW_PY)\b"
                   r"|\b(?:meshcom|mt|mc)-send\b|\brns-exchange\b|\btmux send-keys\b|\bcurl\b.*announce")
 CASE_PATTERNS = re.compile(r"^\s*case \S+ in ")
-QUOTED_ASSIGNMENT = re.compile(r"""^\s*[A-Za-z_]\w*=(['"]).*\1\s*$""")
+QUOTED_ASSIGNMENT = re.compile(r"""^\s*[A-Za-z_]\w*=(['"])(?:(?!\$\().)*\1\s*$""")   # no command substitution
 
 
 def lane_rows(lane):
@@ -283,6 +286,12 @@ def test_a_send_moved_out_of_its_tx_fails_the_dispatch_check_and_the_lint(dry, r
     assert uncovered(d.lines) or d.rc == 2
 
 
+@pytest.mark.parametrize("line,hit", [("PAT='tmux send-keys'", False), ("c=\"$(tmux send-keys -t x n1)\"", True),
+                                      ("    tx H:H433 1 n1 -- must H f.txt \"tmux send-keys -t x n1\"", False)])
+def test_the_lint_reads_a_quoted_pattern_as_data_but_a_command_substitution_as_a_send(line, hit):
+    assert bool(bypasses(line)) is hit
+
+
 def test_no_send_form_is_used_outside_a_tx_call():
     assert bypasses(RUNNER.read_text()) == []
 
@@ -299,7 +308,7 @@ def test_every_lhpc_call_of_the_dry_run_parses_at_this_head(base, tmp_path):
     out.write_text(base.out)
     repo = KIT.parents[1]
     p = subprocess.run([sys.executable, "-I", str(KIT / "cliforms.py"), str(out)], capture_output=True, text=True,
-                       env={**os.environ, "PYTHONPATH": str(repo)}, cwd=repo, check=True, timeout=120)
+                       cwd=repo, check=True, timeout=120)
     rows = [line.split("\t") for line in p.stdout.splitlines()[1:]]
     known = [r for r in rows if any(c.match(r[5]) for c in KNOWN_ABSENT.values())]
     assert rows and [r for r in rows if r[4] != "OK" and r not in known] == []
