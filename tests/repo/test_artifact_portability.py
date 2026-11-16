@@ -10,13 +10,13 @@ So the rule is checked against what RELEASED controllers actually declare, read 
 """
 from __future__ import annotations
 
-import os
 import pathlib
 import subprocess
 import tomllib
 
 import pytest
 
+import ci_env
 import repo_paths
 from lhpc.core.manifest import load_manifest
 
@@ -81,7 +81,7 @@ def released_tags():
     missing there, the fetch broke and this must say so."""
     tags = _released_tags()
     if not tags:
-        if os.environ.get("CI"):
+        if ci_env.under_ci():
             pytest.fail("no release tags in this checkout — CI must fetch them for this guard "
                         "(actions/checkout needs fetch-depth: 0), not skip it")
         pytest.skip("no release tags in this checkout")

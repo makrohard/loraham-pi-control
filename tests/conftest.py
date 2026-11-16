@@ -46,9 +46,10 @@ def pytest_runtest_setup(item):
     # reason. Under CI, which must run from a git checkout, the same absence is a broken checkout
     # and FAILS. Per test, at setup — a failure raised in a collection hook would abort the session.
     if item.get_closest_marker("needs_git_checkout"):
+        import ci_env
         import repo_paths
         if not (repo_paths.REPO / ".git").exists():
-            if os.environ.get("CI"):
+            if ci_env.under_ci():
                 pytest.fail("no .git in this checkout — CI must run from a git checkout "
                             "(needs_git_checkout)", pytrace=False)
             pytest.skip("not a git checkout (needs_git_checkout)")

@@ -8,13 +8,13 @@ live with the other repository invariants (the released-tag dependence is the on
 """
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import tomllib
 
 import pytest
 
+import ci_env
 import repo_paths
 
 REL = "lhpc/data/manifest.example.toml"
@@ -85,7 +85,7 @@ def test_released_manifests_still_parse():
     if not tags:
         # CI fetches the full history and tags for exactly this kind of guard; a missing tag
         # there is a broken fetch, not a reason to skip (same rule as test_artifact_portability).
-        if os.environ.get("CI"):
+        if ci_env.under_ci():
             pytest.fail("no release tags in this checkout — CI must fetch them for this guard "
                         "(actions/checkout needs fetch-depth: 0), not skip it")
         pytest.skip("no release tags in this checkout")
