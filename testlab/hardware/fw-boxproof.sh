@@ -18,7 +18,8 @@
 #  started); the lab identity (undo: --reset); the proxy of meshtastic@r2 (undo: --mode local + webserver apply); the firewall
 #  applies (root, /etc/lhpc + nft; not undone: the state at FWSHA; a return to FWFROM's rules = reset the checkout, then the
 #  same apply sequence); one planned reboot (FW7). A STOP leaves the box as it is until the operator decides.
-# Exit: 0 done, 1 a FAIL row, 2 a STOP, 3 a STOP whose safety stop failed (meshtastic@r2 may still be running).
+# Exit: 0 done, 1 a FAIL row, 2 a STOP, 130 a signal, 3 any of them when the safety stop of a started stack failed (it may
+#  still be running).
 # Evidence: $EVD_ROOT/fw-boxproof-<UTC time> (run.log, REPORT.md, UNDO.txt, SHA256SUMS).
 set -uo pipefail
 MODE=${1:-dry}; case "$MODE" in dry|live) ;; *) echo "usage: fw-boxproof.sh dry|live"; exit 2;; esac
@@ -71,12 +72,19 @@ LITS=("re-apply the firewall before you reboot" "firewall-apply.sh" "Firewall: A
 LOG=/dev/null; [ "$MODE" = live ] && { mkdir -p "$EVD" || exit 2; LOG=$EVD/run.log; }
 say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 stop() { say "STOP: $*"; [ "$MODE" = live ] && echo "STOP: $*" >> "$EVD/STOP.txt"; exit 2; }
-# safestop <tag> <why>: stop meshtastic@r2 (its guarded stop, checked, one retry), then STOP. A stop that fails twice is its
-#  own STOP, rc 3: the stack may still be running and its TX power is unverified.
-safestop() { local i; for i in 1 2; do capture "$1-stop-$i.txt" sshx n "$(gstop meshtastic@r2)"   # any rc but 0 (ssh 255 too) failed
-    [ "$XRC" = 0 ] && stop "$2 (meshtastic@r2 stopped)"; done
-  say "STOP: $2; the stop failed twice: meshtastic@r2 may still be running, TX power unverified"
-  [ "$MODE" = live ] && echo "UNSAFE: $2; meshtastic@r2 may still be running, TX power unverified" >> "$EVD/STOP.txt"; exit 3; }
+# The safety stop: a stack the proof starts is marked (started) before its start and unmarked once its stop is checked
+#  (stopped). On ANY exit of a live run (a STOP, a FAIL, the end, a signal) the EXIT trap stops every marked stack: its guarded
+#  stop form, through the one redactor, checked (any rc but 0, ssh 255 too, failed), one retry. A stop that fails twice
+#  makes the exit 3: the stack may still be running and its TX power is unverified.
+STARTED=()
+started() { STARTED+=("$1"); }
+stopped() { local k keep=(); for k in "${STARTED[@]}"; do [ "$k" = "$1" ] || keep+=("$k"); done; STARTED=("${keep[@]}"); }
+onexit() { local rc=$? k i; trap - EXIT; [ "$MODE" = live ] || exit "$rc"
+  for k in "${STARTED[@]}"; do
+    for i in 1 2; do capture "SAFESTOP-$k-$i.txt" sshx n "$(gstop "$k")"; [ "$XRC" = 0 ] && { say "safety stop: $k stopped"; continue 2; }; done
+    say "UNSAFE: $k may still be running, TX power unverified"; echo "UNSAFE: $k may still be running, TX power unverified" >> "$EVD/STOP.txt"; rc=3
+  done; exit "$rc"; }
+trap onexit EXIT; trap 'exit 130' INT TERM HUP
 fail() { say "FAIL: $*"; [ "$MODE" = live ] && echo "$*" >> "$EVD/FAILED.txt"; }
 ok() { say "ok: $*"; }
 report() { [ "$MODE" = live ] && echo "| $* |" >> "$EVD/REPORT.md"; say "REPORT | $*"; }
@@ -104,11 +112,11 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   [ "$MODE" = dry ] || { case "$mp" in ''|*[!0-9]*) stop "$1: no max_power value";; esac; [ "$mp" -le 17 ] || stop "$1: max_power $mp above 17: no start"; }
   must "$1-ftx0.txt" "$FTX"; local n0 n1; n0=$(body "$1-ftx0.txt" | tail -n 1)
   [ "$MODE" = dry ] || [[ "$n0" =~ ^[0-9]+$ ]] || stop "$1: no count of the Final Tx power lines before the start"
-  undo "$(gstop meshtastic@r2)"; must "$1-start.txt" "$(gstart meshtastic@r2)"
+  undo "$(gstop meshtastic@r2)"; started meshtastic@r2; must "$1-start.txt" "$(gstart meshtastic@r2)"
   must "$1-txpower.txt" "for i in \$(seq 1 30); do [ \"\$($FTX)\" -gt ${n0:-0} ] && break; sleep 2; done; echo COUNT \$($FTX); grep -a 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log | tail -n 1"
   n1=$(body "$1-txpower.txt" | sed -n 's/^COUNT //p')   # this start wrote a new line, or the last one is an older start's
-  [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || safestop "$1" "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"
-  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) safestop "$1" "$1: no power value in this start's Final Tx power line";; esac; [ "$fp" -le 17 ] || safestop "$1" "$1: Final Tx power $fp above 17"; }
+  [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || stop "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"
+  local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no power value in this start's Final Tx power line";; esac; [ "$fp" -le 17 ] || stop "$1: Final Tx power $fp above 17"; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence
@@ -161,10 +169,10 @@ fwstate F5-fw.txt
 
 echo "== FW6 (claim 1) the unchanged radio's Meshtastic starts; the changed radio's is refused naming the apply"
 mtstart F6-r2; report "1a | meshtastic@r2 (unchanged radio) starts after the radio change, no apply | PASS"
-X F6-r4.txt "$(gstart meshtastic@r4)"; r4rc=$XRC
-if [ "$MODE" = dry ] || { [ "$r4rc" != 0 ] && grep -qF "firewall-apply.sh" "$EVD/F6-r4.txt"; }; then report "1b | meshtastic@r4 (changed radio) refused, naming the apply | PASS"
-else fail "FW6: meshtastic@r4 rc $r4rc, the refusal does not name firewall-apply.sh"; report "1b | meshtastic@r4 refused naming the apply | FAIL"; X F6-r4-stop.txt "$(gstop meshtastic@r4)"; fi
-must F6-stop.txt "$(gstop meshtastic@r2)"
+started meshtastic@r4; X F6-r4.txt "$(gstart meshtastic@r4)"; r4rc=$XRC
+if [ "$MODE" = dry ] || { [ "$r4rc" != 0 ] && grep -qF "firewall-apply.sh" "$EVD/F6-r4.txt"; }; then report "1b | meshtastic@r4 (changed radio) refused, naming the apply | PASS"; stopped meshtastic@r4
+else fail "FW6: meshtastic@r4 rc $r4rc, the refusal does not name firewall-apply.sh"; report "1b | meshtastic@r4 refused naming the apply | FAIL"; X F6-r4-stop.txt "$(gstop meshtastic@r4)"; [ "$XRC" != 0 ] || stopped meshtastic@r4; fi
+must F6-stop.txt "$(gstop meshtastic@r2)"; stopped meshtastic@r2
 
 echo "== FW7 (claim 1) the console stays remote over a reboot (planned)"
 undo "none: a planned reboot"; XIN F7-reboot.txt "$PW" "sudo -S -p '' systemd-run --on-active=3 systemctl reboot"; [ "$XRC" = 0 ] || stop "FW7: the reboot was not scheduled (rc $XRC)"; say "reboot scheduled (3 s)"
@@ -192,7 +200,7 @@ else fail "FW9: the page on :$PORT gives LAN code $LANCODE (or a change is pendi
 
 echo "== FE undo (this run's changes; the firewall stays at FWSHA's apply, the checkout at FWSHA)"
 must FE-proxy.txt "$LH webserver proxy meshtastic@r2 --mode local < /dev/null && $LH webserver apply < /dev/null"
-must FE-stop.txt "$(gstop meshtastic@r2)"
+must FE-stop.txt "$(gstop meshtastic@r2)"; stopped meshtastic@r2
 must FE-reset.txt "$LH config meshtastic@r2 --reset --yes < /dev/null"; must FE-mtid.txt "$LH config meshtastic@r2 list"
 [ "$MODE" = dry ] || { grep -qE 'node_name \* = \(empty\)' "$EVD/FE-mtid.txt" && grep -qE 'node_short \* = \(empty\)' "$EVD/FE-mtid.txt"; } || fail "FE: meshtastic@r2's identity is not empty after the reset"
 for k in $KEYS; do must "FE-start-$k.txt" "$(gstart "$k")"; done

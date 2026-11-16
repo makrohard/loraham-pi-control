@@ -62,37 +62,57 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
 
 
 CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
-  *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';;
-  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n';;
-  *) printf 'ok\\n';; esac > "$EVD/$f"; }}
+  *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
+  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
+  *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
   r={stop1}; [ "$n" = 1 ] || r={stop2}; echo "stop rc $r"; return "$r"; }}
-mtstart F6-r2; echo RC=$?"""
+{body}; echo RC=$?"""
+
+
+def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2"):
+    return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
+                                         body=body))
 
 
 @pytest.mark.parametrize("count,started", [("4", True), ("3", False), ("", False)])
 def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, started):
     # Before the start the log holds 3 Final Tx power lines; the start must add one, else the last line is an older
     # start's (stale) and the run stops, the stack stopped first.
-    p, evd = proof(tmp_path, CANNED.format(count=count, power=10, stop1=0, stop2=0))
+    p, _ = canned(tmp_path, count=count)
     if started:
         assert "RC=0" in p.stdout and "Final Tx power 10 dBm" in p.stdout, p.stderr
     else:
-        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout and "(meshtastic@r2 stopped)" in p.stdout
-        assert (evd / "F6-r2-stop-1.txt").exists() and "RC=" not in p.stdout
+        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout
+        assert "safety stop: meshtastic@r2 stopped" in p.stdout and "RC=" not in p.stdout
 
 
-@pytest.mark.parametrize("why,count,power", [("stale", "3", "10"), ("too high", "4", "20"), ("no power value", "4", "x")])
+CAUSES = {"stale": {"count": "3"}, "too high": {"power": "20"}, "no power value": {"power": "x"},
+          "the start failed": {"start": "1"}, "the read failed": {"read": "1"}, "the read had no ssh": {"read": "255"}}
+
+
+@pytest.mark.parametrize("cause", sorted(CAUSES))
 @pytest.mark.parametrize("stop1,stop2,rc", [("0", "0", 2), ("1", "0", 2), ("1", "1", 3), ("255", "0", 2),
                                             ("255", "255", 3)])   # 255: ssh had no connection, also a failed stop
-def test_a_safety_stop_is_checked_retried_once_and_a_failed_one_named(tmp_path, why, count, power, stop1, stop2, rc):
-    # The stop before a power STOP is checked: one retry; a stop that fails twice is its own STOP (rc 3) naming the unsafe
-    # state, never the plain STOP.
-    p, evd = proof(tmp_path, CANNED.format(count=count, power=power, stop1=stop1, stop2=stop2))
-    assert p.returncode == rc and "RC=" not in p.stdout
+def test_every_stop_after_a_start_stops_the_stack_first(tmp_path, cause, stop1, stop2, rc):
+    # Once meshtastic@r2 was started, any STOP (a power check, a failed start or read, ssh 255) exits through the trap,
+    # which stops it: checked, one retry; a stop that fails twice makes the exit 3 and names the unsafe state.
+    p, evd = canned(tmp_path, stop1=stop1, stop2=stop2, **CAUSES[cause])
+    assert p.returncode == rc and "RC=" not in p.stdout, p.stdout + p.stderr
+    stops = sorted(f.name for f in evd.glob("SAFESTOP-*.txt"))
+    assert stops == ["SAFESTOP-meshtastic@r2-1.txt"] + (["SAFESTOP-meshtastic@r2-2.txt"] if stop1 != "0" else [])
     if rc == 3:
         assert "may still be running, TX power unverified" in p.stdout and "UNSAFE" in (evd / "STOP.txt").read_text()
-        assert (evd / "F6-r2-stop-2.txt").exists()
     else:
-        assert "(meshtastic@r2 stopped)" in p.stdout
-        assert (evd / "F6-r2-stop-2.txt").exists() is (stop1 != "0")    # a retry only after a failed first stop
+        assert "safety stop: meshtastic@r2 stopped" in p.stdout
+
+
+def test_a_signal_after_a_start_stops_the_stack(tmp_path):
+    p, _ = canned(tmp_path, body="started meshtastic@r2; kill -TERM $$; echo AFTER")   # bash runs the trap before the next command
+    assert p.returncode == 130 and "AFTER" not in p.stdout and "safety stop: meshtastic@r2 stopped" in p.stdout
+
+
+def test_a_stack_stopped_by_its_row_is_not_stopped_again(tmp_path):
+    p, evd = canned(tmp_path, body="started meshtastic@r2; stopped meshtastic@r2; stop 'a later STOP'")
+    assert p.returncode == 2 and not list(evd.glob("SAFESTOP-*.txt"))
+
