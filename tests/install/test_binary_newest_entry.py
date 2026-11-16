@@ -218,3 +218,16 @@ def test_a_clean_checkout_at_the_pin_is_moved_to_the_entrys_commit_under_the_loc
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "STOP-HERE" in res.summary, res.summary
     assert seen == [("meshcom-qemu", True, True, "f" * 40)]
+
+
+def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_receipt):
+    """U6: a binary-install transaction in an unreadable state makes the receipt unsafe; the lane cannot be
+    judged, so the check says so instead of answering from the source checkout."""
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "2026-11-09T17:54:53Z")
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    jp = bi.journal_path(svc._paths)
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_text("{ not json")
+    assert svc.binary_receipt_state("daemon")[0] == "unsafe"
+    assert _checked(svc) == "could not check"                     # RED before: not a lane verdict

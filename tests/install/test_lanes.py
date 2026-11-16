@@ -1206,3 +1206,130 @@ def test_an_unread_ancestry_of_the_release_fallback_reads_could_not_check(box, c
     box.fail_ancestry_to = ""
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[1]
+
+
+# ---- U6: one lane verdict per source (current / update available / update LHPC first / could not check) ----
+
+def _versions_line(box, capsys, cid="app"):
+    """The component's line of `lhpc status --versions` (local only)."""
+    capsys.readouterr()
+    box.cli("status", "--versions")
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.split()[:1] == [cid]]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def _check_detail(box, capsys, cid="app"):
+    """The component's detail of a public `lhpc source-check s`, and the whole output."""
+    capsys.readouterr()
+    box.cli("source-check", "s")
+    out = capsys.readouterr().out
+    lines = [ln.split(": ", 1)[1] for ln in out.splitlines() if ln.strip().startswith(f"{cid}: ")]
+    assert len(lines) == 1, out
+    return lines[0], out
+
+
+def _install_pill(box, web):
+    """The Installed-version pill of stack s, from the rendered stack body."""
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    doc = htmlq.parse(client.get("/stacks/s/body").get_data(as_text=True))
+    pills = doc.within(doc.by_id("stack-install-s")).find("span", class_="ver")
+    return " ".join(p.text.strip() for p in pills)
+
+
+def test_a_dev_source_at_its_tip_reads_current_in_status_and_check(box, capsys):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2]                    # the tip, not the pin
+    detail = _check_detail(box, capsys)[0]
+    line = _versions_line(box, capsys)
+    assert "differs" not in line and "current" in line.split(), line   # RED before: status said "differs"
+    assert detail == "current"
+
+
+def test_a_stable_source_at_its_resolved_tag_reads_current_in_status_and_check(box, capsys):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+    detail = _check_detail(box, capsys)[0]
+    line = _versions_line(box, capsys)
+    assert "differs" not in line and "current" in line.split(), line
+    assert detail == "current"
+
+
+def test_control_a_pinned_source_at_its_pin_reads_current_in_both(box, capsys):
+    assert box.cli("install", "s", "--yes") == 0
+    assert box.head() == box.c[0]
+    assert _check_detail(box, capsys)[0] == "current"
+    assert "current" in _versions_line(box, capsys).split()
+
+
+def _fail_branch_probe(monkeypatch):
+    """`git ls-remote <remote> main` (the dev and pinned probe) fails; the tag reads of the stable lane do not."""
+    inner = backends.RealCommandRunner.run
+
+    def run(self, argv, timeout, cwd=None, env=None):
+        if argv[:2] == ["git", "ls-remote"] and argv[-1] == "main":
+            return CommandResult(128, "", "fatal: unable to access the remote")
+        return inner(self, argv, timeout, cwd=cwd, env=env)
+    monkeypatch.setattr(backends.RealCommandRunner, "run", run)
+
+
+def test_a_probe_that_fails_reads_could_not_check(box, capsys, web, monkeypatch):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    _fail_branch_probe(monkeypatch)
+    assert _check_detail(box, capsys)[0] == "could not check"     # RED before: "error"
+    assert _install_pill(box, web) == "could not check"           # RED before: "check failed"
+
+
+def test_an_update_beside_a_failed_check_leads_the_summary(box, capsys, monkeypatch):
+    box.use(GH, lib=True)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.cli("update", "lib", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])                 # lib (stable) has a verified update
+    _fail_branch_probe(monkeypatch)                  # app (dev) cannot be checked
+    detail, out = _check_detail(box, capsys, "lib")
+    summary = out.splitlines()[0]
+    # RED before: the summary led with "could not be checked" (errors first)
+    assert 0 <= summary.find("update") < summary.find("could not be checked"), summary
+    assert detail == "update available"
+
+
+def _lhpc_upstream(box, git, make_repo, monkeypatch, pin):
+    """A local LHPC checkout whose fetched upstream head ships a manifest pinning `app` at `pin`, and the
+    self-update cache naming that head (what `lhpc self-update` records after its fetch)."""
+    from lhpc.core import selfupdate
+    repo = box.rt.parent / "lhpc-checkout"
+    text = box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{pin}"')
+    head = make_repo(repo, {"lhpc/data/manifest.example.toml": text})
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: repo)
+    selfupdate.write_cache(Paths(runtime_root=box.rt),
+                           {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
+                            "upstream": {"ok": True, "upstream_head": head, "upstream_head_short": head[:9]}})
+    return head
+
+
+def test_a_pinned_source_whose_next_lhpc_pins_another_commit_reads_update_lhpc_first(box, capsys, git,
+                                                                                    make_repo, monkeypatch):
+    assert box.cli("install", "s", "--yes") == 0                 # at this LHPC's pin c1
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    assert _check_detail(box, capsys)[0] == "update LHPC first"   # RED before: "up to date"
+
+
+def test_control_the_same_pin_upstream_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[0])
+    assert _check_detail(box, capsys)[0] == "current"
+
+
+def test_an_unreadable_upstream_manifest_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
+    assert box.cli("install", "s", "--yes") == 0
+    head = _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    git(box.rt.parent / "lhpc-checkout", "rm", "-q", "lhpc/data/manifest.example.toml")
+    git(box.rt.parent / "lhpc-checkout", "commit", "-qm", "gone")
+    from lhpc.core import selfupdate
+    later = git(box.rt.parent / "lhpc-checkout", "rev-parse", "HEAD")
+    assert later != head
+    selfupdate.write_cache(Paths(runtime_root=box.rt),
+                           {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
+                            "upstream": {"ok": True, "upstream_head": later, "upstream_head_short": later[:9]}})
+    assert _check_detail(box, capsys)[0] == "current"            # no hint, never "could not check"
