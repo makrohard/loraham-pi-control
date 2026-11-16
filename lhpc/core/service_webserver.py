@@ -1135,7 +1135,7 @@ class WebserverOpsMixin:
 
         def row(port_shown, live_scope, level, label, warn_reason):
             return {"kind": "port", **_ws.raw_link(stk, comp, inst, pages), "sid": stk.id, "port": str(port_shown),   # U3 (K2)
-                    "bind": _ws.single_bind(self.listener_scopes(port, listeners)) if live_scope in ("loopback", "exposed") else "",
+                    **_ws.bind_fields(self.listener_scopes(port, listeners), live_scope in ("loopback", "exposed")),
                     "scheme": ep.scheme or "tcp", "live_scope": live_scope,
                     "exposure": {"level": level, "label": label},
                     "warn_reason": warn_reason,

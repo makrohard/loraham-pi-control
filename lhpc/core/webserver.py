@@ -203,6 +203,15 @@ def single_bind(scopes) -> str:
     return addrs.pop() if len(addrs) == 1 else ""
 
 
+def bind_fields(scopes, live: bool) -> dict:
+    """A raw row's `bind` (single_bind, of a live listener only) and `binds`: every address of a port that listens on
+    several ("0.0.0.0, 127.0.0.1", "*" named as its wildcard), so the one row with the worst verdict of them names each
+    (G2-UIU3-R3); [] for one address or none."""
+    wild = "0.0.0.0" if any(s["addr"] == "*" and s.get("family") != "ipv6" for s in scopes) else "::"
+    addrs = sorted({wild if s["addr"] == "*" else s["addr"] for s in scopes}) if live else []
+    return {"bind": single_bind(scopes) if live else "", "binds": addrs if len({s["addr"] for s in scopes}) > 1 else []}
+
+
 def raw_link(stack, comp, inst, pages) -> dict:
     """A raw-port row's label and link (U3, K2): "<stack> @rN", linked to the page of the same component on that radio,
     else to that radio's Settings; a row with no attributed instance gets no radio (none is invented, G2-B3)."""

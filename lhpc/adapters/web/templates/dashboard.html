@@ -427,6 +427,7 @@
             {% else %}
               <span class="pill pill-{{ w.exposure.level }} wsaddr" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it in this stack's Settings">{{ w.addr }} · {{ w.exposure.label }} · local only</span>
             {% endif %}
+            {% if w.binds %}<span class="muted wsbinds" title="This port listens on each of these addresses; the colour is the widest of them.">on {{ w.binds|join(', ') }}</span>{% endif %}
             {% if w.restart_required %}<span class="pill pill-warn" title="The saved allow-list is not applied yet — the running service keeps its launch-time value until restarted">restart pending</span>{% endif %}
             {% if w.logs_component %}<a class="logslink" href="{{ url_for('logs_view', target=w.logs_component) }}">logs</a>{% endif %}
       {% endmacro %}

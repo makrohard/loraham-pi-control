@@ -2779,3 +2779,25 @@ def test_observed_ports_name_only_radio_ports(tmp_path):
     from lhpc.core import instances
     stack = _svc(tmp_path).stack("kiss")
     assert [i.rid for i in instances.observed_insts(stack, {8001, 8267, 8139, 7999, "x"})] == ["r1", "r3"]
+
+
+
+_LOOP = {"family": "ipv4", "ip": "127.0.0.1", "port": 8001, "inode": 2}
+
+
+@pytest.mark.parametrize("listeners,run,pids,want", [
+    ([_public(8001), _LOOP], [], (), {"LoRaHAM KISS TNC @r1": ["on 0.0.0.0, 127.0.0.1"]}),
+    ([_public(8001)], [], (), {"LoRaHAM KISS TNC @r1": []}),                     # one address: nothing more to name
+    ([_public(8001), _LOOP], None, (101,), {"LoRaHAM KISS TNC @r1": ["on 0.0.0.0, 127.0.0.1"],
+                                            "LoRaHAM KISS TNC": []}),           # the unverified line claims no address
+], ids=["two-addresses", "one-address", "unverified"])
+def test_a_port_on_two_addresses_is_one_line_naming_both(tmp_path, monkeypatch, web, listeners, run, pids, want):
+    # G2-UIU3-R3: r1's :8001 listens on every address and on 127.0.0.1. One line with the worst verdict (public), and
+    # it names both addresses, so neither is hidden. red on c6adc66f: the line named no address
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, listeners, run=run, state="RUNNING" if pids else "STOPPED", pids=pids)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = {n: [b.text.strip() for b in box.within(line).find("span", class_="wsbinds")] for n, _h, line in lines
+           if n.startswith("LoRaHAM KISS TNC")}
+    assert got == want
+    assert _box_pill(box) == "exposed"
