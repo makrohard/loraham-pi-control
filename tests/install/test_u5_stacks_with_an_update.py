@@ -19,10 +19,14 @@ from lhpc.core.services import ControllerService
 SWEEP = (sys.executable, "-m", "lhpc", "source-check", "--json")
 
 
-def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head):
+def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head, local_toml=""):
     """What `lhpc source-check --json` prints on a box whose daemon checkout (the manifest's) is at a*40 and
-    whose remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check."""
+    whose remote answers `remote_head` (a CommandResult of `git ls-remote`), through the real source check;
+    `local_toml` is the box's runtime-local config."""
     paths, cmds = Paths(runtime_root=tmp_path / "box"), {}
+    if local_toml:
+        (tmp_path / "box" / "config").mkdir(parents=True)
+        (tmp_path / "box" / "config" / "local.toml").write_text(local_toml)
     box = ControllerService(system=FakeSystem(commands=cmds).system, paths=paths)
     spec = next(c for s in box.stacks() for c in s.components if c.id == "loraham-daemon").source
     src = paths.resolve_source(spec.path)
@@ -95,6 +99,22 @@ def test_a_stack_whose_check_failed_is_named_and_the_update_stands(op_svc, monke
     res = svc.self_update_apply_operator()
     assert res.ok and res.summary == "Update applied.", res
     assert [d for d in res.details if sid in d] == [f"Could not check every source of: {sid}."], res.details
+
+
+def test_an_installed_source_with_an_invalid_remote_is_named_and_uninstalled_ones_are_not(
+        op_svc, monkeypatch, tmp_path, capsys):
+    # The probe answers `unknown` for the installed checkout (the http:// override is refused before any git
+    # call) just as for every source never installed; only the installed one could not be checked.
+    box, sweep = _cli_sweep(tmp_path, monkeypatch, capsys, CommandResult(0, "b" * 40 + "\trefs/heads/main\n", ""),
+                            local_toml='[remotes]\nloraham-daemon = "http://insecure.example/LoRaHAM_Daemon.git"\n')
+    sid = box.stack_of("loraham-daemon")
+    data = json.loads(sweep.stdout)["data"]
+    assert data["stacks_unchecked"] == [sid] and data["counts"]["error"] == 0, sweep
+    svc, _fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False, sweep=sweep)
+    res = svc.self_update_apply_operator()
+    assert res.ok and res.summary == "Update applied.", res
+    assert [d for d in res.details if "with an update" in d or "Could not" in d] == [
+        f"Could not check every source of: {sid}."], res.details
 
 
 def test_nothing_behind_lists_nothing(op_svc, monkeypatch, tmp_path):

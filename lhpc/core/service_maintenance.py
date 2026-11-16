@@ -173,13 +173,11 @@ class MaintenanceOpsMixin:
 
     @invalidates_snapshot
     def source_check(self, target: str = "") -> ActionResult:
-        """NETWORK (explicit): probe each component's remote and refresh the cached freshness
-        marker. The ONLY writer of `state/stackupdates.json`, and never reached from a GET route
-        (P0.6) — it is called by the `/source-check/<target>` POST and the background check thread.
-
-        An uninstalled source costs no network at all (`_update_probe` returns UNKNOWN before any
-        git call), so a sweep over a mostly-uninstalled box is nearly free.
-        """
+        """NETWORK (explicit): probe each component's remote and refresh the cached freshness marker. The ONLY
+        writer of `state/stackupdates.json`, and never reached from a GET route (P0.6) — it is called by the
+        `/source-check/<target>` POST and the background check thread. An uninstalled source costs no network at
+        all (`_update_probe` returns UNKNOWN before any git call), so a sweep over a mostly-uninstalled box is nearly
+        free."""
         from . import stackupdates
         comps, err = self._source_check_targets(target)
         if err:
@@ -187,18 +185,17 @@ class MaintenanceOpsMixin:
         if not comps:
             return ActionResult(True, f"Nothing to check for '{target or 'all'}' — "
                                       "no component declares a source remote.")
-        # An OPTIONAL component that was never installed has nothing to compare, and that is
-        # not a fault of the stack: it must not make `lhpc source-check meshcore` report ERR.
-        # It is still probed, still listed and still recorded — only excused from the
-        # pass/fail verdict. A component asked for BY NAME is never excused (the operator
-        # wants that component's real answer), and an optional source that IS installed but
-        # unreadable stays a genuine error.
+        # An OPTIONAL component that was never installed has nothing to compare, and that is not a fault of the
+        # stack: it must not make `lhpc source-check meshcore` report ERR. It is still probed, still listed and still
+        # recorded — only excused from the pass/fail verdict. A component asked for BY NAME is never excused (the
+        # operator wants that component's real answer), and an optional source that IS installed but unreadable
+        # stays a genuine error.
         named_component = bool(target) and self.stack(target) is None
         excused = set()
         if not named_component:
-            # The line `update()` draws too (`_stack_scope_keeps`): an optional component that
-            # was never installed is excused; a hard build dependency never is — RadioLib is
-            # `optional`, yet an absent RadioLib is a real gap in an installed daemon.
+            # The line `update()` draws too (`_stack_scope_keeps`): an optional component that was never installed
+            # is excused; a hard build dependency never is — RadioLib is `optional`, yet an absent RadioLib is a real
+            # gap in an installed daemon.
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
             excused = {c.id for c in comps if not self._stack_scope_keeps(c, required)}
         results, details, stable_target = {}, [], stable_lane.resolver(self._system.runner.run, self._paths)
@@ -247,11 +244,14 @@ class MaintenanceOpsMixin:
         else:
             summary = (f"No installed/comparable sources could be checked for '{who}' — "
                        f"{unknown} unknown/not comparable.")
-        def stacks(status):     # the stacks (THIS code's manifest) with a component in `status`
-            return sorted({self.stack_of(c) or c for c, e in results.items() if e["status"] == status})
-        return ActionResult(unresolved == 0, summary, details=details,
-                            data={"counts": counts, "checked": n, "excused": sorted(excused),
-                                  "stacks_behind": stacks(stackupdates.BEHIND), "stacks_unchecked": stacks(stackupdates.ERROR)})
+        def stacks(hit):        # the stacks (THIS code's manifest) with a component `hit(status, c)` selects
+            return sorted({self.stack_of(c.id) or c.id for c in comps if hit(results[c.id]["status"], c)})
+        def unchecked(status, c):   # the probe failed, or an INSTALLED source had nothing valid to compare
+            return status == stackupdates.ERROR or (status == stackupdates.UNKNOWN and source_fs.source_present(
+                self._paths, self._paths.resolve_source(c.source.path)))        # (an uninstalled one: nothing to update)
+        return ActionResult(unresolved == 0, summary, details=details, data={
+            "counts": counts, "checked": n, "excused": sorted(excused), "stacks_unchecked": stacks(unchecked),
+            "stacks_behind": stacks(lambda status, _c: status == stackupdates.BEHIND)})
 
     def source_check_view(self) -> dict:
         """Cached, network-free freshness view for GET pages: `{checked_at, components, lhpc_head}` (fetched LHPC)."""
