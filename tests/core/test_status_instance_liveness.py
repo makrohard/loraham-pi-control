@@ -158,3 +158,13 @@ def test_a_record_whose_end_is_not_proven_is_not_an_ended_instance(tmp_path, mon
     svc = _svc(tmp_path, monkeypatch)
     monkeypatch.setattr(Lifecycle, "_proc_ceased", staticmethod(lambda pid: False))
     assert _instances(svc, "daemon") == {}
+
+
+def test_a_record_with_a_malformed_rid_is_not_an_ended_instance(tmp_path, monkeypatch):
+    # G1-STATUS-DEAD-SOCKET NOTE: a record of this boot whose rid is no instance id ("rX") is no instance, and status
+    # still renders. red-before (9c16c524): ValueError from the rid sort, `lhpc status` and the console crash
+    launch_record(tmp_path, "daemon", "loraham-daemon", "rX", "433", GONE_PID)
+    launch_record(tmp_path, "daemon", "loraham-daemon", "r3", "433", GONE_PID + 1)
+    svc = _svc(tmp_path, monkeypatch)
+    assert svc.status("daemon").ok
+    assert list(_instances(svc, "daemon")) == ["daemon@r3"]
