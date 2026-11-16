@@ -224,6 +224,10 @@ HPY
 )
 
 dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le 17 ]; }
+# a command that asks for high power or 18 dBm or more, in any spelling (--high-power, --highpower, POWER=, --power, --tx-power,
+# tx_power, txpower, set tx), any case: the dispatcher refuses it and the dry self-check fails on it
+HIPOWER_RE='-?-high-?power|(^|[^a-z0-9])(power|tx[-_]?power|txp)[ =:]+\+?(1[89]|[2-9][0-9]|[1-9][0-9]{2,})([^0-9]|$)|set tx (1[89]|[2-9][0-9]|[1-9][0-9]{2,})'
+hipower() { printf '%s\n' "$*" | grep -qiE -- "$HIPOWER_RE"; }
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
 fail() { echo "FAIL: $*" >&2; printf '%s\n' "$*" > "$OUT/rowfail.txt"; exit 1; }   # a row FAIL (the marker); its undos run
@@ -356,8 +360,7 @@ tx() { local k=$1 c=$2 cls=$3 sep=${4:-} rad n e f b
     --reserve) [ "$cls" = control ] && [ $# = 4 ] || stop "tx $k: a reservation is 'tx <key> <frames> control --reserve'"; shift 4; e=reserve;;
     *) stop "tx $k: '$sep' (want -- or --reserve)";; esac
   rad=$(getk "RAD_$k"); [ -n "$rad" ] || stop "tx $k: the key resolves to no radio (no power read for it): no TX"
-  ! printf '%s\n' "$*" | grep -qE -- '--high-power|POWER=(1[89]|[2-9][0-9])([^0-9]|$)|tx_power[ :=]+(1[89]|[2-9][0-9])|set tx (1[89]|[2-9][0-9])' \
-    || stop "tx $k: the command carries --high-power or a power of 18 dBm or more: no TX"
+  ! hipower "$*" || stop "tx $k: the command carries --high-power or a power of 18 dBm or more: no TX"
   [ "$(getk "PWROW_${rad//:/_}")" = "${CURROW:-}" ] && [ -n "${CURROW:-}" ] || stop "tx $k: $rad has no verified power in this row: no TX"
   if [ "$cls" != control ]; then [ "${#cls}" -le 16 ] && grep -qxF -- "$cls" "$OUT/nonces" 2>/dev/null || stop "tx $k: '$cls' is not a nonce of this run"
     [[ "$*" == *"$cls"* ]] || stop "tx $k: the command does not carry its nonce '$cls'"; fi
@@ -784,7 +787,7 @@ row_RE() { [ "$MODE" = dry ] && { echo "  [dry] RE: secret and peer-data scans (
 selfcheck() {
   local SCN=0; scok() { echo "dry self-check OK $1"; SCN=$((SCN + 1)); }; sc() { stop "dry self-check $1: $2"; }
   local n c t L G g p w st
-  n=$(grep '^CMD ' "$DRYLOG" | grep -cE -- '--high-power|POWER=(1[89]|[2-9][0-9])([^0-9]|$)|tx_power[ :=]+(1[89]|[2-9][0-9])|set tx (1[89]|[2-9][0-9])') || true
+  n=$(grep '^CMD ' "$DRYLOG" | grep -ciE -- "$HIPOWER_RE") || true
   [ "$n" = 0 ] || sc no-high-power "$n printed command(s) carry --high-power or a power of 18 dBm or more"; scok no-high-power
   c=$(grep '^CMD ' "$DRYLOG" | grep -ciE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b") || true; [ "$c" = 0 ] || sc no-call-in-commands "the operator's call is in $c logged command(s)"
   [ -z "$TRACKER_CALL" ] || { c=$(grep -ciF -- "$TRACKER_CALL" "$DRYLOG") || true; [ "$c" = 0 ] || sc no-call-in-commands "the tracker call is in the command log ($c)"; }; scok no-call-in-commands
@@ -886,7 +889,8 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
     keep TXR_PC_g2 0
     ( tx Q 1 control -- must PC f x ) >/dev/null 2>&1; [ $? = 2 ] || exit 1                                  # an unresolved key
     ( tx K 1 control -- must PC f "x --high-power" ) >/dev/null 2>&1; [ $? = 2 ] || exit 1
-    ( tx K 1 control -- must PC f "set POWER=20" ) >/dev/null 2>&1; [ $? = 2 ] || exit 1
+    local pf; for pf in "set POWER=20" "--power 20" "--tx-power=20" "tx_power: 18" "txpower = 20" "--highpower"; do
+      ( tx K 1 control -- must PC f "x $pf" ) >/dev/null 2>&1; [ $? = 2 ] || exit 1; done
     ( tx K 1 'rfkit 0000bbbb' -- must PC f "send 'rfkit 0000bbbb'" ) >/dev/null 2>&1; [ $? = 2 ] || exit 1   # not a nonce of this run
     ( tx K 1 'rfkit 0000aaaa' -- must PC f "send" ) >/dev/null 2>&1; [ $? = 2 ] || exit 1                     # the command lacks its nonce
     ( CURROW=8; tx K 1 control -- must PC f x ) >/dev/null 2>&1; [ $? = 2 ] || exit 1                         # no power read in this row
