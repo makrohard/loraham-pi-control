@@ -632,19 +632,32 @@ def move_clones(svc, stack_id: str, moves, locked: bool, txn: bool = False) -> t
     return notes, ""
 
 
-def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str]:
-    """Move every checkout a rolled-back binary transaction moved back to its journaled commit (under the
-    install's locks). One that did not exist before stays as adopted: nothing older to return to."""
+def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
+    """Move every checkout a rolled-back binary transaction moved back to its journaled commit. One that did not
+    exist before stays as adopted: nothing older to return to. Under THAT stack's source locks, taken here (sorted;
+    re-entrant when the install of that stack holds them): another stack's install never moves them under its own
+    locks, and a busy lock refuses by name with the journal kept. (ok, why, the moved paths' ownership baseline read
+    under those locks for the restored receipt, None when a record is damaged)."""
+    from . import reslock
+    from .service_base import SourceTxnBlocked
     st = svc.stack(stack_id)
     by_id = {c.id: c for c in (st.components if st else ())}
-    for cid, prev in clones.items():
-        if not prev or (comp := by_id.get(cid)) is None or comp.source is None:
-            continue
-        act = svc._installer().adopt_source(comp, source="pinned", locked=True, force=True,
-                                             pinned_expected=(prev, "the checkout before the failed install"))
-        if act.status == "failed":
-            return False, f"the {comp.source.path} checkout could not be moved back to {prev[:9]} ({act.detail})"
-    return True, ""
+    comps = [(c, prev) for cid, prev in clones.items() if (c := by_id.get(cid)) is not None and c.source is not None]
+    try:
+        with svc._source_operation_guard(svc._binary_source_paths(stack_id), op="binary-recover"):
+            for comp, prev in comps:
+                if not prev:
+                    continue
+                act = svc._installer().adopt_source(comp, source="pinned", locked=True, force=True,
+                                                     pinned_expected=(prev, "the checkout before the failed install"))
+                if act.status == "failed":
+                    return False, (f"the {comp.source.path} checkout could not be moved back to {prev[:9]} "
+                                   f"({act.detail})"), {}
+            now, why = registry_baseline(svc._paths, [c.source.path for c, _p in comps])
+            return True, "", None if why else now     # a damaged record: judged by the receipt that needs it
+    except (reslock.ResourceBusy, SourceTxnBlocked) as busy:
+        return False, (f"a binary install of '{stack_id}' was interrupted after moving its supporting checkout, "
+                       f"which is busy now ({busy}): lhpc install {stack_id} --source binary --yes moves it back"), {}
 
 
 def registry_baseline(paths: Paths, rels) -> tuple[dict, str]:
@@ -661,16 +674,16 @@ def registry_baseline(paths: Paths, rels) -> tuple[dict, str]:
     return baseline, ""
 
 
-def rebase_receipt(svc, stack_id: str, comp_ids) -> str:
+def rebase_receipt(svc, stack_id: str, comp_ids, now: dict | None = None) -> str:
     """After the binary's own move of these components' checkouts outside an install's receipt write (the
-    same-artifact repair, the rollback restore): the installed receipt's baseline for their paths is read again.
-    "" when done (or no receipt to keep), else why not."""
+    same-artifact repair, the rollback restore): the installed receipt's baseline for their paths is read again
+    (or `now`, read under the locks of that move). "" when done (or no receipt to keep), else why not."""
     from . import binary_receipt as brx
     rec = brx.receipt_state(svc._paths, stack_id)[1]
     st = svc.stack(stack_id)
     rels = [c.source.path for c in (st.components if st else ()) if c.id in comp_ids and c.source is not None
             and rec is not None and c.source.path in rec.registry_baseline]
-    now, why = registry_baseline(svc._paths, rels)
+    now, why = ({r: now[r] for r in rels if r in now}, "") if now is not None else registry_baseline(svc._paths, rels)
     if why or not now:
         return why
     if not brx.write_receipt(svc._paths, replace(rec, registry_baseline={**rec.registry_baseline, **now})):

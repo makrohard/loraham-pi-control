@@ -503,8 +503,8 @@ class BinaryOpsMixin:
         """THE authoritative recovery for an open/interrupted binary transaction — files,
         receipt, auth AND the supporting checkouts it moved, in one operation. Called under the locks before any
         new binary work and by the in-process failure path, so a crash and an exception recover identically.
-        A moved checkout goes back only under the install's source locks (`sources_locked`); any other caller
-        leaves the journal for the next binary install, which recovers it."""
+        A moved checkout goes back only in a binary install (`sources_locked`), under that checkout's own source
+        locks (`restore_clones`); any other caller leaves the journal for the next binary install, which recovers it."""
         # A KILLED run (OOM, power cut) cannot run its own cleanup, and each staging directory
         # holds a whole artifact — tens of megabytes on an SD card. Every binary operation is
         # serialized under the same locks, so anything left here is stale by definition
@@ -524,8 +524,9 @@ class BinaryOpsMixin:
         if (clones := j.get("clones") or {}) and not sources_locked:
             return False, (f"a binary install of '{stack_id}' was interrupted after moving its supporting checkout: "
                            f"lhpc install {stack_id} --source binary --yes moves it back")
-        if clones and not (r := bi.restore_clones(self, stack_id, clones))[0]:
-            return r                             # journal RETAINED: the next binary install retries
+        _ok, _why, _now = bi.restore_clones(self, stack_id, clones) if clones else (True, "", {})
+        if not _ok:
+            return False, _why                   # journal RETAINED: the next binary install retries
         ok, why = bi.rollback_files(self._paths, j)
         if not ok:
             return False, why                    # journal RETAINED as evidence
@@ -533,7 +534,7 @@ class BinaryOpsMixin:
         if old_receipt:
             if not brx.write_raw(self._paths, stack_id, old_receipt):
                 return False, "the previous binary receipt could not be restored"
-            if clones and (_why := bi.rebase_receipt(self, stack_id, clones)):
+            if clones and (_why := bi.rebase_receipt(self, stack_id, clones, _now)):
                 return False, _why               # journal RETAINED: read after the checkouts moved back
         elif not brx.remove_receipt(self._paths, stack_id):
             # There was no receipt before this run, so the failed install's one must go. If it

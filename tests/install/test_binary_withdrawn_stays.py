@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from lhpc.core import binary_install as bi, binary_receipt as brx, source_registry
+from lhpc.core import binary_install as bi, binary_receipt as brx, reslock, source_registry
 from lhpc.core.install import DirtyReport
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -259,6 +259,8 @@ def _moving_clone(monkeypatch, svc, commit):
 
         def adopt_source(self, c, *, pinned_expected=None, **kw):
             state["adopted"].append(pinned_expected[0])
+            if "lock_held" in state:                # is this path's source lock held while it moves?
+                state["lock_held"].append(_lock_busy(svc, c.source.path))
             if state.get("refuse"):                 # a failed adoption changes nothing
                 return type("_Failed", (), {"status": "failed", "detail": state["refuse"]})()
             state["commit"] = pinned_expected[0]
@@ -281,6 +283,25 @@ def _moving_clone(monkeypatch, svc, commit):
     monkeypatch.setattr(ControllerService, "_installer", lambda self: _Installer())
     monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
     return state
+
+
+def _lock_busy(svc, rel):
+    try:
+        with reslock.operation_lock(svc._paths, reslock.source_lock_key(rel), "update", "probe"):
+            return False
+    except reslock.ResourceBusy:
+        return True
+
+
+def _meshcom_interrupted_then_daemon(monkeypatch, svc, binary_receipt):
+    """A meshcom binary install died after moving meshcom-qemu from B's commit (journal open); a daemon binary
+    install comes next and must recover it first."""
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "a" * 40)
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    _serve(monkeypatch, "daemon", _entry("daemon", "a" * 64, "a" * 40, NEWER))      # its download refuses
+    return state, svc.stack("meshcom").component("meshcom-qemu").source.path
 
 
 def _corrupt_record(svc, rel):
@@ -536,3 +557,31 @@ def test_the_rebase_rereads_only_the_moved_paths_so_a_source_adoption_elsewhere_
     assert bi.rebase_receipt(svc, "meshcom", ["meshcom-qemu"]) == ""
     st, _rec, why = brx.receipt_state(svc._paths, "meshcom")
     assert st == "superseded" and fw in why, (st, why)
+
+
+def test_another_stacks_install_moves_a_checkout_back_only_under_that_checkouts_own_lock(
+        tmp_path, monkeypatch, binary_receipt):
+    # The daemon install's recovery moves meshcom-qemu back while holding meshcom-qemu's source lock, not under
+    # the daemon's locks alone.
+    svc = _svc(tmp_path, monkeypatch)
+    state, _rel = _meshcom_interrupted_then_daemon(monkeypatch, svc, binary_receipt)
+    state["lock_held"] = []
+    res = svc.install("daemon", apply=True, source="binary")
+    assert not res.ok and "DOWNLOAD-REACHED" in res.summary, res.summary          # recovered, then went on
+    assert state["adopted"] == ["b" * 40] and state["lock_held"] == [True]
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_another_stacks_install_leaves_a_checkout_whose_lock_is_busy_and_names_its_stack(
+        tmp_path, monkeypatch, binary_receipt):
+    # Another operation holds meshcom-qemu's source lock: the daemon install refuses, naming meshcom and the
+    # move-back command; the checkout is not touched and the journal stays.
+    svc = _svc(tmp_path, monkeypatch)
+    state, rel = _meshcom_interrupted_then_daemon(monkeypatch, svc, binary_receipt)
+    monkeypatch.setattr(ControllerService, "_SELF_LOCK_WAIT_S", 0.0)
+    with reslock.operation_lock(svc._paths, reslock.source_lock_key(rel), "update", "probe"):
+        res = svc.install("daemon", apply=True, source="binary")
+    assert not res.ok and "a binary install of 'meshcom'" in res.summary and "busy now" in res.summary, res.summary
+    assert "lhpc install meshcom --source binary --yes moves it back" in res.summary, res.summary
+    assert state["adopted"] == [] and state["commit"] == "a" * 40
+    assert bi.read_journal(svc._paths)[1] == "valid"
