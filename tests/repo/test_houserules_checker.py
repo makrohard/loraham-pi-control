@@ -1053,6 +1053,47 @@ def test_a_c_file_in_its_budget_is_measured_by_lines(repo):
     assert "voice.c 4->4 lines (budget 6), public N/A (not Python)" in line
 
 
+# Python ends a line at "\r\n", "\r" or "\n", never at a form feed or a vertical tab; str.splitlines() does, and moved
+# every later line of the source by one. name: (files the range writes, row, verdict). Red before: each read the line
+# above or below (a comment escaped a clock, a sleep or a slow test was missed, a raise had no reason, a valid split
+# header was invalid and over its budget).
+PY_LINES = {
+    "a comment above does not escape a clock": (
+        {"tests/core/test_x.py": "import time\nX = 1\f# wallclock: not this line\n" + TSL + "(0)\n"}, "wallclock", "HARD"),
+    "a sleep text is found": (_test('\ndef test_two():\n    x = 1\f# c\n    run("' + SL + ' 5")\n'), "wallclock", "HARD"),
+    "slow work on a test's last line is found": (
+        _test('\ndef test_two():\n    x = 1\f# c\n    run("pip ' + 'install x")\n'), "markers", "WARN"),
+    "a raise reason after a form feed is read": (
+        {"tests/repo/test_module_budgets.py": BUDGET.format(x="(4, 1),\f# item-9: one line"),
+         "lhpc/core/service_x.py": BASE["lhpc/core/service_x.py"] + "\n"}, "modules", "WARN"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PY_LINES))
+def test_python_source_lines_are_counted_as_python_counts_them(repo, name):
+    files, row, verdict = PY_LINES[name]
+    _commit(repo, files)
+    rc, rows = _run(repo)
+    assert (rc, rows[row]) == (int(verdict == "HARD"), verdict)
+
+
+def test_a_split_header_with_a_form_feed_in_its_docstring_is_valid(repo):
+    # The new file is 6 Python lines, at its budget; its header is the docstring and an import.
+    _commit(repo, SPLIT_BASE)
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {**SPLIT, "lhpc/core/service_y.py": SPLIT["lhpc/core/service_y.py"].replace('"""Y."""', '"""Y.\fmore"""')})
+    rc, rows = _run(repo)
+    assert (rc, rows["modules"]) == (0, "WARN")
+
+
+def test_a_c_file_is_measured_in_lines_git_counts(repo):
+    # A vertical tab is not a line end: still 4 lines.
+    _c_budgeted(repo)
+    _commit(repo, {"src/voice.c": VOICE.replace("return 0;", "return 1;\v")})
+    rc, line = _modules_line(repo)
+    assert "voice.c 4->4 lines (budget 6)" in line, line
+
+
 def test_a_c_file_over_its_line_budget_is_hard(repo):
     # The budget row is raised with a reason in the same range, so the growth itself is excused: only the line
     # budget (7) makes this HARD; within it the same range would be a WARN.

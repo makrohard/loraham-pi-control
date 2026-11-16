@@ -117,6 +117,13 @@ def patch(cmd: str, *args: str) -> str:
     return git(cmd, *PATCH, *args)
 
 
+def py_text_lines(src: str) -> list[str]:
+    """The lines of a Python source as Python counts them (ast, tokenize): ended by "\\r\\n", "\\r" or "\\n" only, never
+    by "\\f", "\\v" or the other ends str.splitlines() knows."""
+    lines = PY_EOL.split(src)
+    return lines[:-1] if lines[-1] == "" else lines
+
+
 def lf_lines(text: str) -> list[str]:
     """The lines of a text as git counts them: split at "\n" only (str.splitlines also splits at "\r", "\v", "\f"...)."""
     lines = text.split("\n")
@@ -254,12 +261,12 @@ def layer_of(path: str) -> str | None:
 def measure(source: str, path: str = ".py") -> tuple[int, int | None]:
     """(lines, public methods); a budgeted file that is not Python is measured by its lines only (public None)."""
     if not path.endswith(".py"):
-        return len(source.splitlines()), None
+        return len(lf_lines(source)), None
     tree = ast.parse(source)
     public = sum(1 for cls in tree.body if isinstance(cls, ast.ClassDef) for node in cls.body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                  and not node.name.startswith("_"))
-    return len(source.splitlines()), public
+    return len(py_text_lines(source)), public
 
 
 def header_lines(source: str) -> int | None:
@@ -278,7 +285,7 @@ def header_lines(source: str) -> int | None:
                for k, n in enumerate(above)):
         return None
     allowed = {i for n in above for i in range(n.lineno, n.end_lineno + 1)}
-    lines = source.splitlines()
+    lines = py_text_lines(source)
     return None if any(lines[i - 1].strip() and i not in allowed for i in range(1, first.lineno)) else first.lineno
 
 
@@ -424,7 +431,7 @@ def wallclock_lines(src: str, added: set[int]) -> list[int]:
             modules |= {a.asname or a.name for a in node.names if a.name == "time"}
         elif isinstance(node, ast.ImportFrom) and node.module == "time":
             funcs |= {a.asname or a.name for a in node.names if a.name in WALLCLOCK_CALLS}
-    lines = src.splitlines()
+    lines = py_text_lines(src)
     hits = set()
     for node in ast.walk(tree):
         span = [n for n in range(node.lineno, node.end_lineno + 1) if n in added] if hasattr(node, "lineno") else []
@@ -562,7 +569,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
             scopes = test_scopes(src) if src is not None else []
         except SyntaxError:
             scopes = []                      # the wallclock row reports an unparsable file in its scope
-        src_lines = (src or "").splitlines()
+        src_lines = py_text_lines(src or "")
         for _, defline, last, _, marks in scopes:
             if defline not in lines:         # only a test whose def line is added
                 continue
@@ -585,7 +592,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         except SyntaxError:
             bad.append(f"{p} does not parse")
             continue
-        src_lines = src.splitlines()
+        src_lines = py_text_lines(src)
         for n in hits:
             test = next((t for t in scopes if t[0] <= n <= t[2]), None)
             if test is not None:
@@ -624,7 +631,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         return rows
     parts, over, net, excused, raised_bad, raised_ok, splits, sizes = [], False, 0, 0, [], set(), {}, {}
     net_public, excused_public = 0, 0
-    head_budget_lines = (show(head, BUDGET_FILE) or "").splitlines()
+    head_budget_lines = py_text_lines(show(head, BUDGET_FILE) or "")
     for name, value in table.items():
         if name in before and any(v > b for v, b in zip(value, before[name], strict=True)):
             line = next((ln for ln in head_budget_lines if f'"{name}"' in ln), "")
@@ -688,7 +695,7 @@ def base_program(base: str, argv: list[str]) -> int | None:
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("range", help="<base>..<head>")
     ap.add_argument("--fact", action="append", default=[], help="a literal to look for in docs/")
     ap.add_argument("--correction", action="store_true",
