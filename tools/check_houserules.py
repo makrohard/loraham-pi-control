@@ -114,10 +114,9 @@ def header_path(header: str) -> str | None:
     """The path a `+++ ` header names: git's C-quoted form ("b/\\303\\274.md") decoded, the tab git appends after a
     path with a space dropped, the b/ prefix removed; None for /dev/null. Any other form is kept whole, so its lines
     still count."""
+    header = header.removesuffix("\t")     # git's tab after a path with a space, quoted or not
     if header.startswith('"') and header.endswith('"'):
         header = codecs.escape_decode(header[1:-1].encode())[0].decode("utf-8", "replace")
-    elif header.endswith("\t"):
-        header = header[:-1]
     return None if header == "/dev/null" else header[2:] if header.startswith("b/") else header
 
 
