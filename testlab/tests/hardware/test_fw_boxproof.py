@@ -54,3 +54,21 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
     # A claim of reachability (the console, an exposed page) needs a 2xx or 3xx answer; 000, 4xx and 5xx are FAIL.
     p, _ = proof(tmp_path, f'page_ok "{code}" && echo REACHABLE || echo NOT')
     assert p.stdout.split() == (["REACHABLE"] if ok else ["NOT"]), p.stderr
+
+
+CANNED = """X() {{ local f=$1; shift; case $f in
+  *-maxpower.txt) printf '  max_power = 10\\n';; *-ftx0.txt) printf '3\\n';;
+  *-txpower.txt) printf 'COUNT {count}\\n... Final Tx power: 10 dBm\\n';; *) printf 'ok\\n';; esac > "$EVD/$f"; XRC=0; }}
+mtstart F6-r2; echo RC=$?"""
+
+
+@pytest.mark.parametrize("count,started", [("4", True), ("3", False), ("", False)])
+def test_a_power_line_counts_only_when_this_start_wrote_it(tmp_path, count, started):
+    # Before the start the log holds 3 Final Tx power lines; the start must add one, else the last line is an older
+    # start's (stale) and the run stops, the stack stopped first.
+    p, evd = proof(tmp_path, CANNED.format(count=count))
+    if started:
+        assert "RC=0" in p.stdout and "Final Tx power 10 dBm" in p.stdout, p.stderr
+    else:
+        assert p.returncode == 2 and "no Final Tx power line of this start" in p.stdout
+        assert (evd / "F6-r2-stop.txt").exists() and "RC=" not in p.stdout

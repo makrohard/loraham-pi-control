@@ -95,9 +95,12 @@ fwstate() { X "$1" "$LH firewall"; }
 mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: normal power, <= 17)
   must "$1-maxpower.txt" "$LH config meshtastic@r2 list"; local mp; mp=$(body "$1-maxpower.txt" | sed -nE 's/^ *max_power *= *([0-9]+).*/\1/p' | head -n 1)
   [ "$MODE" = dry ] || { case "$mp" in ''|*[!0-9]*) stop "$1: no max_power value";; esac; [ "$mp" -le 17 ] || stop "$1: max_power $mp above 17: no start"; }
-  must "$1-ftx0.txt" "$FTX"; local n0; n0=$(body "$1-ftx0.txt" | tail -n 1)
+  must "$1-ftx0.txt" "$FTX"; local n0 n1; n0=$(body "$1-ftx0.txt" | tail -n 1)
+  [ "$MODE" = dry ] || [[ "$n0" =~ ^[0-9]+$ ]] || stop "$1: no count of the Final Tx power lines before the start"
   undo "$(gstop meshtastic@r2)"; must "$1-start.txt" "$(gstart meshtastic@r2)"
-  must "$1-txpower.txt" "for i in \$(seq 1 30); do [ \"\$($FTX)\" -gt ${n0:-0} ] && break; sleep 2; done; grep -a 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log | tail -n 1"   # this start's line
+  must "$1-txpower.txt" "for i in \$(seq 1 30); do [ \"\$($FTX)\" -gt ${n0:-0} ] && break; sleep 2; done; echo COUNT \$($FTX); grep -a 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log | tail -n 1"
+  n1=$(body "$1-txpower.txt" | sed -n 's/^COUNT //p')   # this start wrote a new line, or the last one is an older start's
+  [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$n0" ]; } || { X "$1-stop.txt" "$(gstop meshtastic@r2)"; stop "$1: no Final Tx power line of this start (count ${n1:-none}, ${n0} before it)"; }
   local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no Final Tx power line";; esac; [ "$fp" -le 17 ] || { X "$1-stop.txt" "$(gstop meshtastic@r2)"; stop "$1: Final Tx power $fp above 17"; }; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
