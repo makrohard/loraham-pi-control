@@ -26,6 +26,8 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -578,53 +580,88 @@ def _box_at(tmp_path: Path, prev: str, cand: str) -> tuple[Path, dict, Path, Pat
 # The release "Upgrading from 0.13.x" (CHANGELOG) starts from: its helper cut git off after 5 s.
 V0138 = "v0.13.8"
 
-# A git first on the helper's PATH whose first `merge` writes the new commit's files outside the
-# two packages, unstaged, then hangs past the helper's limit: the checkout 0.13.8's helper leaves on
-# a slow card (HEAD on the old commit, part of the new tree written). The packages stay 0.13.8's,
-# so the command under proof is 0.13.8's own.
+# A git first on the helper's PATH whose first `merge` does what git does on a slow card until the
+# helper cuts it off: the files the new commit drops are removed, then its files are written in path
+# order up to the cut, unstaged, HEAD on the old commit; the git is then killed, which leaves its
+# index lock behind (it hangs past the limit). Cut halfway through `lhpc/` (where the lane's real cut
+# came, 205 of 674), the package is half old, half new, and 0.13.8's own `lhpc` mostly fails to
+# import: the way back is git's.
 _HANG = "exec sleep 600"  # wallclock: the git must outlast 0.13.8's real 5 s limit, which cuts it off
 _CUT_MERGE = """#!/bin/sh
 if [ "$3" = merge ] && [ -e '{flag}' ]; then
   rm -f '{flag}'
-  '{git}' -C "$2" checkout "$5" -- . ':(exclude)lhpc' ':(exclude)testlab' && '{git}' -C "$2" reset -q && {hang}
+  (cd "$2" && xargs -a '{drop}' -r -d '\\n' rm -f) &&
+    xargs -a '{write}' -r -d '\\n' '{git}' --literal-pathspecs -C "$2" checkout "$5" -- &&
+    '{git}' -C "$2" reset -q && touch "$2/.git/index.lock" && {hang}
 fi
 exec '{git}' "$@"
 """
 
+# The "Upgrading from 0.13.x" step, as the CHANGELOG gives it (the checkout's path filled in): a
+# lock no git holds is removed, the half-written files are overwritten with the new commit's (git
+# deletes nothing it does not track), and the update run again syncs the venv and the units.
+UPGRADE_STEP_0138 = ("pgrep -x git || rm -f {checkout}/.git/index.lock",
+                     "git -C {checkout} reset --hard origin/main",
+                     "lhpc self-update --apply --yes")
+
 
 @pytest.mark.slow
 def test_slow_build_selfupdate_cut_from_0138(tmp_path):
-    """The "Upgrading from 0.13.x" step, run as written with 0.13.8's own code: its one-click
-    helper cuts the merge off ("git refused the fast-forward", the half-written tree left behind),
-    then 0.13.8's `lhpc self-update --apply --overwrite --yes` ends on this commit with a clean tree
-    and the venv synced to it."""
+    """The "Upgrading from 0.13.x" step, run as written: 0.13.8's one-click helper cuts the merge
+    off ("git refused the fast-forward"; the half-written tree and git's lock left behind) early,
+    halfway through `lhpc/` and late; each time the step's git lines leave this commit checked out,
+    clean, with no lock, and after the last its `lhpc self-update --apply --yes` syncs the venv."""
     cand = _git("-C", str(REPO), "rev-parse", "HEAD")
     root, env, co, venv = _box_at(tmp_path, V0138, cand)
     old = _git("-C", str(co), "rev-parse", "HEAD")
-    bindir, flag = tmp_path / "cutgit", tmp_path / "cut"
+    changed = _git("-C", str(co), "diff", "--name-status", "--no-renames", old, cand).splitlines()
+    drop = [ln.split("\t", 1)[1] for ln in changed if ln.startswith("D")]
+    write = [ln.split("\t", 1)[1] for ln in changed if not ln.startswith("D")]   # git's path order
+    pkg = [n for n, path in enumerate(write) if path.startswith("lhpc/")]
+    assert pkg and pkg[-1] < len(write) - 1, "no package files, or nothing after them, to cut at"
+    cuts = {"early": max(1, pkg[0] // 2), "lhpc-half": pkg[len(pkg) // 2], "late": len(write) - 1}
+    bindir, flag, lst = tmp_path / "cutgit", tmp_path / "cut", tmp_path / "write"
     bindir.mkdir()
-    flag.touch()
+    (tmp_path / "drop").write_text("".join(f"{p}\n" for p in drop))
     real = subprocess.run(["sh", "-c", "command -v git"], check=True, capture_output=True,
                           text=True).stdout.strip()
-    (bindir / "git").write_text(_CUT_MERGE.format(flag=flag, git=real, hang=_HANG))
+    (bindir / "git").write_text(_CUT_MERGE.format(flag=flag, git=real, hang=_HANG,
+                                                  drop=tmp_path / "drop", write=lst))
     (bindir / "git").chmod(0o755)
-    env = {**env, "PATH": f"{bindir}:{env.get('PATH', os.environ['PATH'])}"}
-    lhpc = str(venv / "bin" / "lhpc")
-    (root / "state" / "selfupdate.request").write_text("normal\n")
-    r = subprocess.run([lhpc, "self-update", "--run-service"],
-                       env={**env, "INVOCATION_ID": "slow-build-lane"},
-                       capture_output=True, text=True, timeout=HARNESS_S, check=False)
-    cut = r.stdout + r.stderr
-    assert not flag.exists(), f"the helper never ran the merge: {cut[-1500:]}"
-    assert "git refused the fast-forward" in cut, cut[-1500:]
-    assert _git("-C", str(co), "rev-parse", "HEAD") == old
-    assert _git("-C", str(co), "status", "--porcelain"), "the cut merge left no files behind"
-    env.pop("INVOCATION_ID", None)
-    r = subprocess.run([lhpc, "self-update", "--apply", "--overwrite", "--yes"], env=env,
-                       capture_output=True, text=True, timeout=HARNESS_S, check=False)
-    assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
+    path = env.get("PATH", os.environ["PATH"])
+    cut_env = {**env, "PATH": f"{bindir}:{path}"}
+    op_env = {**env, "PATH": f"{venv / 'bin'}:{path}"}           # the operator's shell on the box
+    assert shutil.which("pgrep", path=op_env["PATH"]), "the step's `pgrep` is not on this box"
+    lhpc, lock = str(venv / "bin" / "lhpc"), co / ".git" / "index.lock"
+    steps = [ln.format(checkout=shlex.quote(str(co))) for ln in UPGRADE_STEP_0138]
+
+    def run(line):
+        r = subprocess.run(["sh", "-c", line], env=op_env, capture_output=True, text=True,
+                           timeout=HARNESS_S, check=False)
+        assert r.returncode == 0, f"{line}: {(r.stdout + r.stderr)[-1500:]}"
+
+    for name, k in cuts.items():
+        _git("-C", str(co), "reset", "--quiet", "--hard", old)      # back on 0.13.8, clean
+        lst.write_text("".join(f"{p}\n" for p in write[:k]))
+        flag.touch()
+        (root / "state" / "selfupdate.request").write_text("normal\n")
+        r = subprocess.run([lhpc, "self-update", "--run-service"],
+                           env={**cut_env, "INVOCATION_ID": "slow-build-lane"},
+                           capture_output=True, text=True, timeout=HARNESS_S, check=False)
+        cut = r.stdout + r.stderr
+        assert not flag.exists(), f"{name}: the helper never ran the merge: {cut[-1500:]}"
+        assert "git refused the fast-forward" in cut, f"{name}: {cut[-1500:]}"
+        assert _git("-C", str(co), "rev-parse", "HEAD") == old, name
+        assert _git("-C", str(co), "status", "--porcelain"), f"{name}: the cut left no files"
+        assert lock.exists(), f"{name}: the killed git left no index lock"
+        for line in steps[:2]:
+            run(line)
+        assert _git("-C", str(co), "rev-parse", "HEAD") == cand, name
+        assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == "", name
+        assert not lock.exists(), name
+    run(steps[2])
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand
-    assert _git("-C", str(co), "status", "--porcelain") == ""
+    assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == ""
     have = subprocess.run([str(venv / "bin" / "python"), "-c", "from importlib.metadata import "
                            "version; print(version('loraham-pi-control'))"], env=env,
                           check=True, capture_output=True, text=True, timeout=600).stdout.strip()
