@@ -2301,7 +2301,7 @@ def test_a_gps_disabled_stack_does_not_block_a_source_change(tmp_path, monkeypat
     # off is a DELIBERATE choice now (the default is on) — saved before the stack is up.
     assert svc.save_config_bundle("meshcom", values={"use_gps": "off"}).ok
     # K8f (DEC-W384de): the running instance is told (meshcom@r1, its record); one no instance claims is unknown and
-    # counts as a GPS user (tests/core/test_k8f_gps_per_instance.py)
+    # counts as a GPS user (tests/core/test_gps_switch_per_instance.py)
     monkeypatch.setattr(instances, "running_keys", lambda s, sid: ["meshcom@r1"] if sid == "meshcom" else [])
     _snap_with(svc, {"meshcom-qemu": RunState.RUNNING})          # running, use_gps off
     assert svc.gps_consumers_running() == []

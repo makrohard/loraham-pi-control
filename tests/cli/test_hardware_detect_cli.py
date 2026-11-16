@@ -1,6 +1,6 @@
 """W4 (DEC-W43): `lhpc hardware detect <rid>` runs Detect on one radio of the hardware list and prints its line; rc 0
 when the chip was found, 1 when not found or refused, 2 on a usage error. Detect itself is radio_detect.run's
-(tests/core/test_dec_w43_detect_run.py); here the CLI drives it with the daemon check real over a faked /proc
+(tests/core/test_radio_detect_run.py); here the CLI drives it with the daemon check real over a faked /proc
 listing and the SPI bus a fake behind run.spi_bus."""
 from __future__ import annotations
 
