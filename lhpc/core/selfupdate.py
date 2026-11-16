@@ -32,6 +32,9 @@ from .probes.backends import System
 
 _REMOTE = "origin"
 _LOCAL_TIMEOUT = 5.0
+# The advance itself (the merge, or the forced reset + clean) writes the changed tree: on a slow SD
+# card that takes far longer than a read, and a git cut off mid-checkout leaves a half-written tree.
+_APPLY_TIMEOUT = 300.0
 _NET_TIMEOUT = 25.0
 _MARKER = ("state", "selfupdate.json")
 _LOCK = ("state", "locks", "selfupdate.lock")
@@ -630,14 +633,25 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         # Discard tracked changes + align to upstream, THEN remove every non-ignored untracked path.
         # `git clean -ffd`: -d = directories, and the DOUBLE -f also removes nested untracked git
         # repositories (a single -f skips them); ignored paths such as `.venv/` are preserved.
-        m = _git(system, root, ["reset", "--hard", ref], _LOCAL_TIMEOUT)
+        m = _git(system, root, ["reset", "--hard", ref], _APPLY_TIMEOUT)
         if m.returncode == 0:
-            cl = _git(system, root, ["clean", "-ffd"], _LOCAL_TIMEOUT)
-            if cl.returncode != 0:
+            cl = _git(system, root, ["clean", "-ffd"], _APPLY_TIMEOUT)
+            if getattr(cl, "timed_out", False):
+                m = cl
+            elif cl.returncode != 0:
                 cleanup_failed = True
                 cleanup_error = _summarize_output(cl.stderr or cl.stdout) or "git clean failed"
     else:
-        m = _git(system, root, ["merge", "--ff-only", ref], _LOCAL_TIMEOUT)
+        m = _git(system, root, ["merge", "--ff-only", ref], _APPLY_TIMEOUT)
+    if getattr(m, "timed_out", False):
+        # Cut off by the limit, git may have written part of the new tree: put the checkout back on
+        # the commit it started from, so the same update can simply be run again.
+        back = _restore(system, root, local.get("head", ""))
+        return {"ok": False, "timed_out": True,
+                "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s; "
+                + ("the checkout is back on the commit it started from — run the update again."
+                   if back else "the checkout could not be put back — re-run with 'overwrite local "
+                   "changes' to discard the partly written files and update.")}
     if m.returncode != 0:
         detail = _summarize_output(m.stderr)
         # THREE distinct outcomes share this branch — conflating them offered a DESTRUCTIVE remedy
@@ -670,6 +684,16 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     else:
         out["message"] = APPLIED_RESTART_MESSAGE
     return out
+
+
+def _restore(system: System, root: Path, head: str) -> bool:
+    """Put a checkout whose advance timed out back on `head` with a clean tree; False when it cannot.
+    The files it discards are the update's own: the advance starts only on a clean tree, or after
+    the operator agreed to discard local changes."""
+    if not head:
+        return False
+    return all(_git(system, root, args, _APPLY_TIMEOUT).returncode == 0
+               for args in (["reset", "--hard", head], ["clean", "-ffd"]))
 
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).

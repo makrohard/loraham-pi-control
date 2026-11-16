@@ -175,6 +175,123 @@ def test_failed_forced_reset_is_not_reported_as_divergence(env, monkeypatch):
     assert "No space left" in res["message"]                    # the injected fault survives
 
 
+# --- an advance cut off by its time limit ---------------------------------------------------------
+
+_HANG = "exec sleep 60"  # wallclock: the git must outlast the runner's real time limit, which is under test
+
+def _hanging_git(tmp_path, monkeypatch):
+    """Put a `git` first on the runner's PATH whose FIRST advance to `origin/main` (the merge, or the
+    forced reset) writes the new commit's files, unstaged, and then hangs: the checkout a git cut off
+    mid-checkout leaves, HEAD still on the old commit. Every other call is the real git."""
+    bindir, flag = tmp_path / "bin", tmp_path / "hang"
+    bindir.mkdir()
+    flag.touch()
+    script = bindir / "git"
+    script.write_text(f"""#!/bin/sh
+if [ "$5" = origin/main ] && [ -e '{flag}' ]; then
+  rm -f '{flag}'
+  '{gitrepo.GIT}' -C "$2" checkout origin/main -- . && '{gitrepo.GIT}' -C "$2" reset -q && {_HANG}
+fi
+exec '{gitrepo.GIT}' "$@"
+""")
+    script.chmod(0o755)
+    from lhpc.core.probes import backends
+    monkeypatch.setitem(backends._FIXED_ENV, "PATH", f"{bindir}:{backends._FIXED_ENV['PATH']}")
+    monkeypatch.setattr(selfupdate, "_APPLY_TIMEOUT", 1.0, raising=False)
+
+
+def _operator_cli(monkeypatch):
+    """`lhpc self-update --apply` on a box whose console is not a systemd unit (no `systemctl`), its
+    venv sync and unit refresh stubbed: the real CLI, service and git underneath."""
+    from lhpc.adapters.cli.main import main
+    from lhpc.core.probes.backends import RealCommandRunner
+    from lhpc.core.services import ControllerService
+    real = RealCommandRunner.run
+    monkeypatch.setattr(RealCommandRunner, "run", lambda self, argv, timeout=None, *a, **kw: (
+        CommandResult(127, "", "", not_found=True) if argv[0] == "systemctl"
+        else real(self, argv, timeout, *a, **kw)))
+    monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: CommandResult(0, "", ""))
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (True, "n/a"))
+    return main
+
+
+@pytest.mark.parametrize("flags", [[], ["--overwrite"]], ids=["merge", "forced-reset"])
+def test_an_advance_cut_off_by_its_limit_says_timed_out_and_a_plain_retry_updates(
+        env, tmp_path, monkeypatch, capsys, flags):
+    """A git cut off mid-checkout left a half-written tree that the next update refused as local
+    changes, reported as "git refused the fast-forward". The apply puts the checkout back on the
+    commit it started from, says it timed out, and the same command run again updates."""
+    old = selfupdate.local_state(env["sys"])["head"]
+    new = gitrepo.upstream_commit(env["up"], version="0.1.1")
+    if flags:
+        (env["work"] / "local.txt").write_text("discarded by --overwrite\n")
+    main = _operator_cli(monkeypatch)
+    _hanging_git(tmp_path, monkeypatch)
+    assert main(["self-update", "--apply", "--yes", *flags]) == 1
+    out = capsys.readouterr().out
+    assert "git timed out after 1 s" in out and "back on the commit it started from" in out, out
+    assert "refused" not in out, out
+    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
+    assert gitrepo.git(env["work"], "status", "--porcelain") == ""
+    assert main(["self-update", "--apply", "--yes", *flags]) == 0, capsys.readouterr().out
+    assert gitrepo.git(env["work"], "rev-parse", "HEAD") == new
+
+
+def test_a_timed_out_advance_that_cannot_be_put_back_names_the_overwrite(env, monkeypatch):
+    old = selfupdate.local_state(env["sys"])["head"]
+    gitrepo.upstream_commit(env["up"])
+    real_git = selfupdate._git
+
+    def merge_times_out_reset_fails(system, root, args, timeout):
+        if args[:1] == ["merge"]:
+            return CommandResult(124, "", "Updating files:  30% (1/3)", timed_out=True)
+        if args[:1] == ["reset"]:
+            return CommandResult(128, "", "fatal: Unable to create '.git/index.lock': File exists.")
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", merge_times_out_reset_fails)
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res["timed_out"] is True
+    assert "timed out" in res["message"] and "could not be put back" in res["message"]
+    assert "overwrite local changes" in res["message"] and "\n" not in res["message"]
+    assert selfupdate.local_state(env["sys"])["head"] == old
+
+
+def test_a_forced_cleanup_cut_off_by_its_limit_is_put_back_too(env, monkeypatch):
+    """The forced path's `clean -ffd` is part of the advance: cut off, it is a timeout like the
+    reset's, not the partial "some untracked files could not be removed"."""
+    old = selfupdate.local_state(env["sys"])["head"]
+    gitrepo.upstream_commit(env["up"])
+    real_git = selfupdate._git
+    cut = []
+
+    def first_clean_times_out(system, root, args, timeout):
+        if args[:1] == ["clean"] and not cut:
+            cut.append(args)
+            return CommandResult(124, "", "", timed_out=True)
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", first_clean_times_out)
+    res = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert res["ok"] is False and res["timed_out"] is True and not res.get("cleanup_failed")
+    assert selfupdate.local_state(env["sys"])["head"] == old
+
+
+def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):
+    real_git = selfupdate._git
+    seen = []
+    monkeypatch.setattr(selfupdate, "_git", lambda system, root, args, timeout: (
+        seen.append((args[0], timeout)) or real_git(system, root, args, timeout)))
+    gitrepo.upstream_commit(env["up"])
+    assert selfupdate.apply_update(env["sys"], env["paths"])["ok"]
+    gitrepo.upstream_commit(env["up"], version="0.1.2")
+    assert selfupdate.apply_update(env["sys"], env["paths"], force=True)["ok"]
+    advance = {(op, t) for op, t in seen if op in ("merge", "reset", "clean")}
+    assert {op for op, _ in advance} == {"merge", "reset", "clean"}
+    assert {t for _, t in advance} == {selfupdate._APPLY_TIMEOUT} and selfupdate._APPLY_TIMEOUT >= 300
+    assert {t for op, t in seen if op == "rev-parse"} == {selfupdate._LOCAL_TIMEOUT}
+
+
 # --- garble fix: command-output summarizer -----------------------------------------------------
 
 def test_summarize_output_collapses_multiline_and_box_drawing():
