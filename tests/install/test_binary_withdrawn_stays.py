@@ -278,7 +278,7 @@ def _moving_clone(monkeypatch, svc, commit):
             return None
 
         def _pending_journals(self):
-            return []
+            return state["pending"]() if "pending" in state else []
 
     monkeypatch.setattr(ControllerService, "_installer", lambda self: _Installer())
     monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
@@ -622,6 +622,20 @@ def test_another_stacks_install_leaves_a_checkout_whose_lock_is_busy_and_names_i
     assert "lhpc install meshcom --source binary --yes moves it back" in res.summary, res.summary
     assert state["adopted"] == [] and state["commit"] == "a" * 40
     assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_another_stacks_install_leaves_a_checkout_whose_source_transaction_is_open_and_names_its_stack(
+        tmp_path, monkeypatch, binary_receipt):
+    # A source transaction appears after the daemon install's own guard passed: the restore's guard sees it and
+    # refuses by name (no traceback); nothing moved, the journal stays.
+    svc = _svc(tmp_path, monkeypatch)
+    state, _rel = _meshcom_interrupted_then_daemon(monkeypatch, svc, binary_receipt)
+    calls = []
+    state["pending"] = lambda: [] if calls.append(1) or len(calls) == 1 else ["src/meshcom-qemu-raspi.journal"]
+    res = svc.install("daemon", apply=True, source="binary")
+    assert not res.ok and "a binary install of 'meshcom'" in res.summary and "busy now" in res.summary, res.summary
+    assert "unresolved source-transaction journal" in res.summary, res.summary
+    assert state["adopted"] == [] and bi.read_journal(svc._paths)[1] == "valid"
 
 
 def test_the_plan_names_the_same_artifacts_checkout_repair_the_apply_makes(tmp_path, monkeypatch, binary_receipt):
