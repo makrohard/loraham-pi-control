@@ -346,8 +346,8 @@ def deleted_lines(diff: str) -> list[int]:
             hunk = False
         elif m := re.match(r"@@ -(\d+)", line):
             n, hunk = int(m[1]), True
-        elif hunk and line[:1] in "- ":      # a deleted or a context line of the old file
-            if line[0] == "-":
+        elif hunk and line[:1] in "- ":      # a deleted or a context line ("" under diff.suppressBlankEmpty)
+            if line[:1] == "-":
                 out.append(n)
             n += 1
     return out

@@ -547,6 +547,50 @@ def test_a_clock_after_a_lone_carriage_return_is_found(repo):
     assert _run(repo)[1]["wallclock"] == "HARD"
 
 
+def _module(monkeypatch, repo):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_houserules_mod", CHECKER)
+    hr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hr)
+    monkeypatch.chdir(repo)
+    return hr
+
+
+def test_an_empty_context_line_does_not_stop_the_deleted_line_count(repo, monkeypatch):
+    # Under diff.suppressBlankEmpty git writes an empty context line as "" (no leading space). Red before: line[0]
+    # on it raised IndexError.
+    hr = _module(monkeypatch, repo)
+    assert hr.deleted_lines("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1 @@\n-a\n\n-c\n") == [1, 3]
+
+
+# The release's section commit under a user's diff.suppressBlankEmpty with context between or around its hunks: the
+# fixed invocation (no context, no context between hunks) reads it as with no config. (files at <base>, the commit)
+BLANK_CONTEXT = {
+    "diff.context": ({}, CHANGELOG.replace("## Unreleased\n", "## Unreleased\n- a\n- b\n- c\n")),
+    "diff.interHunkContext": (CHANGELOG.replace("## Unreleased\n", "## Unreleased\n- a\n\n- b\n"),
+                              CHANGELOG.replace("## Unreleased\n", "## Unreleased\n- a2\n\n- b2\n")),
+}
+
+
+@pytest.mark.parametrize("key", sorted(BLANK_CONTEXT))
+def test_a_release_section_commit_reads_the_same_under_suppress_blank_empty(repo, key):
+    before, text = BLANK_CONTEXT[key]
+    if before:
+        _commit(repo, {"CHANGELOG.md": before})
+        _git(repo, "tag", "-f", "base")
+    _git(repo, "config", "diff.suppressBlankEmpty", "true")
+    _git(repo, "config", key, "3" if key == "diff.context" else "5")
+    _commit(repo, {"CHANGELOG.md": text})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (0, "OK")
+
+
+def test_a_word_on_a_line_starting_with_plus_plus_is_named(repo):
+    # Inside a hunk an added "++ " line reads "+++ "; it is the added line, not a header.
+    _commit(repo, {"docs/a.md": f"Alpha fact.\n++ Reviewed by {W}\n"})
+    assert _attribution(repo) == (0, "WARN", "1 at docs/a.md:2")
+
+
 def test_a_crlf_line_is_one_python_line(repo):
     # "\r\n" ends one line for git and for Python: the edited line 2 is not the clock's line 4 (counting the "\r"
     # of each "\r\n" once more would put git's line 2 on Python's 3 and 4).
