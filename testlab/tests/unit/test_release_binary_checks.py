@@ -57,10 +57,10 @@ def test_an_index_at_the_pins_passes_both_checks(tmp_path):
 
 def test_an_index_whose_entries_miss_a_covered_component_fails_the_newest_entry_check(tmp_path):
     # no entry the candidate's install takes (none_compatible): red, named per stack
-    svc, stacks = _stacks(tmp_path, at_pins=False)
+    _svc, stacks = _stacks(tmp_path, at_pins=False)
     for _st, _spec, entries in stacks:
         for e in entries:
-            e.components.pop(sorted(e.components)[0])
+            e.components.pop(min(e.components))
     chosen, refused = binaries_installed(TARGET, stacks)
     assert chosen == [] and len(refused) == len(stacks), chosen
     assert all("no published binary covers" in r for r in refused), refused
