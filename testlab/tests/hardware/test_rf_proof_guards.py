@@ -126,3 +126,29 @@ def test_a_send_outside_tx_fails_the_dry_self_check(tmp_path):
     assert r.returncode == 2
     assert stop_lines(r) == ['STOP: dry self-check sends-only-in-tx: a send outside tx: planted: must H p.txt "$(form tx_text rid=r1 n=x)"']
     assert "dry self-check OK every-send-gated" in r.stdout          # anchor: the dynamic check ran and passed
+
+
+# ---- a STOP inside R0's radio and peer checks ends the run; a malformed peer key is a STOP ---------------------------------
+
+UNKNOWN_KIND = "STOP: PEER_g2: unknown kind 'bogus' (want meshcom, aprs, meshtastic, meshcore-ble or rnode)"
+
+
+@pytest.mark.parametrize("env, want", [
+    ({"RADIO_HSTK": "H ch341-rfm98pw-433 433 bogus=1", "LANE": "fast"}, "STOP: RADIO_HSTK: 'bogus=1' (want serial=<s> or port=<p>)"),
+    ({"PEER_g2": "bogus usb-x hubB", "LANE": "full"}, UNKNOWN_KIND),
+    ({"PEER_g2": "bogus", "LANE": "full"}, UNKNOWN_KIND),
+    ({"PEER_g2": "meshtastic", "LANE": "full"},
+     "STOP: PEER_g2: kind 'meshtastic' without its by-id name or BLE address (an empty or unset key = the peer is absent)"),
+])
+def test_a_malformed_radio_or_peer_key_stops_r0(tmp_path, env, want):
+    # red-before: the selector STOP was swallowed and the run went on (42768cef); 'bogus usb-x' read as an absent serial
+    # peer (42768cef); 'bogus' without an id read as absent before the kind check (f797c66b)
+    r = dry(tmp_path, **env)
+    assert r.returncode == 2
+    assert stop_lines(r) == [want], r.stderr
+
+
+def test_an_empty_peer_key_is_an_absent_peer(tmp_path):
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="3", PEER_g2="")
+    assert r.returncode == 0, r.stderr
+    assert "NOT RUN: row 3 meshtastic box -> peer: absent: peer g2" in r.stdout

@@ -505,8 +505,9 @@ radiokey() {   # radiokey <KEY>: RK = "rid <rid> <box> <model>", or "why <reason
   case "$sel" in serial=*|port=*) rows=$(printf '%s\n' "$rows" | grep -F " $sel ");; '') ;; *) stop "RADIO_$1: '$sel' (want serial=<s> or port=<p>)";; esac
   n=$(printf '%s\n' "$rows" | grep -c .); case "$n" in 0) RK="why absent: radio $1";; 1) RK="rid $(printf '%s\n' "$rows" | cut -d' ' -f2) $b $m";; *) RK="why ambiguous: radio $1 ($n match)";; esac; }
 peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; called directly, so its STOP ends the run
-  local v="PEER_$1" kind id rest; read -r kind id rest <<< "${!v:-}"; PK=; [ -n "$id" ] || { PK="absent: peer $1"; return 0; }
+  local v="PEER_$1" kind id rest; read -r kind id rest <<< "${!v:-}"; PK=; [ -n "$kind" ] || { PK="absent: peer $1"; return 0; }   # unset or empty
   case "$kind" in meshcom|aprs|meshtastic|meshcore-ble|rnode) ;; *) stop "PEER_$1: unknown kind '$kind' (want meshcom, aprs, meshtastic, meshcore-ble or rnode)";; esac
+  [ -n "$id" ] || stop "PEER_$1: kind '$kind' without its by-id name or BLE address (an empty or unset key = the peer is absent)"
   if [ "$kind" = meshcore-ble ]; then
     if [ "$MODE" = dry ]; then case " ${DRY_BLE:-} " in *" $id "*) ;; *) PK="absent: peer $1";; esac
     else peerpin "R0-$1-power.txt" mc-power; [ "$XRC" = 0 ] || PK="absent: peer $1"; fi   # its read-only power read: the connect
