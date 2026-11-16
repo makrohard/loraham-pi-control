@@ -246,6 +246,31 @@ def test_a_tiny_deadline_ends_as_the_named_failure_never_a_traceback():
         assert rc == 1 and "Traceback" not in out and "not announced" in out, out
 
 
+def test_an_alarm_pending_at_the_disarm_never_turns_a_success_into_a_failure(monkeypatch):
+    """In process, deterministic (SR delta note 1): the timer's disarm is faked to deliver a real
+    SIGALRM at that very moment — the alarm "pending after cleanup". Cleanup ignores SIGALRM before it
+    disarms, so a confirmed announce stays a success (rc 0). Without that order the alarm becomes
+    "announce timed out" after the announce went out."""
+    import importlib.util
+    import signal
+    spec = importlib.util.spec_from_file_location("meshchat_announce_inproc", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "announce", lambda api: None)               # the announce went out
+    real = signal.setitimer
+
+    def setitimer(which, seconds, *rest):
+        if seconds == 0:
+            signal.raise_signal(signal.SIGALRM)                          # the alarm lands at the disarm
+        return real(which, 0)                                            # never a real timer here
+    monkeypatch.setattr(mod.signal, "setitimer", setitimer)
+    before = signal.getsignal(signal.SIGALRM)
+    try:
+        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 0
+    finally:
+        signal.signal(signal.SIGALRM, before)
+
+
 def test_a_chunked_answer_in_time_is_read_whole(meshchat):
     rc, out, _s = _script(meshchat(chunked=True).api)
     assert rc == 0 and "announced" in out, out
