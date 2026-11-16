@@ -64,3 +64,21 @@ def test_an_index_whose_entries_miss_a_covered_component_fails_the_newest_entry_
     chosen, refused = binaries_installed(TARGET, stacks)
     assert chosen == [] and len(refused) == len(stacks), chosen
     assert all("no published binary covers" in r for r in refused), refused
+
+
+def test_an_index_at_the_pins_from_other_build_inputs_fails_the_exact_pin_check_and_installs(tmp_path):
+    # built at the pins, but one covered component's build-input digest differs from the candidate's (a CLI bump
+    # after the build): the exact check refuses that stack, the newest-entry check still takes it
+    svc, stacks = _stacks(tmp_path, at_pins=True)
+    bumped = [st.id for st, _spec, entries in stacks if entries[0].inputs]
+    assert bumped, "no binary stack covers a component with build inputs"
+    for _st, _spec, entries in stacks:
+        for e in entries:
+            if e.inputs:
+                e.inputs[min(e.inputs)] = "0" * 64
+    chosen, refused = binaries_at_the_pins(svc, TARGET, stacks)
+    assert sorted(r.split(":")[0] for r in refused) == sorted(bumped), refused
+    assert all("at the candidate's pins and build inputs" in r for r in refused), refused
+    assert len(chosen) == len(stacks) - len(bumped), chosen
+    chosen, refused = binaries_installed(TARGET, stacks)
+    assert refused == [] and len(chosen) == len(stacks), refused
