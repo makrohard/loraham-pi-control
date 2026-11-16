@@ -1132,3 +1132,28 @@ def test_an_unread_tag_list_of_the_installed_commit_reads_could_not_check_before
     setattr(box, f"fail_{where}_tags", False)
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[3]
+
+
+def test_an_equal_version_after_the_installed_one_is_a_forward_move(box):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v2.0", box.c[1])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]
+    box.push_tag("2.0", box.c[2])                     # the same version on a later commit, no release
+    assert box.cli("update", "s", "--yes") == 0       # the floor refuses only a LOWER version, as before
+    assert box.head() == box.c[2]
+
+
+def test_a_plain_tag_after_an_older_release_still_meets_the_floor(box, capsys):
+    box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
+    box.push_tag("v0.5", box.c[0])
+    box.release = "v0.5"                              # an older release, an ancestor
+    box.push_tag("v2.0", box.c[1])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[1]                     # v2.0, a plain tag in the release's future
+    box.push_tag("v1.0", box.c[2])                    # a lower-numbered plain tag after it
+    capsys.readouterr()
+    assert box.cli("update", "s", "--yes") != 0       # a release elsewhere never lifts the floor
+    assert NOT_NEWER in capsys.readouterr().out
+    assert box.head() == box.c[1]
+
