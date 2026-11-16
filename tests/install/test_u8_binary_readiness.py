@@ -83,7 +83,8 @@ def test_a_valid_receipt_recording_the_component_starts(short_tmp_path, monkeypa
 
 def test_an_uncovered_component_of_a_binary_stack_is_judged_on_its_own_source(tmp_path, monkeypatch, binary_receipt):
     """Mixed coverage: on a valid meshcom receipt, a component the spec does not cover has no
-    artifact behind it; without its own checkout it is refused, not passed on the receipt."""
+    artifact behind it; without its own checkout it is refused, not passed on the receipt — by the
+    web start gate too."""
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     spec = svc.binary_spec("meshcom")
@@ -99,6 +100,14 @@ def test_an_uncovered_component_of_a_binary_stack_is_judged_on_its_own_source(tm
     assert svc.on_binary_channel("meshcom") and not svc._source_present(bridge)
     assert svc.install_blocker(bridge) == "not installed — run: lhpc install meshcom"
     assert svc.install_blocker(qemu) == ""                     # the covered one: the receipt
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's identity gate comes first
+    monkeypatch.setattr(svc, "_ensure_daemon", lambda *a, **k: ([], True, ""))   # the daemon up (its own path)
+    r = svc.start("meshcom", apply=True)
+    res = {x.component: x for x in r.results}
+    assert not r.ok and res["meshcom-bridge"].outcome.value == "blocked", r.details     # through the start too
+    assert res["meshcom-bridge"].summary == "not installed — run: lhpc install meshcom", r.details
 
 
 def test_an_unsafe_receipt_refuses_the_generic_start_by_its_reason(tmp_path, monkeypatch, binary_receipt):
@@ -130,16 +139,16 @@ def test_an_unsafe_receipt_refuses_the_generic_start_by_its_reason(tmp_path, mon
     ("unsafe", "", "the binary install of 'daemon' is unsafe — resolve it first"),   # never "" = ready
     ("superseded", "adopted", "not built — run: lhpc build daemon"),               # the source branch
 ])
-def test_a_receipt_that_is_not_valid_is_never_read_as_ready(tmp_path, monkeypatch, binary_receipt, state, why,
+def test_a_receipt_that_is_not_valid_is_never_read_as_ready(short_tmp_path, monkeypatch, binary_receipt, state, why,
                                                            expected):
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    """Through `start daemon` too: the daemon's own spawn path refuses by the same reason."""
+    svc, spawned = _daemon_box(short_tmp_path, monkeypatch, binary_receipt)   # records the daemon
     daemon = svc.stack("daemon").component(DAEMON)
-    (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
-    rec = binary_receipt(svc)                                    # records the daemon
+    rec = svc.binary_receipt_state("daemon")[1]
     monkeypatch.setattr(ControllerService, "binary_receipt_state", lambda self, sid: (state, rec, why))
     monkeypatch.setattr(ControllerService, "_build_complete", lambda self, comp: False)   # a source build would say so
     assert svc.install_blocker(daemon) == expected
+    assert _refused(svc, spawned) == f"daemon: {expected}"
 
 
 def _meshtastic_box(tmp_path, monkeypatch, binary_receipt, *, clone):

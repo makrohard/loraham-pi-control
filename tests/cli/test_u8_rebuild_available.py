@@ -94,9 +94,17 @@ def test_a_marker_from_older_sources_still_refuses_and_the_page_says_build_requi
     assert "&#39;meshcore&#39; cannot start yet — meshcore-node: not built — run: lhpc build meshcore." in page
 
 
-def test_a_component_whose_gui_toolkit_is_absent_is_not_a_start_blocker(box, tmp_path, monkeypatch):
+def _start_flash(c, csrf, target):
+    """The web start (POST op=start) of `target`: the page it lands on (its flash)."""
+    resp = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": target})
+    assert resp.status_code == 302, resp.status_code
+    return c.get(resp.location.split("#")[0]).get_data(as_text=True)
+
+
+def test_a_component_whose_gui_toolkit_is_absent_is_not_a_start_blocker(box, web, csrf, tmp_path, monkeypatch):
     """The same scope as `unbuilt_components`: voice's GTK app on a box without the toolkit can never be
-    built here, so it neither blocks the start nor offers a rebuild; its terminal variant still counts."""
+    built here, so it neither blocks the start nor offers a rebuild; its terminal variant still counts.
+    Through the web start gate too: the refusal names the terminal variant only."""
     box((R1, R2_868))
     svc = _built(tmp_path, monkeypatch, "voice", "")
     monkeypatch.setattr(ControllerService, "gui_unavailable_components", lambda self, stack: ())   # the toolkit here
@@ -104,6 +112,10 @@ def test_a_component_whose_gui_toolkit_is_absent_is_not_a_start_blocker(box, tmp
     assert set(blocked) == {"loraham-voice", "loraham-voice-cli"}, blocked     # nothing built yet
     monkeypatch.setattr(ControllerService, "gui_unavailable_components", lambda self, stack: ("loraham-voice",))
     assert [cid for cid, _why in svc.start_readiness("voice")[0]] == ["loraham-voice-cli"]
+    assert svc.set_operator_identity(callsign="XX0XXA").ok        # voice's identity gate comes first
+    page = _start_flash(web(), csrf, "voice@r1")
+    assert "&#39;voice&#39; cannot start yet — loraham-voice-cli: not built" in page, page
+    assert "loraham-voice: " not in page
 
 
 def test_a_provider_with_changed_inputs_is_still_rebuilt_before_its_dependent(box, tmp_path, monkeypatch):
