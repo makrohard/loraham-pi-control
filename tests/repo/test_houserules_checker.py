@@ -607,6 +607,19 @@ def test_a_name_with_a_newline_keeps_the_row_on_one_line(repo):
     assert _attribution(repo) == (0, "WARN", "1 at docs/a\\x0ab.md:1")
 
 
+def test_a_hunk_header_is_read_up_to_its_new_start(repo):
+    # git's function context after the "@@" can hold "+9": the new start is the first "+" number.
+    _commit(repo, {"x.md": "a+9\n-\n-\n"})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"x.md": f"a+9\n-\n-\nReviewed by {W}\n"})
+    assert _attribution(repo) == (0, "WARN", "1 at x.md:4")
+
+
+def test_a_name_with_a_tab_a_quote_and_a_backslash_is_decoded(repo):
+    _commit(repo, {'docs/a\tb"c\\d.md': f"Reviewed by {W}\n"})
+    assert _attribution(repo) == (0, "WARN", '1 at docs/a\\x09b"c\\d.md:1')
+
+
 def test_an_indented_line_after_a_gap_does_not_lengthen_a_bullet(repo):
     # A continuation is contiguous: three indented lines after an unindented one are not the bullet's.
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace(
