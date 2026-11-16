@@ -95,7 +95,7 @@ jobs:
         if: matrix.python-version == '3.11'
         env:
           # the rules hold from this commit on; the history before it fails them and is not rewritten
-          HR_FLOOR: afd0cfeb6b2e025930b502bd1d064a0b12e1e362
+          HR_FLOOR: ceaad01266a2fa2b7c45e9a29e376c8c5f758605
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
