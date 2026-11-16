@@ -21,8 +21,10 @@
 # Evidence: $EVD_ROOT/fw-boxproof-<UTC time> (run.log, REPORT.md, UNDO.txt, SHA256SUMS).
 set -uo pipefail
 MODE=${1:-dry}; case "$MODE" in dry|live) ;; *) echo "usage: fw-boxproof.sh dry|live"; exit 2;; esac
-KIT=$(cd "$(dirname "$0")" && pwd); REPO=$(git -C "$KIT" rev-parse --show-toplevel) || exit 2
+KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); REPO=$(git -C "$KIT" rev-parse --show-toplevel) || exit 2
 LAB=$KIT/lab.local.env; [ "$MODE" = dry ] && LAB=$KIT/lab.example.env
+# shellcheck source=/dev/null
+RFPROOF_SOURCE_ONLY=1 . "$KIT/rf-proof.sh" || { echo "STOP: rf-proof.sh does not read"; exit 2; }   # its one redactor, capture
 [ -r "$LAB" ] || { echo "STOP: no $LAB"; exit 2; }
 # shellcheck source=/dev/null
 . "$LAB" || { echo "STOP: $LAB does not read"; exit 2; }
@@ -33,6 +35,8 @@ RTB=${BOX_H_RUNTIME:-'~/loraham-pi-control'}; LH="$RTB/venv/lhpc/bin/lhpc"; CK="
 FWSHA=${FWSHA:-}; FWCI=${FWCI:-}; LANCIDR=${LANCIDR:-}; LABNAME=${LABNAME:-LabH2}; LABSHORT=${LABSHORT:-LH2}
 PW=; [ "$MODE" = dry ] || IFS= read -r PW || true; exec 0< /dev/null   # stdin: one line, then closed
 [ "$MODE" = dry ] || [ -n "$PW" ] || { echo "STOP: no box H password on stdin (line 1)"; exit 2; }
+case "lhpc ${HH%@*}" in *"$PW"*) [ "$MODE" = dry ] || { echo "STOP: the box password is part of the login name"; exit 2; };; esac
+PW_H=$PW; PW_Z=; MC_PIN=; TRACKER_CALL=; OPERATOR_CALL=${OPERATOR_CALL:-}   # what the redactor masks
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="$PY -c '$RUNSET_PY'"
 ENABLE_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; ok, msg = radio_start.set_enabled(ControllerService(), sys.argv[1], sys.argv[2] == "on"); print(("OK " if ok else "REFUSED ") + msg); sys.exit(0 if ok else 3)'
@@ -70,12 +74,14 @@ fail() { say "FAIL: $*"; [ "$MODE" = live ] && echo "$*" >> "$EVD/FAILED.txt"; }
 ok() { say "ok: $*"; }
 report() { [ "$MODE" = live ] && echo "| $* |" >> "$EVD/REPORT.md"; say "REPORT | $*"; }
 # X <file> <command>: on box H, output in $EVD/<file>, rc in XRC. XIN <file> <stdin> <command>: the same with stdin.
+# The output goes through rf-proof.sh's capture: redacted (the password, the call) before it is written.
+sshx() { local in=$1; shift
+  if [ "$in" = - ]; then SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"
+  else printf '%s\n' "$in" | SSHPASS=$PW sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")"; fi; }
 X() { local f=$1; shift; if [ "$MODE" = dry ]; then echo "  [dry] H > $f: $*"; XRC=0; return 0; fi
-  XRC=0; SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")" > "$EVD/$f" 2>&1 || XRC=$?
-  echo "$XRC" > "$EVD/$f.rc"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
+  capture "$f" sshx - "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
 XIN() { local f=$1 in=$2; shift 2; if [ "$MODE" = dry ]; then echo "  [dry] H > $f: (stdin) $*"; XRC=0; return 0; fi
-  XRC=0; printf '%s\n' "$in" | SSHPASS=$PW sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$HH" "bash -lc $(printf %q "$*")" > "$EVD/$f" 2>&1 || XRC=$?
-  echo "$XRC" > "$EVD/$f.rc"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
+  capture "$f" sshx "$in" "$*"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$1: rc $XRC"; }
 body() { [ "$MODE" = dry ] && return 0; cat "$EVD/$1"; }
 has() { [ "$MODE" = dry ] && return 0; grep -qF -- "$2" "$EVD/$1"; }
@@ -94,6 +100,7 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no Final Tx power line";; esac; [ "$fp" -le 17 ] || { X "$1-stop.txt" "$(gstop meshtastic@r2)"; stop "$1: Final Tx power $fp above 17"; }; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
+[ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence
 echo "== PREP (the PC; no box touched)"
 [[ "$FWSHA" =~ ^[0-9a-f]{40}$ ]] || stop "FWSHA is not a 40-hex sha"; [[ "$FROM" =~ ^[0-9a-f]{40}$ ]] || stop "FWFROM is not a 40-hex sha"; [ -n "$FWCI" ] || stop "FWCI is not set"
 [[ "$LABNAME" =~ ^[A-Za-z0-9-]{3,20}$ ]] && [[ "$LABSHORT" =~ ^[A-Za-z0-9]{1,4}$ ]] || stop "LABNAME/LABSHORT: a lab name (3-20 [A-Za-z0-9-]) and short name (1-4 [A-Za-z0-9])"
@@ -183,8 +190,7 @@ fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; o
 
 echo "== RE"
 if [ "$MODE" = live ]; then
-  case "lhpc ${HH%@*}" in *"$PW"*) pat="(sshpass +-p *|SSHPASS=|password: *)['\"]?$PW['\"]?( |\$)"; c=$(grep -rlE -- "$pat" "$EVD" | wc -l);;   # the password is part of the login name: leak shapes only
-    *) c=$(grep -rlF -- "$PW" "$EVD" | wc -l);; esac
+  c=$(grep -rlF -- "$PW" "$EVD" | wc -l)                   # the captures are redacted: any occurrence is a leak
   [ "$c" = 0 ] || stop "RE: the box password is in $c evidence file(s): do not publish"
   ( cd "$EVD" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS ); say "evidence $EVD, SHA256SUMS $(sha256sum "$EVD/SHA256SUMS" | cut -c1-8)"
   [ ! -s "$EVD/FAILED.txt" ] || { say "FAILED rows: $(tr '\n' '|' < "$EVD/FAILED.txt")"; exit 1; }
