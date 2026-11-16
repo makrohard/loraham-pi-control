@@ -35,6 +35,29 @@ import time
 
 NOT_SEEN = 3
 
+# The actions, one table for the driver and its dry fake (fake_peer.py loads it from here): the peer each acts on and
+# its kind; the kind fixes the arguments. A call that does not fit is a usage error: exit 2, before any device opens.
+ACTIONS = {"meshcom-power": ("tdeck", "power"), "meshcom-send": ("tdeck", "send"), "meshcom-read": ("tdeck", "read"),
+           "aprs-read": ("tracker", "read"),
+           "mt-power": ("g2", "power"), "mt-send": ("g2", "send"), "mt-read": ("g2", "read"),
+           "mc-power": ("tdpro", "power"), "mc-send": ("tdpro", "send"), "mc-read": ("tdpro", "read"),
+           "rns-exchange": ("rnode", "exchange")}
+ARGS = {"power": ("[<p>]",), "send": ("<nonce>",), "read": ("<nonce>", "<s>"),
+        "exchange": ("<nonce-in>", "<box-name>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>")}
+
+
+def usage_error(a):
+    """None when argv `a` is a call of the table, else the reason (the caller exits 2)."""
+    if not a or a[0] not in ACTIONS:
+        return f"unknown action {a[0] if a else '(none)'}"
+    kind, args = ACTIONS[a[0]][1], a[1:]
+    want = ARGS[kind]
+    if kind == "power":
+        ok = len(args) == 0 or (len(args) == 1 and re.fullmatch(r"-?\d+", args[0]))
+    else:
+        ok = len(args) == len(want) and all(re.fullmatch(r"\d+(\.\d+)?", v) for w, v in zip(want, args, strict=True) if w == "<s>")
+    return None if ok else f"{a[0]}: {' '.join(want)}"
+
 
 def device(name):
     """The device of peer `name` from `PEER_<name>` (its second field): a by-id name or a BLE address."""
@@ -380,6 +403,10 @@ def rns_run(d, inn, box_name, secs, dest_file, out, go_file):
 
 
 def main(a):
+    err = usage_error(a)
+    if err:
+        print(err, file=sys.stderr)
+        return 2
     act = a[0]
     if act == "meshcom-power":
         return meshcom_power(a[1] if len(a) > 1 else None)
@@ -402,14 +429,8 @@ def main(a):
         h = mt_read(nonce, float(a[2]))
     elif act == "mc-read":
         h = mc_read(nonce, float(a[2]))
-    elif act == "rns-exchange":
-        if len(a) != 7:
-            print("rns-exchange: <nonce-in> <box-name> <secs> <dest-file> <out> <go-file>", file=sys.stderr)
-            return 2
-        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6])
     else:
-        print(f"unknown action {act}", file=sys.stderr)
-        return 2
+        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6])
     if h:
         print(f"SEEN {nonce} {h}")
         return 0

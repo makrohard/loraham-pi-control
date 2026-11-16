@@ -4,6 +4,7 @@ import importlib.util
 import pathlib
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -99,3 +100,32 @@ def test_rns_exchange_without_the_release_file_sends_only_its_announce(monkeypat
 def test_a_release_file_after_the_bound_sends_nothing_more(monkeypatch, capsys, tmp_path):
     rc, out = exchange(monkeypatch, capsys, tmp_path, Clock(go=tmp_path / "go", at=fake.RELEASE_WAIT_S + 2))
     assert rc == fake.NOT_SEEN and frames(out) == ["FRAME | PC:rnode | control"]
+
+
+DRIVER = FAKE.with_name("peer.py")
+INVALID = [["rns-send", "n1"], ["rns-read", "n1", "5"], ["meshcom-send"], ["mc-power", "garbage"], ["mt-read", "n1", "x"],
+           ["aprs-send", "n1"], ["aprs-power"], ["mt-send", "n1", "extra"], ["rns-exchange", "a", "b", "5", "d", "o"], []]
+VALID = [["meshcom-power"], ["mt-power", "1"], ["mc-power", "-2"], ["meshcom-send", "n1"], ["mt-send", "n1"],
+         ["mc-send", "n1"], ["meshcom-read", "n1", "5"], ["aprs-read", "n1", "2.5"], ["mt-read", "n1", "5"],
+         ["mc-read", "n1", "5"]]
+
+
+class NoDevice(types.ModuleType):
+    def __getattr__(self, name):
+        raise AssertionError(f"a device module was used ({self.__name__}.{name})")
+
+
+@pytest.mark.parametrize("act", INVALID, ids=lambda a: " ".join(a) or "(none)")
+def test_a_call_the_driver_refuses_the_fake_refuses_alike(monkeypatch, act):
+    # The same exit code before any device: peer.py and the fake share one action table.
+    spec = importlib.util.spec_from_file_location("peer_parity", DRIVER)
+    peer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(peer)
+    for name in ("serial", "meshtastic", "meshcore", "RNS", "LXMF"):
+        monkeypatch.setitem(sys.modules, name, NoDevice(name))
+    assert (peer.main(act), run(*act).returncode) == (2, 2)
+
+
+@pytest.mark.parametrize("act", VALID, ids=" ".join)
+def test_a_call_the_driver_takes_the_fake_takes(act):
+    assert run(*act).returncode == 0

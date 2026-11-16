@@ -266,10 +266,13 @@ def test_the_coverage_check_counts_frames_per_radio_and_class(lines, bad):
 
 def test_a_peer_that_sends_twice_under_one_tx_fails_the_dispatch_check(dry, tmp_path):
     planted = tmp_path / "fake_peer.py"
+    shutil.copy(KIT / "peer.py", tmp_path / "peer.py")           # the fake reads its action table beside it
     text = (KIT / "fake_peer.py").read_text()
     planted.write_text(text.replace("        frame(peer, a[1])\n", "        frame(peer, a[1])\n        frame(peer, a[1])\n", 1))
     assert planted.read_text() != text
     d = dry("full", FAKE_PEER=str(planted))
+    # both detectors fire: the runner's own self-check STOPs (rc 2), and this test's credit count finds the frame
+    assert d.rc == 2 and "without a TX credit" in d.err
     assert [f for f in uncovered(d.lines) if "PC:" in f]
 
 
