@@ -502,8 +502,8 @@ def test_a_killed_host_takes_its_manager_down(tmp_path):
         def term(*_):
             open({str(flag)!r}, "w").write("term"); sys.exit(0)
         signal.signal(signal.SIGTERM, term)
+        signal.alarm(30)                        # a manager left behind ends by itself, also one blocked in the open
         open({str(ready)!r}, "w").close()       # the handler is installed
-        signal.alarm(30)                        # a manager left behind ends by itself, as before
         signal.pause()
     """)
     host = textwrap.dedent(f"""

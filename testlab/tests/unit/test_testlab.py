@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -716,14 +717,18 @@ def _spawned(proc, needle):
 
 def _sleeper(*argv_tail):
     """A Python sleeper carrying `argv_tail`, returned once it runs its own code: it writes one byte first, so its
-    exec is done and /proc shows its argv (Popen returns while the exec is still setting the argument area)."""
+    exec is done and /proc shows its argv (Popen returns while the exec is still setting the argument area). The
+    byte ends the wait; the 10 s bound only guards a sleeper that hangs before it, which is killed and reaped."""
     proc = subprocess.Popen([sys.executable, "-c", "import os, time; os.write(1, b'r'); time.sleep(60)",
                              *argv_tail], stdout=subprocess.PIPE)
-    ran = proc.stdout.read(1)
+    readable, _, _ = select.select([proc.stdout], [], [], 10)  # wallclock: hang guard only; the sleeper's byte ends the wait
+    ran = proc.stdout.read(1) if readable else b""
     proc.stdout.close()
     if ran != b"r":
+        proc.kill()
         proc.wait()
-        pytest.fail(f"the sleeper exited before it ran (exit {proc.returncode})")
+        pytest.fail(f"the sleeper did not run within 10 s (exit {proc.returncode})" if not readable
+                    else f"the sleeper exited before it ran (exit {proc.returncode})")
     return proc
 
 
