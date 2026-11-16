@@ -81,10 +81,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          . .github/scripts/containers.sh   # crun: every container of this step is removed when it ends
           . .github/scripts/retry.sh
           # Outside the checkout: the lane copies /repo, and 178 MiB more there could fill the disk first.
-          target="aarch64-$(crun "$IMG" sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')"
+          # The Debian release of the image is the one its base image names (FROM ...-<codename>): no container.
+          codename=$(sed -n 's/^FROM [^ ]*-\([a-z]*\)$/\1/p' .devcontainer/Dockerfile)
+          [ -n "$codename" ] || { echo "::error::STOP: .devcontainer/Dockerfile's FROM names no Debian release"; exit 1; }
+          target="aarch64-$codename"
           mirror="$RUNNER_TEMP/binmirror"
           echo "BIN_TARGET=$target" >> "$GITHUB_ENV"
           echo "BIN_MIRROR=$mirror" >> "$GITHUB_ENV"
@@ -402,9 +404,10 @@ jobs:
         # 0.25 stays the ceiling (a throttle only ever gets tighter). test_slow_build_calibrated
         # still judges the throttled run on its own.
         run: |
-          q=$(python3 testlab/slowbuild/cpu_quota.py --image "$IMG")
-          echo "$q" >> "$GITHUB_ENV"
-          echo "slow-build CPU quota: \`$q\`" >> "$GITHUB_STEP_SUMMARY"
+          . .github/scripts/containers.sh   # its timed build's container is removed when the step ends
+          lhpc_wait_for lhpc-ci-quota-$$ \
+            python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name lhpc-ci-quota-$$ >> "$GITHUB_ENV"
+          echo "slow-build CPU quota: \`$(grep '^SLOW_CPUS=' "$GITHUB_ENV" | tail -n 1)\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Acquire the timed operations' transfers (timed, recorded, never judged)
         # Decision (a): a timed operation's transfer is measured as its own number and never

@@ -29,6 +29,7 @@ import hashlib
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -72,12 +73,12 @@ def quota(w1: float, z_cpu: float) -> float:
     return min(CEILING, math.floor(MARGIN * w1 / z_cpu * 100) / 100)
 
 
-def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S) -> float:
+def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S, name: str = "") -> float:
     """Wall seconds of the calibration's cpu build in `image` at --cpus 1, timed inside, as calibrate.sh times it."""
     with tempfile.TemporaryDirectory() as tmp:
-        for name in inputs():
-            shutil.copy2(HERE / name, Path(tmp) / Path(name).name)
-        name = f"lhpc-cpu-quota-{os.getpid()}"
+        for src in inputs():
+            shutil.copy2(HERE / src, Path(tmp) / Path(src).name)
+        name = name or f"lhpc-cpu-quota-{os.getpid()}"
         argv = ["docker", "run", "--rm", "--name", name, "--network", "none", "--cpus", "1", "--user", "root",
                 "-v", f"{tmp}:/w", image, "bash", "-c",
                 'set -e; t0=$EPOCHREALTIME; make -s -C /w -j"$(nproc)" >/dev/null; echo "$t0 $EPOCHREALTIME"']
@@ -85,8 +86,12 @@ def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S) -> float:
             r = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
         except BaseException as e:
             # Ending the client does not end its container (--rm removes it only once it exits): remove it by name.
-            # It is absent if it never started, or ended meanwhile.
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=60)
+            # A TERM ends here too (the script turns it into SystemExit). An absent container is fine (never started, or
+            # ended meanwhile); any other failure of the removal is said.
+            rm = subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, check=False, timeout=60)
+            if rm.returncode != 0 and "no such container" not in rm.stderr.lower():
+                print(f"cpu_quota: container {name} may still be running: docker rm -f: {_tail(rm.stderr)}",
+                      file=sys.stderr)
             if isinstance(e, subprocess.TimeoutExpired):
                 raise SystemExit(f"cpu_quota: the timed build did not end within {timeout:g} s: {' '.join(argv)}\n"
                                  f"stdout: {_tail(e.stdout)}\nstderr: {_tail(e.stderr)}") from None
@@ -107,10 +112,11 @@ def _tail(out) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--image", required=True)
+    ap.add_argument("--name", default="", help="the timed build's container name (the step's cleanup removes it)")
     args = ap.parse_args(argv)
     work = workload()
     z_cpu = zero_cpu_s(tomllib.loads(BASELINE.read_text()).get("calibration", []), work)
-    w1 = measure_w1(args.image)
+    w1 = measure_w1(args.image, name=args.name)
     q = quota(w1, z_cpu)
     if q <= 0:
         raise SystemExit(f"cpu_quota: W1 {w1:.1f} s gives no positive quota against the Zero's {z_cpu} s")
@@ -121,4 +127,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))   # a TERM still removes the container
     sys.exit(main())

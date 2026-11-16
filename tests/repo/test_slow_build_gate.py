@@ -114,8 +114,7 @@ def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
     assert set(env) == {"SLOW_MEM", "SLOW_SWAP", "SLOW_WRITE_IOPS", "SLOW_READ_IOPS"}, env
     text = WORKFLOW.read_text()
     job = text[text.index("\n  slow-build:\n"):]
-    sizing = job.index('q=$(python3 testlab/slowbuild/cpu_quota.py --image "$IMG")\n'
-                       '          echo "$q" >> "$GITHUB_ENV"\n')
+    sizing = job.index('python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name lhpc-ci-quota-$$ >> "$GITHUB_ENV"\n')
     assert job.index('echo "IMG=$IMG" >> "$GITHUB_ENV"') < sizing < job.index("- name: Slow-target build")
     run = job[job.index("crun --user root \\\n            --cpus="):job.index("test -s slowevidence")]
     for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',

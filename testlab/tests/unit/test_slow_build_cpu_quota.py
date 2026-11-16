@@ -6,7 +6,11 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import os
 import re
+import select
+import signal
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -71,7 +75,7 @@ def test_without_a_usable_zero_row_the_step_refuses_by_name(rows, why):
 
 
 def test_the_step_prints_the_quota_for_the_job_env(monkeypatch, capsys):
-    monkeypatch.setattr(cpu_quota, "measure_w1", lambda image: 19.0)
+    monkeypatch.setattr(cpu_quota, "measure_w1", lambda image, name="": 19.0)
     assert cpu_quota.main(["--image", "lhpc-testlab:ci"]) == 0
     out, err = capsys.readouterr()
     z = cpu_quota.zero_cpu_s(tomllib.loads(cpu_quota.BASELINE.read_text())["calibration"], cpu_quota.workload())
@@ -79,14 +83,14 @@ def test_the_step_prints_the_quota_for_the_job_env(monkeypatch, capsys):
     assert "W1 19.0 s at --cpus 1" in err and f"Zero cpu_s {z} s" in err
 
 
-def _docker(tmp_path, monkeypatch, body: str):
+def _docker(tmp_path, monkeypatch, body: str, rm: str = "sys.exit(0)"):
     """A stand-in `docker` first on PATH: it records each call's argv (one line each); `run` then runs `body`, any
-    other subcommand (the `rm -f` of a container) just returns."""
+    other subcommand (the `rm -f` of a container) runs `rm`."""
     exe = tmp_path / "bin" / "docker"
     exe.parent.mkdir()
     exe.write_text(f"#!{sys.executable}\nimport sys\n"
                    f"open({str(tmp_path / 'calls')!r}, 'a').write('\\0'.join(sys.argv[1:]) + '\\n')\n"
-                   f"if sys.argv[1] != 'run':\n    sys.exit(0)\n{body}")
+                   f"if sys.argv[1] != 'run':\n    {rm}\n{body}")
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{exe.parent}:{__import__('os').environ['PATH']}")
     return lambda: [line.split("\0") for line in (tmp_path / "calls").read_text().splitlines()]
@@ -123,3 +127,40 @@ def test_a_timed_build_that_hangs_is_a_stop_after_its_bound_and_its_container_is
     assert "the timed build did not end within 0.5 s: docker run " in why and "stdout: started" in why
     run, rm = calls()
     assert run[0] == "run" and rm == ["rm", "-f", run[run.index("--name") + 1]]
+
+
+@pytest.mark.wallclock("a real stand-in hangs past the step's bound (0.5 s here)")
+@pytest.mark.parametrize("rm, said", [
+    ("sys.stderr.write('Error: No such container: x\\n'); sys.exit(1)", False),          # gone already: nothing to say
+    ("sys.stderr.write('Cannot connect to the Docker daemon\\n'); sys.exit(1)", True),   # not removed: said
+])
+def test_a_removal_that_fails_is_said_unless_the_container_is_gone(tmp_path, monkeypatch, capsys, rm, said):
+    _docker(tmp_path, monkeypatch, "import time\ntime.sleep(60)\n", rm=rm)
+    with pytest.raises(SystemExit):
+        cpu_quota.measure_w1("img", timeout=0.5, name="quota-x")
+    err = capsys.readouterr().err
+    assert ("container quota-x may still be running: docker rm -f: Cannot connect to the Docker daemon" in err) is said
+
+
+@pytest.mark.wallclock("a real sizing program and its stand-in build; the waits are bounded at 10 s (hang guards)")
+def test_a_term_to_the_sizing_program_removes_its_container(tmp_path, monkeypatch):
+    """G1-TC-T3-RE2 B1: a TERM ended the program without its cleanup, and the container kept building. Through the
+    step's command line; the stand-in build says it runs through a FIFO the test holds open."""
+    ready = tmp_path / "ready"
+    os.mkfifo(ready)
+    fd = os.open(ready, os.O_RDWR)                       # a reader from the start: the stand-in's open never blocks
+    calls = _docker(tmp_path, monkeypatch, f"open({str(ready)!r}, 'w').write('r')\nimport time\ntime.sleep(60)\n")
+    proc = subprocess.Popen([sys.executable, str(_PATH), "--image", "img", "--name", "quota-x"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert select.select([fd], [], [], 10)[0], "the timed build never started"
+        proc.send_signal(signal.SIGTERM)
+        proc.communicate(timeout=10)
+        assert proc.returncode == 128 + signal.SIGTERM
+        run, rm = calls()
+        assert run[run.index("--name") + 1] == "quota-x" and rm == ["rm", "-f", "quota-x"]
+    finally:
+        os.close(fd)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

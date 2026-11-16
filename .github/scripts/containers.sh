@@ -1,28 +1,40 @@
-# Sourced by a workflow step that starts containers: `crun ARGS...` is `docker run --rm ARGS...` under a name of
-# this step, and the step removes every container it named when it ends (success, failure, or the signals a job
-# timeout or a cancel sends). The docker client's own end never ends its container: a client killed by the runner
-# left the container running, and `--rm` removes a container only after it exits.
+# Sourced by a workflow step that starts containers. Every container is named before it is created, and when the step
+# ends (EXIT, or INT/TERM: what a job timeout or a cancel sends the step's shell) the step kills and reaps its client,
+# then removes the container by that name. The client's own end never ends its container (--rm removes it only once it
+# exits), and a reaped client creates nothing more.
 #
-# The names are kept in a file, so a container started in `$(crun ...)` (a subshell) is removed too. The client
-# runs in the background and the step waits for it: a trapped signal ends the wait at once, while a foreground
-# client would hold its trap back until the container ended.
-LHPC_CONTAINERS=$(mktemp "${RUNNER_TEMP:-/tmp}/lhpc-containers.XXXXXX")
+#   crun ARGS...                 docker run --rm ARGS... as such a container
+#   lhpc_wait_for NAME CMD...    CMD, which starts the container NAME itself (the quota step's sizing program)
+#
+# The client runs in the background under `wait`: bash runs a trap only after a FOREGROUND child exits, while `wait`
+# returns at once. Never call them inside $(...): bash holds its traps until a substitution ends.
+LHPC_CONTAINER=""
 
-lhpc_remove_containers() {
-  if [ -s "$LHPC_CONTAINERS" ]; then
-    xargs docker rm -f < "$LHPC_CONTAINERS" >/dev/null 2>&1 || true   # absent (already removed by --rm): fine
+lhpc_remove_container() {
+  local out
+  kill -KILL $(jobs -p) 2>/dev/null   # the client first (KILL: an attached client forwards TERM to its container)
+  wait 2>/dev/null
+  if [ -n "$LHPC_CONTAINER" ] && ! out=$(docker rm -f "$LHPC_CONTAINER" 2>&1) \
+      && ! grep -qi 'no such container' <<<"$out"; then
+    echo "::warning::container $LHPC_CONTAINER may still be running: docker rm -f: $out"
   fi
-  rm -f "$LHPC_CONTAINERS"
+  LHPC_CONTAINER=""
 }
-trap lhpc_remove_containers EXIT
+trap lhpc_remove_container EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-crun() {  # crun <docker run args...>: docker run --rm, named, removed when the step ends
-  local name rc=0
-  name="lhpc-ci-$$-$BASHPID-$RANDOM$RANDOM"
-  echo "$name" >> "$LHPC_CONTAINERS"
-  docker run --rm --name "$name" "$@" &
+lhpc_wait_for() {  # lhpc_wait_for NAME CMD...
+  local rc=0
+  LHPC_CONTAINER=$1
+  shift
+  "$@" &
   wait $! || rc=$?
+  LHPC_CONTAINER=""                   # ended: --rm has removed it
   return "$rc"
+}
+
+crun() {  # crun <docker run args...>
+  local name="lhpc-ci-$$-$RANDOM$RANDOM"
+  lhpc_wait_for "$name" docker run --rm --name "$name" "$@"
 }
