@@ -1537,16 +1537,15 @@ def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypa
     assert svc.build_remedy("meshtastic") == "lhpc build meshtastic"
 
 
-def test_a_stale_artifact_starts_and_reads_behind(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
-    """The operator-visible end of it: the artifact built before a CLI bump starts (U8), and the
-    update offer names it behind."""
+def test_a_stale_artifact_starts(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
+    """The operator-visible end of it: the artifact built before a CLI bump starts (U8). Whether it is
+    behind is the binary lane's newest published entry (U9, test_binary_install.py), not its build inputs."""
     _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     svc = ControllerService(manifest_path=_manifest_with_a_newer_cli(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    # U8: changed build inputs alone never refuse a start; the binary update offer says it is behind.
+    # U8: changed build inputs alone never refuse a start.
     assert svc.install_blocker(_comp(svc, "meshtastic")) == ""
-    assert svc.binary_freshness("meshtastic")["state"] == "behind"
     assert "meshtastic" not in svc.start_readiness("meshtastic")[1]   # no "Rebuild available": a build is refused here
 
 

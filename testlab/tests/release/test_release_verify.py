@@ -21,6 +21,8 @@ from lhpc_testlab.release import (
     REPEATER_DASHBOARD,
     alive,
     assert_plugin_manager_running,
+    binaries_at_the_pins,
+    binaries_installed,
     gui_startable,
     install_build,
     plugin_manager_markers,
@@ -106,20 +108,8 @@ def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(t
     passes). The release bot publishes one per release; none is red even though a box would install an
     older one (the check below): the release did not prove its own binary. Runs before the installs, so a
     gap fails in seconds."""
-    import hashlib
     svc, target, stacks = _binary_stacks(tmp_path)
-    chosen, refused = [], []
-    for stack, spec, entries in stacks:
-        pins = svc._binary_pins(stack.id)
-        inputs = {c.id: hashlib.sha256(svc.build_inputs_text(c).encode("utf-8")).hexdigest()
-                  for c in stack.components if c.id in spec.covers and (c.build_inputs or c.asset_inputs)}
-        at_pins = [e for e in entries if e.target == target
-                   and all(e.components.get(cid) == pin for cid, pin in pins.items())
-                   and e.inputs == inputs]
-        if at_pins:
-            chosen.append(f"{stack.id}: {at_pins[0].filename}")
-        else:
-            refused.append(f"{stack.id}: no entry for {target} at the candidate's pins and build inputs")
+    chosen, refused = binaries_at_the_pins(svc, target, stacks)
     print("binaries built at the candidate's pins: " + (", ".join(chosen) or "none"))
     assert not refused, "no published binary at the candidate's pins:\n  " + "\n  ".join(refused)
 
@@ -128,14 +118,8 @@ def test_release_every_binary_stack_has_a_binary_the_candidate_installs(tmp_path
     """Every binary stack has an entry the candidate's install takes: `newest_entry` (U9: the newest entry
     for this target that covers the candidate's binary spec, at any commits). None (`none_compatible`) is
     red: the release would leave its boxes without a binary."""
-    from lhpc.core import binary_install as bi
     _svc, target, stacks = _binary_stacks(tmp_path)
-    chosen, refused = [], []
-    for stack, spec, entries in stacks:
-        try:
-            chosen.append(f"{stack.id}: {bi.newest_entry(entries, target, spec.covers).filename}")
-        except bi.BinaryInstallError as exc:
-            refused.append(f"{stack.id}: {exc.message}")
+    chosen, refused = binaries_installed(target, stacks)
     print("binaries the candidate installs: " + (", ".join(chosen) or "none"))
     assert not refused, "no published binary the candidate installs:\n  " + "\n  ".join(refused)
 

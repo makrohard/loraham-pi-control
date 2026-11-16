@@ -192,6 +192,39 @@ def missing_required_cases(reported) -> list[str]:
     return sorted(set(required_release_cases()) - set(reported))
 
 
+def binaries_at_the_pins(svc, target: str, stacks) -> tuple[list, list]:
+    """(chosen, refused) over [(stack, spec, entries)]: per binary stack a published entry BUILT AT the candidate's
+    pins: `target`, its commit for every covered component equal to the manifest pin and its build-input digests
+    equal to the ones the candidate computes (`lhpc_commit` is not compared)."""
+    import hashlib
+    chosen, refused = [], []
+    for stack, spec, entries in stacks:
+        pins = svc._binary_pins(stack.id)
+        inputs = {c.id: hashlib.sha256(svc.build_inputs_text(c).encode("utf-8")).hexdigest()
+                  for c in stack.components if c.id in spec.covers and (c.build_inputs or c.asset_inputs)}
+        at_pins = [e for e in entries if e.target == target
+                   and all(e.components.get(cid) == pin for cid, pin in pins.items())
+                   and e.inputs == inputs]
+        if at_pins:
+            chosen.append(f"{stack.id}: {at_pins[0].filename}")
+        else:
+            refused.append(f"{stack.id}: no entry for {target} at the candidate's pins and build inputs")
+    return chosen, refused
+
+
+def binaries_installed(target: str, stacks) -> tuple[list, list]:
+    """(chosen, refused) over [(stack, spec, entries)]: per binary stack the entry the candidate's install takes
+    (`newest_entry`, U9: at any commits); none (`none_compatible`) is refused."""
+    from lhpc.core import binary_install as bi
+    chosen, refused = [], []
+    for stack, spec, entries in stacks:
+        try:
+            chosen.append(f"{stack.id}: {bi.newest_entry(entries, target, spec.covers).filename}")
+        except bi.BinaryInstallError as exc:
+            refused.append(f"{stack.id}: {exc.message}")
+    return chosen, refused
+
+
 def stop(env: dict, *stacks: str, require: bool = True) -> None:
     """Release the bands before the next stack claims them.
 
