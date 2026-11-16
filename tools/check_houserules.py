@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import codecs
 import fnmatch
 import io
 import os
@@ -109,6 +110,17 @@ def show(rev: str, path: str) -> str | None:
     return git("show", f"{rev}:{path}")
 
 
+def header_path(header: str) -> str | None:
+    """The path a `+++ ` header names: git's C-quoted form ("b/\\303\\274.md") decoded, the tab git appends after a
+    path with a space dropped, the b/ prefix removed; None for /dev/null. Any other form is kept whole, so its lines
+    still count."""
+    if header.startswith('"') and header.endswith('"'):
+        header = codecs.escape_decode(header[1:-1].encode())[0].decode("utf-8", "replace")
+    elif header.endswith("\t"):
+        header = header[:-1]
+    return None if header == "/dev/null" else header[2:] if header.startswith("b/") else header
+
+
 def added_lines(diff: str) -> list[tuple[str, int, str]]:
     """(path, new line number, text) of every added line in a `--unified=0` diff. A "+++ " line is the file header
     only outside a hunk: inside one it is an added line that starts with "++ "."""
@@ -117,7 +129,7 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
         if line.startswith("diff "):
             hunk = False
         elif line.startswith("+++ ") and not hunk:
-            path = line[6:] if line.startswith("+++ b/") else None
+            path = header_path(line[4:])
         elif line.startswith("@@"):
             n, hunk = int(re.search(r"\+(\d+)", line).group(1)), True
         elif line.startswith("+") and path:
@@ -547,11 +559,16 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # attribution
     authors = sorted({a for sha, a, _ in commits if sha not in ALLOWED_COMMITS})
     trailers = sum(len(TRAILER.findall(msg)) for _, _, msg in commits)
-    texts = [msg for _, _, msg in commits] + [t for _, _, t in added]
-    words = sum(1 for t in texts for name in ATTRIBUTION if name.lower() in t.lower())
-    words += sum(len(WORDS.findall(WORD_EXEMPT.sub("", t))) for t in texts)
+    # Every added line counts, wherever its text was before; only a file renamed with identical content (-M100%: no
+    # hunk, whatever diff.renames says) adds none. The row names where each word is, for the review of the WARN.
+    texts = [(f"commit {sha[:8]}", msg) for sha, _, msg in commits]
+    texts += [(f"{path}:{n}", t) for path, n, t in added_lines(git("diff", "--unified=0", "-M100%", rng))]
+    hits = [(where, c) for where, t in texts
+            if (c := sum(name.lower() in t.lower() for name in ATTRIBUTION) + len(WORDS.findall(WORD_EXEMPT.sub("", t))))]
+    words = sum(c for _, c in hits)
     v = "HARD" if trailers or any(a not in ALLOWED_AUTHORS for a in authors) else "WARN" if words else "OK"
-    rows.append(("attribution", f"authors {','.join(authors) or '-'}; trailers {trailers}; words {words}", v))
+    rows.append(("attribution", f"authors {','.join(authors) or '-'}; trailers {trailers}; words {words}"
+                 + (f" at {', '.join(where for where, _ in hits)}" if hits else ""), v))
 
     # modules
     table, base_table = (budgets(show(head, BUDGET_FILE)), budgets(show(base, BUDGET_FILE))) if BUDGET_FILE else (None, None)

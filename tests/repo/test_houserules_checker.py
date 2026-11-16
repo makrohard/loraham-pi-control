@@ -352,6 +352,82 @@ def test_flasks_request_object_in_code_is_not_an_attribution_word(repo):
     assert rows["attribution"] == "WARN"
 
 
+def _attribution(repo):
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False)
+    line = next(x for x in p.stdout.splitlines() if x.startswith("attribution"))
+    return p.returncode, line.split()[-1], line.split("; words ", 1)[1].rsplit(None, 1)[0]
+
+
+W = "Clau" + "de"
+F3, F4 = "`" * 3, "`" * 4
+CREDITS = f"Reviewed by {W}\nApproved by {W}\n"
+# name: (files at <base>, files the range writes, where the words are at <head>). Each moves the text of <base>; no
+# move cancels, so every added line counts (the review of the WARN reads the named lines).
+MOVES = {
+    "a block moved unchanged": ({"docs/a.md": f"Alpha fact.\nOne {W} line.\nA plain line.\n"},
+                                {"docs/a.md": "Alpha fact.\n", "docs/b.md": f"Beta.\nOne {W} line.\nA plain line.\n"},
+                                "docs/b.md:2"),
+    "out of a fenced example (G2 R1)": ({"docs/a.md": f"Do not write:\n{F3}\nReviewed by {W}\n{F3}\n"},
+                                        {"docs/a.md": f"Do not write:\n{F3}\n{F3}\n", "docs/b.md": f"Credits\nReviewed by {W}\n"},
+                                        "docs/b.md:2"),
+    "out of an HTML comment (G2 R2)": ({"docs/a.md": f"Alpha fact.\n<!-- never:\n{CREDITS}-->\n"},
+                                       {"docs/a.md": "Alpha fact.\n<!-- never:\n-->\n", "docs/b.md": f"Credits\n{CREDITS}"},
+                                       "docs/b.md:2, docs/b.md:3"),
+    "out of a fence inside a longer fence (G2 R2)": (
+        {"docs/a.md": f"Alpha fact.\n{F4}\n{F3}\n{CREDITS}{F3}\n{F4}\n"},
+        {"docs/a.md": f"Alpha fact.\n{F4}\n{F3}\n{F3}\n{F4}\n", "docs/b.md": f"Credits\n{CREDITS}"},
+        "docs/b.md:2, docs/b.md:3"),
+    "out of a path with a space (G2 R2)": ({"docs/an example.md": f"{F3}\n{CREDITS}{F3}\n"},
+                                           {"docs/an example.md": f"{F3}\n{F3}\n", "docs/b.md": f"Credits\n{CREDITS}"},
+                                           "docs/b.md:2, docs/b.md:3"),
+    "into a path with a space": ({"docs/a.md": f"{F3}\n{CREDITS}{F3}\n"},
+                                 {"docs/a.md": f"{F3}\n{F3}\n", "docs/an example.md": f"Credits\n{CREDITS}"},
+                                 "docs/an example.md:2, docs/an example.md:3"),
+    "into a path git quotes (G2 R2)": ({"docs/a.md": f"{F3}\n{CREDITS}{F3}\n"},
+                                       {"docs/a.md": f"{F3}\n{F3}\n", "docs/über.md": f"Credits\n{CREDITS}"},
+                                       "docs/über.md:2, docs/über.md:3"),
+    "a whole fenced example moved (G2 R2)": ({"docs/a.md": f"Alpha fact.\n{F3}\n{CREDITS}{F3}\n"},
+                                             {"docs/a.md": "Alpha fact.\n", "docs/b.md": f"Beta.\n{F3}\n{CREDITS}{F3}\n"},
+                                             "docs/b.md:3, docs/b.md:4"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(MOVES))
+def test_every_added_line_counts_and_the_row_names_where(repo, name):
+    before, after, where = MOVES[name]
+    _commit(repo, before)
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, after)
+    assert _attribution(repo) == (0, "WARN", f"{where.count(',') + 1} at {where}")
+
+
+def test_a_message_word_is_named_by_its_commit(repo):
+    _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, msg=RED + "written in one " + "ses" + "sion\n")
+    sha = subprocess.run(["git", "rev-parse", "--short=8", "HEAD"], cwd=repo, capture_output=True, text=True,
+                         check=True).stdout.strip()
+    assert _attribution(repo) == (0, "WARN", f"1 at commit {sha}")
+
+
+def test_a_header_without_the_b_prefix_still_counts(repo):
+    # A user's diff.noprefix drops git's a/ b/ prefixes: the header's path is kept whole, so its lines still count.
+    _git(repo, "config", "diff.noprefix", "true")
+    _commit(repo, {"docs/b.md": f"Credits\nReviewed by {W}\n"})
+    assert _attribution(repo) == (0, "WARN", "1 at docs/b.md:2")
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_a_file_renamed_unchanged_adds_no_word(repo, edited):
+    # A rename with identical content has no hunk (-M100%), even when the user's git turns rename detection off; an
+    # edited rename counts all its lines.
+    _commit(repo, {"docs/a.md": f"Alpha fact.\nOne {W} line.\n"})
+    _git(repo, "tag", "-f", "base")
+    _git(repo, "config", "diff.renames", "false")
+    _git(repo, "mv", "docs/a.md", "docs/c.md")
+    _commit(repo, {"docs/c.md": f"Alpha fact.\nOne {W} line.\n" + ("Omega.\n" if edited else "")})
+    assert _attribution(repo) == ((0, "WARN", "1 at docs/c.md:2") if edited else (0, "OK", "0"))
+
+
 def test_an_indented_line_after_a_gap_does_not_lengthen_a_bullet(repo):
     # A continuation is contiguous: three indented lines after an unindented one are not the bullet's.
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace(

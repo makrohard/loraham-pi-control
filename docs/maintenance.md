@@ -109,7 +109,9 @@ repositories.
   module budgets); a HARD line fails it. An item that only corrects a released CHANGELOG section
   passes `--correction`. A commit holds at most two CHANGELOG bullets, except one that changes only
   `CHANGELOG.md`, inside its top section: the release's section (R10), which is not held to two
-  entries. It checks form, not truth: a PASS says nothing about whether a
+  entries. Attribution words count in the commit messages and on every line the range adds, moved or not
+  (a file renamed unchanged adds none); the row names the file and line of each.
+  It checks form, not truth: a PASS says nothing about whether a
   stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own
   repository runs the same tool; its `.houserules.toml` at `<base>` names its layers, test files and
   test definitions, changelog and budget file (empty: that rule off; a budgeted file that is not Python, a
