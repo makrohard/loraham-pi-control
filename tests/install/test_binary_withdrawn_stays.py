@@ -776,6 +776,31 @@ def test_a_failed_install_names_the_checkout_it_created_and_kept(tmp_path, monke
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
+@pytest.mark.parametrize("clones", [
+    {"meshcom-qemu": {"commit": ""}},                                   # its path lost: was a KeyError
+    {"meshcom-qemu": {"commit": None, "path": "PATH"}},
+    {"meshcom-qemu": {"commit": "", "path": "../escape"}},
+    {"meshcom-qemu": "a" * 40},
+    ["meshcom-qemu"],                                                   # not a map: was an AttributeError
+], ids=["no-path", "no-commit", "escaping-path", "not-a-record", "not-a-map"])
+def test_a_hand_damaged_journal_checkout_entry_is_refused_by_name_never_a_crash(tmp_path, monkeypatch, binary_receipt,
+                                                                               clones):
+    # An interrupted install's journal whose checkout entries are damaged by hand: the recovery reads each one's
+    # commit and path, so the journal is unreadable, refused by name and kept, never a crash.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    jp = bi.journal_path(svc._paths)
+    path = svc.stack("meshcom").component("meshcom-qemu").source.path
+    jp.write_text(json.dumps({**json.loads(jp.read_text()), "clones": clones}).replace('"PATH"', json.dumps(path)))
+    svc.invalidate_snapshot()
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: pytest.fail("must refuse first"))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "resolve state/binary/install.journal.json by hand" in res.summary, res.summary
+    assert jp.exists()
+
+
 @pytest.mark.parametrize("unreadable", ["journal", "receipt"])
 def test_the_plan_refuses_what_the_apply_refuses_when_its_state_cannot_be_read(tmp_path, monkeypatch, binary_receipt,
                                                                               unreadable):

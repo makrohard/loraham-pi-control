@@ -148,18 +148,16 @@ class BinaryChannelMixin:
 
     @staticmethod
     def _binary_predates(sid: str, cids) -> str:
-        return f"the installed binary predates {', '.join(cids)}: lhpc update {sid} or install it from source"
+        return (f"the installed binary predates {', '.join(cids)}: lhpc update {sid} when a published binary covers "
+                "it, else install it from source")
 
     def binary_install_refusal(self, stack_id: str) -> bool:
         """True when this stack's last FAILED console install job was the typed refusal (no published
-        binary this lhpc can install), from its job result only (no index fetch on a GET), while its
-        banner is not dismissed."""
+        binary this lhpc can install), from its job result only (no index fetch on a GET). Dismissing the
+        job deletes that record, so a dismissed banner is gone with it."""
         from . import jobresult
-        log = f"install-{stack_id}.log"
-        rec = jobresult.read_one(self._paths, log)
-        if not rec or rec.get("state") != "failed" or "refusal" not in rec:
-            return False
-        return log not in self._task_dismissed_ids()
+        rec = jobresult.read_one(self._paths, f"install-{stack_id}.log")
+        return bool(rec) and rec.get("state") == "failed" and "refusal" in rec
 
     def binary_capable(self, component_id: str) -> bool:
         """True when a binary artifact CAN provide this component (its stack's spec covers it),

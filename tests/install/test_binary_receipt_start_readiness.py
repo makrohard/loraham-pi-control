@@ -68,8 +68,8 @@ def test_an_old_receipt_refuses_a_component_the_widened_spec_now_covers(short_tm
     svc, spawned = _daemon_box(short_tmp_path, monkeypatch, binary_receipt, commits=pins)
     assert svc.on_binary_channel("daemon")
     why = _refused(svc, spawned)
-    assert why == (f"daemon: the installed binary predates {DAEMON}: lhpc update daemon "
-                   "or install it from source"), why
+    assert why == (f"daemon: the installed binary predates {DAEMON}: lhpc update daemon when a published binary "
+                   "covers it, else install it from source"), why
 
 
 def test_a_valid_receipt_recording_the_component_starts(short_tmp_path, monkeypatch, binary_receipt):

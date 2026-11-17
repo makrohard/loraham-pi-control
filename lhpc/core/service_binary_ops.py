@@ -396,8 +396,8 @@ class BinaryOpsMixin:
         cannot be checked (`bi.is_newer` None: never replaced by what may be older); all only while the files hash as
         installed, verified whatever the entry's age. ("", None, "") installs `entry`: changed files of the same
         artifact (the reinstall is the repair) or a newer entry. Changed files and nothing newer: the refusal, never
-        an older replacement. Plan and apply branch on `how`; a kept or same artifact's checkouts are checked
-        against ITS receipt's commits, never another entry's."""
+        an older replacement. Plan and apply branch on `how`: a kept or unordered artifact returns before any
+        checkout is inspected; a same one's checkouts are checked against ITS receipt's commits, never the entry's."""
         state, rec, _why = self.binary_receipt_state(stack_id)
         if state == "valid" and self._binary_missing(stack_id, rec):
             return "", None, ""                  # the start refuses it (one readiness rule): never kept, the entry covers it
@@ -539,7 +539,7 @@ class BinaryOpsMixin:
             return False, "the binary-install journal could not be cleared"
         self.invalidate_snapshot()
         notes = [f"the {c['path']} checkout this install created was kept: nothing older to return to"
-                 for c in clones.values() if c["commit"] == ""]    # restore_clones accepted only {commit, path}
+                 for c in clones.values() if c["commit"] == ""]    # {commit, path}: `read_journal` checked the shape
         if kept:
             notes.append(f"the mesh password of {', '.join(kept)} was changed during the install: its new value kept")
         return True, "; ".join(notes)

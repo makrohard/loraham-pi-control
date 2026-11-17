@@ -569,6 +569,11 @@ def read_journal(paths: Paths):
             isinstance(k, str) and validators.safe_rel(k) and isinstance(v, str) and validators.safe_rel(v)
             for k, v in dirs.items()):
         return None, "unsafe"
+    clones = d.get("clones", {})                # {component: {commit, path}} (`record_clone`): the recovery reads both
+    if not isinstance(clones, dict) or not all(
+            isinstance(v, dict) and isinstance(v.get("commit"), str) and isinstance(p := v.get("path"), str)
+            and validators.safe_rel(p) for v in clones.values()):
+        return None, "unsafe"
     made = d.get("created_dirs", [])
     if not isinstance(made, list) or not all(isinstance(x, str) and validators.safe_rel(x) for x in made):
         return None, "unsafe"
@@ -739,13 +744,13 @@ def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
     st = svc.stack(stack_id)
     by_id = {c.id: c for c in (st.components if st else ())}
     comps, lost = [], []
-    for cid, rec in clones.items():
-        prev, rel = (rec.get("commit"), rec.get("path")) if isinstance(rec, dict) else (None, None)
+    for cid, rec in clones.items():              # {commit, path}: `read_journal` refuses any other shape
+        prev, rel = rec["commit"], rec["path"]
         c = by_id.get(cid)
-        if isinstance(prev, str) and rel and c is not None and c.source is not None and c.source.path == rel:
+        if c is not None and c.source is not None and c.source.path == rel:
             comps.append((c, prev))
-        elif not (isinstance(prev, str) and prev == ""):     # a checkout to move back that cannot be found as journaled
-            lost.append(f"{cid} at {rel or '?'} (was at {prev[:9] if isinstance(prev, str) else '?'})")
+        elif prev:                                   # a checkout to move back that cannot be found as journaled
+            lost.append(f"{cid} at {rel} (was at {prev[:9]})")
     if lost:                                   # never skipped, never redirected to another path: the journal stays
         return False, (f"an interrupted binary install of '{stack_id}' moved checkouts the manifest no longer names "
                        f"at that path: {'; '.join(lost)} — resolve state/binary/install.journal.json by hand"), {}
