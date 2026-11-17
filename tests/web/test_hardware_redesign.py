@@ -55,6 +55,29 @@ def test_an_offline_daemon_shows_once_in_the_row_as_its_badge(web, tmp_path, mon
     assert "⚠ stick not plugged in on port 1-1.9" in _row(page, "r3")                 # the row's other notes stay
 
 
+_DASH = '<script src="/static/dash.js" defer></script>'
+
+
+def test_the_list_badges_are_live_regions_the_poll_can_find(web, tmp_path, monkeypatch):
+    # HWLIST-BADGE-LIVE: each list badge has its radio's id and announces changes politely; /hardware loads the poll
+    page = _box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True)
+    for rid in ("r1", "r2", "r3"):
+        badge = re.search(rf'<span class="badge [^"]*" id="hw-badge-{rid}"([^>]*)>', page)
+        assert badge and badge.group(1) == ' aria-live="polite"', rid
+    assert _DASH in page
+
+
+@pytest.mark.parametrize("url", ["/stacks", "/stacks?open=daemon", "/stacks/daemon/menu/stackrow-daemon"])
+def test_each_page_that_can_show_the_list_loads_the_poll(web, tmp_path, monkeypatch, url):
+    page = _box(web, tmp_path, monkeypatch).get(url).get_data(as_text=True)
+    assert _DASH in page and page.count(_DASH) == 1, url
+
+
+def test_a_menu_page_without_the_list_does_not_load_the_poll(web, tmp_path, monkeypatch):
+    page = _box(web, tmp_path, monkeypatch).get("/stacks/daemon/menu/stack-settings-daemon").get_data(as_text=True)
+    assert "hw-badge-" not in page and _DASH not in page
+
+
 def test_the_detail_page_keeps_its_offline_note(web, tmp_path, monkeypatch):
     page = _text(_box(web, tmp_path, monkeypatch).get("/hardware/radio/r1").get_data(as_text=True))
     assert '<p class="note-bad">⚠ daemon offline</p>' in page                         # it has no badge

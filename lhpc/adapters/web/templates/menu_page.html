@@ -15,4 +15,6 @@
 {% block scripts %}
   {# The GPS Monitor pane fills itself from /api/gps while open (the same script as the Stacks page). #}
   {% if here.id.startswith('gps-') %}<script src="{{ url_for('static', filename='gps.js') }}" defer></script>{% endif %}
+  {# A level holding the hardware list (the daemon's row): its daemon badges update live. #}
+  {% if 'id="hw-badge-' in body %}<script src="{{ url_for('static', filename='dash.js') }}" defer></script>{% endif %}
 {% endblock %}

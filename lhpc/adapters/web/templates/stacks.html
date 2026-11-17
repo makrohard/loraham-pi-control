@@ -98,4 +98,6 @@
   <script src="{{ url_for('static', filename='taskbanner.js') }}" defer></script>
   {# The GPS Monitor pane (polls /api/gps only while open; skyview + NMEA panes). #}
   <script src="{{ url_for('static', filename='gps.js') }}" defer></script>
+  {# The daemon's Hardware submenu: its list's daemon badges update live (also once a lazy body arrives). #}
+  <script src="{{ url_for('static', filename='dash.js') }}" defer></script>
 {% endblock %}

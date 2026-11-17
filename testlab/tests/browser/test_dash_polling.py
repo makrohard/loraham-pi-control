@@ -169,3 +169,32 @@ def test_the_live_rssi_value_stays_on_one_line_on_a_phone(flask_page):
     page.set_viewport_size({"width": 1280, "height": 900})
     assert round(page.evaluate(_CELL, "r3")["meterW"]) == 192                     # the desktop meter is unchanged
     page.context.close()
+
+
+# --- HWLIST-BADGE-LIVE: the hardware list's daemon badges follow the same poll (/hardware, and a Stacks body that
+#     arrives on first expand) -------------------------------------------------------------------------------------
+
+def _answer_live(page):
+    page.route(DAEMON, lambda route: _live(route, RIDS[DAEMON.match(route.request.url).group(1)]))
+
+
+def _wait_list_rendered(page):
+    page.wait_for_function(
+        "rids => rids.every(r => document.getElementById('hw-badge-' + r).textContent === 'daemon usable (READY)')",
+        arg=list(RIDS), timeout=15000)
+
+
+def test_the_hardware_lists_badges_follow_the_daemon_live(page):
+    _answer_live(page)
+    page.goto(page.lab_base + "/hardware", wait_until="load")
+    _wait_list_rendered(page)
+    assert all(page.get_attribute(f"#hw-badge-{rid}", "aria-live") == "polite" for rid in RIDS)
+    assert all(page.get_attribute(f"#hw-badge-{rid}", "class") == "badge badge-running" for rid in RIDS)
+
+
+def test_a_daemon_body_loaded_on_first_expand_polls_its_list_badges(page):
+    _answer_live(page)
+    page.goto(page.lab_base + "/stacks", wait_until="load")
+    assert page.locator("[id^='hw-badge-']").count() == 0          # the daemon's body is not loaded yet
+    page.click("#stackrow-daemon > summary")
+    _wait_list_rendered(page)

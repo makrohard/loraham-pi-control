@@ -24,3 +24,7 @@
   </div>
 </section>
 {% endblock %}
+{% block scripts %}
+  {# The list's daemon badges update live (the same poll as Home's radio cards). #}
+  <script src="{{ url_for('static', filename='dash.js') }}" defer></script>
+{% endblock %}

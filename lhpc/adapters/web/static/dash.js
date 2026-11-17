@@ -1,5 +1,7 @@
 // Radio dashboard live updater. For each radio card (W285/W286: one per radio, its band a property) it polls
 // the read-only daemon API of that radio and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
+// The hardware list's daemon badges (`hw-badge-<rid>`, on /hardware and in the daemon's Hardware submenu, also
+// when a Stacks body arrives later) are polled the same way.
 // Same-origin only. The polling is read-only and, since 0.7.0, genuinely passive: it asks the
 // daemon for channel data WITHOUT a CAD scan, because a scan destroys a frame in flight. The one
 // action this file takes is the explicit "Scan now" button, which is a POST with a CSRF token.
@@ -25,12 +27,15 @@
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
-        var badge = document.getElementById("rd-badge-" + key);
-        if (badge) {      // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
-          badge.textContent = d.ready ? "daemon usable (READY)"
-            : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
-          badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"));
-        }
+        ["rd-badge-", "hw-badge-"].forEach(function (prefix) {
+          var badge = document.getElementById(prefix + key);
+          if (badge) {    // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
+            var text = d.ready ? "daemon usable (READY)"
+              : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
+            if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
+            badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"));
+          }
+        });
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
         var meter = document.getElementById("rd-rssi-" + key);
@@ -74,9 +79,10 @@
   // The discipline of taskbanner.js, per radio: no timer while the page is hidden, never a second
   // request while one is still out (a slow daemon answer is not overlapped), and after a failure a
   // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
-  var POLL_MS = 3000, ERROR_MS = 15000;
-  cols.forEach(function (col) {
-    var rid = col.getAttribute("data-radio-rid") || "";
+  var POLL_MS = 3000, ERROR_MS = 15000, started = {};
+  function start(rid) {
+    if (!rid || started[rid]) return;           // one poller per radio, however many badges show it
+    started[rid] = true;
     var timer = null, polling = false;
 
     function clearTimer() {
@@ -105,6 +111,17 @@
     });
 
     tick();
+  }
+  cols.forEach(function (col) { start(col.getAttribute("data-radio-rid") || ""); });
+  function listBadges(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('[id^="hw-badge-"]'), function (el) {
+      start(el.id.slice("hw-badge-".length));
+    });
+  }
+  listBadges(document);
+  // A Stacks body loaded on first expand (stacklazy.js) may hold the hardware list.
+  document.addEventListener("lhpc:bodyloaded", function (e) {
+    listBadges((e.detail && e.detail.root) || document);
   });
 
   // Auto-refresh the dashboard ONLY when its structural state changes (a stack
