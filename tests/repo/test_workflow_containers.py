@@ -105,6 +105,23 @@ def test_the_quota_steps_container_is_the_one_its_step_removes():
     assert m and m[1] == m[2] == '"${LHPC_CI_PREFIX}quota-$$"', m
 
 
+def test_the_cleanups_worst_case_ends_before_the_runners_kill():
+    """G2-TESTSD read N-j: the bound counted 1 s per removal, but `timeout -k K B` may take B + K: with LHPC_CLEAN_S=6
+    the worst case was about 10.5 s after the cancel's INT, past the runner's KILL at 10 s (INT, TERM 7.5 s later,
+    KILL 2.5 s after that). Worst case: the loop to its deadline, its last removal started just before it (1 s, the
+    floor, + K), a poll, then the kill's removal (1 s + K)."""
+    text = HELPER.read_text()
+    clean_s = float(re.search(r"^LHPC_CLEAN_S=\$\{LHPC_CLEAN_S:-([\d.]+)\}", text, re.M)[1])
+    poll_s = float(re.search(r"^LHPC_POLL_S=\$\{LHPC_POLL_S:-([\d.]+)\}", text, re.M)[1])
+    body = text[text.index("lhpc_clean() {"):text.index("\n}\n", text.index("lhpc_clean() {"))]
+    runs = [ln for ln in body.splitlines() if "docker " in ln and not ln.lstrip().startswith("echo ")]
+    calls = re.findall(r"timeout -k ([\d.]+) \"\$LHPC_B\" docker ", body)
+    assert len(calls) == len(runs) == 1, runs                               # one removal call, bounded
+    assert '[ "$left" -ge 1000000 ] || left=1000000' in text                 # each bound is at least 1 s
+    worst = clean_s + 2 * (1 + float(calls[0])) + poll_s
+    assert worst < 10, f"the cleanup may run {worst:g} s after INT: the runner's KILL comes at 10 s"
+
+
 def _docker(tmp_path: Path, mode: str) -> Path:
     """A stand-in `docker` in tmp/bin. `run` is the client: it records its pid (tmp/client.pid), and like a real
     attached client ignores TERM and INT and ends when its container is removed (137), or, for `run -d`, once the

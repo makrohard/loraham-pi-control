@@ -9,9 +9,10 @@
 # error, INT/TERM, the step's end). A second INT/TERM during it never cuts it short.
 #
 # Boundary: a client that dies mid-create (killed alone by OOM or KILL, killed at the deadline, or killed by the
-# runner's KILL) can leave a create the daemon still holds, which lands later. The job's last step (an inline,
-# bounded sweep of this run's names) removes it if it is there by then and fails the job; after the job, the
-# GitHub-hosted runner's machine is discarded.
+# runner's KILL), or one whose step is signalled between `setsid ... &` and `LHPC_GROUP=$!` (the EXIT cleanup then
+# removes the name once, with no group to wait for), can leave a create the daemon still holds, which lands later.
+# The job's last step (an inline, bounded sweep of this run's names) removes it if it is there by then and fails the
+# job; after the job, the GitHub-hosted runner's machine is discarded.
 #
 #   crun ARGS...                   docker run --rm ARGS... as such a container
 #   lhpc_wait_for NAME CMD...      CMD, which starts the container NAME itself (the quota step's sizing program)
@@ -22,7 +23,7 @@
 # a FOREGROUND child exits, while `wait` returns at once. Never call these inside $(...): bash holds its traps until
 # a substitution ends.
 LHPC_CI_PREFIX="lhpc-ci-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-"
-LHPC_CLEAN_S=${LHPC_CLEAN_S:-6}   # loop <= 6 s + its last rm <= 1 s + poll + the kill's rm <= 1 s: before the KILL at 10 s
+LHPC_CLEAN_S=${LHPC_CLEAN_S:-5}   # loop 5 s + its last rm (1 s + -k 1) + poll + the kill's rm (1 s + -k 1) = 9.5 s < KILL at 10 s
 LHPC_POLL_S=${LHPC_POLL_S:-0.5}
 LHPC_CONTAINER=""                 # the name this step owns now
 LHPC_GROUP=""                     # its client's process group while that may live
