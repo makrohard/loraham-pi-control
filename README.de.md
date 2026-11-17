@@ -120,7 +120,7 @@ Position (GPS) ist eine globale Quelle mit einem Schalter pro Stack: [GPS](docs/
 
 Von der frisch geflashten Karte zu laufenden Stacks, der Reihe nach.
 
-#### 1. Karte vorbereiten
+#### 1. Karte vorbereiten *(PC: überspringen — nimm dein installiertes Linux)*
 
 Raspberry Pi Imager: **Modell** wählen, **Raspberry Pi OS Lite (64-bit)**, und vor dem Flashen
 **Hostname, Benutzername, WLAN + Land, SSH aktivieren** setzen.
@@ -185,6 +185,8 @@ bash bootstrap-deps.sh --dry-run
 sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```
 
+*(PC: `--spi-mode skip`)*
+
 - **Root erforderlich** (`sudo bash …`); das Skript selbst ruft nie sudo auf.
 - **`--spi-mode` ist Pflicht** — `soft-cs` (LoRaHAM Pi / Uputronics / Waveshare, inkl. dual) ·
   `hardware-cs` (Kernel-CE0/CE1) · `skip`. Welcher, und die optionalen Schalter:
@@ -216,8 +218,8 @@ sudo systemctl disable --now nginx.service               # Paket behalten, den R
 # Boards mit wenig RAM (<600 MB): eine Swapdatei bewahrt die meshtasticd-/meshcom-Builds vor dem OOM-Kill
 sudo fallocate -l 768M /var/swap.lhpc && sudo chmod 600 /var/swap.lhpc && sudo mkswap /var/swap.lhpc
 echo '/var/swap.lhpc none swap sw,pri=10 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
-printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI-Overlay
-sudo usermod -aG spi,gpio "$USER"                        # → greift mit dem Neustart in Schritt 6
+printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI-Overlay · nur Pi (PC: überspringen)
+sudo usermod -aG spi,gpio "$USER"                        # → greift mit dem Neustart in Schritt 6 · nur Pi (PC: überspringen)
 ```
 <!-- test:deps-manual:end -->
 
@@ -268,6 +270,8 @@ SSH neu verbinden und wieder `tmux new -s lhpc` starten.
 lhpc config operator --callsign YOURCALL  # optional; YOURCALL = dein Basis-Rufzeichen
 lhpc hardware loraham                     # dein Funk-Setup aus dem Katalog:
 ```
+
+*(PC: überspringen; richte deinen Stick ein wie unter [USB-Funkgeräte](docs/usb-radios.md))*
 
 <details><summary><em>Der Hardware-Katalog — jedes <code>lhpc hardware</code>-Setup</em></summary>
 

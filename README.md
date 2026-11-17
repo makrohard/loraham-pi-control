@@ -114,7 +114,7 @@ Position (GPS) is one global source with a per-stack switch: [GPS](docs/gps.md).
 
 From a freshly flashed card to running stacks, in order.
 
-#### 1. Prepare the card
+#### 1. Prepare the card *(PC: skip — use your installed Linux)*
 
 Raspberry Pi Imager: pick your **model**, **Raspberry Pi OS Lite (64-bit)**, and set **hostname,
 username, Wi-Fi + country, enable SSH** before flashing.
@@ -178,6 +178,8 @@ bash bootstrap-deps.sh --dry-run
 sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```
 
+*(PC: `--spi-mode skip`)*
+
 - **Root required** (`sudo bash …`); the script itself never calls sudo.
 - **`--spi-mode` is required** — `soft-cs` (every board) ·
   `hardware-cs` (kernel chip selects: LoRaHAM / Uputronics) · `skip`. Which one, and the optional flags: [deps](docs/cli.md#deps).
@@ -208,8 +210,8 @@ sudo systemctl disable --now nginx.service               # keep the package, dis
 # small-RAM boards (<600 MB): a disk swapfile stops the meshtasticd/meshcom builds OOM-ing
 sudo fallocate -l 768M /var/swap.lhpc && sudo chmod 600 /var/swap.lhpc && sudo mkswap /var/swap.lhpc
 echo '/var/swap.lhpc none swap sw,pri=10 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
-printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI overlay
-sudo usermod -aG spi,gpio "$USER"                        # → applied by the reboot in step 6
+printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI overlay · Pi only (PC: skip)
+sudo usermod -aG spi,gpio "$USER"                        # → applied by the reboot in step 6 · Pi only (PC: skip)
 ```
 <!-- test:deps-manual:end -->
 
@@ -261,6 +263,8 @@ Reconnect SSH and start a fresh `tmux new -s lhpc`.
 lhpc config operator --callsign YOURCALL  # optional; YOURCALL = your base callsign
 lhpc hardware loraham                     # pick your radio setup from the catalog:
 ```
+
+*(PC: skip; add your stick as in [USB radios](docs/usb-radios.md))*
 
 <details><summary><em>The hardware catalog — every <code>lhpc hardware</code> setup</em></summary>
 
