@@ -350,6 +350,7 @@ class FileParam:
                                  # secret_ref (hidden, no default, file mode 0600).
     # The manifest's default when it carries instance tokens; `default` is its template value (no radio). "" = none.
     default_template: str = ""
+    radio_power: bool = False    # a TX power: its default is at most the instance radio's model default (USB 14, SPI 17)
 
 
 @dataclass(frozen=True)
@@ -722,9 +723,10 @@ class ResourceConflict:
     advisory: bool = False       # a holder's claim is advisory: show it, but do not block a start
 
 
-def band_default(p, band: str, preset: str = "") -> str:
+def band_default(p, band: str, preset: str = "", power_default: int | None = None) -> str:
     """A run/file param's default on `band`: its radio's preset first (`preset_defaults`: a pin follows the
     board, e.g. Uputronics CE0/CE1; K6: the instance's radio row's model variant), then `band_defaults`, then
     `default`. Only a file param (a pin in an app's config file) has `preset_defaults`; a run param with one
-    fails to load."""
-    return dict(getattr(p, "preset_defaults", ())).get(preset) or dict(p.band_defaults).get(band, p.default)
+    fails to load. A `radio_power` param's default is at most `power_default` (its radio's model default)."""
+    v = dict(getattr(p, "preset_defaults", ())).get(preset) or dict(p.band_defaults).get(band, p.default)
+    return str(min(int(v), power_default)) if getattr(p, "radio_power", False) and power_default is not None and v else v

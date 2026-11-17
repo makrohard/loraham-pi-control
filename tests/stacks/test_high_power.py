@@ -62,7 +62,7 @@ def test_no_family_stays_the_union_utility():
     # an already-authorised 20 — the union admits it, the caller predicate authorised it.
     assert dc.validate_set("POWER", "20") is None
     assert dc.validate_set("POWER", "20", "", False) is None
-    assert dc.validate_set("POWER", "21", "", True) is not None
+    assert dc.validate_set("POWER", "23", "", True) is not None      # the union's top is the Meshstick's 22 (P7)
 
 
 def test_contiguous_range_and_panel_bounds():
@@ -70,7 +70,7 @@ def test_contiguous_range_and_panel_bounds():
     assert dp.numeric_range("POWER", "sx127x") == ("2", "17")
     assert dp.numeric_range("POWER", "sx127x", True) == ("2", "20")
     assert dp.numeric_range("POWER", "sx1262", True) == ("0", "20")
-    assert dp.numeric_range("POWER", "", True) == ("0", "20")
+    assert dp.numeric_range("POWER", "", True) == ("0", "22")      # the union of every model (P7)
 
 
 # --- the running daemon's report ---------------------------------------------------------------

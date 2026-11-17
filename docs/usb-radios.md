@@ -25,6 +25,10 @@ The release that ships these sticks is listed in the [changelog](../CHANGELOG.md
 **PINE64 adapter:** PINE64's page above is the reference for its wiring and drivers. Its IRQ and
 BUSY lines sit on the CH341's INT# and SLCT status pins, not on the D0–D7 lines the other sticks use.
 
+**Power:** every stick starts at `POWER` 14 dBm; its range is its chip's: SX1262 0–20 (the Meshstick 0–22), the
+RFM98PW stick 2–17 (exactly 20 with its high-power switch). The PINE64 adapter's 15–20 need daemon 1.4.2 and have
+not yet been run on the adapter.
+
 ## One USB id for every stick
 
 All three sticks report the same USB id, `1a86:5512` (the CH341 in SPI mode). LHPC therefore never

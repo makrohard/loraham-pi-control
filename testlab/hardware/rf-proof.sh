@@ -17,7 +17,7 @@
 #
 # SAFETY (every check below is a STOP, never NOT RUN; absent hardware is NOT RUN, never PASS):
 #  - ONE dispatcher `tx` for every send. It checks the command (no --high-power, no power >= 18), the radio's power read in
-#    this row (a box radio <= min(17, its model's power_max_dbm) with HIGHPOWER=0 and no high-power grant; a peer low or one
+#    this row (a box radio <= min(17, its model's power_default_dbm) with HIGHPOWER=0 and no high-power grant; a peer low or one
 #    of the as-is peers), the message (the row's nonce, <= 16 characters), the budget (TXMAX frames per physical radio per
 #    run, reserved at the worst case), both boxes' boot ids and the USB lists; then it runs the send itself.
 #  - R0 sums the worst cases of the chosen rows per physical radio; a sum above TXMAX is a STOP before any TX.
@@ -93,7 +93,7 @@ while not b.endswith(b"\n") and len(b) < 4096:
 print(b.decode().strip())'
 CPORT_PY='import sys; from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); sid, inst, _b, why = instances.resolve(s, sys.argv[1]); print("WHY", why or "-"); [print("CPORT", e.address.rsplit(":", 1)[1]) for c in (s.stack(sid).components if inst is not None else ()) for t, e in zip(c.endpoints, instances.endpoints_for(c.endpoints, inst)) if t.kind == "tcp" and t.address.endswith(":5000")]; life = s._lifecycle(); [print("OWNED", r.get("pgid")) for r in (life.owned_records("meshcore-node", rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]'
 RADIOS_PY='from lhpc.core import paths, radios; s = radios.load(paths.resolve_paths()); print("STATE", s.kind); [print("ROW", r.id, r.model, r.band, r.enabled, "serial=" + r.usb_serial, "port=" + r.usb_port, "hp=" + str(r.high_power)) for r in s.radios]'
-CAPS_PY='import sys; sys.argv[1:] and sys.path.insert(0, sys.argv[1]); from lhpc.core import radio_models; [print("CAP", m.id, m.power_max_dbm) for m in radio_models.load().values()]'
+CAPS_PY='import sys; sys.argv[1:] and sys.path.insert(0, sys.argv[1]); from lhpc.core import radio_models; [print("CAP", m.id, m.power_default_dbm) for m in radio_models.load().values()]'
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="cd {RT} && ./venv/lhpc/bin/python -c '$RUNSET_PY'"
 USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; esac; echo "${d##*/} $(cat $d/idVendor 2>/dev/null):$(cat $d/idProduct 2>/dev/null) dev=$(cat $d/devnum 2>/dev/null) ser=$(cat $d/serial 2>/dev/null)"; done'
@@ -479,9 +479,9 @@ jspower() {   # jspower <form> <value>: a stack's own power value in -9..17; Mes
   [[ "$2" =~ ^-?[0-9]{1,2}$ ]] || { echo "no strict power value ('$2')"; return 1; }; [ "$2" -ge -9 ] && [ "$2" -le "$PCAP" ] || { echo "power $2 outside -9..17"; return 1; }
   [ "$1" != mt_pget ] || [ "$2" -ge 1 ] || { echo "Meshtastic tx_power $2 (0 = the firmware's maximum)"; return 1; }; echo "$2"; }
 jcap() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$PCAP" ]; }   # Meshtastic's max_power cap, 1..17
-jmodel() {   # jmodel <box> <rid> <value>: the value <= min(17, the radio's model's power_max_dbm on that box), else the reason
+jmodel() {   # jmodel <box> <rid> <value>: the value <= min(17, the radio's model's power_default_dbm on that box), else the reason
   local m c; m=$(getk "MODEL_$1_$2"); c=$(getk "CAP_$1_$m"); [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { echo "no model cap for $1:$2 ('$m' '$c')"; return 1; }
-  [ "$c" -gt "$PCAP" ] && c=$PCAP; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_max_dbm))"; return 1; }; echo "$3"; }
+  [ "$c" -gt "$PCAP" ] && c=$PCAP; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_default_dbm))"; return 1; }; echo "$3"; }
 pnum() {
   local all v; all=$(body "$1" | grep -v '^[[:space:]]*$')
   case $2 in mt_pget) v=$(printf '%s\n' "$all" | sed -nE 's/^lora\.(tx_power|txPower): (-?[0-9]+)$/\2/p')

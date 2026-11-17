@@ -103,9 +103,9 @@ class DaemonParamsMixin:
         """One shared predicate for every LIVE POWER request (direct SET, profile apply, the
         start preflight) so they cannot disagree: `daemon_control.live_power_error` on the
         daemon's own reported family and permission plus the radio's grant (`_granted`)."""
-        return daemon_control.live_power_error(
-            value, daemon_control.chip_family_from_status(status),
-            daemon_control.high_power_from_status(status), self._granted(band, rid))
+        return daemon_control.live_power_error(value, daemon_control.chip_family_from_status(status),
+                                               daemon_control.high_power_from_status(status), self._granted(band, rid),
+                                               radio_start.power_window(self, self._one_rid(band, rid))[1])
 
     def _granted(self, band: str, rid: str = "") -> bool:
         """The +20 dBm grant of radio `rid`, else of `band`'s one enabled radio (radio_start.effective_high_power,
@@ -305,9 +305,9 @@ class DaemonParamsMixin:
         if why or not self._has_daemon_params(stack_id):
             return {}
         ov = {**radio_start.row_dp(self, rid), **radio_start.instance_dp(self, stack_id, rid)}   # the instance's set wins
-        out, pmax = {}, radio_start.power_max(self, rid)          # one list + model read for every param (G1-B3-CODE N3)
+        out, pdef = {}, radio_start.power_window(self, rid)[0]    # one list + model read for every param (G1-B3-CODE N3)
         for name in daemon_params.ALL_PARAMS:
-            eff = ov.get(name) or daemon_params.default_value(stack_id, band, name, pmax)
+            eff = ov.get(name) or daemon_params.default_value(stack_id, band, name, pdef)
             if eff:
                 out[name] = eff
         return out

@@ -108,7 +108,8 @@ def test_unknown_family_narrows_nothing(family):
     # from a typo, so the match is exact and case-sensitive.
     assert dc.validate_set("POWER", "0", family) is None
     assert dc.validate_set("POWER", "20", family) is None
-    assert dc.validate_set("POWER", "21", family) is not None
+    assert dc.validate_set("POWER", "22", family) is None          # the union's top: the Meshstick's 22 (P7)
+    assert dc.validate_set("POWER", "23", family) is not None
 
 
 def test_only_power_is_family_dependent():
@@ -121,7 +122,7 @@ def test_only_power_is_family_dependent():
 def test_power_range_matches_the_daemons_own_policy():
     assert dc.int_range("POWER", "sx127x") == (2, 17)
     assert dc.int_range("POWER", "sx1262") == (0, 20)
-    assert dc.int_range("POWER") == (0, 20)
+    assert dc.int_range("POWER") == (0, 22)          # the union of every model (RADIO-POWER P7: the Meshstick's 22)
 
 
 # --- the family reaches the gate from the configured board -------------------

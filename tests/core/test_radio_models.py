@@ -21,7 +21,7 @@ short = "fake"
 transport = "usb-ch341"
 chip = "sx1262"
 bands = ["868"]
-power_max_dbm = 20
+power_default_dbm = 14
 high_power_switch = false
 usb = { vid = "1a86", pid = "5512", product = "Fake" }
   [[model.variant]]
@@ -154,3 +154,17 @@ def test_the_rows_name_exactly_the_daemons_presets():
     listed = "".join(re.findall(r'"([^"]*)"', known.group(1)))        # adjacent literals are one C string
     named = {v.preset for m in radio_models.load().values() for v in m.variants}
     assert named == set(listed.split(", ")) == set(_daemon_profiles())
+
+
+def test_a_raised_power_top_is_the_daemons_preset_ceiling():
+    # RADIO-POWER P7: a row's raised POWER top (the Meshstick's 22) is the daemon preset's `power_max_dbm` at the pin,
+    # in every band it serves; a row without one has none to mirror (the SX1262 table's 20, the chip range)
+    daemon = _daemon_profiles()
+    raised = {m.id for m in radio_models.load().values() if m.power_max_dbm is not None}
+    assert raised == {"meshstick-1262"}
+    for model in radio_models.load().values():
+        for v in model.variants:
+            for band in ([v.band] if v.band else model.bands):
+                if model.power_max_dbm is not None:
+                    assert daemon[v.preset][band].get("power_max_dbm") == model.power_max_dbm, (model.id, band)
+

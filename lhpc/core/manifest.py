@@ -79,6 +79,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             omit_if_empty=p.get("omit_if_empty", False),
             secret_ref=str(p.get("secret_ref", "")),
             secret_file=str(p.get("secret_file", "")),
+            radio_power=p.get("radio_power", False) is True,
         )
         for p in raw.get("param", [])
     )
@@ -118,6 +119,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
     # they differ only in WHERE the value comes from (operator secrets.toml vs a
     # controller-managed file under config/secrets/).
     for prm in params:
+        if prm.radio_power and prm.kind != "int":
+            raise ManifestError(f"param {prm.name!r} has radio_power and must be kind int")
         if prm.secret_ref and prm.secret_file:
             raise ManifestError(f"param {prm.name!r} declares both secret_ref and secret_file "
                                 f"— a secret has exactly one source")

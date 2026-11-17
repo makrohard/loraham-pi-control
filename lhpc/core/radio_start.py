@@ -408,7 +408,7 @@ def radio_list_lines(svc) -> list:
     usb = {r.id: m for r in state.radios if (m := models.get(r.model)) is not None and m.transport != "spi"}
     found = usb_access.scan() if usb else None
     return [f"  {r.id}  {r.model}  {r.band} MHz  {_usb_port_text(r, usb[r.id], found) if r.id in usb else '-'}"
-            + ("" if r.enabled else "  disabled") + ((note := power_note(svc, r, models.get(r.model))) and f"  ({note})")
+            + ("" if r.enabled else "  disabled")
             for r in state.radios]
 
 
@@ -448,7 +448,7 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready, "radio_state": v.radio_state,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
-                     "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(svc, r, m, usb, v, found)),
+                     "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
                      "attention": _attention(pr, _radio_users(svc, r))})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
@@ -460,9 +460,9 @@ def hardware_view(svc) -> dict:
     return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
 
 
-def _problems(svc, radio, model, usb: bool, view, found) -> list:
+def _problems(radio, usb: bool, view, found) -> list:
     """W257: a row's short notes, read-only facts in a fixed order (no Detect, no bus): its daemon offline (enabled,
-    the CONF socket does not answer), then its stick not plugged in, then a POWER above its model's maximum. A wrong
+    the CONF socket does not answer), then its stick not plugged in (no POWER note: the chip range is the limit). A wrong
     band or a USB row with no binding never reaches here: the list's own checks make such a list invalid, and an
     invalid list has no rows."""
     out = ["daemon offline"] if radio.enabled and not view.reachable else []
@@ -473,24 +473,7 @@ def _problems(svc, radio, model, usb: bool, view, found) -> list:
                        else f"stick not plugged in on port {radio.usb_port}")
         elif why:
             out.append(why)
-    return out + ([note] if (note := power_note(svc, radio, model)) else [])
-
-
-def power_note(svc, radio, model) -> str:
-    """G1-B3-CODE B2: a row's dp_POWER its model's maximum refuses (saved before the cap) is named, never an invalid
-    list: saves refuse it, and Apply sends it as before (the daemon refuses it). The check is the saves' own, so a
-    granted +20 on an SX127x row is no note (second read B2)."""
-    from . import daemon_control
-    value, cap = dict(radio.dp).get("POWER"), model.power_max_dbm if model else None
-    if not value or cap is None:
-        return ""
-    try:
-        grant = _settings(svc, radio, model).hipower
-    except ValueError:
-        grant = False
-    if daemon_control.validate_set("POWER", value, model.chip, grant, cap) is None:
-        return ""
-    return f"POWER {value} is above the model maximum {cap} dBm: lower it"
+    return out
 
 
 def _attention(problems: list, users: list) -> list:
@@ -754,15 +737,15 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
-def power_max(svc, rid: str):
-    """A34: radio `rid`'s model `power_max_dbm` (the daemon's continuous POWER window's top), or None without its row
-    or model."""
+def power_window(svc, rid: str) -> tuple:
+    """Radio `rid`'s model (power_default_dbm, power_max_dbm): the POWER every stack starts at, at most (USB 14, SPI
+    17), and the raised top (the Meshstick's 22, else None = the chip range); (None, None) without its row or model."""
     row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None) if rid else None
     model = radio_models.load().get(row.model) if row else None
-    return model.power_max_dbm if model else None
+    return (model.power_default_dbm, model.power_max_dbm) if model else (None, None)
 
 
-def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None, inherited=None, pmax=None) -> tuple:
+def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=None, inherited=None, pwin=(None, None)) -> tuple:
     """The daemon-param edits of a settings save, ({PARAM: canonical value, or "" to clear}, ""), or ({}, why): a
     param not in `values` is left out; a blank clears; a value is validated for the chip, then canonicalised, and one
     equal to what it inherits (`inherited`, an instance's: its radio's row; else its default) clears. A radio's save (`shown`: the values its panel shows) keeps only what the operator
@@ -773,12 +756,12 @@ def dp_updates(svc, sid: str, band: str, values: dict, chip, high_power, shown=N
         if name not in values:
             continue
         raw = str(values[name]).strip()
-        if raw and (err := daemon_control.validate_set(name, raw, chip, high_power, pmax)):
+        if raw and (err := daemon_control.validate_set(name, raw, chip, high_power, pwin[1])):
             return {}, f"{name}: {err}"
         canon = daemon_control.canonical_value(name, raw) if raw else ""
         if shown is None:
-            out[name] = "" if canon == (inherited or {}).get(name, daemon_params.default_value(sid, band, name, pmax)) else canon
-        elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name, pmax)):
+            out[name] = "" if canon == (inherited or {}).get(name, daemon_params.default_value(sid, band, name, pwin[0])) else canon
+        elif not raw or canon != shown.get(name, daemon_params.default_value(sid, band, name, pwin[0])):
             out[name] = canon
     return out, ""
 
@@ -790,9 +773,9 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
     if svc._is_daemon_target(sid):
         return {}
     stored = cfgmod.load_stack_config(svc._paths, svc._owner_stack_id(sid), inst=commands.Instance(rid))
-    chip, grant = chip_family(svc, rid) or "", effective_high_power(svc, rid)
+    chip, grant, top = chip_family(svc, rid) or "", effective_high_power(svc, rid), power_window(svc, rid)[1]
     return {name: str(v) for name in daemon_params.ALL_PARAMS if (v := stored.get(f"dp_{name}")) not in (None, "")
-            and daemon_control.validate_set(name, str(v), chip, grant) is None}
+            and daemon_control.validate_set(name, str(v), chip, grant, top) is None}
 
 
 def dp_target(svc, target: str, rid: str) -> tuple:
@@ -821,7 +804,7 @@ def params_view(svc, target: str, rid: str) -> dict:
             "can_apply": is_daemon or _apply_open(radio_clients(svc, rid, sid)), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
             "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, rid) or "", effective_high_power(svc, rid),
-                                             power_max(svc, rid))}
+                                             *power_window(svc, rid))}
 
 
 def _apply_open(clients) -> bool:
@@ -844,7 +827,7 @@ def save_params(svc, target: str, rid: str, values: dict):
     if is_daemon:
         return set_row_dp(svc, rid, None, (target, values))
     edits, err = dp_updates(svc, sid, band, values, chip_family(svc, rid) or "", effective_high_power(svc, rid),
-                            inherited=row_dp(svc, rid), pmax=power_max(svc, rid))
+                            inherited=row_dp(svc, rid), pwin=power_window(svc, rid))
     if err:
         return ActionResult(False, err)
     try:
@@ -865,7 +848,7 @@ def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
     sid = svc._owner_stack_id(target)
     shown = row_dp(svc, rid)
     return dp_updates(svc, sid, band, values, svc.radio_chip_family(rid), effective_high_power(svc, rid),
-                      {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()}, pmax=power_max(svc, rid))
+                      {k: daemon_control.canonical_value(k, str(v)) for k, v in shown.items()}, pwin=power_window(svc, rid))
 
 
 def effective_high_power(svc, rid: str) -> bool:

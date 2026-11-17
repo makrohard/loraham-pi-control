@@ -1,6 +1,6 @@
 """The radio model table: one row per board or stick model (`lhpc/data/radio_models.toml`).
 
-A model names its transport, chip, bands, power window and, per variant, the daemon `--hw` preset with
+A model names its transport, chip, bands, power default (and an optional raised top) and, per variant, the daemon `--hw` preset with
 the BCM lines it claims. Loading validates every row against one schema, so a new model within the
 supported chips and transports is one row and no code. Unused until the hardware list (stage L5).
 """
@@ -16,8 +16,11 @@ TRANSPORTS = ("spi", "usb-ch341")
 CHIPS = ("sx127x", "sx1262")
 BANDS = ("433", "868")
 PIN_FIELDS = ("cs", "irq", "rst", "gpio", "aux", "txen", "rxen", "led_pin")   # the daemon profile's names
-_MODEL_KEYS = {"id", "label", "short", "transport", "chip", "bands", "power_max_dbm", "high_power_switch",
-               "variant", "usb", "direct"}
+_MODEL_KEYS = {"id", "label", "short", "transport", "chip", "bands", "power_default_dbm", "power_max_dbm",
+               "high_power_switch", "variant", "usb", "direct"}
+# The only per-model POWER top: an SX1262 board whose maker rates it above the chip table's 20 (the Meshstick, 22),
+# equal to its daemon preset's ceiling. Every other model's range is its chip's (daemon_control.int_range).
+_RAISED_TOP = {"sx1262": range(21, 23)}
 _VARIANT_KEYS = {"key", "preset", "band", "pins"}
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A USB stick's pins are its CH341 bridge's lines (T1.4b point 7): D0-D7, plus the two status pins the bridge
@@ -46,11 +49,12 @@ class RadioModel:
     transport: str
     chip: str
     bands: tuple
-    power_max_dbm: int
+    power_default_dbm: int
     high_power_switch: bool
     variants: tuple
     usb: dict | None = None
     direct: dict | None = None
+    power_max_dbm: int | None = None      # a raised POWER top (Meshstick 22), None = the chip range
 
     def variant(self, key: str) -> Variant:
         return next(v for v in self.variants if v.key == key)
@@ -81,7 +85,13 @@ def _model(row: dict) -> RadioModel:
     need(row.get("chip") in CHIPS, "chip", f"must be one of {', '.join(CHIPS)}")
     bands = row.get("bands")
     need(isinstance(bands, list) and bool(bands) and set(bands) <= set(BANDS), "bands", f"must be some of {', '.join(BANDS)}")
-    need(type(row.get("power_max_dbm")) is int, "power_max_dbm", "must be an integer")
+    from .daemon_control import int_range
+    lo, hi = int_range("POWER", row["chip"])
+    need(type(row.get("power_default_dbm")) is int and lo <= row["power_default_dbm"] <= hi, "power_default_dbm",
+         f"must be an integer in [{lo}, {hi}]")
+    top = row.get("power_max_dbm")
+    need(top is None or (type(top) is int and top in _RAISED_TOP.get(row["chip"], ())), "power_max_dbm",
+         "may only raise an SX1262's top to 21 or 22")
     need(type(row.get("high_power_switch")) is bool, "high_power_switch", "must be true or false")
     usb = row.get("usb")
     need((usb is not None) == (row["transport"] == "usb-ch341"), "usb", "is required for a USB model and only there")
@@ -91,7 +101,7 @@ def _model(row: dict) -> RadioModel:
     need(bool(variants), "variant", "is required")
     need(len({v.key for v in variants}) == len(variants), "variant", "keys must differ")
     return RadioModel(row["id"], row["label"], row["short"], row["transport"], row["chip"], tuple(bands),
-                      row["power_max_dbm"], row["high_power_switch"], variants, usb, row.get("direct"))
+                      row["power_default_dbm"], row["high_power_switch"], variants, usb, row.get("direct"), top)
 
 
 def _variant(v: dict, where: str, bands: list, transport: str = "spi") -> Variant:

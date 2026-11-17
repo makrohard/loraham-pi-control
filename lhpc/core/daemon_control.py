@@ -61,7 +61,7 @@ _ALLOWED_SET_INT: dict[str, tuple[int, int]] = {
     "CADWAIT": (50, 5000),
     "CADIDLE": (0, 2000),
     "CADPOLL": (10, 500),
-    "POWER": (0, 20),          # union of both chip families; see _POWER_RANGE
+    "POWER": (0, 22),          # union of every model: both chip families and the Meshstick's 22; see _POWER_RANGE
     "SF": (7, 12),
     "CR": (5, 8),
     "PREAMBLE": (6, 65535),
@@ -348,7 +348,7 @@ def int_range(key: str, family: str = "") -> tuple[int, int] | None:
 
 
 def validate_set(key: str, value: str, family: str = "", high_power: bool = False,
-                 power_max: int | None = None) -> str | None:
+                 power_top: int | None = None) -> str | None:
     """Return an error string if (key, value) is not an allowed SET, else None.
 
     `family` narrows the POWER range to the chip actually fitted; omitted, POWER is validated
@@ -359,8 +359,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
     SX127x — with no family this stays the non-authoritative union utility (`apply_set` calls it
     that way), and its default of False must never turn that second check into a refusal of an
     already-authorised 20: the union admits 20 regardless. The authorisation boundary for a LIVE
-    20 is `live_power_error`, not this function. `power_max` (the radio's model `power_max_dbm`, A34: the top of
-    the CONTINUOUS window) narrows that window; the high-power extra (exactly 20 on SX127x) stays.
+    20 is `live_power_error`, not this function. `power_top` (the radio's model `power_max_dbm`, the Meshstick's 22)
+    RAISES the continuous window's top above the chip table; nothing narrows it (the chip range is the only limit).
     """
     key = key.upper()
     value = value.upper()
@@ -370,8 +370,7 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
         return None
     if key in _ALLOWED_SET_INT:
         lo, hi = int_range(key, family)
-        cap = power_max if key == "POWER" and power_max is not None else None
-        hi = hi if cap is None else min(hi, cap)
+        hi = max(hi, power_top) if key == "POWER" and power_top is not None else hi
         if not _INT_RE.fullmatch(value):
             return f"{key} must be an integer in [{lo}, {hi}]"
         try:
@@ -472,7 +471,7 @@ def high_power_from_status(status: dict) -> bool | None:
 
 
 def live_power_error(value: str, running_family: str, live_high_power: bool | None,
-                     saved_on: bool) -> str | None:
+                     saved_on: bool, power_top: int | None = None) -> str | None:
     """The LIVE POWER predicate — authoritative for EVERY live POWER value, not only 20.
 
     Rule: the RUNNING `CHIPFAMILY` decides the live numeric set; the saved hardware family decides
@@ -481,7 +480,8 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
     with `ERR`), or refuses a legitimate `POWER=0` on a
     running SX1262.
 
-      * running SX1262           -> 0..20; the permission is irrelevant
+      * running SX1262           -> 0..20, or 0..`power_top` on a model that raises it (the Meshstick's
+                                    22); the permission is irrelevant
       * running SX127x           -> 2..17, or exactly 20 only when the running daemon reports
                                     HIGHPOWER=1 AND the band's switch is saved on; 0/1 and
                                     18/19 refused
@@ -496,7 +496,8 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
     except ValueError:
         return "POWER must be an integer"
     if running_family == "sx1262":
-        return None if 0 <= n <= 20 else "POWER must be in [0, 20] on the running SX1262"
+        hi = max(20, power_top or 0)
+        return None if 0 <= n <= hi else f"POWER must be in [0, {hi}] on the running SX1262"
     if running_family == "sx127x":
         if 2 <= n <= 17:
             return None

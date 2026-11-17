@@ -14,7 +14,7 @@ short = "stick"
 transport = "usb-ch341"
 chip = "sx1262"
 bands = ["868"]
-power_max_dbm = 14
+power_default_dbm = 14
 high_power_switch = false
 usb = {{ vid = "1a86", pid = "5512" }}
 

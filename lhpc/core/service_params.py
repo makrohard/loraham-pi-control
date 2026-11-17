@@ -391,10 +391,10 @@ class ParamsConfigMixin:
         return str(val)
 
     def _band_default(self, p, band: str, inst=None) -> str:
-        """model.band_default with the pin preset of the instance's radio row (K6; a band caller: its band's first
-        radio); the list is read only for a param with pin defaults."""
-        rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band) if getattr(p, "preset_defaults", ()) else ""
-        return band_default(p, band, _radio_start.row_preset(self._paths, rid) if rid else "")
+        """model.band_default with the pin preset and the power default of the instance's radio row (K6; a band caller:
+        its band's first radio); the list is read only for a param with pin defaults or a radio power."""
+        rid = getattr(inst, "rid", "") or _instances.band_radio(self._paths, band) if getattr(p, "preset_defaults", ()) or getattr(p, "radio_power", False) else ""
+        return band_default(p, band, *((_radio_start.row_preset(self._paths, rid), _radio_start.power_window(self, rid)[0]) if rid else ("", None)))
 
     def _param_default_canon(self, p, cfg_band: str, band: str, inst=None) -> str:
         """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —

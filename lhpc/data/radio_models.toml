@@ -2,7 +2,9 @@
 # A new model within the supported chips and transports is one row here plus its daemon preset; no code.
 #
 # Per row: `id`, `label`, `short` (<= 7 characters, for default radio names), `transport` (spi | usb-ch341),
-# `chip` (sx127x | sx1262), `bands`, `power_max_dbm` (the daemon's continuous POWER window's top) and
+# `chip` (sx127x | sx1262), `bands`, `power_default_dbm` (the POWER every stack starts at, at most: USB 14, SPI 17;
+# a default, not a limit: the chip range is the limit), an optional `power_max_dbm` (only an SX1262 rated above the
+# chip table's 20: the Meshstick's 22, its daemon preset's ceiling) and
 # `high_power_switch` (the daemon's `--high-power` +20 dBm permission applies), `direct` (meshtastic's
 # YAML `Module` when meshtasticd drives the radio itself), `usb` ({vid, pid} and an optional
 # `product`; USB rows only; the Meshstick's bridge reports no product string).
@@ -18,7 +20,7 @@ short = "loraham"
 transport = "spi"
 chip = "sx127x"
 bands = ["433", "868"]
-power_max_dbm = 17
+power_default_dbm = 17
 high_power_switch = true
 direct = { module = "RF95" }
 
@@ -41,7 +43,7 @@ short = "uputron"
 transport = "spi"
 chip = "sx127x"
 bands = ["433", "868"]
-power_max_dbm = 17
+power_default_dbm = 17
 high_power_switch = true
 direct = { module = "RF95" }
 
@@ -62,7 +64,7 @@ short = "wavesh"
 transport = "spi"
 chip = "sx1262"
 bands = ["433", "868"]
-power_max_dbm = 20
+power_default_dbm = 17
 high_power_switch = false
 
   [[model.variant]]
@@ -77,6 +79,7 @@ short = "mstick"
 transport = "usb-ch341"
 chip = "sx1262"
 bands = ["868"]
+power_default_dbm = 14
 power_max_dbm = 22
 high_power_switch = false
 usb = { vid = "1a86", pid = "5512" }
@@ -94,7 +97,7 @@ short = "pine64"
 transport = "usb-ch341"
 chip = "sx1262"
 bands = ["868"]
-power_max_dbm = 14
+power_default_dbm = 14
 high_power_switch = false
 usb = { vid = "1a86", pid = "5512" }
 
@@ -110,7 +113,7 @@ short = "rfm98"
 transport = "usb-ch341"
 chip = "sx127x"
 bands = ["433"]
-power_max_dbm = 17
+power_default_dbm = 14
 high_power_switch = true
 usb = { vid = "1a86", pid = "5512" }
 
