@@ -1,4 +1,4 @@
-// fixture: LoRaHAM_Daemon loraham_daemon/hardware_profile.cpp at f9b16468edeb61032547f1fe3f02c10cb1f3e313 (v1.4.1), verbatim below this line; refreshed with every daemon pin move
+// fixture: LoRaHAM_Daemon loraham_daemon/hardware_profile.cpp at c951d8202853c0aedc6765a565bc1df41345c940 (v1.4.2), verbatim below this line; refreshed with every daemon pin move
 #include "hardware_profile.h"
 
 #include <string.h>
@@ -225,7 +225,7 @@ static bool profile_fill(const char *preset, int band, DaemonHardwareProfile *p)
         p->usb_ch341 = true;
         p->usb_vid = 0x1A86;
         p->usb_pid = 0x5512;
-        p->power_max_dbm = 14;          /* until the module's rating is known */
+        p->power_max_dbm = 0;           /* the SX1262 range (config_policy.h) */
         p->claimed_count = 0;
         return true;
     }

@@ -14,9 +14,9 @@
   a stick, offers the USB setup as one command; a start is refused by name when the stick or its access is missing.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
   radio id (`lhpc stack stop daemon@rN`).
-- LoRaHAM daemon v1.4.1 (f9b16468, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
+- LoRaHAM daemon v1.4.2 (c951d820, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per radio with `lhpc hardware --ocp <rid>`.
-- Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, aeed7554).
+- Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 745bd067).
   Source builds need `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch it before `lhpc build daemon`.
 - Update: a libch341 checkout LHPC cloned from pine64 is re-cloned from the fork on `lhpc update`, not refused as
   identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
