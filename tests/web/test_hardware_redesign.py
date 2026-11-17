@@ -44,9 +44,20 @@ def test_the_row_button_reads_disable_or_enable(web, tmp_path, monkeypatch):
     assert re.search(r'data-rid="r3">.*?name="enabled" value="on"> <button type="submit">Enable', page)
 
 
-def test_a_problem_shows_in_the_row(web, tmp_path, monkeypatch):
+def _row(page, rid):
+    return re.search(rf'data-rid="{rid}">(.*?)</tr>', page, re.S).group(1)
+
+
+def test_an_offline_daemon_shows_once_in_the_row_as_its_badge(web, tmp_path, monkeypatch):
     page = _text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True))
-    assert re.search(r'data-rid="r1">.*?⚠ daemon offline', page)                     # enabled, no CONF answer
+    row = _row(page, "r1")                                                           # enabled, no CONF answer
+    assert ">daemon offline</span>" in row and row.count("daemon offline") == 1, row   # the badge, no red note too
+    assert "⚠ stick not plugged in on port 1-1.9" in _row(page, "r3")                 # the row's other notes stay
+
+
+def test_the_detail_page_keeps_its_offline_note(web, tmp_path, monkeypatch):
+    page = _text(_box(web, tmp_path, monkeypatch).get("/hardware/radio/r1").get_data(as_text=True))
+    assert '<p class="note-bad">⚠ daemon offline</p>' in page                         # it has no badge
 
 
 def test_the_detail_page_has_its_facts_detect_and_remove(web, tmp_path, monkeypatch):
