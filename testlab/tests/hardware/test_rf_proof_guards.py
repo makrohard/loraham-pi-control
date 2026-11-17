@@ -140,6 +140,66 @@ def test_row_r0_writes_the_note_above_the_report_table(tmp_path, pw, head):
     assert lines[:len(head) + 1] == [*head, "| row | stack | box | band | peer | direction | nonce seen | power used | result |"], r.stderr
 
 
+# ---- R0 and the end check run `{LH} status` on a box: through a stand-in box that runs each command in a real bash --------
+
+HEAD40 = "a" * 40
+STATUS = "1 stacks, 1 components: 1 running\n[controller] lhpc controller  (running)\n[kiss] KISS TNC  (running)\n"
+
+
+def box_stand_in(tmp_path):
+    """sshpass on PATH as a box: it runs the command the box's login shell gets ('bash -lc <cmd>') in a real bash, so a
+    placeholder left in a command fails there as on a box (rc 127); the box's runtime holds a fake lhpc and python, and
+    the host-bound commands (git, ss, the journal test) answer as a box at INTHEAD would. Each command lands in box.log."""
+    box = tmp_path / "box"
+    rtbin = box / "rt" / "venv" / "lhpc" / "bin"
+    rtbin.mkdir(parents=True)
+    (rtbin / "lhpc").write_text(f'#!/bin/bash\n[ "$*" = status ] || exit 3\nprintf %s "{STATUS}"\n')
+    (rtbin / "python").write_text('#!/bin/bash\ncase "$2" in *radios.load*) echo "STATE valid";; '
+                                  '*radio_models*) echo "CAP ch341-rfm98pw-433 17";; *ControllerService*) echo kiss@r1;; '
+                                  '*) exit 3;; esac\n')
+    (box / "env.sh").write_text(f'git() {{ echo {HEAD40}; }}; ss() {{ echo "ESTAB 0 0 192.0.2.2:22 192.0.2.1:50000"; }}\n'
+                                'test() { [ "$*" = "-d /var/log/journal" ] || builtin test "$@"; }\n')
+    pc = tmp_path / "bin"
+    pc.mkdir()
+    (pc / "sshpass").write_text(f'#!/bin/bash\nfor a; do last=$a; done; eval "set -- $last"\n'
+                                f'[ "$1 $2" = "bash -lc" ] || exit 99; printf "%s\\n" "$3" >> "{box}/box.log"\n'
+                                f'BASH_ENV="{box}/env.sh" exec bash -c "$3"\n')
+    (pc / "gh").write_text(f'#!/bin/sh\necho "{HEAD40} success"\n')
+    for f in [*rtbin.iterdir(), *pc.iterdir()]:
+        f.chmod(0o755)
+    setup = (f'. "{HW}/zstatus.sh"; declare -A ABSENT=(); BOXES=H; RUN=; LANE=fast; PW_H=pw-h-Q71; PW_Z=; BOX_H_HOST=box-h; '
+             f'BOX_H_RUNTIME="{box}/rt"; INTHEAD={HEAD40}; INTCI=1; FORMS_HEAD=$INTHEAD; '
+             'usbsnap() { :; }; boxkern() { :; }; ')   # the PC's and the box's kernel logs (journalctl, sudo): another path
+    return box, setup, {"PATH": f"{pc}:{os.environ['PATH']}"}
+
+
+def test_r0_runs_the_box_status_and_key_read_and_records_the_running_set(tmp_path):
+    # red-before (f256f271): R0 sent a literal "{LH} status" to the box: rc 127, STOP (the kit run 1B stop at R0)
+    box, setup, env = box_stand_in(tmp_path)
+    r, evd = source_only(tmp_path, setup + 'EVD="$EVD/run"; OUT=$EVD; row_R0 && echo R0-DONE', **env)
+    assert "R0-DONE" in r.stdout, r.stdout + r.stderr
+    run = evd / "run"
+    assert (run / "R0-H-status.txt").read_text() == STATUS and (run / "R0-H-status.txt.rc").read_text() == "0\n"
+    assert "data: R0 H: running instances: 'kiss@r1'" in r.stdout
+    log = (box / "box.log").read_text()
+    assert f"{box}/rt/venv/lhpc/bin/lhpc status" in log and "{" + "LH}" not in log and "{" + "RT}" not in log
+
+
+def test_the_end_check_runs_the_box_status_and_finds_the_recorded_set(tmp_path):
+    # red-before (f256f271): verify_set (RS and the recovery) sent a literal "{LH} status": rc 127, "status/key read failed"
+    box, setup, env = box_stand_in(tmp_path)
+    r, evd = source_only(tmp_path, setup + 'keep RUN_H kiss@r1; verify_set && echo VS-DONE', **env)
+    assert "ok: H: the recorded running instances run again" in r.stdout and "VS-DONE" in r.stdout, r.stdout + r.stderr
+    assert (evd / "VS-H.txt").read_text() == STATUS
+    assert f"{box}/rt/venv/lhpc/bin/lhpc status" in (box / "box.log").read_text()
+
+
+def test_a_pc_command_naming_the_box_lhpc_is_a_stop(tmp_path):
+    r, evd = source_only(tmp_path, 'X PC f.txt "{LH} status; touch \\"$RAN\\""')
+    assert stop_lines(r) == ["STOP: a PC command names a box path ({RT} or {LH})"], r.stderr
+    assert not (evd / "ran").exists()
+
+
 def test_the_end_scan_skips_an_equal_password_and_still_scans_the_other(tmp_path):
     r, _ = source_only(tmp_path, 'PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; OPERATOR_CALL=XX9TST; '
                                    'printf "login lhpc\\nzz-Q71\\n" > "$EVD/x.txt"; secret_scan')

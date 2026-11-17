@@ -254,7 +254,7 @@ keep() { echo "$1=$2" >> "$OUT/state.env" || stop "state.env: append failed"; }
 getk() { local l; l=$(grep "^$1=" "$OUT/state.env" 2>/dev/null | tail -n 1)   # a recorded empty value is a value
   if [ -n "$l" ]; then printf '%s\n' "${l#*=}"; else printf '%s\n' "${2-}"; fi; }
 hask() { [ "$MODE" = dry ] && return 0; grep -q "^$1=" "$OUT/state.env"; }
-form() { local n=$1 t=${F[$1]}; shift; t=${t//\{LH\}/\{RT\}/venv/lhpc/bin/lhpc}; local kv; for kv in "$@"; do t=${t//\{${kv%%=*}\}/${kv#*=}}; done
+form() { local n=$1 t=${F[$1]}; shift; local kv; for kv in "$@"; do t=${t//\{${kv%%=*}\}/${kv#*=}}; done
   if [[ $t == *"{cport}"* ]]; then for kv in "$@"; do [ "${kv%%=*}" = rid ] && t=${t//\{cport\}/$(rport 5000 "${kv#*=}")}; done; fi
   [ "$MODE" = live ] || echo "$n" >> "$SCRATCH/formed"; printf '%s' "$t"; }
 gstart() { printf '( o=$(%s) || { echo RUNSET-READ-FAILED; exit 4; }; if printf "%%s\\n" "$o" | grep -qxF -- %s; then echo ALREADY-RUNNING %s; else %s; fi )' "$RUNSET" "$1" "$1" "$(form start inst="$1")"; }
@@ -285,9 +285,11 @@ pweq() { local p="PW_$1"; [ -n "${!p:-}" ] && [ "${!p}" = "$(boxvar "$1" USER)" 
 pwnote() { local b; for b in H Z; do pweq "$b" && echo "NOTE: box $b password equals its login name (lab box); not masked"; done; return 0; }
 # shq <value>: the value as one shell word (printf %q); a leading ~/ stays the login's home on the box ("$HOME"/...)
 shq() { case "$1" in "~/"*) printf '"$HOME"/%s' "$(printf %q "${1#\~/}")";; *) printf %q "$1";; esac; }
-# rt <box|PC> <text> [raw]: {RT} -> the box's runtime path, quoted for a shell command (raw: as it is, for a script's text on stdin)
-rt() { [ "$1" = PC ] && { [[ $2 != *"{RT}"* ]] || stop "a PC command names a box path ({RT})"; printf '%s' "$2"; return; }
-  local t=$2 r; r=$(boxvar "$1" RUNTIME); [ "${3:-}" = raw ] || r=$(shq "$r"); printf '%s' "${t//\{RT\}/$r}"; }
+# rt <box|PC> <text> [raw]: {LH} -> {RT}/venv/lhpc/bin/lhpc, then {RT} -> the box's runtime path, quoted for a shell command (raw:
+# as it is, for a script's text on stdin); the one expansion of both, for every command X/XIN run (forms, raw commands, undos)
+rt() { local t=${2//\{LH\}/\{RT\}/venv/lhpc/bin/lhpc} r
+  [ "$1" = PC ] && { [[ $t != *"{RT}"* ]] || stop "a PC command names a box path ({RT} or {LH})"; printf '%s' "$t"; return; }
+  r=$(boxvar "$1" RUNTIME); [ "${3:-}" = raw ] || r=$(shq "$r"); printf '%s' "${t//\{RT\}/$r}"; }
 sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
   if [ "$in" = - ]; then SSHPASS=$pw sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"
   else printf '%s\n' "$in" | SSHPASS=$pw sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"; fi; }
