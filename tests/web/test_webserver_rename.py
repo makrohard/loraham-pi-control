@@ -114,6 +114,13 @@ def test_every_shipped_web_interface_has_its_proxy_name(tmp_path):
 
 
 _BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
+_CONTROL = re.compile(r"<(button|label)\b[^>]*>([^<{]+)</\1>")
+
+
+def _control_texts():
+    """The texts of the console's buttons and labels (templates), the actions a docs path may end with."""
+    return {m.group(2).strip() for f in sorted((repo_paths.REPO / "lhpc/adapters/web/templates").glob("*.html"))
+            for m in _CONTROL.finditer(f.read_text(encoding="utf-8"))}
 
 
 def _doc_files():
@@ -124,10 +131,11 @@ def _doc_files():
 def test_every_menu_path_the_docs_write_names_entries_that_exist(tmp_path, web):
     # A bold path "Apps → LoRaHAM Pi Control → A → B …", "… → A" or "Webserver… → A" (README EN + DE, docs/*.md)
     # starts with entries that exist, each below the one before (Apps: from the controller row; "…" or a bare entry:
-    # anywhere in the tree); what follows the entries is the panel's action (a button). A renamed entry the docs
-    # still name fails here.
+    # anywhere in the tree); what follows the entries is the panel's action, each part a button's or a label's text.
+    # A renamed entry the docs still name fails here, also behind entries that exist.
     c, _svc = _client(web, tmp_path)
     paths = set(_levels(c).values())
+    controls = _control_texts()
     bad = []
     for f in _doc_files():
         for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
@@ -145,6 +153,6 @@ def test_every_menu_path_the_docs_write_names_entries_that_exist(tmp_path, web):
                     continue                                                  # not a menu path
                 k = max((i for i in range(1, len(parts) + 1)
                          if any((p[:i] if anchored else p[-i:]) == tuple(parts[:i]) for p in paths)), default=0)
-                if k < (2 if anchored else 1):                                 # Apps: the row and one entry at least
+                if k < (2 if anchored else 1) or not set(parts[k:]) <= controls:  # Apps: the row + one entry at least
                     bad.append(f"{f.relative_to(repo_paths.REPO)}:{n}: {span}")
     assert bad == []
