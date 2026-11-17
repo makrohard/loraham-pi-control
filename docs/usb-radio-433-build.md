@@ -5,7 +5,8 @@ serial, and a HopeRF RFM98PW (SX127x, 433 MHz, high power). It reports the USB i
 the other [USB radios](usb-radios.md). In LHPC it is the model `ch341-rfm98pw-433`, which needs
 LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that ships it).
 
-Keep power off while soldering.
+Keep power off while soldering, and handle the parts ESD-safe: work on a grounded mat or with a wrist
+strap, and touch ground before you touch the CH341A board, the EEPROM or the radio module.
 
 ## Contents
 
@@ -17,7 +18,6 @@ Keep power off while soldering.
 - [6. Program the EEPROM](#6-program-the-eeprom)
 - [7. Boot from the EEPROM](#7-boot-from-the-eeprom)
 - [8. First test at low power](#8-first-test-at-low-power)
-- [Sources](#sources)
 
 ## 1. Parts and tools
 
@@ -25,6 +25,14 @@ Keep power off while soldering.
   below are that board's; check yours by its silk labels and by continuity.
 - An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
 - A HopeRF RFM98PW module on a carrier with a ground plane, a 433 MHz antenna or a 50 Ω dummy load.
+- Other modules: a plain SX127x module (SX1276/77/78, without the RFM98PW's extra PA) or an SX126x module
+  (SX1262) works the same way, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
+  Feed its VCC 3.3 V, never the 5 V feed of step 4. An SX127x module takes the signals of step 3 (NSS,
+  SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the model `ch341-rfm98pw-433` (433 MHz). An SX1262
+  module also needs BUSY and uses DIO1 where the SX127x uses DIO0: wire it as one of the two SX1262
+  [USB radios](usb-radios.md), the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY, D1 RXEN; model
+  `meshstick-1262`) or the PINE64 adapter (`pinedio-usb-1262`), both 868 MHz models in LHPC. Each
+  model's daemon preset fixes that stick's pins, TCXO and PA settings, so the module must match them.
 - A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
 - A multimeter, fine soldering tools and short insulated wires.
 
@@ -32,7 +40,7 @@ Keep power off while soldering.
 
 ![CH341A board underside with the pads this build uses, and the CH341A pinout](img/usb-radio-433-ch341a.svg)
 
-With USB unplugged and nothing attached:
+Start with USB unplugged and nothing attached:
 
 1. Set **both** voltage jumper caps (at the USB end) to **3V3**. All signal lines in this build are
    3.3 V logic; the radio's digital inputs must stay below 3.6 V.
@@ -41,6 +49,12 @@ With USB unplugged and nothing attached:
    line. `1a86:5523` means UART mode: unplug and check the mode jumper.
 4. Measure against the IC, not against a header numbering: CH341A pin 12 is GND, pins 28 and 9 are on
    the 3.3 V supply (each about 3.3 V with USB on; near 5 V means the voltage caps are wrong — unplug).
+5. **Find the 5 V pickup** with USB unplugged: the VBUS contact of the USB plug, found by continuity, or
+   a rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
+   Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
+6. **Check the feed alone**, before any radio wire is on: solder the feed wire to the pickup and leave
+   its far end insulated. With USB on, its positive reads 5.0–6.0 V against GND, with the right
+   polarity. Unplug. (Checked now, the board never runs with its signal wires on an unpowered radio.)
 
 ## 3. Wire the radio
 
@@ -74,19 +88,15 @@ the chip's.
 
 ## 4. Power and capacitors
 
-The module's VCC (pin 5) is fed **5 V directly** from USB, as in the reference build.
+The module's VCC (pin 5) is fed **5 V directly** from USB, as in the reference build, by the feed
+checked in step 2. Keep USB unplugged until point 3.
 
-1. **Find the 5 V pickup** with power off: the VBUS contact of the USB plug, found by continuity, or a
-   rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
-   Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
-2. **Solder the capacitors** across VCC (pin 5) and GND, as close to the module as possible: the 470 µF
+1. **Solder the capacitors** across VCC (pin 5) and GND, as close to the module as possible: the 470 µF
    electrolytic (its stripe, the minus side, to GND) and the 100 nF ceramic. Without them the PA's current
    pulse at each transmission drops the CH341 off USB.
-3. **Check the feed alone**, its wire not yet on pin 5: with USB on, its positive reads 5.0–6.0 V
-   against GND, with the right polarity. Unplug.
-4. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
+2. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
    **output**: never tie it to anything.
-5. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
+3. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
    cable), which is under HopeRF's minimum: the fix is the regulated supply below.
 
@@ -97,13 +107,10 @@ What the USB feed means:
   from a standard port.
 - So start at the **lowest** transmit power and watch the kernel log (`journalctl -k -f`) for a USB
   disconnect or an over-current message.
-- Measured with those capacitors on a USB-powered port: up to `POWER` 14 the stick stays; from 15 it drops off
-  USB (brown-out). LHPC starts it at 14.
-- +20 dBm (`lhpc hardware --high-power <rid> on`, `POWER=20`) on this stick is **unmeasured**. LHPC admits it,
-  because the model has the high-power switch, but it has not been tried on USB power. Leave it off until it is
-  measured with an antenna or a dummy load.
-- A separately regulated 5–6 V supply, with the grounds joined and its positive never tied to USB VBUS,
-  is the alternative for high power.
+- A separately regulated 5–6 V supply rated for at least 1 A (the module's 700 mA maximum plus margin),
+  with the grounds joined and its positive never tied to USB VBUS, is the alternative for high power.
+- At any power, keep transmissions short, check the module's temperature, and stay within your licence's
+  power and duty limits for the band.
 
 ## 5. Solder the EEPROM
 
@@ -209,21 +216,19 @@ when the host needs it). The build needs no driver blacklist.
    rate, sync word, header/CRC and IQ, and confirm that its frames arrive. The reference build received
    MeshCom frames at 433.175 MHz, SF11, BW 250 kHz, CR 4/6, sync 0x2B, preamble 16.
 3. **Then transmit, at the lowest power**, into an antenna or a dummy load rated above the expected
-   power. Watch the kernel log for a USB disconnect, and check the module's temperature. The reference
-   build sent one MeshCom frame at the lowest drive, without a USB event.
+   power, with the bare daemon and no client stack. The lowest is `POWER` 2, the daemon's floor on an
+   SX127x ([radio parameters](stacks/daemon.md#radio-parameters)).
+   - Save it on the radio's own row: `lhpc config daemon@<rid> --daemon-param POWER=2`.
+   - Start the daemon: `lhpc stack start daemon@<rid>`. Once the radio is READY, LHPC applies the saved
+     values, the 2 included, before anything can transmit. A daemon that already runs takes it with
+     `lhpc config daemon@<rid> --apply-daemon`, which must report no error.
+   - Send one frame: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at
+     the 2. It needs the operator call sign, and this stick must be the only enabled 433 MHz radio in the
+     hardware list.
+
+   The daemon does not report the power back: the evidence of 2 is the daemon's OK to the apply and an
+   outside measurement (a power meter, or a peer's RSSI). Watch the kernel log for a USB disconnect, and
+   check the module's temperature. The reference build sent one MeshCom frame at the lowest drive,
+   without a USB event. A client stack started later on this radio applies its own `POWER`.
 4. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
    stick comes back after an unplug.
-
-## Sources
-
-This page is translated from the build guide (v2, 23 Oct 2026). Its drawings are new, drawn from the
-datasheets' pin tables:
-- HopeRF, RFM98PW/RFM95PW datasheet, REV1.1 (module pins, supply, current);
-- WCH, CH341 datasheet CH341DS1, version 2D (pins, 3.3 V operation, EEPROM format);
-- Atmel, AT24C01A/02/04/08A/16A datasheet, doc0180 rev. Z1, 05/2007 (EEPROM pins);
-- command-tab/ch341eeprom at 7cffbef7;
-- the USB-IF power policy;
-- markbirss/MESHSTICK (the Meshstick reference wiring).
-
-The `POWER` limit in step 4, the jumper table in step 7 and the receive and transmit results in step 8 were
-measured on the reference build.
