@@ -244,3 +244,65 @@ def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_r
     # clone's), so the page and `status --versions`, which read it through `effective_status`, show it too
     entry = stackupdates.view(svc._paths)["components"]["loraham-daemon"]
     assert stackupdates.effective_status(entry, comp.source.pin_commit) == stackupdates.ERROR, entry  # RED: unchecked
+
+
+# ---- G2-B1: the binary lane's verdict on every surface, keyed by the installed artifact ----
+
+def _status_src(svc, cid="loraham-daemon"):
+    """The `src` words of the component's line in `lhpc status daemon`."""
+    lines = [d for d in svc.status("daemon").details if d.split()[:1] == [cid]]
+    assert len(lines) == 1, lines
+    return lines[0].split(" src ", 1)[1].strip()
+
+
+def _versions(svc, cid="loraham-daemon"):
+    lines = [d for d in svc.status_versions().details if d.split()[:1] == [cid]]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def _page(svc, web):
+    import htmlq
+    client = web(service_factory=lambda: ControllerService(system=svc._system, paths=svc._paths))
+    return htmlq.parse(client.get("/stacks/daemon/body").get_data(as_text=True))
+
+
+def _install_pills(svc, web):
+    """The covered components' lane pills in the daemon stack's Install section."""
+    doc = _page(svc, web)
+    return {p.text.strip() for p in doc.within(doc.by_id("stack-install-daemon")).find("span", class_="ver")}
+
+
+def _info_card(svc, web):
+    doc = _page(svc, web)
+    card = doc.within(doc.by_id("stack-info-daemon"))
+    rows = [card.within(tr).find("td")[0].text for tr in card.find("tr")
+            if [th.text for th in card.within(tr).find("th")] == ["Source / profile"]]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+def _behind(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "2026-11-09T17:54:53Z")
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, _other(svc, "daemon"), "2026-11-10T03:51:59Z"))
+    assert _checked(svc) == _is(stackupdates.BEHIND)
+    return svc
+
+
+def test_a_binary_row_behind_its_newest_entry_reads_the_lane_verdict_on_every_surface(tmp_path, monkeypatch,
+                                                                                       binary_receipt, web):
+    svc = _behind(tmp_path, monkeypatch, binary_receipt)
+    assert _status_src(svc) == "binary, update available"                          # RED before: "binary"
+    assert "binary, update available" in _versions(svc)
+    assert _info_card(svc, web) == "binary, update available / candidate-available"
+    assert _install_pills(svc, web) == {"update available"}
+
+
+def test_a_binary_verdict_reads_unchecked_once_another_artifact_with_the_same_commits_is_installed(
+        tmp_path, monkeypatch, binary_receipt, web):
+    svc = _behind(tmp_path, monkeypatch, binary_receipt)
+    binary_receipt(svc, sha="3" * 64, commits=_other(svc, "daemon"),             # the same component commits
+                   provenance={"published_at": "2026-11-09T17:54:53Z"})
+    assert _install_pills(svc, web) == set()                                     # RED before: {"update available"}
+    assert _status_src(svc) == "binary, unchecked"

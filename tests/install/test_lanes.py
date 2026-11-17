@@ -1075,7 +1075,7 @@ def test_a_switch_to_stable_checks_freshness_against_its_target_not_the_recorded
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable") == 0       # the dry run
     out = capsys.readouterr().out
-    assert "app: upstream update-available" in out    # RED before: up-to-date (D against the dev branch's tip)
+    assert "app: update available" in out             # the one label (G2-B1 B3); RED before U1: up-to-date
     assert box.head() == box.c[2]
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[1]
@@ -1177,7 +1177,7 @@ def test_a_box_the_floor_holds_back_is_offered_the_release_in_its_future(box, ca
     assert su.view(Paths(runtime_root=box.rt))["components"]["app"]["upstream_head"] == box.c[1]   # THIS box's target
     capsys.readouterr()
     assert box.cli("update", "s") == 0                # the dry run
-    assert "app: upstream update-available" in capsys.readouterr().out
+    assert "app: update available" in capsys.readouterr().out
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[1]                     # the release, not the plain tag the floor refused
     box.cli("source-check", "s")
@@ -1377,10 +1377,17 @@ def _lhpc_upstream(box, git, make_repo, monkeypatch, pin=None, text=None, ahead=
         head = git(repo, "rev-parse", "HEAD")
         git(repo, "checkout", "-q", "-")
     monkeypatch.setattr(selfupdate, "repo_root", lambda: repo)
+    _self_update_refresh(box, git, head)
+    return head
+
+
+def _self_update_refresh(box, git, head):
+    """The self-update cache as one refresh writes it: the fetched head and this checkout's own HEAD beside it."""
+    from lhpc.core import selfupdate
     selfupdate.write_cache(Paths(runtime_root=box.rt),
                            {"schema_version": selfupdate.CACHE_SCHEMA_VERSION,
+                            "local": {"is_git": True, "head": git(box.lhpc_repo, "rev-parse", "HEAD")},
                             "upstream": {"ok": True, "upstream_head": head, "upstream_head_short": head[:9]}})
-    return head
 
 
 def test_a_pinned_source_whose_next_lhpc_pins_another_commit_reads_update_lhpc_first(box, capsys, git,
@@ -1443,14 +1450,14 @@ def test_a_cached_head_equal_to_this_checkout_gives_no_hint(box, capsys, git, ma
     assert _check_detail(box, capsys)[0] == "current"            # RED before: "update LHPC first"
 
 
-def test_the_update_plan_of_a_source_waiting_for_lhpc_says_nothing_to_fetch(box, capsys, git, make_repo,
+def test_the_update_plan_of_a_source_waiting_for_lhpc_says_update_lhpc_first(box, capsys, git, make_repo,
                                                                             monkeypatch):
-    """`lhpc update s` (the plan) reads "update LHPC first" as up to date: the source is at this LHPC's pin."""
+    """`lhpc update s` (the plan, a live probe) prints the one label: the prerequisite is kept (G2-B1 B3)."""
     assert box.cli("install", "s", "--yes") == 0
     _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
     capsys.readouterr()
     box.cli("update", "s")
-    assert "app: upstream up-to-date" in capsys.readouterr().out
+    assert "app: update LHPC first" in capsys.readouterr().out   # RED before: "app: upstream up-to-date"
 
 
 def test_a_malformed_upstream_manifest_gives_no_hint(box, capsys, git, make_repo, monkeypatch):
@@ -1519,6 +1526,62 @@ def test_a_verdict_stored_before_u6_reads_unchecked(box, capsys, web):
     line = _versions_line(box, capsys)
     assert "unchecked" in line.split(), line                      # RED before: "current"
     assert _install_pill(box, web) == ""                          # RED before: "current"
+
+
+# ---- G2-B1: a stored verdict stands only on every input it was computed from (one lane key) ----
+
+def _readers(box, capsys, web):
+    """The verdict word of `lhpc status`, `status --versions` and the info card (its source half)."""
+    return (_status_src(box, capsys), _versions_line(box, capsys).split()[1], _info_card(box, web).split(" / ")[0])
+
+
+def _pinned_at_the_dev_tip_waiting_for_lhpc(box, capsys, git, make_repo, monkeypatch):
+    """`app` pinned at c3, which is also the dev tip; the fetched next LHPC pins c2: "update LHPC first"."""
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    box.manifest.write_text(box.manifest.read_text().replace(f'pin_commit = "{box.c[0]}"', f'pin_commit = "{box.c[2]}"'))
+    assert box.cli("install", "s", "--yes") == 0
+    assert box.head() == box.c[2] and box.selector() == "pinned"
+    assert _check_detail(box, capsys)[0] == "update LHPC first"
+
+
+def test_a_pinned_verdict_reads_unchecked_once_the_source_follows_dev_at_the_same_head(box, capsys, git, make_repo,
+                                                                                         monkeypatch, web):
+    _pinned_at_the_dev_tip_waiting_for_lhpc(box, capsys, git, make_repo, monkeypatch)
+    assert box.cli("update", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2] and box.selector() == "dev"         # the head, the pin and the fetched LHPC stay
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "update LHPC first"
+    assert _check_detail(box, capsys)[0] == "current"                  # the dev lane's own verdict
+
+
+def test_a_pinned_verdict_reads_unchecked_once_the_running_lhpc_moved_beside_the_fetched_one(box, capsys, git,
+                                                                                               make_repo,
+                                                                                               monkeypatch, web):
+    _pinned_at_the_dev_tip_waiting_for_lhpc(box, capsys, git, make_repo, monkeypatch)
+    repo = box.lhpc_repo                                               # a commit beside the fetched head
+    (repo / "BESIDE").write_text("another LHPC\n")
+    git(repo, "add", "BESIDE")
+    git(repo, "commit", "-qm", "beside")
+    _self_update_refresh(box, git, git(repo, "rev-parse", "up"))           # the next refresh records it
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "update LHPC first"
+    assert _check_detail(box, capsys)[0] == "current"                  # the fetched head is no newer LHPC now
+
+
+def test_a_dev_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys, web):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert _check_detail(box, capsys)[0] == "current"
+    (box.rt / "config" / "local.toml").write_text(f'[remotes]\napp = "{OTHER}"\n')
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another remote)
+
+
+@pytest.mark.parametrize("key", ["another lane", 7])
+def test_a_stored_verdict_with_another_or_a_malformed_key_reads_unchecked(box, capsys, web, key):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert _check_detail(box, capsys)[0] == "current"
+    cache = box.rt / "state" / "stackupdates.json"
+    data = json.loads(cache.read_text())
+    data["components"]["app"]["lane_key"] = key
+    cache.write_text(json.dumps(data))
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current"
 
 
 def test_a_component_without_a_source_is_listed_by_status_versions(box, capsys):
