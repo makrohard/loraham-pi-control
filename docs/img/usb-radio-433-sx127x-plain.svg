@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="780" viewBox="0 0 980 780" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">Wiring: CH341A board and a plain SX1276/78 module</title>
-<desc id="d">Functional wiring of a plain 433 MHz SX1276/78 module whose antenna is on PA_BOOST, as the model ch341-rfm98pw-433: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to RESET, DIO0 to D6, DIO1 to D4, GND to every GND pin. VCC from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 10 µF at the module. DIO2 to DIO5 open; ANT to a 433 MHz antenna or a 50 ohm load. Example pin numbers are the HopeRF RFM96W/RFM98W's.</desc>
+<desc id="d">Functional wiring of a plain 433 MHz SX1276/78 module whose antenna is on PA_BOOST, as the model ch341-rfm98pw-433: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to RESET, DIO0 to D6, DIO1 to D4, GND to every GND pin. VCC from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 22 µF at the module. DIO2 to DIO5 open; ANT to a 433 MHz antenna or a 50 ohm load. Example pin numbers are the HopeRF RFM96W/RFM98W's.</desc>
 <defs>
 <marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker>
 <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker>
@@ -75,7 +75,7 @@
 <line x1="578" y1="476" x2="602" y2="476" stroke="#1b2430" stroke-width="2.4"/>
 <line x1="590" y1="476" x2="590" y2="498" stroke="#1b2430" stroke-width="1.5"/>
 <circle cx="590" cy="498" r="3.5" fill="#c0261f"/><circle cx="590" cy="428" r="3.5" fill="#1b2430"/>
-<text x="572" y="466" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 10 µF</text>
+<text x="572" y="466" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 22 µF</text>
 <text x="674" y="532" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">DIO2–DIO5: open</text>
 <text x="674" y="554" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">ANT: antenna / 50 Ω</text>
 <text x="40" y="618" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">VCC from the board's 3V3 pad, never 5 V: the chip's VDD is 1.8–3.7 V.</text>

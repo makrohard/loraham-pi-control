@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="868" viewBox="0 0 980 868" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">Wiring: CH341A board and an SX1262 module</title>
-<desc id="d">Functional wiring of an 868 MHz SX1262 module as the model meshstick-1262: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to NRST, DIO1 to D6, BUSY to D4, D1 to RXEN, GND to every GND pin. On a module with a TXEN pin, TXEN is tied to DIO2 at the module. The module needs a TCXO powered from DIO3 at 1.8 V. VCC 3.3 V from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 10 µF at the module.</desc>
+<desc id="d">Functional wiring of an 868 MHz SX1262 module as the model meshstick-1262: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to NRST, DIO1 to D6, BUSY to D4, D1 to RXEN, GND to every GND pin. On a module with a TXEN pin, TXEN is tied to DIO2 at the module. The module needs a TCXO powered from DIO3 at 1.8 V. VCC 3.3 V from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 22 µF at the module.</desc>
 <defs>
 <marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker>
 <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker>
@@ -72,7 +72,7 @@
 <line x1="578" y1="520" x2="602" y2="520" stroke="#1b2430" stroke-width="2.4"/>
 <line x1="590" y1="520" x2="590" y2="542" stroke="#1b2430" stroke-width="1.5"/>
 <circle cx="590" cy="542" r="3.5" fill="#c0261f"/><circle cx="590" cy="472" r="3.5" fill="#1b2430"/>
-<text x="572" y="510" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 10 µF</text>
+<text x="572" y="510" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 22 µF</text>
 <text x="674" y="576" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">TXEN (if present) ── DIO2</text>
 <text x="674" y="598" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">DIO3: the module's TCXO</text>
 <text x="674" y="620" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">ANT: antenna / 50 Ω</text>

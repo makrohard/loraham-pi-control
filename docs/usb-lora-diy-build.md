@@ -38,7 +38,7 @@ plane, and use an antenna for its band or a 50 Ω dummy load.
 ### Capacitors
 
 - For the RFM98PW: a 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
-- For a 3.3 V module: a 100 nF and a 10 µF capacitor (it runs from the board's 3V3).
+- For a 3.3 V module: a 100 nF and a 22 µF capacitor (it runs from the board's 3V3).
 
 ### Tools
 
@@ -149,13 +149,12 @@ power are in [step 3](#3-power-and-capacitors).
 
 ### Capacitors (every module)
 
-Solder them across the module's VCC and GND, as close to the module as possible. They buffer the current
-pulse at each transmission.
+Solder them across the module's VCC and GND, as close to the module as possible.
 
 | module | capacitors |
 |---|---|
-| HopeRF RFM98PW (VCC = pin 5) | a 470 µF electrolytic (its stripe, the minus side, to GND) and a 100 nF ceramic |
-| a 3.3 V module (plain SX127x, SX1262) | a 10 µF (an electrolytic or tantalum one: its minus side to GND) and a 100 nF ceramic |
+| HopeRF RFM98PW (VCC = pin 5) | a 470 µF electrolytic (its stripe, the minus side, to GND) and a 100 nF ceramic. The 470 µF carries the PA's current pulse of up to 700 mA at each transmission. Mind its inrush at plug-in: it can reset a hub and the devices on it. Plug the stick in first or use a powered hub; a small series resistor or NTC in the 5 V feed limits the inrush, but also drops voltage during the transmit pulse |
+| a 3.3 V module (plain SX127x, SX1262) | a 22 µF (an electrolytic or tantalum one: its minus side to GND) and a 100 nF ceramic |
 
 ### Power: HopeRF RFM98PW (5 V, high power)
 
@@ -166,9 +165,8 @@ checked in step 1. Keep USB unplugged until point 2.
    **output**: never tie it to anything.
 2. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
-   cable), which is under HopeRF's minimum. Plug in with `journalctl -k -f` open: the 470 µF is far above
-   the 10 µF USB 2.0 allows a device at attach; an over-current or hub reset at plug-in means this port
-   cannot feed the stick.
+   cable), which is under HopeRF's minimum. Plug in with `journalctl -k -f` open: an over-current or hub
+   reset at plug-in means this port cannot feed the stick.
 
 What the USB feed means:
 - HopeRF specifies 650 mA typical and 700 mA maximum for the module alone at +30 dBm on 433 MHz, plus
