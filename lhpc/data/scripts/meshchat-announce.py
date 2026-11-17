@@ -34,7 +34,8 @@ import time
 
 ROUTE = "/api/v1/announce"
 MAX_BODY = 64 * 1024                                       # the answer is ~27 bytes
-RAW_BUDGET = MAX_BODY + 4096                               # + chunk framing, below the decoding
+RAW_BUDGET = MAX_BODY + 4096                               # what the parser consumes below the decoding (+ chunk
+                                                           # framing); the socket may read one buffer ahead of it
 REPORT_S = 1.0                                             # the final line's own bound
 
 

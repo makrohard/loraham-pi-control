@@ -124,6 +124,17 @@ def meshchat():
         f.close()
 
 
+@pytest.fixture
+def alarm_kept():
+    """An in-process `main()` leaves SIGALRM ignored and the real-time timer disarmed (G2-RETI NOTE2): the test's
+    process gets both back as they were. The real setitimer is taken here, before a test fakes it."""
+    import signal
+    handler, timer, setitimer = signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL), signal.setitimer
+    yield
+    signal.signal(signal.SIGALRM, handler)
+    setitimer(signal.ITIMER_REAL, *timer)
+
+
 def _script(api, timeout="5", env=None):
     """The script as the runner runs it: its own process, here under a 30 s subprocess timeout (a
     regression of the bound fails the test instead of holding the run). -> (rc, output, seconds)."""
@@ -260,6 +271,8 @@ def _closed_pipe():
     return None, w
 
 
+@pytest.mark.wallclock("the script's own deadline and report bound are real timers in a child: its elapsed time is "
+                       "the property, under a 10 s kill")
 @pytest.mark.parametrize("out, err, ok", [
     pytest.param("devnull", "full", False, id="failure-on-full-stderr"),
     pytest.param("full", "devnull", True, id="success-on-full-stdout"),
@@ -276,20 +289,23 @@ def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, out, er
     api = meshchat().api if ok else f"127.0.0.1:{_free_port()}"
     made = {k: (_full_pipe() if v == "full" else _closed_pipe()) for k, v in (("out", out), ("err", err)) if v != "devnull"}
     fd = {k: made[k][1] if k in made else subprocess.DEVNULL for k in ("out", "err")}
+    t0 = time.monotonic()
     p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", "1"], stdout=fd["out"], stderr=fd["err"])
     for r, w in made.values():
         os.close(w)
     try:
         rc = p.wait(timeout=10)                       # wallclock: a bound on the child, never paces
+        secs = time.monotonic() - t0
     except subprocess.TimeoutExpired:
         p.kill()
         p.wait()
-        rc = None
+        rc, secs = None, None
     finally:
         for r, _w in made.values():
             if r is not None:
                 os.close(r)
     assert rc == (0 if ok else 1), rc
+    assert secs < 1 + 1 + 1.5, secs                  # --timeout 1 + REPORT_S 1 + 1.5 s start-up (G2-RETI NOTE1)
 
 
 def test_a_redirect_is_refused_and_never_followed(meshchat):
@@ -323,7 +339,7 @@ def test_a_tiny_deadline_ends_as_the_named_failure_never_a_traceback():
         assert rc == 1 and "Traceback" not in out and "not announced" in out, out
 
 
-def test_an_alarm_pending_at_the_disarm_never_turns_a_success_into_a_failure(monkeypatch):
+def test_an_alarm_pending_at_the_disarm_never_turns_a_success_into_a_failure(monkeypatch, alarm_kept):
     """In process, deterministic (SR delta note 1): the timer's disarm is faked to deliver a real
     SIGALRM at that very moment — the alarm "pending after cleanup". Cleanup ignores SIGALRM before it
     disarms, so a confirmed announce stays a success (rc 0). Without that order the alarm becomes
@@ -341,14 +357,10 @@ def test_an_alarm_pending_at_the_disarm_never_turns_a_success_into_a_failure(mon
             signal.raise_signal(signal.SIGALRM)                          # the alarm lands at the disarm
         return real(which, 0)                                            # never a real timer here
     monkeypatch.setattr(mod.signal, "setitimer", setitimer)
-    before = signal.getsignal(signal.SIGALRM)
-    try:
-        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 0
-    finally:
-        signal.signal(signal.SIGALRM, before)
+    assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 0
 
 
-def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys):
+def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys, alarm_kept):
     """Its sibling: the arm itself is faked to deliver SIGALRM at once. The timer is armed inside the
     protected region, so main returns the named failure (rc 1) — nothing escapes (SR delta note)."""
     import importlib.util
@@ -363,11 +375,7 @@ def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys):
         if seconds == 5:                                                 # the run's arm (--timeout 5), not the report's
             signal.raise_signal(signal.SIGALRM)                          # the alarm lands at the arm
     monkeypatch.setattr(mod.signal, "setitimer", setitimer)
-    before = signal.getsignal(signal.SIGALRM)
-    try:
-        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
-    finally:
-        signal.signal(signal.SIGALRM, before)
+    assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
     assert "not announced — announce timed out" in capsys.readouterr().err
 
 
@@ -403,7 +411,7 @@ def test_a_parser_failure_outside_the_named_ones_logs_its_type_only(meshchat, ra
 
 @pytest.mark.parametrize("exc", [RecursionError("maximum recursion depth exceeded CANARY_SECRET"),
                                  KeyError("CANARY_SECRET")], ids=["recursion", "any-type"])
-def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch, capsys, exc):
+def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch, capsys, exc, alarm_kept):
     """The B2 boundary itself, on any Python: an exception none of the named excepts covers, its text
     carrying a canary, ends as rc 1 with the fixed message and the type name only. KeyError stands for
     any type outside the two seen (ValueError, RecursionError), so the boundary is `Exception`."""
@@ -415,12 +423,7 @@ def test_any_other_exception_ends_as_the_fixed_message_and_its_type(monkeypatch,
     def deep(api):
         raise exc
     monkeypatch.setattr(mod, "announce", deep)
-    import signal
-    before = signal.getsignal(signal.SIGALRM)
-    try:
-        assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
-    finally:
-        signal.signal(signal.SIGALRM, before)
+    assert mod.main(["--api", "127.0.0.1:1", "--timeout", "5"]) == 1
     err = capsys.readouterr().err
     assert err == "meshchat-announce: not announced — GET /api/v1/announce: " + type(exc).__name__ + "\n", err
 
