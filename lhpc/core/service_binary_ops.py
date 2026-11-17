@@ -394,7 +394,7 @@ class BinaryOpsMixin:
         an older replacement. Plan and apply branch on `how`; a kept or same artifact's checkouts are checked
         against ITS receipt's commits, never another entry's."""
         state, rec, _why = self.binary_receipt_state(stack_id)
-        if state == "valid" and self.binary_missing(stack_id, rec):
+        if state == "valid" and self._binary_missing(stack_id, rec):
             return "", None, ""                  # the start refuses it (one readiness rule): never kept, the entry covers it
         same = state == "valid" and rec.artifact_sha256 == entry.sha256
         newer = False if same or state != "valid" else bi.is_newer(entry, rec, entries)
@@ -934,20 +934,20 @@ class BinaryOpsMixin:
         newer entry is published; `error` = the index could not be read, or (with `why`) the newest entry cannot be
         ordered against the installed one (`bi.is_newer` None) (could not check). No entry for this box, or a
         newest one that does not cover this lhpc, offers nothing: the installed binary stays current (D10), unless
-        it lacks a covered component the start then refuses (`binary_missing`): a covering entry is offered, else
+        it lacks a covered component the start then refuses (`_binary_missing`): a covering entry is offered, else
         could not check with the start's reason."""
         state, rec, _why = self.binary_receipt_state(stack_id)
         spec = self.binary_spec(stack_id)
         if state != "valid" or rec is None or spec is None:
             return {"state": "n/a", "offer": ""}
-        missing = self.binary_missing(stack_id, rec)          # the start refuses this install (one readiness rule)
+        missing = self._binary_missing(stack_id, rec)          # the start refuses this install (one readiness rule)
         try:
             entries = bi.index_entries(bi.fetch_index(spec.index_url), stack_id)
             entry = bi.newest_entry(entries, self.binary_target(), spec.covers)
         except bi.BinaryNoneCompatible:
             if missing:                                      # no update exists: never "update available"
                 return {"state": "error", "offer": "", "why": (
-                    f"{self.binary_predates(stack_id, missing)} — no published binary covers "
+                    f"{self._binary_predates(stack_id, missing)} — no published binary covers "
                     f"{', '.join(missing)} yet, so install it from source")}
             return {"state": "current", "offer": ""}
         except bi.BinaryInstallError:

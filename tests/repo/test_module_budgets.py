@@ -24,8 +24,8 @@ BUDGETS = {
     "service_base.py": (166, 0),
     "service_admission.py": (457, 0),  # split-s4: split from services.py; K4b: a stop locks its running instances' bands; K6: lowered
     "service_auto_install.py": (1875, 16),
-    "service_binary_channel.py": (280, 18),  # trackF-c3: the web client keeps its own selector; U8: lowered (binary_behind out)
-    "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
+    "service_binary_channel.py": (289, 18),  # trackF-c3: the web client keeps its own selector; U8: lowered (binary_behind out); chain-A G2: one binary readiness rule for start, freshness and install
+    "service_binary_ops.py": (1104, 5),  # trackF-c3: the web client follows meshtastic's binary install; chain-A G2: the kept binary by sha, an unstamped receipt dated by its entry, the readiness rule, kept checkouts named
     "service_boot_restore.py": (674, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source); K8f S4-4a: a radio's daemon item fails by name (G1-K8F-S4-4A B1/B2)
     "service_build.py": (818, 11),  # split-s5: split from service_lifecycle_ops.py; U8: one start readiness (start_readiness for the web gate and the page), paid by binary_behind out of service_binary_channel.py
     "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
@@ -34,7 +34,7 @@ BUDGETS = {
     "service_hmac.py": (1019, 17),  # K7: the apply restarts every running instance (one shared secret, DEC-W384v)
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
     "service_lifecycle_ops.py": (3185, 32),  # K8d3: Home's overview per radio and one band pass for its stray cards (G1-K8D3 N2), family net -13; co-17: a stored OCP the band's chip cannot represent blocks that band's start; K4b: lowered (the one-band rule and the band marker out); K6: competitors per radio, launch_band from the launch records; G1-K6C: lowered (a test-only wrapper out, runs_on_band shorter); K7: lowered (the interactive markers' logic to interactive_markers.py); G1-K8A: lowered (the marker comments); U8: lowered (the start readiness in one place)
-    "service_maintenance.py": (2895, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client; K7: the upstream update restarts and the uninstall prep stops every instance; G1-K8A 9: clean keeps deleting a 0.13 band marker
+    "service_maintenance.py": (2896, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client; K7: the upstream update restarts and the uninstall prep stops every instance; G1-K8A 9: clean keeps deleting a 0.13 band marker; chain-A G2: the update row names why it could not check
     "service_network.py": (1272, 12),  # w17-NA: (DEC-W34) +2 public = ap_cidr() + network_set_ap_cidr(), the fixed interface; lines kept by moving _fw_ap_live's body to ap_network.py
     "service_params.py": (2511, 39),  # K4b: restart markers per instance (a bare id reads its instances'); MeshCore files by instance; K6: stores per radio, live consumers per instance, port_of, derived rows refused (DEC-W384q)
     "service_rflog.py": (490, 13),  # split-s1: split from service_lifecycle_ops.py; K6: the stack-wide switch sets every instance; G1-K6C: a partly saved switch names the saved and the failed instances; K7: a stack without a radio refuses the switch, --all skips it (G1-K6C-RE 3)
