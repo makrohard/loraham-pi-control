@@ -137,9 +137,8 @@ Before step 1 (each line was missed or found late in a real run):
 3. Local gate green ([CONTRIBUTING](CONTRIBUTING.md#what-should-be-green)); push the branch;
    dispatch CI and `testlab.yml` with `release_verify=true` on it
    ([testlab](docs/testlab.md#running-the-verification-lanes)).
-4. Run the [release test matrix](docs/test-matrix.md) on the box into the run report. The release
-   commit is not amended (binaries are built from it); the result goes into
-   `docs/live-tests/live-test.md` in the first docs commit after the tag. The
+4. Run the [release test matrix](docs/test-matrix.md) on the box into the run report. RF rows run
+   by the [hardware proof](docs/hardware-proof.md) kit, whose evidence is their record. The
    [fast lane](docs/test-matrix.md#fast-lane) needs the maintainer's explicit waiver, and every
    skipped row is written down.
 5. CI and testlab green again on the **final** commit, with the binaries of step 8 published.

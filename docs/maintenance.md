@@ -141,7 +141,7 @@ The standing rules for the docs and `CHANGELOG.md`; they bind every contributor,
 
 | # | rule |
 |---|---|
-| R1 | **Short:** only what the reader needs to do the task. No history ("used to", "since 0.x"): the CHANGELOG and git own it, and live-tests own the dated evidence. A rationale is no longer than its rule (a one-line "why" that stops a known mistake stays) |
+| R1 | **Short:** only what the reader needs to do the task. No history ("used to", "since 0.x"): the CHANGELOG and git own it, and the hardware proof kit's evidence owns the dated runs. A rationale is no longer than its rule (a one-line "why" that stops a known mistake stays) |
 | R2 | **Once, in the right spot:** one fact, one owner page; elsewhere one line plus a link, never a paraphrase. |
 | R3 | **True:** every sentence is true of the code at the base and no stronger than the mechanism; verified (file:line) or removed. Numbers are measured. Page and CLI literals come from a rendered page. A model-table value is LHPC's support, not a vendor fact. A change that makes a sentence untrue fixes it in the same commit |
 | R4 | **Frames:** when two docs disagree on a figure, name whose frame each is; change no number without a code line |
@@ -152,7 +152,7 @@ The standing rules for the docs and `CHANGELOG.md`; they bind every contributor,
 | R9 | **Upgrade steps:** before 1.0.0, an upgrade problem is a step under "Upgrading from …" in the CHANGELOG, never one-time migration code |
 | R10 | **Major and minor sections:** major changes only, no history back and forth; written once before the tag, upgrade steps kept |
 | R11 | **Names:** no Co-Authored-By or AI attribution; no tool, agent or session names in committed text. The maintainer's name and email appear in copyright files only. No secrets, addresses, call signs, node ids or box names. English, except the German README |
-| R12 | **Special files:** README.de.md is a full translation, worked last, and lands together with its English twin. Live-test records stay (at most a one-line release header). Out of scope: the vendored rnode-flasher README, released CHANGELOG sections, licence texts |
+| R12 | **Special files:** README.de.md is a full translation, worked last, and lands together with its English twin. The hardware proof kit's evidence is the record of hardware runs ([hardware proof](hardware-proof.md#the-evidence)). Out of scope: the vendored rnode-flasher README, released CHANGELOG sections, licence texts |
 | R13 | **Run docs** (item READMEs, read-ins, plans) follow R1, R2 and R6 |
 | R14 | **Docs-run method:** no behaviour or policy change (a sentence that needs code becomes a code finding); editors on disjoint files; four lenses (fact loss, contradictions, the reader, policy); a gate-1 review (an independent review of the diff before it lands); stop with a resumable report when it does not fit; never drop a user-facing element the code still has |
 | R15 | **Gates before a docs commit:** check_houserules, the README drift tests, the cli section test, a link + anchor + TOC check, every test that reads docs, ruff |
@@ -244,8 +244,8 @@ The standing rules for the docs and `CHANGELOG.md`; they bind every contributor,
     smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes), no box. That lane
     does not cover the daemon, RadioLib or the shared chat source (the real daemon needs a radio).
-    Anything that changes behaviour on hardware is proved on the box and recorded under
-    `docs/live-tests/`.
+    Anything that changes behaviour on hardware is proved on the box
+    ([hardware proof](hardware-proof.md)).
 - **Every release has one slow-target build row:** the `slow-build` job (row C,
   [testlab.md](testlab.md#running-the-verification-lanes)) runs on the release SHA of every
   release, minor, patch and bot alike, and is green with `test_slow_build_calibrated` and

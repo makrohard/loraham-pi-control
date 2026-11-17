@@ -8,7 +8,7 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
-KIT = ("testlab/hardware", "testlab/tests/hardware", "docs/live-tests/hardware-proof.md")
+KIT = ("testlab/hardware", "testlab/tests/hardware", "docs/hardware-proof.md")
 # The login is assembled so that this file does not hold it.
 LAB_VALUE = re.compile("lhpc" + r"@|(?<![\d.])(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}(?![\d.])")
 
@@ -20,7 +20,7 @@ def tracked():
 
 def test_the_kit_files_are_tracked():
     files = tracked()
-    assert "testlab/hardware/peer.py" in files and "docs/live-tests/hardware-proof.md" in files
+    assert "testlab/hardware/peer.py" in files and "docs/hardware-proof.md" in files
 
 
 def test_no_tracked_kit_file_holds_a_box_login_or_a_lan_address():

@@ -7,9 +7,7 @@ compiles run on the [second box](#bench)).
 
 **When:** before the tag of a minor release; which release runs what:
 [maintenance](maintenance.md#branches-and-releases). The daemon, RadioLib and the shared chat
-source are moved by hand and proved here. Results go into the run report and, in the first docs
-commit after the tag, replace the section in `docs/live-tests/live-test.md` (the release commit
-is not amended: binaries are built from it).
+source are moved by hand and proved here. Results go into the run report.
 
 Evidence is the controller's typed outcome plus the stack's own state (`lhpc status`, the node's
 info, an HTTP answer, `rnstatus` counters), never a log grep.
@@ -33,7 +31,7 @@ info, an HTTP answer, `rnstatus` counters), never a log grep.
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
 | Channels | `binary` (daemon, meshtastic, meshcom), `pinned` and `dev` ([selections](provenance.md#selections)); see [Coverage](#coverage) |
 | Console | running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`; [why](maintenance.md#running-on-a-pi)) |
-| RF on air | the hardware test line, RF fast and RF full ([hardware proof](live-tests/hardware-proof.md)); its RF fast is not this matrix's [fast lane](#fast-lane) |
+| RF on air | the hardware test line, RF fast and RF full ([hardware proof](hardware-proof.md)); its RF fast is not this matrix's [fast lane](#fast-lane) |
 | Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
 ## Procedure per stack
@@ -81,7 +79,7 @@ an earlier row's repository (chat, the daemon's) is still purged and reinstalled
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed. On a Desktop image it is the reverse: the GTK voice starts verified and the terminal variant is skipped |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 5 | `graywolf` | fetched release | fetches the pinned upstream `.deb` | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
-| 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is the dated report `docs/live-tests/reticulum-test-2026-09-12.md` |
+| 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. |
 | 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater (set `repeater_name` first); the optional web UI started with `lhpc stack start meshcore-webui` | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
 | 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
 | 9 | `meshtastic` | pinned (from source), **on the second box** | meshtasticd | 868 | as row 8; build time and memory recorded |
@@ -158,7 +156,7 @@ After the per-stack rows, with every stack installed and built:
 | **`dev` selector spot-check** | on one light stack with no binary (kiss): `lhpc clean kiss --purge --yes`, `lhpc install kiss --source dev --yes`, build, start, then reinstall it on the default channel | the install reports the resolved BRANCH TIP and the checkout is at it (after `lhpc source-check kiss`, `--versions` reads `current`); the stack starts; after the reinstall and a check it reads `current` |
 | **boot restore** | start a set of stacks (the release runs nothing by default), then power-cycle once | `N restored, 0 failed` for that set, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |
-| **high-power switch** | on a box whose 433 radio is a bare SX127x module (Uputronics): the rows of the current high-power live test ([live-tests](live-tests/)); on the LoRaHAM board the refusals and the switch state only — the approved plan does not cover +20 dBm TX on its RFM98PW | refusals without the flag, the flag on the switched radio only, one frame at 20 with `TXERR` 0, the start gate, revocation by restart |
+| **high-power switch** | on a box whose 433 radio is a bare SX127x module (Uputronics): every check of the next column; on the LoRaHAM board the refusals and the switch state only — the approved plan does not cover +20 dBm TX on its RFM98PW | refusals without the flag, the flag on the switched radio only, one frame at 20 with `TXERR` 0, the start gate, revocation by restart |
 | **binaries** | `lhpc status --versions` on the three binary stacks | the installed binary is the newest published entry for the box's platform |
 | **host tests: the last step, after the from-zero reinstall, before the tag** | `lhpc test daemon --yes` first, then `lhpc test <stack> --yes` for every other stack, one at a time, timed (binary installs refuse host tests: record them as skipped); where offered, `lhpc test <stack> --tx --yes` too (real RF: only with the operator's go and antennas or dummy loads in place) | outcome and duration per stack, for the record only; memory pressure or an OOM kill on the Zero 2 W is not a release blocker |
 

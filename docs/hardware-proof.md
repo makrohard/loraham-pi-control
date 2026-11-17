@@ -15,7 +15,7 @@ run, with the hardware connected, reachable and set up. `live` prints that line 
 | **RF full** | RF fast, plus every stack on air with a real peer | rows 1–11 | the PC peers below |
 
 `LANE=fast|full` picks the rows (default `fast`); `ROWS_ONLY="<id> ..."` runs single rows. RF fast is not the release
-matrix's fast lane ([test matrix](../test-matrix.md)).
+matrix's fast lane ([test matrix](test-matrix.md)).
 
 The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that defines them):
 
@@ -97,11 +97,10 @@ both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,
 the password on stdin).
 
-## The dated report
+## The evidence
 
-A live run writes its evidence under `$EVD_ROOT` (the command outputs, `REPORT.md`, `COVERAGE.md`, `SHA256SUMS`). The
-dated report in `docs/live-tests/` takes its rows from `REPORT.md` and `COVERAGE.md`, names each peer by its kind
-("the CA2RXU tracker"), never by its call, and lists every NOT RUN row with its reason.
+A live run writes its evidence under `$EVD_ROOT` (the command outputs, `REPORT.md`, `COVERAGE.md`, `SHA256SUMS`); that
+evidence is the run's record.
 
 ## Bench setup and reflash (manual, outside every lane)
 
@@ -118,7 +117,7 @@ Finding them on the PC:
   another name.
 - The Heltec RNode is reached only through the PC's shared rnsd instance (the RNS config path in the local file), never
   by opening its port.
-- On a box: `lhpc hardware` shows its radio setup ([CLI](../cli.md#hardware)).
+- On a box: `lhpc hardware` shows its radio setup ([CLI](cli.md#hardware)).
 
 Known traps: the PC's gpsd claims every CP2102 port on each replug, the RNode's included, so stop it (or narrow its udev
 rule) before a row that needs the RNode; a fix that lasts needs root on the PC. Reflashing or factory-resetting a peer is
