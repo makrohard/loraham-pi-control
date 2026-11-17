@@ -102,8 +102,8 @@ both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the 
 `tx`, the lhpc calls parsed at the head (`cliforms.py`) and the redaction.
 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,
-the password on stdin). It checks a Meshtastic stack's power cap before each start, never takes the operator's call as
-the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails).
+the password on stdin). It checks a Meshtastic stack's power cap before each start (the running ones at its first read,
+before any change), needs the operator's call and never takes it as the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails).
 
 ## The evidence
 

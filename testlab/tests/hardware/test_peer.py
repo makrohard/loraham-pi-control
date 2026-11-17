@@ -314,19 +314,26 @@ def test_a_sigterm_during_the_read_still_sends_setinfo_off(clock, monkeypatch):
     assert signal.getsignal(signal.SIGTERM) is not term[0]          # the read's handler is gone after it
 
 
-def test_the_setinfo_off_is_written_with_sigint_and_sigterm_held_off(clock, monkeypatch):
+@pytest.mark.parametrize("sig,raised", [("SIGINT", KeyboardInterrupt), ("SIGTERM", SystemExit)])
+def test_a_signal_during_the_setinfo_off_is_held_until_it_is_sent_then_ends_the_read(clock, monkeypatch, sig, raised):
+    # B6: the off is written whole with SIGINT/SIGTERM held off; G2C-SR N1: one that arrives meanwhile is raised after it,
+    # never dropped (red-before 3a4a0af3: ignored, so the read ended SEEN as if no signal had come)
     import signal
+    s, before = getattr(signal, sig), (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
     port = Port(clock, pending=rx_meshcom(N1))
-    write, held = port.write, []
+    write = port.write
 
-    def watching(b):
+    def signalling(b):
         if b == b"--setinfo off\r\n":
-            held.append((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)))
+            signal.raise_signal(s)                                 # delivered here, before the off is written
         write(b)
-    port.write = watching
+    port.write = signalling
     monkeypatch.setitem(sys.modules, "serial", FakeSerialModule(port))
-    assert peer.main(["meshcom-read", N1, "5"]) == 0
-    assert held == [(signal.SIG_IGN, signal.SIG_IGN)] and signal.getsignal(signal.SIGINT) is not signal.SIG_IGN
+    with pytest.raises(raised) as e:
+        peer.main(["meshcom-read", N1, "5"])
+    assert port.written == [b"--setinfo on\r\n", b"--setinfo off\r\n"]
+    assert raised is KeyboardInterrupt or e.value.code == 128 + signal.SIGTERM
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
 
 
 def test_a_setinfo_off_that_cannot_be_sent_fails_the_read_by_name(clock, monkeypatch, capsys):

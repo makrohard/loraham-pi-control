@@ -202,7 +202,7 @@ def live_copy(tmp_path, lab=None, env=None, stdin=f"{PW}\n", extra=""):
         (bin_ / name).write_text(f"#!/bin/bash\ntouch {tmp_path}/called\n")
         (bin_ / name).chmod(0o755)
     e = {k: v for k, v in os.environ.items() if k not in LAB and k not in INPUTS}
-    e.update(PATH=f"{bin_}:{os.environ['PATH']}", TMPDIR=str(tmp_path), **(env or {}))
+    e.update({"PATH": f"{bin_}:{os.environ['PATH']}", "TMPDIR": str(tmp_path), "OPERATOR_CALL": CALL, **(env or {})})
     p = subprocess.run(["bash", str(kit / "fw-boxproof.sh"), "live"], input=stdin, capture_output=True, text=True,
                        cwd=tmp_path, env=e, check=False, timeout=60)
     return p, (tmp_path / "called").exists()
@@ -324,6 +324,25 @@ def test_r4_is_never_started_above_its_models_cap(tmp_path):
     assert not (evd / "F6-r4.txt").exists() and not list(evd.glob("SAFESTOP-*.txt"))
 
 
+
+# ---- G2C-SR B1: FE and the undo replay start FW0's running stacks again: FW0 checks each running meshtastic@rN first ----
+
+@pytest.mark.parametrize("runset,mp,stop", [("meshtastic@r2\\nmeshcom@r1\\n", "20", "F0-r2: max_power 20 above 17"),
+                                            ("meshtastic@r4\\n", "15", "F0-r4: max_power 15 above 14"),
+                                            ("meshcom@r1\\nmeshtastic@r2\\n", "18", "F0-r2: max_power 18 above 17")])
+def test_a_running_meshtastic_above_its_cap_stops_at_fw0_before_any_change(tmp_path, runset, mp, stop):
+    # red-before (3a4a0af3's FW0 read, shimmed as runset0): KEYS were read and nothing checked; FW3 then journalled their
+    # starts, and a later STOP's replay (or FE) started meshtastic@r2 at max_power 20
+    p, evd = canned(tmp_path, body="runset0; echo AFTER", runset=runset, mp=mp)
+    assert p.returncode == 2 and f"STOP: {stop}" in p.stdout and "AFTER" not in p.stdout, p.stdout + p.stderr
+    assert not (evd / "UNDO.txt").exists() and not list(evd.glob("UNDO-*.txt"))
+
+
+def test_running_stacks_within_their_caps_pass_fw0_each_checked(tmp_path):
+    p, evd = canned(tmp_path, body='runset0; echo "KEYS=$KEYS"', runset="meshtastic@r2\\nmeshcom@r1\\nmeshtastic@r4\\n", mp="14")
+    assert "KEYS=meshtastic@r2 meshcom@r1 meshtastic@r4 " in p.stdout and "RC=0" in p.stdout, p.stdout + p.stderr
+    assert sorted(f.name for f in evd.glob("F0-*-maxpower.txt")) == ["F0-r2-maxpower.txt", "F0-r4-maxpower.txt"]
+
 # ---- G2-HWKITC B4: a STOP or a signal replays the journalled undos, last first; one that fails is UNRESOLVED ------------
 
 REPLAY = """sshx() {{ shift; echo "$*" >> "$EVD/../replayed"; case "$*" in {fails}) return 1;; esac
@@ -376,12 +395,21 @@ def test_after_fe_ran_the_undos_an_exit_replays_none(tmp_path):
 # ---- G2-HWKITC B5: the lab identity is never the operator's call ---------------------------------------------------------
 
 @pytest.mark.parametrize("call,key,value", [(CALL, "LABNAME", CALL), (CALL, "LABNAME", CALL.lower() + "-7"),
-                                            ("K1AB", "LABSHORT", "k1ab"), (CALL + "-9", "LABNAME", CALL)])
+                                            ("K1AB", "LABSHORT", "k1ab")])
 def test_a_lab_identity_equal_to_the_operators_call_stops_before_any_box_call(tmp_path, call, key, value):
     # red-before (44b611ca): LABNAME=<the call> passed its grammar and reached `lhpc config ... node_name <call>` over ssh
     p, ssh = live_copy(tmp_path, env={"OPERATOR_CALL": call, key: value})
     assert p.returncode == 2 and f"STOP: {key} is the operator's call" in p.stdout and not ssh, p.stdout + p.stderr
     assert call.split("-")[0].lower() not in (p.stdout + p.stderr).lower()
+
+
+@pytest.mark.parametrize("call", ["", CALL + "-9", CALL.lower()])
+def test_a_live_run_without_a_plain_operators_call_stops_before_any_box_call(tmp_path, call):
+    # G2C-SR M1: rf-proof.sh's own call check does not run when it is sourced; with no call the identity check and the
+    # redactor's mask had nothing to compare (red-before 3a4a0af3: an empty call ran on to the FWSHA check)
+    p, ssh = live_copy(tmp_path, env={"OPERATOR_CALL": call})
+    assert p.returncode == 2 and "STOP: OPERATOR_CALL is not a callsign" in p.stdout and not ssh, p.stdout + p.stderr
+    assert not call or call.split("-")[0].lower() not in (p.stdout + p.stderr).lower()
 
 
 def test_a_lab_identity_that_only_contains_the_call_runs_on(tmp_path):

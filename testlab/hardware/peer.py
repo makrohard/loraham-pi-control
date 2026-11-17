@@ -11,7 +11,8 @@ peer transmission unless the readback is the low value. The PIN comes on stdin o
 The call itself is checked before any device opens (exit 2 otherwise): a power value is 1-2 ASCII digits in THE power
 domain 0..17 dBm (mt-power 1..17: Meshtastic's 0 is its maximum), the runner's one; a power SET runs only with
 RFPROOF_PEER_CTX=set|restore (the runner's one setter), a send and rns-exchange only with RFPROOF_PEER_CTX=tx (inside the
-runner's tx); a nonce is the runner's form (<a-z prefix> <8 hex>).
+runner's tx); a nonce is the runner's form (<a-z prefix> <8 hex>). The context is a convention against an accidental call
+(a hand-run call can set it); the power domain is the hard bound.
 A read counts only a frame the peer RECEIVED: the T-Deck's RX-LoRa2 text frame, the tracker's [LoRa Rx] APRS message, the
 nonce in that frame's text; a console echo or the peer's own TX line never counts.
 The runner holds an exclusive flock around every call, so two peers never act at once (they share USB hubs).
@@ -144,9 +145,10 @@ def on_term(signum, _frame):
 
 
 def restore(s, post):
-    """Send `post` (the console restore) with SIGINT/SIGTERM held off; if it cannot be sent the call fails naming the device
-    state, never a clean result."""
-    held = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    """Send `post` (the console restore) with SIGINT/SIGTERM held off (deferred: raised after it); if it cannot be sent the
+    call fails naming the device state, never a clean result."""
+    got = []                                           # a SIGINT/SIGTERM meanwhile is kept and raised once the restore is sent
+    held = {sig: signal.signal(sig, lambda n, _f: got.append(n)) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         for c in post:
             s.write(c)
@@ -156,6 +158,8 @@ def restore(s, post):
     finally:
         for sig, h in held.items():
             signal.signal(sig, h)
+        if got:
+            signal.raise_signal(got[0])
 
 
 def serial_wait(port, nonce, secs, form, pre=(), post=()):

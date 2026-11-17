@@ -14,8 +14,9 @@
 # INPUTS (env): FWSHA (40 hex: the sha under proof, on FWREF, default cons/b4-cln-r1), FWFROM (40 hex: the box's sha before
 #  the update; FWSHA must contain it), FWCI (a green CI run of FWSHA), LANCIDR (the console's allowed CIDR, read at FW0 when
 #  empty), LABNAME/LABSHORT (the lab node identity; never a callsign: one equal to OPERATOR_CALL, any case, any SSID, STOPs
-#  before any box contact).
-# RF: FW6 and FW9 start meshtastic@r2, FW6 tries meshtastic@r4 (normal power). BEFORE any start (mtpre): the radio's row (one,
+#  before any box contact). OPERATOR_CALL (lab file or env) is required, a callsign without an SSID.
+# RF: FW6 and FW9 start meshtastic@r2, FW6 tries meshtastic@r4 (normal power), FE and the undo replay start FW0's running
+#  stacks again; FW0 checks each running meshtastic@rN before any change. BEFORE any start (mtpre): the radio's row (one,
 #  no high-power grant), its model's power_max_dbm, and the stack's max_power (meshtasticd's cap before its first frame) <=
 #  min(17, that cap), else STOP; after a start, its "Final Tx power" <= 17 (corroboration), else STOP. r4's expected refusal
 #  counts only when a read of the running set shows it is not running.
@@ -54,8 +55,10 @@ PW_H=$PW; PW_Z=; MC_PIN=; TRACKER_CALL=; OPERATOR_CALL=${OPERATOR_CALL:-}   # wh
 pweq H || case "lhpc ${HH%@*}" in *"$PW"*) [ "$MODE" = dry ] || { echo "STOP: the box password is part of the login name"; exit 2; };; esac
 # the lab identity is never the operator's call: compared without case and SSID, before any box contact (it would reach the
 #  box command's argv and the node's identity on air)
+#  the call itself is required, of rf-proof.sh's form (its own check does not run when sourced): no call, no comparison and no mask
+[[ "$OPERATOR_CALL" =~ ^[A-Z0-9]{3,8}$ ]] || { echo "STOP: OPERATOR_CALL is not a callsign without an SSID (3..8 of A-Z 0-9)"; exit 2; }
 callbase() { local c=${1^^}; printf '%s' "${c%%-*}"; }
-for k in LABNAME LABSHORT; do [ -z "$OPERATOR_CALL" ] || [ "$(callbase "${!k}")" != "$(callbase "$OPERATOR_CALL")" ] \
+for k in LABNAME LABSHORT; do [ "$(callbase "${!k}")" != "$(callbase "$OPERATOR_CALL")" ] \
   || { echo "STOP: $k is the operator's call (the lab identity is never a callsign)"; exit 2; }; done
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="$PY -c '$RUNSET_PY'"
@@ -145,6 +148,10 @@ mtpre() {   # mtpre <file-tag> <rid>: BEFORE any start of meshtastic@<rid>: its 
   m=$(body "$1-radios.txt" | awk -v r="$2" '$1 == "ROW" && $2 == r {print $3}'); c=$(body "$1-caps.txt" | awk -v m="$m" '$1 == "CAP" && $2 == m {print $3}')
   [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || stop "$1: no single power cap of $2's model ('$m'): no start"
   [ "$c" -le 17 ] || c=17; [ "$MP" -le "$c" ] || stop "$1: max_power $MP above $c dBm (min(17, $m's power_max_dbm)): no start"; }
+runset0() {   # FW0 (read-only): the running set (KEYS), then BEFORE any change mtpre for every meshtastic@rN in it: FE and the
+  # undo replay start each of them again, so one above its cap STOPs here, with nothing changed and no undo journalled
+  local k; must F0-runset.txt "$RUNSET"; KEYS=$(body F0-runset.txt | grep -E '^[a-z0-9_-]+@r[0-9]+$' | tr '\n' ' ')
+  for k in $KEYS; do case $k in meshtastic@r*) mtpre "F0-${k#*@}" "${k#*@}";; esac; done; }
 mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: normal power, <= 17): mtpre before, Final Tx power after
   mtpre "$1" r2; local mp=$MP
   must "$1-ftx0.txt" "echo SIZE \$($FSZ); $FTX"; local n0 n1 s0 s1 b; n0=$(body "$1-ftx0.txt" | tail -n 1); s0=$(body "$1-ftx0.txt" | sed -n 's/^SIZE //p')
@@ -193,7 +200,7 @@ fwstate F0-fw.txt; [ "$MODE" = dry ] || grep -qE "Firewall: (Active|Changes pend
 must F0-ws.txt "$LH webserver status"; has F0-ws.txt "Remote listener active" || stop "FW0: the console is not remote"
 [ -n "$LANCIDR" ] || LANCIDR=$(body F0-ws.txt | sed -nE 's/^ *allowed CIDRs: *([0-9./]+).*/\1/p' | head -n 1); [ "$MODE" = dry ] && LANCIDR=${LANCIDR:-192.0.2.0/24}
 [[ "$LANCIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || stop "FW0: no single LAN CIDR (got '$LANCIDR')"
-must F0-runset.txt "$RUNSET"; KEYS=$(body F0-runset.txt | grep -E '^[a-z0-9_-]+@r[0-9]+$' | tr '\n' ' ')
+runset0
 must F0-r4.txt "$PY -c '$ROWR4_PY'"; [ "$MODE" = dry ] || grep -qx 'ROW r4 pinedio-usb-1262 868 True' "$EVD/F0-r4.txt" || stop "FW0: r4 is not the enabled pinedio 868 row"
 must F0-mtid.txt "$LH config meshtastic@r2 list"; [ "$MODE" = dry ] || { grep -qE 'node_name \* = \(empty\)' "$EVD/F0-mtid.txt" && grep -qE 'node_short \* = \(empty\)' "$EVD/F0-mtid.txt"; } || stop "FW0: meshtastic@r2 already has a node identity (the --reset undo would remove it)"
 must F0-etc.txt "sha256sum /etc/lhpc/firewall.snapshot.json /etc/lhpc/firewall.candidate.json"
