@@ -221,6 +221,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Remove any container a step left (a create that landed after its step's removals)
+        if: always()
+        run: |
+          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
+          . .github/scripts/containers.sh
+          lhpc_sweep
+
   release-verify:
     # Every stack an automated pin release may move: installed on its DEFAULT channel (the
     # published binary, else the manifest pin), built, started, verified, and finally proved
@@ -343,6 +350,13 @@ jobs:
           path: releaseevidence/**
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Remove any container a step left (a create that landed after its step's removals)
+        if: always()
+        run: |
+          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
+          . .github/scripts/containers.sh
+          lhpc_sweep
 
   slow-build:
     # Row C of the slow-target build proof (docs/maintenance.md, the slow-target build row): every
@@ -495,7 +509,7 @@ jobs:
           # The trap exists before the container: `docker run -d` can print an id and still fail.
           cid= rc=0
           trap '[ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1; true' EXIT
-          cid=$(docker run -d "$IMG" sleep 300) || rc=$?
+          cid=$(docker run -d --name "lhpc-ci-disk-$$" "$IMG" sleep 300) || rc=$?   # named: the job's sweep knows it too
           if [ "$rc" -ne 0 ]; then
             echo "::error::STOP: the probe container did not start (docker run rc $rc)"
             exit 1
@@ -653,3 +667,10 @@ jobs:
         run: |
           echo "::warning::the slow-build evidence could not be uploaded (two attempts); the verdict above stands"
           echo "**Evidence upload failed twice: no slow-build-evidence artifact for this run.**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove any container a step left (a create that landed after its step's removals)
+        if: always()
+        run: |
+          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
+          . .github/scripts/containers.sh
+          lhpc_sweep
