@@ -60,12 +60,14 @@ def _text(data: bytes | None) -> str:
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
     runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
-    stack) is drained for up to 5 s and kept in the error with the rest of its output; then it is
-    killed. It runs without core dumps (set by a shell in front of it, as the release lane's
-    programs run: no Python between this threaded process's fork and exec)."""
+    stack) is drained for up to 5 s and kept in the error with the rest of its output; then its whole
+    process group is killed (it starts as a group leader: a child it started, still holding the pipes
+    or not, ends with it; one that left the group on purpose, a lab daemon, is the lab reset's).
+    It runs without core dumps (set by a shell in front of it, as the release lane's programs run:
+    no Python between this threaded process's fork and exec)."""
     argv = ["/bin/sh", "-c", 'ulimit -c 0; exec "$@"', "sh", str(lab_bin()), *args]
     proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -73,9 +75,12 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
         try:
             out, err = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired as late:      # still running, or a descendant holds the pipes
-            proc.kill()
-            proc.wait()
             out, err = late.stdout, late.stderr        # everything read so far
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)        # the lab and what it started, ended or not
+        except ProcessLookupError:
+            pass                                       # the group is empty: nothing left
+        proc.wait()
         raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
                            f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
     r = subprocess.CompletedProcess(argv, proc.returncode, _text(out), _text(err))

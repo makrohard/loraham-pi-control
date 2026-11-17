@@ -3,7 +3,9 @@ the child dumps every thread's Python stack (PYTHONFAULTHANDLER + SIGABRT), and 
 the child printed before. It runs without core dumps. A stand-in replaces the `lhpc-testlab` executable."""
 from __future__ import annotations
 
+import os
 import resource
+import select
 import sys
 
 import pytest
@@ -44,6 +46,42 @@ def test_a_hang_after_output_keeps_that_output_and_runs_without_core_dumps(tmp_p
         resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
     assert "stdout: PARTIAL-OUT core-limit 0\n" in str(hang.value), str(hang.value)
     assert not list(tmp_path.glob("core*"))
+
+
+def _ended(pid: int, timeout: float = 5.0) -> bool:
+    """True once `pid` has exited (reaped or a zombie of init's)."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    try:
+        return bool(select.select([fd], [], [], timeout)[0])
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.wallclock("a real child hangs past run_lab's timeout; its children are real; waits bounded at 5 s")
+def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
+    """G2-TESTSA B5: the timeout killed only the lab's own process; a child it had started (holding the output pipes,
+    or not) ran on. Both end with the lab now, and the error still names the command and its output."""
+    _stand_in(tmp_path, monkeypatch, "import subprocess, time\n"
+              "a = subprocess.Popen(['sleep', '60'])\n"                                   # holds the pipes
+              "b = subprocess.Popen(['sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+              f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{a.pid}} {{b.pid}}')\n"
+              "print('PARTIAL-OUT', flush=True)\ntime.sleep(60)\n")
+    with pytest.raises(RuntimeError) as hang:
+        testing.run_lab({}, "reset", timeout=1)
+    kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
+    try:
+        assert str(hang.value).split("\n", 1)[0] == "lhpc-testlab reset timed out after 1 s"
+        assert "stdout: PARTIAL-OUT\n" in str(hang.value), str(hang.value)
+        assert [_ended(k) for k in kids] == [True, True], kids
+    finally:
+        for k in kids:
+            try:
+                os.kill(k, 9)
+            except ProcessLookupError:
+                pass
 
 
 def test_a_command_that_ends_returns_its_status_and_output(tmp_path, monkeypatch):
