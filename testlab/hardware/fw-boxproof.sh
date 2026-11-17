@@ -19,7 +19,9 @@
 #  units on the row radios (r2, r4) again: FW0 power-checks each before any change (pwrok: a Meshtastic max_power in 1..17,
 #  so 0 = the firmware maximum STOPs; a daemon's STATUS POWER and HIGHPOWER=0; both <= min(17, the model cap); any other
 #  stack there STOPs), and so does every restart (FE, the replay's PSTART) and, after FW7's reboot, every unit running on a
-#  row radio. Units on other radios are never stopped or started (they stay as they are). BEFORE any start (mtpre): the radio's row (one,
+#  row radio. Before FW7's reboot (bootcheck), every unit boot restore may start on a row radio (an owned record with no
+#  operator stop intent, running or not) is power-checked too, else STOP: no reboot (a daemon there that is not running has
+#  no STATUS to read, so it STOPs). Units on other radios are never stopped or started (they stay as they are). BEFORE any start (mtpre): the radio's row (one,
 #  no high-power grant), its model's power_max_dbm, and the stack's max_power (meshtasticd's cap before its first frame) <=
 #  min(17, that cap), else STOP; after a start, its "Final Tx power" <= 17 (corroboration), else STOP. r4's expected refusal
 #  counts only when a read of the running set shows it is not running.
@@ -69,6 +71,10 @@ for k in LABNAME LABSHORT; do [ "$(callbase "${!k}")" != "$(callbase "$OPERATOR_
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="$PY -c '$RUNSET_PY'"
 ENABLE_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; ok, msg = radio_start.set_enabled(ControllerService(), sys.argv[1], sys.argv[2] == "on"); print(("OK " if ok else "REFUSED ") + msg); sys.exit(0 if ok else 3)'
+# the units lhpc-boot-restore.service may start at the next boot, as its classification (service_boot_restore
+#  _classify_boot_evidence): an owned record of a stack (role ""), with a radio, minus the operator stop intents; read
+#  before FW7's reboot, so every record is the next boot's evidence; unreadable intents subtract none (fail closed)
+BOOTSET_PY='from lhpc.core import boot_restore as b; from lhpc.core.services import ControllerService; s = ControllerService(); v = s._lifecycle().owned_inventory()[0]; n = s._stop_intent_stacks() or set(); [print("BOOT", k) for k in sorted({b.instance_key(r.get("stack", ""), b.rid_of(r.get("rid"))) for r in v if r.get("role", "") == ""} - n)]'
 ROWR4_PY='from lhpc.core import paths, radios; [print("ROW", r.id, r.model, r.band, r.enabled) for r in radios.load(paths.resolve_paths()).radios if r.id == "r4"]'
 # the apply: the root steps read the password ONCE (sudo -S -v on the only stdin line), then sudo -n; lhpc reads no stdin
 APPLY="cd $RTB && ./venv/lhpc/bin/lhpc firewall --script > /dev/null && sudo -S -p '' -v && sudo -n bash $RTB/config/files/firewall/firewall-apply.sh < /dev/null && sudo -n systemctl start lhpc-firewall-check.service < /dev/null && ./venv/lhpc/bin/lhpc webserver apply < /dev/null"
@@ -182,6 +188,16 @@ rowcheck() {   # rowcheck <tag>: after FW7's reboot (FW5 changed r4's config): e
   local k; must "$1-runset.txt" "$RUNSET"
   for k in $(body "$1-runset.txt" | grep -E '^[a-z0-9_-]+@r[0-9]+$'); do [[ ${k#*@} =~ $ROWRID ]] || continue
     started "$k"; pwrok "$1-$k" "$k" || stop "$1-$k: $WHY: it runs after the reboot"; done; }
+bootcheck() {   # bootcheck <tag>: BEFORE FW7 schedules the reboot (G2-HWKITC-E B1): every unit boot restore may start on a
+  # row radio (BOOTSET_PY: running or not) is power-checked now, as each restart is (pwrok: a Meshtastic's stored max_power; a
+  # daemon's STATUS, so a daemon there that is not running STOPs: its start power has no one stored value); a failed check
+  # STOPs before the reboot. A unit on another radio is never checked (this proof leaves those as they are).
+  local k; must "$1-bootset.txt" "$PY -c '$BOOTSET_PY'"
+  for k in $(body "$1-bootset.txt" | sed -n 's/^BOOT //p' | grep -E '^[a-z0-9_-]+@r[0-9]+$'); do [[ ${k#*@} =~ $ROWRID ]] || continue
+    pwrok "$1-$k" "$k" || stop "$1-$k: $WHY: boot restore may start it at the reboot: no reboot"; done; }
+fw7reboot() {   # FW7's reboot, scheduled only after bootcheck held
+  bootcheck F7-pre
+  [ "$MODE" = dry ] || echo "$(date -u +%FT%TZ) none: a planned reboot" >> "$EVD/UNDO.txt"; XIN F7-reboot.txt "$PW" "sudo -S -p '' systemd-run --on-active=3 systemctl reboot"; [ "$XRC" = 0 ] || stop "FW7: the reboot was not scheduled (rc $XRC)"; say "reboot scheduled (3 s)"; }
 fe() {   # FE: this run's changes undone, each restore checked; one that did not hold is a STOP, so the exit replays the journal
   # (every undo idempotent); the list clears (undone) only after every check held
   must FE-proxy.txt "$LH webserver proxy meshtastic@r2 --mode local < /dev/null && $LH webserver apply < /dev/null"
@@ -274,7 +290,7 @@ r4refused
 must F6-stop.txt "$(gstop meshtastic@r2)"; stopped meshtastic@r2
 
 echo "== FW7 (claim 1) the console stays remote over a reboot (planned)"
-[ "$MODE" = dry ] || echo "$(date -u +%FT%TZ) none: a planned reboot" >> "$EVD/UNDO.txt"; XIN F7-reboot.txt "$PW" "sudo -S -p '' systemd-run --on-active=3 systemctl reboot"; [ "$XRC" = 0 ] || stop "FW7: the reboot was not scheduled (rc $XRC)"; say "reboot scheduled (3 s)"
+fw7reboot
 if [ "$MODE" = live ]; then sleep 60; for i in $(seq 1 60); do SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=5 "$HH" true 2>/dev/null && break; sleep 5; done; fi
 must F7-state.txt "echo boot \$(cat /proc/sys/kernel/random/boot_id)"; BOOT1=$(body F7-state.txt | sed -n 's/^boot //p')
 if [ "$MODE" = live ]; then [ -n "$BOOT1" ] && [ "$BOOT1" != "$BOOT0" ] || stop "FW7: no new boot id after the reboot"; fi

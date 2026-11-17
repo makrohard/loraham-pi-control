@@ -1,10 +1,12 @@
 """testlab/hardware/fw-boxproof.sh, the firewall box proof, through its own functions in source-only mode
 (FWPROOF_SOURCE_ONLY=1) with a fake ssh: what it writes as evidence, and how it judges a page and a power line."""
+import json
 import os
 import pathlib
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -75,7 +77,7 @@ CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
   *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf 'SIZE {size0}\\n3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
   *-txpower.txt) printf 'SIZE {size1}\\nCOUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
   *-radios.txt) printf '{radios}';; *-caps.txt) printf '{caps}';; *-runset.txt) printf '{runset}';;
-  *-status.txt) printf '{status}'; XRC={statusrc};;
+  *-status.txt) printf '{status}'; XRC={statusrc};; *-bootset.txt) printf '{bootset}';;
   F6-r4.txt) printf 'refused: re-apply with firewall-apply.sh\\n'; XRC={r4rc};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
@@ -90,10 +92,10 @@ CAPS = "CAP loraham 17\\nCAP pinedio-usb-1262 14\\nCAP meshstick-1262 22\\n"
 
 def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10",
            size0="500", size1="600", radios=RADIOS, caps=CAPS, runset="meshtastic@r2\\n", r4rc="1",
-           status="POWER=10 HIGHPOWER=0\\n", statusrc="0"):
+           status="POWER=10 HIGHPOWER=0\\n", statusrc="0", bootset=""):
     return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
                                          body=body, mp=mp, size0=size0, size1=size1, radios=radios, caps=caps,
-                                         runset=runset, r4rc=r4rc, status=status, statusrc=statusrc))
+                                         runset=runset, r4rc=r4rc, status=status, statusrc=statusrc, bootset=bootset))
 
 
 @pytest.mark.parametrize("mp,why", [("17", None), ("18", "max_power 18 above 17: no start"), ("20", "above 17"),
@@ -398,9 +400,11 @@ def test_a_dry_run_reads_the_running_set_at_fw0_and_rechecks_the_row_radios_afte
                        stdin=subprocess.DEVNULL, check=False, timeout=120)
     lines = p.stdout.splitlines()
     at = {key: next((i for i, x in enumerate(lines) if key in x), None)
-          for key in ("> F0-runset.txt", "> F3-", "> F7-reboot.txt", "> F7-runset.txt", "== FW8", "== FE undo")}
+          for key in ("> F0-runset.txt", "> F3-", "> F7-pre-bootset.txt", "> F7-reboot.txt", "> F7-runset.txt", "== FW8",
+                      "== FE undo")}
     assert None not in at.values() and "STOP:" not in p.stdout and "DONE (dry)" in p.stdout, (at, p.stdout + p.stderr)
     assert at["> F0-runset.txt"] < at["> F3-"] and at["> F7-reboot.txt"] < at["> F7-runset.txt"] < at["== FW8"] < at["== FE undo"]
+    assert at["> F7-pre-bootset.txt"] < at["> F7-reboot.txt"]   # G2-HWKITC-E B1: bootcheck before the reboot
 
 # ---- G2-HWKITC-D B1: max_power 0 is Meshtastic's "the maximum", never a cap: no start at FW0, FW6, FW9 or r4's try ----------
 
@@ -424,6 +428,76 @@ def test_after_the_reboot_a_row_radios_unit_above_its_cap_stops_and_is_safety_st
 def test_after_the_reboot_row_radios_units_within_their_caps_run_on(tmp_path):
     p, evd = canned(tmp_path, body='rowcheck F7; echo "STARTED=${STARTED[*]}"', runset="daemon@r4\\nmeshcom@r1\\n")
     assert "STARTED=daemon@r4" in p.stdout and "RC=0" in p.stdout and (evd / "F7-daemon@r4-status.txt").exists(), p.stdout
+
+
+# ---- G2-HWKITC-E B1: before FW7's reboot, every unit boot restore may start on a row radio is power-checked -----------------
+# (running or not: an enabled unit that is inactive at FW0 was never checked, and the reboot started it before rowcheck F7)
+
+@pytest.mark.parametrize("bootset,kw,why", [
+    ("BOOT daemon@r4\\n", {"statusrc": "1"}, "F7-pre-daemon@r4: the power was not read (rc 1)"),   # inactive: no STATUS
+    ("BOOT daemon@r4\\n", {"status": "POWER=16 HIGHPOWER=0\\n"}, "F7-pre-daemon@r4: POWER 16 above 14 dBm"),
+    ("BOOT meshtastic@r4\\n", {"mp": "15"}, "F7-pre-meshtastic@r4: max_power 15 above 14"),
+    ("BOOT meshcom@r1\\nBOOT meshtastic@r2\\n", {"mp": "0"}, "F7-pre-meshtastic@r2: max_power 0 is outside 1..17"),
+    ("BOOT meshcore@r2\\n", {}, "F7-pre-meshcore@r2: no power check for a meshcore stack")])
+def test_a_unit_boot_restore_may_start_unchecked_stops_before_the_reboot(tmp_path, bootset, kw, why):
+    # red-before (e4e65db3, its FW7 schedule shimmed as fw7reboot): only FW0's running units were checked, so a daemon@r4
+    # that was inactive then (its record left, no stop intent) was rebooted into at POWER 16 before rowcheck F7 saw it
+    p, evd = canned(tmp_path, body="fw7reboot; echo AFTER", bootset=bootset, **kw)
+    stop = next((x for x in p.stdout.splitlines() if " STOP: " in x), "")
+    assert p.returncode == 2 and f"STOP: {why}" in stop and stop.endswith(": boot restore may start it at the reboot: no reboot"), p.stdout
+    assert "AFTER" not in p.stdout and not (evd / "F7-reboot.txt").exists()
+
+
+def test_units_boot_restore_may_start_within_their_caps_or_off_the_row_radios_let_the_reboot_run(tmp_path):
+    p, evd = canned(tmp_path, body="fw7reboot", bootset="BOOT daemon@r4\\nBOOT kiss\\nBOOT meshtastic@r2\\nBOOT reticulum@r3\\n")
+    assert "RC=0" in p.stdout and "reboot scheduled" in p.stdout and (evd / "F7-reboot.txt").exists(), p.stdout + p.stderr
+    assert (evd / "F7-pre-daemon@r4-status.txt").exists() and (evd / "F7-pre-meshtastic@r2-maxpower.txt").exists()
+    assert sorted(f.name for f in evd.glob("F7-pre-*")) == ["F7-pre-bootset.txt", "F7-pre-daemon@r4-caps.txt",
+                                                          "F7-pre-daemon@r4-radios.txt", "F7-pre-daemon@r4-status.txt",
+                                                          "F7-pre-meshtastic@r2-caps.txt", "F7-pre-meshtastic@r2-maxpower.txt",
+                                                          "F7-pre-meshtastic@r2-radios.txt"]
+
+
+def _owned_record(root, i, stack, rid, role=""):
+    pid = 999900 + i
+    rec = {"launch_id": f"c{i}__868__{pid}__{pid:032x}", "stack": stack, "component": f"c{i}", "band": "868", "pid": pid,
+           "role": role, "launched_at": 1000, "version": 1, "requested_target": stack, "start_scope": "stack",
+           "boot_id": "OLDBOOT", "starttime": "123", "pgid": pid, "sid": pid, "rid": rid}
+    (root / "state" / "owned" / f"{rec['launch_id']}.json").write_text(json.dumps(rec))
+
+
+CLASSIFY_PY = ("from lhpc.core import boot_restore as b; from lhpc.core.services import ControllerService; "
+               "ev = ControllerService()._classify_boot_evidence('CURBOOT')[0]; "
+               "[print('BOOT', k) for k in sorted({b.instance_key(e.stack, e.rid) for e in ev})]")
+
+
+@pytest.mark.parametrize("intents", ["readable", "unreadable"])
+def test_the_boot_set_read_is_boot_restores_own_classification(tmp_path, intents):
+    # BOOTSET_PY against the product (a previous boot's records): a stack's record with no stop intent is listed, running or
+    # not; one under its intent (FW3's operator stop of daemon@r4 writes one) and a part's record (a role) are not; with the
+    # intents unreadable, none is subtracted (boot restore then restores nothing: the read stays the stricter set)
+    m = re.search(r"^BOOTSET_PY='(.*)'$", PROOF.read_text(), re.MULTILINE)
+    assert m, "fw-boxproof.sh has no BOOTSET_PY"
+    root = tmp_path / "rt"
+    (root / "state" / "owned").mkdir(parents=True)
+    (root / "state" / "stop-intent").mkdir()
+    for i, (stack, rid, role) in enumerate([("daemon", "r4", ""), ("meshtastic", "r2", ""), ("kiss", "r3", ""),
+                                            ("daemon", "r2", "client")]):
+        _owned_record(root, i, stack, rid, role)
+    (root / "state" / "stop-intent" / "meshtastic@r2.json").write_text("{}\n")
+    env = {**os.environ, "LHPC_RUNTIME_ROOT": str(root), "TMPDIR": str(tmp_path)}
+    if intents == "unreadable":
+        (root / "state" / "stop-intent").chmod(0)
+    try:
+        run = [subprocess.run([sys.executable, "-c", c], capture_output=True, text=True, env=env, cwd=tmp_path,
+                              stdin=subprocess.DEVNULL, check=False, timeout=120) for c in (m.group(1), CLASSIFY_PY)]
+    finally:
+        (root / "state" / "stop-intent").chmod(0o755)
+    assert [r.returncode for r in run] == [0, 0], [r.stderr for r in run]
+    if intents == "readable":
+        assert run[0].stdout == run[1].stdout == "BOOT daemon@r4\nBOOT kiss@r3\n", (run[0].stdout, run[1].stdout)
+    else:
+        assert run[0].stdout == "BOOT daemon@r4\nBOOT kiss@r3\nBOOT meshtastic@r2\n" and run[1].stdout == "", run
 
 
 # ---- G2-HWKITC-D B2: FE's restore is checked; one that did not hold is a STOP and the journal replays ----------------------

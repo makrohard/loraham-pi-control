@@ -351,7 +351,8 @@ def test_a_setinfo_off_that_cannot_be_sent_fails_the_read_by_name(clock, monkeyp
     assert "SEEN" not in capsys.readouterr().out
 
 
-def test_a_signal_while_the_off_fails_leaves_the_failed_restore_as_the_error(clock, monkeypatch):
+@pytest.mark.parametrize("sig", ["SIGINT", "SIGTERM"])   # G2-HWKITC-E N1: Ctrl-C pinned as well as SIGTERM
+def test_a_signal_while_the_off_fails_leaves_the_failed_restore_as_the_error(clock, monkeypatch, sig):
     # G2-HWKITC-D N2: the deferred signal no longer replaces the error that names the device state; it is named in it
     # (red-before 3ea308da: the SIGTERM raised in the finally turned the RuntimeError into a bare SystemExit)
     import signal
@@ -360,12 +361,12 @@ def test_a_signal_while_the_off_fails_leaves_the_failed_restore_as_the_error(clo
 
     def failing(b):
         if b == b"--setinfo off\r\n":
-            signal.raise_signal(signal.SIGTERM)
+            signal.raise_signal(getattr(signal, sig))
             raise OSError("the port is gone")
         write(b)
     port.write = failing
     monkeypatch.setitem(sys.modules, "serial", FakeSerialModule(port))
-    with pytest.raises(RuntimeError, match=r"may keep the changed mode; SIGTERM came meanwhile"):
+    with pytest.raises(RuntimeError, match=rf"may keep the changed mode; {sig} came meanwhile"):
         peer.main(["meshcom-read", N1, "5"])
 
 
