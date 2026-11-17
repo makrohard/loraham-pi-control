@@ -108,7 +108,7 @@ def test_a_docs_only_release_stays_on_the_virtual_row(lab):
 def test_clause_i_a_daemon_or_radiolib_pin_move_needs_the_real_row(lab, pin):
     got = _check(lab, {"lhpc/data/manifest.example.toml":
                        _manifest(bridge=lab[2]["b0"], **{pin: NEW})})
-    assert [r for r in got if r.startswith("(i) ")] and len(got) == 1
+    assert [r for r in got if r.startswith("(i) ")] and len(got) == 1  # rule-10: rows are selected by their id; the count is asserted
 
 
 @pytest.mark.parametrize("files", [
@@ -116,7 +116,7 @@ def test_clause_i_a_daemon_or_radiolib_pin_move_needs_the_real_row(lab, pin):
     {"lhpc/core/config.py": CONFIG.format(p="uputronics-ce0")},
 ])
 def test_clause_ii_the_radio_configuration_needs_the_real_row(lab, files):
-    assert [r for r in _check(lab, files) if r.startswith("(ii) ")]
+    assert [r for r in _check(lab, files) if r.startswith("(ii) ")]  # rule-10: a row is selected by its id
 
 
 def test_clause_ii_reads_the_daemon_component_but_not_the_rest_of_config_py(lab):
@@ -130,12 +130,12 @@ def test_clause_ii_reads_the_daemon_component_but_not_the_rest_of_config_py(lab)
 @pytest.mark.parametrize("to, real", [("backend", True), ("docs", False)])
 def test_clause_iii_only_a_bridge_move_into_its_hardware_backend(lab, to, real):
     got = _check(lab, {"lhpc/data/manifest.example.toml": _manifest(bridge=lab[2][to])})
-    assert bool([r for r in got if r.startswith("(iii) ")]) is real
+    assert bool([r for r in got if r.startswith("(iii) ")]) is real  # rule-10: a row is selected by its id
 
 
 def test_clause_iii_an_unreadable_bridge_diff_counts_as_touched(lab):
     got = _check(lab, {"lhpc/data/manifest.example.toml": _manifest(bridge="c" * 40)})
-    assert [r for r in got if r.startswith("(iii) ")]
+    assert [r for r in got if r.startswith("(iii) ")]  # rule-10: a row is selected by its id
 
 
 def test_clause_iv_a_runner_pin_move_needs_the_real_row(lab):

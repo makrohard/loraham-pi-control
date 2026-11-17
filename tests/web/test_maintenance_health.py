@@ -77,7 +77,7 @@ def test_a_failing_task_is_shown_with_its_time_until_it_succeeds(tmp_path, monke
     monkeypatch.setattr(ControllerService, TASKS[task], real)  # the next pass succeeds
     assert network_watch_pass(svc) == 300.0
     details = svc.doctor().details
-    assert not [d for d in details if d.startswith(" !maintenance")]
+    assert not [d for d in details if d.startswith(" !maintenance")]  # rule-10: the prefix selects the items; the selection is compared whole
     ok = [d for d in details if d.startswith(f"  maintenance {task}: ok at ")]
     assert len(ok) == 1 and re.fullmatch(
         rf"  maintenance {task}: ok at {UTC} \(last failure {UTC}: RuntimeError: {task} "
@@ -90,7 +90,7 @@ def test_a_box_whose_pass_never_ran_says_so(tmp_path, web):
     first pass; the dashboard shows no failure."""
     svc = _svc(tmp_path)
     lines = [d for d in svc.doctor().details if "maintenance" in d]
-    assert len(lines) == 1 and lines[0].startswith("  maintenance: never run")
+    assert len(lines) == 1 and lines[0].startswith("  maintenance: never run")  # rule-10: a sentence for people (rule B2); no typed field carries it
     assert _notice(web, svc) is None
 
 
@@ -101,7 +101,7 @@ def test_a_box_whose_pass_never_ran_says_so(tmp_path, web):
 def test_an_unreadable_record_is_never_healthy(tmp_path, web, record):
     svc = _svc(tmp_path)
     (tmp_path / "state" / "maintenance.json").write_text(record)
-    assert [d for d in svc.doctor().details if d.startswith(" !maintenance record: FAILED")]
+    assert [d for d in svc.doctor().details if d.startswith(" !maintenance record: FAILED")]  # rule-10: the prefix selects the items; the selection is compared whole
     assert "record" in (_notice(web, svc) or "")
 
 
@@ -154,10 +154,10 @@ def test_a_record_that_stops_being_written_is_shown_failing(tmp_path, monkeypatc
                         lambda self: (_ for _ in ()).throw(RuntimeError("crl")))
     with caplog.at_level("WARNING"):
         network_watch_pass(svc)
-    assert any(m.startswith("maintenance record failed: maintenance.json not written: ")
+    assert any(m.startswith("maintenance record failed: maintenance.json not written: ")  # rule-10: a log record for people; no typed field carries it
                for m in caplog.messages), caplog.messages     # the record write was reached
     rows = [r for r in maintenance.failing(svc._paths) if r[0] == "record"]
-    assert rows == [("record", "", rows[0][2])] and rows[0][2].startswith(
+    assert rows == [("record", "", rows[0][2])] and rows[0][2].startswith(  # rule-10: a sentence for people (rule B2); the row's typed task is compared whole
         f"stale — last written {old}, not updated since"), rows    # the time is the last pass
     assert f" !maintenance record: FAILED — stale — last written {old}, not updated since" in \
         "\n".join(svc.doctor().details)

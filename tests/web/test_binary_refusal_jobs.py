@@ -79,7 +79,7 @@ def test_spawn_web_job_puts_no_override_on_the_install_argv(tmp_path, monkeypatc
         return None, None                          # "could not start": the argv is what we check
     monkeypatch.setattr(type(svc._lifecycle()), "spawn_job", _spawn)
     svc.spawn_web_job("install", "daemon", source="binary")
-    assert not any(a.startswith("--accept-pin-mismatch") for a in seen["argv"])
+    assert not any(a.startswith("--accept-pin-mismatch") for a in seen["argv"])  # rule-10: the option and its =value form are both absent
 
 
 def test_a_none_compatible_refusal_is_transported_also_when_only_the_inputs_differ():

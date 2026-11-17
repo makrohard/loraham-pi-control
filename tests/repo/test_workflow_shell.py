@@ -161,7 +161,7 @@ def test_the_backoff_schedule_is_the_documented_one():
     """At once, then 1, 2, 5 and 10 min, then every 10 min until the waits would pass 30 min
     (docs/testlab.md); the command's own status comes back."""
     r = _backoff('c() { return 7; }; backoff c; echo "status=$?"')
-    assert [ln.split()[1] for ln in r.stdout.splitlines() if ln.startswith("slept ")] == [
+    assert [ln.split()[1] for ln in r.stdout.splitlines() if ln.startswith("slept ")] == [  # rule-10: the prefix selects the items; the selection is compared whole
         "0", "60", "120", "300", "600", "600"]
     assert "status=7" in r.stdout
     assert r.stderr.count("failed (status 7); retrying in") == 6 and "giving up" in r.stderr
@@ -170,7 +170,7 @@ def test_the_backoff_schedule_is_the_documented_one():
 def test_a_transfer_that_recovers_is_a_success_after_the_waits():
     r = _backoff('n=0; c() { n=$((n+1)); [ "$n" -ge 3 ]; }; backoff c; echo "attempts=$n status=$?"')
     assert "attempts=3 status=0" in r.stdout
-    assert [ln for ln in r.stdout.splitlines() if ln.startswith("slept ")] == ["slept 0", "slept 60"]
+    assert [ln for ln in r.stdout.splitlines() if ln.startswith("slept ")] == ["slept 0", "slept 60"]  # rule-10: the prefix selects the items; the selection is compared whole
 
 
 def test_a_test_schedule_without_a_last_wait_stops_after_the_list():

@@ -304,7 +304,7 @@ def test_network_row_wifi_pill_bands_and_alignment(page):
             "(t) => { const p = document.getElementById('sys-wifi-pill'); return p && p.textContent === t; }",
             arg=text, timeout=15000)
         classes = page.locator("#sys-wifi-pill").get_attribute("class").split()
-        assert [c for c in classes if c.startswith("pill-")] == [cls], (text, classes)
+        assert [c for c in classes if c.startswith("pill-")] == [cls], (text, classes)  # rule-10: the class family selects; the selection is compared whole
     # Time, Network (and GNSS) share one layout: pill column and text column line up.
     geo = page.evaluate("""() => { const x = (id) => document.getElementById(id).getBoundingClientRect().left;
         return {tp: x('sys-time-pill'), np: x('sys-wifi-pill'), gp: x('sys-gps-state'),

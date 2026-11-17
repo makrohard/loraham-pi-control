@@ -147,7 +147,7 @@ def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
     d = jobresult._read_raw(svc._paths, _LOG)
     assert d["state"] == "failed"                                         # proven stop → ordinary failed
     # ... named as a timeout, with the limit that fired and its effective value (the env's 0.3 s)
-    assert d["detail"].startswith("timed out (runaway guard 0.3 s): sleep 5"), d["detail"]
+    assert d["detail"].startswith("timed out (runaway guard 0.3 s): sleep 5"), d["detail"]  # rule-10: a sentence for people (rule B2); no typed field carries it
 
 
 @pytest.mark.wallclock("the stall rule against a real quiet child is the case")
@@ -165,7 +165,7 @@ def test_web_build_stalled_detail(tmp_path, monkeypatch):
     assert e.value.code == 124
     d = jobresult._read_raw(svc._paths, _LOG)
     assert d["state"] == "failed"
-    assert d["detail"].startswith("timed out (stalled, no activity for 1 s): sleep 30"), d["detail"]
+    assert d["detail"].startswith("timed out (stalled, no activity for 1 s): sleep 30"), d["detail"]  # rule-10: a sentence for people (rule B2); no typed field carries it
 
 
 def test_handshake_uses_attempt_and_admitted_flag(tmp_path, monkeypatch):
@@ -294,7 +294,7 @@ def test_install_on_admit_false_installs_nothing(tmp_path, monkeypatch):
                         lambda self, *a, **k: called.append(1))
     r = svc.install("meshcom", apply=True, source="pinned", on_admit=lambda: False)
     assert not r.ok and "superseded" in r.summary.lower() and called == []
-    assert r.details[0].startswith("  nothing to run here — ")
+    assert r.details[0].startswith("  nothing to run here — ")  # rule-10: a sentence for people (rule B2); no typed field carries it
 
 
 def test_a_contended_install_names_the_retry(tmp_path, monkeypatch):
@@ -512,7 +512,7 @@ def test_a_web_start_refused_at_admission_is_typed_and_names_the_remedy(tmp_path
     svc._paths.under(updater_units.UNINSTALL_GUARD).write_text("")
     log, admission, reason = svc.spawn_start_job("start", "meshcom")
     assert (log, admission) == (None, "admission_blocked")
-    assert reason.startswith("A controller uninstall is in progress")
+    assert reason.startswith("A controller uninstall is in progress")  # rule-10: a sentence for people (rule B2); the typed admission is asserted beside it
     assert reason.endswith("Next: lhpc self-update --recover-request")
 
 

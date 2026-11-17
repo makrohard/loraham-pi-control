@@ -213,7 +213,7 @@ def test_a_split_packet_is_two_lines_and_one_decoded_message(tmp_path):
     assert r2["status"] == "ok" and r2["kind"] == "plain"
     assert r2["decoded"] == body.decode() + " [split seq 4, two frames]"
     t2 = decode("t2", _at(4, tx_second.hex(), "TX"))
-    assert t2["status"] == "ok" and t2["decoded"].startswith("reply ") and "[split seq 10" in t2["decoded"]
+    assert t2["status"] == "ok" and t2["decoded"].startswith("reply ") and "[split seq 10" in t2["decoded"]  # rule-10: the decoded line is for people; the typed status is asserted beside it
 
 
 def test_link_data_is_link_traffic_whole_or_split(tmp_path):

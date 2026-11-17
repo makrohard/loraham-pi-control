@@ -380,7 +380,7 @@ def test_each_required_disk_must_be_throttled(tmp_path, monkeypatch, io_max, bad
     problems = lane._io_problems(tmp_path, REQUIRED)
     assert [mm for mm in (ROOT, WORK) if any(f"disk {mm}," in p for p in problems)] == bad
     assert len(problems) == len(bad), problems
-    assert lane._io_problems(tmp_path, {})[0].startswith("no disk is required")
+    assert lane._io_problems(tmp_path, {})[0].startswith("no disk is required")  # rule-10: a sentence for people (rule B2); no typed field carries it
 
 
 def _fake_sys(tmp_path, monkeypatch, dev: int, disk: str | None, partition: bool):
@@ -462,7 +462,7 @@ def test_an_unresolvable_required_disk_records_nothing(tmp_path, monkeypatch, ro
     measures nothing as evidence — never a disk silently left out of the check."""
     _box(tmp_path, monkeypatch, root_disk, work_disk, TIGHT)
     problems = lane._env_problems()
-    assert any(p.startswith(want) for p in problems), problems
+    assert any(p.startswith(want) for p in problems), problems  # rule-10: a sentence for people (rule B2); no typed field carries it
     monkeypatch.setattr(lane, "EVIDENCE", {})
     monkeypatch.setattr(lane, "_write", lambda: pytest.fail("evidence written"))
     with pytest.raises(AssertionError, match="not evidence"):
@@ -481,10 +481,10 @@ def test_the_calibration_work_dir_is_the_one_the_throttle_check_names(step):
 def test_the_disk_throttle_must_be_named(tmp_path, monkeypatch):
     monkeypatch.delenv("SLOW_WRITE_IOPS", raising=False)
     (tmp_path / "io.max").write_text("8:0 riops=1 wiops=1\n")
-    assert lane._io_problems(tmp_path, REQUIRED)[0].startswith("SLOW_WRITE_IOPS=None")
+    assert lane._io_problems(tmp_path, REQUIRED)[0].startswith("SLOW_WRITE_IOPS=None")  # rule-10: a sentence for people (rule B2); no typed field carries it
     monkeypatch.setenv("SLOW_WRITE_IOPS", "1")
     monkeypatch.setenv("SLOW_READ_IOPS", "1")
-    assert lane._io_problems(tmp_path / "nowhere", REQUIRED)[0].startswith("io.max is unreadable")
+    assert lane._io_problems(tmp_path / "nowhere", REQUIRED)[0].startswith("io.max is unreadable")  # rule-10: a sentence for people (rule B2); no typed field carries it
 
 
 def test_a_step_that_failed_on_a_transfer_says_external_first():
@@ -501,7 +501,7 @@ def test_a_step_that_failed_on_a_transfer_says_external_first():
 def test_a_step_that_failed_otherwise_has_no_external_line():
     with pytest.raises(pytest.fail.Exception) as red:
         lane._judged("building meshcore-cli", _done(rc=1, stderr="error: compile failed\n"))
-    assert not str(red.value).startswith("EXTERNAL-UNAVAILABLE")
+    assert "EXTERNAL-UNAVAILABLE" not in str(red.value)
 
 
 @pytest.mark.parametrize("stderr, external", [
@@ -513,7 +513,9 @@ def test_a_step_that_failed_otherwise_has_no_external_line():
 def test_the_fetch_scripts_bare_download_failed_is_judged_by_curls_own_line(stderr, external):
     with pytest.raises(pytest.fail.Exception) as red:
         lane._judged("the upstream fetch of 0.14.14", _done(rc=1, stderr=stderr))
-    assert str(red.value).startswith("EXTERNAL-UNAVAILABLE what=") is external
+    first = str(red.value).splitlines()[0]
+    assert (first == "EXTERNAL-UNAVAILABLE what=slowbuild:the-upstream-fetch-of-0.14.14") is external
+    assert ("EXTERNAL-UNAVAILABLE" in str(red.value)) is external
 
 
 def test_without_wheels_the_timed_pip_operations_run_unchanged(monkeypatch, tmp_path):

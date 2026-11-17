@@ -148,7 +148,7 @@ def test_the_fallback_page_says_nothing_console_specific(tmp_path):
     assert not doc.find("script") and not doc.find("link")
     refs = [v for tag in ("a", "img", "iframe", "source") for el in doc.find(tag)
             for v in (el["href"], el["src"]) if v]
-    assert refs and not any(r.startswith(("/static/", "http:", "https:", "//")) for r in refs)
+    assert refs and not any(r.startswith(("/static/", "http:", "https:", "//")) for r in refs)  # rule-10: a URL is judged by its scheme or root
 
 
 def test_every_stack_block_serves_the_branded_page_instead_of_a_raw_502():
@@ -1006,7 +1006,7 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
     # as adjacent bytes: an added attribute or a Jinja newline between the tags changes nothing.
     assert re.search(r'class="[^"]*pill-warn[^"]*"[^>]*>\s*<a\b[^>]*href="http://', body)
     # console address is a clickable https:// URL pill
-    assert any((a["href"] or "").startswith("https://") for a in doc.find("a", class_="wsurl"))
+    assert any((a["href"] or "").startswith("https://") for a in doc.find("a", class_="wsurl"))  # rule-10: a URL is judged by its scheme
 
 
 def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):

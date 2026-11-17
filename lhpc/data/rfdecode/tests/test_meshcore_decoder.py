@@ -111,7 +111,7 @@ def test_the_recorded_chemobile_advert_verifies_and_names_the_node(tmp_path):
     decode = dec.make_decoder("chat", _secrets(tmp_path), _companion_db(tmp_path, [], []), str(tmp_path))
     r = decode("k", _line(bytes.fromhex(CHEMOBILE_ADVERT)))
     assert r["status"] == "ok" and r["kind"] == "advert"
-    assert r["decoded"].startswith("CHEMobile key 37bd5d25f79fffe0") and r["peer"] == "37bd5d25"
+    assert r["decoded"].startswith("CHEMobile key 37bd5d25f79fffe0") and r["peer"] == "37bd5d25"  # rule-10: the decoded line is for people; the typed peer is asserted beside it
 
 
 @pytest.mark.parametrize("mode", ["chat", "chat+repeater"])
@@ -208,7 +208,7 @@ def test_an_anonymous_request_to_us_opens_and_a_login_never_shows_its_password(t
                    + CryptoUtils.encrypt_then_mac(ss[:16], ss, login))
     r = decode("k", _line(frame))
     assert r["status"] == "ok" and r["kind"] == "anon-request"
-    assert r["decoded"].startswith("anonymous request ts 1789238625, 13 B")
+    assert r["decoded"].startswith("anonymous request ts 1789238625, 13 B")  # rule-10: the decoded line is for people (rule B2)
     assert "hunter2" not in json.dumps(r)
     elsewhere = _frame(C.PAYLOAD_TYPE_ANON_REQ, bytes([0x99]) + client.get_public_key() + b"\x00" * 8)
     assert decode("k", _line(elsewhere))["status"] == "undecryptable"

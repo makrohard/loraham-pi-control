@@ -57,14 +57,14 @@ def test_dashboard_autostart_section_shows_state_and_last_result(tmp_path, web):
         return doc.within(_autostart(doc))
 
     sec = autostart()
-    assert sec.text.startswith("Autostart stacks on boot: on")
+    assert sec.text.startswith("Autostart stacks on boot: on")  # rule-10: a sentence for people (rule B2); the toggle's typed default is asserted beside it
     assert "no boot restore has run yet" in sec.text        # nothing has run on a fresh root
     assert sec.field_default("restore") == "off"            # toggle offers the flip
     assert [b.text for b in sec.find("button")] == ["Turn off"]
 
     assert svc.set_boot_restore(False).ok
     sec = autostart()
-    assert sec.text.startswith("Autostart stacks on boot: off")
+    assert sec.text.startswith("Autostart stacks on boot: off")  # rule-10: a sentence for people (rule B2); the toggle's typed default is asserted beside it
     assert sec.field_default("restore") == "on"
     assert [b.text for b in sec.find("button")] == ["Turn on"]
 
@@ -1137,7 +1137,7 @@ def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path, web):
     assert r.status_code == 200
     j = r.get_json()
     assert j["band"] == "433" and j["reachable"] is True
-    assert j["line"].startswith("STATUS")              # one raw, sanitised status line
+    assert j["line"].startswith("STATUS")              # one raw, sanitised status line  # rule-10: a raw daemon line is judged by its verb
     # 868 has no reply -> fail-closed, not reachable
     assert c.get("/api/daemon/r2/socket").get_json() == {"rid": "r2", "band": "868", "line": "", "reachable": False}
     assert c.get("/api/daemon/r9/socket").status_code == 404        # radio validated -> no arbitrary path

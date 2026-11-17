@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -114,7 +115,7 @@ def test_paths_agree_with_the_dashboards_resolver_including_the_long_path_fallba
     assert sock == dashboard._socket_path()
     assert root == state_dir.resolve() / "plugins"
     if length == 200:
-        assert not str(sock).startswith(str(state_dir))    # the fallback kicked in, for both
+        assert not Path(sock).is_relative_to(state_dir)    # the fallback kicked in, for both
 
 
 # --- the marker protocol, one test per row ---------------------------------------------------

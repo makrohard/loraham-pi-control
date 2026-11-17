@@ -100,8 +100,8 @@ def test_kiss_rx_and_tx_round_trip(chain):
     run_lab(chain.env, "inject", "433", "aprs-position", check=True)
     data = s.recv(1024)
     assert data[:2] == b"\xc0\x00" and data.endswith(b"\xc0")     # KISS data frame
-    assert bytes(b >> 1 for b in data[2:8]).startswith(b"APDR16")  # AX.25 dest
-    assert bytes(b >> 1 for b in data[9:15]).startswith(b"DL0LAB")
+    assert bytes(b >> 1 for b in data[2:8]) == b"APDR16"  # AX.25 dest
+    assert bytes(b >> 1 for b in data[9:15]) == b"DL0LAB"
     assert b"Test Lab mobile" in data
     tx_log = chain.root / "state" / "testlab" / "tx.jsonl"
     before = tx_log.read_text().count("\n") if tx_log.exists() else 0

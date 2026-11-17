@@ -22,7 +22,7 @@ def test_class_tokens_scopes_text_and_order():
     assert doc.find("a", class_="update-link")[0]["href"] == "/stacks?open=daemon&inst=daemon"   # unescaped
     daemon = doc.within(doc.by_id("stackrow-daemon"))
     assert daemon.find("select", name="value") and not daemon.find("a", class_="update-link")
-    assert daemon.text.startswith("@abc Daemon running") and "inner & text" in daemon.text
+    assert daemon.text.startswith("@abc Daemon running") and "inner & text" in daemon.text  # rule-10: the joined text of a fixture row; its tail is checked beside it
     assert doc.index(doc.by_id("stackrow-daemon")) < doc.index(doc.find("a", class_="update-link")[0]) \
         < doc.index(doc.by_id("stackrow-kiss"))
 

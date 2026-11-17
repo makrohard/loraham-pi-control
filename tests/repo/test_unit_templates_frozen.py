@@ -161,7 +161,7 @@ def test_a_released_line_removed_from_the_history_fails():
 def test_a_compatible_unit_without_its_pinned_digest_or_equal_to_current_fails():
     current, history = _pairs(FROZEN), _history(RELEASED.read_text())
     rendered = dict(_pairs(COMPATIBLE), **{U.HELPER_UNIT: "1" * 64})  # an edit with no pinned line
-    assert any(e.startswith("compatible units differ") for e in _guard(current, history,
+    assert any(e.startswith("compatible units differ") for e in _guard(current, history,  # rule-10: a sentence for people (rule B2); no typed field carries it
                                                                        _pairs(COMPATIBLE), rendered))
     same = dict(_pairs(COMPATIBLE), **{U.WEB_UNIT: current[U.WEB_UNIT]})
     assert f"compatible unit equals its current unit: {U.WEB_UNIT}" in _guard(current, history, same,

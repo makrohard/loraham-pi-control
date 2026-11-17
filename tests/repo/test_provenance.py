@@ -134,7 +134,7 @@ def test_signature_is_bound_to_the_pin(pin_tag, tags, signed, want, verb):
     r = pv.evaluate(repo, "/d", _Spec(pin_commit=PIN, pin_tag=pin_tag), "pinned",
                     trusted_fingerprints=[FPR])
     assert r.status == want, r.detail
-    assert [c[3] for c in repo.calls if c[3].startswith("verify-")] == [verb]
+    assert [c[3] for c in repo.calls if c[3].startswith("verify-")] == [verb]  # rule-10: the prefix selects the items; the selection is compared whole
 
 
 def test_verify_signature_requires_trusted_list():

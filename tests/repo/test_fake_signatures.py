@@ -78,7 +78,7 @@ def test_the_teardown_fails_a_test_that_swallowed_the_refusal(tmp_path):
                          for c in cases]
     assert name == "test_swallows"
     [(tag, message)] = outcome
-    assert tag == "error" and message.startswith("failed on teardown")
+    assert tag == "error" and message.startswith("failed on teardown")  # rule-10: pytest's own report sentence; the typed tag is asserted beside it
     assert "lhpc.core.selfupdate.check_upstream" in message
 
 

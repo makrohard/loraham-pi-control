@@ -69,7 +69,7 @@ def test_longfast_default_key_hashes_to_eight_and_opens_the_recorded_frame(tmp_p
     decode = dec.make_decoder(_prefs(tmp_path, [("", b"\x01", channel_pb2.Channel.Role.PRIMARY)]))
     r = decode("k", G2_ROUTING_ACK)
     assert r["status"] == "ok" and r["kind"] == "routing" and "ack" in r["decoded"]
-    assert r["peer"] == "!a2e9aed8 → !9ee3dad0" and r["decoded"].startswith("[LongFast]")
+    assert r["peer"] == "!a2e9aed8 → !9ee3dad0" and r["decoded"].startswith("[LongFast]")  # rule-10: the decoded line is for people; the typed peer is asserted beside it
 
 
 def test_a_generated_channel_key_decodes_text_position_and_nodeinfo(tmp_path):

@@ -625,7 +625,7 @@ def test_a_window_that_passed_while_the_component_runs_blames_no_stack(monkeypat
 def test_a_component_lhpc_reports_gone_is_marked(monkeypatch, tmp_path, state):
     msg = _readiness_message(monkeypatch, tmp_path,
                              _done(_STATUS.format(stack=state, state=state)))
-    assert msg.startswith("STACK-REGRESSION stack=kiss phase=readiness\n")
+    assert msg.split("\n", 1)[0] == "STACK-REGRESSION stack=kiss phase=readiness" and "\n" in msg
     assert "KISS-RUN-LOG-LAST" in msg
 
 

@@ -67,7 +67,7 @@ async def test_device_query(app, client):
     res = await client.commands.send_device_query()
     assert res.type.name != "ERROR"
     payload = res.payload
-    assert payload.get("model", "").startswith("LHPC")
+    assert payload.get("model", "").startswith("LHPC")  # rule-10: a model label for people, not a decision
 
 
 async def test_contacts_initially_empty(app, client):

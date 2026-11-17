@@ -2,6 +2,7 @@
 
 
 from __future__ import annotations
+import ipaddress
 import os
 import pytest
 import re
@@ -1354,7 +1355,7 @@ def test_monitor_reports_local_ip(tmp_path):
     view = webserver.monitor_view(_paths(tmp_path), WebserverConfig())
     assert "local_ip" in view
     ip = view["local_ip"]
-    assert isinstance(ip, str) and not ip.startswith("127.")   # '' or a real LAN IPv4, never loopback
+    assert isinstance(ip, str) and not (ip and ipaddress.ip_address(ip).is_loopback)   # '' or a real LAN IPv4, never loopback
 
 
 def test_local_ip_is_failsoft_string():
@@ -1986,7 +1987,7 @@ def test_socket_mode_fail_closed_without_waitress(monkeypatch, tmp_path: Path):
     # ...and a refused start leaves no watchdog behind (a leaked lhpc-network-watch thread built a
     # ControllerService from the then-current $LHPC_RUNTIME_ROOT and wrote into another test's root)
     # and writes nothing: no lock, no `web_session.key`, no firewall reconcile.
-    assert {t for t in threading.enumerate() if t.name.startswith("lhpc-")} == before
+    assert {t for t in threading.enumerate() if t.name.startswith("lhpc-")} == before  # rule-10: threads are selected by their name family; the set is compared whole
     assert sorted(tmp_path.rglob("*")) == files
 
 
@@ -2240,7 +2241,7 @@ def test_cert_lifecycle(tmp_path):
     assert issued.ok and issued.data["label"] == "tablet"
     assert any(c["label"] == "tablet" for c in svc.webserver_cert_list().data["certs"])
     rev = svc.webserver_cert_revoke("tablet")
-    assert rev.ok and rev.summary.startswith("revoked 'tablet';")
+    assert rev.ok and rev.summary.startswith("revoked 'tablet';")  # rule-10: a sentence for people (rule B2); no typed field carries it
     assert svc.webserver_cert_discard_export("tablet").ok
 
 
@@ -2680,7 +2681,7 @@ def test_revoke_reloads_the_proxy(tmp_path, monkeypatch):
 def test_a_failed_reload_after_revoke_is_said_and_retried_by_the_heal(tmp_path, monkeypatch):
     svc, r, calls = _revoke_with_reload(tmp_path, monkeypatch, "failed")
     assert not r.ok and "reload FAILED" in r.summary and "lhpc webserver apply" in r.summary
-    assert r.summary.startswith("revocation RECORDED for 'laptop'")  # a partial failure, not OK
+    assert r.summary.startswith("revocation RECORDED for 'laptop'")  # a partial failure, not OK  # rule-10: a sentence for people (rule B2); its typed fields are asserted beside it
     assert r.data["revocation_recorded"] is True and r.data["reload_ok"] is False
     assert "Do not revoke again" in r.summary and "Settings → Apply" in r.summary
     assert "retries the reload on its next pass" in r.summary

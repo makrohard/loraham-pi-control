@@ -38,7 +38,7 @@ def test_every_pip_step_of_a_timed_build_is_covered_and_no_excluded_one():
     assert r.stdout.splitlines() == want and len(want) == 11
     # nomadnet's and lxmd's Reticulum step is the node's wheel through rns-wheel.sh: no pip step to fetch for.
     # sideband's build installs with pip too, but the row excludes it (GTK/Kivy only).
-    assert "sideband" in excluded and not any(s.startswith("sideband ") for s in want)
+    assert "sideband" in excluded and not any(s.startswith("sideband ") for s in want)  # rule-10: a requirement line is selected by its package name
 
 
 def _repo(path, files):

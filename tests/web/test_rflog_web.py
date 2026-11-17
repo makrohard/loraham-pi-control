@@ -357,7 +357,7 @@ def test_a_decoder_level_error_is_reported_with_the_records_intact(tmp_path, mon
                         lambda self, t, j, recs: {"records": [{**r, "status": "", "kind": "", "peer": "", "decoded": ""} for r in recs],
                                                   "error": "reticulum is not built — nothing to decode with"})
     d = web().get("/api/rflog/rns/decoded?job=rf-reticulum.log").get_json()
-    assert d["error"].startswith("reticulum is not built") and d["records"][0]["raw"] == KISS_LINE
+    assert d["error"] == "reticulum is not built — nothing to decode with" and d["records"][0]["raw"] == KISS_LINE
 
 
 @pytest.mark.parametrize("url,encrypted", [
