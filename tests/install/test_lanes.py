@@ -1573,6 +1573,20 @@ def test_a_dev_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys
     assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another remote)
 
 
+def test_a_remote_override_saved_during_the_check_reads_unchecked(box, capsys, monkeypatch, web):
+    """The key is read before the probe: an input saved while the check reads the remote never stamps its verdict."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    inner = backends.RealCommandRunner.run
+
+    def run(self, argv, timeout, cwd=None, env=None):
+        if argv[:2] == ["git", "ls-remote"]:                           # saved while the check reads the remote
+            (box.rt / "config" / "local.toml").write_text(f'[remotes]\napp = "{OTHER}"\n')
+        return inner(self, argv, timeout, cwd=cwd, env=env)
+    monkeypatch.setattr(backends.RealCommandRunner, "run", run)
+    assert _check_detail(box, capsys)[0] == "current"                  # against the remote it read
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (the new remote's key)
+
+
 def test_a_stable_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys, web):
     box.release = "v2.8.0.7239fe8"
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
