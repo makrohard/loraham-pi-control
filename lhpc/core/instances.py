@@ -115,17 +115,70 @@ def running_insts(svc, sid: str):
 
 
 
-def listener_insts(svc, stack, running, started: bool, live_ports=()) -> list:
-    """The instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2, G2-UIU3-R3): every radio of
-    the stack's bands, a disabled one too (saved_insts), its instances and any running one (`running`, None: unknown),
-    by rid, and every radio whose own port of an endpoint has a live listener (`live_ports`, observed_insts: a listed
-    radio's own entry wins), one row each, a radio the stack no longer lists too; without any: None. A started stack's
-    unknown running set adds None, the radio-less read of its unattributed processes: a fallback that only adds a row,
-    never stands for an instance's."""
-    every = sorted({i.rid: i for i in (*observed_insts(stack, live_ports), *commands.stack_instances(stack, svc._paths),
-                                       *filter(None, saved_insts(svc, stack.id)), *(running or ()))}.values(),
-                   key=lambda i: int(i.rid[1:]))                                   # r1, r2, ...: the box's order
-    return every + ([None] if not every or (started and running is None) else [])
+def listener_insts(svc, stack, running, started: bool, live_ports=()) -> tuple:
+    """(configured, evidence): the instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2,
+    G2-UIU3-R3 class). CONFIGURED, one per rid at its SAVED ports (with_bases): every radio of the stack's bands, a
+    disabled one too (saved_insts), every radio with its own settings file (stored_insts: one no longer listed, or
+    of another band now), its instances and any running one (`running`, None: unknown). EVIDENCE, at the ports it was
+    seen on, never re-based: every radio whose DEFAULT port of an endpoint has a live listener (`live_ports`,
+    observed_insts). An evidence row only adds a live port no configured row shows (the caller). Without any: None. A
+    started stack's unknown running set adds None, the radio-less read of its unattributed processes: a fallback that
+    only adds a row, never stands for an instance's."""
+    evidence = observed_insts(stack, live_ports) + launched_insts(svc, stack.id)
+    configured = [with_bases(svc, stack.id, i) for i in sorted(
+        {i.rid: i for i in (*stored_insts(svc, stack.id), *commands.stack_instances(stack, svc._paths),
+                            *filter(None, saved_insts(svc, stack.id)), *(running or ()))}.values(), key=rid_order)]
+    return configured + ([None] if not (configured or evidence) or (started and running is None) else []), evidence
+
+
+def launched_insts(svc, sid: str) -> list:
+    """rN at the bases its launch recorded ("bases", lifecycle._observe_and_record), for each verified owned launch of
+    `sid`, started or not (G2-UIU3-R3 H2a/H3: a listener left on an earlier saved port). A record without "bases"
+    (written before it) or with a bad one adds none; {} is a launch at the defaults. verify_owned runs only for such
+    a record of `sid`."""
+    life, out = svc._lifecycle(), {}
+    recs = svc._request_memo(("owned-inventory",), lambda: life.owned_inventory()[0])
+    for rec in recs:
+        if rec.get("role") or not commands.is_rid(rec.get("rid")) or "bases" not in rec \
+                or (rec.get("stack") or svc.stack_of(rec.get("component", ""))) != sid:
+            continue
+        bases = _record_bases(rec["bases"])
+        if bases is not None and life.verify_owned(rec)[0]:
+            out[(rec["rid"], tuple(sorted(bases.items())))] = commands.Instance(rec["rid"], bases=bases)
+    return sorted(out.values(), key=rid_order)
+
+
+def _record_bases(raw) -> dict | None:
+    """A launch record's {"<base>": <port>} as {base: port}, or None when any entry is not two ports (1024..65535)."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for k, v in raw.items():
+        if not (isinstance(k, str) and k.isascii() and k.isdigit() and isinstance(v, int) and not isinstance(v, bool)
+                and 1024 <= int(k) <= 65535 and 1024 <= v <= 65535):
+            return None
+        out[int(k)] = v
+    return out
+
+
+def rid_order(inst) -> int:
+    """r1, r2, ... r10: the box's order; no radio last."""
+    return int(inst.rid[1:]) if getattr(inst, "rid", "") else 1 << 30
+
+
+def stored_insts(svc, sid: str) -> list:
+    """rN for each `config/stacks/<sid>@rN.toml` on disk (G2-UIU3-R3 class): a radio the hardware list no longer holds,
+    or one whose band left the stack's bands, keeps its saved ports. Listed no-follow: a link is not a settings file."""
+    import os
+
+    from .paths import PathContainmentError
+    try:
+        with os.scandir(svc._paths.under("config", "stacks")) as it:
+            names = [e.name for e in it if e.is_file(follow_symlinks=False)]
+    except (OSError, PathContainmentError):
+        return []
+    rids = (n[len(sid) + 1:-len(".toml")] for n in names if n.startswith(f"{sid}@") and n.endswith(".toml"))
+    return [commands.Instance(r) for r in rids if commands.is_rid(r)]
 
 
 def observed_insts(stack, live_ports) -> list:

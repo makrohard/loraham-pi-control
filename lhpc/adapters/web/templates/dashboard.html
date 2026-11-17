@@ -466,6 +466,7 @@
             {% endif %}
           {% else %}<a class="pill wsurl" href="{{ wl }}">not proxied</a>{% endif %}
           {% if w.stopped %}<span class="pill pill-warn" title="This radio's instance is stopped, but its page still listens — start the instance, or disable its proxy and Apply." data-state="instance-stopped">instance stopped</span>{% endif %}
+          {% if w.radio_off %}<span class="pill pill-warn" title="This radio is {{ w.radio_off }} in the hardware list, but its page still listens until Apply." data-state="radio-off">radio {{ w.radio_off }} — page still served until Apply</span>{% endif %}
           {% if w.raw %}{{ raw_pills(w.raw) }}{% endif %}
         </div>
       {% endfor %}

@@ -2615,9 +2615,10 @@ def test_an_idle_home_page_reads_the_process_table_no_more_often_than_before_n1(
     from lhpc.core import instances
     radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
     svc = _svc(tmp_path)
-    n = {"running_insts": 0, "cmdlines": 0}
+    from lhpc.core.lifecycle import Lifecycle
+    n = {"running_insts": 0, "cmdlines": 0, "verify_owned": 0}
     real_ri, pf = instances.running_insts, svc._system.procfs
-    real_cm = pf.cmdlines
+    real_cm, real_vo = pf.cmdlines, Lifecycle.verify_owned
 
     def count(key, fn):
         def counted(*a, **k):
@@ -2627,9 +2628,10 @@ def test_an_idle_home_page_reads_the_process_table_no_more_often_than_before_n1(
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(instances, "running_insts", count("running_insts", real_ri))
         mp.setattr(pf, "cmdlines", count("cmdlines", real_cm))
+        mp.setattr(Lifecycle, "verify_owned", count("verify_owned", real_vo))
         rows = svc.dashboard_webservers()
     assert [r["kind"] for r in rows] == ["console"]                   # nothing started, nothing listens
-    assert n == {"running_insts": 0, "cmdlines": 10}
+    assert n == {"running_insts": 0, "cmdlines": 10, "verify_owned": 0}   # FIX-PLAN-v2 §2: no record, no check
 
 
 def test_a_stopped_stacks_one_listener_is_one_line(tmp_path, monkeypatch, web):
@@ -2754,6 +2756,40 @@ def test_every_residual_listener_of_a_stack_with_no_instance_has_its_own_line(tm
     assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
 
 
+@pytest.mark.parametrize("hw,listeners,run,moved,want", [
+    ("r1r2", [_public(8134)], [], "r2", [("@r2", "8134")]),                                   # M1
+    ("r1r2", [_public(8134), _public(9133, 2)], [], "r2", [("@r2", "8134"), ("@r2", "9133")]),  # M2
+    ("r1r2", [_public(8134)], ["r2"], "r2", [("@r2", "8134")]),                               # M3: runs on its old port
+    ("r1", [_public(8001)], [], "r1", [("@r1", "8001")]),                                     # M4
+    ("off", [_public(8134)], [], "r2", [("@r2", "8134")]),                                    # M5: every radio disabled
+    ("removed", [_public(9133)], [], "r2", [("@r2", "9133")]),           # r2 no longer listed, its saved :9133
+    ("removed", [_public(8134)], [], "r2", [("@r2", "8134")]),           # r2 no longer listed, its default :8134
+], ids=["M1-stopped", "M2-both", "M3-running-old-port", "M4-r1-moved", "M5-all-disabled", "removed-saved-port",
+        "removed-default-port"])
+def test_every_listener_no_row_explains_has_its_own_line_after_a_port_move(tmp_path, monkeypatch, web, hw, listeners,
+                                                                            run, moved, want):
+    # G2-UIU3-R3 class (SECOND-READ-CODE-UI-U3-DELTA-v6 B1): kiss@<moved> was saved at 9000 (r1 :9000, r2 :9133); a
+    # kiss process left over (or r2 still running since before the move) listens on every address on its old default
+    # port, its saved port, or both. Every such port is its own public line of that radio, whatever the radio's history
+    # (listed, disabled, no longer listed), and the box pill is not "secure". red on d9436671: the listed radio's saved
+    # port replaced its default one (one row per rid), so the default port's leftover had no line and Home read secure
+    import dataclasses
+    from lhpc.core import commands, instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1,) if hw == "r1" else (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, listeners, run=[commands.Instance(r) for r in run],
+                    state="RUNNING" if run else "STOPPED")
+    assert svc.save_config_bundle("kiss", values={"kiss_port": "9000"}, inst=instances.copy_of(svc, "kiss", moved)[0]).ok
+    if hw in ("off", "removed"):
+        radios_fixture.write(tmp_path, (radios_fixture.R1,) if hw == "removed" else tuple(
+            dataclasses.replace(r, enabled=False) for r in (radios_fixture.R1, radios_fixture.R2)))
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = sorted((n.rpartition(" ")[2], a.text.strip()) for n, _h, line in lines if n.startswith("LoRaHAM KISS TNC")
+                 for a in box.within(line).find("span", class_="wsaddr"))
+    assert [g for g in got if g[1].endswith("· public")] == [(r, f"localhost:{p} · public") for r, p in want], got
+    assert _box_pill(box) == "exposed"
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
 def test_a_disabled_radios_listener_at_its_saved_port_has_its_own_line(tmp_path, monkeypatch, web):
     # G2-UIU3-R3 (a disabled radio, saved_insts): kiss@r2 was saved at 9000 and r2 is disabled since; a kiss process
     # left over still listens on r2's saved :9133 on every address. Only r2's own settings name that port (no default
@@ -2795,6 +2831,84 @@ def test_observed_ports_name_only_radio_ports(tmp_path):
     from lhpc.core import instances
     stack = _svc(tmp_path).stack("kiss")
     assert [i.rid for i in instances.observed_insts(stack, {8001, 8267, 8139, 7999, "x"})] == ["r1", "r3"]
+    # r64 is the last radio port (DEC-W348): one step past it names none (SECOND-READ-CODE-UI-U3-DELTA-v6 N2)
+    assert [i.rid for i in instances.observed_insts(stack, {8001 + 133 * 63, 8001 + 133 * 64})] == ["r64"]
+
+
+def test_the_box_lists_radios_in_number_order(tmp_path, monkeypatch, web):
+    # SECOND-READ-CODE-UI-U3-DELTA-v6 N1: r2 before r10 (by number, not by text); both kiss leftovers, every radio off
+    import dataclasses
+    radios_fixture.write(tmp_path, tuple(dataclasses.replace(r, enabled=False) for r in (radios_fixture.R1, radios_fixture.R2)))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8001 + 133 * 9), _public(8134, 2)], run=[], state="STOPPED")
+    _doc, _box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, _l in lines if n.startswith("LoRaHAM KISS TNC")] == ["LoRaHAM KISS TNC @r2", "LoRaHAM KISS TNC @r10"]
+
+
+def test_a_radio_moved_to_another_band_keeps_its_saved_port_line(tmp_path, monkeypatch, web):
+    # SWEEP-CLASS-UI-U3-LISTENER-v2 H2b: meshcore (868 only) on r2, its companion saved at 5100 (:5233); r2 is now a
+    # 433 radio, so no meshcore instance lists it. A meshcore leftover still listens on :5233 on every address: r2's
+    # settings file names it, so it is r2's public line. red on d9436671: no line
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(5233)], run=[], state="STOPPED", sid="meshcore")
+    assert svc.save_config_bundle("meshcore", values={"port": "5100"}, inst=instances.copy_of(svc, "meshcore", "r2")[0]).ok
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = [(n.rpartition(" ")[2], a.text.strip()) for n, _h, line in lines for a in box.within(line).find("span", class_="wsaddr")]
+    assert ("@r2", "localhost:5233 · public") in got, got
+    assert _box_pill(box) == "exposed"
+
+
+def test_a_stack_missing_from_the_snapshot_still_shows_what_listens(tmp_path, monkeypatch, web):
+    # SWEEP-CLASS-UI-U3-LISTENER-v2 H6: kiss has no snapshot entry; its leftover :8001 still listens on every address.
+    # It reads as not started: r1's public line. red on d9436671: the stack was skipped, no line
+    import dataclasses
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8001)], run=[], state="STOPPED")
+    snap = svc.build_snapshot()
+    snap = dataclasses.replace(snap, stacks=[ss for ss in snap.stacks if ss.stack.id != "kiss"])
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = [(n, a.text.strip()) for n, _h, line in lines for a in box.within(line).find("span", class_="wsaddr")]
+    assert ("LoRaHAM KISS TNC @r1", "localhost:8001 · public") in got, got
+    assert _box_pill(box) == "exposed"
+
+
+@pytest.mark.parametrize("off,serving", [("disabled", True), ("removed", True), ("disabled", False), ("all-off", True)])
+def test_a_page_of_a_radio_no_longer_listed_keeps_its_line_while_nginx_serves_it(tmp_path, monkeypatch, web, off,
+                                                                                  serving):
+    # SWEEP-CLASS-UI-U3-LISTENER-v2 H5: meshcom@r2's public proxy :8578 is configured; r2 is then disabled (or
+    # removed) in the hardware list, and nginx still serves the page until Apply. Its line stays, says why, and
+    # the box pill is not "secure"; once nothing listens, no line. red on d9436671: no r2 line
+    import dataclasses
+    svc = _meshcom_box(tmp_path, monkeypatch, [_R2_PROXY] if serving else [])
+    _r2_public_proxy(svc)
+    radios_fixture.write(tmp_path, (dataclasses.replace(radios_fixture.R1, enabled=off != "all-off"),) + (
+        () if off == "removed" else (dataclasses.replace(radios_fixture.R2, enabled=False),)))
+    off = "disabled" if off == "all-off" else off                          # every radio off: no page is listed
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    if not serving:
+        assert "MeshCom (QEMU) @r2" not in [n for n, _h, _l in lines]
+        return
+    [line] = [line for n, _h, line in lines if n == "MeshCom (QEMU) @r2"]
+    [pill] = box.within(line).find("span", **{"data-state": "radio-off"})
+    assert pill.text.strip() == f"radio {off} — page still served until Apply"
+    assert _box_pill(box) == "exposed"
+
+
+@pytest.mark.parametrize("case,port,rid", [("r2-disabled", 8213, "@r2"), ("r3-unknown", 8346, "@r3")])
+def test_a_page_upstream_of_a_radio_with_no_page_left_listening_has_a_line(tmp_path, monkeypatch, web, case, port, rid):
+    # SWEEP-CLASS-UI-U3-LISTENER-v2 H5: graywolf's web UI (a page endpoint, not a raw one) still listens on every
+    # address for a radio with no page: r2 disabled since (:8213, its line says the radio is disabled), or r3 that
+    # no list or file names (:8346, its default port: the evidence row). graywolf is stopped. red on d9436671: no line
+    import dataclasses
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=case != "r2-disabled")))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(port)], run=[], state="STOPPED", sid="graywolf")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    mine = [line for n, _h, line in lines if n.endswith(rid)]
+    assert mine, [n for n, _h, _l in lines]
+    assert any(box.within(line).find("span", **{"data-state": "radio-off"}) for line in mine) == (case == "r2-disabled")
+    assert f":{port}" in " ".join(line.text for line in mine)
 
 
 

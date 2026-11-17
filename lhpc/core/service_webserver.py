@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 
-from . import commands, instances
+from . import commands, instances, radios
 from . import listeners as _listener_inv
 from . import openhop_store as _openhop_store
 from . import webserver as _ws
@@ -815,7 +815,7 @@ class WebserverOpsMixin:
                                     applied=applied) for p in pages]
 
     def stack_web_view(self, page_id: str, listeners=None, fw_status=None,
-                       applied=None) -> dict:
+                       applied=None, page=None) -> dict:
         """READ-ONLY view for ONE proxied page's Webserver panel (a stack id names the stack's
         first page). Includes the raw-port warning, which is evidence from THIS host
         (/proc/net/tcp), not a hardcoded per-stack fact.
@@ -832,7 +832,7 @@ class WebserverOpsMixin:
             WEBSERVER_SCHEMES,
             StackWebConfig,
         )
-        page = self.web_page(page_id)
+        page = page or self.web_page(page_id)       # G2-UIU3-R3 H5: the caller's page of a radio no longer listed
         if page is None:
             return {}
         address, upstream_scheme = page.address, page.scheme
@@ -944,20 +944,61 @@ class WebserverOpsMixin:
         by_id = {ss.stack.id: ss for ss in self.build_snapshot().stacks}
         for stk in self.stacks():
             ss = by_id.get(stk.id)
-            if ss is None or stk.main_component is None:
-                continue
-            mst = ss.components.get(stk.main_component.id)   # not started: only what still listens (home_rows)
-            started = mst is not None and mst.run_state in up
+            # G2-UIU3-R3 H6: a stack with no snapshot entry or no main component reads as not started
+            comps = ss.components if ss is not None else {}
+            mst = comps.get(stk.main_component.id) if stk.main_component is not None else None
+            started = mst is not None and mst.run_state in up   # not started: only what still listens (home_rows)
+            insts = instances.running_insts(self, stk.id) if started else None   # K8f S4-4b1 (D3 B3): per running instance
+            configured, evidence = instances.listener_insts(self, stk, insts, started, {lis.port for lis in snap})
             pages = self.stack_web_pages(stk.id)               # one row per proxied page; F3b: its component's state
             stack_rows = [{**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""}
-                          for page in pages for cs in [ss.components.get(page.component_id)]]
-            insts = instances.running_insts(self, stk.id) if started else None   # K8f S4-4b1 (D3 B3): per running instance
-            stack_rows += [self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=ss.components.get(comp.id),
-                                                    get_argvs=_argvs, inst=i, pages=pages)     # every OTHER open port (no-auth tcp)
-                           for every in [instances.listener_insts(self, stk, insts, started, {lis.port for lis in snap})]   # once per stack
-                           for comp in stk.components for ep in comp.endpoints if self._is_raw_endpoint(ep) for i in every]
+                          for page in pages for cs in [comps.get(page.component_id)]]
+            stack_rows += self._off_list_page_rows(stk, configured, pages, snap, fw_status)
+            stack_rows += self._listener_rows(stk, comps, snap, fw_status, _argvs, pages, configured, evidence, stack_rows)
             rows.extend(_ws.home_rows(stack_rows, insts, started=started))   # U3 (K2)
         return rows
+
+    def _off_list_page_rows(self, stk, configured, pages, snap, fw_status) -> list:
+        """G2-UIU3-R3 H5: the page rows of a configured radio that has no page now (disabled, removed from the hardware
+        list, or of another band), only while its proxy or its upstream still listens; `radio_off` says which."""
+        from .model import web_pages
+        listed = {p.page_id.partition("@")[2] for p in pages}
+        off = [i for i in configured if i is not None and i.rid not in listed]
+        if not off:
+            return []
+        hw = {r.id: r for r in radios.load(self._paths).radios}
+        out = []
+        for page in web_pages(stk, instances=off, paths=self._paths):
+            r = {**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": ""}
+            if r["live"] or r["direct_scope"] not in ("absent", None, ""):
+                rad = hw.get(r["rid"])
+                out.append({**r, "radio_off": "removed" if rad is None else "disabled" if not rad.enabled
+                            else "on another band"})
+        return out
+
+    def _listener_rows(self, stk, comps, snap, fw_status, get_argvs, pages, configured, evidence, page_rows) -> list:
+        """The raw rows of one stack's Home box (G2-UIU3-R3 class: every live listener no row explains has a row). A
+        CONFIGURED instance's row for every raw endpoint, at its saved ports; then an EVIDENCE instance's row (a
+        radio whose default port is live) for every network endpoint, raw or a page's upstream, kept only when its
+        listener is live and no row shows the same (component, port): evidence only adds, never replaces. In the box's
+        order: by endpoint, then by radio, a configured row before an evidence one."""
+        eps = [(n, comp, ep) for n, (comp, ep) in enumerate((c, e) for c in stk.components for e in c.endpoints)
+               if self._is_raw_endpoint(ep) or (getattr(ep, "client", False) and ":" in ep.address)]
+
+        def one(comp, ep, i):
+            return self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=comps.get(comp.id),
+                                            get_argvs=get_argvs, inst=i, pages=pages)
+        own = [(n, i, one(comp, ep, i)) for n, comp, ep in eps if self._is_raw_endpoint(ep) for i in configured]
+        shown = {(r["component"], r["port"]) for _n, _i, r in own} | \
+            {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
+        seen = []
+        for n, comp, ep in eps:
+            for i in evidence:
+                r = one(comp, ep, i)
+                if r["live_scope"] != "absent" and (r["component"], r["port"]) not in shown:
+                    shown.add((r["component"], r["port"]))          # two evidence radios on one port: one row
+                    seen.append((n, i, r))
+        return [r for _n, _i, r in sorted(own + seen, key=lambda t: (t[0], instances.rid_order(t[1])))]
 
     @staticmethod
     def _is_raw_endpoint(ep) -> bool:
@@ -984,7 +1025,7 @@ class WebserverOpsMixin:
         """The web-UI (http/https) box row for ONE proxied page: proxied port + posture, or the
         DIRECT listen address when the reverse proxy is not enabled (the adapter reattaches the
         reached host, like the console). A stack's further pages carry the component's name."""
-        v = self.stack_web_view(page.page_id, listeners=listeners, fw_status=fw_status) or {}
+        v = self.stack_web_view(page.page_id, listeners=listeners, fw_status=fw_status, page=page) or {}
         swc = v.get("cfg")
         enabled = bool(swc and swc.enabled)
         # A listener that still exists after a saved Disable is reported until Apply removes it.
@@ -1125,8 +1166,9 @@ class WebserverOpsMixin:
         of services with a log link and a restart hint is unchanged.
         These ports have no auth, so the colour is the whole warning."""
         from .model import RunState
-        # K8f S4-4b1 (D3 B3): instance `inst` (None: an unknown running set) at its own ports, bind host and processes
-        ep = instances.endpoints_for([ep], instances.with_bases(self, stk.id, inst))[0] if inst is not None else ep
+        # K8f S4-4b1 (D3 B3): instance `inst` (None: an unknown running set) at its own ports, bind host and processes;
+        # its bases are the caller's (G2-UIU3-R3: saved for a configured instance, the seen ones for evidence)
+        ep = instances.endpoints_for([ep], inst)[0] if inst is not None else ep
         level, label, has_bind = self._bind_exposure(stk.id, comp, inst)
         static = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
         live = comp_state is not None and comp_state.run_state in (RunState.RUNNING, RunState.DEGRADED)
