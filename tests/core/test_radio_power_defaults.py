@@ -90,7 +90,7 @@ def test_a_meshstick_starts_at_14_and_its_apply_sends_14(tmp_path):
 
 @pytest.mark.parametrize("stack", ["daemon", "chat", "kiss", "voice", "meshcom"])
 def test_the_diy_433_stick_starts_every_stack_at_14(tmp_path, stack):
-    # red-before: 17 (min(17, the model maximum 17)); the brown-out above 14 on USB power
+    # red-before: 17 (min(17, the model maximum 17))
     svc, _fake = _svc(tmp_path)
     assert _power_row(svc, stack, "r3")["default"] == "14"
 

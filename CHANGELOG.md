@@ -12,8 +12,8 @@
   starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
 - USB radios (Meshstick and PINE64 adapter at 868 MHz, CH341A + RFM98PW stick at 433 MHz): Hardware adds and binds
   a stick, offers the USB setup as one command; a start is refused by name when the stick or its access is missing.
-- Radio power: USB radios start at 14 dBm, SPI at 17; a POWER set by hand stays (DIY 433 stick: set it ≤ 14). The
-  limit is the chip range: SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22.
+- Radio power: USB radios start at 14 dBm, SPI at 17; a POWER set by hand stays. The limit is the chip range:
+  SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22.
 - KISS: the TNC (v0.6.4, power 0–22) reads config/files/<rid>/loraham_kiss_tnc.conf (kiss's POWER, at the next start);
   edits in loraham_kiss_tnc.conf.example (any key) are no longer read: the TNC runs on its shipped defaults.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
