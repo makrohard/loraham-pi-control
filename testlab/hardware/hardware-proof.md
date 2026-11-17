@@ -26,7 +26,7 @@ The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that
 | 9 | daemon text frames | box H, PineDio 868 | the Zero, board 868 | minimum, restored / as-is |
 | 10 | daemon text frames | box H, board 433 | the Zero, board 433 | as-is / as-is |
 | 11 | daemon text frames | box H, board 868 | the Zero, board 868 | as-is / as-is |
-| 1 | MeshCom | box H, board 433 | the MeshCom T-Deck | as-is / receive only |
+| 1 | MeshCom | box H, board 433 | the MeshCom T-Deck | as-is / read only (its stored power 0..17 dBm, else a STOP: set it by hand first) |
 | 2 | KISS + Graywolf | box H, board 433 | the CA2RXU tracker | as-is / as-is, not read |
 | 3 | Meshtastic | the Zero, board 868 | the Station G2 | as-is / low, restored |
 | 4 | MeshCore | the Zero, board 868 | the T-Deck Pro (Bluetooth) | as-is / read only |

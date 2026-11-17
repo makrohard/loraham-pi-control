@@ -48,16 +48,17 @@ ROWS=(
   "9  fast frame H:HPINE       Z:Z868        min,as-is    -"
   "10 fast frame H:H433        Z:Z433        as-is,as-is  -"
   "11 fast frame H:H868        Z:Z868        as-is,as-is  -"
-  "1  full stack H:H433        peer:tdeck    as-is,-      -"
+  "1  full stack H:H433        peer:tdeck    as-is,read   -"
   "2  full stack H:H433        peer:tracker  as-is,as-is  -"
   "3  full stack Z:Z868        peer:g2       as-is,low    -"
   "4  full stack Z:Z868        peer:tdpro    as-is,read   -"
   "5  full stack Z:Z868        peer:rnode    as-is,read   -"
   "6  full stack H:H433        Z:Z433        as-is,as-is  -"
 )
-# The worst-case frames of a row per endpoint ("A B"): frame rows one each way; row 1 three console attempts; row 5 the box's
-# announce + delivery proof + own send, the RNode's announce + message + path request.
-declare -A WORST=([1]="3 0" [2]="1 1" [3]="1 1" [4]="1 1" [5]="3 3" [6]="1 1")
+# The worst-case frames of a row per endpoint ("A B"): frame rows one each way; row 1 three console attempts and the T-Deck's
+# one send (the box's node runs with mesh off: it repeats nothing); row 5 the box's announce + delivery proof + own send, the
+# RNode's announce + message + path request.
+declare -A WORST=([1]="3 1" [2]="1 1" [3]="1 1" [4]="1 1" [5]="3 3" [6]="1 1")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
 rowf() { local id lane kind a b pw fl; read -r id lane kind a b pw fl <<< "${RROW[$1]}"; case $2 in lane) echo "$lane";; kind) echo "$kind";;
@@ -91,6 +92,7 @@ declare -A F=(
   # the word in MeshCore on the box: sync_msgs POPS the node's queue (a read deletes it, no undo); each poll bounded
   [rx_mc_app]="timeout -k 2 10 {RT}/src/meshcore-cli/.venv/bin/meshcore-cli -j -t 127.0.0.1 -p {cport} sync_msgs 2>/dev/null | grep -F -- '{n}\"'"
   [rx_mchat]="grep -rlF -- '{n}' {RT}/state/meshchat 2>/dev/null"
+  [rx_mcom]="grep -hF -- '>*:{n}' {RT}/logs/{rid}/rf-*.log 2>/dev/null | grep -F ' RX '"   # a MeshCom group text: <src>>*:<text>
 )
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional: row 5 box -> peer is NOT RUN without it).
@@ -830,10 +832,16 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     REPORT "$id" daemon "$ba ($ra, $rb)" "$(v="RADIO_$ka"; set -- ${!v}; echo "$3")" — stop-isolation "stop $rb: $ra runs on; stop $ra: $rb runs on" — PASS; fi
   undo_to "$m"; }
 
-row_1() {   # MeshCom box radio 433.175 <-> the MeshCom T-Deck (receive only: its TX power is not provable over its serial answers)
-  local b=${1%%:*} k=${1#*:}; notrun 1 peer-\>box "the T-Deck's TX power is not provable over its serial answers: it only receives"
-  needs $(rforms 1) || { notrun 1 box-\>peer "form not confirmed: $NEEDS_MISSING"; return 0; }
-  local m r n a src pr; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n=$(nonce)
+row_1() {   # MeshCom box radio 433.175 <-> the MeshCom T-Deck. Peer -> box: the T-Deck sends at its OWN stored power, read first
+  # (two agreeing --lora windows) and never changed: outside THE power domain 0..17 dBm (its 22 of 11-10) is a STOP before any
+  # change of the row; it is set into the domain once by hand (on the order, its undo saved), as the G2's 27 -> 17
+  local b=${1%%:*} k=${1#*:}
+  needs $(rforms 1) || { notrun_row 1 "form not confirmed: $NEEDS_MISSING"; return 0; }
+  local m r n n2 a src pr tp; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n=$(nonce); n2=$(nonce)
+  pread PC 1-peer-power.txt meshcom-power; [ "$XRC" = 0 ] || stop "row 1: the T-Deck's power read failed (rc $XRC): no TX"   # a READ, never a write
+  tp=$(body 1-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
+  [ "$MODE" = dry ] || pdom "$tp" || stop "row 1: the T-Deck reads '${tp}' dBm (outside 0..17 or unreadable); this run never changes it: set its stored power to 17 or less by hand first (peer.py meshcom-power <p>, on the order, its undo saved): no TX"
+  keep P_R1-tdeck "${tp:-dry}"; radk R1-tdeck PC:tdeck; pwok PC:tdeck; data "row 1: the T-Deck at its own ${tp:-dry} dBm, not changed"
   started "$b" 1-daemon.txt "daemon@$r"; dpower "$b" "$r" "R1-$b-$r-d"   # the daemon's STATUS before the stack's own start
   started "$b" 1-start.txt "meshcom@$r"; dpower "$b" "$r" "R1-$b-$r"
   X "$b" 1-provision.txt "$(printf "$PROVWAIT" "$r")"; [ "$MODE" = dry ] || [ "$XRC" = 0 ] || fail "row 1: the node's provisioning check did not finish ($(tail -n 1 "$OUT/1-provision.txt"))"
@@ -846,6 +854,11 @@ row_1() {   # MeshCom box radio 433.175 <-> the MeshCom T-Deck (receive only: it
   [ "$MODE" = dry ] || [ "$src" = 0 ] || fail "row 1 box -> peer: the node's console did not take '$n' (rc $src: 4 = no banner, 3 = no echo)"
   result 1-peer-read.txt "$n" || fail "not heard: $n"
   REPORT 1 meshcom "$b ($r)" "433.175 MHz" "MeshCom T-Deck" "box -> peer" yes "$(getk "P_R1-$b-$r" as-is) dBm (as-is)" PASS
+  if needs rx_mcom; then   # the receive judge: a MeshCom group text on r's RF log, RX, whose text is this run's nonce
+    tx R1-tdeck 1 "$n2" -- peer 1-peer-send.txt "$VMT" meshcom-send "$n2"; [ "$XRC" = 0 ] || stop "row 1: the T-Deck send failed (rc $XRC)"
+    boxrx "$b" 1-box-rx.txt rx_mcom "$r" "$n2" 90 || fail "not heard: $n2"
+    REPORT 1 meshcom "$b ($r)" "433.175 MHz" "MeshCom T-Deck" "peer -> box" "yes (RX on $r)" "the T-Deck at its own ${tp:-dry} dBm (not changed)" PASS
+  else notrun 1 peer-\>box "form not confirmed: $NEEDS_MISSING"; fi
   undo_to "$m"; }
 
 row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): box -> peer = the message on the tracker; peer -> box = its ACK
@@ -1165,6 +1178,13 @@ selfcheck() {
     [ "$(printf '%s\n' "$L" | bash -c "$g" | grep -c .)" = 1 ] && [ "$(printf '%s\n' '2026-11-15T02:26:23.126Z RX rssi=-56.00 snr=11.25 len=37 hex=0a1b2c' | bash -c "$g" | grep -c .)" = 0 ] \
     && [ "$(printf '%s\n' '2026-11-15T02:26:23.127Z TX rssi=- len=37 channel Public: SENDER: rfkit 250b74dd' | bash -c "$g" | grep -c .)" = 0 ] ) || sc rx-mc-judge "the rx_mc judge"
   scok rx-mc-judge
+  ( d=$(mktemp -d -p "$SCRATCH") && mkdir -p "$d/logs/r1" && g=$(form rx_mcom rid=r1 n='rfkit 250b74dd'); g=${g//\{RT\}/$d}
+    j() { printf '%s\n' "$1" > "$d/logs/r1/rf-meshcom.log"; [ "$(bash -c "$g" | grep -c .)" = "$2" ]; }   # the T-Deck's text frame, RX
+    j '18:33:54Z RX rssi=-53.00 snr=13.50 len=46 hex=3a ascii=".....XX0XXX-1>*:rfkit 250b74dd.."' 1 \
+    && j '18:33:54Z TX rssi=- snr=- len=46 hex=3a ascii=".....XX0XXX-1>*:rfkit 250b74dd.."' 0 \
+    && j '18:33:54Z RX rssi=-53.00 snr=13.50 len=46 hex=3a ascii=".....XX0XXX-1>DL1AB:rfkit 250b74dd.."' 0 \
+    && j '18:33:54Z RX rssi=-53.00 snr=13.50 len=46 hex=3a ascii=".....XX0XXX-1>*:echo rfkit 250b74dd"' 0 ) || sc rx-mcom-judge "the rx_mcom judge"
+  scok rx-mcom-judge
   g='LISTEN 0 4096 0.0.0.0:4536 0.0.0.0:* users:(("meshtasticd",pid=7,fd=9))
 LISTEN 0 4096 [::]:9576 [::]:* users:(("meshtasticd",pid=7,fd=10))'
   [ "$(printf '%s\n' "$g" | mt_ports)" = "4536 9576 " ] || sc row3-port-judge "mt_ports does not read r2's two ports"

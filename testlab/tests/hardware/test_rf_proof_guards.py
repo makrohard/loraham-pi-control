@@ -1287,3 +1287,40 @@ def test_the_readers_own_forms_pass_its_check(tmp_path, name):
     r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; pread H f.txt {name} r1')
     assert r.returncode == 0, r.stderr
     assert (evd / "ran").exists()
+
+
+# ---- row 1 peer -> box (his word 2026-11-17: the T-Deck sends at its own stored power, read first, never changed) ---------
+
+def _tdeck_power(tmp_path, power):
+    """Row 1's start in live mode, a fake peer.py answering the T-Deck's power read with `power`; a box start leaves a marker."""
+    (tmp_path / "peer.py").write_text(f"print('POWER {power}')\n")
+    return source_only(tmp_path, f'PEER="{tmp_path}/peer.py"; LOCK="{tmp_path}/lock"; VMT=python3; FORMS_OK="start stop rx_mcom"; '
+                       ': > "$EVD/undo.list"; CURROW=1; started() {{ touch "$EVD/box-start"; exit 0; }}; row_1 H:H433')
+
+
+@pytest.mark.parametrize("power", ["22", "18", "", "x"])
+def test_row_1_stops_before_any_change_when_the_tdecks_power_is_outside_the_domain(tmp_path, power):
+    # red-before (16c98e22): row 1 read no T-Deck power at all; now the T-Deck sends at its own power, so 22 dBm (its 11-10
+    # value) or an unreadable one STOPs before the row starts anything, naming the manual step
+    r, evd = _tdeck_power(tmp_path, power)
+    assert r.returncode == 2 and not (evd / "box-start").exists(), r.stdout + r.stderr
+    assert "set its stored power to 17 or less by hand first" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("power", ["17", "2"])
+def test_row_1_goes_on_with_the_tdecks_own_power_inside_the_domain(tmp_path, power):
+    r, evd = _tdeck_power(tmp_path, power)
+    assert r.returncode == 0 and (evd / "box-start").exists(), r.stdout + r.stderr
+    assert f"row 1: the T-Deck at its own {power} dBm, not changed" in r.stdout
+
+
+def test_row_1_runs_peer_to_box_through_tx_in_dry(tmp_path):
+    # red-before (16c98e22): row 1 peer -> box was NOT RUN ("it only receives", DEC-W409bh, lifted 2026-11-17)
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="1")
+    assert r.returncode == 0 and stop_lines(r) == [], r.stdout + r.stderr
+    results = {line.split(" | ")[6]: line.split(" | ")[-1] for line in r.stdout.splitlines() if line.split(" | ")[:2] == ["REPORT", "1"]}
+    assert results == {"box -> peer": "DRY-PASS", "peer -> box": "DRY-PASS"}, r.stdout
+    tx = [line for line in r.stdout.splitlines() if line.startswith("TX | PC:tdeck | 1 | ")]
+    assert len(tx) == 1 and "peer 1-peer-send.txt" in tx[0], r.stdout
+    assert any(line.startswith("BUDGET | PC:tdeck | 1 |") for line in r.stdout.splitlines()), r.stdout
+    assert "dry self-check OK rx-mcom-judge" in r.stdout
