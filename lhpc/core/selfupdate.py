@@ -660,16 +660,17 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
             force and (local.get("dirty") or unknown)):
         # Up to date by HEAD, but the tree decides whether the update is done: a forced cleanup cut off
         # after its reset leaves untracked files. "Already up to date" is a success only for a tree read
-        # clean; else the update is not complete (ok=False), the paths are listed, and the operator's
+        # clean; else a clean finish is not confirmed (ok=False), the paths are listed, and the operator's
         # overwrite (the forced path below, run again, with fresh consent) finishes the cleanup.
         if local.get("dirty"):
-            return {"ok": False, "incomplete": True, "changes": list(local_changes(system)),
-                    "message": "Up to date by HEAD, but the update is not complete: local changes are present "
-                               "(modified or untracked files) — 'overwrite local changes' discards them."}
+            return {"ok": False, "unconfirmed": True, "changes": list(local_changes(system)),
+                    "message": "The checkout is at upstream HEAD but has local changes (modified or untracked "
+                               "files), so a clean finish cannot be confirmed — 'overwrite local changes' discards "
+                               "them."}
         if unknown:                                   # the tree's state is not known: say so, offer the finish
-            return {"ok": False, "incomplete": True, "status_unread": True,
-                    "message": "Up to date by HEAD, but the checkout's state could not be read, so the update "
-                               "is not confirmed complete — 'overwrite local changes' finishes a cut cleanup."}
+            return {"ok": False, "unconfirmed": True, "status_unread": True,
+                    "message": "The checkout is at upstream HEAD but its state could not be read, so a clean finish "
+                               "cannot be confirmed — 'overwrite local changes' finishes a cut cleanup."}
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if not force and not local.get("status_ok", True):
         # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing

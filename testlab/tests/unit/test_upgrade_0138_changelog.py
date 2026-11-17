@@ -1,7 +1,9 @@
 """The "Upgrading from 0.13.x" self-update step has ONE source: the slow-build lane runs lhpc_testlab.upgrade_0138
-as written, and the CHANGELOG must give exactly those lines (each in backticks, in that order) and the lock text."""
+as written, and the CHANGELOG's delimited block names exactly those commands (in backticks, in that order, nothing
+else) and the lock text."""
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,19 +12,16 @@ from lhpc_testlab import upgrade_0138
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _section() -> str:
+def _block() -> str:
     text = (ROOT / "CHANGELOG.md").read_text()
-    start = text.index("Upgrading from 0.13.x")
-    end = text.find("\n## ", start)
-    return text[start:end if end > 0 else len(text)]
+    start = text.index("<!-- upgrade-0138:")
+    return text[start:text.index("<!-- /upgrade-0138 -->", start)]
 
 
-def test_the_changelog_gives_the_tested_0138_step_line_by_line():
-    sec = _section()
-    at = [sec.find(f"`{cmd}`") for cmd in upgrade_0138.STEPS]
-    assert -1 not in at and at == sorted(at), dict(zip(upgrade_0138.STEPS, at, strict=True))
-    assert upgrade_0138.LOCK[0] in sec and f"`{upgrade_0138.LOCK[1]}`" in sec
-    assert sec.index(upgrade_0138.LOCK[0]) > at[1]                 # the lock line follows the reset it is keyed to
+def test_the_changelog_block_names_exactly_the_tested_0138_commands():
+    blk = _block()
+    assert re.findall(r"`([^`]+)`", blk) == list(upgrade_0138.PROCEDURE), blk   # an added command fails it
+    assert upgrade_0138.LOCK[0] in blk
 
 
 def _git(cwd, *args):

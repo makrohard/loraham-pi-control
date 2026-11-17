@@ -747,7 +747,7 @@ class SelfUpdateOpsMixin:
                 refusal = ["  nothing to run here — the box could not reach the checkout's origin "
                            "(network, DNS or the remote itself); once it can, run the same "
                            "command again"]
-            elif res.get("needs_overwrite") or res.get("incomplete") or refusal:
+            elif res.get("needs_overwrite") or res.get("unconfirmed") or refusal:
                 refusal.append("Resetting the checkout to upstream discards exactly those local "
                                "commits/changes and keeps nothing of them.")
                 nxt = ["lhpc self-update --apply --overwrite"]
