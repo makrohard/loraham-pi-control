@@ -1025,7 +1025,7 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
     rc = main(["webserver"])
     err = capsys.readouterr().err
     assert rc == 2
-    assert err.split()[:3] == ["usage:", "lhpc", "webserver"]
+    assert err.startswith("usage: lhpc webserver")    # rule-10: argparse's usage line, anchored; no typed field
 
 
 
@@ -1142,7 +1142,7 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
 def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(argv) == 2
-    assert capsys.readouterr().out.split(maxsplit=1)[0] == "ERR"
+    assert capsys.readouterr().out.startswith("ERR ")    # rule-10: the status token, anchored; no typed field
 
 
 @pytest.mark.parametrize("argv", [["rflog"],                                    # a stack, --all or --clear-all
@@ -1152,7 +1152,7 @@ def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
 def test_rflog_bulk_flags_take_no_stack_and_exclude_each_other(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(argv) == 2
-    assert capsys.readouterr().err.split(maxsplit=1)[0] == "usage:"
+    assert capsys.readouterr().err.startswith("usage: ")    # rule-10: argparse's usage line, anchored; no typed field
     assert not (tmp_path / "rt" / "config" / "stacks").exists()
 
 
@@ -1173,7 +1173,7 @@ def test_rflog_all_and_clear_all_reach_every_registered_log(tmp_path, monkeypatc
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
     assert main(["rflog", "--all", "off"]) == 0
-    assert capsys.readouterr().out.split(maxsplit=1)[0] == "OK"
+    assert capsys.readouterr().out.startswith("OK ")    # rule-10: the status token, anchored; no typed field
     from lhpc.core.commands import stack_instances      # K6 (DEC-W384k): every instance's own switch
     from lhpc.core.manifest import load_manifest
     stacks = {s.id: s for s in load_manifest()}
@@ -1246,7 +1246,7 @@ def test_rflog_decrypt_is_refused_on_plaintext_logs(tmp_path, monkeypatch, capsy
     for surface in ("graywolf@r1", "meshcom@r1"):
         assert main(["rflog", surface, "--decrypt"]) == 2
         out = capsys.readouterr().out
-        assert out.split(maxsplit=1)[0] == "ERR" and "plaintext already" in out   # the status token; the sentence is the contract
+        assert out.startswith("ERR ") and "plaintext already" in out   # rule-10: the status token; the sentence is the contract
     assert main(["rflog", "daemon", "--band", "433", "--decrypt"]) == 2
 
 
@@ -1277,7 +1277,7 @@ def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypat
                         lambda self, t, j, recs: _decoded([], "reticulum is not built — nothing to decode with"))
     assert main(["rflog", "reticulum", "--decrypt"]) == 1
     out = capsys.readouterr().out
-    assert out.split(maxsplit=1)[0] == "ERR" and "reticulum is not built" in out
+    assert out.startswith("ERR   reticulum is not built")    # rule-10: the decoder error right after the status token
 
 
 def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, capsys):
