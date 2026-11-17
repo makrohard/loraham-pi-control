@@ -43,6 +43,11 @@ licence-free 868 MHz SRD frequencies, within their limits ([band limits](stacks/
   D1 RXEN; model `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on
   SLCT, no RESET; model `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon
   preset fixes that stick's pins, TCXO and PA settings, so the module must match them.
+
+  ![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
+
+  ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
+
 - A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
 - A multimeter, fine soldering tools and short insulated wires.
 

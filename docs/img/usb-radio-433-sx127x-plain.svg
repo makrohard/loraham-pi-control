@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="780" viewBox="0 0 980 780" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
+<title id="t">Wiring: CH341A board and a plain SX1276/78 module</title>
+<desc id="d">Functional wiring of a plain 433 MHz SX1276/78 module whose antenna is on PA_BOOST, as the model ch341-rfm98pw-433: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to RESET, DIO0 to D6, DIO1 to D4, GND to every GND pin. VCC 3.3 V from a separate supply rated for the module's transmit current, grounds joined, 100 nF and 10 µF at the module. DIO2 to DIO5 open; ANT to a 433 MHz antenna or a 50 ohm load. Example pin numbers are the HopeRF RFM96W/RFM98W's.</desc>
+<defs>
+<marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker>
+<marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#237a3b"/></marker>
+<marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00707a"/></marker>
+<marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker>
+<marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a8245a"/></marker>
+<marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4a2e"/></marker>
+<marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3d6e8f"/></marker>
+</defs>
+<rect x="0.5" y="0.5" width="979" height="779" rx="12" fill="#ffffff" stroke="#c9ced6" stroke-width="1"/>
+<text x="490" y="36" text-anchor="middle" font-size="14" fill="#1b2430" font-weight="bold">PLAIN SX1276/78 MODULE, 433 MHz, as the model ch341-rfm98pw-433 (functional drawing)</text>
+<rect x="40" y="70" width="230" height="512" rx="6" fill="#f2f4f7" stroke="#1b2430" stroke-width="1.5"/>
+<text x="155" y="92" text-anchor="middle" font-size="13" fill="#1b2430" font-weight="bold">CH341A BOARD</text>
+<rect x="660" y="70" width="280" height="512" rx="6" fill="#f2f4f7" stroke="#1b2430" stroke-width="1.5"/>
+<text x="800" y="92" text-anchor="middle" font-size="13" fill="#1b2430" font-weight="bold">SX1276/78 MODULE (signal names)</text>
+<text x="54" y="124" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D0 / CS0</text>
+<text x="256" y="124" text-anchor="end" font-size="11" fill="#5b6573">IC 15</text>
+<text x="674" y="124" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">NSS</text>
+<text x="926" y="124" text-anchor="end" font-size="11" fill="#5b6573">RFM9xW 5</text>
+<line x1="276" y1="120" x2="654" y2="120" stroke="#1f5fae" stroke-width="2.2" marker-end="url(#a0)"/>
+<circle cx="270" cy="120" r="4" fill="#1f5fae"/><circle cx="660" cy="120" r="4" fill="#1f5fae"/>
+<text x="54" y="168" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D3 / SCK</text>
+<text x="256" y="168" text-anchor="end" font-size="11" fill="#5b6573">IC 18</text>
+<text x="674" y="168" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">SCK</text>
+<text x="926" y="168" text-anchor="end" font-size="11" fill="#5b6573">4</text>
+<line x1="276" y1="164" x2="654" y2="164" stroke="#a85400" stroke-width="2.2" marker-end="url(#a1)"/>
+<circle cx="270" cy="164" r="4" fill="#a85400"/><circle cx="660" cy="164" r="4" fill="#a85400"/>
+<text x="54" y="212" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D5 / MOSI</text>
+<text x="256" y="212" text-anchor="end" font-size="11" fill="#5b6573">IC 20</text>
+<text x="674" y="212" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">MOSI</text>
+<text x="926" y="212" text-anchor="end" font-size="11" fill="#5b6573">3</text>
+<line x1="276" y1="208" x2="654" y2="208" stroke="#237a3b" stroke-width="2.2" marker-end="url(#a2)"/>
+<circle cx="270" cy="208" r="4" fill="#237a3b"/><circle cx="660" cy="208" r="4" fill="#237a3b"/>
+<text x="54" y="256" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D7 / MISO</text>
+<text x="256" y="256" text-anchor="end" font-size="11" fill="#5b6573">IC 22</text>
+<text x="674" y="256" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">MISO</text>
+<text x="926" y="256" text-anchor="end" font-size="11" fill="#5b6573">2</text>
+<line x1="276" y1="252" x2="654" y2="252" stroke="#00707a" stroke-width="2.2" marker-start="url(#a3)"/>
+<circle cx="270" cy="252" r="4" fill="#00707a"/><circle cx="660" cy="252" r="4" fill="#00707a"/>
+<text x="54" y="300" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D2 / CS2</text>
+<text x="256" y="300" text-anchor="end" font-size="11" fill="#5b6573">IC 17</text>
+<text x="674" y="300" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">RESET</text>
+<text x="926" y="300" text-anchor="end" font-size="11" fill="#5b6573">6</text>
+<line x1="276" y1="296" x2="654" y2="296" stroke="#6b4fa0" stroke-width="2.2" marker-end="url(#a4)"/>
+<circle cx="270" cy="296" r="4" fill="#6b4fa0"/><circle cx="660" cy="296" r="4" fill="#6b4fa0"/>
+<text x="54" y="344" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D6</text>
+<text x="256" y="344" text-anchor="end" font-size="11" fill="#5b6573">IC 21</text>
+<text x="674" y="344" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">DIO0 (interrupt)</text>
+<text x="926" y="344" text-anchor="end" font-size="11" fill="#5b6573">14</text>
+<line x1="276" y1="340" x2="654" y2="340" stroke="#a8245a" stroke-width="2.2" marker-start="url(#a5)"/>
+<circle cx="270" cy="340" r="4" fill="#a8245a"/><circle cx="660" cy="340" r="4" fill="#a8245a"/>
+<text x="54" y="388" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">D4</text>
+<text x="256" y="388" text-anchor="end" font-size="11" fill="#5b6573">IC 19</text>
+<text x="674" y="388" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">DIO1</text>
+<text x="926" y="388" text-anchor="end" font-size="11" fill="#5b6573">15</text>
+<line x1="276" y1="384" x2="654" y2="384" stroke="#6b4a2e" stroke-width="2.2" marker-start="url(#a6)"/>
+<circle cx="270" cy="384" r="4" fill="#6b4a2e"/><circle cx="660" cy="384" r="4" fill="#6b4a2e"/>
+<text x="54" y="432" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">GND</text>
+<text x="256" y="432" text-anchor="end" font-size="11" fill="#5b6573">IC 12</text>
+<line x1="270" y1="428" x2="660" y2="428" stroke="#1b2430" stroke-width="2.2"/>
+<circle cx="270" cy="428" r="4" fill="#1b2430"/><circle cx="660" cy="428" r="4" fill="#1b2430"/>
+<text x="674" y="432" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">every GND pin</text>
+<text x="926" y="432" text-anchor="end" font-size="11" fill="#5b6573">1, 8, 10</text>
+<rect x="300" y="474" width="200" height="48" rx="5" fill="#ffffff" stroke="#c0261f" stroke-width="1.8"/>
+<text x="400" y="494" text-anchor="middle" font-size="12" fill="#c0261f" font-weight="bold">3.3 V SUPPLY, ≥ 150 mA</text>
+<text x="400" y="511" text-anchor="middle" font-size="11" fill="#5b6573">grounds joined</text>
+<line x1="500" y1="498" x2="660" y2="498" stroke="#c0261f" stroke-width="2.2"/>
+<circle cx="660" cy="498" r="4" fill="#c0261f"/>
+<line x1="400" y1="474" x2="400" y2="428" stroke="#1b2430" stroke-width="1.6" stroke-dasharray="4 3"/>
+<circle cx="400" cy="428" r="3.5" fill="#1b2430"/>
+<text x="674" y="502" text-anchor="start" font-size="13" fill="#c0261f" font-weight="bold">VCC / 3.3V</text>
+<line x1="590" y1="428" x2="590" y2="468" stroke="#1b2430" stroke-width="1.5"/>
+<line x1="578" y1="468" x2="602" y2="468" stroke="#1b2430" stroke-width="2.4"/>
+<line x1="578" y1="476" x2="602" y2="476" stroke="#1b2430" stroke-width="2.4"/>
+<line x1="590" y1="476" x2="590" y2="498" stroke="#1b2430" stroke-width="1.5"/>
+<circle cx="590" cy="498" r="3.5" fill="#c0261f"/><circle cx="590" cy="428" r="3.5" fill="#1b2430"/>
+<text x="572" y="466" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 10 µF</text>
+<text x="674" y="532" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">DIO2–DIO5: open</text>
+<text x="674" y="554" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">ANT: antenna / 50 Ω</text>
+<text x="40" y="618" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">Never 5 V: the chip's VDD is 1.8–3.7 V.</text>
+<text x="40" y="640" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">Fits: a 433 MHz SX1276 or SX1278 module whose antenna is on PA_BOOST (HopeRF RFM96W, RFM98W).</text>
+<text x="40" y="662" text-anchor="start" font-size="12" fill="#5b6573">Not: SX1277 (SF6–9 only), an 868 MHz-matched module (RFM95W), a module that transmits only on RFO.</text>
+<text x="40" y="684" text-anchor="start" font-size="12" fill="#5b6573">DIO2–DIO5 stay open. ANT: a 433 MHz antenna or a 50 Ω load before any transmission.</text>
+<text x="40" y="706" text-anchor="start" font-size="12" fill="#5b6573">RFM9xW at +20 dBm on PA_BOOST: 120 mA (HopeRF). Grey numbers: RFM96W/98W pins (VCC 13, ANT 9).</text>
+<text x="40" y="728" text-anchor="start" font-size="12" fill="#5b6573">Other modules number their pins differently: wire by signal name, from that module's datasheet.</text>
+</svg>
