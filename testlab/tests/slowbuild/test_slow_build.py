@@ -673,6 +673,9 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
         assert _git("-C", str(co), "rev-parse", "HEAD") == cand, name
         assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == "", name
         assert not lock.exists(), name
+    # The lab's manifest overlay is a lab file rendered by the code installed: release-1 wrote it, and this commit's
+    # parser no longer reads that release's manifest (a box has no overlay). Render it again with this commit's code.
+    _release1_overlay(venv / "bin" / "python", root, env)
     run(steps[2])
     assert other.poll() is None, "the other git ended before the update ran again"
     other.kill()
