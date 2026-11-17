@@ -200,6 +200,51 @@ def test_a_pc_command_naming_the_box_lhpc_is_a_stop(tmp_path):
     assert not (evd / "ran").exists()
 
 
+# ---- the power boundary: no power set on stdin in any context; the setter and the reader run only their own command -------
+
+@pytest.mark.parametrize("ctx", ["set", "read", "restore"])
+def test_a_power_set_on_stdin_stops_in_every_power_context(tmp_path, ctx):
+    # red-before (cd825a69): under PCTX=set|read|restore the stdin payload was not checked: the box ran it
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; '
+                                   f'f() {{ local PCTX={ctx}; XIN H p.txt "lhpc daemon r1 --set POWER=20 --yes" "bash -s"; }}; f')
+    assert stop_lines(r) == ["STOP: p.txt: a power token in the stdin payload: never run"], r.stderr
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("ctx", ["set", "read", "restore"])
+@pytest.mark.parametrize("cmd", ["lhpc daemon r1 --set POWER=\\$(printf 20) --yes", "touch \\\"\\$RAN\\\""])
+def test_under_the_power_setter_or_reader_only_its_own_command_runs(tmp_path, ctx, cmd):
+    # red-before (cd825a69): the context flag alone let any command through: both ran under set and restore, the plain
+    # command under read (the reader's check already refused the set form there); POWER=$(printf 20) has no digit after the
+    # token: a value that is not a literal number now counts as over
+    r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; f() {{ local PCTX={ctx}; X H p.txt "{cmd}"; }}; f')
+    want = ("the reader's command carries a power set" if ctx == "read" else "the setter's command carries a power above") \
+        if "POWER" in cmd else "under the power setter or reader only its own command runs: never run"
+    assert len(stop_lines(r)) == 1 and want in stop_lines(r)[0], r.stderr
+    assert not (evd / "ran").exists()
+
+
+def test_the_setter_runs_only_its_fixed_form_with_a_literal_value(tmp_path):
+    # red-before (cd825a69): a setter form with a shell expansion before its value (POWER=$(printf 2)0 = 20 on the box) ran
+    r, evd = source_only(tmp_path, "keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; sshrun() { touch \"$EVD/ran\"; }; "
+                                   "F[dset]='{LH} daemon {rid} --set POWER=$(printf 2){p} --yes'; pset H s.txt r1 0")
+    assert r.returncode == 2 and not (evd / "ran").exists(), r.stderr
+
+
+@pytest.mark.parametrize("value", ["$(printf 20)", "`printf 20`", "$P", "${P}"])
+def test_a_power_value_that_is_not_a_literal_number_counts_as_over(tmp_path, value):
+    # red-before (cd825a69): pover saw no digits after the token, so the expansion passed the setter's check
+    r, _ = source_only(tmp_path, f"pover 'lhpc daemon r1 --set POWER={value} --yes' && echo OVER")
+    assert r.stdout.strip() == "OVER", r.stderr
+
+
+def test_the_evidence_file_is_opened_before_its_command_runs(tmp_path):
+    # red-before (cd825a69): the command ran while its evidence file could not be opened (then the run STOPped)
+    r, evd = source_only(tmp_path, 'mkdir "$EVD/x.txt"; X PC x.txt "touch \\"\\$RAN\\""')
+    assert r.returncode == 2, r.stderr
+    assert not (evd / "ran").exists()
+
+
 def test_the_end_scan_skips_an_equal_password_and_still_scans_the_other(tmp_path):
     r, _ = source_only(tmp_path, 'PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; OPERATOR_CALL=XX9TST; '
                                    'printf "login lhpc\\nzz-Q71\\n" > "$EVD/x.txt"; secret_scan')
@@ -528,14 +573,43 @@ def _peer_fake(tmp_path):
     return marker, fake
 
 
-def test_a_peer_restore_sets_its_journalled_pre_state_above_17(tmp_path):
-    # red-before (d20b8c41): the replay went through the 17 cap and STOPped: the peer stayed at its row power
+def test_a_peer_restore_above_17_is_refused_reported_and_never_set(tmp_path):
+    # supersedes 94d8b1b7 (a peer found above 17 was set back there): that restore would itself break 'never 20 dBm'.
+    # One power domain 0..17 dBm for read, set and restore; a pre-state outside it STOPs the row before any change (below).
+    # red-before (cd825a69): the replay set mt-power 30
     marker, fake = _peer_fake(tmp_path)
-    r, _ = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; keep PRE_PC_mt-power 30; '
+    r, evd = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; keep PRE_PC_mt-power 30; '
                                    ': > "$EVD/undo.done"; printf "u1\\tPC\\t@pset PC mt-power 30\\n" > "$EVD/undo.list"; undo_to 0',
                          FAKE=str(fake))
-    assert r.returncode == 0, r.stderr
-    assert marker.read_text() == "mt-power 30\n"
+    assert r.returncode == 1, r.stderr
+    assert not marker.exists()
+    assert "PC: @pset PC mt-power 30 (rc 2)" in (evd / "UNRESOLVED.txt").read_text().splitlines()
+
+
+@pytest.mark.parametrize("pre", ["-3", "0", "18", "30"])
+def test_a_peer_pre_state_outside_the_power_domain_stops_the_row_before_any_change(tmp_path, pre):
+    # red-before (cd825a69): ppower journalled the pre-state and set the peer low; a -3 restore was refused later (the
+    # peer stayed changed), a 30 restore set 30 again; Meshtastic's 0 is its firmware's maximum
+    marker = tmp_path / "peer-args"
+    fake = tmp_path / "peer.py"
+    fake.write_text(f"import sys\nopen({str(marker)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\nprint('POWER {pre}')\n")
+    r, evd = source_only(tmp_path, 'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; : > "$EVD/undo.list"; '
+                                   'echo 0 > "$EVD/undo.seq"; CURROW=3; ppower R3-g2 g2 mt-power 1', FAKE=str(fake))
+    assert stop_lines(r) == [f"STOP: PC:mt-power: pre-state power '{pre}' outside 0..17 dBm (Meshtastic 1..17): "
+                             "nothing changed; set it into the domain by hand first"], r.stderr
+    assert marker.read_text() == "mt-power\n"                      # the read only, never a set
+    assert (evd / "undo.list").read_text() == ""
+
+
+@pytest.mark.parametrize("judge, ok", [('jstatus "STATUS HIGHPOWER=0 POWER=-3"', False), ('jstatus "STATUS HIGHPOWER=0 POWER=-9"', False),
+                                       ('jstatus "STATUS HIGHPOWER=0 POWER=0"', True), ('jstatus "STATUS HIGHPOWER=0 POWER=17"', True),
+                                       ("jspower rt_pget -3", False), ("jspower rt_pget 0", True), ("jspower mt_pget 0", False),
+                                       ("jspower mt_pget 1", True), ("pdom 0", True), ("pdom 17", True), ("pdom 18", False),
+                                       ("pdom -1", False), ("pdom 0 mt-power", False), ("pdom ''", False), ("pdom 1x", False)])
+def test_every_power_judge_has_the_one_domain(tmp_path, judge, ok):
+    # red-before (cd825a69): the box STATUS and a stack's value accepted -9..-1 (no restore can set them back); no pdom
+    r, _ = source_only(tmp_path, judge + " >/dev/null && echo IN || echo OUT")
+    assert r.stdout.strip() == ("IN" if ok else "OUT"), r.stderr
 
 
 def test_a_box_restore_sets_its_journalled_pre_state(tmp_path):

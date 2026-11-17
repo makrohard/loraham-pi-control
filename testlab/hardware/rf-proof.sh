@@ -21,6 +21,9 @@
 #    of the as-is peers), the message (the row's nonce, <= 16 characters), the budget (TXMAX frames per physical radio per
 #    run, reserved at the worst case), both boxes' boot ids and the USB lists; then it runs the send itself.
 #  - R0 sums the worst cases of the chosen rows per physical radio; a sum above TXMAX is a STOP before any TX.
+#  - ONE power domain (pdom), 0..17 dBm, for every power read, set and restore: a pre-state outside it STOPs the row before
+#    any change. The guard at X/XIN/peer: no power token on stdin in any context; outside pset/pread no power token at all;
+#    under pset/pread (PCTX) only that call's own rendered command (PAUTH), and no value that is not a literal number.
 #  - Every change pushes its undo first; a row FAIL runs its undos and the run goes on; a STOP or an interrupt runs all.
 #  - The USB guard before and after each row; one peer at a time under the peer lock (two peers on one hub never transmit
 #    at once); the RF logs' TX count per radio at most 15 after the run (RS).
@@ -100,7 +103,7 @@ USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; e
 USBEV='USB disconnect|new (full|high|low|super)-speed USB|reset (full|high|low|super)-speed USB|over-current'
 rport() { local n=${2#r}; case "$n" in ''|*[!0-9]*) stop "rport: rid '$2'";; esac; echo $(( $1 + 133 * (n - 1) )); }   # a listed instance's port
 GW_PY='import http.cookiejar, json, os, sys, time, urllib.request
-BASE = "http://127.0.0.1:" + sys.argv[2]   # argv = nonce port rid; TO (the call) is the first stdin line
+BASE = "http://127.0.0.1:" + sys.argv[2]   # argv = nonce port rid; the assignment of TO (the call) is the first line of this script on stdin (the caller prefixes it)
 pw = open(os.path.expanduser("{RT}/state/" + sys.argv[3] + "/graywolf/graywolf-admin.txt")).read().strip()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 def call(m, p, b=None):
@@ -225,7 +228,10 @@ print("UP", "yes" if len(up) == 1 and up[0].get("status") is True else "no")
 HPY
 )
 
-dbm_ok() { [[ "$1" =~ ^-?[0-9]{1,2}$ ]] && [ "$1" -le "$PCAP" ]; }
+# pdom <value> [<form|peer action>]: THE power domain of every power read (a pre-state), set and restore: 0..17 dBm, 1-2 ASCII
+# digits; Meshtastic (mt_pget, mt-power) 1..17, its 0 being the firmware's maximum. A value outside it is never set, journalled
+# or restored: a pre-state outside it STOPs the row before any change (the restore could not set it back within 0..17).
+pdom() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$((10#$1))" -le "$PCAP" ] || return 1; case "${2:-}" in mt_pget|mt-power) [ "$((10#$1))" -ge 1 ];; esac; }
 # THE power boundary. pnorm: a text normalised (every quote, backslash and blank removed, lowercase), so no quoting, tab or
 # escape can split a key. A normalised text with a power token (power, txp, settx) runs only through the one setter (pset)
 # or the one reader (pread); anything else carrying one is a STOP at the X/XIN/peer boundary (guard).
@@ -234,7 +240,8 @@ ptoken() { local t; t=$(pnorm "$1"); [[ $t == *power* || $t == *txp* || $t == *s
 # pover <text> [read]: rc 0 when a text carries a high-power flag or a value after a power token above the cap (as an integer,
 # any zeros); with `read` (the one reader's context) also any set form of a power (a read never sets one); the attribute
 # high_power is read by the radios read, so it counts only outside `read`
-pover() { local t n; t=$(pnorm "$1"); [[ $t == *highpower* || $t == *high-power* ]] && return 0
+pover() { local t n nl='(power|txp|settx)[^0-9a-z]{0,3}[$`]'; t=$(pnorm "$1"); [[ $t == *highpower* || $t == *high-power* ]] && return 0
+  [[ $t =~ $nl ]] && return 0   # a value after a power token that is not a literal number (an expansion) counts as over
   if [ "${2:-}" = read ]; then [[ $t =~ --set[a-z0-9_.]*(power|txp) || $t =~ set[-_]?power || $t == *settx* ]] && return 0
   else [[ $t == *high_power* ]] && return 0; fi
   for n in $(printf '%s' "$t" | grep -oE '(power|txp|settx)[^0-9a-z]{0,3}-?[0-9]+' | grep -oE '[0-9]+$'); do n=${n#"${n%%[!0]*}"}
@@ -277,7 +284,9 @@ redact() {   # the passwords, the PIN, the tracker call and the operator's call 
     t=${t//"$s"/<REDACTED>}; done
   [[ "$c" =~ ^[A-Za-z0-9]+$ ]] || { printf '%s' "$t"; return; }; printf '%s' "$t" | sed -E "s/\\b$c(-[0-9]{1,2})?\\b/<CALL>/Ig"; }
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
-  local f=$1 o=${OUT:-$EVD} s; shift; "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
+  local f=$1 o=${OUT:-$EVD} s; shift
+  { : > "$o/$f" && : > "$o/$f.rc"; } 2>/dev/null || stop "$f: the evidence file cannot be written: the command did not run"
+  "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
   [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc" || stop "$f.rc: not written"; }
 boxvar() { local v="BOX_${1}_$2" d=; case $2 in USER) d=lhpc;; RUNTIME) d='~/loraham-pi-control';; esac; printf '%s' "${!v:-$d}"; }
 # pweq <H|Z>: box <b>'s password is EXACTLY its login name (a lab box): allowed, not masked, not scanned; pwnote: the header lines
@@ -306,28 +315,33 @@ XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
 guard() {   # guard <file> <command> <stdin|->: THE runtime boundary of X, XIN and the peer process, before anything runs
   local f=$1 c=$2 in=$3
+  [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
+    || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"   # in every context; the box password (sudo -S) is not a command
   if [ -z "${PCTX:-}" ]; then ! ptoken "$c" || stop "$f: a power token outside the one power setter/reader: never run"
-    [ "$in" = - ] || { [ -n "${PW_H:-}" ] && [ "$in" = "$PW_H" ]; } || { [ -n "${PW_Z:-}" ] && [ "$in" = "$PW_Z" ]; } \
-      || ! ptoken "$in" || stop "$f: a power token in the stdin payload: never run"   # the box password (sudo -S) is not a command
-  elif [ "$PCTX" = set ]; then ! pover "$c" || stop "$f: the setter's command carries a power above $PCAP dBm or a high-power flag: never run"
-  elif [ "$PCTX" = read ]; then ! pover "$c" read || stop "$f: the reader's command carries a power set, a high-power flag or a power above $PCAP dBm: never run"; fi
+  else if [ "$PCTX" = read ]; then ! pover "$c" read || stop "$f: the reader's command carries a power set, a high-power flag or a power above $PCAP dBm: never run"
+    else ! pover "$c" || stop "$f: the setter's command carries a power above $PCAP dBm or a high-power flag: never run"; fi   # set, restore
+    [ -n "${PAUTH:-}" ] && [ "$c" = "$PAUTH" ] && [ "$in" = - ] || stop "$f: under the power setter or reader only its own command runs: never run"; fi
   ! issend "$c" "$([ "$in" = - ] || printf '%s' "$in")" || [ "${TXCTX:-}" = 1 ] || stop "$f: a send outside tx: never run"; }
 pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one power setter: the value is its own argument,
-  # leading zeros stripped, then 1-2 ASCII digits <= min(17, the radio's model cap), else STOP. --restore (the undo replay):
+  # leading zeros stripped, then 1-2 ASCII digits in the power domain (pdom) and <= the radio's model cap, else STOP. --restore (the undo replay):
   # exactly the pre-state value journalled for that radio when the row changed it (PRE_<box|PC>_<target>), and nothing else
   local restore=; [ "$1" = --restore ] && { restore=1; shift; }
   local w=$1 f=$2 tg=$3 v=$4 cap=$PCAP m c pre
   [[ $v =~ ^[0-9]+$ ]] || stop "$f: power value '$v' is not ASCII digits"; v=${v#"${v%%[!0]*}"}; v=${v:-0}
   [[ $v =~ ^[0-9]{1,2}$ ]] || stop "$f: power value '$4' has more than 2 digits"
+  pdom "$v" "$tg" || stop "$f: power $v outside 0..17 dBm (Meshtastic 1..17): never set"
   if [ -n "$restore" ]; then pre=$(getk "PRE_${w}_$tg"); pre=${pre#"${pre%%[!0]*}"}
     [ -n "$(getk "PRE_${w}_$tg")" ] && [ "${pre:-0}" = "$v" ] || stop "$f: restore $w $tg to $v: not its journalled pre-state ('$(getk "PRE_${w}_$tg")')"
   elif [ "$w" != PC ]; then m=$(getk "MODEL_${w}_$tg"); c=$(getk "CAP_${w}_$m"); [[ $c =~ ^[0-9]{1,2}$ ]] || stop "$f: no model cap for $w:$tg ('$m')"
     { [ "${#c}" -lt 2 ] || [[ ! "$c" > "$PCAP" ]]; } || c=$PCAP; cap=$c; fi
   [ -n "$restore" ] || { [ "${#v}" -lt "${#cap}" ] || { [ "${#v}" = "${#cap}" ] && [[ ! "$v" > "$cap" ]]; }; } || stop "$f: power $v above the cap $cap dBm"
-  local PCTX=set; [ -z "$restore" ] || PCTX=restore   # restore: the journalled pre-state, checked above
-  if [ "$w" = PC ]; then peer "$f" "$VMT" "$tg" "$v"; else X "$w" "$f" "$(form dset rid="$tg" p="$v")"; fi; }
+  local PCTX=set PAUTH= t; [ -z "$restore" ] || PCTX=restore   # restore: the journalled pre-state, checked above
+  if [ "$w" = PC ]; then case "$tg" in mt-power|meshcom-power|mc-power) ;; *) stop "$f: '$tg' is not a peer power action";; esac
+    PAUTH="$tg $v"; peer "$f" "$VMT" "$tg" "$v"
+  else t=$(form dset rid="$tg" p="$v"); PAUTH=$(rt "$w" "$t"); X "$w" "$f" "$t"; fi; }   # PAUTH: the one command the guard lets through
 jpower() {   # jpower <box|PC> <rid|peer-action> <value>: journal a radio's pre-state power before the row changes it: the
   # value the restore may set (PRE_<box|PC>_<target>) and its undo (@pset, replayed by pset --restore)
+  pdom "$3" "$2" || stop "$1:$2: pre-state power '$3' outside 0..17 dBm (Meshtastic 1..17): nothing changed; set it into the domain by hand first"
   keep "PRE_$1_$2" "$3"; undo_push "$1" "@pset $1 $2 $3"; }
 rnsinst() {   # rnsinst <name> <the key's fields>: the RNS shared instance of an rnode peer: instance=<name> port=<n> control=<n>,
   # no defaults: instance [A-Za-z0-9_.-]+, port and control 1..65535 and different; a missing or malformed one is a STOP
@@ -337,15 +351,16 @@ rnsinst() {   # rnsinst <name> <the key's fields>: the RNS shared instance of an
     || stop "PEER_$1: $([ $k = ctl ] && echo control || echo port)= missing or not 1..65535 ('$t')"; done
   [ "$((10#$port))" != "$((10#$ctl))" ] || stop "PEER_$1: port= and control= are the same ($port)"; }
 pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixed read form, rendered here from its name
-  local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read
+  local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read PAUTH=   # PAUTH: the one command the guard lets through under PCTX
   case "$n" in
-    mt_pget|rt_pget|mt_cap) X "$w" "$f" "$(form "$n" rid="$r")";;
-    radios) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'";;
-    caps) X "$w" "$f" "cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'";;
-    hpower) X PC "$f" "python3 -I $(shq "$SCRATCH/hpower.py") $(shq "$RNSCFG") $(shq "$(dirname "$VRNS")/rnstatus")";;
-    mt-power|meshcom-power) peer "$f" "$VMT" "$n";;
-    mc-power) peerpin "$f" mc-power;;
-    *) stop "pread: '$n' is not a power read";; esac; }
+    mt_pget|rt_pget|mt_cap) c=$(form "$n" rid="$r");;
+    radios) c="cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'";;
+    caps) c="cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'";;
+    hpower) w=PC; c="python3 -I $(shq "$SCRATCH/hpower.py") $(shq "$RNSCFG") $(shq "$(dirname "$VRNS")/rnstatus")";;
+    mt-power|meshcom-power) PAUTH=$n; peer "$f" "$VMT" "$n"; return;;
+    mc-power) PAUTH=$n; peerpin "$f" mc-power; return;;
+    *) stop "pread: '$n' is not a power read";; esac
+  PAUTH=$(rt "$w" "$c"); X "$w" "$f" "$c"; }
 pmust() { pread "$@"; [ "$XRC" = 0 ] || stop "$2: exit status $XRC ($OUT/$2)"; }
 declare -A SPAWNF=()
 peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a peer process starts (dry: fake_peer.py, empty stdin)
@@ -407,7 +422,7 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
       echo "$id" >> "$EVD/undo.done" || { rec "undo journal: $id ran but is not recorded as run" || true; rc=1; }; fi
     sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
     n=$((n - 1)); done; return $rc; }
-ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX; done; }   # every scope's flag: an exit inside pset/pread/tx keeps its local
+ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX PAUTH; done; }   # every scope's flag: an exit inside pset/pread/tx keeps its local
 recover() { trap - EXIT INT TERM; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
   ( secret_scan ) || rec "recover: the evidence scan found a secret or failed: do not publish $EVD" || lost=1
@@ -463,11 +478,11 @@ usbguard() {   # usbguard <tag>: PC by-id + kernel log, each present box's USB l
     [ "$ev" = 0 ] || stop "USB guard $1: $ev USB event line(s) in box $b's kernel log since R0"; done
   ok "USB guard $1: no re-enumeration on the PC and the boxes $BOXES"; }
 # the pure power judges; each prints the value, or the reason with rc 1
-jstatus() {   # jstatus "<daemon STATUS line>": exactly one POWER in -9..17 and exactly one HIGHPOWER, = 0
+jstatus() {   # jstatus "<daemon STATUS line>": exactly one POWER in the power domain (pdom) and exactly one HIGHPOWER, = 0
   local -a ws; local w p= h= np=0 nh=0; read -ra ws <<< "$1"
   for w in "${ws[@]}"; do case "$w" in POWER=*) p=${w#POWER=}; np=$((np + 1));; HIGHPOWER=*) h=${w#HIGHPOWER=}; nh=$((nh + 1));; esac; done
   [ "$np" = 1 ] || { echo "$np POWER field(s) in the STATUS (want 1)"; return 1; }; [ "$nh" = 1 ] || { echo "$nh HIGHPOWER field(s) in the STATUS (want 1)"; return 1; }
-  [[ "$p" =~ ^-?[0-9]{1,2}$ ]] || { echo "POWER '$p' is not a number"; return 1; }; [ "$p" -ge -9 ] && [ "$p" -le "$PCAP" ] || { echo "POWER=$p outside -9..17"; return 1; }
+  pdom "$p" || { echo "POWER '$p' outside 0..17 dBm (no restore could set it back)"; return 1; }
   [ "$h" = 0 ] || { echo "HIGHPOWER is '$h', not 0"; return 1; }; echo "$p"; }
 jfield() { local -a ws; local w v= n=0; read -ra ws <<< "$1"; for w in "${ws[@]}"; do case "$w" in "$2="*) v=${w#*=}; n=$((n + 1));; esac; done
   [ "$n" = 1 ] && [ -n "$v" ] || { echo "$n $2 field(s) in the STATUS (want 1)"; return 1; }; echo "$v"; }
@@ -475,9 +490,8 @@ jgrant() {   # jgrant "<radio rows>" <rid>: exactly one row of the rid, its high
   local rows n hp; rows=$(printf '%s\n' "$1" | grep -E "^ROW $2 "); n=$(printf '%s\n' "$rows" | grep -c .)
   [ "$n" = 1 ] || { echo "$n hardware row(s) of $2 (want 1)"; return 1; }; hp=$(printf '%s\n' "$rows" | grep -oE ' hp=[^ ]*$' | cut -d= -f2)
   case "$hp" in None|False) echo "$hp";; *) echo "the high-power grant of $2 is '$hp' (want None or False)"; return 1;; esac; }
-jspower() {   # jspower <form> <value>: a stack's own power value in -9..17; Meshtastic's 0 means the firmware's maximum
-  [[ "$2" =~ ^-?[0-9]{1,2}$ ]] || { echo "no strict power value ('$2')"; return 1; }; [ "$2" -ge -9 ] && [ "$2" -le "$PCAP" ] || { echo "power $2 outside -9..17"; return 1; }
-  [ "$1" != mt_pget ] || [ "$2" -ge 1 ] || { echo "Meshtastic tx_power $2 (0 = the firmware's maximum)"; return 1; }; echo "$2"; }
+jspower() {   # jspower <form> <value>: a stack's own power value in the power domain (pdom: Meshtastic's 0 is its maximum)
+  pdom "$2" "$1" || { echo "power '$2' outside 0..17 dBm (Meshtastic 1..17: its 0 is the firmware's maximum)"; return 1; }; echo "$2"; }
 jcap() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$PCAP" ]; }   # Meshtastic's max_power cap, 1..17
 jmodel() {   # jmodel <box> <rid> <value>: the value <= min(17, the radio's model's power_default_dbm on that box), else the reason
   local m c; m=$(getk "MODEL_$1_$2"); c=$(getk "CAP_$1_$m"); [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { echo "no model cap for $1:$2 ('$m' '$c')"; return 1; }
@@ -502,7 +516,7 @@ spower() {   # spower <box> <form> <rid> <key>: a stack's own power value (MeshC
   local p o; p=$(jspower "$2" "$(pnum "PW-$4.txt" "$2")") || stop "$4: $p (raw output in PW-$4.txt): no TX"; o=$(jmodel "$1" "$3" "$p") || stop "$4: $o: no TX"
   keep "P_$4" "$p"; pwok "$1:$3"; ok "$4: power as-is $p dBm, within its model's cap"; }
 ppower() {   # ppower <key> <peer> <action> <low>: a PC peer set LOW for its row (the original journalled first), read back low
-  local k=$1 pr=$2 a=$3 lo=$4 o r; dbm_ok "$lo" || stop "$k: the row's low power '$lo' is not <= 17"; radk "$k" "PC:$pr"
+  local k=$1 pr=$2 a=$3 lo=$4 o r; pdom "$lo" "$a" || stop "$k: the row's low power '$lo' is outside 0..17 dBm"; radk "$k" "PC:$pr"
   pread PC "PP-$k-0.txt" "$a"; [ "$XRC" = 0 ] || stop "$k: the peer power read failed (rc $XRC)"; o=$(body "PP-$k-0.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || case "$o" in ''|*[!0-9-]*) stop "$k: no power readback";; esac
   jpower PC "$a" "${o:-10}"
@@ -514,7 +528,7 @@ hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd:
   printf '%s\n' "$HPOWER_PY" > "$SCRATCH/hpower.py"; pread PC "$f" hpower
   [ "$XRC" = 0 ] || stop "rnode: the shared RNode's power cannot be read now ($(tr '\n' ' ' < "$OUT/$f")): no TX"
   local tp nw up; tp=$(sed -n 's/^TXPOWER //p' "$OUT/$f"); nw=$(sed -n 's/^NEWER //p' "$OUT/$f"); up=$(sed -n 's/^UP //p' "$OUT/$f")
-  [[ "$tp" =~ ^-?[0-9]{1,2}$ ]] || stop "rnode: no TXPOWER in the read ($f): no TX"
+  pdom "$tp" || stop "rnode: no TXPOWER in 0..17 dBm in the read ($f): no TX"
   [ "$nw" = yes ] || stop "rnode: the rnsd runs an older config than the file (it was edited after the start): no TX"
   [ "$up" = yes ] || stop "rnode: the RNode 868 interface is not Up: no TX"
   [ "$tp" -le 7 ] || stop "rnode: the shared RNode is set to $tp dBm (above 7): no TX"
@@ -753,7 +767,7 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   spower "$b" mc_pget "$r" "R4-$b-$r"
   pread PC 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write
   tp=$(body 4-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
-  [ "$MODE" = dry ] || { [[ "$tp" =~ ^-?[0-9]{1,2}$ ]] && [ "$tp" -le "$PCAP" ]; } || stop "row 4: the T-Deck Pro reads '${tp}' dBm (above 17 or unreadable); its power is never changed: no TX"
+  [ "$MODE" = dry ] || pdom "$tp" || stop "row 4: the T-Deck Pro reads '${tp}' dBm (outside 0..17 or unreadable); its power is never changed: no TX"
   keep P_R4-tdpro "${tp:-dry}"; radk R4-tdpro PC:tdpro; pwok PC:tdpro; data "row 4: the T-Deck Pro at its own ${tp:-dry} dBm, not changed"
   tx R4-tdpro 1 "$n1" -- peerpin 4-peer-send.txt mc-send "$n1"; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro send failed"
   boxrx "$b" 4-box-rx.txt rx_mc "$r" "$n1" 90 || fail "not heard: $n1"
@@ -943,14 +957,14 @@ LISTEN 0 4096 [::]:9576 [::]:* users:(("meshtasticd",pid=7,fd=10))'
   L='STATUS RADIO=READY TX=0 TXMODE=MANAGED TXQUEUE=1 RXREADY=1 HIGHPOWER=0 CHIPFAMILY=SX127x OCP=100 FREQ=433.174988 SF=11 POWER=17'
   [ "$(jstatus "$L")" = 17 ] && ! jstatus "${L/HIGHPOWER=0/HIGHPOWER=1}" >/dev/null && ! jstatus "${L/ HIGHPOWER=0/}" >/dev/null \
     && ! jstatus "${L/ POWER=17/ POWER=18}" >/dev/null && ! jstatus "$L POWER=14" >/dev/null && ! jstatus "$L HIGHPOWER=0" >/dev/null \
-    && ! jstatus "${L/ POWER=17/ POWER=x}" >/dev/null && ! jstatus "" >/dev/null && [ "$(jstatus "${L/ POWER=17/ POWER=-9}")" = -9 ] \
+    && ! jstatus "${L/ POWER=17/ POWER=x}" >/dev/null && ! jstatus "" >/dev/null && ! jstatus "${L/ POWER=17/ POWER=-3}" >/dev/null && [ "$(jstatus "${L/ POWER=17/ POWER=0}")" = 0 ] \
     && [ "$(jfield "$L" FREQ)" = 433.174988 ] && ! jfield "$L FREQ=1" FREQ >/dev/null && ! jfield "${L/ SF=11/}" SF >/dev/null || sc power-guards "the STATUS judges"
   G='ROW r1 loraham 433 True serial= port= hp=None
 ROW r3 ch341-rfm98pw-433 433 True serial=X port= hp=False
 ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
   jgrant "$G" r1 >/dev/null && jgrant "$G" r3 >/dev/null && ! jgrant "$G" r4 >/dev/null && ! jgrant "$G" r9 >/dev/null || sc power-guards "the high-power grant judge"
   jspower mt_pget 1 >/dev/null && ! jspower mt_pget 0 >/dev/null && jspower rt_pget 17 >/dev/null && ! jspower rt_pget 18 >/dev/null && ! jspower mc_pget 1x >/dev/null \
-    && jcap 17 && ! jcap 18 && ! jcap 0 && dbm_ok 17 && ! dbm_ok 18 && ! dbm_ok '' || sc power-guards "the stack power / cap / dBm judges"
+    && jcap 17 && ! jcap 18 && ! jcap 0 && pdom 17 && pdom 0 && ! pdom 18 && ! pdom -1 && ! pdom '' && ! pdom 0 mt-power || sc power-guards "the stack power / cap / dBm judges"
   ( MODE=live; OUT=$t; EVD=$t; : > "$OUT/state.env"; keep MODEL_H_r1 loraham; keep CAP_H_loraham 17; keep MODEL_H_r4 pinedio-usb-1262; keep CAP_H_pinedio-usb-1262 14
     RA='ROW r1 loraham 433 True serial= port= hp=None'
     X() { case $2 in HG-*) printf '%s\n' "STATE valid" "$DP_ROW" > "$OUT/$2";; PW-*D.txt) printf '%s\n' "$DP_ST" > "$OUT/$2";; PW-*) printf '%s\n' "$DP_V" > "$OUT/$2";; *) printf '%s\n' "$HP_OUT" > "$OUT/$2";; esac; XRC=${HP_RC:-0}; }
@@ -1073,7 +1087,7 @@ BOXES=${BOXES# }
 INTHEAD=${INTHEAD:-}; INTCI=${INTCI:-}; [ "$MODE" = live ] || { INTHEAD=${INTHEAD:-0000000000000000000000000000000000000000}; INTCI=${INTCI:-dry}; }
 TRACKER_CALL=${TRACKER_CALL:-}; TRACKER_DBM=${TRACKER_DBM:-}; [ "$MODE" = live ] || { TRACKER_CALL=${TRACKER_CALL:-$OPERATOR_CALL-9}; TRACKER_DBM=${TRACKER_DBM:-10}; }
 declare +x TRACKER_CALL
-[ -z "$TRACKER_DBM" ] || dbm_ok "$TRACKER_DBM" || stop "TRACKER_DBM is not a power value <= 17 dBm"
+[ -z "$TRACKER_DBM" ] || pdom "$TRACKER_DBM" || stop "TRACKER_DBM is not a power value in 0..17 dBm"
 [ -z "$TRACKER_CALL" ] || [[ "$TRACKER_CALL" =~ ^[A-Z0-9]{3,8}-[0-9]{1,2}$ ]] || stop "TRACKER_CALL is not a call-SSID"
 # the forms: dry confirms every form (every row prints all its commands); live needs every form of the chosen rows
 if [ "$MODE" = dry ]; then FORMS_OK="${!F[*]}"; FORMS_HEAD=$INTHEAD
