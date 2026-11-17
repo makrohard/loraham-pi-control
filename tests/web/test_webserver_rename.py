@@ -11,7 +11,7 @@ import repo_paths
 from htmlq import parse
 
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
 _RADIOS = (radios_fixture.R1, radios_fixture.R2, radios_fixture.R3)      # r1, r2 on 433, r3 on 868
@@ -113,6 +113,21 @@ def test_every_shipped_web_interface_has_its_proxy_name(tmp_path):
     assert unnamed == []
 
 
+
+def test_the_bypass_warning_names_the_firewall_by_a_path_of_the_tree(tmp_path, web):
+    # G2 row 56 B1: an upstream listening on all interfaces warns where the managed firewall is, by its menu path;
+    # red on 4297e042: "Dashboard → Webserver → Firewall", a path the tree does not have
+    radios_fixture.write(tmp_path, _RADIOS)
+    lis = Listener(family="ipv4", ip="0.0.0.0", port=9443, inode=1)
+    svc = ControllerService(system=FakeSystem(listeners=[lis]).system, paths=Paths(runtime_root=tmp_path))
+    c = web(service_factory=lambda: svc)
+    body = " ".join(c.get("/stacks?open=meshtastic").get_data(as_text=True).split())
+    named = set(re.findall(r"The managed firewall can close it \(([^)]*)\)", body))
+    assert named == {"Apps → LoRaHAM Pi Control → Firewall"}, named
+    parts = next(iter(named)).split(" → ")
+    assert tuple(parts[1:]) in set(_levels(c).values())
+
+
 _BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
 _CONTROL = re.compile(r"<(button|label)\b[^>]*>([^<{]+)</\1>")
 
@@ -128,11 +143,12 @@ def _doc_files():
             *sorted((repo_paths.REPO / "docs").glob("*.md"))]
 
 
-def test_every_menu_path_the_docs_write_names_entries_that_exist(tmp_path, web):
+def test_every_bold_menu_path_in_the_readmes_and_docs_names_entries_that_exist(tmp_path, web):
     # A bold path "Apps → LoRaHAM Pi Control → A → B …", "… → A" or "Webserver… → A" (README EN + DE, docs/*.md)
     # starts with entries that exist, each below the one before (Apps: from the controller row; "…" or a bare entry:
     # anywhere in the tree); what follows the entries is the panel's action, each part a button's or a label's text.
     # A renamed entry the docs still name fails here, also behind entries that exist.
+    # Only bold paths in README EN + DE and docs/*.md are read; a path a template writes has its own test.
     c, _svc = _client(web, tmp_path)
     paths = set(_levels(c).values())
     controls = _control_texts()
