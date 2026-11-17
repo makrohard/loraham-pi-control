@@ -680,6 +680,7 @@ def test_a_kept_binary_is_identified_by_its_sha_never_by_its_file_name(tmp_path,
     assert state["adopted"] == [] and state["commit"] == "b" * 40
 
 
+
 def test_a_repair_whose_receipt_reads_back_unreadable_is_refused_and_moves_the_checkout_back(
         tmp_path, monkeypatch, binary_receipt):
     # The repair moved the checkout, then its receipt reads back unreadable (a transient I/O error): the repair is
@@ -778,3 +779,16 @@ def test_the_plan_refuses_what_the_apply_refuses_when_its_state_cannot_be_read(t
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "blocked" in res.summary, res.summary
     assert not plan.ok and plan.summary == res.summary, (plan.summary, res.summary)
+
+
+def test_the_plan_of_an_interrupted_install_is_the_plan_the_apply_takes_after_its_recovery(tmp_path, monkeypatch,
+                                                                                           binary_receipt):
+    # An interrupted (valid, uncommitted) journal of this stack makes the receipt read "in progress": the apply
+    # recovers it first and then decides, so the plan is never the unreadable-receipt refusal.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    svc.invalidate_snapshot()
+    plan = svc.install("meshcom", apply=False, source="binary")
+    assert plan.ok and any(d.startswith("  download ") for d in plan.details), (plan.summary, plan.next_commands)

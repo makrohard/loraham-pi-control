@@ -127,10 +127,10 @@ class BinaryOpsMixin:
             _j, _jstate = bi.read_journal(self._paths)
             if _jstate != "absent" and self._journal_prev_auth(_j) is None:
                 return self._binary_blocked(stack_id, _UNREADABLE_JOURNAL)
+            _settled = _jstate == "absent"   # an open journal: the apply recovers it first, then reads the receipt
             _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
-            if _pstate == "unsafe" and _prec is None:
+            if _settled and _pstate == "unsafe" and _prec is None:
                 return self._binary_unreadable_receipt(stack_id, _pwhy)
-            _settled = _jstate == "absent"
             _how, _rec, _stuck = self._binary_current(stack_id, entry, entries) if _settled else ("", None, "")
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
