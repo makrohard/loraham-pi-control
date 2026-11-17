@@ -21,20 +21,23 @@ strap, and touch ground before you touch the CH341A board, the EEPROM or the rad
 
 ## 1. Parts and tools
 
-- A CH341A board (the build used eBay item 176153644271, MPN `UTTL_IIC_SPI`). The pad and jumper names
-  below are that board's; check yours by its silk labels and by continuity.
+- A CH341A USB-to-SPI board, sold as "CH341A module USB to SPI" (MPN `UTTL_IIC_SPI`): the kind with two
+  3V3/5V voltage jumpers, an I2C-SPI/UART mode jumper and the two pad rows shown in step 2. The pad and
+  jumper names below are that board's; check yours by its silk labels and by continuity.
 - An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
 - A HopeRF RFM98PW module on a carrier with a ground plane, a 433 MHz antenna or a 50 Ω dummy load.
-- Other modules: a plain SX127x module (SX1276/77/78, without the RFM98PW's extra PA) or an SX126x module
-  (SX1262) works the same way, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
+- Other modules: a plain 433 MHz SX1276/78 module (without the RFM98PW's extra PA) whose antenna is on
+  PA_BOOST, the output the daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)), or an
+  SX126x module (SX1262) works the same way, wired by signal name: its pin numbers and layout differ from
+  the RFM98PW's.
   Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the
   5 V feed of step 4; the rating of the board's 3.3 V pads is unknown. An SX127x module takes the
   signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the model `ch341-rfm98pw-433`
   (433 MHz). An SX1262 module also needs BUSY and uses DIO1 where the SX127x uses DIO0: wire it as one
   of the two SX1262 [USB radios](usb-radios.md), the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY,
-  D1 RXEN; model `meshstick-1262`) or the PINE64 adapter (`pinedio-usb-1262`), both 868 MHz models in
-  LHPC. Each model's daemon preset fixes that stick's pins, TCXO and PA settings, so the module must
-  match them.
+  D1 RXEN; model `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on
+  SLCT, no RESET; model `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon
+  preset fixes that stick's pins, TCXO and PA settings, so the module must match them.
 - A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
 - A multimeter, fine soldering tools and short insulated wires.
 
@@ -55,8 +58,9 @@ Start with USB unplugged and nothing attached:
    a rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
    Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
 6. **Check the feed alone**, before any radio wire is on: solder the feed wire to the pickup and leave
-   its far end insulated. With USB on, its positive reads 5.0–6.0 V against GND, with the right
-   polarity. Unplug. (Checked now, the board never runs with its signal wires on an unpowered radio.)
+   its far end free. With USB on, measure at that end against CH341A pin 12 (GND): 5.0–6.0 V, with the
+   right polarity. Unplug, then insulate the end. (Checked now, the board never runs with its signal
+   wires on an unpowered radio.)
 
 ## 3. Wire the radio
 
@@ -94,13 +98,15 @@ The module's VCC (pin 5) is fed **5 V directly** from USB, as in the reference b
 checked in step 2. Keep USB unplugged until point 3.
 
 1. **Solder the capacitors** across VCC (pin 5) and GND, as close to the module as possible: the 470 µF
-   electrolytic (its stripe, the minus side, to GND) and the 100 nF ceramic. Without them the PA's current
-   pulse at each transmission drops the CH341 off USB.
+   electrolytic (its stripe, the minus side, to GND) and the 100 nF ceramic. They buffer the PA's current
+   pulse at each transmission.
 2. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
    **output**: never tie it to anything.
 3. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
-   cable), which is under HopeRF's minimum: the fix is the regulated supply below.
+   cable), which is under HopeRF's minimum: the fix is the regulated supply below. Plug in with
+   `journalctl -k -f` open: the 470 µF is far above the 10 µF USB 2.0 allows a device at attach, and an
+   over-current or hub reset at plug-in also means the separate supply.
 
 What the USB feed means:
 - HopeRF specifies 650 mA typical and 700 mA maximum for the module alone at +30 dBm on 433 MHz, plus
@@ -111,6 +117,7 @@ What the USB feed means:
   disconnect or an over-current message.
 - A separately regulated 5–6 V supply rated for at least 1 A (the module's 700 mA maximum plus margin),
   with the grounds joined and its positive never tied to USB VBUS, is the alternative for high power.
+  Switch it on before you plug in USB, and unplug USB before you switch it off.
 - At any power, keep transmissions short, check the module's temperature, and stay within your licence's
   power and duty limits for the band.
 
@@ -213,25 +220,28 @@ and verify it.
 LHPC's one-time USB setup gives your user access to the stick (the console's Hardware page shows it
 when the host needs it). The build needs no driver blacklist.
 
-1. **SPI check.** The first SPI check reads the chip's version register (0x42). An RFM98PW reads `0x12`.
-2. **Receive first.** Match a known-good 433 MHz peer in frequency, bandwidth, spreading factor, coding
-   rate, sync word, header/CRC and IQ, and confirm that its frames arrive. The reference build received
-   MeshCom frames at 433.175 MHz, SF11, BW 250 kHz, CR 4/6, sync 0x2B, preamble 16.
-3. **Then transmit, at the lowest power**, into an antenna or a dummy load rated above the expected
-   power, with the bare daemon and no client stack. The lowest is `POWER` 2, the daemon's floor on an
-   SX127x ([radio parameters](stacks/daemon.md#radio-parameters)).
-   - Save it on the radio's own row: `lhpc config daemon@<rid> --daemon-param POWER=2`.
-   - Start the daemon: `lhpc stack start daemon@<rid>`. Once the radio is READY, LHPC applies the saved
-     values, the 2 included, before anything can transmit. A daemon that already runs takes it with
-     `lhpc config daemon@<rid> --apply-daemon`, which must report no error.
-   - Send one frame: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at
-     the 2. It needs the operator call sign, and it sends one frame on every band the daemon serves: make
-     this stick the only enabled radio in the hardware list for the test.
-
-   The daemon does not report the power back: the evidence of 2 is the daemon's OK to the apply (the
-   start prints `[ok] 433: POWER=2 sent`; a `[warn]` there means it was not applied) and an outside
-   measurement (a power meter, or a peer's RSSI). Watch the kernel log for a USB disconnect, and
-   check the module's temperature. The reference build sent one MeshCom frame at the lowest drive,
-   without a USB event. A client stack started later on this radio applies its own `POWER`.
-4. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
-   stick comes back after an unplug.
+1. **Only the bare daemon on this radio.** Stop every client stack that runs on it (`lhpc stack stop
+   <stack>@<rid>`; `lhpc status` lists them), and make this stick the only enabled radio in the hardware
+   list: the TX test in point 5 sends on every band the daemon serves.
+2. **Save the lowest power first**, before anything starts: `lhpc config daemon@<rid> --daemon-param
+   POWER=2`. 2 is the daemon's floor on an SX127x ([radio parameters](stacks/daemon.md#radio-parameters)).
+3. **Start the daemon:** `lhpc stack start daemon@<rid>` (`restart` if it already runs). The start must
+   print `[ok] 433: POWER=2 sent`. A `[keep]` line (a client stack still runs), a `[warn]` or no such line
+   means the 2 is not applied: do not transmit. The radio must then reach READY (`lhpc status daemon`),
+   which is the SPI check. The reference build's own check read the chip's version register (0x42) as
+   `0x12`.
+4. **Receive first.** Set a known-good 433 MHz peer's values on the daemon (`lhpc config daemon@<rid>
+   --daemon-param FREQ=… --daemon-param SF=…`, then `--apply-daemon`): frequency, bandwidth, spreading
+   factor, coding rate, sync word, preamble and CRC. Its frames must show in `lhpc daemon <rid> --feed`
+   (the RF log `logs/<rid>/rf-daemon.log`). These are the peer's settings: the reference build's peer
+   sent MeshCom frames at 433.175 MHz, SF11, BW 250 kHz, CR 4/6, sync 0x2B, preamble 16, which is not
+   LHPC's MeshCom profile.
+5. **Then transmit one frame at that power**, into an antenna or a dummy load rated above the expected
+   power: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at the 2; it
+   needs the operator call sign. The daemon does not report the power back: the evidence of 2 is the
+   `[ok]` line of point 3 and an outside measurement (a power meter, or a peer's RSSI). Watch the kernel
+   log for a USB disconnect, and check the module's temperature. The reference build sent one MeshCom
+   frame at the lowest drive, without a USB event.
+6. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
+   stick comes back after an unplug. A client stack started later on this radio keeps the 2 unless its
+   own settings, or its app (voice), set another.
