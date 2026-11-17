@@ -647,6 +647,17 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                     d["probe_value"] = str(pv)          # a pattern: never placeholder-expanded
                     d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
                                                    source, band, inst, daemon)
+                #  * refused_on: a regex for the device's refusal in the reply to a send (read only
+                #    with stop_on); an unconfirmed step names the refusal it matched.
+                ro = step.get("refused_on")
+                if ro is not None:
+                    if not step.get("stop_on"):
+                        raise CommandError("tcp_send: refused_on needs a stop_on (the reply is read only then)")
+                    try:
+                        re.compile(str(ro))
+                    except re.error as exc:
+                        raise CommandError(f"tcp_send: refused_on is not a regex: {exc}") from exc
+                    d["refused_on"] = str(ro)           # a pattern: never placeholder-expanded
             resolved.append(d)
         elif kind == "log_wait":
             # B2a: wait for a line in a log file (MeshCom: the firmware's own console announcement); the path is
@@ -1131,13 +1142,15 @@ for _si, s in enumerate(STEPS):
             reps = s.get("repeat", 1)
             sent = 0
             t0 = time.monotonic()
-            def _done(oc, n, reported=None):
+            def _done(oc, n, reported=None, refusal=None):
                 entry = {"kind": "tcp_send",
                          "label": s.get("label", "%s:%s" % (s["host"], s["port"])),
                          "host": s["host"], "port": s["port"], "outcome": oc,
                          "attempts": n, "elapsed_s": round(time.monotonic() - t0, 1)}
                 if reported is not None:     # the value the node last reported (an unconfirmed one keeps it)
                     entry["reported"] = "".join(c for c in reported if c.isprintable())[:32]
+                if refusal is not None:      # the device's refusal of the last send (refused_on)
+                    entry["refusal"] = "".join(c for c in refusal if c.isprintable())[:64]
                 _record(entry)
             def _read(conn, done):
                 # ONE answer, read to its end: a slow guest (QEMU on a Zero 2 W) may take many
@@ -1167,6 +1180,8 @@ for _si, s in enumerate(STEPS):
             skipped = False
             answered = False             # some probe got a reply (value form only)
             reported = None              # the value the node last reported (value form only)
+            refusal = None               # the last send's reply matched refused_on
+            _ro = s.get("refused_on")
             # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and no
             # NEW attempt starts after its END, the last slot plus its own interval (checked at each
             # attempt's entry, after the sleep) — a required run sits inside the start's outer timeout,
@@ -1233,7 +1248,10 @@ for _si, s in enumerate(STEPS):
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
                         if s.get("stop_on"):
-                            acked = _said(s["stop_on"], *_read(c, lambda t: _said(s["stop_on"], t, False)))
+                            ans, done = _read(c, lambda t: _said(s["stop_on"], t, False) or bool(_ro and _re.search(_ro, t)))
+                            acked = _said(s["stop_on"], ans, done)
+                            rm = _re.search(_ro, ans) if _ro and not acked else None
+                            refusal = rm.group(0) if rm else None
                     sent += 1                # one complete connect + sendall succeeded
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
@@ -1265,10 +1283,11 @@ for _si, s in enumerate(STEPS):
                 # so. Diagnostic only: the step exits 0, as 0.9.2 did for a console that answered
                 # (it sent blind and passed as `sent-unacked`); failing the start here would be a
                 # changed refusal. A console that never answered still ends `exhausted` below.
-                _done("unverified", n, reported)
-                sys.stderr.write("tcp_send %s:%s: value never confirmed in %d attempt(s); the node may use %s\\n"
+                _done("unverified", n, reported, refusal)
+                sys.stderr.write("tcp_send %s:%s: value never confirmed in %d attempt(s); the node may use %s%s\\n"
                                  % (s["host"], s["port"], n,
-                                    "its own value %r" % reported if reported is not None else "an unknown value"))
+                                    "its own value %r" % reported if reported is not None else "an unknown value",
+                                    "; it refused: %r" % refusal if refusal is not None else ""))
             elif sent == 0:
                 _done("exhausted", n)
                 if not s.get("optional", True):

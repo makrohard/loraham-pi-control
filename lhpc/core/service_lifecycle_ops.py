@@ -2734,10 +2734,10 @@ class LifecycleOpsMixin:
     _OUTCOME_RE = _re.compile(r"[a-z][a-z-]{0,23}")
 
     @staticmethod
-    def _safe_label(value, fallback: str = "step") -> str:
+    def _safe_label(value, fallback: str = "step", limit: int = 32) -> str:
         """A sidecar label is data from a file, not a trusted string: keep it printable, single
         line and short before it reaches a status line."""
-        s = "".join(c for c in str(value or "") if c.isprintable())[:32].strip()
+        s = "".join(c for c in str(value or "") if c.isprintable())[:limit].strip()
         return s or fallback
 
     def _render_post_steps(self, steps, log_hint: str, stack_hint: str, inst=None) -> list[str]:
@@ -2770,8 +2770,8 @@ class LifecycleOpsMixin:
                              f"lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "unverified":
                 held = f"the node may use {self._safe_label(st['reported'], '?')}" if "reported" in st else "its own value unknown"
-                lines.append(f"post-start: {label} UNVERIFIED — not confirmed ({held}): the node answered but never "
-                             f"reported the expected value within {el}s ({n} attempts); re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
+                refused = f"; it refused: '{self._safe_label(st['refusal'], '?', 64)}'" if "refusal" in st else ""
+                lines.append(f"post-start: {label} UNVERIFIED — not confirmed ({held}): the node answered but never reported the expected value within {el}s ({n} attempts){refused}; re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "ok":
                 lines.append(f"post-start: {label} applied after {el}s")
             elif oc == "failed":

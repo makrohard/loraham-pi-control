@@ -196,12 +196,16 @@ def test_a_refused_power_is_unverified_and_the_node_keeps_running(tmp_path):
     assert res.ok, (res.summary, res.details)
     # N2 (the coordinator's decision): a warning, not a refusal, that names the power the node may still use: in
     # `lhpc status`, in the poststart's answer and in the post-start log
+    # plan E13: the line also names the firmware's own refusal (`refused_on`, command_functions.cpp:5803)
+    refused = f"txpower {n} dBm not between 0 and max 8 dBm"
     line = (r"post-start: tx power UNVERIFIED — not confirmed \(the node may use 7\): the node answered but never "
-            r"reported the expected value within [0-9.]+s \(2 attempts\); re-apply with: lhpc stack poststart meshcom@r1")
+            r"reported the expected value within [0-9.]+s \(2 attempts\); it refused: '" + refused + r"'; "
+            r"re-apply with: lhpc stack poststart meshcom@r1")
     assert any(re.fullmatch(line, ln) for ln in node.status), node.status
     assert any(re.search(line[len("post-start: "):].split(":", 1)[0], d) for d in res.details), res.details
     log = next(d.split(" -> tail -f ", 1)[1] for d in res.details if " -> tail -f " in d)
-    assert "value never confirmed in 2 attempt(s); the node may use its own value '7'" in pathlib.Path(log).read_text()
+    assert (f"value never confirmed in 2 attempt(s); the node may use its own value '7'; it refused: '{refused}'"
+            in pathlib.Path(log).read_text())
 
 
 def _rendered(step, daemon):
@@ -227,6 +231,20 @@ def test_no_power_refuses_the_render_and_nothing_is_sent(daemon):
     assert _rendered(step, {"power": "14"})[0]["data"] == "--txpower 14\n"
 
 
+@pytest.mark.contract
+@pytest.mark.parametrize("extra, why", [({}, r"refused_on needs a stop_on"),
+                                        ({"stop_on": "set"}, r"refused_on is not a regex")],
+                         ids=["no-stop_on", "not-a-regex"])
+def test_a_refusal_pattern_is_checked_at_render(extra, why):
+    # the reply is read only with stop_on: a refused_on without it would never match; a broken regex is the
+    # manifest's error, never the runner's
+    step = {"kind": "tcp_send", "port": 1, "data": "--txpower {daemon:power}\n", "refused_on": "(", **extra}
+    with pytest.raises(commands.CommandError, match=why):
+        _rendered(step, {"power": "14"})
+    step.update(stop_on="set", refused_on="txpower {daemon:power} -?[0-9]+")
+    assert _rendered(step, {"power": "14"})[0]["refused_on"] == "txpower {daemon:power} -?[0-9]+"   # a pattern: not expanded
+
+
 def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():
     from lhpc.core.manifest import load_manifest
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
@@ -239,3 +257,6 @@ def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():
     # 6794); `--info`'s TXPWR line is printfdeb (:7648), the line the callsign's probe reads too (testlab 43991217519:
     # 25 `--lora` probes "incomplete", the start cut at 600 s)
     assert (power["probe"], power["probe_value"]) == ("--info\n", "TXPWR (-?[0-9]+) dBm")
+    # its refusal pattern matches the firmware's own text (printfdeb, command_functions.cpp:5803)
+    assert re.search(power["refused_on"], "22txpower 22 dBm not between 0 and max 20 dBm\n").group(0) == \
+        "txpower 22 dBm not between 0 and max 20 dBm"
