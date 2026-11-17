@@ -76,7 +76,8 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   (the tracker's ACK, the LXMF delivery proof, the RNS path request) is reserved with `tx ... control --reserve` right
   before the send that triggers it. Any failed check is a STOP.
 - A radio sends at most 10 frames per run (`TXMAX`); the start prints each radio's worst case (`BUDGET` lines) and a sum
-  above 10 is a STOP before any transmission.
+  above 10 is a STOP before any transmission. After the run, each radio's TX count in its RF log (all its frames, the
+  stack's own included) must also be at most 10, else that is a FAIL.
 - Every change is undone after its row, the undo recorded before the change. An unplanned reboot stops the run.
 - Every captured output is redacted before it is written: the passwords, the PIN and the operator's call with any SSID.
   A received radio line is never written; the receive judges write `SEEN <nonce> <time> rssi=<n>`. The end scan checks

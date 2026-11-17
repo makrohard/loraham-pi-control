@@ -26,7 +26,7 @@
 #    under pset/pread (PCTX) only that call's own rendered command (PAUTH), and no value that is not a literal number.
 #  - Every change pushes its undo first; a row FAIL runs its undos and the run goes on; a STOP or an interrupt runs all.
 #  - The USB guard before and after each row; one peer at a time under the peer lock (two peers on one hub never transmit
-#    at once); the RF logs' TX count per radio at most 15 after the run (RS).
+#    at once); the RF logs' TX count per radio at most TXMAX in this run (RS; a missing or unreadable count fails).
 #  - Every capture goes through the one redactor before it is written (the passwords, the PIN, the operator's call with any
 #    SSID); the RX judges write marker lines only; the end scan (RE) checks the evidence again. A box password EXACTLY equal
 #    to that box's login name (a lab box) is neither masked nor scanned: REPORT.md's header says so (pweq).
@@ -798,7 +798,7 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   tx "$q" 1 control -- must "$b" 5-announce.txt "LHPC_INST=meshchat@$r curl -fsS --max-time 15 http://127.0.0.1:$mp/api/v1/announce"   # 3. the box's announce
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
   hpower R5-rnode 5-rnode-power-2.txt; tx R5-rnode 1 control --reserve; tx "$q" 1 control --reserve
-  tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $go"
+  tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
   [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row 5: the dry release file"   # dry: right after its tx
   if needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no PC destination hash"
@@ -813,10 +813,15 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   undo_to "$m"; }
 
 # the chat client's command from the start's own output (the line after "run it yourself in a terminal:"), in the measured form
-chatcmd() { local cc re; if [ "$MODE" = dry ]; then cc="cd /dry/files/$2/ && /dry/LoRaHAM_Daemon/loraham_chat --data-socket /tmp/lora-$2.sock --conf-socket /tmp/loraconf-$2.sock; stty sane 2>/dev/null"
-  else cc=$(body "$1" | grep -A1 -F 'run it yourself in a terminal:' | sed -n '2s/^ *//p'); fi
-  re="^cd [^';&|]+ && [^';&| ]+/loraham_chat --data-socket [^' ]*/lora-$2[.]sock --conf-socket [^' ]*/loraconf-$2[.]sock; stty sane 2>/dev/null\$"
-  echo "$cc"; [[ "$cc" =~ $re ]]; }
+# chatcmd <file> <rid>: the chat client's call, BUILT from four paths parsed out of the box's start output as data, never the
+# box's line itself: each a plain absolute path (/[A-Za-z0-9._/-]), the client .../loraham_chat, the sockets .../lora-<rid>.sock
+# and .../loraconf-<rid>.sock. Prints the built call (rc 0), or the box's line (rc 1) when it is not that form.
+chatcmd() { local l p='(/[A-Za-z0-9._/-]+)' re; if [ "$MODE" = dry ]; then l="cd /dry/files/$2/ && /dry/LoRaHAM_Daemon/loraham_chat --data-socket /tmp/lora-$2.sock --conf-socket /tmp/loraconf-$2.sock; stty sane 2>/dev/null"
+  else l=$(body "$1" | grep -A1 -F 'run it yourself in a terminal:' | sed -n '2s/^ *//p'); fi
+  re="^cd $p && $p/loraham_chat --data-socket $p/lora-$2[.]sock --conf-socket $p/loraconf-$2[.]sock; stty sane 2>/dev/null\$"
+  [[ "$l" =~ $re ]] || { echo "$l"; return 1; }
+  printf 'cd %s && %s/loraham_chat --data-socket %s/lora-%s.sock --conf-socket %s/loraconf-%s.sock; stty sane 2>/dev/null' \
+    "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$2" "${BASH_REMATCH[4]}" "$2"; }
 row_6() {   # chat: the chat CLIENT in the foreground of a tmux pane on each box, ready before typing; one line each way
   local ba=${1%%:*} bb=${2%%:*} ra rb; ra=$(getk "${1#*:}"); rb=$(getk "${2#*:}")
   needs $(rforms 6) || { notrun_row 6 "form not confirmed: $NEEDS_MISSING"; return 0; }
@@ -860,8 +865,12 @@ row_RS() {
   [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved after verify: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
     must $b "RS-$b-boot.txt" "cat /proc/sys/kernel/random/boot_id"; [ "$MODE" = dry ] && continue; eq "RS $b: no reboot" "$(body "RS-$b-boot.txt")" "$(getk BOOT_$b)"
-    awk 'NR == FNR {a[$1] = $2; next} {print $1, $2 - (a[$1] + 0)}' "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" > "$OUT/RS-$b-tx-run.txt"
-    data "RS $b: TX frames of this run per radio: $(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt")"; awk '$2 > 15 {exit 1}' "$OUT/RS-$b-tx-run.txt" || fail "RS $b: a radio sent more than 15 frames in this run (duty)"; done
+    awk 'function n(v) {return v ~ /^[0-9]+$/} NR == FNR {a[$1] = $2; next}   # each radio: RS minus R0; a count missing or not a number = UNREADABLE
+      {s[$1] = 1; print $1, (n($2) && (!($1 in a) || n(a[$1])) ? $2 - a[$1] : "UNREADABLE")} END {for (k in a) if (!(k in s)) print k, "UNREADABLE"}' \
+      "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" > "$OUT/RS-$b-tx-run.txt"
+    data "RS $b: TX frames of this run per radio: $(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt")"
+    awk -v m="$TXMAX" '$2 !~ /^-?[0-9]+$/ || $2 < 0 || $2 > m {exit 1}' "$OUT/RS-$b-tx-run.txt" \
+      || fail "RS $b: a radio sent more than $TXMAX frames in this run (the physical TX count), or its count is missing or unreadable (RS-$b-tx-run.txt)"; done
   usbguard RS
   for pr in $(sed -n 's/^TXR_\([^=]*\)=.*/\1/p' "$OUT/state.env" | awk '!s[$0]++' | sort); do say "BUDGET | ${pr/_/:} | $(getk "TXR_$pr") | $TXMAX"; done
   [ "$MODE" = dry ] || { [ ! -s "$EVD/NOT-RUN.txt" ] || say "NOT RUN, for the coordinator: $(tr '\n' '|' < "$EVD/NOT-RUN.txt")"; }; }
@@ -906,7 +915,8 @@ selfcheck() {
     $1 ~ /^CMD/ {want = 0; next}
     $1 == "FRAME" {r = $2; if (r ~ /:\*$/) {b = substr(r, 1, 2); r = ""; for (k in cr) if (index(k, b) == 1 && cr[k] > 0) {r = k; break}}
       if (r == "" || cr[r] < 1) {print "FRAME " $2 " (line " NR ") without a TX credit"; exit}; cr[r]--}
-    want && NR == want && $1 !~ /^CMD/ {print "TX on line " NR - 1 " is not followed by its command"; exit}' "$DRYLOG")
+    want && NR == want && $1 !~ /^CMD/ {print "TX on line " NR - 1 " is not followed by its command"; bad = 1; exit}
+    END {if (want && !bad) print "TX on line " want - 1 " is not followed by its command"}' "$DRYLOG")
   [ -z "$t" ] || sc every-send-gated "$t"; scok every-send-gated
   t=$(cut -d' ' -f2 "$SCRATCH/needed" 2>/dev/null | sort -u | grep -vxF -f <(sort -u "$SCRATCH/formed" 2>/dev/null) | grep -vx rt_send | tr '\n' ' ') || true
   [ -z "$t" ] || sc all-forms-printed "needed but never printed: $t"; scok all-forms-printed
@@ -916,13 +926,13 @@ selfcheck() {
     CC="cd /x/ && /x/loraham_chat --data-socket /tmp/lora-r1.sock --conf-socket /tmp/loraconf-r1.sock; rm -rf ~; stty sane 2>/dev/null"; ! chatcmd x r1 > /dev/null || exit 1
     CC="cd /x/ && /x/lorachat --data-socket /tmp/lora-r1.sock --conf-socket /tmp/loraconf-r1.sock; stty sane 2>/dev/null"; ! chatcmd x r1 > /dev/null ) || sc chat-judge "the chat command judge"
   printf '%s\n' "$MCSEND_PY" | python3 -I -c 'import ast, sys; ast.parse(sys.stdin.read())' || sc chat-judge "the MeshCom send helper does not parse"; scok chat-judge
-  ( d=$(mktemp -d "$SCRATCH/pw.XXXXXX") || exit 1; T=$(printf "$PROVWAIT" r9 | sed "s|{RT}/logs|$d|; s/seq 1 120/seq 1 2/; s/sleep 5/sleep 0/")
-    pw() { local want=$1; shift; printf '%s\n' "$@" > "$d/start-meshcom-qemu-r9.log"; bash -c "$T" > /dev/null; [ $? = "$want" ]; }
+  ( d=$(mktemp -d "$SCRATCH/pw.XXXXXX") || exit 1; T=$(printf "$PROVWAIT" r9 | sed 's|{RT}/logs|"$PWLOGS"|; s/seq 1 120/seq 1 2/; s/sleep 5/sleep 0/')
+    pw() { local want=$1; shift; printf '%s\n' "$@" > "$d/start-meshcom-qemu-r9.log"; PWLOGS=$d bash -c "$T" > /dev/null; [ $? = "$want" ]; }   # the path as data
     pw 0 "[run] node image: x" "[run] provisioning the node" "[run] provisioning verified" "[run] node image: y" "[run] web UI: z" \
     && pw 3 "[run] node image: x" "[run] provisioning the node" "[run] provisioning check: lacks" \
     && pw 3 "[run] node image: x" "[run] provisioning the node" "[run] provisioning FAILED: x" \
     && pw 0 "[run] node image: x" "[run] provisioning the node" "[run] provisioning verified" \
-    && pw 3 "[run] QEMU: x" && rm "$d/start-meshcom-qemu-r9.log" && { bash -c "$T" > /dev/null; [ $? = 3 ]; } ) || sc provisioning-wait "the provisioning wait judge"
+    && pw 3 "[run] QEMU: x" && rm "$d/start-meshcom-qemu-r9.log" && { PWLOGS=$d bash -c "$T" > /dev/null; [ $? = 3 ]; } ) || sc provisioning-wait "the provisioning wait judge"
   printf "TO = 'N0CALL-9'\n%s\n" "$GW_PY" | python3 -I -c 'import ast, sys; ast.parse(sys.stdin.read())' || sc provisioning-wait "the Graywolf helper does not parse"; scok provisioning-wait
   ( MODE=live; pv() { local want=$1; shift; body() { printf '%s\n' "${PV_LINES[@]}"; }; PV_LINES=("$@"); [ "$(pnum x mc_pget)" = "$want" ]; }
     I1='INFO:meshcore:TCP Connection started'; I2='INFO:meshcore:Connected to Node running on a 14.0 (14) fw.'
@@ -1094,10 +1104,11 @@ if [ "$MODE" = dry ]; then FORMS_OK="${!F[*]}"; FORMS_HEAD=$INTHEAD
 else FORMS_OK=${FORMS_OK:-}; FORMS_HEAD=${FORMS_HEAD:-}; [ -n "$FORMS_OK" ] || stop "FORMS_OK is empty: confirm the forms at INTHEAD first"
   miss=$(for r in $RUN; do for f in $(rforms "$r"); do case " $FORMS_OK " in *" $f "*) ;; *) echo "$f";; esac; done; done | sort -u | tr '\n' ' ')
   [ -z "$miss" ] || stop "form not confirmed: ${miss% } (FORMS_OK must hold every form of the chosen rows)"; fi
+[[ ${TMPDIR:-/tmp} =~ ^/[A-Za-z0-9._/-]+$ ]] || stop "TMPDIR '${TMPDIR:-}' is not a plain absolute path ([A-Za-z0-9._/-]): the scratch root is spliced into commands"
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rf-proof.XXXXXX") || stop "mktemp"; DRYLOG=$SCRATCH/commands.log; : > "$DRYLOG"
 if [ "$MODE" = dry ]; then OUT=$SCRATCH/out; EVD=$EVDROOT/rf-proof-dry; mkdir -p "$OUT" || stop "scratch"
 else EVD=$EVDROOT/rf-proof-$(date -u +%Y%m%dT%H%M%SZ)-$LANE; OUT=$EVD; fi
-trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap 'exit 130' INT TERM
+trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap 'stop "interrupted (signal): the recovery runs"' INT TERM
 
 [ "$MODE" = dry ] || echo "LIVE: this run transmits. It needs the transmit and lab permission and the GO for this run, with the hardware connected, reachable and set up."
 for r in R0 R1; do echo "== ROW $r"; "row_$r"; done

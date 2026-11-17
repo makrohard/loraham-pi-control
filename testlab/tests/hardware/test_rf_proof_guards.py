@@ -245,6 +245,82 @@ def test_the_evidence_file_is_opened_before_its_command_runs(tmp_path):
     assert not (evd / "ran").exists()
 
 
+# ---- RS counts each radio's physical TX of the run against TXMAX; a missing or unreadable count fails --------------------
+
+@pytest.mark.parametrize("r0, frames, want", [("r1 0", 10, None), ("r1 0", 11, "more than 10"), ("r1 4", 14, None),
+                                              ("r1 0\nr2 0", 3, "missing or unreadable"), ("r1 x", 3, "missing or unreadable")])
+def test_rs_holds_each_radio_to_txmax_physical_frames(tmp_path, r0, frames, want):
+    # red-before (cd825a69): RS allowed 15 frames per radio (TXMAX is 10), and a count missing at RS or unreadable passed
+    box, setup, env = box_stand_in(tmp_path)
+    logs = box / "rt" / "logs" / "r1"
+    logs.mkdir(parents=True)
+    (logs / "rf-a.log").write_text("2026-11-17T10:00:00Z TX len=9\n" * frames)
+    r, _ = source_only(tmp_path, setup + f'printf "{r0}\\n" > "$EVD/R0-H-tx.txt"; keep RUN_H kiss@r1; '
+                                         'keep BOOT_H "$(cat /proc/sys/kernel/random/boot_id)"; : > "$EVD/undo.list"; : > "$EVD/undo.done"; '
+                                         'usbguard() { :; }; row_RS && echo RS-DONE', **env)   # the USB guard: another path
+    if want is None:
+        assert "RS-DONE" in r.stdout, r.stdout + r.stderr
+    else:
+        assert r.returncode == 1 and "RS-DONE" not in r.stdout and want in r.stderr, r.stdout + r.stderr
+
+
+# ---- row 6 never runs a command line from the box's output: it builds the chat call from plain paths ----------------------
+
+CHAT_OK = ("cd /home/lhpc/rt/files/r1/ && /home/lhpc/rt/LoRaHAM_Daemon/loraham_chat --data-socket /run/loraham/lora-r1.sock "
+           "--conf-socket /run/loraham/loraconf-r1.sock; stty sane 2>/dev/null")
+
+
+@pytest.mark.parametrize("line", [CHAT_OK.replace("/files/r1/", "/$(touch>chat-marker)/"),
+                                  CHAT_OK.replace("/files/r1/", "/`touch chat-marker`/"),
+                                  CHAT_OK.replace("/run/loraham/lora-r1", "/run/$(id)/lora-r1"),
+                                  CHAT_OK.replace("lora-r1.sock --conf", "lora-r1.sock $(id) --conf"),
+                                  CHAT_OK.replace("cd /home", "cd home")])
+def test_the_chat_call_is_refused_when_a_path_from_the_box_is_not_plain(tmp_path, line):
+    # red-before (cd825a69): the judge passed $(...) and `...` inside the paths, then the line ran in the box's tmux pane
+    r, _ = source_only(tmp_path, 'printf "%s\\n" "run it yourself in a terminal:" "$LINE" > "$EVD/s.txt"; '
+                                   'chatcmd s.txt r1 > /dev/null && echo ACCEPTED', LINE=line)
+    assert "ACCEPTED" not in r.stdout and not list(tmp_path.rglob("chat-marker")), r.stderr
+
+
+def test_the_chat_call_is_built_from_the_parsed_paths(tmp_path):
+    r, _ = source_only(tmp_path, 'printf "%s\\n" x "run it yourself in a terminal:" "  $LINE" > "$EVD/s.txt"; chatcmd s.txt r1',
+                       LINE=CHAT_OK)
+    assert r.returncode == 0 and r.stdout.strip() == CHAT_OK, r.stdout + r.stderr   # a control: a plain line passes as is
+
+
+# ---- the scratch root is a plain path; an interrupt is a STOP; the dry gate check sees a TX without its command -----------
+
+def test_a_scratch_root_that_is_not_a_plain_path_stops_the_start(tmp_path):
+    # red-before (cd825a69): the dry run went on with TMPDIR spliced into shell text (the self-check ran its $(...))
+    bad = tmp_path / "s$(touch scratch-marker)"
+    bad.mkdir()
+    r = subprocess.run(["bash", str(HW / "rf-proof.sh"), "dry"], env={**_env(tmp_path), "TMPDIR": str(bad)}, stdin=subprocess.DEVNULL,
+                       cwd=tmp_path, capture_output=True, text=True, timeout=300, check=False)
+    assert r.returncode == 2 and not list(tmp_path.rglob("scratch-marker")), r.stdout[-2000:] + r.stderr
+    assert stop_lines(r) == [f"STOP: TMPDIR '{bad}' is not a plain absolute path ([A-Za-z0-9._/-]): the scratch root is spliced "
+                             "into commands"], r.stderr
+
+
+def test_an_interrupt_is_a_stop(tmp_path):
+    # red-before (cd825a69): SIGTERM ended the run with rc 130, outside the documented 0/1/2
+    p = subprocess.Popen(["bash", str(HW / "rf-proof.sh"), "dry"], env=_env(tmp_path), stdin=subprocess.DEVNULL, cwd=tmp_path,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in p.stdout:
+        if line.startswith("== ROW R1"):
+            break
+    p.terminate()
+    _, err = p.communicate(timeout=120)
+    assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err, err
+
+
+def test_the_dry_gate_check_flags_a_tx_without_its_command_at_the_end(tmp_path):
+    # red-before (cd825a69): a TX as the last log line passed "every-send-gated" (no END check)
+    r, _ = source_only(tmp_path, f'. "{HW}/zstatus.sh"; MODE=dry; SCRATCH=$EVD; DRYLOG=$EVD/drylog; OPERATOR_CALL=N0CALL; '
+                                   'TRACKER_CALL=; printf "TX PC:r1 1 nonce send\\n" > "$DRYLOG"; selfcheck')
+    assert "dry self-check OK every-send-gated" not in r.stdout
+    assert "TX on line 1 is not followed by its command" in r.stdout + r.stderr, r.stdout + r.stderr
+
+
 def test_the_end_scan_skips_an_equal_password_and_still_scans_the_other(tmp_path):
     r, _ = source_only(tmp_path, 'PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; OPERATOR_CALL=XX9TST; '
                                    'printf "login lhpc\\nzz-Q71\\n" > "$EVD/x.txt"; secret_scan')
