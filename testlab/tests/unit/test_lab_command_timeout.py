@@ -86,8 +86,13 @@ def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
                 pass
 
 
-# A setsid child, and an orphan: a setsid grandchild whose parent (sh) has ended.
-_STRAYS = ("c = subprocess.Popen(['setsid', 'sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+# A setsid child; an orphan: a setsid grandchild whose parent (sh) has ended; and G2-TESTSD B1's own input: an orphan
+# in the caller's process group that holds the output pipes (`sh -c 'sleep 60 &'`, its sh ended before the timeout).
+_STRAYS = ("import os\n"
+           "r, w = os.pipe()\n"
+           "subprocess.run(['sh', '-c', f'sleep 60 {w}>&- & echo $! >&{w}'], pass_fds=(w,))\n"   # wallclock: marked tests' text
+           "os.close(w)\no = os.read(r, 64).decode().split()[0]\n"
+           "c = subprocess.Popen(['setsid', 'sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
            "g = subprocess.run(['sh', '-c', 'setsid sleep 60 >/dev/null 2>&1 & echo $!'],\n"  # wallclock: marked tests' text
            "                   capture_output=True, text=True).stdout.split()[0]\n")
 
@@ -98,12 +103,12 @@ def test_a_hang_ends_what_the_lab_started_outside_its_group(tmp_path, monkeypatc
     it, so a setsid child and a grandchild whose parent had ended (init's by then) ran on. A keeper
     (a child subreaper) now holds both below the lab command, and they end with it."""
     _stand_in(tmp_path, monkeypatch, "import subprocess, time\n" + _STRAYS +
-              f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{c.pid}} {{g}}')\ntime.sleep(60)\n")
+              f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{c.pid}} {{g}} {{o}}')\ntime.sleep(60)\n")
     with pytest.raises(RuntimeError, match=r"^lhpc-testlab reset timed out after 1 s\n"):
         testing.run_lab({}, "reset", timeout=1)
     kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
     try:
-        assert [_ended(k) for k in kids] == [True, True], kids
+        assert [_ended(k) for k in kids] == [True, True, True], kids
     finally:
         for k in kids:
             try:
@@ -120,7 +125,7 @@ def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
     exe = tmp_path / "lhpc-testlab"
     exe.write_text(f"#!{sys.executable}\nimport os, subprocess, time\n"
                    "a = subprocess.Popen(['sleep', '60'])\n" + _STRAYS +
-                   f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{os.getpid()}} {{a.pid}} {{c.pid}} {{g}}')\n"
+                   f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{os.getpid()}} {{a.pid}} {{c.pid}} {{g}} {{o}}')\n"
                    "time.sleep(60)\n")
     exe.chmod(0o755)
     caller = ("import pathlib, sys\nfrom lhpc_testlab import testing\n"
@@ -130,7 +135,7 @@ def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
     kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
     try:
         assert outer.returncode == 124, outer.stderr          # the outer timeout's kill ended the caller
-        assert [_ended(k) for k in kids] == [True] * 4, kids
+        assert [_ended(k) for k in kids] == [True] * 5, kids
     finally:
         for k in kids:
             try:

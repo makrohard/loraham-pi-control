@@ -221,12 +221,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Remove any container a step left (a create that landed after its step's removals)
+      # The job's last step, whatever came before: a create that landed after its step's cleanup (its client died
+      # mid-create) is removed here and fails the job. Inline, so it needs no checkout; bounded; this run's names only.
+      - name: Sweep this run's containers (fails on any left over)
         if: always()
         run: |
-          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
-          . .github/scripts/containers.sh
-          lhpc_sweep
+          prefix="lhpc-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"
+          rc=0
+          ids=$(timeout -k 5 "${LHPC_SWEEP_S:-60}" docker ps -aq --filter "name=^/?$prefix") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the container sweep could not list containers (docker ps rc $rc)"
+            exit 1
+          fi
+          [ -n "$ids" ] || exit 0
+          echo "::error::a step left containers, removed now: $(echo $ids)"
+          timeout -k 5 "${LHPC_SWEEP_S:-60}" docker rm -f $ids >/dev/null || echo "::error::the sweep's docker rm -f failed (rc $?)"
+          exit 1
 
   release-verify:
     # Every stack an automated pin release may move: installed on its DEFAULT channel (the
@@ -351,12 +361,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Remove any container a step left (a create that landed after its step's removals)
+      # The job's last step, whatever came before: a create that landed after its step's cleanup (its client died
+      # mid-create) is removed here and fails the job. Inline, so it needs no checkout; bounded; this run's names only.
+      - name: Sweep this run's containers (fails on any left over)
         if: always()
         run: |
-          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
-          . .github/scripts/containers.sh
-          lhpc_sweep
+          prefix="lhpc-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"
+          rc=0
+          ids=$(timeout -k 5 "${LHPC_SWEEP_S:-60}" docker ps -aq --filter "name=^/?$prefix") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the container sweep could not list containers (docker ps rc $rc)"
+            exit 1
+          fi
+          [ -n "$ids" ] || exit 0
+          echo "::error::a step left containers, removed now: $(echo $ids)"
+          timeout -k 5 "${LHPC_SWEEP_S:-60}" docker rm -f $ids >/dev/null || echo "::error::the sweep's docker rm -f failed (rc $?)"
+          exit 1
 
   slow-build:
     # Row C of the slow-target build proof (docs/maintenance.md, the slow-target build row): every
@@ -419,8 +439,8 @@ jobs:
         # still judges the throttled run on its own.
         run: |
           . .github/scripts/containers.sh   # its timed build's container is removed when the step ends
-          lhpc_wait_for lhpc-ci-quota-$$ \
-            python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name lhpc-ci-quota-$$ >> "$GITHUB_ENV"
+          lhpc_wait_for "${LHPC_CI_PREFIX}quota-$$" \
+            python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name "${LHPC_CI_PREFIX}quota-$$" >> "$GITHUB_ENV"
           echo "slow-build CPU quota: \`$(grep '^SLOW_CPUS=' "$GITHUB_ENV" | tail -n 1)\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Acquire the timed operations' transfers (timed, recorded, never judged)
@@ -486,6 +506,7 @@ jobs:
       # and the work dir's, and records nothing unless each is throttled.
       - name: Resolve the disks to throttle
         run: |
+          . .github/scripts/containers.sh   # lhpc_start: the probe's container is removed by its name on every way out
           # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
           # path, when it cannot be resolved.
           disk_of() {
@@ -506,15 +527,14 @@ jobs:
           # The upperdir exists only while its container does (`--rm` deletes it at exit, and
           # findmnt resolves no missing path), so a container is kept alive until every
           # required disk has resolved, and removed on every way out of the step.
-          # The trap exists before the container: `docker run -d` can print an id and still fail.
-          cid= rc=0
-          trap '[ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1; true' EXIT
-          cid=$(docker run -d --name "lhpc-ci-disk-$$" "$IMG" sleep 300) || rc=$?   # named: the job's sweep knows it too
+          # The step owns the name before the start: `docker run -d` can create it and still fail.
+          name="${LHPC_CI_PREFIX}disk-$$" rc=0
+          lhpc_start "$name" docker run -d --name "$name" "$IMG" sleep 300 >/dev/null || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::error::STOP: the probe container did not start (docker run rc $rc)"
             exit 1
           fi
-          layer=$(docker exec "$cid" cat /proc/self/mountinfo \
+          layer=$(docker exec "$name" cat /proc/self/mountinfo \
             | awk '$5 == "/"' | sed -n 's/.* - overlay .*[ ,]upperdir=\([^,]*\).*/\1/p')
           if [ -z "$layer" ]; then
             echo "::error::STOP: the lab container's root is not an overlay with an upperdir — its writable layer's disk cannot be measured"
@@ -530,8 +550,7 @@ jobs:
             [ "$path" = "$layer" ] && root=$d
             disks="$disks $d"
           done
-          docker rm -f "$cid" >/dev/null
-          trap - EXIT
+          lhpc_done
           while read -r swap _; do
             if d=$(disk_of "$swap") && test -b "$d"; then disks="$disks $d"
             else echo "::notice::swap $swap: its disk could not be resolved — not throttled"; fi
@@ -668,9 +687,19 @@ jobs:
           echo "::warning::the slow-build evidence could not be uploaded (two attempts); the verdict above stands"
           echo "**Evidence upload failed twice: no slow-build-evidence artifact for this run.**" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Remove any container a step left (a create that landed after its step's removals)
+      # The job's last step, whatever came before: a create that landed after its step's cleanup (its client died
+      # mid-create) is removed here and fails the job. Inline, so it needs no checkout; bounded; this run's names only.
+      - name: Sweep this run's containers (fails on any left over)
         if: always()
         run: |
-          [ -f .github/scripts/containers.sh ] || exit 0   # no checkout: no container was started
-          . .github/scripts/containers.sh
-          lhpc_sweep
+          prefix="lhpc-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"
+          rc=0
+          ids=$(timeout -k 5 "${LHPC_SWEEP_S:-60}" docker ps -aq --filter "name=^/?$prefix") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the container sweep could not list containers (docker ps rc $rc)"
+            exit 1
+          fi
+          [ -n "$ids" ] || exit 0
+          echo "::error::a step left containers, removed now: $(echo $ids)"
+          timeout -k 5 "${LHPC_SWEEP_S:-60}" docker rm -f $ids >/dev/null || echo "::error::the sweep's docker rm -f failed (rc $?)"
+          exit 1

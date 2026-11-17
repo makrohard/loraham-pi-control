@@ -67,8 +67,10 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     grandchild whose parent has ended. The command runs under a keeper (`reaper`, a child subreaper)
     that keeps all of these its descendants while the command runs; each is pinned by a pidfd before
     the dump, so no recycled pid is signalled. The keeper stays in the caller's process group: an
-    outer kill of that group (a lane's timeout, Ctrl-C) reaches it, and it kills all it keeps. A
-    command that ends in time leaves what it started on purpose (a lab daemon) running. It runs
+    outer kill of that group (a lane's timeout, Ctrl-C) reaches it, and it kills all it keeps. That
+    includes the lab daemons this command started: a timed-out command leaves none of them (the lab
+    reset tolerates that: it signals a recorded pid only while it is still that daemon). A command
+    that ends in time leaves what it started on purpose (a lab daemon) running. It runs
     without core dumps (set by the keeper, single-threaded, before its exec of the command)."""
     argv = [sys.executable, "-I", "-S", str(Path(reaper.__file__)), str(lab_bin()), *args]
     proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},

@@ -18,6 +18,9 @@ import pytest
 import repo_paths
 
 WORKFLOW = repo_paths.REPO / ".github" / "workflows" / "testlab.yml"
+ROOT = repo_paths.REPO
+PROBE = r"lhpc-ci-0-0-disk-\d+"          # the disk probe's container: this run's prefix (no run id here: 0-0)
+PROBE_GLOB = "lhpc-ci-0-0-disk-*"
 STACKS = ("kiss", "chat")
 MEASURED = ('[[measured]]\ncomponent = "c"\nop = "clone"\nseconds = 1\nkey = "pin:x"\n'
             'source = "zero2w"\nhost = "h"\nlhpc = "v0.11.0 (abc1234)"\ndate = 2026-10-01\n'
@@ -114,7 +117,7 @@ def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
     assert set(env) == {"SLOW_MEM", "SLOW_SWAP", "SLOW_WRITE_IOPS", "SLOW_READ_IOPS"}, env
     text = WORKFLOW.read_text()
     job = text[text.index("\n  slow-build:\n"):]
-    sizing = job.index('python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name lhpc-ci-quota-$$ >> "$GITHUB_ENV"\n')
+    sizing = job.index('python3 testlab/slowbuild/cpu_quota.py --image "$IMG" --name "${LHPC_CI_PREFIX}quota-$$" >> "$GITHUB_ENV"\n')
     assert job.index('echo "IMG=$IMG" >> "$GITHUB_ENV"') < sizing < job.index("- name: Slow-target build")
     run = job[job.index("crun --user root \\\n            --cpus="):job.index("test -s slowevidence")]
     for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',
@@ -168,7 +171,7 @@ def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = Fal
     the upperdir is deleted when its container goes, as Docker deletes it: at the exit of a
     `run --rm`, or at `rm -f` of a detached container. Every docker call is logged to
     `tmp_path/docker.log`. `run_d_rc` is the exit status of `run -d`, which prints its id
-    either way."""
+    either way. The probe's container is this run's name (`PROBE`): exec and rm take nothing else."""
     stub = tmp_path / "bin"
     stub.mkdir()
     (tmp_path / "mountinfo").write_text(_mountinfo(upper))
@@ -178,8 +181,8 @@ def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = Fal
         f'#!/bin/sh\necho "$*" >> {log}\ncase $1 in\n'
         f"info) case $* in *DockerRootDir*) echo {storage} ;; *) exit 9 ;; esac ;;\n"
         f'run) case " $* " in *" -d "*) echo cid0; exit {run_d_rc} ;; *) cat {mountinfo}; {gone} ;; esac ;;\n'
-        f'exec) [ "$2" = cid0 ] || exit 9; cat {mountinfo} ;;\n'
-        f'rm) [ "$2 $3" = "-f cid0" ] || exit 9; {gone} ;;\n'
+        f'exec) case $2 in {PROBE_GLOB}) cat {mountinfo} ;; *) exit 9 ;; esac ;;\n'
+        f'rm) case "$2 $3" in "-f "{PROBE_GLOB}) {gone} ;; *) exit 9 ;; esac ;;\n'
         "*) exit 9 ;;\nesac\n")
     (stub / "sudo").write_text('#!/bin/sh\n[ "$1" = -n ] && shift\nexec "$@"\n')
     for f in ("docker", "sudo"):
@@ -189,7 +192,7 @@ def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = Fal
     env = {"PATH": f"{stub}:/usr/bin:/bin:/usr/sbin:/sbin", "GITHUB_ENV": str(env_file),
            "IMG": "lhpc-testlab:ci", "SLOW_WRITE_IOPS": "120", "SLOW_READ_IOPS": "1200"}
     r = subprocess.run(["bash", "-e", "-c", _resolve_step()], env=env, capture_output=True,
-                       text=True, check=False)
+                       text=True, check=False, cwd=ROOT)       # it sources .github/scripts/containers.sh
     return r, env_file.read_text()
 
 
@@ -226,7 +229,7 @@ def test_an_unresolvable_required_disk_stops_the_job_before_any_measurement(tmp_
     assert (f"::error::STOP: backing device of {storage} could not be "
             "resolved — the throttle cannot be applied") in r.stdout, r.stdout
     assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
-    assert "rm -f cid0" in (tmp_path / "docker.log").read_text()    # removed on the way out
+    assert re.search(rf"(?m)^rm -f {PROBE}$", (tmp_path / "docker.log").read_text())   # removed on the way out
 
 
 def test_disk_of_fails_loudly_on_an_unresolvable_path(tmp_path):
@@ -287,7 +290,7 @@ def test_a_container_root_that_is_not_an_overlay_stops_the_job(tmp_path):
     assert ("::error::STOP: the lab container's root is not an overlay with an upperdir — its "
             "writable layer's disk cannot be measured") in r.stdout, r.stdout
     assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
-    assert "rm -f cid0" in (tmp_path / "docker.log").read_text()    # removed on the way out
+    assert re.search(rf"(?m)^rm -f {PROBE}$", (tmp_path / "docker.log").read_text())   # removed on the way out
 
 
 def test_the_upperdir_is_resolved_while_its_container_lives(tmp_path):
@@ -305,14 +308,16 @@ def test_the_upperdir_is_resolved_while_its_container_lives(tmp_path):
     assert f"writable layer (measured): {upper}" in r.stdout, r.stdout
     assert re.search(r"^SLOW_IO_ROOT_DISK=\d+:\d+$", env, re.M), env
     log = (tmp_path / "docker.log").read_text().splitlines()
-    assert log[1].split(" ") == ["run", "-d", "lhpc-testlab:ci", "sleep", "300"] and log[-1] == "rm -f cid0", log
+    name = log[1].split(" ")[3]
+    assert re.fullmatch(PROBE, name) and log[1].split(" ") == ["run", "-d", "--name", name, "lhpc-testlab:ci", "sleep", "300"], log
+    assert log[-1] == f"rm -f {name}", log
     assert not upper.exists()       # the stub deleted it with its container, as Docker does
 
 
 def test_a_probe_container_that_fails_to_start_is_still_removed(tmp_path):
     """Correction 11: `docker run -d` can create a container, print its id and exit non-zero.
-    The trap exists before the call and the id is kept, so the job stops naming the failure and
-    the container is removed."""
+    The step owns the container's name before the call (lhpc_start), so the job stops naming the
+    failure and the container is removed by that name."""
     _tools()
     disk = _on_disk(tmp_path)
     r, env = _resolve(tmp_path, str(disk), str(disk), run_d_rc=125)
@@ -320,4 +325,4 @@ def test_a_probe_container_that_fails_to_start_is_still_removed(tmp_path):
     assert "::error::STOP: the probe container did not start (docker run rc 125)" in r.stdout, r.stdout
     assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
     log = (tmp_path / "docker.log").read_text().splitlines()
-    assert log[-1] == "rm -f cid0", log
+    assert re.fullmatch(f"rm -f {PROBE}", log[-1]), log
