@@ -2379,3 +2379,14 @@ def test_the_web_confirm_moves_only_on_the_warned_heads_it_showed(box, capsys, g
         assert box.head() == box.c[1], page
     else:
         assert box.head() == mine and "the checkout changed after the warning you confirmed" in html.unescape(page)
+
+
+def test_the_pinned_move_uses_the_boxs_copy_only_when_the_branch_is_gone(box, capsys, git):
+    """G2-STABLELANE-S1 N2 / SR T-1: with the branch still upstream but the history read failing (remote
+    unreachable), the box's copy never stands in: could not check, nothing moves."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.cli("source-check", "s")                      # the box's history copy
+    box.advance()                                     # the copy is now behind the upstream
+    box.fail_fetch = True                             # a failing read, not a gone branch
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
+    assert rc != 0 and "could not check" in out and box.head() == box.c[2], out  # mutant Y1: back to the pin c1
