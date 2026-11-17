@@ -2754,6 +2754,22 @@ def test_every_residual_listener_of_a_stack_with_no_instance_has_its_own_line(tm
     assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
 
 
+def test_a_disabled_radios_listener_at_its_saved_port_has_its_own_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R3 (a disabled radio, saved_insts): kiss@r2 was saved at 9000 and r2 is disabled since; a kiss process
+    # left over still listens on r2's saved :9133 on every address. Only r2's own settings name that port (no default
+    # port of any radio), so r2 is read although disabled: its own line, the box pill is not "secure"
+    import dataclasses
+    from lhpc.core import instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=False)))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(9133)], run=[], state="STOPPED")
+    assert svc.save_config_bundle("kiss", values={"kiss_port": "9000"}, inst=instances.copy_of(svc, "kiss", "r2")[0]).ok
+    assert instances.observed_insts(svc.stack("kiss"), {9133}) == []              # no radio's default port
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = {n: [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")] for n, _h, line in lines}
+    assert got.get("LoRaHAM KISS TNC @r2") == ["localhost:9133 · public"], got
+    assert _box_pill(box) == "exposed"
+
+
 @pytest.mark.parametrize("runs", ["r1", "r2"])
 def test_a_fixed_port_listener_is_one_line_on_the_running_radio(tmp_path, monkeypatch, web, runs):
     # Reticulum's ports are fixed (one set serves whichever radio it runs on): r1 and r2 both read the same sockets
