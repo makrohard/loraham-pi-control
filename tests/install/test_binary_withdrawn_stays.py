@@ -299,7 +299,7 @@ def _meshcom_interrupted_then_daemon(monkeypatch, svc, binary_receipt):
     _installed(svc, binary_receipt, "meshcom")
     state = _moving_clone(monkeypatch, svc, "a" * 40)
     bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
-    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    bi.record_clone(svc._paths, svc.stack("meshcom").component("meshcom-qemu"), "b" * 40)
     _serve(monkeypatch, "daemon", _entry("daemon", "a" * 64, "a" * 40, NEWER))      # its download refuses
     return state, svc.stack("meshcom").component("meshcom-qemu").source.path
 
@@ -360,7 +360,7 @@ def test_an_install_interrupted_after_the_checkout_move_is_moved_back_by_the_nex
     _installed(svc, binary_receipt, "meshcom")
     state = _moving_clone(monkeypatch, svc, "a" * 40)
     bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
-    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    bi.record_clone(svc._paths, svc.stack("meshcom").component("meshcom-qemu"), "b" * 40)
     ok, why = svc.binary_recover()
     assert not ok and "lhpc install meshcom --source binary --yes" in why
     assert bi.read_journal(svc._paths)[1] == "valid" and state["commit"] == "a" * 40
@@ -425,7 +425,7 @@ def test_a_checkout_that_cannot_be_moved_back_blocks_the_next_install_by_name_an
     state = _moving_clone(monkeypatch, svc, "a" * 40)
     state["refuse"] = "disk full"
     bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
-    bi.record_clone(svc._paths, "meshcom-qemu", "b" * 40)
+    bi.record_clone(svc._paths, svc.stack("meshcom").component("meshcom-qemu"), "b" * 40)
     _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, OLDER))
     res = svc.install("meshcom", apply=True, source="binary")
     path = svc.stack("meshcom").component("meshcom-qemu").source.path
@@ -591,7 +591,7 @@ def test_the_rebase_rereads_only_the_moved_paths_so_a_source_adoption_elsewhere_
         if txn == "fw-at-install":
             assert brx.write_receipt(svc._paths, dataclasses.replace(
                 rec, registry_baseline={**rec.registry_baseline, fw: txn}))
-    assert bi.rebase_receipt(svc, "meshcom", ["meshcom-qemu"]) == ""
+    assert bi.rebase_receipt(svc, "meshcom", [svc.stack("meshcom").component("meshcom-qemu").source.path]) == ""
     st, _rec, why = brx.receipt_state(svc._paths, "meshcom")
     assert st == "superseded" and fw in why, (st, why)
 
@@ -702,3 +702,46 @@ def test_a_repair_whose_receipt_reads_back_unreadable_is_refused_and_moves_the_c
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "the binary receipt could not be read (I/O error)" in res.summary, res.summary
     _repaired_back(svc, state)
+
+
+def _fails_after_the_move(monkeypatch, svc, entry):
+    """`entry` served; its download and extract pass, the publish after the checkout move fails."""
+    _serve(monkeypatch, "meshcom", entry)
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "validate_and_extract", lambda *a, **k: [])
+    monkeypatch.setattr(bi, "publish", _fail("PUBLISH-FAILED"))
+
+
+def _died_after_the_move(monkeypatch, svc, binary_receipt):
+    """C installed (meshcom-qemu at C's commit); an install of the newer B moved the checkout to B's commit and
+    died before its own unwind (a power cut): the journal stays open with the moved checkout in it."""
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _fails_after_the_move(monkeypatch, svc, _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    with monkeypatch.context() as m:
+        m.setattr(ControllerService, "binary_recover", lambda self, **k: (True, ""))   # no unwind: it died
+        svc.install("meshcom", apply=True, source="binary")
+    assert state["commit"] == "a" * 40 and bi.read_journal(svc._paths)[1] == "valid"
+    return state
+
+
+@pytest.mark.parametrize("change", ["removed", "moved"])
+def test_a_journaled_checkout_the_manifest_no_longer_names_there_blocks_the_recovery_and_keeps_the_journal(
+        tmp_path, monkeypatch, binary_receipt, change):
+    # Before the recovery the manifest renamed meshcom-qemu (or moved its source path): nothing is moved, at the
+    # old path or the new one, the recovery refuses by name and the journal stays.
+    svc = _svc(tmp_path, monkeypatch)
+    state = _died_after_the_move(monkeypatch, svc, binary_receipt)
+    real, st = ControllerService.stack, svc.stack("meshcom")
+    comp = st.component("meshcom-qemu")
+    if change == "removed":
+        comps = tuple(c for c in st.components if c.id != "meshcom-qemu")
+    else:
+        comps = tuple(dataclasses.replace(c, source=dataclasses.replace(c.source, path="src/elsewhere"))
+                      if c.id == "meshcom-qemu" else c for c in st.components)
+    changed = dataclasses.replace(st, components=comps)
+    monkeypatch.setattr(ControllerService, "stack", lambda self, sid: changed if sid == "meshcom" else real(self, sid))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "meshcom-qemu" in res.summary and comp.source.path in res.summary, res.summary
+    assert state["adopted"] == ["a" * 40] and state["commit"] == "a" * 40, state
+    assert bi.read_journal(svc._paths)[1] == "valid"

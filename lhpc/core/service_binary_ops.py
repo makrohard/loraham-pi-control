@@ -492,7 +492,7 @@ class BinaryOpsMixin:
         if old_receipt:
             if not brx.write_raw(self._paths, stack_id, old_receipt):
                 return False, "the previous binary receipt could not be restored"
-            if clones and (_why := bi.rebase_receipt(self, stack_id, clones, _now)):
+            if clones and (_why := bi.rebase_receipt(self, stack_id, [c["path"] for c in clones.values()], _now)):
                 return False, _why               # journal RETAINED: read after the checkouts moved back
         elif not brx.remove_receipt(self._paths, stack_id):
             # There was no receipt before this run, so the failed install's one must go. If it

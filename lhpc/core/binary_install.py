@@ -607,12 +607,14 @@ def _journal_update(paths: Paths, **fields) -> dict:
     return j
 
 
-def record_clone(paths: Paths, comp_id: str, commit: str | None) -> None:
-    """Journal a supporting checkout's commit BEFORE the transaction moves it ("" = it did not exist), so the
-    rollback can move it back; None forgets it (its adoption failed and changed nothing)."""
+def record_clone(paths: Paths, comp, commit: str | None) -> None:
+    """Journal a supporting checkout's commit AND its source path BEFORE the transaction moves it ("" = it did not
+    exist), so the rollback moves that very checkout back (`restore_clones`, whatever the manifest says by then);
+    None forgets it (its adoption failed and changed nothing)."""
     j, _state = read_journal(paths)
-    clones = {k: v for k, v in ((j or {}).get("clones") or {}).items() if k != comp_id}
-    _journal_update(paths, clones=clones if commit is None else {**clones, comp_id: commit})
+    clones = {k: v for k, v in ((j or {}).get("clones") or {}).items() if k != comp.id}
+    _journal_update(paths, clones=clones if commit is None else
+                    {**clones, comp.id: {"commit": commit, "path": comp.source.path}})
 
 
 def move_clones(svc, stack_id: str, moves, locked: bool) -> tuple[list, str]:
@@ -622,7 +624,7 @@ def move_clones(svc, stack_id: str, moves, locked: bool) -> tuple[list, str]:
     recovery) moves it back: a failed install never leaves the old binary with new run scripts."""
     inst, notes = svc._installer(), []
     for comp, want, prev in moves:
-        record_clone(svc._paths, comp.id, prev)
+        record_clone(svc._paths, comp, prev)
         # The source lock of this path is held by an OUTER boundary (the auto-install run, `locked`) or by
         # THIS install's own guard over `_binary_source_paths`: re-acquiring it would self-contend.
         held = locked or comp.source.path in set(svc._binary_source_paths(stack_id))
@@ -630,7 +632,7 @@ def move_clones(svc, stack_id: str, moves, locked: bool) -> tuple[list, str]:
                                 force=svc._paths.resolve_source(comp.source.path).is_dir(),
                                 pinned_expected=(want, "the binary artifact's commit"))   # exact, not the pin (U9)
         if act.status == "failed":                 # the adoption changes nothing when it fails
-            record_clone(svc._paths, comp.id, None)
+            record_clone(svc._paths, comp, None)
             return notes, (f"{comp.id} needs its source checkout (run scripts live there) and it could not "
                            f"be adopted ({act.detail}).")
         notes.append(f"  adopted pinned source for {comp.id} (run scripts)")
@@ -645,7 +647,7 @@ def repair_clones(svc, stack_id: str, moves, locked: bool, old_receipt) -> tuple
     try:
         open_txn(svc._paths, stack_id, secrets.token_hex(8), old_receipt=old_receipt)
         notes, why = move_clones(svc, stack_id, moves, locked)
-        why = why or rebase_receipt(svc, stack_id, [c.id for c, _w, _p in moves])
+        why = why or rebase_receipt(svc, stack_id, [c.source.path for c, _w, _p in moves])
         if not why and not commit(svc._paths):
             why = "could not commit the binary transaction"
     except Exception as exc:                       # a journal write, a filesystem error, anything: unwound below
@@ -726,8 +728,9 @@ def inspect_clones(svc, stack_id: str, spec, commits: dict, src_cmd: str):
 
 
 def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
-    """Move every checkout a rolled-back binary transaction moved back to its journaled commit. One that did not
-    exist before stays as adopted: nothing older to return to. Under THAT stack's source locks, taken here (sorted;
+    """Move every checkout a rolled-back binary transaction moved back to its journaled commit, at its journaled
+    path. One that did not exist before stays as adopted: nothing older to return to. One the manifest no longer
+    names at that path is refused by name with the journal kept: never skipped, never moved at another path. Under THAT stack's source locks, taken here (sorted;
     re-entrant when the install of that stack holds them): another stack's install never moves them under its own
     locks, and a busy lock refuses by name with the journal kept. (ok, why, the moved paths' ownership baseline read
     under those locks for the restored receipt, None when a record is damaged)."""
@@ -735,7 +738,17 @@ def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
     from .service_base import SourceTxnBlocked
     st = svc.stack(stack_id)
     by_id = {c.id: c for c in (st.components if st else ())}
-    comps = [(c, prev) for cid, prev in clones.items() if (c := by_id.get(cid)) is not None and c.source is not None]
+    comps, lost = [], []
+    for cid, rec in clones.items():
+        prev, rel = (rec.get("commit"), rec.get("path")) if isinstance(rec, dict) else (None, None)
+        c = by_id.get(cid)
+        if isinstance(prev, str) and rel and c is not None and c.source is not None and c.source.path == rel:
+            comps.append((c, prev))
+        elif not (isinstance(prev, str) and prev == ""):     # a checkout to move back that cannot be found as journaled
+            lost.append(f"{cid} at {rel or '?'} (was at {prev[:9] if isinstance(prev, str) else '?'})")
+    if lost:                                   # never skipped, never redirected to another path: the journal stays
+        return False, (f"an interrupted binary install of '{stack_id}' moved checkouts the manifest no longer names "
+                       f"at that path: {'; '.join(lost)} — resolve state/binary/install.journal.json by hand"), {}
     try:
         with svc._source_operation_guard(svc._binary_source_paths(stack_id), op="binary-recover"):
             for comp, prev in comps:
@@ -767,8 +780,8 @@ def registry_baseline(paths: Paths, rels) -> tuple[dict, str]:
     return baseline, ""
 
 
-def rebase_receipt(svc, stack_id: str, comp_ids, now: dict | None = None) -> str:
-    """After the binary's own move of these components' checkouts outside an install's receipt write (the
+def rebase_receipt(svc, stack_id: str, moved_rels, now: dict | None = None) -> str:
+    """After the binary's own move of these checkouts (their source paths) outside an install's receipt write (the
     same-artifact repair, the rollback restore): the installed receipt's baseline for their paths is read again
     (or `now`, read under the locks of that move). "" when done, else why not. Both callers rebase a receipt that
     must exist (the repaired artifact's, the restored previous one): one that cannot be read is the failure, never
@@ -777,9 +790,7 @@ def rebase_receipt(svc, stack_id: str, comp_ids, now: dict | None = None) -> str
     _state, rec, _why = brx.receipt_state(svc._paths, stack_id)
     if rec is None:
         return f"the binary receipt could not be read after its checkout moved ({_why or _state})"
-    st = svc.stack(stack_id)
-    rels = [c.source.path for c in (st.components if st else ()) if c.id in comp_ids and c.source is not None
-            and rec is not None and c.source.path in rec.registry_baseline]
+    rels = [r for r in moved_rels if r in rec.registry_baseline]
     now, why = ({r: now[r] for r in rels if r in now}, "") if now is not None else registry_baseline(svc._paths, rels)
     if why or not now:
         return why
