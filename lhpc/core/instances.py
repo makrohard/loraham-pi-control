@@ -148,14 +148,16 @@ def represented(rows) -> set:
 
 def off_list_page_rows(svc, stk, configured, page_rows, snap, fw_status) -> list:
     """G2-UIU3-R3 H5: the page rows of a configured radio that has no page now (disabled, removed from the hardware
-    list, or of another band), only for a live listener no row represents yet (`represented`: a fixed-port stack's
-    pages share one upstream); `radio_off` says which."""
+    list, or of another band), only for a live listener no listed radio owns: a listed page owns its proxy port and
+    its upstream, proxied or not (G2-UIU3-R5 B1: a fixed-port stack's pages share one upstream, which stays the listed
+    radio's even behind its proxy); `radio_off` says which."""
     from .model import web_pages
     off = [i for i in configured if i is not None and i.rid not in {p["rid"] for p in page_rows}]
     if not off:
         return []
     hw = {r.id: r for r in radios.load(svc._paths).radios}
-    shown, out = represented(page_rows), []
+    shown = represented(page_rows) | {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
+    out = []
     for page in web_pages(stk, instances=off, paths=svc._paths):
         r = {**svc._dashboard_web_row(stk, page, snap, fw_status), "comp_state": ""}
         mine = {k for k in represented([r]) if k[0] == "proxy" or r["direct_scope"] not in ("absent", None, "")}

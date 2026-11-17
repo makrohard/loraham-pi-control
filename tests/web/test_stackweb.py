@@ -2940,6 +2940,74 @@ def test_a_proxied_pages_public_upstream_has_its_own_line(tmp_path, monkeypatch,
     assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
 
 
+def _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, r1_proxied, listeners, hardware):
+    """reticulum (fixed ports: one MeshChat upstream :8790 serves either radio) runs on r1, whose page is proxied on
+    :8590 when `r1_proxied`; r2 has its own settings file and no proxy (its page is not proxied), and the hardware
+    list is then `hardware` (r2 disabled or removed). The service."""
+    from lhpc.core import commands
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, listeners, run=[commands.Instance("r1")], state="RUNNING", sid="reticulum")
+    if r1_proxied:
+        assert svc.stack_web_configure("reticulum@r1", mode="public", port=8590, cidrs=["0.0.0.0/0"], confirm=True,
+                                       confirm_public=True).ok
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "stacks" / "reticulum@r2.toml").write_text("")
+    radios_fixture.write(tmp_path, hardware)
+    return svc
+
+
+@pytest.mark.parametrize("r1_proxied", [True, False], ids=["r1-proxied", "r1-not-proxied"])
+@pytest.mark.parametrize("r2", ["disabled", "removed"])
+def test_a_fixed_port_upstream_stays_the_listed_radios_when_another_radios_page_is_off_list(tmp_path, monkeypatch,
+                                                                                             web, r1_proxied, r2):
+    # G2-UIU3-R5 B1 (a regression of the fixed-port case of c39d6bde): reticulum runs on r1, MeshChat's one upstream
+    # :8790 listens on every address, r2 (disabled or removed) keeps its settings, its page not proxied. The upstream is
+    # r1's: one line names it, under r1, never under r2; the box reads "exposed". red on 0fb3bf96 (r1 proxied): the
+    # :8790 line was r2's, "radio disabled — page still served until Apply"
+    import dataclasses
+    hardware = (radios_fixture.R1,) + ((dataclasses.replace(radios_fixture.R2, enabled=False),) if r2 == "disabled" else ())
+    svc = _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, r1_proxied,
+                                            [_public(4242), _public(8790, 2), _public(8590, 3)], hardware)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, line in lines if ":8790" in line.text] == ["Reticulum (RNS) @r1"], [n for n, _h, _l in lines]
+    assert not [n for n, _h, _l in lines if n.endswith("@r2")]
+    assert _box_pill(box) == "exposed"
+
+
+def test_two_off_list_pages_on_one_live_upstream_are_one_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R5 N1 (R5): every radio is off, r1 and r2 both keep their reticulum settings, and the one fixed upstream
+    # :8790 still listens on every address: one line for it (the first radio's), not one per page
+    import dataclasses
+    off = (dataclasses.replace(radios_fixture.R1, enabled=False), dataclasses.replace(radios_fixture.R2, enabled=False))
+    svc = _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, False, [_public(8790, 2)], off)
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert [n for n, _h, line in lines if ":8790" in line.text] == ["Reticulum (RNS) @r1"], [n for n, _h, _l in lines]
+
+
+def test_an_off_list_page_with_nothing_listening_has_no_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R5 N1 (R3): graywolf's r2 is disabled and its page is not proxied; nothing listens on r2's upstream
+    # :8213 (nor anywhere): no r2 line. (R2, a saved proxy that does not listen: ..._while_nginx_serves_it[disabled-False])
+    import dataclasses
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=False)))
+    svc = _kiss_box(tmp_path, monkeypatch, [], run=[], state="STOPPED", sid="graywolf")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    assert not [n for n, _h, _l in lines if n.endswith("@r2")], [n for n, _h, _l in lines]
+
+
+def test_a_raw_row_represents_its_port_so_the_same_evidence_adds_none():
+    # G2-UIU3-R5 N2: represented() read directly (home_rows' dedupe hides it on Home): kiss@r1's configured raw row
+    # :8001 represents (component, :8001), and r1's evidence on that same port adds no second row
+    from types import SimpleNamespace as NS
+
+    from lhpc.core import commands, instances
+    row = {"kind": "port", "component": "loraham-kiss-tnc", "rid": "r1", "port": "8001", "live_scope": "exposed"}
+    assert instances.represented([row]) == {("loraham-kiss-tnc", "8001")}
+    svc = NS(_is_raw_endpoint=lambda ep: True, _dashboard_port_row=lambda *a, **k: dict(row))
+    stk = NS(components=[NS(id="loraham-kiss-tnc", endpoints=[NS(address="127.0.0.1:8001")])])
+    rows = instances.listener_rows(svc, stk, {}, [], None, None, (), [commands.Instance("r1")], [commands.Instance("r1")], [])
+    assert [(r["rid"], r["port"]) for r in rows] == [("r1", "8001")]
+
+
 def test_an_off_list_page_on_a_proxy_port_a_listed_page_shows_adds_no_line(tmp_path, monkeypatch, web):
     # G2-UIU3-R4 (known gap OS): meshcom@r2's proxy was saved on :8578 and switched off; a hand edit of local.toml
     # (Settings refuses a port another page holds) gives r1's page :8578, and nginx serves r1 there; r2 is then
