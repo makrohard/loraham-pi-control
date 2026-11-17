@@ -152,7 +152,7 @@ class TxTestPlan:
 # ONE conservative outer bound for a synchronous required post-start run. The inner executor is
 # already bounded — finite retry counts, bounded socket operations, bounded tcp_wait, a 120 s cap
 # per exec — so this only has to be comfortably larger than the longest supported declared
-# sequence: MeshCom's firmware-boot wait (1300 s) plus its callsign window (904 s) plus one attempt (~64 s) = 2268 s
+# sequence: MeshCom's firmware-boot wait (1300 s) plus its callsign schedule's end (934 s) plus one attempt (~64 s) = 2298 s
 # (B2a). Its "provisioning verified" wait shares the boot wait's clock (`shares_clock`): on a provisioning start both
 # end by the harness's one deadline (run.sh:243, :274), on a normal restart the marker is there at once, so the two
 # count once (MESHCOM-VERIFY). A per-manifest calculator was tried and removed: it was a second, disagreeing model of

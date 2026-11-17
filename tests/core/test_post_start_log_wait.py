@@ -1231,3 +1231,17 @@ def test_no_attempt_starts_after_the_schedules_end(tmp_path, repeat, late, conne
                                     answers=[[], [], []])
     got = [ln.split()[1] for ln in trace if ln.startswith("connect ")]  # rule-10: a trace line's first word is its kind
     assert got == connects, (steps, err, trace)
+
+
+@pytest.mark.parametrize("info, outcome", [
+    ("OldCall: <DL1AB-1>\n", "unverified"),              # another field that ends in "Call": no call read, not skipped
+    ("Call: <DL1AB-1>\n", "probe-matched"),
+])
+def test_the_shipped_probe_value_reads_only_the_call_field(tmp_path, info, outcome):
+    """The MeshCom probe_value has a left edge too: "OldCall: <DL1AB-1>" is not the node's call."""
+    send = next(s for s in _rendered(_meshcom_steps()) if s["kind"] == "tcp_send")
+    rc, steps, err, trace = _hooked(tmp_path, [_send(1, probe="--info\n", probe_value=send["probe_value"],
+                                                     probe_expect="DL1AB-1", stop_on="Call:DL1AB-1")],
+                                    virtual=True, answers=[[info], ["Call:DL1AB-1 Short:X set\n"]])
+    assert steps[0]["outcome"] == outcome, (steps, err, trace)
+
