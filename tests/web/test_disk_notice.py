@@ -1,4 +1,6 @@
 """The disk-space notice on every page, and the watchdog's one log line per level change."""
+import re
+
 import pytest
 from htmlq import parse
 
@@ -37,6 +39,19 @@ def test_the_disk_notice_shows_level_figure_and_link_on_every_page(monkeypatch, 
         classes, text, hrefs = notice
         assert cls in classes and figure in text and "/#sysbox" in hrefs, path
 
+
+
+def test_the_disk_notice_names_the_system_box_by_the_names_the_pages_show(monkeypatch, web):
+    # The link's text is a path: the header's link to Home, then the System box's heading on Home (the same class as
+    # the bypass warning's firewall path, G2 row 56 B1); red on 9b15a5d9: "Dashboard → System", Home's old title
+    monkeypatch.setattr(ControllerService, "disk_health", lambda self: [_row("low", "bytes")])
+    client = web()
+    home = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    named = re.findall(r'<a href="/#sysbox">([^<]*)</a>', home)
+    title = re.findall(r'<a [^>]*class="home"[^>]*>([^<]+)</a>', home)
+    box = re.findall(r'<details id="sysbox">\s*<summary><h2>([^<]+)</h2>', home)
+    assert len(title) == 1 and len(box) == 1, (title, box)
+    assert named == [f"{title[0]} → {box[0]}"], named
 
 def _page(web, tmp_path, root, runtime=None):
     """The dashboard over a FakeSystem's statvfs data: the rows come from the classifier itself."""

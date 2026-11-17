@@ -37,7 +37,7 @@
       {% call(part) banner('bad' if disk_notice.level == 'critical' else 'warn', id='disk-notice',
                            title='Disk space ' ~ ('CRITICAL' if disk_notice.level == 'critical' else 'low')) %}
         {%- if part == 'body' %}{{ disk_notice.figure }}. Free space before installing or building.
-        {%- else %}<a href="/#sysbox">Dashboard → System</a> (open it) shows the filesystems{% endif %}
+        {%- else %}<a href="/#sysbox">Home → System</a> (open it) shows the filesystems{% endif %}
       {% endcall %}
     {% endif %}
     {# DEC-W384g: no hardware list, so no stack has an instance; the pages are empty for that reason. #}
