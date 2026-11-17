@@ -2996,16 +2996,36 @@ def test_an_off_list_page_with_nothing_listening_has_no_line(tmp_path, monkeypat
 
 def test_a_raw_row_represents_its_port_so_the_same_evidence_adds_none():
     # G2-UIU3-R5 N2: represented() read directly (home_rows' dedupe hides it on Home): kiss@r1's configured raw row
-    # :8001 represents (component, :8001), and r1's evidence on that same port adds no second row
+    # :8001 represents (component, :8001), and r1's evidence on that same port adds no second row; a proxied page
+    # represents its proxy only while it listens (through Home an idle proxy's page goes in home_rows)
     from types import SimpleNamespace as NS
 
     from lhpc.core import commands, instances
     row = {"kind": "port", "component": "loraham-kiss-tnc", "rid": "r1", "port": "8001", "live_scope": "exposed"}
     assert instances.represented([row]) == {("loraham-kiss-tnc", "8001")}
+    page = {"kind": "stack", "component": "meshchat", "posture": {"run": "proxied"}, "port": 8590, "direct_port": "8790"}
+    assert instances.represented([{**page, "live": True}]) == {("proxy", "8590")}   # a proxied page: its proxy alone,
+    assert instances.represented([{**page, "live": False}]) == set()                 # and only while it listens
     svc = NS(_is_raw_endpoint=lambda ep: True, _dashboard_port_row=lambda *a, **k: dict(row))
     stk = NS(components=[NS(id="loraham-kiss-tnc", endpoints=[NS(address="127.0.0.1:8001")])])
     rows = instances.listener_rows(svc, stk, {}, [], None, None, (), [commands.Instance("r1")], [commands.Instance("r1")], [])
     assert [(r["rid"], r["port"]) for r in rows] == [("r1", "8001")]
+
+
+def test_an_off_list_page_adds_a_row_only_for_a_live_upstream(tmp_path, monkeypatch):
+    # G2-UIU3-R5 N1 (R3) read on the helper (through Home, home_rows drops a page row with nothing listening):
+    # graywolf's disabled r2, its page not proxied. Its upstream :8213 absent: no row; live: r2's row, "disabled"
+    import dataclasses
+
+    from lhpc.core import commands, instances
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=False)))
+    svc = _svc(tmp_path, [])
+    for scope, want in (("absent", []), ("exposed", [("r2", "disabled")])):
+        row = {"kind": "stack", "rid": "r2", "component": "graywolf", "live": False, "posture": None, "port": None,
+               "direct_port": "8213", "direct_scope": scope}
+        monkeypatch.setattr(type(svc), "_dashboard_web_row", lambda self, *a, _r=row, **k: dict(_r))
+        rows = instances.off_list_page_rows(svc, svc.stack("graywolf"), [commands.Instance("r2")], [], None, None)
+        assert [(r["rid"], r["radio_off"]) for r in rows] == want, scope
 
 
 def test_an_off_list_page_on_a_proxy_port_a_listed_page_shows_adds_no_line(tmp_path, monkeypatch, web):
