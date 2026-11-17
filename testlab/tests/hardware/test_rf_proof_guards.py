@@ -194,6 +194,55 @@ def test_the_end_check_runs_the_box_status_and_finds_the_recorded_set(tmp_path):
     assert f"{box}/rt/venv/lhpc/bin/lhpc status" in (box / "box.log").read_text()
 
 
+R3 = 'keep MODEL_H_r3 ch341-rfm98pw-433; : > "$EVD/undo.list"; echo 0 > "$EVD/undo.seq"; '
+
+
+@pytest.mark.parametrize("cmd, want", [
+    ("echo CAP=$(getk CAP_H_ch341-rfm98pw-433)", "CAP=14"),                    # R0 records the lab's cap, not the model's 17
+    ("jmodel H r3 15 || echo NO-TX", "NO-TX"),                                   # an as-is 15 (dpower, spower): no TX
+    ("jmodel H r3 14", "14"),
+])
+def test_the_rfm98pw_stick_is_held_to_setting_14(tmp_path, cmd, want):
+    # red-before (54ddaa4a): R0 kept the model cap the box reports (the stand-in's 17) as r3's cap: an as-is 15..17 passed
+    _box, setup, env = box_stand_in(tmp_path)
+    r, _ = source_only(tmp_path, setup + 'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; ' + R3 + cmd, **env)
+    assert r.stdout.strip().splitlines()[-1:] == [want], r.stdout + r.stderr
+
+
+def test_the_rfm98pw_stick_is_never_set_above_14(tmp_path):
+    # red-before (54ddaa4a): pset H r3 15 sent --set POWER=15 (the cap was 17)
+    box, setup, env = box_stand_in(tmp_path)
+    r, _ = source_only(tmp_path, setup + 'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; ' + R3
+                       + 'pset H s14.txt r3 14; pset H s15.txt r3 15', **env)
+    assert stop_lines(r) == ["STOP: s15.txt: power 15 above the cap 14 dBm"], r.stdout + r.stderr
+    log = (box / "box.log").read_text()
+    assert "r3 --set POWER=14 --yes" in log and "POWER=15" not in log     # 14 is sent (a control), 15 never
+
+
+def test_a_pre_state_above_the_sticks_cap_stops_before_any_change(tmp_path):
+    # red-before (54ddaa4a): jpower journalled 15 and pushed its undo: row 7's restore would set r3 back to 15
+    _box, setup, env = box_stand_in(tmp_path)
+    r, evd = source_only(tmp_path, setup + 'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; ' + R3 + 'jpower H r3 15', **env)
+    assert stop_lines(r) == ["STOP: H:r3: pre-state power 15 above 14 dBm (min(17, ch341-rfm98pw-433's power_default_dbm, KITCAP)): "
+                             "nothing changed; set it to its cap or below by hand first"], r.stdout + r.stderr
+    run = evd / "run"
+    assert (run / "undo.list").read_text() == "" and "PRE_H_r3" not in (run / "state.env").read_text()
+
+
+@pytest.mark.parametrize("action, value, want", [
+    ("mt-power", "0", "STOP: f.txt: power 0 outside 0..17 dBm (Meshtastic 1..17): never set"),      # Meshtastic's 0 = its maximum
+    ("mt-send", "5", "STOP: f.txt: 'mt-send' is not a peer power action"),
+])
+def test_the_setter_refuses_a_peer_value_or_action_before_the_peer_is_called(tmp_path, action, value, want):
+    # pins the setter's own checks (they held at 54ddaa4a; no caller reaches them today): pdom, the peer power actions
+    marker = tmp_path / "peer-args"
+    fake = tmp_path / "peer.py"
+    fake.write_text(f"import sys\nopen({str(marker)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n")
+    r, _ = source_only(tmp_path, f'cp "$FAKE" ./peer.py; PEER=./peer.py; LOCK=./lock; VMT=python3; pset PC f.txt {action} {value}',
+                       FAKE=str(fake))
+    assert stop_lines(r) == [want] and not marker.exists(), r.stdout + r.stderr
+
+
 def test_a_pc_command_naming_the_box_lhpc_is_a_stop(tmp_path):
     r, evd = source_only(tmp_path, 'X PC f.txt "{LH} status; touch \\"$RAN\\""')
     assert stop_lines(r) == ["STOP: a PC command names a box path ({RT} or {LH})"], r.stderr
@@ -221,6 +270,14 @@ def test_under_the_power_setter_or_reader_only_its_own_command_runs(tmp_path, ct
     want = ("the reader's command carries a power set" if ctx == "read" else "the setter's command carries a power above") \
         if "POWER" in cmd else "under the power setter or reader only its own command runs: never run"
     assert len(stop_lines(r)) == 1 and want in stop_lines(r)[0], r.stderr
+    assert not (evd / "ran").exists()
+
+
+@pytest.mark.parametrize("ctx", ["set", "read", "restore"])
+def test_under_the_power_setter_or_reader_its_own_command_runs_only_without_stdin(tmp_path, ctx):
+    # pins the empty stdin of PAUTH's rule: the authorised command with a payload (no power token in it) is still a STOP
+    r, evd = source_only(tmp_path, f"f() {{ local PCTX={ctx} PAUTH='touch \"$RAN\"'; XIN PC p.txt 'echo hi' 'touch \"$RAN\"'; }}; f")
+    assert stop_lines(r) == ["STOP: p.txt: under the power setter or reader only its own command runs: never run"], r.stdout + r.stderr
     assert not (evd / "ran").exists()
 
 

@@ -65,11 +65,12 @@ is the next line, read only when row 4 runs. Stdin is then closed.
 
 ## Safety
 
-- Every box radio, sticks included, runs at most min(17, its model's maximum) dBm (the PineDio 14), never with
-  `--high-power` or a high-power grant. A peer transmits only after its power read back low, or as one of the as-is
-  peers named above.
+- Every box radio, sticks included, runs at most min(17, its model's start power) dBm (USB radios 14; the RFM98PW stick
+  at setting 14 also when its model says more: the lab's cap), never with `--high-power` or a high-power grant. A peer
+  transmits only after its power read back low, or as one of the as-is peers named above.
 - Every power value read, set or restored lies in 0..17 dBm (Meshtastic 1..17: its 0 is the firmware's maximum). A radio
-  or peer found outside it stops its row before anything changes: set it into that range by hand first.
+  or peer found outside it, or a box radio above its cap, stops the run before anything changes: set it into that range
+  by hand first.
 - Every transmission goes through one dispatcher, `tx <radio> <frames> <nonce|control> -- <executor> <args>`, which checks
   the command, the radio's power read in this row, the message (the row's nonce only, at most 16 characters), the
   budget, both boxes' boot ids and the USB lists, and only then runs the send. An automatic send of a protocol endpoint

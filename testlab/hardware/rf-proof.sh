@@ -34,6 +34,9 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 2; REPO=$(cd "$HERE/../.." && pwd) || exit 2
 readonly PCAP=17 TXMAX=10   # THE power cap (dBm) and the frames per physical radio: constants, never an input
+# the lab's cap per model where it is below the model's power_default_dbm (a constant): the RFM98PW stick (r3) up to setting 14
+# (its PA adds ~10-13 dB; 15 and above also drop it off USB). R0 records min(the model cap, this) as CAP_<box>_<model>
+declare -rA KITCAP=([ch341-rfm98pw-433]=14)
 STICK_MIN=2; WEBPORT=8443; NPREFIX=${NONCE_PREFIX:-rfkit}
 PEER=${PEER:-$HERE/peer.py}; FAKE_PEER=${FAKE_PEER:-$HERE/fake_peer.py}; VMT=${VMT:-python3}; VRNS=${VRNS:-python3}; LOCK=${LOCK:-${TMPDIR:-/tmp}/rf-proof-peer.lock}
 # ---- 1. the ONE row table (the table order is the run order) ---------------------------------------------------------------
@@ -342,6 +345,7 @@ pset() {   # pset [--restore] <box|PC> <file> <rid|peer-action> <value>: THE one
 jpower() {   # jpower <box|PC> <rid|peer-action> <value>: journal a radio's pre-state power before the row changes it: the
   # value the restore may set (PRE_<box|PC>_<target>) and its undo (@pset, replayed by pset --restore)
   pdom "$3" "$2" || stop "$1:$2: pre-state power '$3' outside 0..17 dBm (Meshtastic 1..17): nothing changed; set it into the domain by hand first"
+  local o; [ "$1" = PC ] || o=$(jmodel "$1" "$2" "$3") || stop "$1:$2: pre-state $o: nothing changed; set it to its cap or below by hand first"
   keep "PRE_$1_$2" "$3"; undo_push "$1" "@pset $1 $2 $3"; }
 rnsinst() {   # rnsinst <name> <the key's fields>: the RNS shared instance of an rnode peer: instance=<name> port=<n> control=<n>,
   # no defaults: instance [A-Za-z0-9_.-]+, port and control 1..65535 and different; a missing or malformed one is a STOP
@@ -495,7 +499,7 @@ jspower() {   # jspower <form> <value>: a stack's own power value in the power d
 jcap() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$PCAP" ]; }   # Meshtastic's max_power cap, 1..17
 jmodel() {   # jmodel <box> <rid> <value>: the value <= min(17, the radio's model's power_default_dbm on that box), else the reason
   local m c; m=$(getk "MODEL_$1_$2"); c=$(getk "CAP_$1_$m"); [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { echo "no model cap for $1:$2 ('$m' '$c')"; return 1; }
-  [ "$c" -gt "$PCAP" ] && c=$PCAP; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_default_dbm))"; return 1; }; echo "$3"; }
+  [ "$c" -gt "$PCAP" ] && c=$PCAP; [ "$3" -le "$c" ] || { echo "power $3 above $c dBm (min(17, $m's power_default_dbm, KITCAP))"; return 1; }; echo "$3"; }
 pnum() {
   local all v; all=$(body "$1" | grep -v '^[[:space:]]*$')
   case $2 in mt_pget) v=$(printf '%s\n' "$all" | sed -nE 's/^lora\.(tx_power|txPower): (-?[0-9]+)$/\2/p')
@@ -615,7 +619,7 @@ row_R0() {
     if [ "$MODE" = dry ]; then echo "  [dry] PC > R0-$b-caps.txt: the repo's radio_models (dry uses the repo copy)"; python3 -I -c "$CAPS_PY" "$REPO" > "$OUT/R0-$b-caps.txt" 2>&1 || stop "R0 $b: the repo's radio_models cannot be read"
     else pmust $b "R0-$b-caps.txt" caps; fi   # the installed copy (its loader); unreadable = STOP
     grep -qE '^CAP [a-z0-9-]+ [0-9]+$' "$OUT/R0-$b-caps.txt" || stop "R0 $b: no model power cap read (R0-$b-caps.txt)"
-    while read -r _ m c; do keep "CAP_${b}_$m" "$c"; done < <(grep -E '^CAP ' "$OUT/R0-$b-caps.txt")
+    while read -r _ m c; do [ -n "${KITCAP[$m]:-}" ] && [ "$c" -gt "${KITCAP[$m]}" ] && c=${KITCAP[$m]}; keep "CAP_${b}_$m" "$c"; done < <(grep -E '^CAP ' "$OUT/R0-$b-caps.txt")
     must $b "R0-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
     must $b "R0-$b-status.txt" "{LH} status"; must $b "R0-$b-runset.txt" "$RUNSET"
     [ "$MODE" = dry ] && continue
