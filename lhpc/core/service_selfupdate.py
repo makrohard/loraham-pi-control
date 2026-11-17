@@ -384,13 +384,12 @@ class SelfUpdateOpsMixin:
                     with (selfupdate.controller_runtime_lock(self._paths, exclusive=True),
                           selfupdate.update_lock(self._paths)):
                         return self._self_update_locked(force)
-                # The operator's RUNNING console: stopped, and the lock taken EXCLUSIVE, only right before
-                # the first change (`_self_update_locked`'s hook), so a refusal or a no-op leaves it alone.
-                # Lock order here: self-update, then controller-runtime — both non-blocking (busy, never a
-                # deadlock), and the held admission already excludes the one-click helper.
-                with contextlib.ExitStack() as held, selfupdate.update_lock(self._paths):
-                    return self._self_update_locked(force, before_advance=lambda: (
-                        stop_console() or self._runtime_lock_exclusive(held)))
+                # The operator flow: `stop_console` stops a running console and takes the lock EXCLUSIVE into the
+                # flow's own stack only right before the first change (`_self_update_locked`'s hook), so a refusal or
+                # a no-op leaves the console alone. Lock order here: self-update, then controller-runtime — both
+                # non-blocking (busy, never a deadlock), and the held admission already excludes the one-click helper.
+                with selfupdate.update_lock(self._paths):
+                    return self._self_update_locked(force, before_advance=stop_console)
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy:
@@ -518,8 +517,8 @@ class SelfUpdateOpsMixin:
         install unusable). MUST be called with task admission HELD (the operator flow, the one-click unit), so nothing
         starts between apply and sync. A no-op/already-current or failed/refused apply runs NO pip. A real advance
         carries `update_applied=True`; a pip failure `ok=False` + `venv_sync_failed=True`, the apply data kept.
-        `stop_console` (the operator flow, console running): stops it right before the first change — see
-        `self_update_apply`; None once stopped, else the refusal."""
+        `stop_console` (the operator flow): stops a running console and holds the controller-runtime lock EXCLUSIVE
+        right before the first change — see `self_update_apply`; None once done, else the refusal."""
         import dataclasses as _dc
         import sys as _sys
         import time as _time
@@ -529,7 +528,7 @@ class SelfUpdateOpsMixin:
         if not (self._source_advanced(res) or self._resumes_sync(res)):
             return res                                        # no-op / already-current / failed / refused
         if stop_console is not None and (refused := stop_console()) is not None:
-            return refused                    # a resumed sync changes the console's venv: stopped first (done if advanced)
+            return refused                    # a resumed sync changes the console's venv: stopped + locked first (done if advanced)
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
         if root is not None:
@@ -590,8 +589,10 @@ class SelfUpdateOpsMixin:
         """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO under a CONTINUOUSLY-held task
         admission lock. If the managed web console is running it holds the controller-runtime lock
         SHARED, so we STOP lhpc-web right before the first change (after every gate and read-only check),
-        apply + sync the venv, then START it again — ONLY if it was stopped: a refusal or a no-op leaves the
-        running console alone. When the console is NOT
+        apply + sync the venv, then START it again — ONLY if this apply asked for the stop (also when that stop
+        timed out, was interrupted, or the apply raised): a refusal or a no-op leaves the running console alone.
+        The controller-runtime lock is held EXCLUSIVE from right before the first change through the venv sync
+        and the unit refresh, and let go just before the start. When the console is NOT
         running we STILL apply AND sync the venv (a dependency change must never leave it unusable) — the
         only difference is no service control. Admission is NEVER released between apply and sync in
         either case. REFUSES inside a managed unit (a managed process must never drive systemctl)."""
@@ -612,35 +613,47 @@ class SelfUpdateOpsMixin:
             ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)
         web_active = (not getattr(act, "not_found", False)) and act.returncode == 0
         try:
-            with self._admission_guard("self-update-operator"):
-                if not web_active:
-                    # No service to orchestrate — but STILL apply AND sync the venv, under held admission.
-                    return self._operator_outcome(self._apply_and_sync(force), restarted=False)
-                stopped = []
+            with self._admission_guard("self-update-operator"), contextlib.ExitStack() as held:
+                stop_requested, locked = [], []
 
                 def stop_console():
-                    if stopped:
-                        return None
-                    stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
-                    if getattr(stop, "not_found", False) or stop.returncode != 0:
-                        return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
-                                            next_commands=["systemctl --user stop lhpc-web",
-                                                           "lhpc self-update --apply",
-                                                           "systemctl --user start lhpc-web"],
-                                            data={"stop_failed": True})
-                    stopped.append(True)
+                    """Idempotent, right before the first change or the resumed sync: a running console stopped, then
+                    the lock EXCLUSIVE in `held`. None to go on, else the refusal (nothing was changed)."""
+                    if web_active and not stop_requested:
+                        stop_requested.append(True)   # first: systemd may take a stop that times out or is interrupted
+                        stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
+                        if getattr(stop, "not_found", False) or stop.returncode != 0:
+                            return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
+                                                next_commands=["systemctl --user stop lhpc-web",
+                                                               "lhpc self-update --apply",
+                                                               "systemctl --user start lhpc-web"],
+                                                data={"stop_failed": True})
+                    if not locked and (refused := self._runtime_lock_exclusive(held)) is not None:
+                        return refused
+                    locked.append(True)
                     return None
-                restart_failed = False
+
+                def start_failed():                   # started again only if this apply asked for the stop
+                    start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
+                    return getattr(start, "not_found", False) or start.returncode != 0
                 try:
                     res = self._apply_and_sync(force, stop_console)   # admission still held; venv synced here
-                finally:
-                    if stopped:                                       # started again only if this apply stopped it
-                        start = self._system.runner.run(
-                            ["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
-                        restart_failed = getattr(start, "not_found", False) or start.returncode != 0
-                if not stopped:
-                    return res                                        # a refusal or a no-op: console untouched
-                if restart_failed:
+                except BaseException as exc:
+                    held.close()
+                    if not stop_requested or not start_failed():
+                        raise
+                    # The operator still learns the console is down: the interruption is named, not lost.
+                    why = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+                    return ActionResult(False, f"The update stopped ({why}) — AND lhpc-web did NOT restart. "
+                                        "Recover with: systemctl --user start lhpc-web.service",
+                                        data={"web_restart_failed": True, "interrupted": type(exc).__name__},
+                                        next_commands=["systemctl --user start lhpc-web.service", "lhpc status"])
+                held.close()                                  # let go right before the console starts again
+                if not web_active:
+                    return self._operator_outcome(res, restarted=False)
+                if not stop_requested:
+                    return res                                # a refusal or a no-op: console untouched
+                if start_failed():
                     # A failed REQUIRED restart is ALWAYS ok=False (the console is unavailable). Distinguish
                     # partial success: the source update may have applied (update_applied) — preserve that
                     # AND any venv_sync failure. The summary gives the exact recovery command, no raw output.

@@ -140,7 +140,7 @@ def swept_update(op_svc, monkeypatch):
         from lhpc.core.service_base import ActionResult
         from lhpc.core.services import ControllerService
         svc, fake = op_svc(WEB_INACTIVE, units=True, invocation=False)
-        monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None:
                             ActionResult(True, "Update applied.", data={"already": False}))
         fake.commands[(sys.executable, "-m", "lhpc", "source-check", "--json")] = sweep
         res = svc.self_update_apply_operator()
