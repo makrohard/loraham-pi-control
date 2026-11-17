@@ -32,7 +32,7 @@
     {{ cmdbox('bootstrap', 'lhpc bootstrap') }}
   {% endif %}
   {% if observed_conflicts %}
-    <div class="card"><header><h2>Observed resource conflicts</h2></header>
+    <div class="card"><header><h3>Observed resource conflicts</h3></header>
       <div class="body">{% for c in observed_conflicts %}<p class="conflict">{{ c.message }}</p>{% endfor %}</div></div>
   {% endif %}
 

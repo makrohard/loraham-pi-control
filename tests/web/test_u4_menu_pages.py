@@ -12,6 +12,7 @@ from lhpc.adapters.web import submenus
 from lhpc.core import config as cfgmod
 from lhpc.core import daemon_control as dc
 from lhpc.core import radio_start
+from lhpc.core.model import ResourceConflict
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -328,6 +329,27 @@ def test_a_stacks_page_has_one_heading_the_crumbs_current_item(tmp_path, web, ur
     # STACKS-PAGE-HEADERS: the breadcrumb's last item is the page's only h2; the hidden or card double is gone
     c, _svc = _client(web, tmp_path)
     body = _html(c, url)
+    _one_crumb_heading(body)
+
+
+def test_the_stacks_page_with_resource_conflicts_keeps_one_page_heading(tmp_path, web):
+    # G2 B1: the conflicts card is a section of the page (h3) under the crumb's h2, not a second page heading
+    c, svc = _client(web, tmp_path)
+    clash = ResourceConflict("radio:r1", ("meshtastic", "reticulum"), True, "radio r1 is used twice")
+    svc.observed_conflicts = lambda snap=None: [clash]
+    body = _html(c, "/stacks")
+    assert "<h3>Observed resource conflicts</h3>" in body and "radio r1 is used twice" in body
+    _one_crumb_heading(body)
+
+
+def test_the_crumb_heading_keeps_the_crumbs_look_in_the_served_css(tmp_path, web):
+    # G2 N1: the h2 crumb stays inline in the crumbs' size and line (its colour and weight are .crumbs .here's)
+    c, _svc = _client(web, tmp_path)
+    css = " ".join(c.get("/static/style.css").get_data(as_text=True).split())
+    assert ".crumbs h2.here { display: inline; font-size: inherit; margin: 0; line-height: inherit; }" in css
+
+
+def _one_crumb_heading(body):
     crumbs = _crumbs(parse(body))
     h2 = re.findall(r"<h2[^>]*>(.*?)</h2>", body, re.S)
     assert len(h2) == 1 and re.search(r'<h2 class="here">' + re.escape(h2[0]) + r"</h2></nav>", body), h2
