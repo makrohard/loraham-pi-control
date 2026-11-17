@@ -33,12 +33,12 @@ plane, and use an antenna for its band or a 50 Ω dummy load.
   3V3/5V voltage jumpers, an I2C-SPI/UART mode jumper and the two pad rows shown in step 1. The pad and
   jumper names below are that board's; check yours by its silk labels and by continuity.
   It reports the USB id `1a86:5512`, like the other [USB radios](usb-radios.md).
-- An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
+- An AT24C02N EEPROM (256 bytes, SOIC-8; every grade runs at 3.3 V) and a 100 nF ceramic capacitor.
 
 ### Capacitors
 
 - For the RFM98PW: a 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
-- For a 3.3 V module: a 3.3 V supply rated for its transmit current, a 100 nF and a 10 µF capacitor.
+- For a 3.3 V module: a 100 nF and a 10 µF capacitor (it runs from the board's 3V3).
 
 ### Tools
 
@@ -65,7 +65,7 @@ Start with USB unplugged and nothing attached:
 1. Set **both** voltage jumper caps (at the USB end) to **3V3**. All signal lines in this build are
    3.3 V logic; the radio's digital inputs must stay below 3.6 V.
 2. Set the mode jumper to **I2C-SPI** for the first checks and for programming a blank EEPROM
-   ([step 4](#4-solder-the-eeprom)).
+   ([steps 4–5](#4-solder-the-eeprom)).
 3. Plug in USB with only this board attached and check the id: `lsusb -d 1a86:5512` must show one
    line. `1a86:5523` means UART mode: unplug and check the mode jumper.
 4. Measure against the IC, not against a header numbering: CH341A pin 12 is GND, pins 28 and 9 are on
@@ -128,7 +128,7 @@ A plain 433 MHz SX1276/78 module (without the RFM98PW's extra PA) whose antenna 
 the daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)). Its pin numbers and layout differ
 from the RFM98PW's: wire it by signal name, as the model `ch341-rfm98pw-433`: NSS, SCK, MOSI, MISO, RESET,
 DIO0, DIO1 and GND, on the same D-lines as the RFM98PW. Steps 1.5–1.6 do not apply; its capacitors and
-3.3 V supply are in [step 3](#3-power-and-capacitors).
+power are in [step 3](#3-power-and-capacitors).
 
 ![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
 
@@ -141,7 +141,7 @@ SX1262 [USB radios](usb-radios.md): the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4
 `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on SLCT, no RESET; model
 `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon preset fixes that stick's pins,
 TCXO and PA settings, so the module must match them. Steps 1.5–1.6 do not apply; its capacitors and
-3.3 V supply are in [step 3](#3-power-and-capacitors).
+power are in [step 3](#3-power-and-capacitors).
 
 ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
 
@@ -166,9 +166,9 @@ checked in step 1. Keep USB unplugged until point 2.
    **output**: never tie it to anything.
 2. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
-   cable), which is under HopeRF's minimum: the fix is a regulated supply. Plug in with
-   `journalctl -k -f` open: the 470 µF is far above the 10 µF USB 2.0 allows a device at attach, and an
-   over-current or hub reset at plug-in also means the separate supply.
+   cable), which is under HopeRF's minimum. Plug in with `journalctl -k -f` open: the 470 µF is far above
+   the 10 µF USB 2.0 allows a device at attach; an over-current or hub reset at plug-in means this port
+   cannot feed the stick.
 
 What the USB feed means:
 - HopeRF specifies 650 mA typical and 700 mA maximum for the module alone at +30 dBm on 433 MHz, plus
@@ -177,23 +177,27 @@ What the USB feed means:
   from a standard port.
 - So start at the **lowest** transmit power and watch the kernel log (`journalctl -k -f`) for a USB
   disconnect or an over-current message.
-- A separately regulated 5–6 V supply rated for at least 1 A (the module's 700 mA maximum plus margin),
-  with the grounds joined and its positive never tied to USB VBUS, is the alternative for high power.
-  Switch it on before you plug in USB, and unplug USB before you switch it off.
+- **Warning:** at full power the module alone draws up to 700 mA, more than a USB port supplies. Full power
+  needs a separate supply, which this guide does not cover: with two supplies the signal lines need
+  isolation, so that neither side drives the other while it is unpowered.
 - At any power, keep transmissions short, check the module's temperature, and see the licence note at the
   top.
 
 ### Power: 3.3 V modules
 
-Feed VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never 5 V; the
-rating of the board's 3.3 V pads is unknown. Such a module draws a fraction of the RFM98PW's current
-(HopeRF's RFM9xW: 120 mA at +20 dBm), well within USB's 500 mA, so the RFM98PW's power problem does not
-arise.
+Feed VCC from the board's 3V3 pad, never 5 V. This board's 3.3 V regulator is an AMS1117-3.3 (rated 1 A;
+check the marking on yours). Such a module draws a fraction of the RFM98PW's current (HopeRF's RFM9xW:
+120 mA at +20 dBm), well within USB's 500 mA and the regulator's rating, so the RFM98PW's power problem
+does not arise.
 
 ## 4. Solder the EEPROM
 
 The EEPROM holds the CH341's USB configuration, including an eight-character serial that tells this
 stick apart from every other `1a86:5512` device. It holds no radio firmware.
+
+The EEPROM is optional. Without it, leave the mode jumper on **I2C-SPI** for good (removed, the CH341 starts
+in UART mode, `1a86:5523`) and skip steps 4–6. The stick then has no serial, so LHPC identifies it by its
+USB port: keep it on the same port ([USB radios](usb-radios.md)).
 
 ![Wiring of the AT24C02N EEPROM on the CH341A board](img/usb-radio-433-eeprom.svg)
 
@@ -236,7 +240,7 @@ The reference EEPROM was programmed with the radio wired and on USB 5 V. Keep th
    If your user cannot open the device, run the tool with `sudo`. Keep a copy of `backup-a.bin` outside
    this directory. An all-`FF` dump is a blank chip, or a failed read.
 
-3. **Create the image** (256 bytes: signature and SPI mode, VID 1A86, PID 5512, release 0100, the serial
+3. **Create the image** (256 bytes: signature and the parallel mode (12h) that carries SPI, VID 1A86, PID 5512, release 0100, the serial
    at 0x10). Choose a different eight-character serial for every stick:
 
    ```bash
@@ -278,8 +282,8 @@ Measured on the reference board:
 
 1. Unplug, **remove the mode jumper** (normal use), plug in, and check that the serial is there:
    `lsusb -d 1a86:5512 -v | grep -i iserial`.
-2. Pass: your serial survives a second unplug and replug. With `5512` and no serial, the EEPROM was not
-   loaded: check the jumper and the SDA/SCL wiring.
+2. Pass: your serial survives a second unplug and replug. With `5523`, the EEPROM was not loaded: check its SDA/SCL
+   wiring and contents. With `5512` and no serial, the mode jumper is still on.
 
 Rewrites also work with the jumper removed (the stick stays `1a86:5512`). Programming a *blank* EEPROM
 with the jumper removed was not tested. To restore the old contents, write `backup-a.bin` as in step 5

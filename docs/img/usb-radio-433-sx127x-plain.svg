@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="780" viewBox="0 0 980 780" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">Wiring: CH341A board and a plain SX1276/78 module</title>
-<desc id="d">Functional wiring of a plain 433 MHz SX1276/78 module whose antenna is on PA_BOOST, as the model ch341-rfm98pw-433: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to RESET, DIO0 to D6, DIO1 to D4, GND to every GND pin. VCC 3.3 V from a separate supply rated for the module's transmit current, grounds joined, 100 nF and 10 µF at the module. DIO2 to DIO5 open; ANT to a 433 MHz antenna or a 50 ohm load. Example pin numbers are the HopeRF RFM96W/RFM98W's.</desc>
+<desc id="d">Functional wiring of a plain 433 MHz SX1276/78 module whose antenna is on PA_BOOST, as the model ch341-rfm98pw-433: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to RESET, DIO0 to D6, DIO1 to D4, GND to every GND pin. VCC from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 10 µF at the module. DIO2 to DIO5 open; ANT to a 433 MHz antenna or a 50 ohm load. Example pin numbers are the HopeRF RFM96W/RFM98W's.</desc>
 <defs>
 <marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker>
 <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker>
@@ -65,13 +65,10 @@
 <circle cx="270" cy="428" r="4" fill="#1b2430"/><circle cx="660" cy="428" r="4" fill="#1b2430"/>
 <text x="674" y="432" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">every GND pin</text>
 <text x="926" y="432" text-anchor="end" font-size="11" fill="#5b6573">1, 8, 10</text>
-<rect x="300" y="474" width="200" height="48" rx="5" fill="#ffffff" stroke="#c0261f" stroke-width="1.8"/>
-<text x="400" y="494" text-anchor="middle" font-size="12" fill="#c0261f" font-weight="bold">3.3 V SUPPLY, ≥ 150 mA</text>
-<text x="400" y="511" text-anchor="middle" font-size="11" fill="#5b6573">grounds joined</text>
-<line x1="500" y1="498" x2="660" y2="498" stroke="#c0261f" stroke-width="2.2"/>
-<circle cx="660" cy="498" r="4" fill="#c0261f"/>
-<line x1="400" y1="474" x2="400" y2="428" stroke="#1b2430" stroke-width="1.6" stroke-dasharray="4 3"/>
-<circle cx="400" cy="428" r="3.5" fill="#1b2430"/>
+<text x="54" y="502" text-anchor="start" font-size="13" fill="#c0261f" font-weight="bold">3V3 pad</text>
+<text x="256" y="502" text-anchor="end" font-size="11" fill="#5b6573">AMS1117-3.3</text>
+<line x1="270" y1="498" x2="660" y2="498" stroke="#c0261f" stroke-width="2.2"/>
+<circle cx="270" cy="498" r="4" fill="#c0261f"/><circle cx="660" cy="498" r="4" fill="#c0261f"/>
 <text x="674" y="502" text-anchor="start" font-size="13" fill="#c0261f" font-weight="bold">VCC / 3.3V</text>
 <line x1="590" y1="428" x2="590" y2="468" stroke="#1b2430" stroke-width="1.5"/>
 <line x1="578" y1="468" x2="602" y2="468" stroke="#1b2430" stroke-width="2.4"/>
@@ -81,7 +78,7 @@
 <text x="572" y="466" text-anchor="end" font-size="11" fill="#1b2430" font-weight="bold">100 nF + 10 µF</text>
 <text x="674" y="532" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">DIO2–DIO5: open</text>
 <text x="674" y="554" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">ANT: antenna / 50 Ω</text>
-<text x="40" y="618" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">Never 5 V: the chip's VDD is 1.8–3.7 V.</text>
+<text x="40" y="618" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">VCC from the board's 3V3 pad, never 5 V: the chip's VDD is 1.8–3.7 V.</text>
 <text x="40" y="640" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">Fits: a 433 MHz SX1276 or SX1278 module whose antenna is on PA_BOOST (HopeRF RFM96W, RFM98W).</text>
 <text x="40" y="662" text-anchor="start" font-size="12" fill="#5b6573">Not: SX1277 (SF6–9 only), an 868 MHz-matched module (RFM95W), a module that transmits only on RFO.</text>
 <text x="40" y="684" text-anchor="start" font-size="12" fill="#5b6573">DIO2–DIO5 stay open. ANT: a 433 MHz antenna or a 50 Ω load before any transmission.</text>

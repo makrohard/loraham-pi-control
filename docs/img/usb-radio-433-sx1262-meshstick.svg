@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="868" viewBox="0 0 980 868" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">Wiring: CH341A board and an SX1262 module</title>
-<desc id="d">Functional wiring of an 868 MHz SX1262 module as the model meshstick-1262: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to NRST, DIO1 to D6, BUSY to D4, D1 to RXEN, GND to every GND pin. On a module with a TXEN pin, TXEN is tied to DIO2 at the module. The module needs a TCXO powered from DIO3 at 1.8 V. VCC 3.3 V from a separate supply, grounds joined, 100 nF and 10 µF at the module.</desc>
+<desc id="d">Functional wiring of an 868 MHz SX1262 module as the model meshstick-1262: D0 to NSS, D3 to SCK, D5 to MOSI, MISO to D7, D2 to NRST, DIO1 to D6, BUSY to D4, D1 to RXEN, GND to every GND pin. On a module with a TXEN pin, TXEN is tied to DIO2 at the module. The module needs a TCXO powered from DIO3 at 1.8 V. VCC 3.3 V from the board's 3V3 pad (its AMS1117-3.3 regulator), 100 nF and 10 µF at the module.</desc>
 <defs>
 <marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker>
 <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker>
@@ -62,13 +62,10 @@
 <line x1="270" y1="472" x2="660" y2="472" stroke="#1b2430" stroke-width="2.2"/>
 <circle cx="270" cy="472" r="4" fill="#1b2430"/><circle cx="660" cy="472" r="4" fill="#1b2430"/>
 <text x="674" y="476" text-anchor="start" font-size="13" fill="#1b2430" font-weight="bold">every GND pin</text>
-<rect x="300" y="518" width="200" height="48" rx="5" fill="#ffffff" stroke="#c0261f" stroke-width="1.8"/>
-<text x="400" y="538" text-anchor="middle" font-size="12" fill="#c0261f" font-weight="bold">3.3 V SUPPLY</text>
-<text x="400" y="555" text-anchor="middle" font-size="11" fill="#5b6573">grounds joined</text>
-<line x1="500" y1="542" x2="660" y2="542" stroke="#c0261f" stroke-width="2.2"/>
-<circle cx="660" cy="542" r="4" fill="#c0261f"/>
-<line x1="400" y1="518" x2="400" y2="472" stroke="#1b2430" stroke-width="1.6" stroke-dasharray="4 3"/>
-<circle cx="400" cy="472" r="3.5" fill="#1b2430"/>
+<text x="54" y="546" text-anchor="start" font-size="13" fill="#c0261f" font-weight="bold">3V3 pad</text>
+<text x="256" y="546" text-anchor="end" font-size="11" fill="#5b6573">AMS1117-3.3</text>
+<line x1="270" y1="542" x2="660" y2="542" stroke="#c0261f" stroke-width="2.2"/>
+<circle cx="270" cy="542" r="4" fill="#c0261f"/><circle cx="660" cy="542" r="4" fill="#c0261f"/>
 <text x="674" y="546" text-anchor="start" font-size="13" fill="#c0261f" font-weight="bold">VCC 3.3 V</text>
 <line x1="590" y1="472" x2="590" y2="512" stroke="#1b2430" stroke-width="1.5"/>
 <line x1="578" y1="512" x2="602" y2="512" stroke="#1b2430" stroke-width="2.4"/>
@@ -79,7 +76,7 @@
 <text x="674" y="576" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">TXEN (if present) ── DIO2</text>
 <text x="674" y="598" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">DIO3: the module's TCXO</text>
 <text x="674" y="620" text-anchor="start" font-size="12" fill="#5b6573" font-weight="bold">ANT: antenna / 50 Ω</text>
-<text x="40" y="684" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">The 3.3 V supply: rated for the module's TX current (its datasheet).</text>
+<text x="40" y="684" text-anchor="start" font-size="12" fill="#c0261f" font-weight="bold">VCC from the board's 3V3 pad, never 5 V.</text>
 <text x="40" y="706" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">The preset fixes: a TCXO powered from DIO3 at 1.8 V, DIO2 as the RF switch's TX control, RXEN on D1,</text>
 <text x="40" y="728" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">up to +22 dBm, 868 MHz. The module must match all of them.</text>
 <text x="40" y="750" text-anchor="start" font-size="12" fill="#5b6573">A module with TXEN and RXEN pins (e.g. EBYTE E22-900M22S): tie TXEN to DIO2 at the module, RXEN to D1.</text>

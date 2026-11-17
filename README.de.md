@@ -44,7 +44,9 @@ und Reticulum — auf einem Pi Zero 2W oder Pi 5.
 
 Jedes Raspberry-Pi-HAT, dessen Funkchip ein **SX1276**, **SX1278** oder **SX1262** ist und
 **direkt am SPI-Bus** des Pi hängt — `lhpc` steuert den Chip selbst: kein LoRaWAN-Concentrator,
-kein USB- oder seriell angebundenes Funkgerät, keine RNode-Firmware dazwischen.
+kein seriell (UART) angebundenes Funkgerät, keine RNode-Firmware dazwischen. Unterstützt werden außerdem drei
+USB-Sticks mit CH341-Brücke (ELECROW Meshstick, PINE64-USB-Adapter, ein selbstgebauter CH341A-Stick mit RFM98PW,
+SX1276/78 oder SX1262: [Bauanleitung](docs/usb-lora-diy-build.md)): [USB-Funkgeräte](docs/usb-radios.md).
 
 Für drei Boards ist ein fertiges Hardware-Preset enthalten:
 

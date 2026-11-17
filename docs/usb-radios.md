@@ -18,7 +18,7 @@ hardware list (`config/radios.toml`), added on the console's *Add Hardware* page
 |---|---|---|---|---|
 | ELECROW Meshstick | SX1262 + TCXO | 868 MHz | `meshstick-1262` | supported |
 | [PINE64 USB LoRa adapter](https://pine64.org/documentation/Pinedio/USB_adapter/) (Pinedio) | SX1262 | 868 / 915 MHz (LHPC uses 868) | `pinedio-usb-1262` | supported |
-| CH341A + RFM98PW, a self-built stick ([build guide](usb-radio-433-build.md)) | SX127x (RFM98PW, high power) | 433 MHz | `ch341-rfm98pw-433` | supported |
+| CH341A + RFM98PW, a self-built stick ([build guide](usb-lora-diy-build.md)) | SX127x (RFM98PW, high power) | 433 MHz | `ch341-rfm98pw-433` | supported |
 
 The release that ships these sticks is listed in the [changelog](../CHANGELOG.md).
 
