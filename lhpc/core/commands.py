@@ -1131,11 +1131,14 @@ for _si, s in enumerate(STEPS):
             reps = s.get("repeat", 1)
             sent = 0
             t0 = time.monotonic()
-            def _done(oc, n):
-                _record({"kind": "tcp_send",
+            def _done(oc, n, reported=None):
+                entry = {"kind": "tcp_send",
                          "label": s.get("label", "%s:%s" % (s["host"], s["port"])),
                          "host": s["host"], "port": s["port"], "outcome": oc,
-                         "attempts": n, "elapsed_s": round(time.monotonic() - t0, 1)})
+                         "attempts": n, "elapsed_s": round(time.monotonic() - t0, 1)}
+                if reported is not None:     # the value the node last reported (an unconfirmed one keeps it)
+                    entry["reported"] = "".join(c for c in reported if c.isprintable())[:32]
+                _record(entry)
             def _read(conn, done):
                 # ONE answer, read to its end: a slow guest (QEMU on a Zero 2 W) may take many
                 # seconds for its first byte and pause between chunks. Up to 30 s for the first
@@ -1163,6 +1166,7 @@ for _si, s in enumerate(STEPS):
             probing = valued or bool(s.get("probe") and s.get("probe_stop_on"))
             skipped = False
             answered = False             # some probe got a reply (value form only)
+            reported = None              # the value the node last reported (value form only)
             # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and no
             # NEW attempt starts after its END, the last slot plus its own interval (checked at each
             # attempt's entry, after the sleep) — a required run sits inside the start's outer timeout,
@@ -1213,6 +1217,7 @@ for _si, s in enumerate(STEPS):
                                                  "(attempt %d/%d) -> no send\\n"
                                                  % (s["host"], s["port"], i + 1, reps))
                                 raise OSError("probe reply incomplete")
+                            reported = m.group(1)
                             if m.group(1) == s["probe_expect"]:
                                 sys.stderr.write("tcp_send %s:%s: probe matched -> already "
                                                  "set, skipping\\n" % (s["host"], s["port"]))
@@ -1260,9 +1265,10 @@ for _si, s in enumerate(STEPS):
                 # so. Diagnostic only: the step exits 0, as 0.9.2 did for a console that answered
                 # (it sent blind and passed as `sent-unacked`); failing the start here would be a
                 # changed refusal. A console that never answered still ends `exhausted` below.
-                _done("unverified", n)
-                sys.stderr.write("tcp_send %s:%s: value never confirmed in %d attempt(s)\\n"
-                                 % (s["host"], s["port"], n))
+                _done("unverified", n, reported)
+                sys.stderr.write("tcp_send %s:%s: value never confirmed in %d attempt(s); the node may use %s\\n"
+                                 % (s["host"], s["port"], n,
+                                    "its own value %r" % reported if reported is not None else "an unknown value"))
             elif sent == 0:
                 _done("exhausted", n)
                 if not s.get("optional", True):

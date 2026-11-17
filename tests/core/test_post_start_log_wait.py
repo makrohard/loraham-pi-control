@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import threading
@@ -15,7 +16,7 @@ import time
 import pytest
 
 from lhpc.core import commands
-from lhpc.core.lifecycle import LOG_WAIT_MAX_S, REQUIRED_POST_TIMEOUT_S
+from lhpc.core.lifecycle import REQUIRED_POST_TIMEOUT_S
 from lhpc.core.manifest import load_manifest
 
 LINE = "[CON ]...Console started on port 2323\n"
@@ -358,7 +359,9 @@ def _meshcom_runner(tmp_path, marker_after):
     in uart-latest.log; the harness's marker is written `marker_after` s after the start (0: already there, a normal
     restart). Returns (seconds from the start to each console connection, the step outcomes by label)."""
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
-    srv, seen = _console("...Call: <DL1ABC>\r\n...LoRa RF-Power: <14 dBm>\r\n")    # the call and the power: already set
+    # the console's recorded `--info` reply (tests/data, see test_meshcom_txpower.py) with this call and power: both set
+    info = (pathlib.Path(__file__).parents[1] / "data" / "meshcom-4.40a-info-reply.txt").read_bytes().decode()
+    srv, seen = _console(info.replace("Call: <XX0XXX-00>", "Call: <DL1ABC>").replace("TXPWR 17 dBm", "TXPWR 14 dBm"))
     steps = [{**s, "port": srv.getsockname()[1]} if s.get("kind") == "tcp_send" else dict(s) for s in comp.post_steps]
     src, root = tmp_path / "src", tmp_path / "rt"
     (src / ".run").mkdir(parents=True)
@@ -409,7 +412,8 @@ def test_a_normal_restart_with_its_marker_kept_probes_the_callsign_at_once(tmp_p
 
 @pytest.mark.parametrize("step, why", [
     ({"kind": "log_wait", "path": "x", "pattern": "", "timeout": 10}, "pattern"),
-    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": LOG_WAIT_MAX_S + 1}, "timeout"),
+    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": 2401}, "timeout"),   # literal: the outer bound's raise
+                                                                                     # widens no single wait (N4)
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": 0}, "timeout"),
     ({"kind": "log_wait", "pattern": "p", "timeout": 10}, "path"),                     # no path
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": "1300"}, "timeout"),  # a string, not a number

@@ -1657,7 +1657,7 @@ class LifecycleOpsMixin:
             jr = life.run_required_post_start(stack, comp, comp_cfg, band=band, inst=inst, daemon=daemon,
                                               on_log_open=announce, require_all=require_all, while_running=self._config_unstable())
             if jr.ok:
-                warn = [ln for ln in self._required_post_outcomes(comp.id, inst, life) if " NOT applied " in ln]
+                warn = [ln for ln in self._required_post_outcomes(comp.id, inst, life) if " NOT applied " in ln or " UNVERIFIED " in ln]
                 return True, f"{'; '.join(warn)} (log {jr.log_path})" if warn else "required post-start completed"
             return False, f"required post-start failed (rc {jr.returncode})"
         # OPTIONAL: scheduling never gates the start, but its typed result makes any
@@ -2769,9 +2769,9 @@ class LifecycleOpsMixin:
                              f"ready within {el}s ({n} attempts); re-apply with: "
                              f"lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "unverified":
-                lines.append(f"post-start: {label} UNVERIFIED — the node answered but never "
-                             f"reported the expected value within {el}s ({n} attempts); "
-                             f"re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
+                held = f"the node may use {self._safe_label(st['reported'], '?')}" if "reported" in st else "its own value unknown"
+                lines.append(f"post-start: {label} UNVERIFIED — not confirmed ({held}): the node answered but never "
+                             f"reported the expected value within {el}s ({n} attempts); re-apply with: lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "ok":
                 lines.append(f"post-start: {label} applied after {el}s")
             elif oc == "failed":

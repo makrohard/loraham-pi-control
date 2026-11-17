@@ -1031,6 +1031,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         own = f"{rid}/{e.job()}"
         return {"target": e.writer, "radio": rid or None, "job": own if rid and _rflog.by_job(own) else e.job()}
 
+    def _unconfirmed_post(stack):
+        """A running stack's post-start setting the node never confirmed (MeshCom's TX power: the node may still use its
+        own value), on the stack's row like its other warnings, with the re-apply command (RADIO-POWER item 4, N2)."""
+        return [(c.id, ln.removeprefix("post-start: ")) for c in stack.components if c.post_steps
+                for ln in service._post_start_outcomes(c.id) if " UNVERIFIED " in ln]
+
     def _shown_instance(stack):
         """G4-web: the instance a stack's Settings view shows without a page radio it can use (what the band default
         picked before): one it runs on (its launch records), else the first radio able to run it; None without one (no
@@ -1174,7 +1180,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
                 "jobs": _jobs,
-                "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))],   # W272: its row
+                "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))]   # W272: its row
+                         + (_unconfirmed_post(stack) if rollup[stack.id] in _RUNNING else []),
                 # W250: what Home's card showed for a running stack: its RF log (W4: its instance's), its tools' launch lines
                 "rflog": _stack_rflog(stack.id) if rollup[stack.id] in _RUNNING else None,
                 "tools": [(c.id, c.name, service.manual_start_command(c, _inst)) for c in _tool_comps] if _tools_here else [],

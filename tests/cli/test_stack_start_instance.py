@@ -138,7 +138,7 @@ def _graywolf_box(box, monkeypatch, procs=None, ports=(8134, 8213)):
     def post(self, stack, comp, comp_cfg, band="", inst=None, **kw):
         seen["post"].append(commands.render_post_launcher(
             comp.post_steps, comp, comp_cfg, self.config.operator, str(self.paths.runtime_root),
-            str(self.source_dir(comp)), band, inst=inst, gps=self._gps_post_values(stack.id, inst)))
+            str(self.source_dir(comp)), band, inst=inst, gps=self._gps_post_values(stack.id, inst), daemon=kw.get("daemon")))
         return JobResult(name=f"post-{comp.id}", state=JobState.SUCCEEDED, returncode=0, log_path="")
     monkeypatch.setattr(Lifecycle, "start", start)
     monkeypatch.setattr(Lifecycle, "stop", stop)

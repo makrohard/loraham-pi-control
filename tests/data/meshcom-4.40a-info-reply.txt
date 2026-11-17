@@ -1,0 +1,48 @@
+--MeshCom 4.40a (build: Nov  9 2026 / 17:49:38)
+...UPDATE: 2026-11-11 00:44:20
+...Call: <XX0XXX-00> ...ID 83830439 ...NODE 39 <EBYTE_E22> ...UTC-OFF 1.000000 [GPS]
+...BATT 0.00 V ...BATT 0 % ...MAXV 4.200 V
+...TIME 46698 ms
+...Flash-Version 20260724
+...TZ CET-1CEST,M3.5.0,M10.5.0/3 ...TZOFF +1.0 h [CET]
+...NOMSGALL off ...MESH off ...BUTTON (12) off ...SOFTSER off ... SOFTSERREAD off
+...PASSWD <>
+...DEBUG man ...DEBUG en
+...BOARD LED: off
+...CHARGE LED: not fitted
+...DEBUG off ...LORADEBUG off ...NBRDEBUG off ...TXCAPTURE off ...GPSDEBUG off/0 ...SOFTSERDEBUG off
+...WXDEBUG off ...BLEDEBUG off ...CONSOLE_TXBUF 2048/1
+...NBRRELAY on ...relays A 0 B 0 ...cancelled 0 ...possible 0 ...refused 0 ...NBRSYM on ...NBRREPORT auto
+...BOOT RESET_REASON=1 POWERON
+...DisplayInfo off ...DisplayCont off ...DisplyLog off ...contrast 255 ...ackinfo off
+...EXTUDP off ...EXT IP none ...NOPMOTHER off
+...BTCODE 000000
+...APRSMC: APRSMC
+...ATXT: 
+...NAME: 
+...BLE : short tx s0 r0 d0 t0 e0 mtu0
+...DISPLAY off
+...CTRY EU8
+...FREQ 433.1750 MHz TXPWR 17 dBm RXBOOST off
+...BLE: con=0 dis=0 to=0 rem=0 loc=0 fail=0 adv=0
+...RM: off strict=off ok=0 rej=0
+...RXSIL: silences=0 longest=0s total=0s
+...AU: notify chan=prod
+...AU env=qemu-headless-extradio-gpsd tag=(local)
+...AU avail=none staged=none
+...MAXHOP text 4 / pos 2
+
+...Webserver  on / Webpwd <> / Gateway off 
+...NETConsole on (port 2323)
+...KISS/TCP   off / TX off / RxMeta off / Auth off
+...WIFI-AP    on
+...SSID <XX0XXX-00> / PASSWORD <>
+...NETWORK Mode:ETH
+...hasIpAddress: yes
+...MTU          : 1280 (MSS 1240)
+...IP address   : 10.0.2.15
+...SUBNET-MASK  : 255.255.255.0
+...Server       : off
+...BLOCKED: none (dropped 0)
+...HEAP         : free 112896 min 104344 blk 102388
+...NVS          : used 219 free 411 total 630 ns 7

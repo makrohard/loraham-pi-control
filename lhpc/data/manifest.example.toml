@@ -2131,11 +2131,12 @@ main = "meshcom-qemu"
     # TX POWER (RADIO-POWER item 4): the node's power, not LHPC's, reaches the daemon at every XR connect (the bridge
     # configures the radio with what the firmware reports), so LHPC sets it: `--txpower N`, N = the POWER this instance
     # applies to its daemon (`{daemon:power}`: its own set over the radio row's over the default). The same ack-aware,
-    # idempotent form as the callsign: `--lora` reports `RF-Power: <N dBm>`; equal -> no send (it persists in NVS),
+    # idempotent form as the callsign: `--info` reports `TXPWR N dBm` (`--lora` prints to the UART only, never to the
+    # console); equal -> no send (it persists in NVS),
     # different -> send until the ACK `set txpower to N dBm`; a refusal or a cut reply ends `unverified`. It keeps the
     # callsign's full window: the callsign's flash rewrite (~1 min frozen on a Zero 2 W) or a guest reboot can fall into
     # it. Both windows together size the required post-start bound (lifecycle.REQUIRED_POST_TIMEOUT_S).
-    { kind = "tcp_send", port = "{port:12323}", label = "tx power", required = true, data = "--txpower {daemon:power}\n", probe = "--lora\n", probe_value = "RF-Power: <(-?[0-9]+) dBm>", probe_expect = "{daemon:power}", stop_on = "set txpower to {daemon:power} dBm", schedule = [[8, 8], [6, 15], [26, 30]], on_exhausted = "warn" },
+    { kind = "tcp_send", port = "{port:12323}", label = "tx power", required = true, data = "--txpower {daemon:power}\n", probe = "--info\n", probe_value = "TXPWR (-?[0-9]+) dBm", probe_expect = "{daemon:power}", stop_on = "set txpower to {daemon:power} dBm", schedule = [[8, 8], [6, 15], [26, 30]], on_exhausted = "warn" },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The

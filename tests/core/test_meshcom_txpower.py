@@ -1,11 +1,12 @@
 """RADIO-POWER item 4: MeshCom's node, not LHPC, configures the daemon's POWER at every XR connect (the bridge applies
 what the firmware reports), so after the callsign LHPC sends the node `--txpower N`, N = the POWER the instance applies
 to its daemon (its own set over the radio row's over the default). Ack-aware and idempotent like the callsign:
-`--lora` reports the node's power; equal -> no send; a refusal ends `unverified` and the node keeps running. Driven
+`--info` reports the node's power (`TXPWR N dBm`); equal -> no send; a refusal ends `unverified` and the node keeps running. Driven
 through `lhpc stack poststart meshcom@r1` (the verb a start's post-start shares, `_run_post_start`) against a stand-in
 net-console that answers as the firmware does (command_functions.cpp:5793-5815, :6782)."""
 import ast
 import dataclasses
+import pathlib
 import re
 import socket
 import subprocess
@@ -22,6 +23,10 @@ from lhpc.core.services import ControllerService
 from seams import seed_framing_driver
 
 CALL = "DL9XYZ-1"
+# The console's real answer to `--info`: MeshCom 4.40a under QEMU, the firmware LHPC ships, recorded on a Zero 2 W on
+# 2026-11-11 (the guest's UART log, lines 66-113: the reply between the console client's command and its disconnect;
+# printfdeb output, which goes to the console and the UART alike). Its call and power are this test's.
+INFO_REPLY = (pathlib.Path(__file__).parents[1] / "data" / "meshcom-4.40a-info-reply.txt").read_bytes().decode()
 
 
 class _Node:
@@ -37,10 +42,11 @@ class _Node:
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _answer(self, line: str) -> str:
-        if line == "--info":
-            return f"...NAME: x\n...Call: <{self.call}>\n"
-        if line == "--lora":
-            return f"--MeshCom 4.35\n...LoRa RF-Frequ: <433.1750 MHz>\n...LoRa RF-Power: <{self.power} dBm>\n"
+        if line == "--info":           # printfdeb: the console gets it (command_functions.cpp:7553, :7648)
+            return (INFO_REPLY.replace("Call: <XX0XXX-00>", f"Call: <{self.call}>")
+                    .replace("TXPWR 17 dBm", f"TXPWR {self.power} dBm"))
+        if line == "--lora":           # a plain printf: the UART gets it, the console none of it (:6782-6794)
+            return ""
         if m := re.fullmatch(r"--setcall (\S+)", line):
             self.call = m.group(1)
             return f"Call:{self.call} Short:x set\n"
@@ -96,11 +102,9 @@ def _on_console(svc, port, schedule=None):
     for st in svc.stacks():
         comps = []
         for c in st.components:
-            if c.id == "meshcom-qemu":
-                steps = [{**s, "port": port, **({"schedule": schedule} if schedule else {})}
-                         for s in c.post_steps if s["kind"] == "tcp_send"]
-                c = dataclasses.replace(c, post_steps=tuple(steps))
-            comps.append(c)
+            steps = [{**s, "port": port, **({"schedule": schedule} if schedule else {})}
+                     for s in c.post_steps if s["kind"] == "tcp_send"]
+            comps.append(dataclasses.replace(c, post_steps=tuple(steps)) if c.id == "meshcom-qemu" else c)
         stacks.append(dataclasses.replace(st, components=tuple(comps)))
     svc._stacks = tuple(stacks)
 
@@ -158,13 +162,13 @@ def test_the_node_gets_the_radios_power_after_its_callsign(tmp_path):
 
 @pytest.mark.needs_session
 def test_a_node_that_already_has_the_power_gets_no_send(tmp_path):
-    # the node reports the instance's POWER -> probed with --lora, zero sends (each one costs a flash write and an XR
+    # the node reports the instance's POWER -> probed with --info, zero sends (each one costs a flash write and an XR
     # reconnect). red on 17fd52e8: no probe either
     svc = _svc(tmp_path)
     n = int(_default_power(svc))
     res, node, _svc2 = _poststart(tmp_path, n)
     assert res.ok, (res.summary, res.details)
-    assert "--lora" in node.got and node.sent("--txpower") == [], node.got
+    assert node.got.count("--info") >= 2 and node.sent("--txpower") == [], node.got     # the callsign's, then the power's
 
 
 @pytest.mark.needs_session
@@ -190,9 +194,14 @@ def test_a_refused_power_is_unverified_and_the_node_keeps_running(tmp_path):
     assert int(n) > 8 and node.sent("--txpower") and set(node.sent("--txpower")) == {f"--txpower {n}"}, node.got
     assert node.power == 7
     assert res.ok, (res.summary, res.details)
-    assert any(re.fullmatch(r"post-start: tx power UNVERIFIED — the node answered but never reported the expected "
-                            r"value within [0-9.]+s \(2 attempts\); re-apply with: lhpc stack poststart meshcom@r1", ln)
-               for ln in node.status), node.status
+    # N2 (the coordinator's decision): a warning, not a refusal, that names the power the node may still use: in
+    # `lhpc status`, in the poststart's answer and in the post-start log
+    line = (r"post-start: tx power UNVERIFIED — not confirmed \(the node may use 7\): the node answered but never "
+            r"reported the expected value within [0-9.]+s \(2 attempts\); re-apply with: lhpc stack poststart meshcom@r1")
+    assert any(re.fullmatch(line, ln) for ln in node.status), node.status
+    assert any(re.search(line[len("post-start: "):].split(":", 1)[0], d) for d in res.details), res.details
+    log = next(d.split(" -> tail -f ", 1)[1] for d in res.details if " -> tail -f " in d)
+    assert "value never confirmed in 2 attempt(s); the node may use its own value '7'" in pathlib.Path(log).read_text()
 
 
 def _rendered(step, daemon):
@@ -226,3 +235,7 @@ def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():
     call, power = comp.post_steps[-2], comp.post_steps[-1]
     assert power["schedule"] == call["schedule"] and power["on_exhausted"] == "warn" and power["required"] is True
     assert "skip_if_param" not in power
+    # its probe is one the console answers: `--lora` prints to the UART only (a plain printf, command_functions.cpp:6782-
+    # 6794); `--info`'s TXPWR line is printfdeb (:7648), the line the callsign's probe reads too (testlab 43991217519:
+    # 25 `--lora` probes "incomplete", the start cut at 600 s)
+    assert (power["probe"], power["probe_value"]) == ("--info\n", "TXPWR (-?[0-9]+) dBm")
