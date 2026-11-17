@@ -1573,6 +1573,22 @@ def test_a_dev_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys
     assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another remote)
 
 
+def test_a_stable_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys, web):
+    box.release = "v2.8.0.7239fe8"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert _check_detail(box, capsys)[0] == "current"
+    (box.rt / "config" / "local.toml").write_text(f'[remotes]\napp = "{OTHER}"\n')
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another remote)
+
+
+def test_a_dev_verdict_reads_unchecked_once_the_manifest_follows_another_branch(box, capsys, web):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert _check_detail(box, capsys)[0] == "current"
+    box.side(box.c[2], "next")
+    box.manifest.write_text(box.manifest.read_text().replace('branch = "main"', 'branch = "next"'))
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another branch)
+
+
 @pytest.mark.parametrize("key", ["another lane", 7])
 def test_a_stored_verdict_with_another_or_a_malformed_key_reads_unchecked(box, capsys, web, key):
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
