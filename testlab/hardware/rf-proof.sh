@@ -281,6 +281,8 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 
 # ---- 6. the executors and the ONE capture helper -----------------------------------------------------------------------------
 # X <H|Z|PC> <file> <command>: runs it; its redacted output in $OUT/<file>, its exit status in XRC (and $OUT/<file>.rc).
+# XBG=1 (a box only): in the background, the pid in SPAWN, `reapx <pid>` ends it; its own name, so a caller's BG=1 (peer
+# runs, `BG=1 tx`) never puts tx's box checks in the background.
 # XIN <H|Z> <file> <stdin-text> <command>: the same with a text on the command's stdin (a script, or the password for sudo -S).
 # must = X, and a non-zero exit is a STOP. peer/peerpin: one peer.py action under the peer lock (BG=1: in the background, the
 # pid in SPAWN; `reap <pid>` waits for it). Dry prints each command ([dry]) and runs nothing on a box or a peer: the fake box
@@ -314,8 +316,8 @@ drylog() { [ "$MODE" = dry ] && printf '%s\n' "$*" >> "$DRYLOG"; return 0; }
 X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: $c"
   guard "$f" "$c" -
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; SPAWN=
-    [ "${BG:-0}" = 1 ] && { ( exec -a "rfkit-dry-listener${DRY_TAG:+:$DRY_TAG}" sleep 60 ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; }; return 0; fi
-  if [ "${BG:-0}" = 1 ]; then case $w in H|Z) ( capture "$f" sshrun "$w" - "$c" ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; return 0;; *) stop "X: BG only on a box";; esac; fi
+    [ "${XBG:-0}" = 1 ] && { ( exec -a "rfkit-dry-listener${DRY_TAG:+:$DRY_TAG}" sleep 60 ) </dev/null >/dev/null 2>&1 & SPAWN=$!; SPAWNF[$SPAWN]=$f; }; return 0; fi
+  if [ "${XBG:-0}" = 1 ]; then case $w in H|Z) ( capture "$f" sshrun "$w" - "$c" ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; return 0;; *) stop "X: XBG only on a box";; esac; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
 XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
@@ -578,12 +580,12 @@ result() { [ "$MODE" = dry ] && return 0
   stop "$1: neither SEEN '$2' (rc 0) nor NOT-SEEN (rc 3): rc $XRC"; }
 # apprx <box> <file> <rendered form> <nonce> <secs|once>: the word inside the app on the box: a marker line only (SEEN <nonce>
 # <time>), never the app's output; <secs> polls the form (a queue read, MeshCore), `once` runs it once (a listener that holds the
-# app's connection until it sees the word or times out, Meshtastic; BG=1: started before the peer sends, ended by reapx)
+# app's connection until it sees the word or times out, Meshtastic; XBG=1: started before the peer sends, ended by reapx)
 apprx() { local seen="echo \"SEEN $4 \$(date -u +%H:%M:%SZ)\"; exit 0"
   if [ "$5" = once ]; then   # a listener: its own end is a line too (LISTENER-RC <rc>, 124 = its timeout): ended early is not "unseen"
     X "$1" "$2" "l=\$($3 | head -n 1); case \"\$l\" in 'LISTENER-RC 124'|'') echo NOT-SEEN; exit 3;; 'LISTENER-RC '*) echo \"LISTENER-ENDED \${l#LISTENER-RC }\"; exit 4;; *) $seen;; esac"
   else X "$1" "$2" "for i in \$(seq 1 $5); do l=\$($3 | head -n 1); [ -n \"\$l\" ] && { $seen; }; sleep 1; done; echo NOT-SEEN; exit 3"; fi; }
-reapx() { [ -n "$1" ] || return 0; [ "$MODE" = dry ] && kill "$1" 2>/dev/null; wait "$1" 2>/dev/null   # a box run of BG=1 X
+reapx() { [ -n "$1" ] || return 0; [ "$MODE" = dry ] && kill "$1" 2>/dev/null; wait "$1" 2>/dev/null   # a box run of XBG=1 X
   [ "$MODE" = dry ] && { XRC=0; return 0; }; XRC=$(cat "$OUT/${SPAWNF[$1]}.rc" 2>/dev/null || echo 99)
   [ "$XRC" -ne 255 ] || stop "${SPAWNF[$1]}: ssh transport rc 255"; }
 lkill() { [ -n "${1:-}" ] || return 0; pkill -TERM -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; return 0; }   # a row's EXIT trap
@@ -803,7 +805,7 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
   ppower R3-g2 g2 mt-power 1
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   # Meshtastic on the box listens BEFORE the G2 sends (no history to read later); reaped before any check that can end the row
-  BG=1 apprx "$b" 3-box-app.txt "$(form rx_mt_app rid="$r" n="$n1" s=90)" "$n1" once; lp=$SPAWN; trap 'lkill "$lp"' EXIT
+  XBG=1 apprx "$b" 3-box-app.txt "$(form rx_mt_app rid="$r" n="$n1" s=90)" "$n1" once; lp=$SPAWN; trap 'lkill "$lp"' EXIT
   [ "$MODE" = dry ] || sleep 10
   tx R3-g2 1 "$n1" -- peer 3-peer-send.txt "$VMT" mt-send "$n1"; [ "$XRC" = 0 ] || stop "row 3: the G2 send failed"
   reapx "$lp"; trap - EXIT; lp=; appseen 3-box-app.txt "$n1"; seen=$?
