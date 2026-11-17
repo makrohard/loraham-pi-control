@@ -75,19 +75,22 @@ class MaintenanceOpsMixin:
 
     def _update_probe(self, comp, stable_target=None, planned=None) -> dict:
         """NETWORK. The lane verdict of ONE component (plan rule R4), bounded, no fetch, no mutation: a
-        `stackupdates` entry, status + its evidence. `local_head_at_check` and `lane_key` (every other input, set
-        by one call after the lane's branch) tie it to what it describes. `unknown` = nothing to compare (no remote,
+        `stackupdates` entry, status + its evidence. `local_head_at_check` and `lane_key` (every other input, read
+        before the probe) tie it to what it describes. `unknown` = nothing to compare (no remote,
         not installed, an invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
         lhpc = stackupdates.lhpc_heads(self._paths)
-        entry = self._lane_probe(comp, stable_target, planned, lhpc)
-        return {**entry, "lane_key": stackupdates.lane_key(self, comp, entry.get("channel") == "binary", lhpc) if comp else ""}
+        # The key FIRST: an input that changes while the lane is probed leaves a key today's inputs no longer match.
+        key = stackupdates.lane_key(self, comp, self._binary_lane(comp), lhpc) if comp else ""
+        return {**self._lane_probe(comp, stable_target, planned, lhpc), "lane_key": key}
+
+    def _binary_lane(self, comp) -> bool:     # a binary-covered component answers from the binary lane (U9)
+        return bool(comp is not None and getattr(comp, "source", None) is not None
+                    and getattr(self, "binary_covers", None) and self.binary_covers(comp.id))
 
     def _lane_probe(self, comp, stable_target, planned, lhpc) -> dict:
         entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
         unsafe = comp is not None and self._binary_unsafe(comp)
-        # A binary-covered component answers from the binary lane's target (the index, U9), not its clone.
-        if (comp is not None and getattr(comp, "source", None) is not None
-                and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
+        if self._binary_lane(comp):                    # from the binary lane's target (the index), not its clone
             sid = self.stack_of(comp.id) or comp.id
             fresh = self.binary_freshness(sid)
             _st, rec, _why = self.binary_receipt_state(sid)
