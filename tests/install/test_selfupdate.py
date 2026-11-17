@@ -16,7 +16,7 @@ import sys
 import pytest
 
 import gitrepo
-from selfupdate_fakes import WEB_INACTIVE
+from selfupdate_fakes import WEB_INACTIVE, frozen_budget
 from lhpc.core import selfupdate
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult
@@ -457,23 +457,21 @@ def test_the_helpers_budget_is_the_shipped_units_limit_less_the_margin_for_its_m
 def test_under_the_helpers_budget_each_step_gets_only_what_is_left(env, monkeypatch):
     """With 10 s of the budget left, the advance runs under a 10 s limit, not its own 300 s, so the helper's
     timeout message speaks before systemd would stop it (the forced path's 1255 s of bounds no longer can)."""
-    import time as _t
     gitrepo.upstream_commit(env["up"], version="0.1.1")
     real = env["sys"].runner.run
     seen = []
     monkeypatch.setattr(env["sys"].runner, "run", lambda argv, timeout=None, *a, **k: (
         seen.append((argv[3] if argv[:1] == ["git"] else argv[0], timeout)) or real(argv, timeout, *a, **k)))
-    monkeypatch.setattr(selfupdate, "_BUDGET_END", [_t.monotonic() + 10.0])
+    frozen_budget(monkeypatch, 10.0)
     assert selfupdate.apply_update(env["sys"], env["paths"])["ok"] is True
     merge = [t for op, t in seen if op == "merge"]
-    assert merge and merge[0] <= 10.0, seen
+    assert merge and merge[0] == 10.0, seen
 
 
 def test_a_spent_budget_starts_no_git_and_no_venv_sync(env, monkeypatch):
-    import time as _t
     calls = []
     monkeypatch.setattr(env["sys"].runner, "run", lambda argv, timeout=None, *a, **k: calls.append(argv))
-    monkeypatch.setattr(selfupdate, "_BUDGET_END", [_t.monotonic() - 1.0])
+    frozen_budget(monkeypatch, -1.0)
     r = selfupdate._git(env["sys"], env["work"], ["merge", "--ff-only", "origin/main"], selfupdate._APPLY_TIMEOUT)
     v = selfupdate.venv_sync(env["sys"].runner, sys.executable, env["work"], 600.0)
     assert r.timed_out and v.timed_out and calls == [], calls

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 import gitrepo
-from selfupdate_fakes import WEB_INACTIVE
+from selfupdate_fakes import WEB_INACTIVE, frozen_budget
 import pytest
 from lhpc.core import selfupdate
 from lhpc.core import updater_units
@@ -184,6 +184,21 @@ def test_run_service_malformed_request_is_recovery(tmp_path, monkeypatch, op_svc
     assert not res.ok and res.data.get("malformed")
     assert (tmp_path / "state" / "selfupdate.inflight").exists()   # retained for recovery
     assert selfupdate.status_view(svc._paths)["last_apply"]["ok"] is False
+
+
+def test_run_service_waits_for_the_lock_only_within_the_helpers_budget(tmp_path, monkeypatch, op_svc):
+    """With the budget spent and the console holding its SHARED lock, the helper refuses at once with the
+    lock message: no 0.5 s retry of its 30 s lock wait runs past the budget (systemd would stop it first)."""
+    import time
+    svc, fake = op_svc(units=True, invocation=True)
+    _write_request(tmp_path, "normal")
+    frozen_budget(monkeypatch, 0.0)
+    slept = []
+    monkeypatch.setattr(time, "sleep", lambda s: slept.append(s) or (_ for _ in ()).throw(RuntimeError("slept")))
+    with selfupdate.controller_runtime_lock(svc._paths, exclusive=False):
+        res = svc.self_update_run_service()
+    assert not res.ok and res.data.get("web_running") and slept == [], (res, slept)
+    assert "did not release the controller-runtime lock" in res.summary
 
 
 def _advancing_svc(tmp_path, monkeypatch, op_svc):
