@@ -1321,9 +1321,10 @@ for _si, s in enumerate(STEPS):
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
                         if lined:
-                            ans, _ = _read(c, lambda t: _has(s["ack_line"], t) or _has(s["refused_line"], t))
+                            ans, _ = _read(c, lambda t: False)   # the whole reply: a refusal after an ACK is seen
+                            # the LAST firmware refusal of the step: a later silent attempt never erases it (G2 N1)
                             refusal = next((m.group(1) for ln in _full(ans)
-                                            if (m := _re.fullmatch(s["refused_line"], ln))), None)
+                                            if (m := _re.fullmatch(s["refused_line"], ln))), refusal)
                             acked = _has(s["ack_line"], ans)     # only starts the confirming probe below
                         elif s.get("stop_on"):
                             acked = _said(s["stop_on"], *_read(c, lambda t: _said(s["stop_on"], t, False)))

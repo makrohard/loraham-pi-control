@@ -157,6 +157,7 @@ def test_status_names_no_radio_from_the_bridges_own_log(box, monkeypatch, body, 
                         [{"rid": "r1", "band": "433"}] if comp_id == "meshcom-bridge" and role == "" else [])
     monkeypatch.setattr(Lifecycle, "_original_ceased", lambda self, rec: False)
     lines = radio_start.ceiling_outcomes(svc, "meshcom-bridge")
+    assert svc._post_start_outcomes("meshcom-bridge") == lines      # G2-D N3: the status path `lhpc status` reads
     want = ("radio: NO RADIO: power above panel — the node asks 14 dBm, the panel's ceiling is 10 dBm (the bridge "
             "refused it at 2026-11-17T20:00:05); set the node's power with: lhpc stack poststart meshcom@r1")
     assert lines == ([want] if shown else []), lines

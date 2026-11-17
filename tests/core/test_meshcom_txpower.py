@@ -44,14 +44,15 @@ def _watchdog():
 class _Node:
     """The node's net-console: one command per connection, answered as the firmware answers it. The faults a G2 row
     needs: `info_extra` lines added to `--info`'s reply, `info_late` lines sent 0.5 s after it in a second write (a
-    slow console's later chunk), `txpower_reply` replacing the `--txpower` reply (`None`: as
+    slow console's later chunk), `txpower_reply` replacing the `--txpower` reply (`None`: as the firmware; a list: one
+    per send, the last one kept), `txpower_late` sent 0.5 s after that reply (`None`: nothing; replacing
     the firmware), `sets` False: a `--txpower` that answers but never changes the node's power."""
 
     def __init__(self, power: int, call: str = CALL, top: int = 20, info_extra=(), txpower_reply=None, sets=True,
-                 info_late=()):
+                 info_late=(), txpower_late=None):
         self.power, self.call, self.top, self.got = power, call, top, []
         self.info_extra, self.txpower_reply, self.sets = tuple(info_extra), txpower_reply, sets
-        self.info_late = tuple(info_late)
+        self.info_late, self.txpower_late = tuple(info_late), txpower_late
         self.srv = socket.socket()
         self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.srv.bind(("127.0.0.1", 0))
@@ -71,7 +72,10 @@ class _Node:
         if m := re.fullmatch(r"--txpower (-?\d+)", line):
             n = int(m.group(1))
             if self.txpower_reply is not None:
-                return self.txpower_reply.format(n=n, top=self.top)
+                reply = self.txpower_reply
+                if isinstance(reply, list):
+                    reply = reply.pop(0) if len(reply) > 1 else reply[0]
+                return reply.format(n=n, top=self.top)
             if not 0 <= n <= self.top:
                 return f"{n}txpower {n} dBm not between 0 and max {self.top} dBm\n"
             if self.sets:
@@ -96,10 +100,13 @@ class _Node:
                 line = buf.decode().strip()
                 self.got.append(line)
                 c.sendall(self._answer(line).encode())
-                if line == "--info" and self.info_late:
+                late = ("".join(ln + "\n" for ln in self.info_late) if line == "--info" else
+                        (self.txpower_late or "").format(n=line.split(" ")[-1], top=self.top)
+                        if line.startswith("--txpower") else "")
+                if late:
                     time.sleep(0.5)          # wallclock: a slow console's later chunk, under the reader's 2 s of silence
                     try:
-                        c.sendall("".join(ln + "\n" for ln in self.info_late).encode())
+                        c.sendall(late.encode())
                     except OSError:
                         pass                                 # a reader that stopped early (the callsign's probe) has gone
 
@@ -337,6 +344,20 @@ def test_only_a_fresh_probe_confirms_the_power(tmp_path, reply, refusal):
     assert "(the node may use 7)" in line
     want = refusal and refusal.format(n=n, top=20)
     assert (f"it refused: '{want}'" in line) if want else ("it refused" not in line), line
+
+
+@pytest.mark.needs_session
+@pytest.mark.parametrize("faults", [
+    {"txpower_reply": ["{n}txpower {n} dBm not between 0 and max {top} dBm\n", ""]},   # refused, then silent
+    {"txpower_reply": "{n}set txpower to {n} dBm\n",                                   # an ACK, the refusal later
+     "txpower_late": "{n}txpower {n} dBm not between 0 and max {top} dBm\n"},
+], ids=["refused-then-silent", "refusal-in-a-later-write"])
+def test_the_firmwares_refusal_stays_named(tmp_path, faults):
+    # G2-D N1: a later attempt with no refusal line never erases the firmware's refusal, and the whole reply is read,
+    # so a refusal after an ACK, in a later write, is seen
+    res, node, svc = _poststart(tmp_path, 7, sets=False, **faults)
+    line = next(ln for ln in node.status if " UNVERIFIED " in ln)
+    assert f"it refused: 'txpower {_default_power(svc)} dBm not between 0 and max 20 dBm'" in line, line
 
 
 def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():

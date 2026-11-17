@@ -1033,7 +1033,9 @@ def running_ceiling_stacks(svc, rid: str) -> list:
 def ceiling_change(svc, rid: str, new: dict, apply) -> str:
     """A POWER change for running stacks with a ceiling on radio `rid` (`new`: stack -> its new own-or-row value, ""
     for the default). Lower than the running ceiling: refused (why), as the bridge would keep the old, higher one until
-    a restart (never above the panel on air). Higher: the restart-required marker. "" when allowed."""
+    a restart (never above the panel on air). Higher: the restart-required marker. "" when allowed. It compares with
+    the SAVED POWER, not the ceiling the bridge was launched with: safe, at worst over-restrictive (start at 10, save 15,
+    then 12 is refused though the live ceiling is 10; a restart clears it)."""
     from . import daemon_params
     band, pdef, raised = daemon_radio(svc, rid)[1], power_window(svc, rid)[0], []
     for sid, value in new.items():
