@@ -1070,11 +1070,14 @@ def test_an_ack_from_a_main_gone_during_the_read_is_not_counted(tmp_path):
 
 
 def test_an_exec_whose_main_ended_meanwhile_is_not_ok(tmp_path):
-    """H2: a required exec completes (rc 0) after the main has ended: its result is not the main's, main-gone."""
+    """H2: a required exec completes (rc 0) after the main has ended: its result is not the main's, main-gone. The exec
+    returns only once the main has exited (its pidfd turns readable), so the order is fixed, not raced."""
     main, binding = _bound_main()
+    end_main = ("import os, select, signal, sys; p = int(sys.argv[1]); fd = os.pidfd_open(p); os.kill(p, signal.SIGKILL);"
+                " select.select([fd], [], [])")
     try:
-        rc, steps, err, _t = _hooked(tmp_path, [{"kind": "exec", "argv": ["kill", str(main.pid)], "required": True}],
-                                     binding)
+        rc, steps, err, _t = _hooked(tmp_path, [{"kind": "exec", "argv": [sys.executable, "-c", end_main, str(main.pid)],
+                                                 "required": True}], binding)
     finally:
         main.kill()
         main.wait()
