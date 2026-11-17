@@ -514,8 +514,11 @@ class BinaryOpsMixin:
         if not bi.drop_txn(self._paths, j):
             return False, "the binary-install journal could not be cleared"
         self.invalidate_snapshot()
-        return True, (f"the mesh password of {', '.join(kept)} was changed during the install: its new value kept"
-                      if kept else "")
+        notes = [f"the {c['path']} checkout this install created was kept: nothing older to return to"
+                 for c in clones.values() if c["commit"] == ""]    # restore_clones accepted only {commit, path}
+        if kept:
+            notes.append(f"the mesh password of {', '.join(kept)} was changed during the install: its new value kept")
+        return True, "; ".join(notes)
 
     def _mesh_passwords(self, stack_id: str, comp_id: str) -> dict:
         """{instance key: (its instance, its saved password_file)} of every saved instance with one (K8f S4-4c)."""

@@ -745,3 +745,17 @@ def test_a_journaled_checkout_the_manifest_no_longer_names_there_blocks_the_reco
     assert not res.ok and "meshcom-qemu" in res.summary and comp.source.path in res.summary, res.summary
     assert state["adopted"] == ["a" * 40] and state["commit"] == "a" * 40, state
     assert bi.read_journal(svc._paths)[1] == "valid"
+
+
+def test_a_failed_install_names_the_checkout_it_created_and_kept(tmp_path, monkeypatch):
+    # The checkout did not exist before the install: the rollback has nothing older to return to and keeps it,
+    # and says so by name.
+    svc = _svc(tmp_path, monkeypatch)
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    path = svc.stack("meshcom").component("meshcom-qemu").source.path
+    svc._paths.resolve_source(path).rmdir()                                          # a first install: no checkout
+    _fails_after_the_move(monkeypatch, svc, _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and state["adopted"] == ["a" * 40], res.summary
+    assert any(path in d and "kept" in d for d in res.details), res.details
+    assert bi.read_journal(svc._paths)[1] == "absent"
