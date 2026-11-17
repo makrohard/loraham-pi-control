@@ -1566,6 +1566,20 @@ def test_a_pinned_verdict_reads_unchecked_once_the_running_lhpc_moved_beside_the
     assert _check_detail(box, capsys)[0] == "current"                  # the fetched head is no newer LHPC now
 
 
+def test_a_manual_lhpc_move_shows_after_the_next_check(box, capsys, git, make_repo, monkeypatch, web):
+    """The readers never probe the LHPC checkout (a GET): a hand move without a self-update keeps the stored
+    verdict (docs/provenance.md says so); the next check reads the moved checkout."""
+    _pinned_at_the_dev_tip_waiting_for_lhpc(box, capsys, git, make_repo, monkeypatch)
+    repo = box.lhpc_repo                                               # moved by hand: the cache stays
+    (repo / "BESIDE").write_text("another LHPC\n")
+    git(repo, "add", "BESIDE")
+    git(repo, "commit", "-qm", "beside")
+    assert _status_src(box, capsys) == "update LHPC first"
+    assert "update LHPC first" in _versions_line(box, capsys) and _install_pill(box, web) == "update LHPC first"
+    assert _check_detail(box, capsys)[0] == "current"                  # the checkout moved since that refresh
+    assert _readers(box, capsys, web) == ("current",) * 3
+
+
 def test_a_dev_verdict_reads_unchecked_after_a_saved_remote_override(box, capsys, web):
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     assert _check_detail(box, capsys)[0] == "current"

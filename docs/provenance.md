@@ -37,7 +37,7 @@ For a fetched package (the Meshtastic web client) `--source` picks the release, 
 Every source lives under the runtime root as a managed clone. `lhpc status`, `lhpc status --versions`
 and the stack page show one verdict per source against its own lane, from the last `lhpc source-check` of
 the checked-out commit: `current`, `update available`, `update LHPC first` or `could not check`
-(`unchecked` before a check). A verdict is cached until the next check: a self-update refreshes it, a manual
+(`unchecked` before a check). After a self-update a verdict reads `unchecked` until the next check; a manual
 move of the LHPC checkout shows after the next check. A dirty or missing checkout shows that instead. The pin is a detail, not a verdict.
 
 ## Ownership records
