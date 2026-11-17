@@ -51,7 +51,7 @@ The `lhpc` docs by task; the top-level README covers install. Start with Archite
 
 - [Test matrix](test-matrix.md) — the release test procedure on the box.
 - [Test lab](testlab.md) — stacks against simulated hardware; the verification lanes.
-- [Hardware proof](hardware-proof.md) — the RF test line on real radios; its evidence is the run's record.
+- [Hardware proof](../testlab/hardware/hardware-proof.md) — the RF test line on real radios; its evidence is the run's record.
 - [Test suite](../tests/README.md) — where a test goes and how to run it.
 - [Test-lab package](../testlab/README.md) — the `lhpc-testlab` package.
 

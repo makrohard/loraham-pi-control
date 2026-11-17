@@ -63,7 +63,7 @@ Andere Boards mit diesen Chips: das Preset wählen, dessen Verdrahtung passt
 ([Katalog](docs/cli.md#hardware)); validiert sind sie hier nicht.
 
 Getestet auf **Pi Zero 2W** und **Pi 5**. On air: LoRaHAM Pi HAT, Uputronics-Dual-Stack, Waveshare
-SX1262 433M; die RF-Testlinie: [Hardware-Proof](docs/hardware-proof.md) (englisch).
+SX1262 433M; die RF-Testlinie: [Hardware-Proof](testlab/hardware/hardware-proof.md) (englisch).
 
 ## Stacks
 

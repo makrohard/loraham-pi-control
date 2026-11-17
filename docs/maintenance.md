@@ -245,7 +245,7 @@ The standing rules for the docs and `CHANGELOG.md`; they bind every contributor,
     [release-verification lane](testlab.md#running-the-verification-lanes), no box. That lane
     does not cover the daemon, RadioLib or the shared chat source (the real daemon needs a radio).
     Anything that changes behaviour on hardware is proved on the box
-    ([hardware proof](hardware-proof.md)).
+    ([hardware proof](../testlab/hardware/hardware-proof.md)).
 - **Every release has one slow-target build row:** the `slow-build` job (row C,
   [testlab.md](testlab.md#running-the-verification-lanes)) runs on the release SHA of every
   release, minor, patch and bot alike, and is green with `test_slow_build_calibrated` and

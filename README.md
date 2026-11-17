@@ -59,7 +59,7 @@ Other boards with those chips: choose the preset whose wiring matches
 ([catalog](docs/cli.md#hardware)); they are not validated here.
 
 Tested on **Pi Zero 2W** and **Pi 5**. On the air: LoRaHAM Pi HAT, Uputronics dual stack,
-Waveshare SX1262 433M; the RF test line: [hardware proof](docs/hardware-proof.md).
+Waveshare SX1262 433M; the RF test line: [hardware proof](testlab/hardware/hardware-proof.md).
 
 ## Stacks
 

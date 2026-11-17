@@ -152,7 +152,7 @@ failure of an acquisition (a broken Dockerfile, say) turns red only after the ba
 about half an hour.
 
 `testlab/tests/unit` tests the simulator itself and `testlab/tests/hardware` the hardware test line in dry mode
-([hardware proof](hardware-proof.md)); the four opt-in lanes:
+([hardware proof](../testlab/hardware/hardware-proof.md)); the four opt-in lanes:
 
 - **acceptance** drives the running server and the real `lhpc` executable and verifies the
   effect. `test_http_smoke.py` sweeps the app's own `url_map`: every parameterless GET must

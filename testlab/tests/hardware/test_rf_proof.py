@@ -1,5 +1,5 @@
 """testlab/hardware/rf-proof.sh in dry mode against the example file's simulated bench, read through its output lines only
-(docs/hardware-proof.md): both lanes pass
+(testlab/hardware/hardware-proof.md): both lanes pass
 their self-checks with the expected coverage; absent or ambiguous hardware turns exactly its rows NOT RUN and changes nothing
 else; an incompatible radio is a FAIL; every frame on air is covered by its own `tx` call; the lhpc calls parse at this head;
 and no secret reaches the evidence."""
