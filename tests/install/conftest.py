@@ -107,7 +107,8 @@ def op_svc(tmp_path, monkeypatch):
                  for argv in selfupdate.venv_sync_argvs(sys.executable, checkout)}
         # The new code's freshness sweep after a synced advance: nothing behind, so nothing listed.
         table[(sys.executable, "-m", "lhpc", "source-check", "--json")] = CommandResult(
-            0, '{"ok": true, "summary": "All checked sources are up to date.", "data": {"stacks_behind": []}}\n', "")
+            0, '{"ok": true, "summary": "All checked sources are up to date.", "data": {"stacks_behind": [], '
+               '"stacks_lhpc_first": [], "stacks_unchecked": []}}\n', "")
         table.update(cmds or {})
         fake = FakeSystem(commands=table)
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=rt))
@@ -125,6 +126,27 @@ def op_svc(tmp_path, monkeypatch):
         return svc, fake
     return build
 
+
+
+@pytest.fixture
+def swept_update(op_svc, monkeypatch):
+    """`swept_update(sweep) -> details`: the operator update in a foreground shell after a real advance and a
+    synced venv, whose `lhpc source-check --json` sweep answered `sweep` (a CommandResult). The update stands."""
+    def run(sweep):
+        import sys
+
+        from selfupdate_fakes import WEB_INACTIVE
+
+        from lhpc.core.service_base import ActionResult
+        from lhpc.core.services import ControllerService
+        svc, fake = op_svc(WEB_INACTIVE, units=True, invocation=False)
+        monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+                            ActionResult(True, "Update applied.", data={"already": False}))
+        fake.commands[(sys.executable, "-m", "lhpc", "source-check", "--json")] = sweep
+        res = svc.self_update_apply_operator()
+        assert res.ok and res.summary == "Update applied.", res
+        return res.details
+    return run
 
 @pytest.fixture()
 def systemctl_ok_rows():

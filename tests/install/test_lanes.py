@@ -1697,3 +1697,42 @@ def test_a_remote_tip_is_the_commit_of_the_exact_name(ref, out, sha):
     assert stable_lane.remote_tip(run, GH, ref, 5.0) == sha
     assert asked == [["git", "ls-remote", GH, "HEAD" if ref == "HEAD" else "refs/heads/main"]]
     assert stable_lane.remote_tip(lambda argv, timeout: CommandResult(128, out, "fatal"), GH, ref, 5.0) == ""
+
+
+def _sweep(box, capsys):
+    """What `lhpc source-check --json` prints on the box (real git), as the self-update's sweep receives it."""
+    capsys.readouterr()
+    rc = box.cli("source-check", "--json")
+    return CommandResult(rc, capsys.readouterr().out, "")
+
+
+def test_a_stack_that_needs_lhpc_updated_first_is_named_with_the_prerequisite(
+        box, capsys, git, make_repo, monkeypatch, swept_update):
+    # app sits at this LHPC's pin; the fetched next LHPC (still ahead of the running checkout) pins another commit.
+    assert box.cli("install", "s", "--yes") == 0
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])
+    sweep = _sweep(box, capsys)
+    data = json.loads(sweep.stdout)["data"]
+    assert data["counts"][su.LHPC_FIRST] == 1 and data["counts"][su.BEHIND] == 0, sweep
+    details = swept_update(sweep)
+    assert "Stacks that need LHPC updated first: s (lhpc self-update --apply)." in details, details
+    assert (data["stacks_lhpc_first"], data["stacks_behind"], data["stacks_unchecked"]) == (["s"], [], []), sweep
+
+
+def test_a_stack_behind_and_one_waiting_for_lhpc_are_both_named_update_available_first(
+        box, capsys, git, make_repo, monkeypatch, swept_update):
+    tool = ('[[stack]]\nid = "t"\nname = "t"\nmain = "tool"\n[[stack.component]]\nid = "tool"\nname = "tool"\n'
+            'kind = "service"\nrun_argv = ["true"]\nreadiness = "process"\n[stack.component.source]\n'
+            f'path = "src/tool"\nremote = "{GH}"\nbranch = "main"\npin_commit = "{{}}"\n')
+    box.manifest.write_text(box.manifest.read_text() + tool.format(box.c[0]))
+    assert box.cli("install", "s", "--yes") == 0 and box.cli("install", "t", "--yes") == 0     # both at c1
+    _lhpc_upstream(box, git, make_repo, monkeypatch, box.c[1])                 # s: update LHPC first
+    box.use(GH)
+    box.manifest.write_text(box.manifest.read_text() + tool.format(box.c[1]))  # t: this LHPC pins c2
+    sweep = _sweep(box, capsys)
+    data = json.loads(sweep.stdout)["data"]
+    assert data["counts"][su.LHPC_FIRST] == 1 and data["stacks_behind"] == ["t"], sweep
+    details = swept_update(sweep)
+    assert [d for d in details if "Stacks" in d] == [
+        "Stacks with an update: t. Stacks that need LHPC updated first: s (lhpc self-update --apply)."], details
+    assert data["stacks_lhpc_first"] == ["s"], sweep
