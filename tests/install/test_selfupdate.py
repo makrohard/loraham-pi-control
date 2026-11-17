@@ -443,6 +443,19 @@ def test_an_unreadable_status_at_an_up_to_date_head_is_finished_by_the_overwrite
     assert done["ok"] is True and not done.get("already") and not (env["work"] / "b.txt").exists(), done
 
 
+def test_the_cli_retry_with_an_unreadable_status_at_an_up_to_date_head_offers_the_overwrite(env, monkeypatch, capsys):
+    """The operator's path for the same case: no paths to list, but the retry still prints the overwrite command."""
+    main = _operator_cli(monkeypatch)
+    _cut_cleanup(env, monkeypatch)
+    real_state = selfupdate.local_state
+    monkeypatch.setattr(selfupdate, "local_state", lambda system: {**real_state(system), "status_ok": False,
+                                                                    "dirty": False})
+    capsys.readouterr()
+    assert main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "could not be read" in out and "lhpc self-update --apply --overwrite" in out, out
+
+
 def test_the_helpers_budget_is_the_shipped_units_limit_less_the_margin_for_its_message():
     """The budget comes from the helper unit as shipped (its bytes are frozen): the unit's TimeoutStartSec less
     HELPER_MARGIN_S, a margin the helper's own message and record need. If either drifts, this fails."""
