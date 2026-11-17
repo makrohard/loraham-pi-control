@@ -53,9 +53,13 @@ class FakeMeshChat:
     def __init__(self, code=200, body=_OK, length=None, chunked=False, drip=0.0, drip_from="body",
                  raw=None, stream=None):
         self.calls, self.called, self.stop = [], threading.Event(), threading.Event()
-        self.stream = stream                           # "chunked" | "unframed": 8 MB fast, then it stalls
+        self.stream = stream                           # "chunked" | "unframed" | "chunk-minus-1": 8 MB fast, then it stalls
         if stream == "chunked":
             raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        elif stream == "chunk-minus-1":                # a chunk size of -1, then the bytes unframed
+            raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n-1\r\n"
+        elif stream == "trailers":                     # the last chunk, then trailer lines without end
+            raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n"
         elif stream == "unframed":
             raw = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"
         self.data, end_of_head = (raw, len(raw)) if raw is not None else _response(code, body, length, chunked)
@@ -92,7 +96,8 @@ class FakeMeshChat:
                 if self.stream:                            # far over the 64 KB cap, then it stalls
                     piece = b"x" * 4096
                     for _ in range(2048):
-                        conn.sendall(b"1000\r\n" + piece + b"\r\n" if self.stream == "chunked" else piece)
+                        conn.sendall(b"1000\r\n" + piece + b"\r\n" if self.stream == "chunked"
+                                     else b"X-Pad: " + piece + b"\r\n" if self.stream == "trailers" else piece)
                     self.stop.wait()
                     return
                 for i in range(self.cut, len(self.data)):  # one byte every `drip` seconds
@@ -215,6 +220,62 @@ def test_an_answer_without_a_declared_length_is_capped_by_the_bytes_read(meshcha
     assert rc == 1 and "larger than 65536 bytes" in out and secs < 5, (out, secs)
 
 
+@pytest.mark.parametrize("kw", [
+    pytest.param({"stream": "chunk-minus-1"}, id="minus-1-then-8-MB"),
+    pytest.param({"stream": "trailers"}, id="trailer-lines-without-end"),
+    pytest.param({"raw": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n-2\r\nxx\r\n0\r\n\r\n"},
+                 id="minus-2"),
+])
+def test_malformed_chunk_framing_is_refused_before_any_unbounded_read(meshchat, kw):
+    """G2-FINAL1A B (chunk framing): a chunk size of -1 made http.client read to the end of the stream below the
+    64 KB read (`fp.read(-1)`): the 8 MB were read on until the deadline. Now every read below the chunk decoding
+    is bounded and a negative one is the named failure, at once (-2 was a bare ValueError, G2-GROUP11 r3 B2)."""
+    rc, out, secs = _script(meshchat(**kw).api, timeout="10")
+    want = "larger than 65536 bytes" if kw.get("stream") == "trailers" else "malformed chunk framing"
+    assert rc == 1 and want in out and secs < 5, (out, secs)
+    assert "Traceback" not in out and "read length must" not in out.lower(), out
+
+
+def _full_pipe():
+    """A pipe whose write end is full and blocking, its read end never read: (read fd, write fd)."""
+    import fcntl
+    import os
+    r, w = os.pipe()
+    flags = fcntl.fcntl(w, fcntl.F_GETFL)
+    fcntl.fcntl(w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    try:
+        while True:
+            os.write(w, b"x" * 65536)
+    except BlockingIOError:
+        pass
+    fcntl.fcntl(w, fcntl.F_SETFL, flags)              # blocking again: the child's write would wait
+    return r, w
+
+
+@pytest.mark.parametrize("full, ok", [("stderr", False), ("stdout", True)], ids=["failure-on-full-stderr",
+                                                                                 "success-on-full-stdout"])
+def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, full, ok):
+    """G2-FINAL1A B (output after the deadline): the report is written after the timer is disarmed, so a full
+    blocking pipe (stderr for a failure, stdout for a success, also at the interpreter's exit flush) held the
+    process with no bound. Now the line is expendable: the process ends by its own bound with its exit code."""
+    import os
+    api = meshchat().api if ok else f"127.0.0.1:{_free_port()}"
+    r, w = _full_pipe()
+    p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", "1"],
+                         stdout=w if full == "stdout" else subprocess.DEVNULL,
+                         stderr=w if full == "stderr" else subprocess.DEVNULL)
+    os.close(w)
+    try:
+        rc = p.wait(timeout=10)                       # wallclock: a bound on the child, never paces
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        rc = None
+    finally:
+        os.close(r)
+    assert rc == (0 if ok else 1), rc
+
+
 def test_a_redirect_is_refused_and_never_followed(meshchat):
     """The call is direct: a 302 to another address is the named failure; that address is never
     contacted (code re-round 3, B2)."""
@@ -283,7 +344,7 @@ def test_an_alarm_at_the_arm_is_the_named_failure(monkeypatch, capsys):
 
     def setitimer(which, seconds, *rest):
         real(which, 0)                                                   # never a real timer here
-        if seconds > 0:
+        if seconds == 5:                                                 # the run's arm (--timeout 5), not the report's
             signal.raise_signal(signal.SIGALRM)                          # the alarm lands at the arm
     monkeypatch.setattr(mod.signal, "setitimer", setitimer)
     before = signal.getsignal(signal.SIGALRM)
@@ -311,7 +372,6 @@ _CHUNKED_HEAD = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: c
 
 
 @pytest.mark.parametrize("raw, kind, text", [
-    pytest.param(_CHUNKED_HEAD + b"-2\r\nxx\r\n0\r\n\r\n", "ValueError", "read length must", id="chunk-size-minus-2"),
     pytest.param(b"HTTP/1.1 200 OK\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" + b"[" * 10000 + b"]" * 10000,
                  "", "recursion depth", id="nested-json"),
 ])
