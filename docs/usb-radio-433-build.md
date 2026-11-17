@@ -8,6 +8,11 @@ LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that 
 Keep power off while soldering, and handle the parts ESD-safe: work on a grounded mat or with a wrist
 strap, and touch ground before you touch the CH341A board, the EEPROM or the radio module.
 
+**Licence.** Built with the RFM98PW (about 1 W at 433 MHz), this stick is an amateur radio transmitter:
+you need an amateur radio licence, and you are responsible for keeping to its frequency, power and duty
+limits. Built with an 868 MHz SX1262 module instead (see step 1), it may also be used on the
+licence-free 868 MHz SRD frequencies, within their limits ([band limits](stacks/reticulum.md#band-limits)).
+
 ## Contents
 
 - [1. Parts and tools](#1-parts-and-tools)
@@ -118,8 +123,8 @@ What the USB feed means:
 - A separately regulated 5–6 V supply rated for at least 1 A (the module's 700 mA maximum plus margin),
   with the grounds joined and its positive never tied to USB VBUS, is the alternative for high power.
   Switch it on before you plug in USB, and unplug USB before you switch it off.
-- At any power, keep transmissions short, check the module's temperature, and stay within your licence's
-  power and duty limits for the band.
+- At any power, keep transmissions short, check the module's temperature, and keep to the limits in the
+  licence note at the top.
 
 ## 5. Solder the EEPROM
 
