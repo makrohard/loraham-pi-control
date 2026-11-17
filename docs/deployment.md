@@ -53,6 +53,9 @@ identity verdicts: [controller identity](architecture.md#controller-identity--se
 Back up `config/`, `profiles/` and the app data under `state/` first
 ([backup & restore](operations.md#backup--restore)).
 
+Self-update follows the checkout's `origin`; status and the console say where updates come from,
+naming the official repo when it is another one.
+
 - **One-click (normal path).** "Update & restart now" checks every gate, answers with the
   "Restarting" page, and about 1 s after that response was closed (time for any remaining output to
   flush) writes an exclusively-created request marker (`state/selfupdate.request`, payload
@@ -99,7 +102,7 @@ Back up `config/`, `profiles/` and the app data under `state/` first
 
 - **Identity mismatch** (`self-update blocked: unsafe controller identity …`): fix what the
   message names — a stray symlink in the chain, wrong ownership/mode (`chmod 700`, `chown` to
-  yourself), a detached/renamed branch (`git -C … checkout main`), or a changed `origin` — then
+  yourself), a detached/renamed branch (`git -C … checkout main`), or a missing `origin` — then
   re-check.
 - **Stuck one-click request** (`update recovery required` in the console): run
   `lhpc self-update --recover-request`. It clears a never-claimed request outright, and an

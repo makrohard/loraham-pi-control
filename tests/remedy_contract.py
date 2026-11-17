@@ -14,9 +14,6 @@ IDENTITY_CAUSES = {
         ("checkout branch 'dev' != 'main'", f"git -C {_CHECKOUT} switch main"),
     "checkout has no origin remote":
         ("checkout has no origin remote", f"git -C {_CHECKOUT} remote add origin {{remote}}"),
-    "origin is not the approved canonical remote":
-        ("origin is not the approved canonical remote",
-         f"git -C {_CHECKOUT} remote set-url origin {{remote}}"),
     "{} is group/other-writable": ("src is group/other-writable", "chmod go-w {root}/src"),
     "controller source_path is not the fixed value":
         ("controller source_path is not the fixed value", None),

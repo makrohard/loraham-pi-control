@@ -19,11 +19,25 @@ _RETRY = "lhpc self-update --apply"
 _WRITABLE = " is group/other-writable"
 
 
+class _FWAbort(Exception):
+    """A refusal before the checkout moves (firewall preflight, the console stop, a follow-up marker)."""
+    def __init__(self, result):
+        self.result = result
+
+
+def _with_origin(res: ActionResult, line: str) -> ActionResult:
+    """`res` with where updates come from (`selfupdate.origin_info`'s line) as its last detail."""
+    import dataclasses as _dc
+    return _dc.replace(res, details=[*res.details, line]) if line else res
+
+
 def _identity_remedy(reason: str, root, spec) -> tuple[list[str], list[str]]:
     """(next_commands, details) for an unsafe controller identity, chosen by the cause
     `controller_identity_live` names in `reason`. Text only: the refusal does not change."""
+    from .selfupdate import redact_userinfo
     checkout = f"{root}/src/loraham-pi-control"
-    branch, remote = getattr(spec, "branch", "main"), getattr(spec, "remote", "")
+    # The official URL is shown (in the command too) without its userinfo, as everywhere.
+    branch, remote = getattr(spec, "branch", "main"), redact_userinfo(getattr(spec, "remote", ""))
     if reason == "checkout is in detached HEAD" or reason.startswith("checkout branch "):
         return ([f"git -C {checkout} switch {branch}", _RETRY],
                 [f"  the checkout is off its branch {branch}; git refuses the switch while it "
@@ -32,9 +46,6 @@ def _identity_remedy(reason: str, root, spec) -> tuple[list[str], list[str]]:
     if reason == "checkout has no origin remote":
         return ([f"git -C {checkout} remote add origin {remote}", _RETRY],
                 [f"  the checkout has no origin; lhpc updates from {remote}"])
-    if reason == "origin is not the approved canonical remote":
-        return ([f"git -C {checkout} remote set-url origin {remote}", _RETRY],
-                [f"  the checkout's origin is not {remote}"])
     if reason.endswith(_WRITABLE):
         label = reason[:-len(_WRITABLE)]
         path = {"runtime root": f"{root}", "src": f"{root}/src"}.get(label, checkout)
@@ -97,6 +108,7 @@ class SelfUpdateOpsMixin:
             "head_short": view.get("head_short", ""),
             "update_available": bool(view.get("update_available", False)),
             "identity": view.get("identity"),             # {ok, reason, checked_at} or None
+            "origin_line": view.get("origin_line", ""),   # where updates come from (sanitized)
             "self_update_cmd": "lhpc self-update",
         }
 
@@ -290,12 +302,20 @@ class SelfUpdateOpsMixin:
         except Exception:
             return False
 
+    def _official_remote(self) -> str:
+        """The manifest's `[controller].remote` (the official repo), "" when no controller is declared."""
+        return getattr(self.controller(), "remote", "") or ""
+
     @invalidates_snapshot
     def self_update_check(self) -> ActionResult:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so
         the footer/pages reflect it. Serialized with apply through the self-update lock: if an apply is
         in progress it DEFERS (nonfatal) with the last cached status instead of racing its refs/cache.
-        Fail-soft."""
+        Fail-soft. Every answer ends with where updates come from (the cached `origin_line`)."""
+        res = self._self_update_check()
+        return _with_origin(res, (res.data or {}).get("origin_line", ""))
+
+    def _self_update_check(self) -> ActionResult:
         from . import selfupdate
         try:
             with selfupdate.update_lock(self._paths):
@@ -303,7 +323,8 @@ class SelfUpdateOpsMixin:
                 # write (a separate field could be dropped by a later refresh). GET/status
                 # then renders the cached verdict only.
                 identity = self.controller_identity_live() if self.controller() else None
-                view = selfupdate.refresh_cache(self._system, self._paths, identity=identity)
+                view = selfupdate.refresh_cache(self._system, self._paths, identity=identity,
+                                                official=self._official_remote())
         except selfupdate.SelfUpdateBusy:
             view = selfupdate.status_view(self._paths)        # no fetch, no cache write
             return ActionResult(True, "A self-update is in progress — showing the last known status.",
@@ -786,12 +807,19 @@ class SelfUpdateOpsMixin:
 
     def _self_update_locked(self, force: bool, before_advance=None) -> ActionResult:
         """`before_advance()` (the operator's running console): called after every refusal this apply can
-        decide without changing anything, right before the first change; None to go on, else its refusal."""
+        decide without changing anything, right before the first change; None to go on, else its refusal.
+        The answer (the operator's and the one-click helper's) ends with where updates come from."""
         from . import selfupdate
+        root = selfupdate.repo_root()
+        org = selfupdate.origin_info(self._system, root, self._official_remote()) if root is not None else {}
+        try:
+            res = self._self_update_locked_apply(force, before_advance)
+        except _FWAbort as abort:              # firewall preflight / before_advance refused: returned as it is
+            return abort.result
+        return _with_origin(res, org.get("line", ""))
 
-        class _FWAbort(Exception):
-            def __init__(self, result):
-                self.result = result
+    def _self_update_locked_apply(self, force: bool, before_advance=None) -> ActionResult:
+        from . import selfupdate
 
         class _Diverged(Exception):
             pass
@@ -822,9 +850,7 @@ class SelfUpdateOpsMixin:
 
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
-                                          before_mutation=_before_mutation)
-        except _FWAbort as abort:                            # firewall preflight / before_advance refused
-            return abort.result
+                                          before_mutation=_before_mutation, official=self._official_remote())
         except _Diverged:
             res = {"ok": False, "needs_overwrite": True, "message": selfupdate.DIVERGED_MESSAGE}
 

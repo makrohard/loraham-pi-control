@@ -230,6 +230,36 @@ def _summarize_output(text: str, limit: int = 200) -> str:
     return collapsed
 
 
+# The user/token part of a `scheme://user:token@host/…` URL (greedy to the LAST `@` of the authority, so a
+# password containing `@` goes too). An scp-style `git@host:path` has no scheme and names no secret.
+_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s'\"]*@")
+
+
+def redact_userinfo(text: str) -> str:
+    """`text` with the user/token part of every `scheme://user:token@host` URL in it removed."""
+    return _USERINFO_RE.sub(r"\1", text or "")
+
+
+def origin_info(system: System, root: Path, official: str) -> dict:
+    """Where self-update fetches from, read ONCE here for every checkout it fetches for: the EFFECTIVE
+    `origin` URL (`git remote get-url`, which applies `insteadOf`), compared with the manifest's official
+    URL, then shown without its userinfo. `{present, display, canonical, line}`; the raw URL never leaves
+    this function. An official URL that normalises to "" (degenerate) never matches; with none declared
+    there is no official repo to name."""
+    from .service_base import _canon_git_url
+    r = _git(system, root, ["remote", "get-url", _REMOTE], _LOCAL_TIMEOUT)
+    raw = r.stdout.strip() if r.returncode == 0 else ""
+    if not raw:
+        return {"present": False, "display": "", "canonical": False, "line": ""}
+    want = _canon_git_url(official)
+    canonical = bool(want) and _canon_git_url(raw) == want
+    display = redact_userinfo(raw)
+    line = f"updates from {display}"
+    if not canonical and official:
+        line += f" (different from the official repo {redact_userinfo(official)})"
+    return {"present": True, "display": display, "canonical": canonical, "line": line}
+
+
 def local_state(system: System) -> dict:
     """NETWORK-FREE local snapshot: version + HEAD + branch + dirtiness. `is_git` is False when lhpc
     is not a git checkout (self-update unavailable)."""
@@ -338,12 +368,15 @@ def _deps_changed(system: System, root: Path, ref: str) -> bool:
     return bool(r.returncode == 0 and r.stdout.strip())
 
 
-def check_upstream(system: System, branch: str = "") -> dict:
+def check_upstream(system: System, branch: str = "", official: str = "") -> dict:
     """NETWORK (explicit): fetch the remote branch, then read the upstream HEAD + version LOCALLY.
-    Never touches the working tree. Fail-soft: returns {ok: False, error} on any problem."""
+    Never touches the working tree. Fail-soft: returns {ok: False, error} on any problem. Every answer
+    from a checkout carries `origin` (`origin_info` against `official`), a failed fetch too, and an
+    error text never carries a URL's userinfo (redacted BEFORE the length cut, which could drop the `@`)."""
     root = repo_root()
     if root is None:
         return {"ok": False, "error": "not a git checkout"}
+    org = origin_info(system, root, official)
     br = branch or local_state(system).get("branch") or "main"
     # `--` ends option parsing so a branch name can never be read as a git flag (S5:
     # defense-in-depth — `br` is derived locally today, but guard it if it ever becomes
@@ -354,15 +387,17 @@ def check_upstream(system: System, branch: str = "") -> dict:
     f = _git(system, root, ["fetch", "--quiet", "--force", _REMOTE, "--",
                             f"refs/heads/{br}:refs/remotes/{_REMOTE}/{br}"], _NET_TIMEOUT)
     if getattr(f, "not_found", False):
-        return {"ok": False, "error": "git not found"}
+        return {"ok": False, "error": "git not found", "origin": org}
     if f.returncode != 0:
-        return {"ok": False, "error": _summarize_output(f.stderr) or "fetch failed"}
+        return {"ok": False, "error": _summarize_output(redact_userinfo(f.stderr)) or "fetch failed",
+                "origin": org}
     ref = f"{_REMOTE}/{br}"
     h = _git(system, root, ["rev-parse", ref], _LOCAL_TIMEOUT)
     if h.returncode != 0:
-        return {"ok": False, "error": _summarize_output(h.stderr) or "no upstream ref"}
+        return {"ok": False, "error": _summarize_output(redact_userinfo(h.stderr)) or "no upstream ref",
+                "origin": org}
     head = h.stdout.strip()
-    return {"ok": True, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],
+    return {"ok": True, "origin": org, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],
             "upstream_version": _version_at(system, root, ref),
             "deps_changed": _deps_changed(system, root, ref),
             # Ancestry against the ref THIS fetch just updated (fresh by construction): True means a
@@ -434,10 +469,18 @@ def _is_bool(v) -> bool:
 # field must satisfy its predicate; absent is always allowed (rendered as unknown/default).
 _LOCAL_FIELDS = {"head": _is_str, "head_short": _is_str, "branch": _is_str,
                  "version": _is_str, "root": _is_str, "dirty": _is_bool, "is_git": _is_bool}
+_ORIGIN_FIELDS = {"present": _is_bool, "display": _is_str, "canonical": _is_bool, "line": _is_str}
+
+
+def _is_origin(v) -> bool:
+    return isinstance(v, dict) and _valid_section(v, _ORIGIN_FIELDS)
+
+
 _UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
                     "branch": _is_str, "upstream_head": _is_str,
                     "upstream_head_short": _is_str, "upstream_version": _is_str,
-                    "ff_blocked": _is_bool}     # absent -> False on read
+                    "ff_blocked": _is_bool,     # absent -> False on read
+                    "origin": _is_origin}       # origin_info's sanitized dict (no raw URL)
 _IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_stamp}
 # Outcome of the LAST service-mediated apply (the one-click web update) — shown once the
 # console is back so the operator sees what happened while it was down.
@@ -479,7 +522,7 @@ def write_cache(paths: Paths, data: dict) -> None:
 
 
 def refresh_cache(system: System, paths: Paths, branch: str = "",
-                  identity: dict | None = None, now: int | None = None) -> dict:
+                  identity: dict | None = None, now: int | None = None, official: str = "") -> dict:
     """Do a live upstream check and persist the COMPLETE versioned envelope
     `{schema_version, local, upstream, identity, checked_at}` in ONE atomic write. The
     `identity` verdict (computed by the controller-identity live check in the service
@@ -496,7 +539,7 @@ def refresh_cache(system: System, paths: Paths, branch: str = "",
         identity = prior if isinstance(prior, dict) else None
     last_apply = prior_env.get("last_apply")
     data = {"schema_version": CACHE_SCHEMA_VERSION,
-            "local": local_state(system), "upstream": check_upstream(system, branch),
+            "local": local_state(system), "upstream": check_upstream(system, branch, official),
             "identity": identity if isinstance(identity, dict) else None,
             "last_apply": last_apply if isinstance(last_apply, dict) else None,
             "checked_at": int(time.time()) if now is None else int(now)}
@@ -545,6 +588,8 @@ def status_view(paths: Paths) -> dict:
     local = local if isinstance(local, dict) else {}
     up = cache.get("upstream")
     up = up if isinstance(up, dict) else {}
+    org = up.get("origin")
+    org = org if isinstance(org, dict) else {}
     # CACHED-ONLY: `is_git`/`available` come from the cached `local.is_git` written by the last
     # refresh (local_state) — NEVER a live `repo_root()`/`.git` probe here, so every GET stays
     # read-only. Absent (no cache yet) -> unavailable/unknown until the startup or explicit
@@ -578,6 +623,8 @@ def status_view(paths: Paths) -> dict:
         # Divergence flag from the last check's fetch (False for old caches without the field):
         # a normal --ff-only apply will REFUSE; proves divergence only, never a force-push.
         "ff_blocked": bool(up.get("ff_blocked") is True),
+        # Where updates come from (the last check's `origin_info`, sanitized; kept by a failed fetch too).
+        "origin_line": _cstr(org.get("line")), "origin_canonical": bool(org.get("canonical") is True),
         "checked_at": _cint(cache.get("checked_at")),
         "ver_color": ver_color, "commit_color": commit_color,
         "update_available": update_available,
@@ -623,7 +670,8 @@ def _last_apply_view(raw):
 
 # ---- apply + restart guidance -----------------------------------------------------------------
 
-def apply_update(system: System, paths: Paths, *, force: bool = False, before_mutation=None) -> dict:
+def apply_update(system: System, paths: Paths, *, force: bool = False, before_mutation=None,
+                 official: str = "") -> dict:
     """Fast-forward the checkout to the upstream branch (fetching fresh). Returns a result dict:
     {ok, message, dirty, already, deps_changed, new_head_short, new_version}.
 
@@ -650,7 +698,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
                 "message": "The checkout is not on a branch (detached HEAD) — self-update follows "
                            "a branch; switch the checkout back to it first."}
     br = local.get("branch") or "main"
-    up = check_upstream(system, br)
+    up = check_upstream(system, br, official)
     if not up.get("ok"):
         return {"ok": False, "unreachable": True,
                 "message": f"Could not reach upstream: {up.get('error', '')}"}
@@ -743,7 +791,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         return {"ok": False,
                 "message": "Update could not be applied — git refused the fast-forward."
                 + (f" {detail}" if detail else "")}
-    refresh_cache(system, paths, br)
+    refresh_cache(system, paths, br, official=official)
     out = {"ok": True, "deps_changed": bool(up.get("deps_changed", False)),
            "new_head_short": up.get("upstream_head_short", ""),
            "new_version": up.get("upstream_version", "")}

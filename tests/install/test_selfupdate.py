@@ -1181,7 +1181,7 @@ def test_dirty_refusal_names_the_paths_but_keeps_the_message_single_line(tmp_pat
                         lambda s: {"is_git": True, "dirty": True, "head": "a" * 40,
                                    "branch": "main", "version": "1"})
     monkeypatch.setattr(selfupdate, "check_upstream",
-                        lambda s, b="": {"ok": True, "upstream_head": "b" * 40, "deps_changed": False})
+                        lambda s, b="", official="": {"ok": True, "upstream_head": "b" * 40, "deps_changed": False})
     cmds = {("git", "-C", "/x", "status", "--porcelain"): CR(0, "?? scratch.txt\n", "")}
     res = selfupdate.apply_update(FakeSystem(commands=cmds).system, gitrepo.runtime_paths(tmp_path))
     assert res["ok"] is False and res["dirty"] is True

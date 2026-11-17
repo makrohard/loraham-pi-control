@@ -1135,13 +1135,10 @@ _GIT_ENV = {
 @pytest.mark.contract
 @pytest.mark.parametrize("origin, command", [
     (None, "remote add origin"),
-    ("https://example.invalid/other.git", "remote set-url origin"),
 ])
-def test_live_identity_tells_a_missing_origin_from_a_wrong_one(tmp_path, monkeypatch, origin,
-                                                                command):
-    """`lhpc self-update --apply` on a real self-hosted checkout with no origin, and with a
-    foreign origin: the identity check tells the two apart, and the refusal names
-    `git remote add` for the first and `git remote set-url` for the second."""
+def test_live_identity_refuses_a_checkout_without_origin(tmp_path, monkeypatch, origin, command):
+    """`lhpc self-update --apply` on a real self-hosted checkout with no origin: refused, and the
+    refusal names `git remote add`. (Any origin is accepted and named: test_selfupdate_origin.py.)"""
     import os
     import subprocess
 

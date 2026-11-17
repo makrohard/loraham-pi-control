@@ -69,7 +69,7 @@ def _box(tmp_path, monkeypatch, *, nginx_t):
     assert webserver.read_applied(paths) == now             # ... deployed as the previous one's
     fake.commands[("nginx", "-t", "-c", staged)] = nginx_t
 
-    def advance(system, paths_, *, force=False, before_mutation=None):
+    def advance(system, paths_, *, force=False, before_mutation=None, official=""):
         if before_mutation is not None:
             before_mutation("a" * 40, "b" * 40, "main", False)
         return {"ok": True, "deps_changed": False, "new_head_short": "bbbbbbb",
@@ -262,7 +262,7 @@ def _update_without_nginx(tmp_path, monkeypatch):
     rows.update(WEB_INACTIVE)
     fake = FakeSystem(commands=rows, listeners=list(_LISTENERS))
 
-    def advance(system, paths_, *, force=False, before_mutation=None):
+    def advance(system, paths_, *, force=False, before_mutation=None, official=""):
         if before_mutation is not None:
             before_mutation("a" * 40, "b" * 40, "main", False)
         return {"ok": True, "deps_changed": False, "new_head_short": "bbbbbbb",

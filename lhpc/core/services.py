@@ -425,8 +425,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             install, etc.). NEUTRAL, not a failure — self-update proceeds via the normal
             `repo_root()` mechanism and apply is NOT blocked.
           * `unsafe` — the deployment IS self-hosted but the in-root checkout/layout is
-            tampered/misconfigured (symlink leaf, group/other-writable, wrong branch/origin,
-            repo/package mismatch). Apply IS blocked.
+            tampered/misconfigured (symlink leaf, group/other-writable, wrong branch, no
+            origin, repo/package mismatch). Apply IS blocked. Which repo `origin` is, is not
+            checked: self-update follows it and names it (`selfupdate.origin_info`).
           * `ok` — self-hosted and every strict check passed.
         `ok` is the boolean `status == "ok"` for callers that only care about the green path.
 
@@ -499,15 +500,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return verdict("unsafe", "checkout is in detached HEAD")
         if head_branch != spec.branch:
             return verdict("unsafe", f"checkout branch {head_branch!r} != {spec.branch!r}")
-        o = _su._git(self._system, Path(real_checkout), ["config", "--get", "remote.origin.url"], 10.0)
-        origin = o.stdout.strip() if o.returncode == 0 else ""
-        canon_spec = _canon_git_url(spec.remote)
-        # Reject an EMPTY canonical on either side: a degenerate manifest remote (".git",
-        # "/", "https://") canonicalizes to "" and would otherwise match a checkout with NO
-        # origin (also "") — a false-accept. A valid, non-empty canonical must match.
-        if not canon_spec or _canon_git_url(origin) != canon_spec:
-            return verdict("unsafe", "checkout has no origin remote" if canon_spec and not origin
-                           else "origin is not the approved canonical remote")
+        # Any origin is accepted (self-update follows it and names it: `origin_info`, the one place it is
+        # read); a checkout with NO origin has nothing to update from.
+        if not _su.origin_info(self._system, Path(real_checkout), spec.remote)["present"]:
+            return verdict("unsafe", "checkout has no origin remote")
         return verdict("ok", "identity ok")
 
     @property

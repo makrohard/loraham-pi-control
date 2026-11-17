@@ -271,13 +271,14 @@ def test_identity_rejects_detached_head(identity_svc):
     assert not v["ok"] and "detached" in v["reason"]
 
 
-def test_identity_rejects_wrong_origin(tmp_path, monkeypatch):
-    co = _make_checkout(tmp_path, origin="https://github.com/evil/other.git")
+def test_identity_accepts_any_origin(tmp_path, monkeypatch):
+    """Self-update follows the checkout's own origin, whichever repo it is (and names it)."""
+    co = _make_checkout(tmp_path, origin="https://github.com/someone/other.git")
     monkeypatch.setattr(selfupdate, "repo_root", lambda: co)
     monkeypatch.setattr(lhpc, "__file__", str(co / "lhpc" / "__init__.py"))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
     v = svc.controller_identity_live()
-    assert not v["ok"] and "origin" in v["reason"]
+    assert v["ok"], v["reason"]
 
 
 # --------------------------------------------------------------------------- cache hardening
@@ -346,7 +347,7 @@ def test_cache_symlink_rejected(tmp_path):
 def test_refresh_writes_full_envelope_atomically(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     monkeypatch.setattr(selfupdate, "local_state", lambda s: {"head": "h", "head_short": "h"})
-    monkeypatch.setattr(selfupdate, "check_upstream", lambda s, b="": {"ok": True})
+    monkeypatch.setattr(selfupdate, "check_upstream", lambda s, b="", official="": {"ok": True})
     ident = {"ok": True, "reason": "identity ok", "checked_at": 5}
     selfupdate.refresh_cache(FakeSystem(cmdlines_data={}).system, paths, identity=ident, now=9)
     raw = json.loads(_cache_path(tmp_path).read_text())
@@ -496,8 +497,8 @@ def test_canon_git_url_preserves_path_case():
 
 
 def test_identity_rejects_degenerate_remote(tmp_path, monkeypatch):
-    """Audit A: a controller whose remote canonicalizes to '' must NOT match a checkout with
-    no origin (both would otherwise be '')."""
+    """Audit A: a controller whose remote canonicalizes to '' never makes a checkout with no
+    origin acceptable (no origin = nothing to update from)."""
     co = _make_checkout(tmp_path)
     _git(co, "remote", "remove", "origin")               # checkout has NO origin
     monkeypatch.setattr(selfupdate, "repo_root", lambda: co)
@@ -540,7 +541,7 @@ def test_apply_refresh_preserves_identity(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "state").mkdir()
     monkeypatch.setattr(selfupdate, "local_state", lambda s: {"head": "h"})
-    monkeypatch.setattr(selfupdate, "check_upstream", lambda s, b="": {"ok": True})
+    monkeypatch.setattr(selfupdate, "check_upstream", lambda s, b="", official="": {"ok": True})
     ident = {"ok": True, "reason": "identity ok", "checked_at": 5}
     selfupdate.refresh_cache(FakeSystem(cmdlines_data={}).system, paths, identity=ident, now=9)
     # a later refresh WITHOUT an identity (apply_update's call) must keep it

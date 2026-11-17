@@ -177,7 +177,7 @@ DYNAMIC = {
     ("lhpc/core/service_selfupdate.py", "self_update_apply"): (1,
         "`_identity_remedy` returns the remedy commands, or the refusal's details say nothing to run",
         ("tests/core/test_controller.py::test_self_update_apply_blocked_by_unsafe_identity",)),
-    ("lhpc/core/service_selfupdate.py", "_self_update_locked"): (2,
+    ("lhpc/core/service_selfupdate.py", "_self_update_locked_apply"): (2,
         "`nxt` is set per refusal kind (where it stays empty the details say nothing to run here); "
         "the restart instructions always carry their commands",
         ("tests/install/test_selfupdate.py::test_a_detached_checkout_is_refused_with_the_switch_back",

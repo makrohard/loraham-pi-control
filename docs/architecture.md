@@ -411,10 +411,10 @@ explicit "check now", and immediately before an apply:
 
 - **ok** — self-hosted and verified: the checkout is under the runtime root, no symlink in the
   `root → src → checkout` chain, owned by the service user with no group/other write, its realpath
-  equals both `repo_root()` and the imported package, on `main` with the approved canonical
-  `origin`.
+  equals both `repo_root()` and the imported package, on `main` with an `origin` (any repo:
+  self-update follows it and names it).
 - **unsafe** — self-hosted but tampered/misconfigured (symlink, group-writable, wrong
-  branch/origin, mismatch). **Blocks apply.**
+  branch, no origin, mismatch). **Blocks apply.**
 - **not_applicable** — a dev checkout. Does not block; self-update uses `repo_root()`.
 
 A same-account process replacing the checkout mid-check is **out of the threat model**: LHPC

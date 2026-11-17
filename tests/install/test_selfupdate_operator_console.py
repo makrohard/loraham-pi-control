@@ -150,7 +150,7 @@ def _unsafe_identity(env, monkeypatch):
     monkeypatch.setattr(ControllerService, "controller", lambda self: SimpleNamespace(
         branch="main", remote="https://example.invalid/loraham-pi-control.git"))
     monkeypatch.setattr(ControllerService, "controller_identity_live", lambda self: {
-        "status": "unsafe", "reason": "origin is not the approved canonical remote"})
+        "status": "unsafe", "reason": "checkout is in detached HEAD"})
 
 
 def _unreachable(env):

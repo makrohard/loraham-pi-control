@@ -168,9 +168,11 @@ def test_a_token_in_the_official_url_is_never_shown(world, monkeypatch, capsys):
     assert "C4NON" not in out and "C4NON" not in (world.rt / "state" / "selfupdate.json").read_text()
 
 
-def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pad", [0, 180], ids=["short", "cut-before-the-at"])
+def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch, pad):
     """Test 8: a git that echoes the credentialed URL in its fetch error (older gits did): the error
-    is returned without the token, and the result still says where it tried to update from."""
+    is returned without the token, and the result still says where it tried to update from. With
+    `pad`, the error's 200-character cut falls between the token and its `@`."""
     from lhpc.core.probes.backends import FakeSystem
     monkeypatch.setattr(selfupdate, "repo_root", lambda: tmp_path)
     url = "https://user:S3CRET@example.invalid/lhpc.git"
@@ -180,19 +182,23 @@ def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch):
             g("status", "--porcelain"): CommandResult(0, "", ""),
             g("remote", "get-url", "origin"): CommandResult(0, url + "\n", ""),
             g("fetch", "--quiet", "--force", "origin", "--", "refs/heads/main:refs/remotes/origin/main"):
-                CommandResult(128, "", f"fatal: unable to access '{url}/': Could not resolve host\n")}
+                CommandResult(128, "", "r" * pad + f"'{url}/': Could not resolve host\n")}
     out = selfupdate.check_upstream(FakeSystem(commands=cmds).system, "main", official="https://x.invalid/o.git")
     assert out["ok"] is False and "S3CRET" not in repr(out), out
-    assert "https://example.invalid/lhpc.git" in out["error"], out
+    assert "S3C" not in out["error"] and ("https://example.invalid" in out["error"] or pad), out
     assert out["origin"]["line"] == _line("https://example.invalid/lhpc.git", "https://x.invalid/o.git")
 
 
-def test_a_degenerate_official_url_never_matches(world, monkeypatch, capsys):
-    """Test 9: an official URL that normalises to "" never counts as matching an origin."""
+@pytest.mark.parametrize("origin", ["fork", "/"], ids=["fork", "origin-also-degenerate"])
+def test_a_degenerate_official_url_never_matches(world, monkeypatch, capsys, origin):
+    """Test 9: an official URL that normalises to "" never counts as matching an origin, not even
+    one that normalises to "" as well ("/": "" == "" must not read as the official repo)."""
     _official(monkeypatch, ".git")
-    assert world.main(["self-update"]) == 0
+    url = world.fork if origin == "fork" else origin
+    gitrepo.git(world.co, "remote", "set-url", "origin", str(url))
+    world.main(["self-update"])                             # "/" cannot be fetched: the line stays
     out = capsys.readouterr().out
-    assert _line(world.fork, ".git") in out.splitlines(), out
+    assert _line(url, ".git") in out.splitlines(), out
     assert _svc(world).self_update_status()["origin_canonical"] is False
 
 
@@ -216,3 +222,14 @@ def test_an_unreachable_fork_still_says_where_it_tried(world, tmp_path, capsys):
     assert world.main(["self-update"]) == 1
     out = capsys.readouterr().out
     assert "Could not reach upstream" in out and _line(gone, world.official) in out.splitlines(), out
+
+
+def test_the_no_origin_remedy_never_shows_a_token(world, monkeypatch, capsys):
+    """Test 8: a checkout without origin is refused with `git remote add origin <official>`; an
+    official URL carrying userinfo is printed without it, in the command and in the text."""
+    _official(monkeypatch, "https://user:C4NON@github.com/makrohard/loraham-pi-control.git")
+    gitrepo.git(world.co, "remote", "remove", "origin")
+    assert world.main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "remote add origin https://github.com/makrohard/loraham-pi-control.git" in out, out
+    assert "C4NON" not in out, out

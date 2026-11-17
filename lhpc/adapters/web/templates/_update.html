@@ -18,6 +18,7 @@
       <td><span class="ver ver-{{ st.commit_color }}">@{{ st.head_short or '?' }}</span>{% if st.dirty %} <span class="pill">dirty</span>{% endif %}</td>
       <td class="mono">{{ st.upstream_head_short or '—' }}</td></tr>
     <tr><th>Branch</th><td class="mono">{{ st.branch or '—' }}</td><td></td></tr>
+    {% if st.origin_line %}<tr><th>Source</th><td colspan="2" class="mono">{{ st.origin_line }}</td></tr>{% endif %}
   </table>
   {# Controller identity (name/version/identity) is shown in the row summary above, not repeated
      here. Keep the UNSAFE reason visible though — an apply is blocked when identity is unsafe. #}

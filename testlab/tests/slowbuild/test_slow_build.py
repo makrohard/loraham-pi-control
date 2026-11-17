@@ -557,10 +557,12 @@ def _box_at(tmp_path: Path, prev: str, cand: str) -> tuple[Path, dict, Path, Pat
     _git("clone", "--quiet", "--branch", "main", str(remote), str(co))
     _git("-C", str(co), "reset", "--quiet", "--hard", prev)
     _harden_box(root, co)
-    # A box's origin is the approved canonical remote, which the helper's controller-identity
-    # check demands of an in-root checkout; the lane serves it from the local candidate remote
-    # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box. Only the
-    # previous release's `[controller]` table is read: its stacks are that release's, not this parser's.
+    # A box's origin is the official repo, which the PREVIOUS release's controller-identity check
+    # still demands of an in-root checkout; the lane serves it from the local candidate remote
+    # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box. From this
+    # release on any origin is accepted, and the line names the EFFECTIVE URL: "updates from <the
+    # candidate remote> (different from the official repo …)". Only the previous release's
+    # `[controller]` table is read: its stacks are that release's, not this parser's.
     prev_manifest = tomllib.loads((co / "lhpc" / "data" / "manifest.example.toml").read_text())
     canonical = parse_controller(prev_manifest).remote
     _git("-C", str(co), "remote", "set-url", "origin", canonical)
