@@ -459,6 +459,7 @@ if cfg.get("virtual"):
     time.monotonic, time.sleep = _mono, _sleep
     _cc = socket.create_connection
     def _connect(*a, **k):
+        _trace.write("connect %.2f\n" % _now[0])
         _now[0] += cfg.get("connect_cost", 0.0)
         return _cc(*a, **k)
     socket.create_connection = _connect
@@ -496,6 +497,7 @@ def _chunk(read):
     _trace.write("read %.2f\n" % _now[0])
     _act("block")
     d = read()
+    _trace.write("got %d %d\n" % (len(d), int(bool(_pat) and _pat in d)))
     if cfg.get("virtual"):
         _now[0] += cfg.get("read_cost", 0.0)
     if _pat and _pat in d:
@@ -531,6 +533,8 @@ def _open(p, *a, **k):
 def _osopen(p, flags=os.O_RDONLY, *a, **k):
     if isinstance(p, str) and p in _logs:
         _now[0] += cfg.get("open_cost", 0.0)
+    if isinstance(p, str) and p.startswith("/proc/self/fd/") and os.path.realpath(p) in _logs:
+        _now[0] += cfg.get("reopen_cost", 0.0)            # the readable reopen through the pin
     if isinstance(p, str) and not flags & getattr(os, "O_PATH", 0):     # a pin opens nothing: not traced
         target = os.path.realpath(p)
         if target in _logs or p in _logs:
@@ -546,7 +550,20 @@ def _stat(p, *a, **k):
         _touched(p)
     return r
 def _pread(fd, n, off):
+    if cfg.get("short"):
+        n = min(n, cfg["short"])                          # the kernel may return less than asked
     return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 or off == 0 else _rpread(fd, n, off)
+_rclose, _eio = os.close, [False]
+def _close(fd):
+    target = ""
+    try:
+        target = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        pass
+    _rclose(fd)
+    if cfg.get("close_eio") and not _eio[0] and target in _logs:
+        _eio[0] = True
+        raise OSError(5, "Input/output error")            # released, but the close reports an error
 def _leaks():
     for name in os.listdir("/proc/self/fd"):
         try:
@@ -555,7 +572,7 @@ def _leaks():
             continue
         if t in _logs or os.path.realpath(t) in _logs:
             _trace.write("leak %s\n" % t)
-builtins.open, os.open, os.pread, os.stat = _open, _osopen, _pread, _stat
+builtins.open, os.open, os.pread, os.stat, os.close = _open, _osopen, _pread, _stat, _close
 import atexit
 atexit.register(lambda: (_leaks(), _trace.write("end %.1f\n" % _now[0])))
 runpy.run_path(sys.argv[1], run_name="__main__")
@@ -679,8 +696,10 @@ def test_a_line_found_only_after_the_deadline_is_not_ready(tmp_path):
     happened, the line was in it, and the wait still timed out."""
     log = tmp_path / "boot.log"
     log.write_text(LINE)
-    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, read_cost=2.0, logs=[str(log)])
-    assert [ln for ln in trace if ln.startswith("read ")] == ["read 0.00"], trace  # rule-10: a trace line's first word is its kind
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, read_cost=2.0, logs=[str(log)],
+                                    pattern="Console started on port 2323")
+    reads = [ln for ln in trace if ln.startswith(("read ", "got "))]  # rule-10: a trace line's first word is its kind
+    assert reads == ["read 0.00", f"got {len(LINE)} 1"], trace           # the read happened and held the line
     assert (rc, steps[0]["outcome"]) == (1, "timeout"), (steps, err)
 
 
@@ -754,12 +773,13 @@ def test_a_deadline_that_passes_between_the_check_and_the_sleep_still_records_th
     assert (rc, [st["outcome"] for st in steps]) == (1, ["timeout"]), (steps, err)
 
 
-def test_no_read_is_requested_after_a_slow_open_used_up_the_deadline(tmp_path):
-    """B3 (R3d): opening the log takes 2 s of a 1 s budget (a stalled mount); no read of it starts after the
-    deadline: each read's start is traced on the virtual clock."""
+@pytest.mark.parametrize("slow", ["open_cost", "reopen_cost"], ids=["the-pin", "the-readable-reopen"])
+def test_no_read_is_requested_after_a_slow_open_used_up_the_deadline(tmp_path, slow):
+    """B3 (R3d): pinning the log, or reopening it readable through the pin, takes 2 s of a 1 s budget; no read of
+    it starts after the deadline: each read's start is traced on the virtual clock."""
     log = tmp_path / "uart.log"
     log.write_text("x" * (3 * _C1))
-    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, open_cost=2.0, logs=[str(log)])
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, logs=[str(log)], **{slow: 2.0})
     late = [ln for ln in trace if ln.startswith("read ") and float(ln.split()[1]) >= 1.0]
     assert steps[0]["outcome"] == "timeout" and not late, (steps, trace, err)
 
@@ -815,13 +835,21 @@ def test_a_tty_swapped_in_after_the_path_was_looked_at_is_never_opened(tmp_path)
     assert f"open {tty}" not in trace and steps[0]["outcome"] == "timeout", (steps, trace, err)
 
 
-def test_a_log_larger_than_the_cap_is_scanned_from_its_start_and_says_so(tmp_path):
+@pytest.mark.parametrize("at, outcome", [((16 << 20) - len(LINE) - 1, "ready"), ((16 << 20) + 10, "timeout")],
+                         ids=["line-just-inside", "line-just-beyond"])
+def test_a_log_larger_than_the_cap_is_scanned_to_the_cap_and_says_so(tmp_path, at, outcome):
+    """A 32 MiB log: a line ending just inside the first 16 MiB is found; one just beyond is not, and the wait
+    says it scanned only the first 16 MiB."""
     log = tmp_path / "uart.log"
     with open(log, "wb") as f:
-        f.truncate(32 << 20)                      # 32 MiB, no line
+        f.truncate(32 << 20)
+        f.seek(at)
+        f.write(LINE.encode())
     rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 1)], virtual=True, logs=[str(log)])
-    assert steps[0]["outcome"] == "timeout" and steps[0]["detail"] == "scanned the first 16 MiB of a larger log", steps
-    assert "scanned the first 16 MiB of a larger log" in err, err
+    assert steps[0]["outcome"] == outcome, (steps, err)
+    if outcome == "timeout":
+        assert steps[0]["detail"] == "scanned the first 16 MiB of a larger log", steps
+        assert "scanned the first 16 MiB of a larger log" in err, err
 
 
 def test_a_pinned_file_outside_the_roots_is_never_read(tmp_path):
@@ -859,3 +887,42 @@ def test_a_source_root_linked_elsewhere_still_counts_as_the_source_root(tmp_path
     os.symlink(elsewhere, src)
     rc, steps, err, _t = _hooked(tmp_path, [_lw(src / ".run" / "uart.log", 3)], virtual=True, source=str(src))
     assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_a_log_read_in_short_pieces_is_read_to_its_end_before_deciding(tmp_path):
+    """The kernel may return less than asked: the read goes on to the size (or EOF) and the line in the pieces
+    counts."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE + "y" * 1000)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], short=16)
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_a_log_rewritten_during_the_read_is_judged_by_a_consistent_read(tmp_path):
+    """B1/B4: the read holds the line, but the file is rewritten in place (same inode and size, a new mtime) while
+    it is read: that read is not one version, so it is read again, and the new version has no line."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE + "y" * 100)
+    n = len(LINE) + 100
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)],
+                                 on_read={"1": ["rewrite", str(log), [["x", n]]]})
+    assert steps[0]["outcome"] == "timeout", (steps, err)
+
+
+def test_an_error_closing_one_descriptor_still_closes_the_other_and_keeps_the_record(tmp_path):
+    """F5: closing the readable descriptor reports EIO (a flush error); the pin is closed all the same and the wait
+    records its outcome."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 3, optional=True), {"kind": "delay", "seconds": 1}],
+                                    virtual=True, logs=[str(log)], close_eio=True)
+    assert [st["kind"] for st in steps] == ["log_wait"] and steps[0]["outcome"] in ("ready", "timeout"), (steps, err)
+    assert not [ln for ln in trace if ln.startswith("leak ")], trace  # rule-10: a trace line's first word is its kind
+
+
+def test_an_expired_budget_starts_no_connect(tmp_path):
+    """The stop check passes at 0.5 s of a 1 s budget, but by the connect's own reading the budget is spent: no
+    connect starts (not even one with a token timeout)."""
+    rc, steps, err, trace = _hooked(tmp_path, [{"kind": "tcp_wait", "host": "127.0.0.1", "port": _closed_port(),
+                                                "timeout": 1, "required": True}], virtual=True, delta=0.5)
+    assert steps[0]["outcome"] == "timeout" and not [ln for ln in trace if ln.startswith("connect ")], (steps, trace)  # rule-10: a trace line's first word is its kind

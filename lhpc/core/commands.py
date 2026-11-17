@@ -662,8 +662,8 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             full = _paths_subst(path, runtime, source, band, inst)
             roots = tuple(r.rstrip("/") + "/" for r in (runtime, source) if r.rstrip("/"))
             if not full.startswith(roots) or ".." in full.split("/"):
-                # LHPC's own files only, under its runtime or source root (both on local storage: a network
-                # filesystem there is out of scope, docs/deployment.md)
+                # LHPC's own files only, under its runtime or source root (both on local block storage: FUSE and
+                # network filesystems there are out of scope, docs/deployment.md)
                 raise CommandError(f"log_wait: path must lie under the runtime or source root: {path!r}")
             resolved.append({"kind": "log_wait", "path": full,
                              "roots": [os.path.realpath(r) for r in (runtime, source) if r.rstrip("/")],
@@ -906,12 +906,31 @@ def _why_stop(end):
 
 _CAP = 16 << 20                            # a log is read from its start up to this; a larger one is said so
 
+def _snapshot(rfd, end):
+    # The file's first _CAP bytes, read to that size or EOF, as one consistent version: (inode, size, mtime_ns)
+    # before and after the read must agree, else it is read once more. None: no consistent read in two (or a stop).
+    for _ in (1, 2):
+        a = os.fstat(rfd)
+        want, data = min(a.st_size, _CAP), b""
+        while len(data) < want:
+            if _why_stop(end):
+                return None                       # nothing starts after the deadline or main's end
+            chunk = os.pread(rfd, want - len(data), len(data))
+            if not chunk:
+                break
+            data += chunk
+        b = os.fstat(rfd)
+        if (a.st_ino, a.st_size, a.st_mtime_ns) == (b.st_ino, b.st_size, b.st_mtime_ns):
+            return data, a.st_size > _CAP
+    return None
+
 def _log_scan(s, end, t0, lbl):
     # ONE pass per poll and no state between passes. The path's file is pinned with O_PATH, which opens no device
-    # (a FIFO, a tty or a serial port is never opened), must be a regular file, and is read from its start in ONE
-    # pread through the pin; a hit counts only if the path still names that file afterwards and the deadline and
-    # the bound main still hold. Both descriptors are closed on every exit. The files are LHPC's own, under its
-    # runtime and source roots on local storage: a stalled network filesystem there is out of scope.
+    # (a FIFO, a tty or a serial port is never opened), must be a regular file under the roots, and is read from
+    # its start through the pin as one consistent version (_snapshot); a hit counts only if the path still names
+    # that file afterwards and the deadline and the bound main still hold. Both descriptors are closed on every
+    # exit, each on its own. Boundary: the files are LHPC's own, under its runtime and source roots on local block
+    # storage; FUSE and network filesystems there are out of scope, and so is a rewrite within one mtime tick.
     path, pat = s["path"], s["pattern"].encode()
     tries, seen, nxt, warned, big = 0, "", t0 + 30, False, False
     while True:
@@ -932,23 +951,24 @@ def _log_scan(s, end, t0, lbl):
                     sys.stderr.write("log_wait %s: %s %s\\n" % (lbl, path, "is outside the runtime and source roots"
                                                                   if outside else "is not a regular file"))
                     warned = True
-            elif not _why_stop(end):              # no read starts once a stop holds
+            elif not _why_stop(end):              # no reopen once a stop holds
                 rfd = os.open("/proc/self/fd/%d" % pfd, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
-                want = min(st.st_size, _CAP)
-                big = st.st_size > _CAP
-                data = os.pread(rfd, want, 0)
-                if len(data) < want:
-                    again = True                  # a short read (truncated meanwhile): look again at once
-                elif pat in data:
-                    cur = os.stat(path)
-                    hit = (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino)
-                    again = not hit               # the path names another file now: read that one at once
+                got = _snapshot(rfd, end)         # checks the stop before every read, the reopen's time included
+                if got is not None:
+                    data, big = got
+                    if pat in data:
+                        cur = os.stat(path)
+                        hit = (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino)
+                        again = not hit           # the path names another file now: read that one at once
         except OSError:
             pass                                  # absent (a guest provisioning) or unreadable: not yet
         finally:
             for fd in (rfd, pfd):
                 if fd is not None:
-                    os.close(fd)
+                    try:
+                        os.close(fd)              # each on its own: an error closing one never skips the other
+                    except OSError:
+                        pass                      # the descriptor is released even when close reports an error
         if hit:
             now = time.monotonic()
             return _why_stop(end) or "ready", tries, seen, now, big
@@ -1022,10 +1042,13 @@ for _si, s in enumerate(STEPS):
                 oc = _why_stop(end)
                 if oc:
                     break
+                rest = end - time.monotonic()
+                if rest <= 0:           # an expired budget starts nothing, not even a short connect
+                    oc = _why_stop(end) or "timeout"
+                    break
                 tries += 1
                 try:                    # an IP address (the resolver's rule): no name lookup, only the connect
-                    socket.create_connection((s["host"], s["port"]),
-                                             max(0.01, min(2.0, end - time.monotonic()))).close()
+                    socket.create_connection((s["host"], s["port"]), min(2.0, rest)).close()
                     oc = _why_stop(end) or "ready"
                     break
                 except OSError:
