@@ -40,6 +40,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
     `run(remote, pin)` = `lhpc update s --source pinned --yes` with the manifest naming that remote and pin."""
     pine_work = tmp_path / "pine-work"
     x = make_repo(pine_work, {"libpinedio-usb.c": "x\n"})
+    git(pine_work, "branch", "-M", "main")            # the manifest's branch (STABLE-LANE O1 reads it for every lane)
     pine = tmp_path / "pine.git"
     git(tmp_path, "clone", "-q", "--bare", str(pine_work), str(pine))
     fork_work = tmp_path / "fork-work"
@@ -101,13 +102,14 @@ def test_a_differing_local_remote_override_stays_refused(box, git):
     assert git(box.dest, "rev-parse", "HEAD") == box.x and git(box.dest, "remote", "get-url", "origin") == PINE
 
 
-def test_a_tree_moved_off_its_recorded_commit_stays_refused(box, git):
+def test_a_tree_moved_off_its_recorded_commit_moves_once_the_warning_is_confirmed(box, git):
+    """STABLE-LANE R11 (was: refused, identity drift): a COMMITTED move off the recorded commit gets the own-changes
+    warning naming that commit; `--yes` confirms it and the update replaces the tree (a dirty tree stays refused)."""
     assert box.run(PINE, box.x) == 0
     (box.dest / "libpinedio-usb.c").write_text("hand edit\n")
     git(box.dest, "commit", "-qam", "moved by hand")              # clean, but not the recorded commit
-    moved = git(box.dest, "rev-parse", "HEAD")
-    assert box.run(FORK, box.y) != 0
-    assert git(box.dest, "rev-parse", "HEAD") == moved and git(box.dest, "remote", "get-url", "origin") == PINE
+    assert box.run(FORK, box.y) == 0
+    assert git(box.dest, "rev-parse", "HEAD") == box.y and git(box.dest, "remote", "get-url", "origin") == FORK
 
 
 @pytest.mark.parametrize("field", ["remote", "resolved_commit"])

@@ -24,9 +24,12 @@ def _ls_remote(remote, ref, sha):
 
 
 def _git_src(src, sha):
-    """A clean git checkout at `sha` (both the head read and the status the probe needs)."""
+    """A clean git checkout at `sha` (both the head read and the status the probe needs), a full clone holding no
+    other commit of these tests (STABLE-LANE P-2 asks the checkout)."""
     a = str(src)
-    return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),
+    return {("git", "-C", a, "rev-parse", "--is-shallow-repository"): CR(0, "false\n", ""),
+            **{("git", "-C", a, "cat-file", "-e", o): CR(1, "", "") for o in (A, B) if o != sha},
+            ("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {sha}\n# branch.head main\n", ""),
             ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v111a\n", "")}

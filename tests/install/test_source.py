@@ -83,10 +83,13 @@ def _ls_remote(remote, ref, sha):
 
 
 def _git_src(src, sha):
-    """A clean git checkout at `sha`. `probe_source` needs both: a failing `status
+    """A clean git checkout at `sha`, a full clone holding no other commit of these tests (A or B): STABLE-LANE's
+    "does the checkout contain the target?" (P-2) reads it there. `probe_source` needs both: a failing `status
     --porcelain=v2` makes it return UNKNOWN *without* a head, and the row then renders no @head."""
     a = str(src)
-    return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),     # the source check's own read
+    return {("git", "-C", a, "rev-parse", "--is-shallow-repository"): CR(0, "false\n", ""),
+            **{("git", "-C", a, "cat-file", "-e", o): CR(1, "", "") for o in (A, B) if o != sha},
+            ("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),     # the source check's own read
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {sha}\n# branch.head main\n", ""),
             ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v111a\n", "")}

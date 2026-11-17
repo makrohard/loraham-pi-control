@@ -41,7 +41,11 @@ def _client(web, tmp_path, sid, *, head, selector):
             ("git", "-C", a, "rev-parse", "HEAD"): CR(0, head + "\n", ""),
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {head}\n# branch.head main\n", ""),
-            ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v1\n", "")}
+            ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v1\n", ""),
+            # a full clone that holds no other commit of these tests (STABLE-LANE P-2 asks the checkout)
+            ("git", "-C", a, "rev-parse", "--is-shallow-repository"): CR(0, "false\n", ""),
+            **{("git", "-C", a, "cat-file", "-e", o): CR(1, "", "")
+               for o in {TIP, OTHER, KW, comp.source.pin_commit} - {head}}}
     if selector is not None:
         assert source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
             source_rel=comp.source.path, remote=remote, selector=selector, resolved_commit=head,

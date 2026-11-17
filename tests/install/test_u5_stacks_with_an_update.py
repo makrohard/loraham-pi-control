@@ -42,8 +42,12 @@ def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head, local_toml="", journa
     src = paths.resolve_source(spec.path)
     if checkout:
         src.mkdir(parents=True)
+    tip = (remote_head.stdout.split() or [""])[0]
     cmds.update({("git", "ls-remote", spec.remote, f"refs/heads/{spec.branch}" if spec.branch else "HEAD"): remote_head,
-                 ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", "")})
+                 ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", ""),
+                 # a full clone that lacks the remote's newer head (STABLE-LANE P-2 asks the checkout)
+                 ("git", "-C", str(src), "rev-parse", "--is-shallow-repository"): CommandResult(0, "false\n", ""),
+                 ("git", "-C", str(src), "cat-file", "-e", tip): CommandResult(1, "", "")})
     with monkeypatch.context() as m:
         m.setattr(cli_main, "ControllerService", lambda *a, **k: box)
         rc = cli_main.main(["source-check", *target, "--json"])

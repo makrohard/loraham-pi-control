@@ -10,6 +10,7 @@ upstream is a local bare repository behind git's own `insteadOf` rewrite (the re
 so the URL stays a GitHub one); the GitHub releases API is the one faked command (`curl`), nothing reaches the
 network. Red before U1: the install took the plain tag, the check compared with the branch tip, and a failed
 release check updated anyway. Red before U2: a bare update moved every source to the pin."""
+import dataclasses
 import json
 import shutil
 
@@ -64,6 +65,8 @@ def box(tmp_path, git, make_repo, monkeypatch):
         fail_ancestry_to = ""                         # ... only `merge-base --is-ancestor <x> <this commit>`
         api_calls: list = []
         git_calls: list = []
+        repo = "200"                                  # the repository's own API page (B3: a 404 there = hidden)
+        repo_calls: list = []
     b = Box()
     real_run = backends.RealCommandRunner.run
 
@@ -77,12 +80,16 @@ def box(tmp_path, git, make_repo, monkeypatch):
             return CommandResult(128, "", "fatal: not a git repository")
         if b.fail_ancestry and argv[:2] == ["git", "-C"] and "stable-history" in argv[2] and argv[3] == "merge-base":
             return CommandResult(128, "", "fatal: could not read the history")
-        if b.fail_ancestry_to and argv[3:5] == ["merge-base", "--is-ancestor"] and argv[-1] == b.fail_ancestry_to:
+        if b.fail_ancestry_to and argv[3:5] == ["merge-base", "--is-ancestor"] and argv[-1] in (
+                b.fail_ancestry_to if isinstance(b.fail_ancestry_to, tuple) else (b.fail_ancestry_to,)):
             return CommandResult(128, "", "fatal: could not read the history")
         if b.fail_fetch and argv[:2] == ["git", "-C"] and argv[3] == "fetch":
             return CommandResult(128, "", "fatal: unable to access the remote")
         if argv[0] != "curl":
             return real_run(self, argv, timeout, cwd=cwd, env=env)
+        if not argv[-1].endswith("/releases/latest"):
+            b.repo_calls.append(argv)
+            return CommandResult(0, f'{{"name": "app"}}\n{b.repo}', "")
         b.api_calls.append(argv)
         if b.release in ("404", "429", "503"):
             return CommandResult(0, f'{{"message": "x"}}\n{b.release}', "")
@@ -144,7 +151,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
         git(work, "push", "-q", "origin", "--delete", *names)
         git(work, "tag", "-d", *names)
     b.drop_tags = drop_tags
-    b.mirror = lambda: next((rt / "state" / "stable-history").glob("*.git"))
+    b.mirror = lambda: next((rt / "state" / "stable-history-v2").glob("*.git"))
     return b
 
 
@@ -204,12 +211,14 @@ def test_a_verified_but_older_target_is_refused_and_reads_current(box, capsys):
     box.release = "v2.8.0.7239fe8"
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.release = "v2.7.0"                           # the upstream's latest release moved back
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    capsys.readouterr()                              # STABLE-LANE X4: a bare update keeps it; a named one moves back
+    assert box.cli("update", "s", "--yes") == 0      # with the warning (was: refused either way)
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out
     assert box.head() == box.c[1]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert "is older than the installed version" in capsys.readouterr().out and box.head() == box.c[0]
 
 
 def test_an_install_from_the_default_branch_head_is_offered_a_new_tag(box, git):
@@ -279,8 +288,8 @@ def test_a_deleted_upstream_tag_still_blocks_a_downgrade(box, git, capsys):
     box.push_tag("v2.9", box.c[1])
     box.release = "v2.9"                                           # ... and its latest release is older
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
-    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0      # RED before: downgraded to v2.9 (STABLE-LANE: a bare update
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out   # keeps it, was refused)
     assert box.head() == box.c[2]
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
@@ -311,8 +320,8 @@ def test_an_unreadable_installed_tag_list_does_not_matter_the_history_refuses_th
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE                           # slice A: c2 is in c3's past (was ERROR)
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before U1: downgraded to v2.9
-    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0      # RED before U1: downgraded to v2.9 (STABLE-LANE: kept, was
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out   # refused)
     assert box.head() == box.c[2]
 
 
@@ -328,8 +337,8 @@ def test_a_commit_with_only_unparseable_tags_refuses_a_stable_downgrade(box, git
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE                              # slice A: the history orders it (was ERROR)
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before U1: downgraded to v2.9
-    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0      # RED before U1: downgraded to v2.9 (STABLE-LANE: a bare update
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out   # keeps it, was refused)
     assert box.head() == box.c[2]
 
 
@@ -404,15 +413,18 @@ def test_a_bare_update_of_a_mixed_stack_keeps_the_stable_sources_release_gate(bo
     assert (box.head(), box.head(LIB)) == (box.c[2], box.c[0])
 
 
-def test_a_source_without_a_valid_record_is_planned_on_the_pin_beside_a_dev_source(box, capsys):
+def test_a_source_without_a_valid_record_follows_the_pin_beside_a_dev_source(box, capsys):
     box.use(GH, lib=True)
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     source_registry.record_path(Paths(runtime_root=box.rt), LIB).unlink()   # lib: its record is gone
     capsys.readouterr()
     assert box.cli("update", "s") == 0                                     # the plan, per source
-    lanes = {ln.split(":")[0].strip(): ln for ln in capsys.readouterr().out.splitlines() if "this update fetches" in ln}
+    out = capsys.readouterr().out
+    lanes = {ln.split(":")[0].strip(): ln for ln in out.splitlines() if "this update fetches" in ln}
     assert "fetches the dev version" in lanes["app"]
-    assert "fetches the pinned version" in lanes["lib"]                   # RED before: lib followed app onto dev
+    # RED before: lib followed app onto dev. STABLE-LANE (P-2/N1): lib's checkout (the dev tip) is ahead of its pin,
+    # so a routine update keeps it (was: planned back onto the pin).
+    assert f"  lib: the pinned target (pinned @ {box.c[0][:9]}) is not newer than the installed version: kept" in out
 
 
 @pytest.mark.parametrize("release_then", ["404", "429"])
@@ -481,11 +493,12 @@ def test_an_older_head_target_refuses_the_downgrade(box, git, capsys):
     git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")
     git(box.work, "push", "-q", "-f", "origin", f"{box.c[0]}:main")      # the default branch moved back
     box.release = "404"                               # no release: the target is the default-branch HEAD (c1)
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to c1's parent
-    out = capsys.readouterr().out                     # proven not forward: refused, not "try again later"
-    assert "is not in the upstream's published history: refused" in out and "try again later" not in out
-    assert box.head() == box.c[1]                     # slice A: c2 is on no branch or tag any more
+    capsys.readouterr()                               # STABLE-LANE X4/R7 (was: refused by name): the own-changes
+    assert box.cli("update", "s", "--source", "stable") == 0   # warning, then the move on --yes
+    out = capsys.readouterr().out                     # slice A: c2 is on no branch or tag any more
+    assert f"the installed commit {box.c[1][:9]} is not upstream" in out and "try again later" not in out, out
+    assert box.head() == box.c[1]
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0 and box.head() == box.c[0]
 
 
 def test_an_unreadable_ancestry_reads_could_not_be_checked(box, git, capsys):
@@ -514,8 +527,8 @@ def test_a_failed_head_read_refuses_the_update(box, git, capsys):
     box.git_calls.clear()
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: downgraded to v2.9
-    assert "could not be checked" in capsys.readouterr().out
-    assert not [a for a in box.git_calls                       # refused before any comparison (the history
+    assert "could not check" in capsys.readouterr().out                # STABLE-LANE N1: the installed commit's
+    assert not [a for a in box.git_calls                       # history (was: "releases could not be checked") (the history
                 if ("merge-base" in a or "fetch" in a) and "stable-history" not in a[2]]   # mirror is the target's read)
     assert not [a for a in box.git_calls if "stable-history" in a[2] and a[3] in ("cat-file", "for-each-ref")
                 and "--count=1" in a]
@@ -546,10 +559,10 @@ def test_the_apply_reads_each_release_once_and_under_its_locks(box, monkeypatch)
         state["apply"] = k.get("apply", False)
         return real_update(self, *a, **k)
 
-    def resolve(run, remote, paths):
+    def resolve(run, remote, branch, paths):
         if state["apply"]:
             reads.append(state["locked"])
-        return real_resolve(run, remote, paths)
+        return real_resolve(run, remote, branch, paths)
     monkeypatch.setattr(ControllerService, "_source_operation_guard", guard)
     monkeypatch.setattr(ControllerService, "update", update)
     monkeypatch.setattr(stable_lane, "resolve", resolve)
@@ -586,13 +599,15 @@ def test_an_explicit_switch_from_dev_to_stable_moves_back_to_the_release(box):
     assert (box.head(), box.selector()) == (box.c[0], "stable")
 
 
-def test_a_switch_to_stable_without_a_release_version_is_refused(box, git, capsys):
+def test_a_switch_to_stable_without_a_release_version_lands_on_the_branch_tip(box, git, capsys):
+    """STABLE-LANE R8 (was: refused, "only to a release or tag the history places"): no version upstream at all,
+    the switch lands on the stable target, the branch tip."""
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     git(box.work, "push", "-q", "origin", "--delete", "v2.7.0", "v2.8.0.7239fe8")   # no version upstream at all
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert "could not be checked" in capsys.readouterr().out
-    assert (box.head(), box.selector()) == (box.c[2], "dev")
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert "warning" not in capsys.readouterr().out
+    assert (box.head(), box.selector()) == (box.c[2], "stable")
 
 
 def test_a_release_the_tag_list_does_not_show_yet_is_not_verified(box, capsys):
@@ -615,7 +630,7 @@ def test_one_source_path_is_resolved_once_per_gate(box):
     svc = box.svc()
     items = [(svc.stack("s"), c) for c in svc.stack("s").components]
     box.api_calls.clear()
-    sel, refs, refused = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
+    sel, refs, refused, _kept, _warned = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
                                                  svc._effective_remote)
     assert len(box.api_calls) == 1 and list(refs) == [REL] and refused == []   # RED before: 2 calls
 
@@ -629,9 +644,7 @@ def test_control_a_release_less_source_still_installs_its_default_branch_head(bo
 
 # ---- MESHCOM-STABLE slice A: the history decides (the LoRaHAM_Daemon `v112` class) -----------------------------
 
-NOT_IN_LINE = "is not in the history of the stable target"
-UNPUBLISHED = "is not in the upstream's published history: refused"
-NOT_NEWER = "is not newer than the installed version: refused; use --source pinned to go back to LHPC's tested versions"
+OWN = "is not upstream; installing deletes"        # STABLE-LANE X4/R11/R-2: the own-changes warning
 NOT_ONE_LINE = "its release and version tags are not one line of history; refused; use --source pinned or dev"
 
 
@@ -686,7 +699,8 @@ def test_a_higher_tag_in_the_installed_commits_past_is_not_a_stable_update(box, 
     assert box.head() == box.c[1]
 
 
-def test_a_release_beside_the_installed_line_is_refused_by_name(box, capsys):
+def test_a_release_beside_the_installed_line_reads_update_available_and_moves_with_the_warning(box, capsys):
+    """STABLE-LANE R6/R10 (was: "could not check" and refused by name): beside is a move, with the warning."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     box.push_tag("v2.8.0", box.c[1])
     box.release = "v2.8.0"
@@ -695,28 +709,34 @@ def test_a_release_beside_the_installed_line_is_refused_by_name(box, capsys):
     box.push_tag("v3.0", d)
     box.release = "v3.0"
     box.cli("source-check", "s")
-    assert box.status() == su.ERROR                   # RED before: behind
+    assert box.status() == su.BEHIND
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
     out = capsys.readouterr().out
-    assert NOT_IN_LINE in out and "try again later" not in out
-    assert box.head() == box.c[1]                     # RED before: moved to the side branch
+    assert "is on another line than the installed version" in out and "try again later" not in out, out
+    assert box.head() == d
 
 
-def test_an_unpublished_installed_commit_is_refused_by_name(box, git, capsys):
+def test_an_unpublished_installed_commit_is_named_and_moves_on_confirm(box, git, capsys):
+    """STABLE-LANE X4/R11 (was: refused by name): the warning names the commit it deletes; on --yes the install
+    replaces the checkout and the ownership record names the new commit."""
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # v2.7.0 (c1)
     git(box.dest, "commit", "-q", "--allow-empty", "-m", "local")        # a commit only this box has
     local = box.head()
     box.push_tag("v2.9.0", box.c[2])
     box.cli("source-check", "s")
-    assert box.status() == su.ERROR                   # RED before: up to date
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert f"the installed commit {local[:9]} {UNPUBLISHED}" in capsys.readouterr().out   # RED before: "not newer"
-    assert box.head() == local
+    assert box.status() == su.BEHIND                  # RED before: up to date (STABLE-LANE X5: local commits on an
+    capsys.readouterr()                               # older base, upstream moved on: the badge; was "could not check")
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    out = capsys.readouterr().out                     # RED before: "not newer"
+    assert f"the installed commit {local[:9]} {OWN} 1 commit(s)" in out and f"{local[:7]} local" in out, out
+    assert box.head() == box.c[2]
+    assert source_registry.read_record(Paths(runtime_root=box.rt), REL).resolved_commit == box.c[2]
 
 
-def test_a_commit_only_a_tag_reaches_is_published_and_moves_forward(box, git):
+def test_a_version_tag_only_a_deleted_branch_reached_is_not_on_the_branch(box, git):
+    """STABLE-LANE O6 (was: such a tag was a stable target and moved forward): only the manifest branch's line
+    counts, so tags whose branch is gone (LoRaHAM_Daemon: 5 of 32) never are; the branch tip is."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     s1 = box.side(box.c[0], "old")                    # a branch the upstream later deletes
     box.push_tag("v0.1.0", s1)
@@ -726,13 +746,9 @@ def test_a_commit_only_a_tag_reaches_is_published_and_moves_forward(box, git):
     s2 = git(box.work, "rev-parse", "HEAD")
     git(box.work, "checkout", "-q", "main")
     git(box.work, "push", "-q", "origin", "--delete", "old")    # only the tag reaches s1 (LoRaHAM_Daemon: 5 of 32)
-    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
-    assert box.head() == s1
     box.push_tag("v0.2.0", s2)
-    box.cli("source-check", "s")
-    assert box.status() == su.BEHIND
-    assert box.cli("update", "s", "--yes") == 0
-    assert box.head() == s2
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
 
 
 def test_a_commit_the_upstream_rewrote_away_is_not_published_although_the_mirror_holds_it(box, git, capsys):
@@ -749,11 +765,11 @@ def test_a_commit_the_upstream_rewrote_away_is_not_published_although_the_mirror
     box.release = "v3.1"
     box.cli("source-check", "s")
     git(box.mirror(), "cat-file", "-e", box.c[2])            # the old object is still there
-    assert box.status() == su.ERROR                   # RED before: behind
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert UNPUBLISHED in capsys.readouterr().out
-    assert box.head() == box.c[2]                     # RED before: moved onto the rewritten history
+    assert box.status() == su.BEHIND                  # STABLE-LANE X5 (was: "could not check"): it lacks v3.1
+    capsys.readouterr()                               # X4/R7 (was: refused by name): the warning, then the move
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert f"the installed commit {box.c[2][:9]} is not upstream" in capsys.readouterr().out
+    assert box.head() == new
 
 
 def test_a_rebuilt_mirror_never_fetches_a_commit_the_upstream_rewrote_away(box, git, capsys):
@@ -765,10 +781,10 @@ def test_a_rebuilt_mirror_never_fetches_a_commit_the_upstream_rewrote_away(box, 
     git(box.work, "commit", "-q", "--allow-empty", "-m", "rewritten")
     git(box.work, "push", "-q", "-f", "origin", "main")      # the upstream still holds c3's object, no ref reaches it
     shutil.rmtree(box.mirror())                              # the mirror is rebuilt from the current refs only
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert UNPUBLISHED in capsys.readouterr().out
-    assert box.head() == box.c[2]
+    capsys.readouterr()                               # STABLE-LANE X4/R7 (was: refused by name): warned, then moved
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert f"the installed commit {box.c[2][:9]} is not upstream" in capsys.readouterr().out
+    assert box.head() != box.c[2]
     held = git(box.mirror(), "cat-file", "--batch-all-objects", "--batch-check=%(objectname)",
                env={"GIT_NO_LAZY_FETCH": "1"}).split()
     assert box.c[1] in held and box.c[2] not in held  # the read asked the upstream for no object (A-M14)
@@ -790,24 +806,25 @@ def test_a_once_shallow_dev_checkout_on_the_stable_lane_moves_forward_only(box, 
     box.cli("source-check", "s")
     assert box.status() == su.UP_TO_DATE
     capsys.readouterr()
-    assert box.cli("update", "s", "--yes") != 0
-    assert NOT_NEWER in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0       # STABLE-LANE: kept (was: refused, "not newer")
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out
     assert box.head() == c4
 
 
-def test_a_switch_onto_stable_from_an_unpublished_commit_is_refused(box, git, capsys, web, csrf):
+def test_a_switch_onto_stable_from_an_unpublished_commit_warns_then_moves(box, git, capsys, web, csrf):
+    """STABLE-LANE X4/R11 (was: refused by name): the web plan shows the warning before Confirm; --yes moves."""
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     git(box.dest, "commit", "-q", "--allow-empty", "-m", "local")
     local = box.head()
     box.release = "v2.8.0.7239fe8"
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0   # RED before: switched back to c2
-    assert UNPUBLISHED in capsys.readouterr().out
-    assert (box.head(), box.selector()) == (local, "dev")
     client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
     page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s",
                                         "source": "stable"}).get_data(as_text=True)
-    assert "published history: refused" in page and (box.head(), box.selector()) == (local, "dev")
+    assert OWN in page and (box.head(), box.selector()) == (local, "dev")
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: switched back to c2 silently
+    assert OWN in capsys.readouterr().out
+    assert (box.head(), box.selector()) == (box.c[1], "stable")
 
 
 @pytest.mark.parametrize("lane", ["stable", "dev"])
@@ -816,12 +833,12 @@ def test_a_failed_ancestry_read_refuses_and_reads_could_not_check(box, capsys, l
     before = box.head()
     box.push_tag("v2.9.0", box.advance())
     box.fail_ancestry = True                          # the mirror's merge-base exits 128
-    if lane == "stable":
-        box.cli("source-check", "s")
-        assert box.status() == su.ERROR
-    capsys.readouterr()
+    if lane == "stable":                              # STABLE-LANE P-2 (was: "could not check"): the full clone lacks
+        box.cli("source-check", "s")                  # the target, so it is not contained: an update
+        assert box.status() == su.BEHIND
+    capsys.readouterr()                               # the move's direction cannot be read: refused (N1)
     assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert "releases could not be checked — try again later" in capsys.readouterr().out
+    assert "could not check the installed commit's history — try again later" in capsys.readouterr().out
     assert (box.head(), box.selector()) == (before, lane)
 
 
@@ -847,7 +864,7 @@ def test_two_paths_of_one_remote_read_one_target_in_one_gate(box):
     items = [(svc.stack("s"), c) for c in svc.stack("s").components]
     box.api_calls.clear()
     box.git_calls.clear()
-    sel, refs, refused = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
+    sel, refs, refused, _kept, _warned = stable_lane.update_gate(svc._system.runner.run, svc._paths, items, "stable",
                                                  svc._effective_remote)
     fetches = [a for a in box.git_calls if a[3:4] == ["fetch"]]
     assert len(box.api_calls) == 1 and len(fetches) == 1      # RED before: 2 API calls
@@ -915,24 +932,21 @@ def test_one_line_of_many_tags_is_placed_with_one_history_read(box):
     box.git_calls.clear()
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[-1]
-    reads = [a for a in box.git_calls if "stable-history" in a[2] and a[3] == "merge-base"]
-    assert len(reads) == 1                            # RED before: one read per pair of tagged commits (64)
+    walks = [a for a in box.git_calls if "stable-history" in a[2] and a[3] in ("merge-base", "rev-list")]
+    assert len(walks) == 1                            # RED before: one read per pair of tagged commits (64); now the
+    #                                                   branch's one first-parent walk (STABLE-LANE O2)
 
 
-def test_tags_that_are_not_one_line_of_history_refuse_the_stable_lane_by_name(box, capsys):
+def test_tags_that_are_not_one_line_of_history_take_the_branchs_nearest(box, capsys):
+    """STABLE-LANE R1 (was: refused by name, final): the walk back from the branch tip gives one answer."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     box.push_tag("v1.0", box.c[1])
     box.push_tag("v0.9", box.side(box.c[0]))         # no release; a tag beside v1.0's line
-    capsys.readouterr()
-    assert box.cli("install", "s", "--source", "stable", "--yes") != 0   # RED before: installed v1.0
-    assert NOT_ONE_LINE in capsys.readouterr().out
-    assert not (box.dest / ".git").exists()
     assert box.cli("install", "s", "--source", "pinned", "--yes") == 0
     capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    out = capsys.readouterr().out
-    assert NOT_ONE_LINE in out and "try again later" not in out       # final: a retry cannot change it
-    assert (box.head(), box.selector()) == (box.c[0], "pinned")
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert "warning" not in capsys.readouterr().out   # forward along main
+    assert (box.head(), box.selector()) == (box.c[1], "stable")
 
 
 def test_the_release_names_its_commit_beside_a_higher_plain_tag_on_it(box, capsys):
@@ -942,9 +956,10 @@ def test_the_release_names_its_commit_beside_a_higher_plain_tag_on_it(box, capsy
     box.drop_tags("v3.0")
     box.push_tag("v2.9.0", box.c[1])                  # the same commit as the release v2.8.0.7239fe8
     box.release = "v2.8.0.7239fe8"                    # the release moves back to an ancestor
-    capsys.readouterr()
-    assert box.cli("update", "s", "--source", "stable", "--yes") != 0
-    assert f"the stable target (stable v2.8.0.7239fe8 @ {box.c[1][:9]}) {NOT_NEWER}" in capsys.readouterr().out
+    capsys.readouterr()                               # STABLE-LANE: a bare update keeps it (was: refused)
+    assert box.cli("update", "s", "--yes") == 0
+    assert (f"the stable target (stable v2.8.0.7239fe8 @ {box.c[1][:9]}) is not newer than the installed version: "
+            "kept") in capsys.readouterr().out
     assert box.head() == box.c[2]
 
 
@@ -1024,8 +1039,8 @@ def test_dated_builds_across_a_new_year_follow_the_history_not_the_date(box, git
     assert box.head() == box.c[1]
     box.release = "v4.40a.12.30"                      # the marker moved back
     capsys.readouterr()
-    assert box.cli("update", "s", "--yes") != 0
-    assert "is not newer than the installed version: refused" in capsys.readouterr().out
+    assert box.cli("update", "s", "--yes") == 0       # STABLE-LANE: kept (was: refused)
+    assert "is not newer than the installed version: kept" in capsys.readouterr().out
     assert box.head() == box.c[1]
 
 
@@ -1074,8 +1089,8 @@ def test_a_switch_to_stable_checks_freshness_against_its_target_not_the_recorded
     assert box.head() == box.c[2]
     capsys.readouterr()
     assert box.cli("update", "s", "--source", "stable") == 0       # the dry run
-    out = capsys.readouterr().out
-    assert "app: update available" in out             # the one label (G2-B1 B3); RED before U1: up-to-date
+    out = capsys.readouterr().out                     # STABLE-LANE X5 (was: "update available"): c3 contains S, so
+    assert "app: current" in out and "is older than the installed version" in out, out   # no badge; the back warning
     assert box.head() == box.c[2]
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[1]
@@ -1097,7 +1112,8 @@ def test_an_unchecked_target_beside_the_installed_release_reads_try_again_later(
 
 
 @pytest.mark.parametrize("how", ["tag-upstream", "tag-withdrawn", "tagged-after-install"])
-def test_a_lower_numbered_plain_tag_after_the_installed_version_is_refused_like_before(box, capsys, how):
+def test_a_lower_numbered_plain_tag_after_the_installed_version_is_a_forward_move(box, capsys, how):
+    """STABLE-LANE R2 (was: refused by the version floor): history decides, whatever the number."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     if how != "tagged-after-install":
         box.push_tag("v2.0", box.c[2])
@@ -1108,31 +1124,22 @@ def test_a_lower_numbered_plain_tag_after_the_installed_version_is_refused_like_
     if how == "tagged-after-install":
         box.push_tag("v2.0", box.c[2])                # only the history mirror knows it
     box.push_tag("v1.0", box.advance())               # the installed commit's child, a lower number, no release
-    capsys.readouterr()
-    assert box.cli("update", "s", "--yes") != 0       # RED before: moved down to v1.0
-    assert NOT_NEWER in capsys.readouterr().out
-    assert box.head() == box.c[2]
     box.cli("source-check", "s")
-    assert box.status() == su.UP_TO_DATE
-    box.release = "v1.0"                              # GitHub's latest release after it: forward (plan case C2)
+    assert box.status() == su.BEHIND
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[3]
 
 
 @pytest.mark.parametrize("where", ["local", "mirror"], ids=["checkout", "history-mirror"])
-def test_an_unread_tag_list_of_the_installed_commit_reads_could_not_check_before_a_plain_tag(box, capsys, where):
+def test_an_unread_tag_list_of_the_installed_commit_no_longer_matters(box, capsys, where):
+    """STABLE-LANE R2 (was: "could not check", the floor needed the installed commit's tags): no tag list is read."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     box.push_tag("v2.0", box.c[2])
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     box.push_tag("v3.0", box.advance())               # a higher plain tag after it: forward once its tags are read
     setattr(box, f"fail_{where}_tags", True)
-    capsys.readouterr()
-    assert box.cli("update", "s", "--yes") != 0       # the floor cannot be read: unknown, never a move
-    assert "try again later" in capsys.readouterr().out
-    assert box.head() == box.c[2]
     box.cli("source-check", "s")
-    assert box.status() == su.ERROR
-    setattr(box, f"fail_{where}_tags", False)
+    assert box.status() == su.BEHIND
     assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[3]
 
@@ -1147,7 +1154,8 @@ def test_an_equal_version_after_the_installed_one_is_a_forward_move(box):
     assert box.head() == box.c[2]
 
 
-def test_a_plain_tag_after_an_older_release_still_meets_the_floor(box, capsys):
+def test_a_lower_plain_tag_after_an_older_release_is_the_target(box, capsys):
+    """STABLE-LANE R2/X2 (was: held back by the floor): the plain tag nearest the tip after the release."""
     box.drop_tags("v2.7.0", "v2.8.0.7239fe8")
     box.push_tag("v0.5", box.c[0])
     box.release = "v0.5"                              # an older release, an ancestor
@@ -1155,10 +1163,8 @@ def test_a_plain_tag_after_an_older_release_still_meets_the_floor(box, capsys):
     assert box.cli("install", "s", "--source", "stable", "--yes") == 0
     assert box.head() == box.c[1]                     # v2.0, a plain tag in the release's future
     box.push_tag("v1.0", box.c[2])                    # a lower-numbered plain tag after it
-    capsys.readouterr()
-    assert box.cli("update", "s", "--yes") != 0       # a release elsewhere never lifts the floor
-    assert NOT_NEWER in capsys.readouterr().out
-    assert box.head() == box.c[1]
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[2]
 
 
 def _v112_then_a_release_and_a_plain_tag_after_it(box):
@@ -1170,42 +1176,43 @@ def _v112_then_a_release_and_a_plain_tag_after_it(box):
     box.push_tag("v1.4.1", box.c[2])                  # a tag after the release, not released yet: the target
 
 
-def test_a_box_the_floor_holds_back_is_offered_the_release_in_its_future(box, capsys):
+def test_a_box_on_v112_is_offered_the_plain_tag_after_the_release(box, capsys):
+    """STABLE-LANE R2/R3/X2 (was: the floor held it back and the release fallback stood in): v112 is no
+    constraint; the plain tag after the release on the branch is every box's one target."""
     _v112_then_a_release_and_a_plain_tag_after_it(box)
     box.cli("source-check", "s")
-    assert box.status() == su.BEHIND                  # RED before: up to date (1.4.1 < 112, the floor)
-    assert su.view(Paths(runtime_root=box.rt))["components"]["app"]["upstream_head"] == box.c[1]   # THIS box's target
+    assert box.status() == su.BEHIND
+    assert su.view(Paths(runtime_root=box.rt))["components"]["app"]["upstream_head"] == box.c[2]
     capsys.readouterr()
     assert box.cli("update", "s") == 0                # the dry run
     assert "app: update available" in capsys.readouterr().out
     assert box.cli("update", "s", "--yes") == 0
-    assert box.head() == box.c[1]                     # the release, not the plain tag the floor refused
-    box.cli("source-check", "s")
-    assert box.status() == su.BEHIND                  # on v1.4.0, v1.4.1 is forward
-    assert box.cli("update", "s", "--yes") == 0
     assert box.head() == box.c[2]
 
 
-def test_the_release_one_checkout_falls_back_to_is_not_the_target_of_another_path(box):
+def test_two_paths_of_one_remote_and_branch_take_one_target(box):
+    """STABLE-LANE R3 (was: src/app took its release fallback, src/lib the remote's target)."""
     _v112_then_a_release_and_a_plain_tag_after_it(box)
     box.use(GH, lib=True)                             # src/lib of the same remote, not installed
-    assert box.cli("update", "s", "--source", "stable", "--yes") == 0   # RED before: refused, not newer
-    assert (box.head(), box.head(LIB)) == (box.c[1], box.c[2])   # src/app the release, src/lib the remote's target
+    assert box.cli("update", "s", "--source", "stable", "--yes") == 0
+    assert (box.head(), box.head(LIB)) == (box.c[2], box.c[2])
 
 
-def test_an_unread_ancestry_of_the_release_fallback_reads_could_not_check(box, capsys):
+def test_an_unread_ancestry_of_the_installed_commit_reads_could_not_check(box, capsys):
+    """STABLE-LANE P-2/N1 (was: the release fallback's ancestry): "does the checkout contain the target?" cannot be
+    read in the mirror nor the checkout: could not check, never a move."""
     _v112_then_a_release_and_a_plain_tag_after_it(box)
-    box.fail_ancestry_to = box.c[1]                   # only "is the release in the installed commit's future?" fails
+    box.fail_ancestry_to = (box.c[0], "HEAD")         # "is X in the installed commit's past?" fails, mirror and checkout
     capsys.readouterr()
     assert box.cli("update", "s", "--yes") != 0
     out = capsys.readouterr().out
-    assert "try again later" in out and "is not newer" not in out
+    assert "could not check" in out and "is not newer" not in out, out
     assert box.head() == box.c[0]
     box.cli("source-check", "s")
     assert box.status() == su.ERROR
     box.fail_ancestry_to = ""
     assert box.cli("update", "s", "--yes") == 0
-    assert box.head() == box.c[1]
+    assert box.head() == box.c[2]
 
 
 # ---- U6: one lane verdict per source (current / update available / update LHPC first / could not check) ----
@@ -1736,3 +1743,517 @@ def test_a_stack_behind_and_one_waiting_for_lhpc_are_both_named_update_available
     assert [d for d in details if "Stacks" in d] == [
         "Stacks with an update: t. Stacks that need LHPC updated first: s (lhpc self-update --apply)."], details
     assert data["stacks_lhpc_first"] == ["s"], sweep
+
+
+# ---- STABLE-LANE (plan v10): "the latest release or tag on the current branch"; every lane's badge and move ----------
+
+def _run(box, capsys, *argv):
+    """`(rc, output)` of one lhpc command on the box."""
+    capsys.readouterr()
+    rc = box.cli(*argv)
+    return rc, capsys.readouterr().out
+
+
+def _rewind(box, git, at):
+    """The upstream force-pushes its main back to `at`: the later commits leave every ref."""
+    git(box.work, "reset", "-q", "--hard", at)
+    git(box.work, "push", "-q", "-f", "origin", "main")
+
+
+def _local_commit(box, git):
+    """A commit made in the installed checkout itself, never pushed; its sha."""
+    (box.dest / "local.txt").write_text("mine\n")
+    git(box.dest, "add", "local.txt")
+    git(box.dest, "commit", "-qm", "mine")
+    return git(box.dest, "rev-parse", "HEAD")
+
+
+def _branch(box, name, which=-1):
+    """The manifest's branch of the `which`-th source (-1: the last one written) becomes `name`."""
+    parts = box.manifest.read_text().split('branch = "main"')
+    which = which % (len(parts) - 1)
+    box.manifest.write_text('branch = "main"'.join(parts[:which + 1]) + f'branch = "{name}"'
+                            + 'branch = "main"'.join(parts[which + 1:]))
+
+
+def test_a_newer_tag_on_another_branch_is_not_the_target(box):
+    box.push_tag("v3.0.0", box.side(box.c[2]))
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                    # RED before: v3.0.0 on the side branch
+
+
+def test_tags_on_two_lines_resolve_to_the_nearest_one_on_the_branch(box):
+    box.push_tag("v3.0.0", box.side(box.c[0]))       # beside main's later commits
+    box.push_tag("v2.9.0", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]                    # RED before: "not one line of history", refused
+
+
+def test_a_forward_tag_with_a_lower_number_is_offered_and_installed(box):
+    box.push_tag("v3.0.0", box.c[0])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                 # RED before: the floor (v3.0.0 installed) said "not newer"
+    assert box.cli("update", "s", "--yes") == 0
+    assert box.head() == box.c[2]
+
+
+def test_a_tag_reached_only_through_a_merged_side_branch_is_not_the_target(box, git):
+    box.push_tag("v3.0.0", box.side(box.c[2], "feature"))
+    git(box.work, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+    git(box.work, "push", "-q", "origin", "main")
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                    # RED before: v3.0.0, reached through the merge
+
+
+def test_no_version_tag_on_the_branch_is_its_tip(box):
+    box.drop_tags("v2.7.0")                          # the suffixed v2.8.0.7239fe8 never counts
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+
+
+def test_a_release_and_a_tag_on_one_commit_carry_the_release_label(box):
+    from lhpc.core import stable_lane
+    box.push_tag("v2.9.0", box.c[2])
+    box.push_tag("spring", box.c[2])
+    box.release = "spring"
+    svc = box.svc()
+    ref = stable_lane.resolve(svc._system.runner.run, GH, "main", svc._paths)
+    assert (ref.sha, ref.label.split(" @")[0], ref.released) == (box.c[2], "stable spring", True)
+
+
+def test_an_installed_local_commit_moves_with_the_own_changes_warning(box, capsys, git):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    box.push_tag("v2.9.0", box.c[2])
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable")
+    assert rc == 0 and f"the installed commit {mine[:9]} {OWN} 1 commit(s) only this checkout has, not recoverable " \
+        f"by LHPC: {mine[:7]} mine; to keep them, push or copy them first" in out, out             # R-2: listed
+    assert box.head() == mine                        # RED before: refused, not in the published history
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc == 0 and OWN in out and box.head() == box.c[2], out                # R11: the confirmed move overwrites
+    assert source_registry.read_record(Paths(runtime_root=box.rt), REL).resolved_commit == box.c[2]
+
+
+def test_a_lane_switch_back_installs_with_the_back_warning(box, capsys):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned")
+    assert rc == 0 and "is older than the installed version" in out, out     # RED before: no warning
+    assert "if the stack fails: remove it, reinstall Known working" in out, out
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
+    assert rc == 0 and "older than the installed version" in out and box.head() == box.c[0], out
+
+
+def test_a_lane_switch_sideways_installs_with_the_sideways_warning(box, capsys):
+    rel = box.side(box.c[1], "release")
+    box.push_tag("v3.0.0", rel)
+    box.release = "v3.0.0"                           # a release on another branch: the target
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == rel
+    rc, out = _run(box, capsys, "update", "s", "--source", "dev", "--yes")
+    assert rc == 0 and "is on another line than the installed version" in out, out   # RED before: no warning
+    assert box.head() == box.c[2]
+
+
+def test_the_lane_switch_warning_is_on_the_web_confirm_page(box, web, csrf):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s",
+                                        "source": "pinned"}).get_data(as_text=True)
+    assert "is older than the installed version" in page    # RED before: no warning before Confirm
+    assert box.head() == box.c[2]
+
+
+def test_a_changed_manifest_branch_reads_unchecked_once(box, capsys):
+    box.side(box.c[2], "next")
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE
+    _branch(box, "next")
+    assert "unchecked" in _versions_line(box, capsys).split()   # RED before: the old branch's verdict stands
+
+
+def test_an_installed_commit_force_pushed_away_moves_with_the_own_changes_warning(box, capsys, git):
+    box.drop_tags("v2.7.0")                          # stable: the branch tip
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+    _rewind(box, git, box.c[1])
+    new = box.advance()                              # main: c1, c2, new; c3 is in no ref
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"the installed commit {box.c[2][:9]} is not upstream" in out, out   # RED before: refused
+    assert box.head() == new
+
+
+def test_a_release_on_another_branch_is_the_target(box):
+    rel = box.side(box.c[1], "release")
+    box.push_tag("v3.0.0", rel)
+    box.release = "v3.0.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == rel
+
+
+def test_without_releases_a_suffixed_tag_is_never_the_target(box):
+    box.push_tag("v2.9.0.d5f1619", box.c[2])
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]
+
+
+def test_a_manifest_branch_the_remote_lacks_is_refused_by_name(box, capsys):
+    _branch(box, "gone")
+    rc, out = _run(box, capsys, "install", "s", "--source", "stable", "--yes")
+    assert rc != 0 and f"branch 'gone' is not on {GH}: refused; use --source pinned" in out, out   # RED before: c1
+    assert not box.dest.exists()
+
+
+def test_two_sources_of_one_remote_on_two_branches_get_two_targets(box):
+    nxt = box.side(box.c[2], "next")
+    box.push_tag("v3.0.0", nxt)
+    box.use(GH, lib=True)
+    _branch(box, "next")                             # src/lib follows `next`, src/app `main`
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert (box.head(), box.head(LIB)) == (box.c[0], nxt)   # RED before: one target per remote (nxt for both)
+
+
+def test_one_source_path_on_two_branches_is_refused_and_nothing_changes(box, capsys):
+    box.side(box.c[2], "next")
+    box.use(GH, lib=True, lib_path=REL)
+    _branch(box, "next")
+    from lhpc.core.manifest import ManifestError
+    with pytest.raises(ManifestError, match="share source path"):     # refused at load, before any change
+        box.cli("install", "s", "--source", "stable", "--yes")
+    assert not box.dest.exists()
+
+
+def test_the_plans_source_identity_holds_the_branch(box):
+    """B2: the plan's own identity of a shared path names the branch (the manifest refuses that shape at load, so
+    the identity is reached here directly)."""
+    box.use(GH, lib=True, lib_path=REL)
+    svc = box.svc()
+    (st,) = svc.stacks()
+    app, lib = st.components
+    lib = dataclasses.replace(lib, source=dataclasses.replace(lib.source, branch="next"))
+    groups, conflicts = svc._plan_source_groups([(st, app), (st, lib)], "pinned")
+    assert groups is None and "incompatible source identities" in conflicts[0], conflicts
+
+
+def test_an_installed_commit_beside_the_target_moves_and_reads_update_available(box, capsys):
+    rel = box.side(box.c[1], "release")
+    box.push_tag("v3.0.0", rel)
+    box.release = "v3.0.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v3.1.0", box.c[2])
+    box.release = "v3.1.0"                           # openhop-shaped: the new release is on main, beside rel
+    box.cli("source-check", "s")
+    assert box.status() == su.BEHIND                 # RED before: beside -> "could not check"
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and "is on another line than the installed version" in out and box.head() == box.c[2], out
+
+
+def test_an_old_all_branches_mirror_never_makes_a_commit_published(box, capsys, git):
+    import hashlib
+    feat = box.side(box.c[2], "feat")
+    box.push_tag("v3.0.0", feat)
+    box.release = "v3.0.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0 and box.head() == feat
+    old = box.rt / "state" / "stable-history" / (hashlib.sha256(GH.encode()).hexdigest()[:16] + ".git")
+    git(box.rt, "init", "-q", "--bare", str(old))
+    git(old, "fetch", "-q", git(box.work, "remote", "get-url", "origin"), "+refs/heads/*:refs/heads/*")
+    git(box.work, "push", "-q", "origin", "--delete", "feat")
+    box.drop_tags("v3.0.0")
+    box.release = "404"                              # the old layout still holds `feat`; the lane's mirror never
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc == 0 and f"the installed commit {feat[:9]} is not upstream" in out and box.head() == box.c[0], out
+
+
+def test_a_plain_tag_after_the_release_on_the_branch_is_the_target(box):
+    box.push_tag("v2.9.0", box.c[2])
+    box.release = "v2.7.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[2]
+
+
+def test_a_suffixed_or_other_branch_tag_after_the_release_leaves_the_release(box):
+    box.push_tag("v3.0.0", box.side(box.c[2]))
+    box.push_tag("v2.9.0.d5f1619", box.c[2])
+    box.release = "v2.7.0"
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                    # RED before: v3.0.0 on the side branch, in the release's future
+
+
+def test_a_failed_release_read_refuses_a_first_install(box, capsys):
+    box.release = "429"
+    rc, out = _run(box, capsys, "install", "s", "--source", "stable", "--yes")
+    assert rc != 0 and "releases could not be checked — try again later" in out, out   # RED before: installed c1
+    assert not box.dest.exists()
+
+
+def test_a_local_commit_on_the_target_is_kept_by_a_bare_update_and_moved_by_a_named_one(box, capsys, git):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and box.head() == mine and "warning" not in out, out   # RED before: refused, not published
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc == 0 and OWN in out and box.head() == box.c[0], out
+
+
+def test_a_releases_404_is_no_release_only_from_a_visible_repository(box, capsys):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0   # 404 from a visible repo: the tags decide
+    assert box.head() == box.c[0]
+    box.push_tag("v2.9.0", box.c[2])
+    box.repo = "404"                                 # the API shows no repository: hidden or private
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "releases could not be checked — try again later" in out, out   # RED before: moved to c3
+    assert box.head() == box.c[0]
+
+
+def test_a_failed_history_read_is_could_not_check_never_a_warning(box, capsys):
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    box.push_tag("v2.9.0", box.c[2])
+    box.fail_ancestry = True
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc != 0 and "could not check" in out and "warning" not in out and box.head() == box.c[0], out
+
+
+def test_a_shallow_dev_checkout_after_a_rewind_the_mirror_saw_keeps_its_commit(box, capsys, git):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    box.cli("source-check", "s")                     # the mirror now holds c3
+    _rewind(box, git, box.c[1])
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE             # RED before: "update available" (any difference)
+    for argv in (("update", "s"), ("update", "s", "--yes")):
+        rc, out = _run(box, capsys, *argv)
+        assert rc == 0 and "not newer" in out and box.head() == box.c[2], out
+
+
+def test_a_shallow_dev_checkout_after_a_rewind_the_mirror_never_saw_is_could_not_check(box, capsys, git):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    _rewind(box, git, box.c[1])
+    shutil.rmtree(box.rt / "state" / "stable-history-v2", ignore_errors=True)   # a new mirror: c3 never fetched
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                  # RED before: "update available"
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "could not check" in out and box.head() == box.c[2], out
+
+
+def test_a_shallow_checkout_with_a_local_commit_and_no_target_is_could_not_check(box, git):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    _local_commit(box, git)
+    box.advance()
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                  # RED before: "update available" from a differing head
+
+
+def test_a_known_working_checkout_ahead_of_its_pin_goes_back_only_by_name(box, capsys, git, web):
+    assert box.cli("install", "s", "--yes") == 0     # Known working: the pin c1, a full clone
+    git(box.dest, "checkout", "-q", box.c[1])
+    box.cli("source-check", "s")
+    assert box.status() == su.UP_TO_DATE             # RED before: "update available" (any difference)
+    assert _status_src(box, capsys) == "ahead of the pin"   # P-3 = A+: no badge, the status says so
+    assert "ahead of the pin" in _versions_line(box, capsys)
+    assert "ahead of the pin" in _info_card(box, web)
+    rc, out = _run(box, capsys, "source-check", "s", "--json")
+    assert json.loads(out)["data"]["stacks_behind"] == [], out          # the U5 lists: not "with an update"
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and "not newer" in out and box.head() == box.c[1], out
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
+    assert rc == 0 and "older than the installed version" in out and box.head() == box.c[0], out
+
+
+@pytest.mark.parametrize("lane", ["pinned", "stable"])
+@pytest.mark.parametrize("case, badge", [("equal", False), ("older", False), ("newer", True), ("mine", False),
+                                         ("mine_moved", True), ("sideways", True)])
+def test_the_badge_shows_only_when_the_checkout_lacks_the_lanes_target(box, git, lane, case, badge):
+    side = box.side(box.c[0]) if case == "sideways" else ""           # pushed before the (full) clone
+    assert box.cli("install", "s", "--source", lane, "--yes") == 0
+    assert box.head() == box.c[0]
+    if case == "older":
+        git(box.dest, "checkout", "-q", box.c[1])
+    elif case in ("mine", "mine_moved"):
+        _local_commit(box, git)
+    elif case == "sideways":
+        git(box.dest, "checkout", "-q", side)
+    if case in ("newer", "mine_moved", "sideways"):                  # the lane's target moves on to c3
+        if lane == "pinned":
+            box.manifest.write_text(box.manifest.read_text().replace(box.c[0], box.c[2]))
+        else:
+            box.push_tag("v2.9.0", box.c[2])
+    box.cli("source-check", "s")
+    assert box.status() == (su.BEHIND if badge else su.UP_TO_DATE)
+
+
+@pytest.mark.parametrize("case, status", [("equal", su.UP_TO_DATE), ("newer", su.BEHIND), ("mine", su.UP_TO_DATE)])
+def test_a_shallow_dev_checkout_badges_only_a_newer_tip(box, git, case, status):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    if case == "mine":
+        _local_commit(box, git)
+    elif case == "newer":
+        box.advance()
+    box.cli("source-check", "s")
+    assert box.status() == status
+
+
+def test_auto_install_never_moves_an_installed_source_back(box, capsys):
+    """P-5: auto-install keeps an installed source whose target lies back; only a named update moves it."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    rc, out = _run(box, capsys, "auto-install", "--source", "pinned", "--yes")
+    assert f"[kept] {REL}: already holds the pinned target {box.c[0][:9]}" in out, out   # RED before: back to c1
+    assert box.head() == box.c[2]
+
+
+def test_the_identity_waiver_is_the_update_paths_only(box, capsys, git):
+    """R-1: only a confirmed update may replace a checkout whose HEAD moved; uninstall's ownership proof is unchanged."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    rc, out = _run(box, capsys, "uninstall", "s", "--yes")
+    assert rc != 0 and "identity drift" in out and box.head() == mine, out
+
+
+def test_a_dirty_checkout_is_still_refused_after_the_warning(box, capsys, git):
+    """R11: uncommitted edits to tracked files stay protected, Confirm or not."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    _local_commit(box, git)
+    (box.dest / "f").write_text("edited, not committed\n")
+    box.push_tag("v2.9.0", box.c[2])
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc != 0 and (box.dest / "f").read_text() == "edited, not committed\n", out
+
+
+def test_a_head_moved_after_the_web_warning_is_refused(box, capsys, git, web, csrf):
+    """R-3: the web Confirm stands on the HEAD its warning named; a commit made in between is never deleted unnamed."""
+    import html
+    import re
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    _local_commit(box, git)
+    box.push_tag("v2.9.0", box.c[2])
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s",
+                                        "source": "stable"}).get_data(as_text=True)
+    heads = html.unescape(re.search(r"name=\"warned_heads\" value='([^']*)'", page).group(1))
+    assert OWN in page and REL in heads, page
+    (box.dest / "later.txt").write_text("later\n")
+    git(box.dest, "add", "later.txt")
+    git(box.dest, "commit", "-qm", "later")           # made after the warning was shown
+    later = box.head()
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s", "source": "stable",
+                                        "confirmed": "yes", "warned_heads": heads},
+                       follow_redirects=True).get_data(as_text=True)
+    assert box.head() == later                        # RED without R-3: replaced, "later" deleted unnamed
+    assert "the checkout changed after the warning you confirmed" in html.unescape(page)
+
+
+def test_a_checkout_moved_by_hand_to_an_upstream_commit_moves_on_confirm(box, capsys, git):
+    """N-3: HEAD moved by hand (no own commits): one more warning reason, the same Confirm applies."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    git(box.dest, "checkout", "-q", box.c[1])         # an upstream commit, not the one LHPC installed
+    box.push_tag("v2.9.0", box.c[2])
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"the checkout moved since LHPC installed it (HEAD {box.c[1][:9]}, installed " \
+        f"{box.c[0][:9]})" in out, out                # RED before: identity drift, refused
+    assert box.head() == box.c[2]
+
+
+def test_a_commit_only_another_upstream_branch_reaches_is_not_upstream_for_the_lane(box, capsys, git):
+    """R4: the lane's mirror holds the component's branch and the tags only; an untagged commit of another upstream
+    branch is not on this lane (the own-changes warning, never "sideways")."""
+    other = box.side(box.c[1], "topic")
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    git(box.dest, "checkout", "-q", other)                # the full clone has every upstream branch
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable")
+    assert rc == 0 and f"the installed commit {other[:9]} {OWN}" in out and "on another line" not in out, out
+
+
+
+def test_the_warning_names_own_commits_behind_a_merge(box, capsys, git):
+    """R-2 / SR B-1: every own commit HEAD reaches is named, also one a merge of upstream work hides by date."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    up = box.advance()
+    git(box.dest, "fetch", "-q", git(box.work, "remote", "get-url", "origin"), "main")
+    git(box.dest, "merge", "-q", "--no-edit", "-m", "merge upstream", "FETCH_HEAD")
+    merge = box.head()
+    box.push_tag("v2.9.0", up)
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable")
+    assert rc == 0 and f"{OWN} 2 commit(s)" in out and f"{mine[:7]} mine" in out and f"{merge[:7]} merge" in out, out
+
+
+def test_the_warning_counts_every_own_commit(box, capsys, git):
+    """R-2 / SR B-1: twelve own commits read "12", ten are named, "and 2 more"."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    for n in range(12):
+        git(box.dest, "commit", "-q", "--allow-empty", "-m", f"own {n}")
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable")
+    assert rc == 0 and f"{OWN} 12 commit(s)" in out and "; and 2 more;" in out, out
+
+
+def test_a_commit_made_after_the_gate_is_never_deleted(box, capsys, git, monkeypatch):
+    """R-1/R-3 / SR B-2: the confirmed move may replace exactly the HEAD its warning named; a commit made between the
+    gate's read and the adoption is refused by the identity check and kept (CLI --yes; the web the same)."""
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    _local_commit(box, git)
+    box.push_tag("v2.9.0", box.c[2])
+    later = {}
+
+    def commit_in_between(self, comps):              # runs after the gate, before the first adoption
+        git(box.dest, "commit", "-q", "--allow-empty", "-m", "later")
+        later["sha"] = git(box.dest, "rev-parse", "HEAD")
+        return ""
+    monkeypatch.setattr(ControllerService, "meshcore_identity_guard", commit_in_between)
+    rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
+    assert rc != 0 and "identity drift" in out and box.head() == later["sha"], out   # RED with a bare waiver
+
+
+def test_the_warning_names_own_commits_a_shallow_checkout_holds_behind_a_merge(box, capsys, git):
+    """R-2 / SR B-1: a shallow dev checkout lacking the upstream's tips: published commits it holds are excluded one
+    by one, so an own commit behind a merge of newer upstream work is still named."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0            # depth 1, at c3
+    mine = _local_commit(box, git)
+    up = box.advance()
+    git(box.dest, "fetch", "-q", git(box.work, "remote", "get-url", "origin"), "main")
+    git(box.dest, "merge", "-q", "--no-edit", "-m", "merge upstream", "FETCH_HEAD")
+    merge = box.head()
+    box.advance()                                     # the upstream's tip is not in the checkout
+    assert git(box.dest, "cat-file", "-t", up) == "commit"
+    rc, out = _run(box, capsys, "update", "s", "--source", "dev")
+    assert rc == 0 and f"{OWN} 2 commit(s)" in out and f"{mine[:7]} mine" in out and f"{merge[:7]} merge" in out, out
+
+
+def test_a_confirmed_head_is_never_a_proof_of_ownership_by_itself(box, git):
+    """R-1: the HEAD a confirmed move named lifts only the commit check; with no remote to match the origin against,
+    ownership stays unprovable (direct: the update path gives no warning, so no accepted HEAD, without a remote)."""
+    from lhpc.core import source_registry as sr
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    svc, paths = box.svc(), Paths(runtime_root=box.rt)
+    sr.write_record(paths, dataclasses.replace(sr.read_record(paths, REL), remote=""))
+    comp = svc.stack("s").component("app")
+    comp = dataclasses.replace(comp, source=dataclasses.replace(comp.source, remote=""))
+    rec, why = sr.verify_identity(paths, svc._system, svc.config(), comp, box.dest, accept_head=mine)
+    assert rec is None and "unprovable" in why, why
+
+
+def test_a_plain_update_keeps_a_dev_source_whose_upstream_branch_is_gone(box, capsys, git):
+    """His rule "a plain Update never goes back": the dev branch was deleted upstream and the manifest pin is behind
+    the checkout, so a plain Update keeps it, named; --source pinned goes back with the back warning."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.cli("source-check", "s")                      # the box's history copy (the 12-hourly check keeps one)
+    git(box.work, "push", "-q", "origin", f"{box.c[2]}:refs/heads/keep")           # the bare repo keeps a HEAD
+    git(git(box.work, "remote", "get-url", "origin"), "symbolic-ref", "HEAD", "refs/heads/keep")
+    git(git(box.work, "remote", "get-url", "origin"), "update-ref", "-d", "refs/heads/main")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; --source pinned goes back with the back " \
+        "warning" in out, out                         # RED before: the dev fallback moved it back to the pin c1
+    assert box.head() == box.c[2]
+
+
+def test_a_gone_branch_with_no_history_to_place_the_pin_names_the_way_out(box, capsys, git):
+    """N-c: a shallow dev checkout, no history copy on the box, its branch gone upstream: nothing moves, and the line
+    names --source pinned (a retry cannot help)."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # depth 1, no history copy
+    bare = git(box.work, "remote", "get-url", "origin")
+    git(box.work, "push", "-q", "origin", f"{box.c[2]}:refs/heads/keep")
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/keep")
+    git(bare, "update-ref", "-d", "refs/heads/main")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "upstream branch 'main' gone and this box holds no history placing the pin: nothing moves; " \
+        "--source pinned goes back with the back warning" in out and box.head() == box.c[2], out

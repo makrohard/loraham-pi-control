@@ -9,7 +9,7 @@ from lhpc.core import lifecycle as lcmod
 from lhpc.core import source_registry
 from lhpc.core.manifest import ManifestError, parse_manifest
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
 from seams import readable_heads, write_own_rev
 
@@ -205,6 +205,10 @@ def test_stack_update_includes_an_installed_optional_component(tmp_path):
     svc = _svc(tmp_path)
     assert "meshcore-cli" not in _planned(svc, "meshcore")             # never installed
     (tmp_path / "src" / "meshcore-cli").mkdir(parents=True)
+    pin = next(c for st in svc.stacks() for c in st.components if c.id == "meshcore-cli").source.pin_commit
+    svc._system.runner.commands[("git", "-C", str(tmp_path / "src" / "meshcore-cli"), "rev-parse", "HEAD")] = \
+        CommandResult(0, pin + "\n", "")
+    # at its pin: the update gate (STABLE-LANE) has nothing to place; a moved head needs readable history
     assert "meshcore-cli" in _planned(svc, "meshcore")                 # installed
     assert "meshcore-cli" in _planned(svc, "")                         # "all" draws the same line
 
