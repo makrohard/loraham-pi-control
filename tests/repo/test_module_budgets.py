@@ -28,7 +28,7 @@ BUDGETS = {
     "service_binary_ops.py": (1104, 5),  # trackF-c3: the web client follows meshtastic's binary install; chain-A G2: the kept binary by sha, an unstamped receipt dated by its entry, the readiness rule, kept checkouts named
     "service_boot_restore.py": (674, 2),  # co-19: a start refused before the claim keeps its reason; K6: lowered (no band-marker source); K8f S4-4a: a radio's daemon item fails by name (G1-K8F-S4-4A B1/B2)
     "service_build.py": (818, 11),  # split-s5: split from service_lifecycle_ops.py; U8: one start readiness (start_readiness for the web gate and the page), paid by binary_behind out of service_binary_channel.py
-    "service_daemon_params.py": (546, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp); RADIO-POWER: Apply live leaves an at-start POWER (kiss) to the next start
+    "service_daemon_params.py": (548, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp); RADIO-POWER: Apply live leaves an at-start POWER (kiss) to the next start; RADIO-POWER fold: the daemon's Apply names a running at-start client (kiss)
     "service_firewall.py": (1652, 19),  # A21: one gate decision on the applied firewall (the snapshot evidence reader), pre-opened page rows
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1019, 17),  # K7: the apply restarts every running instance (one shared secret, DEC-W384v)

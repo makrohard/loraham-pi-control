@@ -99,7 +99,7 @@ def test_apply_live_leaves_kisss_power_to_its_next_start(tmp_path, monkeypatch, 
     cfgmod.save_stack_config(svc._paths, stack, {"dp_POWER": "11"}, inst=Instance("r1"))
     res = svc.apply_daemon_params(stack, rid="r1")
     power_sets = [line for _p, line in fake.sent if line.startswith(b"SET POWER")]
-    assert (power_sets == [b"SET POWER=11\n"]) is sent, (power_sets, res.summary)
+    assert power_sets == ([b"SET POWER=11\n"] if sent else []), (power_sets, res.summary)    # G2: exactly one, or none
     assert ("POWER" in res.data["applied"]) is sent
     if not sent:
         assert res.data["at_start"] == ["POWER"]
@@ -145,3 +145,19 @@ def test_kiss_on_the_meshstick_takes_21_and_22_into_its_file(box, tmp_path, powe
     rc, out, launches = run("start", "kiss@r3")
     assert rc == 0 and ("loraham-kiss-tnc", "868", "r3") in launches, out
     assert _conf(tmp_path, "r3") == f"power={power}\n"
+
+
+@pytest.mark.parametrize("client, sent", [("kiss@r1", False), ("chat@r1", True)])
+def test_the_daemons_apply_leaves_power_to_a_running_kiss_s_next_start(tmp_path, monkeypatch, client, sent):
+    # 3f for the daemon's own Apply (a DIY-guide deep check): with kiss@r1 running, the daemon's POWER sent live is put
+    # back by the TNC on its next frequency switch; red-before: "SET POWER=11" sent and reported applied. Chat (no
+    # POWER in its SET) keeps it: sent live.
+    svc, fake = _svc(tmp_path)
+    monkeypatch.setattr(radio_start, "radio_clients", lambda svc, rid, sid: ([client], False))   # another stack runs
+    assert svc.save_daemon_params("daemon", {"POWER": "11"}, rid="r1").ok
+    res = svc.apply_daemon_params("daemon", rid="r1")
+    power_sets = [line for _p, line in fake.sent if line.startswith(b"SET POWER")]
+    assert power_sets == ([b"SET POWER=11\n"] if sent else []), (power_sets, res.summary)    # G2: exactly one, or none
+    assert ("POWER" in res.data["applied"]) is sent and (res.data["at_start"] == ([] if sent else ["POWER"]))
+    if not sent:
+        assert "POWER: takes effect at the next start of kiss@r1" in res.details, res.details

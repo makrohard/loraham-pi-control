@@ -15,7 +15,7 @@
 - Radio power: USB radios start at 14 dBm, SPI at 17; a POWER set by hand stays. The limit is the chip range:
   SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22.
 - KISS: the TNC (v0.6.4, power 0–22) reads config/files/<rid>/loraham_kiss_tnc.conf (kiss's POWER, at the next start);
-  edits in loraham_kiss_tnc.conf.example (any key) are no longer read: the TNC runs on its shipped defaults.
+  its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) is unread: shipped defaults; note yours.
 - A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
   radio id (`lhpc stack stop daemon@rN`).
 - LoRaHAM daemon v1.4.2 (c951d820, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA

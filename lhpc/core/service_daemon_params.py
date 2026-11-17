@@ -407,8 +407,10 @@ class DaemonParamsMixin:
                     return ActionResult(False, radio_start.socket_refusal(self._paths, b, rid) or f"{rid}'s daemon is not running — start it first",
                                         data={"band": b, "rid": rid, "persisted": True})
                 applies = self._daemon_param_applies(sid, rid)          # B1: the app puts an at-start POWER back
-                at_start = ["POWER"] if sid in daemon_params.POWER_AT_START and applies.pop("POWER", None) else []
-                applied, failed, confirmed, unconfirmed, details = [], [], [], [], [f"{k}: takes effect at the next start of {sid}@{rid}" for k in at_start]
+                holder = next((o for o in ([f"{sid}@{rid}"] if not is_daemon else others)    # the daemon's: a running one
+                               if o.partition("@")[0] in daemon_params.POWER_AT_START), "")
+                at_start = ["POWER"] if holder and applies.pop("POWER", None) else []
+                applied, failed, confirmed, unconfirmed, details = [], [], [], [], [f"{k}: takes effect at the next start of {holder}" for k in at_start]
                 for key, val in applies.items():
                     ok, detail = self._apply_daemon_param(b, key, val, rid)
                     if ok:
