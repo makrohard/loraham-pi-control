@@ -2,22 +2,24 @@
 
 **[Hier geht's zur deutschen Anleitung](README.de.md)**
 
-Install, configure and run amateur-radio LoRa stacks on a Raspberry Pi — a CLI and a local WebGUI.
-`lhpc` installs each stack from a pinned commit, a release, the development tip or a verified
-prebuilt binary, writes every app's configuration from one set of settings, starts and stops them in
-dependency order, and gives each band to one stack at a time. It runs rootless, as your own user.
-Nine stacks: the LoRaHAM daemon with chat, voice, KISS TNC and Graywolf (APRS), plus Meshtastic,
-MeshCom, MeshCore and Reticulum — on a Pi Zero 2W or Pi 5.
+`lhpc` turns a Raspberry Pi or a Linux PC with a LoRa radio into a working LoRa station. It installs the
+stacks you choose, licence-free mesh networks as well as amateur-radio applications, from tested
+versions or the latest upstream, and sets them all up from one place. It starts them in the right order,
+hands each radio to one stack at a time, and tells you when an update is out. You control everything
+from a web interface, also on your phone, or from the command line.
 
-- **Have a Pi with a suitable [LoRa HAT](#hardware)?**
+**Where to start:**
 
-  > **The normal way in is a ready-made image:** Raspberry Pi OS with LHPC and every stack
-  > installed and built; its first boot configures the box and reads an optional `lhpc-config.txt`
-  > from the boot partition. This page is for building a box yourself.
-  >
+- **A Raspberry Pi with a [LoRa HAT or USB stick](#hardware)?** Take the ready-made image:
+  Raspberry Pi OS with LHPC and every stack installed and built; its first boot configures the box
+  and reads an optional `lhpc-config.txt` from the boot partition. Proven on a Pi Zero 2W and a Pi 5.
+
   > ## → [Get a ready-made image](https://github.com/makrohard/loraham-images)
 
-- **No Pi? Two ways to try it, no hardware needed**
+- **A Linux PC (x86) with a [USB stick](#hardware)?** Install it yourself:
+  **[manual install](#manual-install)** (the steps are written and proven for a Pi).
+
+- **No hardware?** Try it in your browser or in the test lab:
 
   > [![Live demo](https://img.shields.io/badge/%E2%96%B6%20Live%20demo-in%20your%20browser-2ea44f)](https://makrohard.github.io/loraham-pi-control/)
   > — the real WebGUI in your browser, simulated via Pyodide. **No sign-in.**
@@ -25,6 +27,14 @@ MeshCom, MeshCore and Reticulum — on a Pi Zero 2W or Pi 5.
   > [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/makrohard/loraham-pi-control)
   > — the test lab: real stack processes against simulated hardware. **Needs a (free) GitHub
   > account.** See [`docs/testlab.md`](docs/testlab.md).
+
+<br>
+
+**⚠️📜🛜 Amateur radio:**
+
+- Some of the hardware, frequencies and stacks need an amateur-radio licence to operate (the Free to use column
+  under [Stacks](#stacks)).
+- You are responsible for complying with your local regulations.
 
 ## Contents
 
@@ -40,46 +50,55 @@ MeshCom, MeshCore and Reticulum — on a Pi Zero 2W or Pi 5.
 
 Any Raspberry Pi HAT whose radio is an **SX1276**, **SX1278** or **SX1262** wired **directly to the
 Pi's SPI bus** — `lhpc` drives the chip itself, so there is no LoRaWAN concentrator, no serial (UART)
-radio and no RNode firmware in between. Three USB sticks on a CH341 bridge are supported as well (ELECROW Meshstick,
-PINE64 USB adapter, a self-built CH341A stick with an RFM98PW, SX1276/78 or SX1262: [build guide](docs/usb-lora-diy-build.md)):
-[USB radios](docs/usb-radios.md).
+radio and no RNode firmware in between. Three HATs ship with a ready-made hardware preset:
 
-Three HATs ship with a ready-made hardware preset:
+<p>
+<a href="https://www.loraham.de/produkt/loraham-pi/"><img src="docs/img/readme/hw-loraham.jpg" width="240" alt="LoRaHAM Pi HAT"></a>
+<a href="https://store.uputronics.com/products/raspberry-pizero-loratm-expansion-board"><img src="docs/img/readme/hw-uputronics.jpg" width="240" alt="Uputronics Raspberry Pi Zero LoRa Expansion Board"></a>
+<a href="https://www.waveshare.com/sx1262-lorawan-hat.htm"><img src="docs/img/readme/hw-waveshare.jpg" width="240" alt="Waveshare SX1262 LoRaWAN/GNSS HAT"></a>
+</p>
 
-- **LoRaHAM Pi HAT** — the [LoRaHAM project's](https://loraham.de) own dual-module board
-  (SX1278 for 433 MHz + RFM95 for 868 MHz).
-- **Uputronics Raspberry Pi Zero LoRa Expansion Board** ([Uputronics](https://store.uputronics.com))
+- **LoRaHAM Pi HAT** — the [LoRaHAM project's](https://www.loraham.de/produkt/loraham-pi/) own
+  dual-module board (SX1278 for 433 MHz + RFM95 for 868 MHz).
+- **Uputronics Raspberry Pi Zero LoRa Expansion Board**
+  ([Uputronics](https://store.uputronics.com/products/raspberry-pizero-loratm-expansion-board))
   — RFM95/RFM98; one board for a single band, or two stacked for dual-band (CE0 = 433 MHz,
   CE1 = 868 MHz).
 - **Waveshare SX1262 LoRaWAN/GNSS HAT**
   ([Waveshare](https://www.waveshare.com/wiki/SX1262_XXXM_LoRaWAN/GNSS_HAT)) — 433M and 868M
   variants.
 
+Three USB sticks on a CH341 bridge are supported as well ([USB radios](docs/usb-radios.md)):
+
+<p>
+<a href="https://www.elecrow.com/meshstick-usb-to-spi-sx1262-tcxo-lora-usb-stick-usb-plug-and-play-meshtastic-lora-mesh-node.html"><img src="docs/img/readme/hw-meshstick.jpg" width="240" alt="ELECROW Meshstick"></a>
+<a href="https://pine64.org/documentation/Pinedio/USB_adapter/"><img src="docs/img/readme/hw-pinedio.jpg" width="240" alt="PINE64 USB LoRa adapter"></a>
+<a href="docs/usb-lora-diy-build.md"><img src="docs/img/readme/hw-diy.jpg" width="240" alt="The self-built CH341A stick"></a>
+</p>
+
+- **ELECROW Meshstick** ([ELECROW](https://www.elecrow.com/meshstick-usb-to-spi-sx1262-tcxo-lora-usb-stick-usb-plug-and-play-meshtastic-lora-mesh-node.html))
+  — SX1262, 868 MHz.
+- **PINE64 USB LoRa adapter** (PineDio, [PINE64](https://pine64.org/documentation/Pinedio/USB_adapter/))
+  — SX1262, 868 MHz.
+- ***Build your own:*** a CH341A stick with an RFM98PW, SX1276/78 or SX1262 —
+  **[step-by-step build guide](docs/usb-lora-diy-build.md)**.
+
 Other boards with those chips: choose the preset whose wiring matches
 ([catalog](docs/cli.md#hardware)); they are not validated here.
 
-Tested on **Pi Zero 2W** and **Pi 5**. On the air: LoRaHAM Pi HAT, Uputronics dual stack,
-Waveshare SX1262 433M; the RF test line: [hardware proof](testlab/hardware/hardware-proof.md).
-
 ## Stacks
 
-<details><summary><em>The nine stacks — bands, what each is, and its docs</em></summary>
-
-| Stack | Band(s) | Licence | What it is | Docs |
-|---|---|---|---|---|
-| `daemon` | 433 + 868 | — | LoRaHAM daemon — owns the radios, one process and socket set per radio | [daemon](docs/stacks/daemon.md) |
-| `chat` | 433 | yes | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
-| `voice` | 433 / 868 | yes | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
-| `kiss` | 433 / 868 | yes | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
-| `graywolf` | via `kiss` | yes | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
-| `meshtastic` | 433 / 868 | no | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
-| `meshcom` | 433 | yes | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
-| `meshcore` | 868 | no | MeshCore on openHop — chat node (TCP 5000 on r1) and/or repeater (dashboard :8000 on r1), by `mode`; + 133 per further radio | [meshcore](docs/stacks/meshcore.md) |
-| `reticulum` | 433 / 868 | no | Reticulum node, drives the radio directly over SPI | [reticulum](docs/stacks/reticulum.md) |
-</details>
-
-⚠️ **Licence.** The `yes` stacks need an amateur-radio licence, the `no` ones are for licence-free
-ISM use; band, power, duty cycle and callsign are **your legal responsibility**.
+| | Stack | Free to use | What it is | Docs |
+|:---:|---|:---:|---|---|
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `daemon` | | LoRaHAM daemon — owns the radios, one process and socket set per radio | [daemon](docs/stacks/daemon.md) |
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `chat` | 📜🛜 | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `voice` | 📜🛜 | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
+| | `kiss` | | KISS TNC over TCP (graywolf, xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| <img src="docs/img/readme/logo-graywolf.png" height="48" alt="graywolf"> | `graywolf` | 📜🛜 | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
+| <img src="docs/img/readme/logo-meshtastic.png" height="48" alt="Meshtastic"> | `meshtastic` | ✅ | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
+| <img src="docs/img/readme/logo-meshcom.png" height="48" alt="ICSSW"> | `meshcom` | 📜🛜 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
+| <img src="docs/img/readme/logo-meshcore.png" height="64" alt="openHop and MeshCore"> | `meshcore` | ✅ | MeshCore on openHop — chat node and/or repeater | [meshcore](docs/stacks/meshcore.md) |
+| <img src="docs/img/readme/logo-reticulum.png" height="48" alt="Reticulum"> | `reticulum` | ✅ | Reticulum node, drives the radio directly over SPI | [reticulum](docs/stacks/reticulum.md) |
 
 Daemon-backed stacks start the daemon automatically; Meshtastic and Reticulum drive the radio
 themselves and cannot share a band with the daemon (`lhpc` refuses the conflict).
