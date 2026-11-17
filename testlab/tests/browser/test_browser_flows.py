@@ -163,7 +163,7 @@ def test_the_webserver_submenu_switcher_and_headings_fit_without_sideways_scroll
     page.evaluate("() => document.querySelectorAll('#stack-webservers-meshtastic details').forEach(d => d.open = true)")
     got = page.evaluate(_WEB_SUBMENU)
     assert got["open"] and got["radios"] == [["r1 · 433", True], ["r2 · 868", True]], got
-    assert got["heads"][0][0] == "Webserver (web UI proxy)" and any(h.startswith("Proxy · Meshtastic UI · r2") for h, _f, _c in got["heads"]), got
+    assert got["heads"][0][0] == "Web Proxies" and any(h.startswith("Proxy · Meshtastic UI · r2") for h, _f, _c in got["heads"]), got
     assert all(f and c for _h, f, c in got["heads"]), got
     assert got["overflow"] <= 1, got
 

@@ -327,7 +327,7 @@ def test_the_stack_panel_renders_one_webserver_subpanel_and_password_block_per_p
     svc = _svc(tmp_path)
     doc = parse(web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True))
     assert doc.present("stack-webserver-two@r1") and doc.present("stack-webserver-two-b@r1")
-    # U3 (K2): one "Webserver (web UI proxy)" submenu; each page's panel is headed "Proxy · <page>" (WEBSERVER-RENAME)
+    # U3 (K2): one "Web Proxies" submenu; each page's panel is headed "Proxy · <page>" (WEBSERVER-RENAME)
     assert doc.present("stack-webservers-two") and "Proxy · Dashboard" in doc.text
     assert doc.within(doc.by_id("stack-webserver-two-b@r1")).field_default("page") == "two-b@r1"
     assert doc.present("stack-password-b") and not doc.present("stack-password-a")
@@ -527,7 +527,7 @@ def test_denied_routes_answer_200_notice_on_a_flagged_page_else_404():
 
 # --- the per-radio Webserver submenu (PLAN-UI-v5 K2, U3) ------------------------------------------------------------
 #
-# meshcom on r1 and r2 (both 433): one "Webserver (web UI proxy)" submenu with the Settings radio switcher; below it
+# meshcom on r1 and r2 (both 433): one "Web Proxies" submenu with the Settings radio switcher; below it
 # the chosen radio's pages, each headed "Proxy · MeshCom UI · rN". Every instance page keeps its own page and tree entry.
 
 def _two_radio_web(tmp_path, web):
@@ -543,12 +543,12 @@ def _summary(doc, el_id):
 
 @pytest.mark.parametrize("rid, other", [("r1", "r2"), ("r2", "r1")])
 def test_one_webserver_submenu_switches_radio_in_place_and_heads_each_page_by_its_instance(tmp_path, web, rid, other):
-    # red on 6b82239a: a "Webserver (web UI proxy)" panel per instance page, no radio in its heading, no switcher
+    # red on 6b82239a: a "Web Proxies" panel per instance page, no radio in its heading, no switcher
     c = _two_radio_web(tmp_path, web)
     r = c.get(f"/stacks?open=meshcom&radio={rid}")
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
-    assert _summary(doc, "stack-webservers-meshcom").strip() == "Webserver (web UI proxy)"
+    assert _summary(doc, "stack-webservers-meshcom").strip() == "Web Proxies"
     assert " ".join(_summary(doc, f"stack-webserver-meshcom@{rid}").split()) == f"Proxy · MeshCom UI · {rid} not proxied"
     assert doc.by_id(f"stack-webserver-meshcom@{other}") is None    # the other radio's page: its own page, the switch
     wrap = doc.within(doc.by_id("stack-webservers-meshcom"))
@@ -571,7 +571,7 @@ def test_every_instance_page_keeps_its_own_page_and_the_submenu_page_switches_ra
         doc = parse(page.get_data(as_text=True))
         assert doc.by_id(f"stack-webserver-meshcom@{rid}") is not None
         crumbs = " ".join(doc.find("nav", class_="crumbs")[0].text.split())     # the page sits under the one submenu
-        assert crumbs.endswith(f"› Webserver (web UI proxy) › Proxy · MeshCom UI · {rid}"), crumbs
+        assert crumbs.endswith(f"› Web Proxies › Proxy · MeshCom UI · {rid}"), crumbs
     # the submenu's own page: the chosen radio's panels, its switcher stays on that page
     doc = parse(c.get("/stacks/meshcom/menu/stack-webservers-meshcom?radio=r2").get_data(as_text=True))
     assert doc.by_id("stack-webserver-meshcom@r2") is not None and doc.by_id("stack-webserver-meshcom@r1") is None

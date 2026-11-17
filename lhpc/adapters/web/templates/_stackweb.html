@@ -15,7 +15,7 @@
    renders open while it holds one, so they are seen without JS. #}
 {% set sw_results = panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') %}
 <details class="advcfg" id="stack-webserver-{{ sw.page_id }}"{% if sw_results %} open{% endif %}>
-  {# WEBSERVER-RENAME: headed like its menu entry, "Proxy · <web UI> · rN"; the stack's one "Webserver (web UI proxy)"
+  {# WEBSERVER-RENAME: headed like its menu entry, "Proxy · <web UI> · rN"; the stack's one "Web Proxies"
      submenu holds it (_stackwebs.html) #}
   <summary>{{ sw.heading }}
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),

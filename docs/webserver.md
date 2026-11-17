@@ -102,9 +102,9 @@ Flags: [CLI](cli.md#webserver).
    lhpc webserver cert issue lhpc-laptop                       # prints a ONE-TIME passphrase; record it
    lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12    # encrypted .p12, mode 0600
    ```
-   The label is what the device's certificate chooser shows; prefix it with `lhpc-`. The
-   console's **Webserver and mTLS proxy → Certificates** panel offers **Download .p12** on a loopback session
-   only.
+   The label is what the device's certificate chooser shows; prefix it with `lhpc-`. The console's
+   **Webserver and mTLS proxy → Certificates** panel offers **Download .p12** on a loopback
+   session only.
 4. **Copy the bundle and the server CA to the remote machine**, one file per `scp` (the panel
    shows equivalent commands with the box's current address, fetching the `.p12` straight from
    `config/tls/exports/`; `ca.crt` is also a plain download there,

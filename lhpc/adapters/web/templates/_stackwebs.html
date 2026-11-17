@@ -1,5 +1,5 @@
 {% from "_menu.html" import page_actions -%}
-{# U3 (PLAN-UI-v5 K2): the stack's ONE "Webserver (web UI proxy)" submenu. It holds the instance pages of the radio the
+{# U3 (PLAN-UI-v5 K2): the stack's ONE "Web Proxies" submenu. It holds the instance pages of the radio the
    view shows (`g.view.radio`), chosen with the radio switcher of Settings (the same `.bandswitch` markup, a server-rendered
    link, no JS); a page without a radio always shows. Filtered here, at render time only: `g.stack_webs` keeps every
    instance page, so each one stays reachable by its own page, the tree and Expose all. Requires `g`. #}
@@ -9,7 +9,7 @@
 {% set ws_open = namespace(v=false) %}
 {% for sw in ws_pages %}{% if panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') %}{% set ws_open.v = true %}{% endif %}{% endfor %}
 <details class="advcfg" id="stack-webservers-{{ g.stack.id }}"{% if ws_open.v %} open{% endif %}>
-  <summary>Webserver (web UI proxy)</summary>
+  <summary>Web Proxies</summary>
   <div class="body">
     {% if g.view.radio_choices %}
       <p><strong>Radio:</strong>
