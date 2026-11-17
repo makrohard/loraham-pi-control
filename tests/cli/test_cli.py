@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+
 import pytest
 
 from lhpc.adapters.cli.main import main
@@ -1025,7 +1027,7 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
     rc = main(["webserver"])
     err = capsys.readouterr().err
     assert rc == 2
-    assert err.startswith("usage: lhpc webserver")    # rule-10: argparse's usage line, anchored; no typed field
+    assert re.match(r"^usage: lhpc webserver(?=\s|$)", err), err   # rule-10: argparse's usage line, anchored at the prog name
 
 
 
