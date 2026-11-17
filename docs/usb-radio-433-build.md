@@ -58,7 +58,7 @@ Start with USB unplugged and nothing attached:
    a rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
    Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
 6. **Check the feed alone**, before any radio wire is on: solder the feed wire to the pickup and leave
-   its far end free. With USB on, measure at that end against CH341A pin 12 (GND): 5.0–6.0 V, with the
+   its far end free. With USB on, measure at that end against a board GND pad: 5.0–6.0 V, with the
    right polarity. Unplug, then insulate the end. (Checked now, the board never runs with its signal
    wires on an unpowered radio.)
 
@@ -233,7 +233,7 @@ when the host needs it). The build needs no driver blacklist.
 4. **Receive first.** Set a known-good 433 MHz peer's values on the daemon (`lhpc config daemon@<rid>
    --daemon-param FREQ=… --daemon-param SF=…`, then `--apply-daemon`): frequency, bandwidth, spreading
    factor, coding rate, sync word, preamble and CRC. Its frames must show in `lhpc daemon <rid> --feed`
-   (the RF log `logs/<rid>/rf-daemon.log`). These are the peer's settings: the reference build's peer
+   or in the RF log `logs/<rid>/rf-daemon.log`. These are the peer's settings: the reference build's peer
    sent MeshCom frames at 433.175 MHz, SF11, BW 250 kHz, CR 4/6, sync 0x2B, preamble 16, which is not
    LHPC's MeshCom profile.
 5. **Then transmit one frame at that power**, into an antenna or a dummy load rated above the expected
