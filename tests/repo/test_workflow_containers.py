@@ -129,7 +129,9 @@ def _docker(tmp_path: Path, mode: str) -> Path:
     `running` exists at once; `pending` is a create the daemon holds: it lands just after a `rm -f` that found no
     such container; `exits`: the client ends at once with 0, no container; `deaf`: the container exists, the client
     never ends by itself. `rm -f NAME...` ends each container that exists, says "No such container" for the others
-    (rc 1); tmp/rm-fails: it fails with that file's words; tmp/hang-rm: it hangs. `ps -aq --filter name=RE` lists
+    (rc 1); tmp/rm-fails: it fails with that file's words; tmp/hang-rm: it hangs and ignores TERM (the worst case:
+    a hung client that inherited an ignored TERM, which the runner's `timeout` leaves ignored; only its -k KILL ends
+    it, rc 137). `ps -aq --filter name=RE` lists
     the containers whose "/name" matches RE (tmp/ps-fails, tmp/hang-ps as for rm)."""
     t, b = tmp_path, tmp_path / "bin"
     b.mkdir()
@@ -148,7 +150,7 @@ def _docker(tmp_path: Path, mode: str) -> Path:
         '       [ "$2" = -d ] && exit 0\n'
         f'       while kill -0 "$(cat {t}/$name.pid 2>/dev/null)" 2>/dev/null; do sleep 0.05; done\n'  # wallclock: poll
         '       exit 137 ;;\n'
-        f'  rm)  shift; [ "$1" = -f ] && shift; [ -f {t}/hang-rm ] && exec tail -f /dev/null\n'
+        f'  rm)  shift; [ "$1" = -f ] && shift; [ -f {t}/hang-rm ] && {{ trap \"\" TERM; exec tail -f /dev/null; }}\n'
         f'       [ -f {t}/rm-fails ] && {{ cat {t}/rm-fails >&2; exit 1; }}\n'
         '       st=0\n'
         '       for n in "$@"; do\n'
@@ -311,14 +313,15 @@ def test_a_removal_that_fails_fails_the_step(tmp_path, why):
 @pytest.mark.wallclock("a real step shell under a 2 s cleanup bound, a hanging docker; waits bounded at 15 s")
 def test_a_hanging_removal_ends_within_the_bound_and_fails_the_step(tmp_path):
     """G2-TESTSD B3: `docker rm -f` had no deadline: a hung daemon hung the step's cleanup until the runner's KILL.
-    Every docker call of the cleanup runs under the time left (at least 1 s); a timed-out removal is a failure."""
+    Every docker call of the cleanup runs under the time left (at least 1 s) and a 1 s KILL grace, so a removal that
+    ignores TERM ends too; a timed-out removal is a failure (CI's `timeout` left the stand-in's TERM ignored: rc 137)."""
     proc = _step(tmp_path, "crun img sleep 600")
     try:
         _started(proc)
         (tmp_path / "hang-rm").touch()
         proc.send_signal(signal.SIGTERM)
         assert proc.wait(15) == 143
-        assert re.search(r"::error::container \S+: its removal failed \(docker rm -f rc 124\)", _rest(proc))
+        assert re.search(r"::error::container \S+: its removal failed \(docker rm -f rc 137\)", _rest(proc))
     finally:
         _end(tmp_path, proc)
 
@@ -434,7 +437,7 @@ def test_a_signal_during_the_exit_cleanup_of_a_step_that_failed_by_itself_is_hel
         _wait_calls(tmp_path, "rm -f ", 1)
         proc.send_signal(signal.SIGTERM)                     # mid-cleanup, inside the EXIT trap
         assert proc.wait(15) == 1
-        assert re.search(r"::error::container \S+: its removal failed \(docker rm -f rc 124\)", _rest(proc))
+        assert re.search(r"::error::container \S+: its removal failed \(docker rm -f rc 137\)", _rest(proc))
     finally:
         _end(tmp_path, proc)
 
