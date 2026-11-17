@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -429,3 +430,98 @@ def test_a_send_held_as_data_still_stops_when_it_runs_outside_tx(tmp_path, call)
     assert p.returncode == 2 and "a send outside tx" in p.stderr and "RAN-ON" not in p.stdout
     assert not (tmp_path / "ran").exists()
 
+
+
+# ---- rows 3 + 4: the word must arrive inside the app on the box (HWKIT receive proof) ----------------------------------------
+
+def proc_alive(name):
+    """True when a process whose argv[0] is `name` runs (the dry listener's marker)."""
+    for d in pathlib.Path("/proc").iterdir():
+        try:
+            if d.name.isdigit() and (d / "cmdline").read_bytes().split(b"\0")[0] == name.encode():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+@pytest.mark.parametrize("row, miss, why", [
+    ("3", "3-box-app.txt", "in the radio log, not in Meshtastic on the box"),
+    ("3", "3-box-app.txt:ended", "the Meshtastic listener on the box ended before its time"),
+    ("4", "4-box-app.txt", "in the radio log, not in MeshCore on the box")])
+def test_peer_to_box_passes_only_when_the_app_on_the_box_shows_the_word(dry, base, row, miss, why):
+    """The radio log alone is no longer enough: with the app's marker missing (the dry knob DRY_APPMISS) the row FAILs by
+    that name (the other direction is NOT RUN after it), and a listener that ended early is named as such,
+    never as "not in Meshtastic" (D2); every other row is as in the base run. Red-before: at 54ddaa4a the row reads the
+    radio log only and stays DRY-PASS."""
+    tag = uuid.uuid4().hex                                       # this run's own dry listener (xdist runs others beside it)
+    d = dry("full", DRY_APPMISS=miss, DRY_TAG=tag)
+    assert d.rc == 0, d.err
+    got = {k: r for k, r in d.report().items() if k[0] == row}
+    word = r"\S+ [0-9a-f]{8}"                                  # the leg that failed FAILs; the other did not run after it
+    assert re.fullmatch(rf"FAIL: {why}: {word}", got[(row, "peer -> box")]), got
+    assert re.fullmatch(rf"NOT RUN: after peer -> box FAIL: {why}: {word}", got[(row, "box -> peer")]), got
+    assert {k: r for k, r in d.report().items() if k[0] != row} == {k: r for k, r in base.report().items() if k[0] != row}
+    assert not proc_alive(f"rfkit-dry-listener:{tag}")
+
+
+def test_meshtastic_on_the_box_listens_before_the_g2_sends(base):
+    """Meshtastic keeps no history a later connect could read: the box listener (the app check) is started before the
+    G2's send, and both before the radio-log read; the listener is bounded on the box itself (D3)."""
+    order = [i for i, line in enumerate(base.lines) if re.search(r"\[dry\] (H|Z) > 3-box-app\.txt: ", line)]
+    send = [i for i, line in enumerate(base.lines) if "3-peer-send.txt" in line and "[dry] PC >" in line]
+    rx = [i for i, line in enumerate(base.lines) if re.search(r"\[dry\] (H|Z) > 3-box-rx\.txt: ", line)]
+    assert order and send and rx and order[0] < send[0] < rx[0], (order, send, rx)
+    assert "--listen" in base.lines[order[0]] and "timeout -k 5 90 " in base.lines[order[0]]
+
+
+@pytest.mark.parametrize("row", ["3", "4"])
+def test_each_word_reaches_only_its_own_sender(base, row):
+    """D1: no app read names the sender, so the proof is the word: the peer -> box word is in the peer's send and in the
+    box's reads only, never in a box send; the box -> peer word is in the box's send and the peer's read only."""
+    lines = [line.replace("\\ ", " ") for line in base.lines if re.match(rf"\s*\[dry\] \S+ > {row}-", line)]   # %q quoting
+    app = next(line for line in lines if f"{row}-box-app.txt" in line)
+    n1 = re.search(r"rfkit [0-9a-f]{8}", app).group(0)
+    send = next(line for line in lines if f"{row}-box-send.txt" in line)
+    n2 = re.search(r"rfkit [0-9a-f]{8}", send).group(0)
+    assert n1 != n2
+
+    def files(n):
+        return {re.search(rf"> ({row}-[\w.-]+):", line).group(1) for line in lines if n in line}
+    assert files(n1) == {f"{row}-peer-send.txt", f"{row}-box-rx.txt", f"{row}-box-app.txt"}, files(n1)
+    assert files(n2) == {f"{row}-box-send.txt", f"{row}-peer-read.txt"}, files(n2)
+
+
+def test_a_stop_in_the_listener_window_leaves_no_listener(dry, runner_copy):
+    """D3: a STOP between the listener's start and its reaping (here a planted one right after the start) ends the row;
+    the row's EXIT trap ends the listener (in dry a real marked process), so nothing of it outlives the run."""
+    anchor = '  tx R3-g2 1 "$n1" -- peer 3-peer-send.txt'             # the G2's send: inside the listener's window
+    planted = runner_copy("rf-proof.sh", lambda t: t.replace(anchor, "  stop planted-in-the-window\n" + anchor, 1))
+    tag = uuid.uuid4().hex
+    d = dry("full", script=planted, DRY_TAG=tag)
+    assert "STOP: planted-in-the-window" in d.err, d.err[-2000:]
+    assert not proc_alive(f"rfkit-dry-listener:{tag}")
+
+
+def test_meshcore_on_the_box_is_read_as_json_with_the_word_anchored(base):
+    """Row 4's app read: meshcore-cli's own JSON (`-j sync_msgs`, the message's "text" field), the word anchored at its
+    closing quote (D5), each poll bounded on the box (D4)."""
+    app = next(line for line in base.lines if re.search(r"\[dry\] (H|Z) > 4-box-app\.txt: ", line))
+    n1 = re.search(r"rfkit [0-9a-f]{8}", app).group(0)
+    assert "timeout -k 2 10 " in app and " -j -t 127.0.0.1 -p " in app and " sync_msgs " in app, app
+    assert f"""grep -F -- '{n1}"'""" in app, app
+
+
+@pytest.mark.parametrize("other", ["meshcore-webui", "meshcore-cli"])
+def test_another_meshcore_client_makes_row_4_not_run(dry, base, other):
+    """D4: the app check pops the node's queue; another client of it running at the row's start would drain the word
+    first (a false FAIL), so row 4 is NOT RUN by that name and sends nothing; every other row is as in the base run."""
+    d = dry("full", DRY_MC_OTHER=other)
+    # the rehearsal's completeness check rightly names row 4's forms, never reached (and nothing else)
+    assert d.rc == 2 and "STOP: dry self-check all-forms-printed: needed but never printed: mc_pget mc_send rx_mc rx_mc_app" \
+        in d.err, d.err[-1500:]
+    got = {k: r for k, r in d.report().items() if k[0] == "4"}
+    assert got and all(re.fullmatch(rf"NOT RUN: another MeshCore client of meshcore@r\d+ runs \({other}\): it would drain "
+                                    r"the messages the app check reads", r) for r in got.values()), got
+    assert not [line for line in d.lines if re.search(r"\[dry\] \S+ > 4-(peer-send|box-send)\.txt", line)]
+    assert {k: r for k, r in d.report().items() if k[0] != "4"} == {k: r for k, r in base.report().items() if k[0] != "4"}

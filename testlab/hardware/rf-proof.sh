@@ -85,11 +85,15 @@ declare -A F=(
   [rx_rf]="grep -hF -- '{n}' {RT}/logs/{rid}/rf-*.log 2>/dev/null | grep -F ' RX '"
   [rx_mt]="{LH} rflog meshtastic@{rid} --decrypt 2>/dev/null | grep -F ' RX ' | grep -F -- '{n}'"
   [rx_mc]="{LH} rflog meshcore@{rid} --decrypt 2>/dev/null | grep -F ' RX ' | grep -F -- '{n}'"
+  # the word in Meshtastic on the box: a listener bounded on the box itself; its own end is a line too (LISTENER-RC 124 = its timeout)
+  [rx_mt_app]="{ timeout -k 5 {s} {LH} meshtastic@{rid} --listen 2>&1; echo \"LISTENER-RC \$?\"; } | grep -m1 -F -e \"'text': '{n}'\" -e 'LISTENER-RC '"
+  # the word in MeshCore on the box: sync_msgs POPS the node's queue (a read deletes it, no undo); each poll bounded
+  [rx_mc_app]="timeout -k 2 10 {RT}/src/meshcore-cli/.venv/bin/meshcore-cli -j -t 127.0.0.1 -p {cport} sync_msgs 2>/dev/null | grep -F -- '{n}\"'"
   [rx_mchat]="grep -rlF -- '{n}' {RT}/state/meshchat 2>/dev/null"
 )
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional: row 5 box -> peer is NOT RUN without it).
-declare -A RFORMS=([1]="start stop" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt" [4]="start stop mc_send mc_pget rx_mc"
+declare -A RFORMS=([1]="start stop" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
   [5]="start stop rt_get rt_pget rt_set rx_mchat" [6]="start stop chat_client rx_rf")
 rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
 # ---- 4. the box-side helpers (python, run on the box) ----------------------------------------------------------------------
@@ -97,7 +101,7 @@ STATUS_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock"
 while not b.endswith(b"\n") and len(b) < 4096:
  c=s.recv(4096 - len(b)); assert c, "EOF before the end of the STATUS line"; b+=c
 print(b.decode().strip())'
-CPORT_PY='import sys; from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); sid, inst, _b, why = instances.resolve(s, sys.argv[1]); print("WHY", why or "-"); [print("CPORT", e.address.rsplit(":", 1)[1]) for c in (s.stack(sid).components if inst is not None else ()) for t, e in zip(c.endpoints, instances.endpoints_for(c.endpoints, inst)) if t.kind == "tcp" and t.address.endswith(":5000")]; life = s._lifecycle(); [print("OWNED", r.get("pgid")) for r in (life.owned_records("meshcore-node", rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]'
+CPORT_PY='import sys; from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); sid, inst, _b, why = instances.resolve(s, sys.argv[1]); print("WHY", why or "-"); [print("CPORT", e.address.rsplit(":", 1)[1]) for c in (s.stack(sid).components if inst is not None else ()) for t, e in zip(c.endpoints, instances.endpoints_for(c.endpoints, inst)) if t.kind == "tcp" and t.address.endswith(":5000")]; life = s._lifecycle(); [print("OWNED", r.get("pgid")) for r in (life.owned_records("meshcore-node", rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]; [print("OTHER", c) for c in ("meshcore-webui", "meshcore-cli") for r in (life.owned_records(c, rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]'
 RADIOS_PY='from lhpc.core import paths, radios; s = radios.load(paths.resolve_paths()); print("STATE", s.kind); [print("ROW", r.id, r.model, r.band, r.enabled, "serial=" + r.usb_serial, "port=" + r.usb_port, "hp=" + str(r.high_power)) for r in s.radios]'
 CAPS_PY='import sys; sys.argv[1:] and sys.path.insert(0, sys.argv[1]); from lhpc.core import radio_models; [print("CAP", m.id, m.power_default_dbm) for m in radio_models.load().values()]'
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
@@ -309,7 +313,9 @@ sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
 drylog() { [ "$MODE" = dry ] && printf '%s\n' "$*" >> "$DRYLOG"; return 0; }
 X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: $c"
   guard "$f" "$c" -
-  if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; return 0; fi
+  if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; SPAWN=
+    [ "${BG:-0}" = 1 ] && { ( exec -a "rfkit-dry-listener${DRY_TAG:+:$DRY_TAG}" sleep 60 ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; }; return 0; fi
+  if [ "${BG:-0}" = 1 ]; then case $w in H|Z) ( capture "$f" sshrun "$w" - "$c" ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; return 0;; *) stop "X: BG only on a box";; esac; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
 XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
@@ -392,7 +398,8 @@ drystatus() { local v="DRY_STATUS_${1}_$2" bd f sf; [ -n "${!v:-}" ] && { printf
   echo "STATUS RADIO=READY TX=0 TXMODE=MANAGED TXQUEUE=1 RXREADY=1 HIGHPOWER=0 CHIPFAMILY=SX127x OCP=100 USBWAIT=- BOUND=- ID=$2 FREQ=$f SF=$sf POWER=10"; }
 dryradios() { local v="DRY_RADIOS_$1"; printf '%s\n' "${!v:-STATE valid}"; }
 dryout() { local w=$1 f=$2 c=$3; : > "$OUT/$f"
-  case "$c" in *"$RADIOS_PY"*) dryradios "$w" > "$OUT/$f";; *"$STATUS_PY"*) drystatus "$w" "${c##* }" > "$OUT/$f";; esac; }
+  case "$c" in *"$RADIOS_PY"*) dryradios "$w" > "$OUT/$f";; *"$STATUS_PY"*) drystatus "$w" "${c##* }" > "$OUT/$f";;
+    *"$CPORT_PY"*) [ -z "${DRY_MC_OTHER:-}" ] || echo "OTHER $DRY_MC_OTHER" > "$OUT/$f";; esac; }   # another MeshCore client
 frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
   local w=$1 c=$2 in=$3 send= base= rid='*' cls
@@ -569,6 +576,21 @@ result() { [ "$MODE" = dry ] && return 0
   if [ "$XRC" = 0 ] && grep -qxE "SEEN $(printf '%s' "$2" | sed 's/[.[\*^$]/\\&/g') .*" "$OUT/$1"; then return 0; fi
   if [ "$XRC" = 3 ] && [ "$(tail -n 1 "$OUT/$1")" = NOT-SEEN ]; then return 1; fi
   stop "$1: neither SEEN '$2' (rc 0) nor NOT-SEEN (rc 3): rc $XRC"; }
+# apprx <box> <file> <rendered form> <nonce> <secs|once>: the word inside the app on the box: a marker line only (SEEN <nonce>
+# <time>), never the app's output; <secs> polls the form (a queue read, MeshCore), `once` runs it once (a listener that holds the
+# app's connection until it sees the word or times out, Meshtastic; BG=1: started before the peer sends, ended by reapx)
+apprx() { local seen="echo \"SEEN $4 \$(date -u +%H:%M:%SZ)\"; exit 0"
+  if [ "$5" = once ]; then   # a listener: its own end is a line too (LISTENER-RC <rc>, 124 = its timeout): ended early is not "unseen"
+    X "$1" "$2" "l=\$($3 | head -n 1); case \"\$l\" in 'LISTENER-RC 124'|'') echo NOT-SEEN; exit 3;; 'LISTENER-RC '*) echo \"LISTENER-ENDED \${l#LISTENER-RC }\"; exit 4;; *) $seen;; esac"
+  else X "$1" "$2" "for i in \$(seq 1 $5); do l=\$($3 | head -n 1); [ -n \"\$l\" ] && { $seen; }; sleep 1; done; echo NOT-SEEN; exit 3"; fi; }
+reapx() { [ -n "$1" ] || return 0; [ "$MODE" = dry ] && kill "$1" 2>/dev/null; wait "$1" 2>/dev/null   # a box run of BG=1 X
+  [ "$MODE" = dry ] && { XRC=0; return 0; }; XRC=$(cat "$OUT/${SPAWNF[$1]}.rc" 2>/dev/null || echo 99)
+  [ "$XRC" -ne 255 ] || stop "${SPAWNF[$1]}: ssh transport rc 255"; }
+lkill() { [ -n "${1:-}" ] || return 0; pkill -TERM -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; return 0; }   # a row's EXIT trap
+appseen() {   # appseen <file> <nonce>: 0 the app shows it, 1 it does not, 2 the listener ended early (its own marker); dry:
+  # DRY_APPMISS=<file> rehearses the word missing, DRY_APPMISS=<file>:ended the listener ending early
+  [ "$MODE" = dry ] && { case "${DRY_APPMISS:-}" in "$1") return 1;; "$1:ended") return 2;; esac; return 0; }
+  [ "$XRC" = 4 ] && grep -qxE 'LISTENER-ENDED [0-9]+' "$OUT/$1" && return 2; result "$1" "$2"; }
 covres() { local r; r=$(grep -F "$1|$(dirtext "$2")|" "$OUT/results.txt" 2>/dev/null | tail -n 1 | cut -d'|' -f3-)
   case "$r" in PASS) echo "proven|";; DRY-PASS) echo "rehearsed|";; "FAIL: "*) echo "FAIL|${r#FAIL: }";; "NOT RUN: "*) echo "NOT RUN|${r#NOT RUN: }";; *) echo "NOT RUN|no result";; esac; }
 coverage() {   # one line per item (a model, a stack, a check), row and direction; every supported model no radio carries: not present
@@ -768,7 +790,7 @@ ackjudge() {   # ackjudge <file> <nonce>: row 2 peer -> box: the Graywolf helper
 row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set to 1, its lowest, restored after)
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 3) || { notrun_row 3 "form not confirmed: $NEEDS_MISSING"; return 0; }
-  local m r n1 n2 cap ap wp got pr; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
+  local m r n1 n2 cap ap wp got pr lp seen=; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
   pmust "$b" 3-cap.txt mt_cap "$r"; cap=$(body 3-cap.txt | tail -n 1)   # the cap every frame of the node is clamped to
   [ "$MODE" = dry ] || jcap "$cap" || stop "row 3: meshtastic@$r max_power '$cap' is not 1..17: nothing starts"
   started "$b" 3-start.txt "meshtastic@$r"
@@ -780,9 +802,15 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
   spower "$b" mt_pget "$r" "R3-$b-$r"
   ppower R3-g2 g2 mt-power 1
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
+  # Meshtastic on the box listens BEFORE the G2 sends (no history to read later); reaped before any check that can end the row
+  BG=1 apprx "$b" 3-box-app.txt "$(form rx_mt_app rid="$r" n="$n1" s=90)" "$n1" once; lp=$SPAWN; trap 'lkill "$lp"' EXIT
+  [ "$MODE" = dry ] || sleep 10
   tx R3-g2 1 "$n1" -- peer 3-peer-send.txt "$VMT" mt-send "$n1"; [ "$XRC" = 0 ] || stop "row 3: the G2 send failed"
+  reapx "$lp"; trap - EXIT; lp=; appseen 3-box-app.txt "$n1"; seen=$?
   boxrx "$b" 3-box-rx.txt rx_mt "$r" "$n1" 90 || fail "not heard: $n1"
-  REPORT 3 meshtastic "$b ($r)" "868, EU_868 LongFast" "Station G2" "peer -> box" "yes (RX on $r)" "the G2 at 1 (lowest)" PASS
+  case $seen in 0) ;; 2) fail "the Meshtastic listener on the box ended before its time: $n1";;
+    *) fail "in the radio log, not in Meshtastic on the box: $n1";; esac
+  REPORT 3 meshtastic "$b ($r)" "868, EU_868 LongFast" "Station G2" "peer -> box" "yes (RX on $r, in Meshtastic)" "the G2 at 1 (lowest)" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peer 3-peer-read.txt "$VMT" mt-read "$n2" 90; pr=$SPAWN; [ "$MODE" = dry ] || sleep 10
   tx "R3-$b-$r" 1 "$n2" -- must "$b" 3-box-send.txt "$(form mt_send rid="$r" n="$n2")"; reap "$pr"
@@ -793,7 +821,7 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
 row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE; its power is read, never changed)
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 4) || { notrun_row 4 "form not confirmed: $NEEDS_MISSING"; return 0; }
-  local m r n1 n2 cp tp pr; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
+  local m r n1 n2 cp tp pr ot; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
   started "$b" 4-daemon.txt "daemon@$r"; dpower "$b" "$r" "R4-$b-$r-d"
   started "$b" 4-start.txt "meshcore@$r"
   must "$b" 4-cport.txt "cd {RT} && ./venv/lhpc/bin/python -c '$CPORT_PY' meshcore@$r"; cp=$(rport 5000 "$r")
@@ -801,6 +829,9 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   must "$b" 4-listen.txt "ss -Htlnp 'sport = :$cp'"; [ "$MODE" = dry ] || check_listener 4-listen.txt "$cp"
   must "$b" 4-listener.txt "ps -o pgid= -p ${LP:-0} | tr -d ' '"; [ "$MODE" = dry ] || body 4-cport.txt | grep -qx "OWNED $(body 4-listener.txt)" \
     || stop "row 4: the listener pid $LP on $cp is not in a live owned meshcore-node group of meshcore@$r"
+  # the app check pops the node's queue: another client of it (the web UI, an interactive meshcore-cli) would drain the word first
+  ot=$(body 4-cport.txt | sed -n 's/^OTHER //p' | tr '\n' ' '); [ -z "$ot" ] || { undo_to "$m" || stop "row 4: undo failed"
+    notrun_row 4 "another MeshCore client of meshcore@$r runs (${ot% }): it would drain the messages the app check reads"; return 0; }
   spower "$b" mc_pget "$r" "R4-$b-$r"
   pread PC 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write
   tp=$(body 4-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
@@ -809,7 +840,9 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   tx R4-tdpro 1 "$n1" -- peerpin 4-peer-send.txt mc-send "$n1"; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro send failed"
   boxrx "$b" 4-box-rx.txt rx_mc "$r" "$n1" 90 || fail "not heard: $n1"
-  REPORT 4 meshcore "$b ($r)" "869.618 MHz, eu_uk_narrow" "T-Deck Pro (BLE companion)" "peer -> box" "yes (RX on $r)" "the T-Deck Pro at its own ${tp:-dry} dBm (not changed)" PASS
+  apprx "$b" 4-box-app.txt "$(form rx_mc_app rid="$r" n="$n1")" "$n1" 30   # MeshCore on the box queues it for its clients
+  appseen 4-box-app.txt "$n1" || fail "in the radio log, not in MeshCore on the box: $n1"
+  REPORT 4 meshcore "$b ($r)" "869.618 MHz, eu_uk_narrow" "T-Deck Pro (BLE companion)" "peer -> box" "yes (RX on $r, in MeshCore)" "the T-Deck Pro at its own ${tp:-dry} dBm (not changed)" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peerpin 4-peer-read.txt mc-read "$n2" 90; pr=$SPAWN; [ "$MODE" = dry ] || sleep 15
   tx "R4-$b-$r" 1 "$n2" -- must "$b" 4-box-send.txt "$(form mc_send rid="$r" n="$n2")"; reap "$pr"

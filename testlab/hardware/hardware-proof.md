@@ -40,6 +40,11 @@ line); a failed direction does not skip the other.
 A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; a difference is a FAIL (the radio is
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
 Row 5 has no on-air PASS yet.
+Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
+listener on the box, connected before the G2 sends (Meshtastic keeps no history to read later), and MeshCore's own message
+queue, read with meshcore-cli. That read takes the messages out of the queue, so a MeshCore client already running there
+(the web UI, an interactive meshcore-cli) makes row 4 NOT RUN. A direction passes only with both checks. Their evidence holds
+markers only: `SEEN <nonce> <time>` (the app gives no RSSI), and for row 3 `LISTENER-ENDED <rc>` when its listener ended early.
 
 ## Hardware that is not there
 
