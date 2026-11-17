@@ -226,15 +226,16 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
             return None, (f"identity drift: origin {actual or '(none)'!r} != configured "
                           f"remote {effective!r} — refusing")
         proven = bool(actual)                     # a positive, non-vacuous origin match
-    # Commit check: the tree must still be at the exact recorded resolved commit, or at exactly the HEAD a move the
-    # user confirmed named (`accept_head`, only the source update path; STABLE-LANE R11/R-1): then the origin match
-    # above is the proof.
+    # Commit check: the tree must be at exactly the HEAD a move the user confirmed named (`accept_head`, only the
+    # source update path; STABLE-LANE R11/R-1; then the origin match above is the proof), else at exactly the recorded
+    # resolved commit: a confirmed HEAD is never stood in for by the record (G2-STABLELANE-S2 B1).
     if rec.resolved_commit:
         actual_head = _head(system, git_dest)
-        if actual_head != rec.resolved_commit and not (accept_head and actual_head == accept_head):
-            return None, (f"identity drift: HEAD {actual_head[:12] or '(unknown)'} != recorded "
-                          f"{rec.resolved_commit[:12]} — the tree changed since LHPC adopted "
-                          "it; refusing")
+        if actual_head != (accept_head or rec.resolved_commit):
+            return None, (f"identity drift: HEAD {actual_head[:12] or '(unknown)'} != "
+                          f"{'confirmed ' + accept_head[:12] if accept_head else 'recorded ' + rec.resolved_commit[:12]}"
+                          f" — the tree changed since {'the warning you confirmed' if accept_head else 'LHPC adopted it'}"
+                          "; refusing")
         proven = proven or actual_head == rec.resolved_commit
     if not proven:
         # Path + leaf kind alone is NOT ownership: a manually replaced clean non-Git

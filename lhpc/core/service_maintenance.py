@@ -1633,8 +1633,8 @@ class MaintenanceOpsMixin:
                 sel, stable_refs, refusal, kept, warned = gate()   # the apply's ONE read of selectors and gate, locked
                 if refusal:
                     return refusal
-                if expect_heads is not None and (moved := [f"  {p}: HEAD is now {h[:9]}" for p, (_, h) in sorted(
-                        warned.items()) if expect_heads.get(p) != h]):        # R-3: a Confirm stands on the HEAD it named
+                if expect_heads is not None and (moved := [f"  {p}: HEAD is now {h[:9] or 'unwarned'}" for p in sorted(
+                        set(warned) | set(expect_heads) & affected) if expect_heads.get(p) != (h := warned.get(p, ("", ""))[1])]):
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': the checkout changed after the "
                                         "warning you confirmed; nothing was changed.", details=moved,
                                         next_commands=[f"lhpc update {target} {_src}".strip()])

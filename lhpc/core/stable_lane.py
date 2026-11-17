@@ -234,19 +234,20 @@ def resolver(run, paths):
 
 def contains(run, mirror, src, installed: str, target: str) -> bool | None:
     """The checkout at `src` (HEAD `installed`) already contains `target`: True, False, or None (could not check). The
-    badge and the routine update's "not newer" both ask this. Full history decides, never a missing object: the
-    mirror when it holds the installed commit; else the checkout when it holds the target or is a full clone (target
-    absent = not contained); a shallow checkout without the target cannot tell."""
+    badge and the routine update's "not newer" both ask this, always of `installed` (never the live HEAD). Full history
+    decides, never a missing object: the mirror when it holds the installed commit; else the checkout: the target
+    found in the installed commit's past = contained; a "no" (target absent, or not found in that past) only from a
+    full clone, a shallow checkout's cut history cannot tell (G2-STABLELANE-S1 B1)."""
     if installed == target:
         return True
     if mirror is not None and (known := _is(run, mirror, target, installed)) is not None:
         return known
     have = run(["git", "-C", str(src), "cat-file", "-e", target], timeout=5.0, env=_NO_LAZY)
-    if have.returncode == 0:
-        return {0: True, 1: False}.get(run(["git", "-C", str(src), "merge-base", "--is-ancestor", target, "HEAD"],
-                                           timeout=10.0, env=_NO_LAZY).returncode)
-    if have.returncode != 1:
+    if have.returncode not in (0, 1):
         return None
+    if have.returncode == 0 and (anc := run(["git", "-C", str(src), "merge-base", "--is-ancestor", target, installed],
+                                            timeout=10.0, env=_NO_LAZY).returncode) != 1:
+        return True if anc == 0 else None
     shallow = run(["git", "-C", str(src), "rev-parse", "--is-shallow-repository"], timeout=5.0)
     return False if shallow.returncode == 0 and shallow.stdout.strip() == "false" else None
 
@@ -274,8 +275,8 @@ def assess(run, src) -> str:
     return (head.stdout or "").strip() if head.returncode == 0 else ""
 
 
-def own_commits(run, mirror, src) -> list | None:
-    """Every commit HEAD reaches that no branch or tag of the upstream reaches ("<short> <subject>", children first),
+def own_commits(run, mirror, src, installed: str) -> list | None:
+    """Every commit the installed commit (captured, never the live HEAD) reaches that no branch or tag of the upstream reaches ("<short> <subject>", children first),
     all of them, also behind a merge: what an update deletes with the old checkout. None = not readable. The checkout
     may lack the upstream's tips (a shallow clone), so each remaining candidate is asked of the mirror, and a published
     one (with its ancestors) is excluded in turn."""
@@ -285,7 +286,7 @@ def own_commits(run, mirror, src) -> list | None:
         return None
     stop = sorted({ln.split()[-1] for ln in refs.stdout.splitlines() if ln.split()})
     for _ in range(64):                                  # each round excludes one more published commit
-        out = run(["git", "-C", str(src), "rev-list", "--topo-order", "--ignore-missing", "HEAD", "--not", *stop],
+        out = run(["git", "-C", str(src), "rev-list", "--topo-order", "--ignore-missing", installed, "--not", *stop],
                   timeout=10.0, env=_NO_LAZY)
         if out.returncode != 0:
             return None
@@ -366,13 +367,16 @@ def update_gate(run, paths, items, source: str, remote_of):
                     run, src)) and run(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"],
                                        timeout=15.0).returncode == 2:   # the branch is gone: the pin, never back
                 held = history_dir(paths, remote, branch)              # the history this box already has
-                has = contains(run, held if (held / "HEAD").exists() else None, src, installed, c.source.pin_commit)
+                copy = (held / "HEAD").exists()                        # --source pinned places the pin with it only
+                way = "--source pinned goes back with the back warning" if copy else \
+                    "to go back to the pin: remove the stack, reinstall Known working"
+                has = contains(run, held if copy else None, src, installed, c.source.pin_commit)
                 if has is None:                                         # retrying cannot help: name the way
                     refused.append(f"  {c.id}: upstream branch {branch!r} gone and this box holds no history placing "
-                                   f"the pin: nothing moves; --source pinned goes back with the back warning")
+                                   f"the pin: nothing moves; {way}")
                 if has:
-                    kept[path] = (f"  {c.id}: upstream branch {branch!r} gone; kept {installed[:9]}; --source pinned "
-                                  "goes back with the back warning")    # a plain Update never goes back (his rule)
+                    kept[path] = f"  {c.id}: upstream branch {branch!r} gone; kept {installed[:9]}; {way}"
+                    #                                                     a plain Update never goes back (his rule)
                 if has is not False:
                     continue
             if not want:
@@ -382,7 +386,10 @@ def update_gate(run, paths, items, source: str, remote_of):
         installed = assess(run, src)
         if not installed and lane != "stable":
             continue                                       # not a readable checkout: the adoption's identity decides
-        mirror = mirror or (target.history(remote, branch)[0] if installed and installed != want else None)
+        if mirror is None and installed and installed != want:
+            mirror, why = target.history(remote, branch)
+            if mirror is None and is_final(why) and (history_dir(paths, remote, branch) / "HEAD").exists():
+                mirror = history_dir(paths, remote, branch)        # the branch is gone upstream: the box's copy
         if not source and installed:                       # routine: the badge's predicate first (never back)
             if (has := contains(run, mirror, src, installed, want)) is None:
                 refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
@@ -393,7 +400,7 @@ def update_gate(run, paths, items, source: str, remote_of):
                                   f"kept (to install it anyway: --source {lane})")
                 continue
         how = classify(run, mirror, installed, want) if installed else None
-        own = own_commits(run, mirror, src) if how == "own" else ()
+        own = own_commits(run, mirror, src, installed) if how == "own" else ()
         if how is None or own is None:
             refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
             continue
