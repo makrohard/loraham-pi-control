@@ -36,6 +36,9 @@ def test_the_current_workload_names_a_zero_calibration():
     (27.6, 99.3, 0.23),        # testlab 43852504845's runner: 0.236 at 3 places, enforced as 0.24
     (40.0, 99.3, 0.25),        # a slower runner: the ceiling holds, the throttle never loosens
     (11.68, 99.3, 0.09),       # floored to 2 places, never rounded up
+    (13.0, 85.0, 0.13),        # exactly on a hundredth: binary floats give 12.999... and floored it to 0.12
+    (2.0, 17.0, 0.1),          # 0.85 x 2 / 17 is exactly 0.1 (floats: 0.09999...)
+    (0.1, 8.5, 0.01),          # the smallest quota, exactly on it: floats floored it to 0, a refused run
 ])
 def test_the_quota_keeps_the_margin_under_the_ceiling(w1, z_cpu, want):
     assert cpu_quota.quota(w1, z_cpu) == want
@@ -104,6 +107,24 @@ def test_the_timed_build_runs_as_root_and_a_failed_make_ends_the_script(tmp_path
     [got] = calls()                                   # one run, nothing to remove
     assert got[got.index("--user") + 1] == "root" and got.index("--user") < got.index("img")
     assert got[-1].split("; ")[0] == "set -e"
+
+
+def test_the_build_time_is_the_stamps_difference_in_decimal(tmp_path, monkeypatch):
+    _docker(tmp_path, monkeypatch, "print('1763370689.205073 1763370693.605073')\n")
+    w1 = cpu_quota.measure_w1("img")
+    assert w1 == 4.4                                 # floats: 4.3999998569488525
+    assert cpu_quota.quota(w1, 17.0) == 0.22         # which the quota floored to 0.21
+
+
+@pytest.mark.parametrize("out", ["", "127.5", "start end", "nan 127.5", "127.5 100.0"],
+                         ids=["nothing", "one-stamp", "not-numbers", "nan", "end-before-start"])
+def test_a_build_that_prints_no_usable_times_is_a_stop_naming_the_command_and_its_output(tmp_path, monkeypatch, out):
+    _docker(tmp_path, monkeypatch, f"print({out!r})\n")
+    with pytest.raises(SystemExit) as stop:
+        cpu_quota.measure_w1("img")
+    why = str(stop.value)
+    assert why.split(":", 1)[1].startswith(" the timed build printed no start and end time: docker run ")  # rule-10: the STOP's head names the case, its command follows
+    assert f"stdout: {out}" in why
 
 
 def test_a_failed_timed_build_is_a_stop_naming_the_command_and_its_output(tmp_path, monkeypatch):

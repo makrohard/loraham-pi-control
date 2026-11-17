@@ -25,6 +25,7 @@ removed by that name (ending the docker client does not end its container).
 from __future__ import annotations
 
 import argparse
+import decimal
 import hashlib
 import math
 import os
@@ -70,7 +71,10 @@ def zero_cpu_s(calibrations: list, work: str) -> float:
 
 
 def quota(w1: float, z_cpu: float) -> float:
-    return min(CEILING, math.floor(MARGIN * w1 / z_cpu * 100) / 100)
+    """In decimal, from each number as written: binary floats put 0.85 x 13 / 85 at 0.12999..., one hundredth low."""
+    d = decimal.Decimal
+    exact = d(str(MARGIN)) * d(str(w1)) / d(str(z_cpu))
+    return min(CEILING, float(exact.quantize(d("0.01"), rounding=decimal.ROUND_FLOOR)))
 
 
 def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S, name: str = "") -> float:
@@ -99,8 +103,14 @@ def measure_w1(image: str, timeout: float = BUILD_TIMEOUT_S, name: str = "") -> 
     if r.returncode != 0:
         raise SystemExit(f"cpu_quota: the timed build failed (rc {r.returncode}): {' '.join(argv)}\n"
                          f"stdout: {_tail(r.stdout)}\nstderr: {_tail(r.stderr)}")
-    t0, t1 = map(float, r.stdout.split()[-2:])
-    return t1 - t0
+    try:                                # the build's two $EPOCHREALTIME stamps, subtracted in decimal
+        t0, t1 = (decimal.Decimal(f) for f in r.stdout.split()[-2:])
+    except (ValueError, decimal.InvalidOperation):
+        t0 = t1 = None
+    if t0 is None or not t0.is_finite() or not t1.is_finite() or t1 <= t0:
+        raise SystemExit(f"cpu_quota: the timed build printed no start and end time: {' '.join(argv)}\n"
+                         f"stdout: {_tail(r.stdout)}\nstderr: {_tail(r.stderr)}")
+    return float(t1 - t0)
 
 
 def _tail(out) -> str:
