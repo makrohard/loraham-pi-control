@@ -10,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -59,36 +60,45 @@ def _text(data: bytes | None) -> str:
     return (data or b"").decode("utf-8", "replace")
 
 
+def _read_back(f) -> bytes:
+    f.seek(0)
+    return f.read()
+
+
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
     runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
-    stack) is drained for up to 5 s and kept in the error with the rest of its output; then it and
-    all it had started are killed: a child holding the pipes or not, one started with setsid, a
+    stack) is waited for up to 5 s and kept in the error with the rest of its output; then it and
+    all it had started are killed: a child holding the output or not, one started with setsid, a
     grandchild whose parent has ended. The command runs under a keeper (`reaper`, a child subreaper)
     that keeps all of these its descendants while the command runs; each is pinned by a pidfd before
     the dump, so no recycled pid is signalled. The keeper stays in the caller's process group: an
     outer kill of that group (a lane's timeout, Ctrl-C) reaches it, and it kills all it keeps. That
     includes the lab daemons this command started: a timed-out command leaves none of them (the lab
     reset tolerates that: it signals a recorded pid only while it is still that daemon). A command
-    that ends in time leaves what it started on purpose (a lab daemon) running. It runs
+    that ends in time leaves what it started on purpose (a lab daemon) running; it ends when its
+    keeper does (its output goes to files, so a child it left holding them holds up nothing). It runs
     without core dumps (set by the keeper, single-threaded, before its exec of the command)."""
     argv = [sys.executable, "-I", "-S", str(Path(reaper.__file__)), str(lab_bin()), *args]
-    proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        held = reaper.pin(reaper.descendants(proc.pid))   # before the dump: the lab and all it started
-        proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab
+    # Files, not pipes: a pipe's EOF waits for every holder, a child the command left running included.
+    with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+        proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"}, stdout=out_f, stderr=err_f)
         try:
-            out, err = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired as late:           # still running, or a descendant holds the pipes
-            out, err = late.stdout, late.stderr             # everything read so far
-        reaper.kill(held)                                   # ended or not
-        proc.kill()
-        proc.wait()
-        raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
-                           f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
+            proc.wait(timeout=timeout)                      # the keeper's end is the command's end
+        except subprocess.TimeoutExpired:
+            held = reaper.pin(reaper.descendants(proc.pid))   # before the dump: the lab and all it started
+            proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            reaper.kill(held)                                   # ended or not
+            proc.kill()
+            proc.wait()
+            out, err = _read_back(out_f), _read_back(err_f)
+            raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
+                               f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
+        out, err = _read_back(out_f), _read_back(err_f)
     r = subprocess.CompletedProcess(argv, proc.returncode, _text(out), _text(err))
     if check and r.returncode != 0:
         raise RuntimeError(f"lhpc-testlab {' '.join(args)} rc={r.returncode}\n"

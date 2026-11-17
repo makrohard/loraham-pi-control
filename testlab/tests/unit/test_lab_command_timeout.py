@@ -9,6 +9,7 @@ import select
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 from lhpc_testlab import testing
@@ -64,10 +65,10 @@ def _ended(pid: int, timeout: float = 5.0) -> bool:
 
 @pytest.mark.wallclock("a real child hangs past run_lab's timeout; its children are real; waits bounded at 5 s")
 def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
-    """G2-TESTSA B5: the timeout killed only the lab's own process; a child it had started (holding the output pipes,
+    """G2-TESTSA B5: the timeout killed only the lab's own process; a child it had started (holding the output,
     or not) ran on. Both end with the lab now, and the error still names the command and its output."""
     _stand_in(tmp_path, monkeypatch, "import subprocess, time\n"
-              "a = subprocess.Popen(['sleep', '60'])\n"                                   # holds the pipes
+              "a = subprocess.Popen(['sleep', '60'])\n"                                   # holds the output
               "b = subprocess.Popen(['sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
               f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{a.pid}} {{b.pid}}')\n"
               "print('PARTIAL-OUT', flush=True)\ntime.sleep(60)\n")
@@ -87,7 +88,7 @@ def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
 
 
 # A setsid child; an orphan: a setsid grandchild whose parent (sh) has ended; and G2-TESTSD B1's own input: an orphan
-# in the caller's process group that holds the output pipes (`sh -c 'sleep 60 &'`, its sh ended before the timeout).
+# in the caller's process group that holds the output (`sh -c 'sleep 60 &'`, its sh ended before the timeout).
 _STRAYS = ("import os\n"
            "r, w = os.pipe()\n"
            "subprocess.run(['sh', '-c', f'sleep 60 {w}>&- & echo $! >&{w}'], pass_fds=(w,))\n"   # wallclock: marked tests' text
@@ -142,6 +143,29 @@ def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
                 os.kill(k, 9)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.wallclock("a real child that ends at once, its background child holds its output; bounded at 5 s")
+def test_a_command_that_ends_while_its_child_holds_its_output_returns_when_it_ends(tmp_path, monkeypatch):
+    """G2-TESTSE F1: run_lab took the pipes' EOF for the command's end. A command that started a child holding
+    stdout/stderr and exited (`sh -c 'sleep 60 &'`) was reported as a hang at the timeout, by which time its keeper had
+    ended, the timeout found no descendant, and the child ran on. Its output goes to files now and the keeper's exit ends
+    the command: run_lab returns its status and output then, and what it left running is left, as for any command
+    that ends."""
+    _stand_in(tmp_path, monkeypatch, "import subprocess\n"
+              "kid = subprocess.Popen(['sleep', '60'])\n"                                 # inherits stdout/stderr
+              f"open({str(tmp_path / 'kid')!r}, 'w').write(str(kid.pid))\n"
+              "print('done', flush=True)\n")
+    try:
+        start = time.monotonic()                                                    # wallclock: against the bound
+        r = testing.run_lab({}, "reset", timeout=5)
+        assert time.monotonic() - start < 3, "run_lab waited for the child, not for the command"  # wallclock
+        assert (r.returncode, r.stdout) == (0, "done\n")
+    finally:
+        try:
+            os.kill(int((tmp_path / "kid").read_text()), signal.SIGKILL)
+        except (ProcessLookupError, FileNotFoundError):
+            pass
 
 
 def test_a_kill_reaches_the_listed_process_or_nothing():
