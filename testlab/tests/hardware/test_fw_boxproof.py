@@ -405,6 +405,8 @@ def test_a_dry_run_reads_the_running_set_at_fw0_and_rechecks_the_row_radios_afte
     assert None not in at.values() and "STOP:" not in p.stdout and "DONE (dry)" in p.stdout, (at, p.stdout + p.stderr)
     assert at["> F0-runset.txt"] < at["> F3-"] and at["> F7-reboot.txt"] < at["> F7-runset.txt"] < at["== FW8"] < at["== FE undo"]
     assert at["> F7-pre-bootset.txt"] < at["> F7-reboot.txt"]   # G2-HWKITC-E B1: bootcheck before the reboot
+    boot = re.search(r"^BOOTSET_PY='(.*)'$", PROOF.read_text(), re.MULTILINE)   # SR M1: bootcheck reads the boot set, not another set
+    assert boot and f"-c '{boot.group(1)}'" in lines[at["> F7-pre-bootset.txt"]], lines[at["> F7-pre-bootset.txt"]]
 
 # ---- G2-HWKITC-D B1: max_power 0 is Meshtastic's "the maximum", never a cap: no start at FW0, FW6, FW9 or r4's try ----------
 
