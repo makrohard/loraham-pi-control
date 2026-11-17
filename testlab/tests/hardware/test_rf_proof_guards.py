@@ -1294,8 +1294,9 @@ def test_the_readers_own_forms_pass_its_check(tmp_path, name):
 def _tdeck_power(tmp_path, power):
     """Row 1's start in live mode, a fake peer.py answering the T-Deck's power read with `power`; a box start leaves a marker."""
     (tmp_path / "peer.py").write_text(f"print('POWER {power}')\n")
-    return source_only(tmp_path, f'PEER="{tmp_path}/peer.py"; LOCK="{tmp_path}/lock"; VMT=python3; FORMS_OK="start stop rx_mcom"; '
-                       ': > "$EVD/undo.list"; CURROW=1; started() {{ touch "$EVD/box-start"; exit 0; }}; row_1 H:H433')
+    return source_only(tmp_path, f'PEER="{tmp_path}/peer.py"; LOCK="{tmp_path}/lock"; VMT=python3; '
+                       'FORMS_OK="start stop tx_mcom rx_mcom rx_mcom_app"; '
+                       ': > "$EVD/undo.list"; CURROW=1; started() { touch "$EVD/box-start"; exit 0; }; row_1 H:H433')
 
 
 @pytest.mark.parametrize("power", ["22", "18", "", "x"])
@@ -1320,7 +1321,121 @@ def test_row_1_runs_peer_to_box_through_tx_in_dry(tmp_path):
     assert r.returncode == 0 and stop_lines(r) == [], r.stdout + r.stderr
     results = {line.split(" | ")[6]: line.split(" | ")[-1] for line in r.stdout.splitlines() if line.split(" | ")[:2] == ["REPORT", "1"]}
     assert results == {"box -> peer": "DRY-PASS", "peer -> box": "DRY-PASS"}, r.stdout
+    # each direction names both its pieces of evidence: inside MeshCom on the receiver and the box's RF log
+    seen = {line.split(" | ")[6]: line.split(" | ")[7] for line in r.stdout.splitlines() if line.split(" | ")[:2] == ["REPORT", "1"]}
+    assert seen == {"box -> peer": "yes (in MeshCom on the T-Deck + TX on r1)", "peer -> box": "yes (in MeshCom on r1 + RX on r1)"}, seen
     tx = [line for line in r.stdout.splitlines() if line.startswith("TX | PC:tdeck | 1 | ")]
     assert len(tx) == 1 and "peer 1-peer-send.txt" in tx[0], r.stdout
     assert any(line.startswith("BUDGET | PC:tdeck | 1 |") for line in r.stdout.splitlines()), r.stdout
     assert "dry self-check OK rx-mcom-judge" in r.stdout
+
+
+# ---- row 1: inside MeshCom on the receiver, both ways (plan PLAN-HWKIT-RECEIVE-PROOF-v2, design DESIGN-HWKIT-ROW1-v1) ------
+
+def _row1_dry(tmp_path):
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="1")
+    assert r.returncode == 0 and stop_lines(r) == [], r.stdout + r.stderr
+    return r.stdout.splitlines()
+
+
+def test_row_1_runs_both_box_checks_and_both_rf_judges_in_dry(tmp_path):
+    # red-before (cfe79165): peer -> box read r's RF log only; box -> peer had no RF-log evidence at all
+    out = _row1_dry(tmp_path)
+    files = [line.split(" > ", 1)[1].split(":", 1)[0] for line in out
+             if line.startswith("  [dry] H > 1-box-") and not line.startswith("  [dry] H > 1-box-send-")]
+    assert files == ["1-box-tx.txt", "1-box-app.txt", "1-box-rx.txt"], files
+    assert "dry self-check OK rx-mcom-judge" in out and "dry self-check OK rx-mcom-app-judge" in out
+
+
+def test_row_1_budget_counts_the_tdecks_relays_only(tmp_path):
+    # O1: R0's worst case for the T-Deck is its one send + its mesh's relays of the box's three attempts (4); the kit still
+    # dispatches ONE T-Deck send (the end's count 1); the box endpoint stays 3. red-before (cfe79165): R0 said 1
+    out = _row1_dry(tmp_path)
+    budget = [line for line in out if line.startswith("BUDGET | PC:tdeck | ")]
+    assert [line.split(" | ")[2] for line in budget] == ["4", "1"], budget
+    assert [line.split(" | ")[2] for line in out if line.startswith("BUDGET | H:")][:1] == ["3"], out
+    assert len([line for line in out if line.startswith("TX | PC:tdeck | 1 | ")]) == 1, out
+
+
+def test_row_1_the_tdecks_nonce_is_sent_only_by_the_tdeck(tmp_path):
+    # C2: the peer -> box nonce is given to the T-Deck's send alone; on the box it appears only in the read judges
+    out = _row1_dry(tmp_path)
+    n2 = next(line.split(" | ")[3] for line in out if line.startswith("TX | PC:tdeck | 1 | "))
+    cmds = [line for line in out if line.startswith("  [dry] ") and n2 in line.replace("\\ ", " ")]   # %q escapes the space
+    pc = [c for c in cmds if c.startswith("  [dry] PC > ")]
+    assert len(pc) == 1 and "meshcom-send" in pc[0], cmds
+    box = [c for c in cmds if not c.startswith("  [dry] PC > ")]
+    assert box and all(c.startswith("  [dry] H > 1-box-") and "grep -hE" in c and "python3" not in c and "::" not in c
+                       for c in box), box
+
+
+def test_row_1_journals_setinfo_off_before_it_sends_setinfo_on(tmp_path):
+    # O2: the off is in the journal before the on reaches the box node
+    out = _row1_dry(tmp_path)
+    off = [i for i, line in enumerate(out) if line.startswith("  [dry] undo += H: python3 -I -c ") and "--setinfo\\ off" in line]
+    on = [i for i, line in enumerate(out) if line.startswith("  [dry] H > 1-setinfo-on.txt: ") and "--setinfo\\ on" in line]
+    assert len(off) == 1 and len(on) == 1 and off[0] < on[0], (off, on)
+
+
+def _row1_live(tmp_path, fail_file="", stop_at=""):
+    """Row 1 through runrow in live mode, every box and peer call a fake: X/XIN record their command; `fail_file` is a
+    receive judge that does not see its nonce (a row FAIL); `stop_at` is a tx key whose send STOPs (as in main, the EXIT
+    trap runs the recovery)."""
+    script = ('trap \'rc=$?; [ "$rc" = 0 ] || recover\' EXIT; '
+              'FORMS_OK="start stop tx_mcom rx_mcom rx_mcom_app"; : > "$EVD/undo.list"; keep H433 r1; BOXES=; '
+              'X() { printf "%s\\t%s\\n" "$2" "${*:3}" >> "$EVD/xlog"; XRC=0; }; XIN() { X "$1" "$2" "${@:4}"; }; '
+              'pread() { printf "POWER 17\\n" > "$OUT/$2"; XRC=0; }; started() { :; }; dpower() { :; }; '
+              'usbguard() { :; }; peer() { XRC=0; SPAWN=; }; reap() { :; }; verify_set() { :; }; '
+              'result() { [ "$1" != "FAILF" ]; }; '
+              'tx() { [ "$1" != "STOPK" ] || stop "test: the send of $1"; shift 4; "$@"; }; RUN=1; runrow 1')
+    return source_only(tmp_path, script.replace("FAILF", fail_file).replace("STOPK", stop_at))
+
+
+def _undone(evd):
+    lines = (evd / "xlog").read_text().splitlines()
+    on = [i for i, line in enumerate(lines) if line.startswith("1-setinfo-on.txt\t") and "--setinfo\\ on" in line]
+    off = [i for i, line in enumerate(lines) if line.startswith("UNDO-") and "--setinfo\\ off" in line]
+    return on, off
+
+
+def test_row_1_a_fail_in_peer_to_box_restores_setinfo_through_the_rows_undo(tmp_path):
+    # O2 / C6: a FAIL after the on (MeshCom on the box never printed the T-Deck's text) runs runrow's undo_to: the off
+    r, evd = _row1_live(tmp_path, fail_file="1-box-app.txt")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "not in MeshCom on r1" in (evd / "FAILED.txt").read_text()
+    on, off = _undone(evd)
+    assert len(on) == 1 and len(off) == 1 and on[0] < off[0], (evd / "xlog").read_text()
+
+
+def test_row_1_a_stop_after_setinfo_on_restores_it_through_the_recovery(tmp_path):
+    # O2 / C6: a STOP after the on (the T-Deck's send) ends the run; the recovery runs the journalled off
+    r, evd = _row1_live(tmp_path, stop_at="R1-tdeck")
+    assert r.returncode == 2 and "STOP: test: the send of R1-tdeck" in r.stderr, r.stdout + r.stderr
+    on, off = _undone(evd)
+    assert len(on) == 1 and len(off) == 1 and on[0] < off[0], (evd / "xlog").read_text()
+
+
+@pytest.mark.parametrize("fail_file, why", [("1-peer-read.txt", "box -> peer: not in MeshCom on the T-Deck"),
+                                            ("1-box-tx.txt", "box -> peer: in MeshCom on the T-Deck, but no TX"),
+                                            ("1-box-app.txt", "peer -> box: not in MeshCom on r1"),
+                                            ("1-box-rx.txt", "peer -> box: in MeshCom on r1, but no RX")])
+def test_row_1_each_direction_fails_when_either_of_its_checks_is_missing(tmp_path, fail_file, why):
+    r, evd = _row1_live(tmp_path, fail_file=fail_file)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert why in (evd / "FAILED.txt").read_text(), (evd / "FAILED.txt").read_text()
+    # the failing direction is never a PASS (runrow writes its FAIL; a later direction does not run)
+    results = dict(line.split("|", 2)[1:] for line in (evd / "results.txt").read_text().splitlines())
+    assert results[why.split(":")[0]].startswith("FAIL: "), results
+
+
+def test_row_1_needs_its_three_meshcom_forms_confirmed(tmp_path):
+    # mutant M11 (6f09f3cb): row 1's forms back to "start stop" - its new judges ran unconfirmed. A live row 1 whose
+    # FORMS_OK holds only start and stop stops before any box, naming the three
+    r = subprocess.run(["bash", str(HW / "rf-proof.sh"), "live"], input="\n\n",
+                       env=_env(tmp_path, LAB_ENV=str(HW / "lab.example.env"), LANE="full", ROWS_ONLY="1",
+                                FORMS_OK="start stop"),
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2
+    assert stop_lines(r) == ["STOP: form not confirmed: rx_mcom rx_mcom_app tx_mcom (FORMS_OK must hold every form of "
+                             "the chosen rows)"]
+    assert "== ROW" not in r.stdout

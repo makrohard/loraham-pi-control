@@ -100,7 +100,9 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   the evidence again.
 - Reading MeshCom's received frames switches `--setinfo` on for the read and off after, an interrupt included; an off
   that cannot be sent fails the read. A read counts only a frame the peer received (MeshCom's `RX-LoRa2`, the tracker's
-  `[LoRa Rx]`) with the nonce in its text, never a console echo.
+  `[LoRa Rx]`) with the nonce in its text, never a console echo. Row 1 reads box H's MeshCom node the same way: its
+  `RX-LoRa2` line in the node's UART log, with `--setinfo` on for the row and its off journalled before the on. Each
+  direction also needs its frame in the box's RF log (TX `outcome=ok` out, RX in).
 
 ## Running it
 

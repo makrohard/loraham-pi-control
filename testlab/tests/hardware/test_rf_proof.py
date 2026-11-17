@@ -91,7 +91,7 @@ def runner_copy(tmp_path):
 
 SELF_CHECKS = ("no-high-power", "no-call-in-commands", "peer-calls-locked", "every-send-gated", "all-forms-printed",
                "chat-judge", "provisioning-wait", "meshcore-power-read", "rx-mc-judge", "row3-port-judge", "state-helpers",
-               "power-guards", "tx-dispatch")
+               "power-guards", "tx-dispatch", "rx-mcom-judge", "rx-mcom-app-judge")
 MODELS_IN_LAB = {"loraham", "meshstick-1262", "pinedio-usb-1262", "ch341-rfm98pw-433"}
 MODELS_NOT_IN_LAB = {"uputronics", "waveshare-sx1262"}
 TXMAX = 10
