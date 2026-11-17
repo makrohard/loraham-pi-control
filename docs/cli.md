@@ -117,9 +117,9 @@ this script: [what CI enforces](maintenance.md#what-ci-enforces).
 
 ### source-check
 `lhpc source-check [<target>] [--json]` — check managed sources for upstream updates (network;
-refreshes only `state/stackupdates.json`). `--json` prints `{"ok", "summary", "data"}`; `data` always names
+refreshes only `state/stackupdates.json`). `--json` prints `{"ok", "summary", "data"}`; `data` names
 `stacks_behind`, `stacks_lhpc_first` and `stacks_unchecked` (lists of stack ids; a later release may add keys),
-the stacks a self-update reports.
+the stacks a self-update reports. A refused target (unknown, exit 1) prints no lists.
 
 ---
 
