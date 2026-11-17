@@ -233,3 +233,23 @@ def test_a_radio_scanned_twice_is_still_polled_once(page):
     page.clock.run_for(3500)
     settled()
     assert seen == dict.fromkeys(RIDS, 2), seen
+
+
+def test_a_list_badge_follows_a_later_change_of_its_daemon(page):
+    """The feature itself: after the first poll, a daemon that goes offline and comes back changes its list badge on
+    the next poll each time (the server rendered the page once)."""
+    up = [True]
+    seen, settled = _open(page, lambda route, band: _live(route, band) if up[0] else route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"reachable": False, "ready": False})),
+        path="/hardware")
+    _wait_list_rendered(page)
+    for n, (state, text, cls) in enumerate(((False, "daemon offline", "stopped"), (True, "daemon usable (READY)",
+                                                                                   "running")), 2):
+        up[0] = state
+        page.clock.run_for(3500)
+        settled()
+        assert seen == dict.fromkeys(RIDS, n), seen                     # the next poll, at the normal cadence
+        page.wait_for_function(
+            "([rids, t, c]) => rids.every(r => { const b = document.getElementById('hw-badge-' + r);"
+            " return b.textContent === t && b.className === 'badge badge-' + c; })",
+            arg=[list(RIDS), text, cls], timeout=15000)
