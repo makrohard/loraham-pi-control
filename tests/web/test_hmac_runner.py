@@ -61,12 +61,17 @@ def test_controlled_runner_redacts_real_subprocess_output(tmp_path):
 
 @pytest.mark.wallclock("a real child is cancelled and its stop proven")
 def test_controlled_runner_cooperative_cancellation_terminates(tmp_path):
+    """Cancelled only once the child says it runs (its line is in the log, drained by the runner): the runner then
+    stops a running child, not one that never started (G2-TESTSB B2: a cancel true from the start let a runner that
+    cancels before it launches or stops anything pass)."""
     log = tmp_path / "c.log"
-    with open(log, "wb") as fh:                 # the runner asks only once its child runs: cancel at once
+    with open(log, "wb") as fh:
         r = RealCommandRunner().run_streaming(
-            ["sleep", "30"], timeout=30, log_fh=fh, should_cancel=lambda: True)
+            ["sh", "-c", "echo ready; exec sleep 30"], timeout=30, log_fh=fh,
+            should_cancel=lambda: b"ready\n" in log.read_bytes())
     assert r.cancelled and not r.timed_out
-    assert r.termination in ("terminated", "already-ceased")   # proven stopped
+    assert log.read_bytes() == b"ready\n"
+    assert r.termination == "terminated"        # a running child, proven stopped (not one that had already ended)
     assert r.session_ident and r.session_ident["pid"] > 0
 
 

@@ -1203,7 +1203,7 @@ def test_a_refused_confirmation_leaves_the_used_set_unchanged(tmp_path, monkeypa
         c = web(service_factory=lambda: svc)                       # staged before a restart
     c.set_cookie("session", staged_cookie)                         # the replay / the old cookie
     used = c.application.extensions["lhpc_tx_used"]
-    used["unrelated-sentinel"] = None                             # any prune or add shows below
+    used["unrelated-expired"] = 1.0           # a stamp from 1970: a prune by age (or any prune, or an add) shows below
     before = dict(used)
     r = c.post("/auto-install/start", data=form, follow_redirects=True)
     assert b"RF confirmation refused" in r.data

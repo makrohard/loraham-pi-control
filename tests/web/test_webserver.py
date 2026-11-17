@@ -259,18 +259,45 @@ def _seed_hatch_units(tmp_path, monkeypatch, paths):
     return paths.under(*U.NGINX_RESTART_REQUEST_REL)
 
 
-def _watcher(monkeypatch, req_path, *, on_claim=None):
-    """The 'path unit': claims (deletes) the request marker the moment apply writes it and runs
-    `on_claim` (e.g. flip the fake's listeners). The claim is in place before apply's first poll,
-    so no thread races apply's wait."""
+def _watcher(monkeypatch, req_path, *, on_claim=None, after_polls=0):
+    """The 'path unit': claims (deletes) the request marker and runs `on_claim` (e.g. flip the fake's
+    listeners). By default the moment apply writes it, so the claim is in place before apply's first
+    poll and no thread races apply's wait. With `after_polls=N` the claim comes late, as the real
+    unit's does: from another thread, once apply has slept N polls and found the request still there
+    (apply's clock counts its polls; an event per poll, no timing guess)."""
     real = runtime_fs.open_marker_excl
+
+    def claim():
+        req_path.unlink()
+        if on_claim:
+            on_claim()
+
+    if after_polls:
+        from lhpc.core import service_webserver as SW
+        polls = threading.Semaphore(0)
+
+        class _CountingClock:
+            monotonic = staticmethod(SW._time.monotonic)
+
+            @staticmethod
+            def sleep(s):
+                _real_sleep(s)
+                polls.release()
+
+        _real_sleep = SW._time.sleep
+        monkeypatch.setattr(SW, "_time", _CountingClock)
+
+        def late():
+            if all(polls.acquire(timeout=5) for _ in range(after_polls)):   # bounded: no claim -> apply fails
+                claim()
 
     def write_then_claim(paths, path, text, *a, **k):
         marker = real(paths, path, text, *a, **k)
         if path == req_path:
-            req_path.unlink()
-            if on_claim:
-                on_claim()
+            if after_polls:
+                threading.Thread(target=late, daemon=True).start()
+            else:
+                claim()
         return marker
 
     monkeypatch.setattr(runtime_fs, "open_marker_excl", write_then_claim)
@@ -286,10 +313,12 @@ class _FlippableFake(FakeSystem):
                 Listener(family="ipv4", ip=ip, port=8444, inode=2)]
 
 
-def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
+@pytest.mark.parametrize("after_polls", [0, 2], ids=["claimed-at-once", "claimed-after-two-polls"])
+def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch, after_polls):
     # The full hatch happy path: web-context apply writes the request; the (simulated) path unit
     # claims it and the fresh nginx rebinds; apply re-verifies and reports the watcher success —
-    # never touching systemctl.
+    # never touching systemctl. Claimed at once, or late from another thread after apply has looked
+    # twice and found it still there (G2-TESTSB B3: the late claim had lost its case).
     from lhpc.core import service_webserver as SW
     svc0 = _svc(tmp_path)
     assert svc0.webserver_init(dns_sans=["pi.local"]).ok
@@ -302,7 +331,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 5.0)
     monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
     fake = _FlippableFake(commands=_apply_cmds(paths))
-    _watcher(monkeypatch, req, on_claim=lambda: setattr(fake, "flipped", True))
+    _watcher(monkeypatch, req, on_claim=lambda: setattr(fake, "flipped", True), after_polls=after_polls)
     r = ControllerService(system=fake.system, paths=paths).webserver_apply()
     assert r.ok, r.summary
     assert "restart watcher" in r.summary
