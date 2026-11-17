@@ -107,11 +107,19 @@ def _fs_paths(*dirs):
 def _entry_for(status, at):
     return {"remote": DAEMON_REMOTE, "source_path": "src/x",
             "local_head_at_check": at, "upstream_head": B, "status": status,
-            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
+}
+
+
+def _key(tmp_path, cid="loraham-daemon"):
+    """Today's lane key of `cid` on this box, from the one key function (a dev verdict: no ownership record)."""
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = next(c for st in svc.stacks() for c in st.components if c.id == cid)
+    return su.lane_key(svc, comp, False, su.lhpc_heads(svc._paths))
 
 
 def _seed(tmp_path, entries, now=1000):
-    su.record(Paths(runtime_root=tmp_path), entries, now=now)
+    su.record(Paths(runtime_root=tmp_path), {cid: {**e, "lane_key": _key(tmp_path, cid)} for cid, e in entries.items()},
+              now=now)
 
 
 def _page(web, tmp_path, cmds, dirs, path="/stacks"):

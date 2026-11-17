@@ -45,7 +45,14 @@ def _fs_paths(*dirs):
 def _entry_for(status, at):
     return {"remote": DAEMON_REMOTE, "source_path": "src/x",
             "local_head_at_check": at, "upstream_head": B, "status": status,
-            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
+}
+
+
+def _key(tmp_path, cid="loraham-daemon"):
+    """Today's lane key of `cid` on this box, from the one key function (a dev verdict: no ownership record)."""
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = next(c for st in svc.stacks() for c in st.components if c.id == cid)
+    return su.lane_key(svc, comp, False, su.lhpc_heads(svc._paths))
 
 
 def _probed(fake):
@@ -61,7 +68,7 @@ def test_every_top_level_row_has_an_actions_overlay(web):
 
 def test_get_stacks_never_probes_even_with_a_populated_cache(web, tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
-    su.record(Paths(runtime_root=tmp_path), {"loraham-daemon": _entry_for(su.BEHIND, A)}, now=1000)
+    su.record(Paths(runtime_root=tmp_path), {"loraham-daemon": {**_entry_for(su.BEHIND, A), "lane_key": _key(tmp_path)}}, now=1000)
     fake = FakeSystem(commands=_git_src(ds, A), paths=_fs_paths(ds))
     web(system=fake.system).get("/stacks")
     assert not _probed(fake)
@@ -113,7 +120,7 @@ def test_row_headers_carry_the_version_but_no_source_state_or_commit(web, tmp_pa
     from lhpc.core import selfupdate
     from lhpc.version import __version__
     ds = _repo(tmp_path, "src/loraham-daemon")
-    su.record(Paths(runtime_root=tmp_path), {"loraham-daemon": _entry_for(su.BEHIND, A)}, now=1000)
+    su.record(Paths(runtime_root=tmp_path), {"loraham-daemon": {**_entry_for(su.BEHIND, A), "lane_key": _key(tmp_path)}}, now=1000)
     selfupdate.write_cache(Paths(runtime_root=tmp_path),
                            {"schema_version": 1, "checked_at": 1, "upstream": {},
                             "local": {"is_git": True, "head": "c" * 40, "head_short": "c" * 9,

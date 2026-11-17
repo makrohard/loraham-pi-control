@@ -855,7 +855,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return self._unknown_stack(stack_id)
         snap = self.build_snapshot()
         rollup, by_inst = rollup_states(snap), instance_liveness.rows(self, snap)     # STATUS-DEAD-SOCKET: per instance
-        words = stackupdates.surface(self._paths)
+        words = stackupdates.verdicts(self, snap)
         details: list[str] = [n] if (n := radio_start.no_list_notice(self._paths)) else []   # DEC-W384g
         if not stack_id:
             counts = summarize(snap)["states"]
@@ -879,7 +879,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     details.append(line)
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
-                details.extend(_render_component(comp, st, words(comp, st)[0]) + instance_liveness.lines(by_inst.get(comp.id, ())))
+                details.extend(_render_component(comp, st, words[comp.id][1]) + instance_liveness.lines(by_inst.get(comp.id, ())))
                 if comp.id == web_client.COMPONENT and (_wl := web_client.status(self)):
                     details.append(f"    {_wl}")
                 # Terminal post-start outcome (e.g. the MeshCom callsign push: confirmed /
@@ -990,7 +990,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def status_versions(self) -> ActionResult:
         snap = self.build_snapshot()
-        words = stackupdates.surface(self._paths)
+        words = stackupdates.verdicts(self, snap)
         details: list[str] = []
         for ss in snap.stacks:
             # package -> version -> components, to name a package the stack runs in two versions
@@ -1006,7 +1006,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     # Binary channel: the artifact's own provenance is the honest answer —
                     # there is no checkout whose HEAD could be compared to the pin.
                     details.append(
-                        f"  {comp.id:24s} {'binary':12s} "
+                        f"  {comp.id:24s} {words[comp.id][1]:17s} "
                         f"{st.source_version} built_from={(st.source_head or '-')[:12]} "
                         f"pin={pin}"
                     )
@@ -1016,7 +1016,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if ver != "-":
                             seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
-                        f"  {comp.id:24s} {words(comp, st)[0]:17s} "
+                        f"  {comp.id:24s} {words[comp.id][1]:17s} "
                         f"pin={pin} tag={tag}"
                         + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())

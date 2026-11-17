@@ -22,10 +22,13 @@ def _paths(tmp_path):
     return Paths(runtime_root=tmp_path)
 
 
+K = "dev https://example.invalid/x.git main"     # a lane key, opaque to the rule
+
+
 def _entry(status, at=A, up=B):
     return {"remote": "https://example.invalid/x.git", "source_path": "src/x",
             "local_head_at_check": at, "upstream_head": up, "status": status,
-            "pin_at_check": "", "lhpc_head_at_check": ""}          # a dev/stable verdict: no pin, no fetched LHPC
+            "lane_key": K}
 
 
 def _write_raw(tmp_path, text):
@@ -111,35 +114,46 @@ def test_record_rejects_an_invalid_entry_without_writing_it(tmp_path):
 # --- the staleness guard (the whole point) ------------------------------------------------------
 
 def test_verdict_holds_only_for_the_head_it_was_computed_against(tmp_path):
-    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), A) == su.UP_TO_DATE
-    assert su.effective_status(_entry(su.BEHIND, at=A), A) == su.BEHIND
+    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), A, K) == su.UP_TO_DATE
+    assert su.effective_status(_entry(su.BEHIND, at=A), A, K) == su.BEHIND
 
 
 def test_stale_up_to_date_never_renders_green(tmp_path):
     # Checked against A; the source is now at B (operator updated / cleaned + re-cloned).
-    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), B) == su.UNCHECKED
+    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), B, K) == su.UNCHECKED
 
 
 def test_stale_behind_stops_nagging_after_an_update(tmp_path):
     # The reverse staleness: a "behind" verdict for a commit that is no longer installed.
-    assert su.effective_status(_entry(su.BEHIND, at=A), B) == su.UNCHECKED
+    assert su.effective_status(_entry(su.BEHIND, at=A), B, K) == su.UNCHECKED
 
 
 def test_missing_or_empty_heads_are_unchecked(tmp_path):
-    assert su.effective_status(_entry(su.UP_TO_DATE, at=""), A) == su.UNCHECKED
-    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), "") == su.UNCHECKED
-    assert su.effective_status(None, A) == su.UNCHECKED
-    assert su.effective_status({}, A) == su.UNCHECKED
+    assert su.effective_status(_entry(su.UP_TO_DATE, at=""), A, K) == su.UNCHECKED
+    assert su.effective_status(_entry(su.UP_TO_DATE, at=A), "", K) == su.UNCHECKED
+    assert su.effective_status(None, A, K) == su.UNCHECKED
+    assert su.effective_status({}, A, K) == su.UNCHECKED
 
 
 def test_unknown_needs_no_head_to_stay_valid(tmp_path):
     # "nothing to compare" (no remote / not installed) is not a verdict ABOUT a commit.
-    assert su.effective_status(_entry(su.UNKNOWN, at=""), A) == su.UNKNOWN
+    assert su.effective_status(_entry(su.UNKNOWN, at=""), A, K) == su.UNKNOWN
 
 
 def test_error_is_head_bound_and_never_green(tmp_path):
-    assert su.effective_status(_entry(su.ERROR, at=A), A) == su.ERROR
-    assert su.effective_status(_entry(su.ERROR, at=A), B) == su.UNCHECKED
+    assert su.effective_status(_entry(su.ERROR, at=A), A, K) == su.ERROR
+    assert su.effective_status(_entry(su.ERROR, at=A), B, K) == su.UNCHECKED
+
+
+def test_a_verdict_holds_only_for_the_lane_key_it_was_computed_with(tmp_path):
+    """G2-B1: the key holds every other input, compared whole: another, an empty or a missing key is unchecked; a
+    malformed one is dropped when stored."""
+    assert su.effective_status(_entry(su.BEHIND), A, "pinned " + A) == su.UNCHECKED
+    assert su.effective_status({**_entry(su.BEHIND), "lane_key": ""}, A, "") == su.UNCHECKED
+    assert su.effective_status({k: v for k, v in _entry(su.BEHIND).items() if k != "lane_key"}, A, K) == su.UNCHECKED
+    p = _paths(tmp_path)
+    su.record(p, {"x": {**_entry(su.BEHIND), "lane_key": 7}})
+    assert su.view(p)["components"] == {}
 
 
 def test_unchecked_is_never_a_stored_status():

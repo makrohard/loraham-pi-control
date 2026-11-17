@@ -19,6 +19,7 @@ from . import (
     source_fs,
     source_registry,
     stable_lane,
+    stackupdates,
     task_hide,
     validators,
     web_client,
@@ -74,11 +75,15 @@ class MaintenanceOpsMixin:
 
     def _update_probe(self, comp, stable_target=None, planned=None) -> dict:
         """NETWORK. The lane verdict of ONE component (plan rule R4), bounded, no fetch, no mutation: a
-        `stackupdates` entry, status + its evidence. `local_head_at_check` ties it to the checkout it describes
-        (a later Update/Clean invalidates it). `unknown` = nothing to compare (no remote, not installed, an
-        invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
-        from . import stackupdates
-        entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": "", "pin_at_check": "", "lhpc_head_at_check": ""}
+        `stackupdates` entry, status + its evidence. `local_head_at_check` and `lane_key` (every other input, set
+        by one call after the lane's branch) tie it to what it describes. `unknown` = nothing to compare (no remote,
+        not installed, an invalid remote); `error` = a check that ran and failed ("could not check"), never "fine"."""
+        lhpc = stackupdates.lhpc_heads(self._paths)
+        entry = self._lane_probe(comp, stable_target, planned, lhpc)
+        return {**entry, "lane_key": stackupdates.lane_key(self, comp, entry.get("channel") == "binary", lhpc) if comp else ""}
+
+    def _lane_probe(self, comp, stable_target, planned, lhpc) -> dict:
+        entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
         unsafe = comp is not None and self._binary_unsafe(comp)
         # A binary-covered component answers from the binary lane's target (the index, U9), not its clone.
         if (comp is not None and getattr(comp, "source", None) is not None
@@ -124,7 +129,7 @@ class MaintenanceOpsMixin:
         stable = planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact)
         pinned = "" if stable else stackupdates.pinned_target(self._paths, comp)
         if pinned:                                     # the pinned lane is local: its target is this manifest's pin
-            sref, remote_sha, entry["pin_at_check"], entry["lhpc_head_at_check"] = None, "", pinned, stackupdates.fetched_lhpc_head(self._paths)
+            sref, remote_sha = None, ""
         elif stable:
             sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
             if not (sref.sha and sref.verified):
@@ -140,21 +145,14 @@ class MaintenanceOpsMixin:
         entry["upstream_head"] = want
         current = local_sha == want or older                       # older None: the checkout's tags not read
         entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
-        if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run, entry["lhpc_head_at_check"]).get(comp.id, pinned) != pinned:
+        if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run, lhpc).get(comp.id, pinned) != pinned:
             entry["status"] = stackupdates.LHPC_FIRST              # only the known-working lane (plan row U6)
         return entry
 
     def update_status(self, comp, stable_ref=None) -> str:
-        """`_update_probe` in the 3 values `update()`'s plan prints: "up-to-date", "update-available" or
-        "unknown" (an ERROR too). `stable_ref`: the operation's stable target (the dry run), whatever lane is
-        recorded."""
-        from . import stackupdates
-        status = self._update_probe(comp, planned=stable_ref)["status"]   # the operation's stable target, the gate's read
-        if status in (stackupdates.UP_TO_DATE, stackupdates.LHPC_FIRST):   # at its pin: no source update here
-            return "up-to-date"
-        if status == stackupdates.BEHIND:
-            return "update-available"
-        return "unknown"                                          # incl. ERROR
+        """The live verdict `update()`'s plan prints (its label): `stable_ref` is the operation's stable target (the
+        dry run), whatever lane is recorded."""
+        return self._update_probe(comp, planned=stable_ref)["status"]
 
     def _source_check_targets(self, target: str):
         """(components, error) for a source-freshness sweep. Unlike `_resolve`, this selects on
@@ -182,7 +180,6 @@ class MaintenanceOpsMixin:
         writer of `state/stackupdates.json`, and never reached from a GET route (P0.6) — it is called by the
         `/source-check/<target>` POST and the background check thread. An uninstalled source costs no network at
         all (`_update_probe` returns UNKNOWN before any git call), so sweeping a mostly-uninstalled box is nearly free."""
-        from . import stackupdates
         comps, err = self._source_check_targets(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -256,9 +253,8 @@ class MaintenanceOpsMixin:
             "stacks_behind": stacks(lambda status, _c: status == stackupdates.BEHIND)})
 
     def source_check_view(self) -> dict:
-        """Cached, network-free freshness view for GET pages: `{checked_at, components, lhpc_head}` (fetched LHPC)."""
-        from . import stackupdates
-        return {**stackupdates.view(self._paths), "lhpc_head": stackupdates.fetched_lhpc_head(self._paths)}
+        """Cached, network-free freshness view for GET pages: `{checked_at, components}`."""
+        return stackupdates.view(self._paths)
 
 
     def _with_source(self, target: str):
@@ -1588,7 +1584,7 @@ class MaintenanceOpsMixin:
             details = []
             for _, c in items:
                 fresh = self.update_status(c, stable_refs.get(c.source.path))   # the gate's target, no second read
-                details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
+                details.append(f"  {c.id}: {stackupdates.label(fresh)} — this update fetches the "
                                f"{sel[c.source.path]} version from {c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",

@@ -1065,12 +1065,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             for comp in ss.stack.components:
                 index[comp.id] = (comp, ss.components[comp.id])
         # CACHED source freshness (never the network on a GET — P0.6). Each cached verdict is
-        # resolved against the component's CURRENT head, so a source updated since the last check
+        # resolved against the component's CURRENT head and lane key, so a source updated since the last check
         # reads `unchecked`, not a stale green/yellow.
         _fresh = service.source_check_view()
-        _fresh_comps = _fresh.get("components", {})
-        _verdicts = {cid: stackupdates.verdict(_fresh_comps, c, st, _fresh.get("lhpc_head")) for cid, (c, st) in index.items()}
-        _words = {cid: stackupdates.source_words(v, index[cid][1]) for cid, v in _verdicts.items()}
+        _lanes = stackupdates.verdicts(service, snapshot)      # cid -> (verdict, source words, profile words)
+        _words = {cid: v[1:] for cid, v in _lanes.items()}
         jobs_by_stack = {}
         for job in service.active_jobs():
             jobs_by_stack.setdefault(job.get("stack"), []).append(job)
@@ -1115,7 +1114,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Freshness, resolved per component against the head the verdict was computed from.
             # Scoped to the stack's OWN components: a cross-stack dependency (loraham-daemon inside
             # the chat row) belongs to its own stack's row and must not light up this one.
-            upd_states = {c.id: _verdicts[c.id] for c in stack.components}
+            upd_states = {c.id: _lanes[c.id][0] for c in stack.components}
             # Deep-link target for the row's "Update": the behind component itself. The MAIN
             # (== the stack) links to its Install section; a behind DEPENDENCY links to its own
             # #comp-<id> subsection so the operator lands on the component that actually has the update.

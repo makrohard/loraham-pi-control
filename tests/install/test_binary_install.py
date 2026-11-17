@@ -1486,7 +1486,8 @@ def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path,
     entry = svc._update_probe(comp)
     head = svc.binary_receipt_state("daemon")[1].components[comp.id]
     assert entry["channel"] == "binary" and entry["local_head_at_check"] == head
-    assert stackupdates.effective_status(entry, head) == stackupdates.UP_TO_DATE
+    key = stackupdates.lane_key(svc, comp, True, stackupdates.lhpc_heads(svc._paths))   # today's binary key
+    assert stackupdates.effective_status(entry, head, key) == stackupdates.UP_TO_DATE
 
 
 def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch, binary_receipt, stub_pipeline):

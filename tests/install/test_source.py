@@ -206,20 +206,20 @@ def test_unknown_target_errors_without_network(tmp_path):
     assert svc._system.runner.calls == []
 
 
-def test_update_status_maps_behind_same_error_and_no_component(tmp_path):
+def test_update_status_is_the_live_verdict_behind_same_error_and_no_component(tmp_path):
+    """The dry run's live probe gives the one verdict (G2-B1 B3: no 3-value adapter; the plan prints its label)."""
     src = _install(tmp_path, "src/loraham-daemon")
     comp = _svc(tmp_path).stack("daemon").component("loraham-daemon")
 
     behind = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, B), **_git_src(src, A)}
-    assert _svc(tmp_path, behind).update_status(comp) == "update-available"
+    assert _svc(tmp_path, behind).update_status(comp) == su.BEHIND
 
     same = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(src, A)}
-    assert _svc(tmp_path, same).update_status(comp) == "up-to-date"
+    assert _svc(tmp_path, same).update_status(comp) == su.UP_TO_DATE
 
-    # a probe ERROR collapses back to "unknown" for the legacy callers (update()'s dry-run)
     fail = {("git", "ls-remote", DAEMON_REMOTE, DAEMON_BRANCH): CR(1, "", "boom")}
-    assert _svc(tmp_path, fail).update_status(comp) == "unknown"
-    assert _svc(tmp_path).update_status(None) == "unknown"
+    assert _svc(tmp_path, fail).update_status(comp) == su.ERROR       # "could not check", no longer "unknown"
+    assert _svc(tmp_path).update_status(None) == su.UNKNOWN
 
 
 # --- the source-parent transaction and its filesystem primitives -----------------------------------

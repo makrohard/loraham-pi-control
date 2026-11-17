@@ -77,10 +77,10 @@ def _valid_entry(e) -> bool:
         return False
     if e.get("status") not in _STORED:
         return False
-    for k in ("local_head_at_check", "upstream_head", "pin_at_check", "lhpc_head_at_check"):
+    for k in ("local_head_at_check", "upstream_head"):
         if k in e and not (_is_str(e[k]) and (e[k] == "" or _HEX.match(e[k]))):
             return False
-    for k in ("remote", "source_path"):
+    for k in ("remote", "source_path", "lane_key"):
         if k in e and not _is_str(e[k]):
             return False
     return not ("checked_at" in e and not _is_stamp(e["checked_at"]))
@@ -145,23 +145,15 @@ def view(paths: Paths) -> dict:
             "components": _clean_components(data.get("components"))}
 
 
-def fetched_lhpc_head(paths: Paths) -> str:
-    """The LHPC head the last self-update check fetched (its cache), "" without one."""
-    from . import selfupdate
-    return (selfupdate.read_cache(paths).get("upstream") or {}).get("upstream_head") or ""
-
-
-def effective_status(entry, current_head: str, pin: str | None = None, lhpc_head: str | None = None) -> str:
-    """Resolve a cached entry against the component's CURRENT local head.
+def effective_status(entry, current_head: str, key: str) -> str:
+    """Resolve a cached entry against the component's CURRENT local head and lane key.
 
     The verdict was computed against `local_head_at_check`. If the source has moved since (the
     operator ran Update, or Clean re-cloned it), the stored verdict describes a commit that is no
     longer installed and must NOT be shown — neither its green nor its yellow. Returns `unchecked`.
-    The ONE rule for every reader (the page, `status --versions`): a verdict stands only on all the evidence it
-    was computed from. A pinned-lane verdict also records the manifest pin (`pin_at_check`) and the LHPC head the
-    self-update check had fetched (`lhpc_head_at_check`); once either moved (`pin`, `lhpc_head`: today's), it
-    reads `unchecked`. An entry without that evidence (written before one verdict per lane) reads `unchecked`.
-    """
+    The ONE rule for every reader: a verdict stands only on every input it was computed from. `lane_key` (see
+    `lane_key`) holds the rest; it is compared whole, never parsed: another, a missing or a malformed key reads
+    `unchecked` (also an entry written before the key existed)."""
     if not isinstance(entry, dict):
         return UNCHECKED
     status = entry.get("status")
@@ -172,31 +164,54 @@ def effective_status(entry, current_head: str, pin: str | None = None, lhpc_head
     at = entry.get("local_head_at_check") or ""
     if not at or not current_head or at != current_head:
         return UNCHECKED
-    if "pin_at_check" not in entry or "lhpc_head_at_check" not in entry:
-        return UNCHECKED
-    if entry["pin_at_check"] and (entry["pin_at_check"] != pin or entry["lhpc_head_at_check"] != (lhpc_head or "")):
-        return UNCHECKED
-    return status
+    return status if key and entry.get("lane_key") == key else UNCHECKED
 
 
-def verdict(fresh: dict, comp, status, lhpc_head: str) -> str:
-    """The ONE lane verdict of `comp` that every surface shows: its last check, on today's head, pin and LHPC."""
-    return effective_status(fresh.get(comp.id), status.source_head or "", comp.source.pin_commit if comp.source else None,
-                            lhpc_head)
+def lhpc_heads(paths: Paths) -> tuple[str, str]:
+    """(fetched, running): the head the last self-update check fetched and the LHPC checkout's head it recorded in the
+    same refresh (`local.head`), both from the self-update cache: no subprocess, so a GET never probes the checkout."""
+    from . import selfupdate
+    cache = selfupdate.read_cache(paths)
+    return ((cache.get("upstream") or {}).get("upstream_head") or "", (cache.get("local") or {}).get("head") or "")
 
 
-def source_words(lane: str, status) -> tuple[str, str]:
+def lane_key(svc, comp, binary: bool, lhpc: tuple[str, str]) -> str:
+    """The ONE identity of every input a verdict of `comp` is computed from besides its head, for the probe and every
+    reader (opaque): the binary lane's installed artifact; the stable lane's remote; the pinned lane's pin and both
+    LHPC heads (the next LHPC's pins come from the fetched commit itself); the dev lane's remote and branch."""
+    from . import source_registry
+    if binary:
+        rec = svc.binary_receipt_state(svc.stack_of(comp.id) or comp.id)[1]
+        return f"binary {rec.artifact_sha256 if rec else ''}"
+    if comp.source is None:
+        return ""
+    rec, pin = source_registry.read_record(svc._paths, comp.source.path), pinned_target(svc._paths, comp)
+    if rec is not None and rec.selector == "stable" and not comp.source.artifact:
+        return f"stable {svc._effective_remote(comp)}"
+    return f"pinned {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {svc._effective_remote(comp)} {comp.source.branch or 'HEAD'}"
+
+
+def source_words(lane: str, status, why: str = "") -> tuple[str, str]:
     """(source, profile) for `lhpc status`, `status --versions` and the info card: a clean checkout reads its lane
-    verdict and is a candidate only on "update available"; the probe's own facts (dirty, missing) stay."""
-    if status.source_state.value not in ("match", "differs"):
-        return status.source_state.value, status.profile_state.value
-    return label(lane), "candidate-available" if lane == BEHIND else status.profile_state.value
+    verdict, a binary install `binary, <verdict>`, with the check's reason when it has one; a candidate only on
+    "update available". The probe's own facts (dirty, missing) stay."""
+    state = status.source_state.value
+    if state not in ("match", "differs", "binary"):
+        return state, status.profile_state.value
+    words = ("binary, " if state == "binary" else "") + label(lane) + (f" — {why}" if why else "")
+    return words, "candidate-available" if lane == BEHIND else status.profile_state.value
 
 
-def surface(paths: Paths):
-    """`(comp, status) -> (source, profile)` on today's check view, for the CLI readers."""
-    fresh, lhpc_head = view(paths)["components"], fetched_lhpc_head(paths)
-    return lambda comp, status: source_words(verdict(fresh, comp, status, lhpc_head), status)
+def verdicts(svc, snapshot) -> dict:
+    """{component id: (verdict, source words, profile words)}: the stored verdicts on today's heads and lane keys,
+    for every reader of the cache (`lhpc status`, `status --versions`, the stack page). Network-free."""
+    comps, lhpc, out = svc.source_check_view()["components"], lhpc_heads(svc._paths), {}
+    for ss in snapshot.stacks:
+        for comp in ss.stack.components:
+            st, entry = ss.components[comp.id], comps.get(comp.id) or {}
+            v = effective_status(entry, st.source_head or "", lane_key(svc, comp, st.source_state.value == "binary", lhpc))
+            out[comp.id] = (v, *source_words(v, st, entry.get("why", "") if v == ERROR else ""))
+    return out
 
 
 def pinned_target(paths: Paths, comp) -> str:
@@ -237,21 +252,22 @@ def record(paths: Paths, results: dict, now: int | None = None) -> dict:
     return out
 
 
-def next_lhpc_pins(paths: Paths, run, head: str) -> dict:
-    """{component id: pin} of the LHPC the last self-update check fetched: the shipped manifest at `head` (that
-    check's `upstream_head`, `fetched_lhpc_head`), read with `git show` in this checkout (local, no network), only when that head is
-    ahead of the running checkout. {} for no cache, no checkout, a head not ahead, or a manifest that cannot be
-    read: no hint, never "could not check" (plan row U6)."""
+def next_lhpc_pins(paths: Paths, run, lhpc: tuple[str, str]) -> dict:
+    """{component id: pin} of the LHPC the last self-update check fetched: the shipped manifest at the fetched head of
+    `lhpc` (`lhpc_heads`, the same pair the lane key holds), read with `git show` in this checkout (local, no network),
+    only when it is strictly ahead of the recorded running head and the checkout is still at that head. {} for no
+    cache, no checkout, a head not ahead, a checkout moved since, or a manifest that cannot be read: no hint, never
+    "could not check" (plan row U6)."""
     import tomllib
 
     from . import selfupdate
     from .manifest import ManifestError, parse_manifest
-    root = selfupdate.repo_root()
-    if root is None or not re.fullmatch(r"[0-9a-f]{40}", head):
+    (head, here), root = lhpc, selfupdate.repo_root()
+    if root is None or not re.fullmatch(r"[0-9a-f]{40}", head) or not here or here == head:
         return {}
-    here = run(["git", "-C", str(root), "rev-parse", "HEAD"], timeout=5.0)
-    if here.returncode != 0 or here.stdout.strip() == head or run(          # strictly ahead: a newer LHPC
-            ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", head], timeout=5.0).returncode != 0:
+    live = run(["git", "-C", str(root), "rev-parse", "HEAD"], timeout=5.0)   # moved since that refresh: no hint
+    if live.returncode != 0 or live.stdout.strip() != here or run(          # strictly ahead: a newer LHPC
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", here, head], timeout=5.0).returncode != 0:
         return {}
     shown = run(["git", "-C", str(root), "show", f"{head}:lhpc/data/manifest.example.toml"], timeout=10.0)
     try:

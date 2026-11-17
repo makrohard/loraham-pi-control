@@ -243,7 +243,8 @@ def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_r
     # G1 B1: the stored verdict is tied to the checkout head the status probe reports for an unsafe receipt (the
     # clone's), so the page and `status --versions`, which read it through `effective_status`, show it too
     entry = stackupdates.view(svc._paths)["components"]["loraham-daemon"]
-    assert stackupdates.effective_status(entry, comp.source.pin_commit) == stackupdates.ERROR, entry  # RED: unchecked
+    key = stackupdates.lane_key(svc, comp, False, stackupdates.lhpc_heads(svc._paths))
+    assert stackupdates.effective_status(entry, comp.source.pin_commit, key) == stackupdates.ERROR, entry  # RED: unchecked
 
 
 # ---- G2-B1: the binary lane's verdict on every surface, keyed by the installed artifact ----
