@@ -1738,6 +1738,18 @@ def test_update_status_malformed_remote_never_reaches_git(tmp_path, recording_sy
     assert not any("ls-remote" in c for c in calls)             # git ls-remote NEVER invoked
 
 
+def test_update_status_override_for_a_manifest_without_a_remote_never_reaches_git(tmp_path, recording_system):
+    """A source the manifest gives no remote is "unknown": a remote override alone does not make it checkable."""
+    sys, calls = recording_system
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "src" / "x").mkdir(parents=True)                # installed source dir
+    (tmp_path / "config").mkdir(parents=True)
+    (tmp_path / "config" / "local.toml").write_text('[remotes]\nx = "https://github.com/a/b.git"\n')
+    comp = Component(id="x", name="x", kind=ComponentKind.SERVICE, source=SourceSpec(path="src/x", remote=""))
+    assert svc.update_status(comp) == "unknown"
+    assert not any("ls-remote" in c for c in calls)
+
+
 # --- the activation transaction: journal, crash recovery, and what recovery may never touch ------
 # `installer(search_root=tmp_path / "rt")` declares src/app as a MANAGED source, so recovery
 # accepts its journal: recovery only ever operates on manifest-declared managed-source
