@@ -16,6 +16,8 @@ from pathlib import Path
 
 from lhpc.core.paths import Paths
 
+from . import reaper
+
 
 def lab_bin() -> Path:
     exe = Path(sys.executable).parent / "lhpc-testlab"
@@ -57,55 +59,30 @@ def _text(data: bytes | None) -> str:
     return (data or b"").decode("utf-8", "replace")
 
 
-def _descendants_in_group(pid: int) -> list[int]:
-    """What `pid` started (its children, theirs, ...) that is still in this process group, read from /proc.
-    A descendant that made a group of its own on purpose (a lab daemon) is the lab reset's, not listed."""
-    kids: dict[int, list[int]] = {}
-    group: dict[int, int] = {}
-    for d in Path("/proc").iterdir():
-        if not d.name.isdigit():
-            continue
-        try:
-            f = (d / "stat").read_text().rsplit(")", 1)[1].split()   # after "(comm)": state ppid pgrp
-        except (OSError, IndexError):
-            continue                                                 # ended while read
-        kids.setdefault(int(f[1]), []).append(int(d.name))
-        group[int(d.name)] = int(f[2])
-    own, found, todo = os.getpgrp(), [], list(kids.get(pid, []))
-    while todo:
-        p = todo.pop()
-        todo += kids.get(p, [])
-        if group.get(p) == own:
-            found.append(p)
-    return found
-
-
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
     runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
     stack) is drained for up to 5 s and kept in the error with the rest of its output; then it and
-    what it had started in this process group are killed (a child still holding the pipes or not;
-    one that left the group on purpose, a lab daemon, is the lab reset's). It stays in the caller's
-    process group, so an outer kill of that group (a lane's timeout, Ctrl-C) still ends it.
-    It runs without core dumps (set by a shell in front of it, as the release lane's programs run:
-    no Python between this threaded process's fork and exec)."""
-    argv = ["/bin/sh", "-c", 'ulimit -c 0; exec "$@"', "sh", str(lab_bin()), *args]
+    all it had started are killed: a child holding the pipes or not, one started with setsid, a
+    grandchild whose parent has ended. The command runs under a keeper (`reaper`, a child subreaper)
+    that keeps all of these its descendants while the command runs; each is pinned by a pidfd before
+    the dump, so no recycled pid is signalled. The keeper stays in the caller's process group: an
+    outer kill of that group (a lane's timeout, Ctrl-C) reaches it, and it kills all it keeps. A
+    command that ends in time leaves what it started on purpose (a lab daemon) running. It runs
+    without core dumps (set by the keeper, single-threaded, before its exec of the command)."""
+    argv = [sys.executable, "-I", "-S", str(Path(reaper.__file__)), str(lab_bin()), *args]
     proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        started = _descendants_in_group(proc.pid)      # before the dump: once the lab ends they are init's
-        proc.send_signal(signal.SIGABRT)
+        held = reaper.pin(reaper.descendants(proc.pid))   # before the dump: the lab and all it started
+        proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab
         try:
             out, err = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired as late:      # still running, or a descendant holds the pipes
-            out, err = late.stdout, late.stderr        # everything read so far
-        for p in started:                              # what the lab started, ended or not
-            try:
-                os.kill(p, signal.SIGKILL)
-            except ProcessLookupError:
-                pass                                   # already gone
+        except subprocess.TimeoutExpired as late:           # still running, or a descendant holds the pipes
+            out, err = late.stdout, late.stderr             # everything read so far
+        reaper.kill(held)                                   # ended or not
         proc.kill()
         proc.wait()
         raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"

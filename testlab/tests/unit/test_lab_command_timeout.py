@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import resource
 import select
+import signal
 import subprocess
 import sys
 
@@ -85,14 +86,41 @@ def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
                 pass
 
 
+# A setsid child, and an orphan: a setsid grandchild whose parent (sh) has ended.
+_STRAYS = ("c = subprocess.Popen(['setsid', 'sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+           "g = subprocess.run(['sh', '-c', 'setsid sleep 60 >/dev/null 2>&1 & echo $!'],\n"  # wallclock: marked tests' text
+           "                   capture_output=True, text=True).stdout.split()[0]\n")
+
+
+@pytest.mark.wallclock("a real child hangs past run_lab's timeout; its children are real; waits bounded at 5 s")
+def test_a_hang_ends_what_the_lab_started_outside_its_group(tmp_path, monkeypatch):
+    """G2 read N-d: the timeout listed only what the lab started that was still in its process group and still below
+    it, so a setsid child and a grandchild whose parent had ended (init's by then) ran on. A keeper
+    (a child subreaper) now holds both below the lab command, and they end with it."""
+    _stand_in(tmp_path, monkeypatch, "import subprocess, time\n" + _STRAYS +
+              f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{c.pid}} {{g}}')\ntime.sleep(60)\n")
+    with pytest.raises(RuntimeError, match=r"^lhpc-testlab reset timed out after 1 s\n"):
+        testing.run_lab({}, "reset", timeout=1)
+    kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
+    try:
+        assert [_ended(k) for k in kids] == [True, True], kids
+    finally:
+        for k in kids:
+            try:
+                os.kill(k, 9)
+            except ProcessLookupError:
+                pass
+
+
 @pytest.mark.wallclock("an outer timeout kills a real caller after 2 s; waits bounded at 5 s")
 def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
     """G2-TESTSA B5 read R3: a lab command in a process group of its own outlived an outer kill of its caller's group (a
-    lane's `timeout`, Ctrl-C): the lab and its children ran on after their pytest ended. Both end with the caller."""
+    lane's `timeout`, Ctrl-C): the lab and its children ran on after their pytest ended. They end with the caller, and so
+    do a setsid child and an orphaned grandchild (N-d), which no group kill reaches."""
     exe = tmp_path / "lhpc-testlab"
     exe.write_text(f"#!{sys.executable}\nimport os, subprocess, time\n"
-                   "a = subprocess.Popen(['sleep', '60'])\n"
-                   f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{os.getpid()}} {{a.pid}}')\n"
+                   "a = subprocess.Popen(['sleep', '60'])\n" + _STRAYS +
+                   f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{os.getpid()}} {{a.pid}} {{c.pid}} {{g}}')\n"
                    "time.sleep(60)\n")
     exe.chmod(0o755)
     caller = ("import pathlib, sys\nfrom lhpc_testlab import testing\n"
@@ -102,13 +130,31 @@ def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
     kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
     try:
         assert outer.returncode == 124, outer.stderr          # the outer timeout's kill ended the caller
-        assert [_ended(k) for k in kids] == [True, True], kids
+        assert [_ended(k) for k in kids] == [True] * 4, kids
     finally:
         for k in kids:
             try:
                 os.kill(k, 9)
             except ProcessLookupError:
                 pass
+
+
+def test_a_kill_reaches_the_listed_process_or_nothing():
+    """G2 read N-e: a listed pid was signalled by its number, up to 5 s later; a pid the kernel had handed on since
+    would have been hit. It is pinned now by a pidfd, and only while its start time is still the listed one."""
+    from lhpc_testlab import reaper
+    proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE)                 # blocks on its stdin until killed
+    try:
+        listed = [p for p in reaper.descendants(os.getpid()) if p[0] == proc.pid]
+        assert len(listed) == 1, listed
+        pid, start = listed[0]
+        assert reaper.pin([(pid, start + 1)]) == []                       # the same number, another process
+        reaper.kill(reaper.pin(listed))
+        assert proc.wait(timeout=5) == -signal.SIGKILL
+        assert reaper.pin(listed) == []                                   # ended and reaped: nothing to pin
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def test_a_command_that_ends_returns_its_status_and_output(tmp_path, monkeypatch):
