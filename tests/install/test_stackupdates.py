@@ -135,9 +135,13 @@ def test_missing_or_empty_heads_are_unchecked(tmp_path):
     assert su.effective_status({}, A, K) == su.UNCHECKED
 
 
-def test_unknown_needs_no_head_to_stay_valid(tmp_path):
-    # "nothing to compare" (no remote / not installed) is not a verdict ABOUT a commit.
-    assert su.effective_status(_entry(su.UNKNOWN, at=""), A, K) == su.UNKNOWN
+def test_unknown_stands_only_on_the_head_and_key_it_was_computed_with(tmp_path):
+    """"Nothing to compare" (not installed, no or an invalid remote) is a verdict about these inputs too (G2 sweep):
+    not installed (no head) stands until a head appears; another head or key reads unchecked."""
+    assert su.effective_status(_entry(su.UNKNOWN, at=""), "", K) == su.UNKNOWN          # still not installed
+    assert su.effective_status(_entry(su.UNKNOWN, at=A), A, K) == su.UNKNOWN            # an invalid remote, same head
+    assert su.effective_status(_entry(su.UNKNOWN, at=""), A, K) == su.UNCHECKED         # installed since
+    assert su.effective_status(_entry(su.UNKNOWN, at=A), A, "dev other main") == su.UNCHECKED   # the remote changed
 
 
 def test_error_is_head_bound_and_never_green(tmp_path):

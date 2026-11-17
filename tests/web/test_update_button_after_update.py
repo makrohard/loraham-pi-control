@@ -36,7 +36,8 @@ def _client(web, tmp_path, sid, *, head, selector):
     src = tmp_path / comp.source.path
     (src / ".git").mkdir(parents=True)
     a = str(src)
-    cmds = {("git", "ls-remote", remote, comp.source.branch or "HEAD"): CR(0, f"{TIP}\trefs/heads/x\n", ""),
+    full = f"refs/heads/{comp.source.branch}" if comp.source.branch else "HEAD"     # the exact name it is asked by
+    cmds = {("git", "ls-remote", remote, full): CR(0, f"{TIP}\t{full}\n", ""),
             ("git", "-C", a, "rev-parse", "HEAD"): CR(0, head + "\n", ""),
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {head}\n# branch.head main\n", ""),

@@ -81,6 +81,15 @@ class StableRef(NamedTuple):
         return ((self.sha, self.label), "") if self.sha else ((None, None), self.why)
 
 
+def remote_tip(run, remote: str, ref: str, timeout: float) -> str:
+    """The commit `ref` names on `remote`, "" when it cannot be read: `HEAD` or the branch `refs/heads/<ref>` by its
+    EXACT name. `git ls-remote` matches name tails, so `main` also lists `refs/heads/feature/main` (sorted first)."""
+    full = ref if ref == "HEAD" else f"refs/heads/{ref}"
+    out = run(["git", "ls-remote", remote, full], timeout=timeout)
+    rows = [ln.split() for ln in out.stdout.splitlines()] if out.returncode == 0 else []
+    return next((r[0] for r in rows if r[1:] == [full] and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", r[0])), "")
+
+
 def history_dir(paths, remote: str):
     """The remote's history mirror: `state/stable-history/<16 hex of sha256(remote)>.git` under the runtime root."""
     return paths.under("state", "stable-history", hashlib.sha256(remote.encode()).hexdigest()[:16] + ".git")
@@ -192,10 +201,9 @@ def resolve(run, remote: str, paths) -> StableRef:
                                     str(mirror), True)
         return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror), name == release,
                          None if name == release else rel or None)
-    head = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
-    if head.returncode != 0 or not head.stdout.strip():
+    sha = remote_tip(run, remote, "HEAD", 15.0)
+    if not sha:
         return StableRef(why=f"could not resolve HEAD on {remote}")
-    sha = head.stdout.split()[0]
     return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", "", str(mirror))
 
 

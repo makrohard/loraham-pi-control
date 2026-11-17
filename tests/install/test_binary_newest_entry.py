@@ -232,8 +232,8 @@ def test_an_unsafe_receipt_reads_could_not_check(tmp_path, monkeypatch, binary_r
     comp = svc.stack("daemon").component("loraham-daemon")
     src = svc._paths.resolve_source(comp.source.path)
     src.mkdir(parents=True, exist_ok=True)
-    fake.commands[("git", "ls-remote", comp.source.remote, comp.source.branch or "HEAD")] = \
-        CommandResult(0, comp.source.pin_commit + "\tHEAD\n", "")
+    full = f"refs/heads/{comp.source.branch}" if comp.source.branch else "HEAD"     # the exact name it is asked by
+    fake.commands[("git", "ls-remote", comp.source.remote, full)] = CommandResult(0, f"{comp.source.pin_commit}\t{full}\n", "")
     fake.commands[("git", "-C", str(src), "rev-parse", "HEAD")] = CommandResult(0, comp.source.pin_commit + "\n", "")
     jp = bi.journal_path(svc._paths)
     jp.parent.mkdir(parents=True, exist_ok=True)

@@ -99,31 +99,31 @@ class MaintenanceOpsMixin:
                     # was taken) is could not check, never "fine".
                     "status": {"current": stackupdates.UP_TO_DATE, "behind": stackupdates.BEHIND}.get(
                         fresh["state"], stackupdates.ERROR)}
-        if comp is None or comp.source is None or not comp.source.remote:
+        if comp is None or comp.source is None:
             return {**entry, "status": stackupdates.UNKNOWN}
         entry["source_path"] = comp.source.path
         src = self._paths.resolve_source(comp.source.path)
         if not source_fs.source_present(self._paths, src):
-            return {**entry, "status": stackupdates.UNKNOWN}      # not installed -> NO network
+            return {**entry, "status": stackupdates.UNKNOWN}      # not installed -> no git at all
+        run = self._system.runner.run
+        # The local head first: every verdict, "unknown" and a failed remote check too, is tied to this checkout.
+        loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
+        local_sha = entry["local_head_at_check"] = loc.stdout.strip() if loc.returncode == 0 else ""
         remote = self.config().remotes.get(comp.id) or comp.source.remote
         # Revalidate the (possibly hand-edited) remote IMMEDIATELY before git — an invalid
         # runtime override must never reach `git ls-remote`; treat it as unknown, not a check.
         from . import validators
         try:
-            remote = validators.remote_url(remote or "", field="remote")
+            remote = validators.remote_url(remote or "", field="remote") if comp.source.remote else ""
         except validators.ValidationError:
             return {**entry, "status": stackupdates.UNKNOWN}
         if not remote:
             return {**entry, "status": stackupdates.UNKNOWN}
+        if not local_sha:
+            return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         entry["remote"] = remote
         ref = comp.source.branch or "HEAD"
-        run = self._system.runner.run
         rec = source_registry.read_record(self._paths, comp.source.path)
-        # The local head first: a remote check that fails is then tied to this checkout too ("could not check").
-        loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-        if loc.returncode != 0 or not loc.stdout.strip():
-            return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
-        local_sha = entry["local_head_at_check"] = loc.stdout.strip()
         if unsafe:                                     # the start refuses it too: could not check, at the clone's head
             return {**entry, "status": stackupdates.ERROR}
         stable = planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact)
@@ -136,10 +136,9 @@ class MaintenanceOpsMixin:
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
             remote_sha = sref.sha
         else:
-            sref, rem = None, run(["git", "ls-remote", remote, ref], timeout=12.0)
-            if rem.returncode != 0 or not rem.stdout.strip():
-                return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
-            remote_sha = rem.stdout.split()[0]
+            sref, remote_sha = None, stable_lane.remote_tip(run, remote, ref, 12.0)
+            if not remote_sha:
+                return {**entry, "status": stackupdates.ERROR}        # unreachable / no such branch
         _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
         want = sref.sha if sref else pinned or remote_sha
         entry["upstream_head"] = want
@@ -375,10 +374,9 @@ class MaintenanceOpsMixin:
             # artifact: the declared artifact IS the maintainer's default branch;
             # dev: the configured development branch (strict — never another ref).
             ref = "HEAD" if spec.artifact else (spec.branch or "HEAD")
-            out = run(["git", "ls-remote", remote, ref], timeout=15.0)
-            if out.returncode != 0 or not out.stdout.strip():
+            sha = stable_lane.remote_tip(run, remote, ref, 15.0)
+            if not sha:
                 return (None, None), f"could not resolve {ref!r} on {remote}"
-            sha = out.stdout.split()[0]
             label = ("declared artifact (default branch)" if spec.artifact
                      else f"development branch {ref}")
             return (sha, f"frozen: {label} @ {sha[:9]}"), ""

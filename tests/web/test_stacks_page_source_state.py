@@ -18,7 +18,9 @@ B = "b" * 40
 
 
 def _ls_remote(remote, ref, sha):
-    return {("git", "ls-remote", remote, ref): CR(0, f"{sha}\trefs/heads/{ref}\n", "")}
+    """`git ls-remote` of `ref` by its exact name (`HEAD` or `refs/heads/<ref>`), as the source check asks it."""
+    full = ref if ref == "HEAD" else f"refs/heads/{ref}"
+    return {("git", "ls-remote", remote, full): CR(0, f"{sha}\t{full}\n", "")}
 
 
 def _git_src(src, sha):

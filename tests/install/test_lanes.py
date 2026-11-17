@@ -1319,11 +1319,11 @@ def test_control_a_dirty_checkout_keeps_its_probe_fact_on_every_surface(box, cap
 
 
 def _fail_branch_probe(monkeypatch):
-    """`git ls-remote <remote> main` (the dev and pinned probe) fails; the tag reads of the stable lane do not."""
+    """`git ls-remote <remote> refs/heads/main` (the dev and pinned probe) fails; the stable lane's tag reads do not."""
     inner = backends.RealCommandRunner.run
 
     def run(self, argv, timeout, cwd=None, env=None):
-        if argv[:2] == ["git", "ls-remote"] and argv[-1] == "main":
+        if argv[:2] == ["git", "ls-remote"] and argv[-1] == "refs/heads/main":
             return CommandResult(128, "", "fatal: unable to access the remote")
         return inner(self, argv, timeout, cwd=cwd, env=env)
     monkeypatch.setattr(backends.RealCommandRunner, "run", run)
@@ -1652,3 +1652,20 @@ def test_the_stack_page_words_an_unknown_verdict_as_every_reader(box, capsys, we
     words = " ".join(doc.within(doc.by_id("stack-install-s")).text.split())
     assert _status_src(box, capsys) == "unknown"
     assert "Installed version: unknown" in words, words                # RED before: "no remote"
+
+
+@pytest.mark.parametrize("ref, out, sha", [
+    ("main", f"{'1' * 40}\trefs/heads/feature/main\n{'2' * 40}\trefs/heads/main\n", "2" * 40),   # the exact name only
+    ("main", f"{'1' * 40}\trefs/heads/feature/main\n", ""),                                    # no such branch
+    ("main", "not-a-sha\trefs/heads/main\n", ""),                                              # an answer, no commit
+    ("HEAD", f"{'3' * 40}\tHEAD\n{'4' * 40}\trefs/heads/HEAD\n", "3" * 40)])
+def test_a_remote_tip_is_the_commit_of_the_exact_name(ref, out, sha):
+    from lhpc.core import stable_lane
+    asked = []
+
+    def run(argv, timeout):
+        asked.append(argv)
+        return CommandResult(0, out, "")
+    assert stable_lane.remote_tip(run, GH, ref, 5.0) == sha
+    assert asked == [["git", "ls-remote", GH, "HEAD" if ref == "HEAD" else "refs/heads/main"]]
+    assert stable_lane.remote_tip(lambda argv, timeout: CommandResult(128, out, "fatal"), GH, ref, 5.0) == ""

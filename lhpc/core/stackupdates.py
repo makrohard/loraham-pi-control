@@ -153,18 +153,17 @@ def effective_status(entry, current_head: str, key: str) -> str:
     longer installed and must NOT be shown — neither its green nor its yellow. Returns `unchecked`.
     The ONE rule for every reader: a verdict stands only on every input it was computed from. `lane_key` (see
     `lane_key`) holds the rest; it is compared whole, never parsed: another, a missing or a malformed key reads
-    `unchecked` (also an entry written before the key existed)."""
+    `unchecked` (also an entry written before the key existed). `unknown` ("nothing to compare") stands on the same
+    rule, its head and key maybe empty: once the source is installed or its remote changes it reads `unchecked`."""
     if not isinstance(entry, dict):
         return UNCHECKED
     status = entry.get("status")
     if status not in _STORED:
         return UNCHECKED
-    if status == UNKNOWN:
-        return UNKNOWN                               # "nothing to compare" needs no head to be valid
     at = entry.get("local_head_at_check") or ""
-    if not at or not current_head or at != current_head:
+    if at != (current_head or "") or entry.get("lane_key") != key:
         return UNCHECKED
-    return status if key and entry.get("lane_key") == key else UNCHECKED
+    return status if status == UNKNOWN or (at and key) else UNCHECKED
 
 
 def lhpc_heads(paths: Paths) -> tuple[str, str]:
@@ -177,18 +176,20 @@ def lhpc_heads(paths: Paths) -> tuple[str, str]:
 
 def lane_key(svc, comp, binary: bool, lhpc: tuple[str, str]) -> str:
     """The ONE identity of every input a verdict of `comp` is computed from besides its head, for the probe and every
-    reader (opaque): the binary lane's installed artifact; the stable lane's remote; the pinned lane's pin and both
-    LHPC heads (the next LHPC's pins come from the fetched commit itself); the dev lane's remote and branch."""
+    reader (opaque): the binary lane's installed artifact; for a source the remote (an invalid one leaves nothing to
+    compare) and its lane: stable; the pinned lane's pin and both LHPC heads (the next LHPC's pins come from the
+    fetched commit itself); the dev lane's branch."""
     from . import source_registry
     if binary:
         rec = svc.binary_receipt_state(svc.stack_of(comp.id) or comp.id)[1]
         return f"binary {rec.artifact_sha256 if rec else ''}"
     if comp.source is None:
         return ""
-    rec, pin = source_registry.read_record(svc._paths, comp.source.path), pinned_target(svc._paths, comp)
+    rec, pin, remote = source_registry.read_record(svc._paths, comp.source.path), pinned_target(svc._paths, comp), \
+        svc._effective_remote(comp)
     if rec is not None and rec.selector == "stable" and not comp.source.artifact:
-        return f"stable {svc._effective_remote(comp)}"
-    return f"pinned {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {svc._effective_remote(comp)} {comp.source.branch or 'HEAD'}"
+        return f"stable {remote}"
+    return f"pinned {remote} {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {remote} {comp.source.branch or 'HEAD'}"
 
 
 def source_words(lane: str, status, why: str = "") -> tuple[str, str]:

@@ -34,7 +34,7 @@ def _cli_sweep(tmp_path, monkeypatch, capsys, remote_head, local_toml="", journa
     src = paths.resolve_source(spec.path)
     if checkout:
         src.mkdir(parents=True)
-    cmds.update({("git", "ls-remote", spec.remote, spec.branch or "HEAD"): remote_head,
+    cmds.update({("git", "ls-remote", spec.remote, f"refs/heads/{spec.branch}" if spec.branch else "HEAD"): remote_head,
                  ("git", "-C", str(src), "rev-parse", "HEAD"): CommandResult(0, "a" * 40 + "\n", "")})
     with monkeypatch.context() as m:
         m.setattr(cli_main, "ControllerService", lambda *a, **k: box)
