@@ -51,7 +51,8 @@ def test_every_container_a_workflow_starts_is_removed_when_its_step_ends():
             starts = [i for i, ln in enumerate(code) if re.search(r"\b(crun|lhpc_wait_for)\b", ln)]
             for i, ln in enumerate(code):
                 assert not re.search(r"\$\(\s*(crun|lhpc_wait_for)\b", ln), f"{wf.name}: inside $(...): {ln.strip()}"
-                if re.search(r"\bdocker +(?:container +)?(?:run|create)\b", ln):   # any direct start, text or not
+                said = re.sub(r'''\becho +(?:"[^"]*"|'[^']*')''', "echo", ln)   # a message's text starts nothing
+                if re.search(r"\bdocker +(?:container +)?(?:run|create)\b", said):   # any other start, quoted or not
                     direct.append(ln.strip())
                     assert re.fullmatch(DISK_PROBE, ln.strip()), f"{wf.name}: a container started without crun: {ln.strip()}"
                     trap = [j for j, t in enumerate(code[:i]) if re.fullmatch(

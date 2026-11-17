@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import resource
 import select
+import subprocess
 import sys
 
 import pytest
@@ -75,6 +76,32 @@ def test_a_hang_ends_the_children_the_lab_started(tmp_path, monkeypatch):
     try:
         assert str(hang.value).split("\n", 1)[0] == "lhpc-testlab reset timed out after 1 s"
         assert "stdout: PARTIAL-OUT\n" in str(hang.value), str(hang.value)
+        assert [_ended(k) for k in kids] == [True, True], kids
+    finally:
+        for k in kids:
+            try:
+                os.kill(k, 9)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.wallclock("an outer timeout kills a real caller after 2 s; waits bounded at 5 s")
+def test_an_outer_kill_of_the_caller_ends_the_lab_and_its_children(tmp_path):
+    """G2-TESTSA B5 read R3: a lab command in a process group of its own outlived an outer kill of its caller's group (a
+    lane's `timeout`, Ctrl-C): the lab and its children ran on after their pytest ended. Both end with the caller."""
+    exe = tmp_path / "lhpc-testlab"
+    exe.write_text(f"#!{sys.executable}\nimport os, subprocess, time\n"
+                   "a = subprocess.Popen(['sleep', '60'])\n"
+                   f"open({str(tmp_path / 'kids')!r}, 'w').write(f'{{os.getpid()}} {{a.pid}}')\n"
+                   "time.sleep(60)\n")
+    exe.chmod(0o755)
+    caller = ("import pathlib, sys\nfrom lhpc_testlab import testing\n"
+              "testing.lab_bin = lambda: pathlib.Path(sys.argv[1])\ntesting.run_lab({}, 'reset', timeout=100)\n")
+    outer = subprocess.run(["timeout", "-k", "2", "2", sys.executable, "-c", caller, str(exe)], timeout=30, check=False,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    kids = [int(p) for p in (tmp_path / "kids").read_text().split()]
+    try:
+        assert outer.returncode == 124, outer.stderr          # the outer timeout's kill ended the caller
         assert [_ended(k) for k in kids] == [True, True], kids
     finally:
         for k in kids:

@@ -273,19 +273,18 @@ def _watcher(monkeypatch, req_path, *, on_claim=None, after_polls=0):
             on_claim()
 
     if after_polls:
+        import time
+
         from lhpc.core import service_webserver as SW
         polls = threading.Semaphore(0)
+        real_sleep = time.sleep
 
-        class _CountingClock:
-            monotonic = staticmethod(SW._time.monotonic)
-
-            @staticmethod
-            def sleep(s):
-                _real_sleep(s)
+        def counting_sleep(s):                     # apply imports time inside the call, so it sleeps through this
+            real_sleep(s)
+            if s == SW._RESTART_WATCH_POLL_S:      # only the watch's polls count
                 polls.release()
 
-        _real_sleep = SW._time.sleep
-        monkeypatch.setattr(SW, "_time", _CountingClock)
+        monkeypatch.setattr(time, "sleep", counting_sleep)
 
         def late():
             if all(polls.acquire(timeout=5) for _ in range(after_polls)):   # bounded: no claim -> apply fails

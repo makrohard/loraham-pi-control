@@ -57,29 +57,56 @@ def _text(data: bytes | None) -> str:
     return (data or b"").decode("utf-8", "replace")
 
 
+def _descendants_in_group(pid: int) -> list[int]:
+    """What `pid` started (its children, theirs, ...) that is still in this process group, read from /proc.
+    A descendant that made a group of its own on purpose (a lab daemon) is the lab reset's, not listed."""
+    kids: dict[int, list[int]] = {}
+    group: dict[int, int] = {}
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            f = (d / "stat").read_text().rsplit(")", 1)[1].split()   # after "(comm)": state ppid pgrp
+        except (OSError, IndexError):
+            continue                                                 # ended while read
+        kids.setdefault(int(f[1]), []).append(int(d.name))
+        group[int(d.name)] = int(f[2])
+    own, found, todo = os.getpgrp(), [], list(kids.get(pid, []))
+    while todo:
+        p = todo.pop()
+        todo += kids.get(p, [])
+        if group.get(p) == own:
+            found.append(p)
+    return found
+
+
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
     runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
-    stack) is drained for up to 5 s and kept in the error with the rest of its output; then its whole
-    process group is killed (it starts as a group leader: a child it started, still holding the pipes
-    or not, ends with it; one that left the group on purpose, a lab daemon, is the lab reset's).
+    stack) is drained for up to 5 s and kept in the error with the rest of its output; then it and
+    what it had started in this process group are killed (a child still holding the pipes or not;
+    one that left the group on purpose, a lab daemon, is the lab reset's). It stays in the caller's
+    process group, so an outer kill of that group (a lane's timeout, Ctrl-C) still ends it.
     It runs without core dumps (set by a shell in front of it, as the release lane's programs run:
     no Python between this threaded process's fork and exec)."""
     argv = ["/bin/sh", "-c", 'ulimit -c 0; exec "$@"', "sh", str(lab_bin()), *args]
     proc = subprocess.Popen(argv, env={**env, "PYTHONFAULTHANDLER": "1"},
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        started = _descendants_in_group(proc.pid)      # before the dump: once the lab ends they are init's
         proc.send_signal(signal.SIGABRT)
         try:
             out, err = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired as late:      # still running, or a descendant holds the pipes
             out, err = late.stdout, late.stderr        # everything read so far
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)        # the lab and what it started, ended or not
-        except ProcessLookupError:
-            pass                                       # the group is empty: nothing left
+        for p in started:                              # what the lab started, ended or not
+            try:
+                os.kill(p, signal.SIGKILL)
+            except ProcessLookupError:
+                pass                                   # already gone
+        proc.kill()
         proc.wait()
         raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
                            f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
