@@ -8,10 +8,11 @@ LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that 
 Keep power off while soldering, and handle the parts ESD-safe: work on a grounded mat or with a wrist
 strap, and touch ground before you touch the CH341A board, the EEPROM or the radio module.
 
-**Licence.** Built with the RFM98PW (about 1 W at 433 MHz), this stick is an amateur radio transmitter:
-you need an amateur radio licence, and you are responsible for keeping to its frequency, power and duty
-limits. Built with an 868 MHz SX1262 module instead (see step 1), it may also be used on the
-licence-free 868 MHz SRD frequencies, within their limits ([band limits](stacks/reticulum.md#band-limits)).
+**! Licence.** Built with the RFM98PW (about 1 W at 433 MHz), this stick is an amateur radio transmitter
+and needs an amateur radio licence. Built with an 868 MHz SX1262 module instead (see
+[other radio modules](#other-radio-modules)), it may also be used on the licence-free 868 MHz SRD
+frequencies, within their limits ([band limits](stacks/reticulum.md#band-limits)). You are responsible for
+complying with your local regulations.
 
 ## Contents
 
@@ -23,6 +24,7 @@ licence-free 868 MHz SRD frequencies, within their limits ([band limits](stacks/
 - [6. Program the EEPROM](#6-program-the-eeprom)
 - [7. Boot from the EEPROM](#7-boot-from-the-eeprom)
 - [8. First test at low power](#8-first-test-at-low-power)
+- [Other radio modules](#other-radio-modules)
 
 ## 1. Parts and tools
 
@@ -31,23 +33,7 @@ licence-free 868 MHz SRD frequencies, within their limits ([band limits](stacks/
   jumper names below are that board's; check yours by its silk labels and by continuity.
 - An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
 - A HopeRF RFM98PW module on a carrier with a ground plane, a 433 MHz antenna or a 50 Ω dummy load.
-- Other modules: a plain 433 MHz SX1276/78 module (without the RFM98PW's extra PA) whose antenna is on
-  PA_BOOST, the output the daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)), or an
-  SX126x module (SX1262) works the same way, wired by signal name: its pin numbers and layout differ from
-  the RFM98PW's.
-  Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the
-  5 V feed of step 4; the rating of the board's 3.3 V pads is unknown. An SX127x module takes the
-  signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the model `ch341-rfm98pw-433`
-  (433 MHz). An SX1262 module also needs BUSY and uses DIO1 where the SX127x uses DIO0: wire it as one
-  of the two SX1262 [USB radios](usb-radios.md), the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY,
-  D1 RXEN; model `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on
-  SLCT, no RESET; model `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon
-  preset fixes that stick's pins, TCXO and PA settings, so the module must match them.
-
-  ![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
-
-  ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
-
+- Other radio modules: see [other radio modules](#other-radio-modules).
 - A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
 - A multimeter, fine soldering tools and short insulated wires.
 
@@ -114,7 +100,7 @@ checked in step 2. Keep USB unplugged until point 3.
    **output**: never tie it to anything.
 3. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
-   cable), which is under HopeRF's minimum: the fix is the regulated supply below. Plug in with
+   cable), which is under HopeRF's minimum: the fix is a regulated supply. Plug in with
    `journalctl -k -f` open: the 470 µF is far above the 10 µF USB 2.0 allows a device at attach, and an
    over-current or hub reset at plug-in also means the separate supply.
 
@@ -128,8 +114,8 @@ What the USB feed means:
 - A separately regulated 5–6 V supply rated for at least 1 A (the module's 700 mA maximum plus margin),
   with the grounds joined and its positive never tied to USB VBUS, is the alternative for high power.
   Switch it on before you plug in USB, and unplug USB before you switch it off.
-- At any power, keep transmissions short, check the module's temperature, and keep to the limits in the
-  licence note at the top.
+- At any power, keep transmissions short, check the module's temperature, and see the licence note at the
+  top.
 
 ## 5. Solder the EEPROM
 
@@ -255,3 +241,27 @@ when the host needs it). The build needs no driver blacklist.
 6. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
    stick comes back after an unplug. A client stack started later on this radio sets its own POWER:
    check it in that stack's settings before it transmits.
+
+## Other radio modules
+
+Not tested by the author.
+
+A plain 433 MHz module (without the RFM98PW's extra PA) whose antenna is on PA_BOOST, the output the
+daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)), or an SX126x module (SX1262) can
+take the RFM98PW's place, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
+Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the 5 V
+feed of step 4; the rating of the board's 3.3 V pads is unknown. The drawings below replace steps 3 and 4;
+the EEPROM steps 5–7 stay the same.
+
+- **SX127x (433 MHz):** the signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the
+  model `ch341-rfm98pw-433`.
+
+  ![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
+
+- **SX1262 (868 MHz):** also needs BUSY and uses DIO1 where the SX127x uses DIO0. Wire it as one of the
+  two SX1262 [USB radios](usb-radios.md): the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY, D1 RXEN;
+  model `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on SLCT, no
+  RESET; model `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon preset fixes
+  that stick's pins, TCXO and PA settings, so the module must match them.
+
+  ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)

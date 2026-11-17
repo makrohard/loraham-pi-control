@@ -83,7 +83,7 @@
 <text x="40" y="706" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">The preset fixes: a TCXO powered from DIO3 at 1.8 V, DIO2 as the RF switch's TX control, RXEN on D1,</text>
 <text x="40" y="728" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">up to +22 dBm, 868 MHz. The module must match all of them.</text>
 <text x="40" y="750" text-anchor="start" font-size="12" fill="#5b6573">A module with TXEN and RXEN pins (e.g. EBYTE E22-900M22S): tie TXEN to DIO2 at the module, RXEN to D1.</text>
-<text x="40" y="772" text-anchor="start" font-size="12" fill="#5b6573">A module with a plain crystal (no TCXO) fails at the daemon's start: wire it as the PINE64 adapter instead</text>
+<text x="40" y="772" text-anchor="start" font-size="12" fill="#5b6573">A module with a plain crystal (no TCXO) does not match this preset: wire it as the PINE64 adapter</text>
 <text x="40" y="794" text-anchor="start" font-size="12" fill="#5b6573">(DIO1 on INT#, BUSY on SLCT, no reset; model pinedio-usb-1262).</text>
 <text x="40" y="816" text-anchor="start" font-size="12" fill="#5b6573">DIO3 stays on the module's TCXO; ANT: an 868 MHz antenna or a 50 Ω load before any transmission.</text>
 </svg>
