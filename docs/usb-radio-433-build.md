@@ -1,43 +1,62 @@
-# Building a 433 MHz USB radio: CH341A + RFM98PW
+# Building a LoRa USB radio: CH341A + LoRa module
 
-A self-built USB radio: a CH341A USB-to-SPI board, an AT24C02N EEPROM that gives the stick its own
-serial, and a HopeRF RFM98PW (SX127x, 433 MHz, high power). It reports the USB id `1a86:5512`, like
-the other [USB radios](usb-radios.md). In LHPC it is the model `ch341-rfm98pw-433`, which needs
-LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that ships it).
+A self-built LoRa USB radio: a CH341A USB-to-SPI board, an AT24C02N EEPROM that gives the stick its own
+serial, and a LoRa module.
 
-Keep power off while soldering, and handle the parts ESD-safe: work on a grounded mat or with a wrist
-strap, and touch ground before you touch the CH341A board, the EEPROM or the radio module.
+> [!WARNING]
+> **Licence.** Built with the RFM98PW (about 1 W at 433 MHz), this stick is an amateur radio transmitter
+> and needs an amateur radio licence. Built with an 868 MHz SX1262 module instead (see
+> [step 2](#sx1262-module-33-v-868-mhz)), it may also be used on the licence-free 868 MHz SRD
+> frequencies, within their limits ([band limits](stacks/reticulum.md#band-limits)). You are responsible for
+> complying with your local regulations.
 
-**! Licence.** Built with the RFM98PW (about 1 W at 433 MHz), this stick is an amateur radio transmitter
-and needs an amateur radio licence. Built with an 868 MHz SX1262 module instead (see
-[other radio modules](#other-radio-modules)), it may also be used on the licence-free 868 MHz SRD
-frequencies, within their limits ([band limits](stacks/reticulum.md#band-limits)). You are responsible for
-complying with your local regulations.
+![The reference build: CH341A board, RFM98PW and antenna in a small tin](img/usb-radio-433-build-photo.jpg)
+
+## Parts and tools
+
+### Radio module: three to choose from
+
+| module | chip | band | supply | LHPC model |
+|---|---|---|---|---|
+| HopeRF RFM98PW (high power, about 1 W) | SX127x with an extra PA | 433 MHz | **5 V** | `ch341-rfm98pw-433` |
+| a plain SX1276/78 module | SX127x | 433 MHz | 3.3 V | `ch341-rfm98pw-433` |
+| an SX1262 module | SX1262 | 868 MHz | 3.3 V | `meshstick-1262` or `pinedio-usb-1262` |
+
+Only the RFM98PW needs the 5 V feed of step 1 and the 5 V power of step 3; each module has its own part
+in [step 2](#2-wire-the-radio). The model `ch341-rfm98pw-433` needs LoRaHAM daemon >= 1.4.0 (see the
+[changelog](../CHANGELOG.md) for the release that ships it). Mount the module on a carrier with a ground
+plane, and use an antenna for its band or a 50 Ω dummy load.
+
+### USB board and EEPROM
+
+- A CH341A USB-to-SPI board, sold as "CH341A module USB to SPI" (MPN `UTTL_IIC_SPI`): the kind with two
+  3V3/5V voltage jumpers, an I2C-SPI/UART mode jumper and the two pad rows shown in step 1. The pad and
+  jumper names below are that board's; check yours by its silk labels and by continuity.
+  It reports the USB id `1a86:5512`, like the other [USB radios](usb-radios.md).
+- An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
+
+### Capacitors
+
+- For the RFM98PW: a 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
+- For a 3.3 V module: a 3.3 V supply rated for its transmit current, a 100 nF and a 10 µF capacitor.
+
+### Tools
+
+- A multimeter, fine soldering tools and short insulated wires.
+- Keep power off while soldering, and handle the parts ESD-safe: work on a grounded mat or with a wrist
+  strap, and touch ground before you touch the CH341A board, the EEPROM or the radio module.
 
 ## Contents
 
-- [1. Parts and tools](#1-parts-and-tools)
-- [2. Prepare the CH341 board](#2-prepare-the-ch341-board)
-- [3. Wire the radio](#3-wire-the-radio)
-- [4. Power and capacitors](#4-power-and-capacitors)
-- [5. Solder the EEPROM](#5-solder-the-eeprom)
-- [6. Program the EEPROM](#6-program-the-eeprom)
-- [7. Boot from the EEPROM](#7-boot-from-the-eeprom)
-- [8. First test at low power](#8-first-test-at-low-power)
-- [Other radio modules](#other-radio-modules)
+- [1. Prepare the CH341 board](#1-prepare-the-ch341-board)
+- [2. Wire the radio](#2-wire-the-radio)
+- [3. Power and capacitors](#3-power-and-capacitors)
+- [4. Solder the EEPROM](#4-solder-the-eeprom)
+- [5. Program the EEPROM](#5-program-the-eeprom)
+- [6. Boot from the EEPROM](#6-boot-from-the-eeprom)
+- [7. First test at low power](#7-first-test-at-low-power)
 
-## 1. Parts and tools
-
-- A CH341A USB-to-SPI board, sold as "CH341A module USB to SPI" (MPN `UTTL_IIC_SPI`): the kind with two
-  3V3/5V voltage jumpers, an I2C-SPI/UART mode jumper and the two pad rows shown in step 2. The pad and
-  jumper names below are that board's; check yours by its silk labels and by continuity.
-- An AT24C02N EEPROM (256 bytes, SOIC-8, 2.7–5.5 V; run it at 3.3 V) and a 100 nF ceramic capacitor.
-- A HopeRF RFM98PW module on a carrier with a ground plane, a 433 MHz antenna or a 50 Ω dummy load.
-- Other radio modules: see [other radio modules](#other-radio-modules).
-- A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
-- A multimeter, fine soldering tools and short insulated wires.
-
-## 2. Prepare the CH341 board
+## 1. Prepare the CH341 board
 
 ![CH341A board underside with the pads this build uses, and the CH341A pinout](img/usb-radio-433-ch341a.svg)
 
@@ -45,24 +64,37 @@ Start with USB unplugged and nothing attached:
 
 1. Set **both** voltage jumper caps (at the USB end) to **3V3**. All signal lines in this build are
    3.3 V logic; the radio's digital inputs must stay below 3.6 V.
-2. Set the mode jumper to **I2C-SPI** for the first checks and for programming a blank EEPROM.
+2. Set the mode jumper to **I2C-SPI** for the first checks and for programming a blank EEPROM
+   ([step 4](#4-solder-the-eeprom)).
 3. Plug in USB with only this board attached and check the id: `lsusb -d 1a86:5512` must show one
    line. `1a86:5523` means UART mode: unplug and check the mode jumper.
 4. Measure against the IC, not against a header numbering: CH341A pin 12 is GND, pins 28 and 9 are on
    the 3.3 V supply (each about 3.3 V with USB on; near 5 V means the voltage caps are wrong — unplug).
-5. **Find the 5 V pickup** with USB unplugged: the VBUS contact of the USB plug, found by continuity, or
+5. **(RFM98PW only) Find the 5 V pickup** with USB unplugged: the VBUS contact of the USB plug, found by continuity, or
    a rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
    Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
-6. **Check the feed alone**, before any radio wire is on: solder the feed wire to the pickup and leave
+6. **(RFM98PW only) Check the feed alone**, before any radio wire is on: solder the feed wire to the pickup and leave
    its far end free. With USB on, measure at that end against a board GND pad: 5.0–6.0 V, with the
    right polarity. Unplug, then insulate the end. (Checked now, the board never runs with its signal
    wires on an unpowered radio.)
 
-## 3. Wire the radio
+## 2. Wire the radio
+
+With USB unplugged, wire the module by signal name to the board's underside D-line pads; the CH341A IC
+pin numbers are for checking continuity. After soldering, check every wire end to end, every module GND
+to the board GND, and each neighbour for a solder bridge, with power off. Wire your module by its part:
+
+- [HopeRF RFM98PW (5 V, high power)](#hoperf-rfm98pw-5-v-high-power)
+- [Plain SX127x module (3.3 V, 433 MHz)](#plain-sx127x-module-33-v-433-mhz)
+- [SX1262 module (3.3 V, 868 MHz)](#sx1262-module-33-v-868-mhz)
+
+### HopeRF RFM98PW (5 V, high power)
+
+Tested by the author.
 
 ![RFM98PW module pinout, top view](img/usb-radio-433-rfm98pw.svg)
 
-![Wiring of the CH341A board, the RFM98PW, the capacitors and the EEPROM](img/usb-radio-433-wiring.svg)
+![Wiring of the CH341A board, the RFM98PW and the capacitors](img/usb-radio-433-wiring.svg)
 
 With USB unplugged, solder the seven signal wires and the grounds. The tags W1–W7 are this guide's
 labels, not board markings. Use the board's underside D-line pads; the IC pin numbers are for checking
@@ -88,17 +120,51 @@ the chip's.
 - After soldering, check every wire end to end, radio pins 2, 16 and pad 17 to the board GND, and each
   neighbour for a solder bridge, with power off.
 
-## 4. Power and capacitors
+### Plain SX127x module (3.3 V, 433 MHz)
+
+Not tested by the author.
+
+A plain 433 MHz SX1276/78 module (without the RFM98PW's extra PA) whose antenna is on PA_BOOST, the output
+the daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)). Its pin numbers and layout differ
+from the RFM98PW's: wire it by signal name, as the model `ch341-rfm98pw-433`: NSS, SCK, MOSI, MISO, RESET,
+DIO0, DIO1 and GND, on the same D-lines as the RFM98PW. Steps 1.5–1.6 do not apply; its capacitors and
+3.3 V supply are in [step 3](#3-power-and-capacitors).
+
+![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
+
+### SX1262 module (3.3 V, 868 MHz)
+
+Not tested by the author.
+
+An SX1262 module also needs BUSY and uses DIO1 where the SX127x uses DIO0. Wire it as one of the two
+SX1262 [USB radios](usb-radios.md): the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY, D1 RXEN; model
+`meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on SLCT, no RESET; model
+`pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon preset fixes that stick's pins,
+TCXO and PA settings, so the module must match them. Steps 1.5–1.6 do not apply; its capacitors and
+3.3 V supply are in [step 3](#3-power-and-capacitors).
+
+![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
+
+## 3. Power and capacitors
+
+### Capacitors (every module)
+
+Solder them across the module's VCC and GND, as close to the module as possible. They buffer the current
+pulse at each transmission.
+
+| module | capacitors |
+|---|---|
+| HopeRF RFM98PW (VCC = pin 5) | a 470 µF electrolytic (its stripe, the minus side, to GND) and a 100 nF ceramic |
+| a 3.3 V module (plain SX127x, SX1262) | a 10 µF (an electrolytic or tantalum one: its minus side to GND) and a 100 nF ceramic |
+
+### Power: HopeRF RFM98PW (5 V, high power)
 
 The module's VCC (pin 5) is fed **5 V directly** from USB, as in the reference build, by the feed
-checked in step 2. Keep USB unplugged until point 3.
+checked in step 1. Keep USB unplugged until point 2.
 
-1. **Solder the capacitors** across VCC (pin 5) and GND, as close to the module as possible: the 470 µF
-   electrolytic (its stripe, the minus side, to GND) and the 100 nF ceramic. They buffer the PA's current
-   pulse at each transmission.
-2. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
+1. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
    **output**: never tie it to anything.
-3. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
+2. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
    out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
    cable), which is under HopeRF's minimum: the fix is a regulated supply. Plug in with
    `journalctl -k -f` open: the 470 µF is far above the 10 µF USB 2.0 allows a device at attach, and an
@@ -117,11 +183,19 @@ What the USB feed means:
 - At any power, keep transmissions short, check the module's temperature, and see the licence note at the
   top.
 
-## 5. Solder the EEPROM
+### Power: 3.3 V modules
+
+Feed VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never 5 V; the
+rating of the board's 3.3 V pads is unknown. Such a module draws a fraction of the RFM98PW's current
+(HopeRF's RFM9xW: 120 mA at +20 dBm), well within USB's 500 mA, so the RFM98PW's power problem does not
+arise.
+
+## 4. Solder the EEPROM
 
 The EEPROM holds the CH341's USB configuration, including an eight-character serial that tells this
-stick apart from every other `1a86:5512` device. It holds no radio firmware. Its wiring is the lower
-part of the drawing in [step 3](#3-wire-the-radio).
+stick apart from every other `1a86:5512` device. It holds no radio firmware.
+
+![Wiring of the AT24C02N EEPROM on the CH341A board](img/usb-radio-433-eeprom.svg)
 
 | AT24C02N pin | connect to |
 |---|---|
@@ -135,7 +209,7 @@ part of the drawing in [step 3](#3-wire-the-radio).
 SDA and SCL are not D5 or D6. Add 4.7 kΩ pull-ups to 3.3 V on SDA and SCL only if the idle lines do
 not sit near 3.3 V with USB on.
 
-## 6. Program the EEPROM
+## 5. Program the EEPROM
 
 The reference EEPROM was programmed with the radio wired and on USB 5 V. Keep the mode jumper on
 **I2C-SPI**, and keep only this CH341 plugged in: the tool opens the first `1a86:5512` it finds.
@@ -193,7 +267,7 @@ The reference EEPROM was programmed with the radio wired and on USB 5 V. Keep th
    Do not unplug during the write. If it fails, check 3.3 V on EEPROM pin 8, WP at 0 V, idle SDA/SCL,
    the address pins and the chip's orientation. Name each new readback file differently (02, 03 …).
 
-## 7. Boot from the EEPROM
+## 6. Boot from the EEPROM
 
 Measured on the reference board:
 
@@ -208,10 +282,10 @@ Measured on the reference board:
    loaded: check the jumper and the SDA/SCL wiring.
 
 Rewrites also work with the jumper removed (the stick stays `1a86:5512`). Programming a *blank* EEPROM
-with the jumper removed was not tested. To restore the old contents, write `backup-a.bin` as in step 6
+with the jumper removed was not tested. To restore the old contents, write `backup-a.bin` as in step 5
 and verify it.
 
-## 8. First test at low power
+## 7. First test at low power
 
 LHPC's one-time USB setup gives your user access to the stick (the console's Hardware page shows it
 when the host needs it). The build needs no driver blacklist.
@@ -220,53 +294,25 @@ when the host needs it). The build needs no driver blacklist.
    <stack>@<rid>`; `lhpc status` lists them), and make this stick the only enabled radio in the hardware
    list: the TX test in point 5 sends on every band the daemon serves.
 2. **Save the lowest power first**, before anything starts: `lhpc config daemon@<rid> --daemon-param
-   POWER=2`. 2 is the daemon's floor on an SX127x ([radio parameters](stacks/daemon.md#radio-parameters)).
+   POWER=2`. 2 is the daemon's floor on an SX127x; on an SX1262 it is 0 (`POWER=0`; the daemon's SX1262 range
+   is 0–20, [radio parameters](stacks/daemon.md#radio-parameters)).
 3. **Start the daemon:** `lhpc stack start daemon@<rid>` (`restart` if it already runs). The start must
-   print `[ok] 433: POWER=2 sent`. A `[keep]` line (a client stack still runs), a `[warn]` or no such line
-   means the 2 is not applied: do not transmit. The radio must then reach READY (`lhpc status daemon`),
-   which is the SPI check. The reference build's own check read the chip's version register (0x42) as
-   `0x12`.
-4. **Receive first.** Set a known-good 433 MHz peer's values on the daemon (`lhpc config daemon@<rid>
+   print `[ok] 433: POWER=2 sent` (an SX1262: `[ok] 868: POWER=0 sent`). A `[keep]` line (a client stack
+   still runs), a `[warn]` or no such line means the lowest power is not applied: do not transmit. The radio must then reach READY (`lhpc status daemon`),
+   which is the SPI check. The reference build's own check read the RFM98PW's version register (0x42)
+   as `0x12`; an SX1262 has no such register.
+4. **Receive first.** Set a known-good peer's values (on the stick's band) on the daemon (`lhpc config daemon@<rid>
    --daemon-param FREQ=… --daemon-param SF=…`, then `--apply-daemon`): frequency, bandwidth, spreading
    factor, coding rate, sync word, preamble and CRC. Its frames must show in `lhpc daemon <rid> --feed`
    or in the RF log `logs/<rid>/rf-daemon.log`. These are the peer's settings: the reference build's peer
    sent MeshCom frames at 433.175 MHz, SF11, BW 250 kHz, CR 4/6, sync 0x2B, preamble 16, which is not
    LHPC's MeshCom profile.
 5. **Then transmit one frame at that power**, into an antenna or a dummy load rated above the expected
-   power: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at the 2; it
-   needs the operator call sign. The daemon does not report the power back: the evidence of 2 is the
-   `[ok]` line of point 3 and an outside measurement (a power meter, or a peer's RSSI). Watch the kernel
+   power: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at the lowest power; it
+   needs the operator call sign. The daemon does not report the power back: the evidence of the lowest
+   power is the `[ok]` line of point 3 and an outside measurement (a power meter, or a peer's RSSI). Watch the kernel
    log for a USB disconnect, and check the module's temperature. The reference build sent one MeshCom
    frame at the lowest drive, without a USB event.
 6. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
    stick comes back after an unplug. A client stack started later on this radio sets its own POWER:
    check it in that stack's settings before it transmits.
-
-## Other radio modules
-
-Not tested by the author.
-
-A plain 433 MHz module (without the RFM98PW's extra PA) whose antenna is on PA_BOOST, the output the
-daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)), or an SX126x module (SX1262) can
-take the RFM98PW's place, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
-Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the 5 V
-feed of step 4; the rating of the board's 3.3 V pads is unknown. For these 3.3 V modules the drawings
-below replace steps 2.5–2.6, 3 and 4: the 5 V wire of step 2 is not made. The EEPROM steps 5–7 stay
-the same.
-
-- **SX127x (433 MHz):** the signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the
-  model `ch341-rfm98pw-433`.
-
-  ![Wiring of a plain SX1276/78 module as the model ch341-rfm98pw-433](img/usb-radio-433-sx127x-plain.svg)
-
-- **SX1262 (868 MHz):** also needs BUSY and uses DIO1 where the SX127x uses DIO0. Wire it as one of the
-  two SX1262 [USB radios](usb-radios.md): the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY, D1 RXEN;
-  model `meshstick-1262`) or the PINE64 adapter (D0 NSS, DIO1 on the status pin INT#, BUSY on SLCT, no
-  RESET; model `pinedio-usb-1262`), both 868 MHz models in LHPC. Each SX1262 model's daemon preset fixes
-  that stick's pins, TCXO and PA settings, so the module must match them.
-
-  ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
-
-Step 8 applies with the module's own band: an SX1262 on 868 MHz takes 0 as its lowest `POWER` (the daemon's
-SX1262 range is 0–20), its start prints `[ok] 868: POWER=0 sent`, it needs an 868 MHz peer, and it has no
-0x42 version register: READY is the SPI check.
