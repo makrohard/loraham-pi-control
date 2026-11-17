@@ -137,7 +137,8 @@ def main(argv=None) -> int:
 
 
 def _report(stream, line, rc):
-    """The final line under its own REPORT_S: a full pipe drops it (expendable), the exit code stands."""
+    """The final line under its own REPORT_S: a full pipe or a closed reader (BrokenPipeError) drops it
+    (expendable), the exit code stands."""
     signal.signal(signal.SIGALRM, _deadline)
     try:
         try:
@@ -146,7 +147,7 @@ def _report(stream, line, rc):
         finally:
             signal.signal(signal.SIGALRM, signal.SIG_IGN)
             signal.setitimer(signal.ITIMER_REAL, 0)
-    except Failure:
+    except (Failure, OSError):
         pass
     return rc
 

@@ -252,19 +252,33 @@ def _full_pipe():
     return r, w
 
 
-@pytest.mark.parametrize("full, ok", [("stderr", False), ("stdout", True)], ids=["failure-on-full-stderr",
-                                                                                 "success-on-full-stdout"])
-def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, full, ok):
+def _closed_pipe():
+    """A pipe whose read end is closed: a write raises BrokenPipeError (Python ignores SIGPIPE). -> (None, write fd)."""
+    import os
+    r, w = os.pipe()
+    os.close(r)
+    return None, w
+
+
+@pytest.mark.parametrize("out, err, ok", [
+    pytest.param("devnull", "full", False, id="failure-on-full-stderr"),
+    pytest.param("full", "devnull", True, id="success-on-full-stdout"),
+    pytest.param("devnull", "closed", False, id="failure-on-closed-stderr"),
+    pytest.param("closed", "devnull", True, id="success-on-closed-stdout"),
+    pytest.param("closed", "full", True, id="success-on-closed-stdout-and-full-stderr"),
+])
+def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, out, err, ok):
     """G2-FINAL1A B (output after the deadline): the report is written after the timer is disarmed, so a full
     blocking pipe (stderr for a failure, stdout for a success, also at the interpreter's exit flush) held the
-    process with no bound. Now the line is expendable: the process ends by its own bound with its exit code."""
+    process with no bound; a closed reader raised BrokenPipeError, a traceback that a full stderr held again
+    (second read of the fix). Now the line is expendable: the process ends by its own bound with its exit code."""
     import os
     api = meshchat().api if ok else f"127.0.0.1:{_free_port()}"
-    r, w = _full_pipe()
-    p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", "1"],
-                         stdout=w if full == "stdout" else subprocess.DEVNULL,
-                         stderr=w if full == "stderr" else subprocess.DEVNULL)
-    os.close(w)
+    made = {k: (_full_pipe() if v == "full" else _closed_pipe()) for k, v in (("out", out), ("err", err)) if v != "devnull"}
+    fd = {k: made[k][1] if k in made else subprocess.DEVNULL for k in ("out", "err")}
+    p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", "1"], stdout=fd["out"], stderr=fd["err"])
+    for r, w in made.values():
+        os.close(w)
     try:
         rc = p.wait(timeout=10)                       # wallclock: a bound on the child, never paces
     except subprocess.TimeoutExpired:
@@ -272,7 +286,9 @@ def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, full, o
         p.wait()
         rc = None
     finally:
-        os.close(r)
+        for r, _w in made.values():
+            if r is not None:
+                os.close(r)
     assert rc == (0 if ok else 1), rc
 
 
