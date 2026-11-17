@@ -201,6 +201,54 @@ def test_run_service_waits_for_the_lock_only_within_the_helpers_budget(tmp_path,
     assert "did not release the controller-runtime lock" in res.summary
 
 
+def _owed_rerender(paths):
+    """A deployed proxy config and a pending re-render: the update's last step will run it."""
+    from lhpc.core import proxy_rerender, runtime_fs, webserver
+    (paths.runtime_root / "config" / "nginx").mkdir(parents=True, exist_ok=True)
+    runtime_fs.atomic_write(paths, paths.under(*webserver.NGINX_CONF), "server {}\n")
+    assert proxy_rerender.mark(paths) == ""
+
+
+def _subprocess_spy(monkeypatch):
+    """The verifier and the re-render are fresh interpreters (real `subprocess.run`, not the injected System):
+    the spy records each one's argv tail and timeout, and executes nothing."""
+    import subprocess
+    seen = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, timeout=None, **k: (
+        seen.append((" ".join(str(x) for x in argv[1:4]), timeout)), subprocess.CompletedProcess(argv, 0, "ok\n", ""))[1])
+    return seen
+
+
+def test_a_late_helper_runs_the_steps_after_the_venv_sync_only_within_its_budget(tmp_path, monkeypatch, op_svc):
+    """With 7 s of the helper's budget left after the venv sync, the unit verifier and the proxy re-render get those
+    7 s, not their own 60 s and 120 s: a late helper still records its message inside the unit's TimeoutStartSec."""
+    svc, fake, pip = _advancing_svc(tmp_path, monkeypatch, op_svc)
+    _owed_rerender(svc._paths)
+    seen = _subprocess_spy(monkeypatch)
+    frozen_budget(monkeypatch, 7.0)
+    svc.self_update_run_service()
+    steps = {step: t for step, t in seen}
+    assert steps.get("-m lhpc.core.updater_units verify-set") == 7.0, seen
+    assert steps.get("-m lhpc _webserver-rerender") == 7.0, seen
+
+
+def test_a_spent_budget_starts_neither_the_verifier_nor_the_rerender(tmp_path, monkeypatch, op_svc):
+    """Spent: neither fresh interpreter starts, the units read as unverified and the re-render stays owed, each
+    with its cause."""
+    from lhpc.core import proxy_rerender
+    from lhpc.core.services import ControllerService
+    svc, fake = op_svc(units=True, invocation=True)
+    _owed_rerender(svc._paths)
+    monkeypatch.setattr(ControllerService, "updater_integration", lambda self: {"fixable": True})
+    monkeypatch.setattr(ControllerService, "self_update_repair_integration", lambda self, **k: None)
+    seen = _subprocess_spy(monkeypatch)
+    frozen_budget(monkeypatch, 0.0)
+    ok_units, why_units = svc._refresh_units_post_update()     # the private IS the seam: what it starts
+    ok_proxy, why_proxy = proxy_rerender.after_update(svc._paths)
+    assert seen == [] and not ok_units and not ok_proxy, (seen, why_units, why_proxy)
+    assert "time budget is spent" in why_units and "time budget is spent" in proxy_rerender.pending(svc._paths)
+
+
 def _advancing_svc(tmp_path, monkeypatch, op_svc):
     """A managed updater whose apply REALLY advances (so the venv sync runs); returns
     (svc, fake, pip argv) — the pip row is the fixture's succeeding one until a test changes it."""

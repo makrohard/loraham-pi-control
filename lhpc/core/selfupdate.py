@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -163,9 +164,10 @@ def venv_unsynced(root: Path | None) -> str:
 
 # ONE budget for the one-click helper: lhpc-selfupdate.service stops it at its TimeoutStartSec (900 s; a unit's
 # bytes are frozen), less than the helper's own bounds add up to on a slow forced path (fetch 25 + reset 300 +
-# clean 300 + venv sync 600 + lock wait 30 s). Under the helper every step is clipped to what is left of the unit's
-# limit less HELPER_MARGIN_S, so the helper's own message is recorded before systemd would stop it; a spent budget
-# starts nothing (that step reads as timed out). Outside the helper (the operator's shell) nothing is clipped.
+# clean 300 + venv sync 600 + lock wait 30 + unit verifier 60 + proxy re-render 120 s). Under the helper every step
+# is clipped to what is left of the unit's limit less HELPER_MARGIN_S, so the helper's own message is recorded before
+# systemd would stop it; a spent budget starts nothing (that step reads as timed out or not started). Outside the
+# helper (the operator's shell) nothing is clipped.
 HELPER_MARGIN_S = 30.0
 _BUDGET_END = [None]                           # the helper's monotonic deadline while it runs, else None
 
@@ -189,6 +191,14 @@ def clip(timeout: float) -> float:
     """`timeout`, or less: what is left of the helper's budget (0.0 when it is spent)."""
     end = _BUDGET_END[0]
     return timeout if end is None else max(0.0, min(timeout, end - time.monotonic()))
+
+
+def run_within(argv: list, timeout: float) -> subprocess.CompletedProcess:
+    """`argv` run with its output captured as text and `timeout` clipped to the helper's budget; a spent budget
+    starts nothing."""
+    if (t := clip(timeout)) <= 0:
+        raise subprocess.SubprocessError("the update's time budget is spent")
+    return subprocess.run(argv, capture_output=True, text=True, timeout=t, check=False)
 
 
 def _git(system: System, root: Path, args: list[str], timeout: float):

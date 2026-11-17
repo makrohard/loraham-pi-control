@@ -200,9 +200,13 @@ def after_update(paths: Paths) -> tuple[bool, str]:
         return _keep(paths, _unreadable(exc))
     if deployed is None:
         return _missing(paths)
+    from . import selfupdate
     argv = [_python(paths), "-m", "lhpc", "_webserver-rerender", "--root", str(paths.runtime_root)]
+    if (limit := selfupdate.clip(_TIMEOUT_S)) <= 0:     # the helper's budget is spent: the re-render starts not
+        return _keep(paths, "the re-render did not start: the update's time budget is spent — Apply the "
+                     "webserver configuration")
     try:
-        run = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_S, check=False)
+        run = subprocess.run(argv, capture_output=True, text=True, timeout=limit, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return _keep(paths, f"the re-render could not run ({type(exc).__name__}) — Apply the "
                      "webserver configuration")

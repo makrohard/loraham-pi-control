@@ -430,7 +430,7 @@ class SelfUpdateOpsMixin:
         import subprocess
         import sys as _sys
 
-        from . import updater_units
+        from . import selfupdate, updater_units
         # Only units that are provably THIS deployment's may be rewritten. A foreign,
         # ambiguous or overridden set is someone else's file — leave it, and do not
         # blame the update for it.
@@ -467,9 +467,8 @@ class SelfUpdateOpsMixin:
                    else self.self_update_repair_integration(restart=False))
         except Exception as exc:
             return False, f"unit refresh raised {type(exc).__name__}: {exc}"[:160]
-        try:
-            chk = subprocess.run([py, "-m", "lhpc.core.updater_units", "verify-set", root],
-                                 capture_output=True, text=True, timeout=60, check=False)
+        try:                                              # held to the helper's budget, like every step
+            chk = selfupdate.run_within([py, "-m", "lhpc.core.updater_units", "verify-set", root], 60)
         except (OSError, subprocess.SubprocessError) as exc:
             return False, f"unit verification could not run: {exc}"[:160]
         if chk.returncode == 0:
