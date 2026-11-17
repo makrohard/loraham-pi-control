@@ -244,4 +244,6 @@ when the host needs it). The build needs no driver blacklist.
    frame at the lowest drive, without a USB event.
 6. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
    stick comes back after an unplug. A client stack started later on this radio keeps the 2 unless its
-   own settings, or its app (voice), set another.
+   own settings, or its app (voice), set another. While KISS runs, an apply does not send `POWER` and
+   prints `POWER: takes effect at the next start of kiss@<rid>`: a new power reaches it at its next
+   start.
