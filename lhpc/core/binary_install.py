@@ -770,9 +770,13 @@ def registry_baseline(paths: Paths, rels) -> tuple[dict, str]:
 def rebase_receipt(svc, stack_id: str, comp_ids, now: dict | None = None) -> str:
     """After the binary's own move of these components' checkouts outside an install's receipt write (the
     same-artifact repair, the rollback restore): the installed receipt's baseline for their paths is read again
-    (or `now`, read under the locks of that move). "" when done (or no receipt to keep), else why not."""
+    (or `now`, read under the locks of that move). "" when done, else why not. Both callers rebase a receipt that
+    must exist (the repaired artifact's, the restored previous one): one that cannot be read is the failure, never
+    "nothing to rebase", so the move is not committed with the receipt naming the old ownership."""
     from . import binary_receipt as brx
-    rec = brx.receipt_state(svc._paths, stack_id)[1]
+    _state, rec, _why = brx.receipt_state(svc._paths, stack_id)
+    if rec is None:
+        return f"the binary receipt could not be read after its checkout moved ({_why or _state})"
     st = svc.stack(stack_id)
     rels = [c.source.path for c in (st.components if st else ()) if c.id in comp_ids and c.source is not None
             and rec is not None and c.source.path in rec.registry_baseline]

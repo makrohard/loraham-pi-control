@@ -678,3 +678,27 @@ def test_a_kept_binary_is_identified_by_its_sha_never_by_its_file_name(tmp_path,
         res = svc.install("meshcom", apply=apply, source="binary")
         assert res.ok and res.data["changes"] == 0, (res.summary, res.details)
     assert state["adopted"] == [] and state["commit"] == "b" * 40
+
+
+def test_a_repair_whose_receipt_reads_back_unreadable_is_refused_and_moves_the_checkout_back(
+        tmp_path, monkeypatch, binary_receipt):
+    # The repair moved the checkout, then its receipt reads back unreadable (a transient I/O error): the repair is
+    # refused by name, never committed with the receipt left un-rebased, and undone like a failed install.
+    svc, state = _repair_setup(tmp_path, monkeypatch, binary_receipt)
+    real_move, real_state, after_move = bi.move_clones, brx.receipt_state, []
+
+    def move(*a, **k):
+        out = real_move(*a, **k)
+        after_move.append("moved")
+        return out
+
+    def receipt_state(*a, **k):
+        if after_move == ["moved"]:                  # the first read after the move, once
+            after_move.append("read")
+            return "unsafe", None, "the binary receipt could not be read (I/O error)"
+        return real_state(*a, **k)
+    monkeypatch.setattr(bi, "move_clones", move)
+    monkeypatch.setattr(brx, "receipt_state", receipt_state)
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "the binary receipt could not be read (I/O error)" in res.summary, res.summary
+    _repaired_back(svc, state)
