@@ -373,6 +373,35 @@ def test_another_stack_on_a_row_radio_stops_fw0(tmp_path):
     assert p.returncode == 2 and "STOP: F0-meshcore@r2: no power check for a meshcore stack" in p.stdout, p.stdout + p.stderr
 
 
+
+FAKE_GIT = """#!/bin/bash
+# PREP's repository checks answered (fetch, ancestry, the dependency diff, the literals); everything else is the real git
+case " $* " in *" fetch "*|*" merge-base "*|*" diff --name-only "*) exit 0;; *" grep -c "*) echo "lhpc/x.py:1"; exit 0;; esac
+exec {git} "$@"
+"""
+
+
+def test_a_dry_run_reads_the_running_set_at_fw0_and_rechecks_the_row_radios_after_the_reboot(tmp_path):
+    # the call sites, pinned through the whole flow (a dry run prints every box command, no box touched): FW0's runset0
+    # before FW3's first change, and FW7's rowcheck after the reboot and before FW8 (G2-HWKITC-D N1, G2C-SR M1)
+    root = tmp_path / "r"
+    kit = root / "testlab" / "hardware"
+    shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
+    subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=60)
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "git").write_text(FAKE_GIT.format(git=shutil.which("git")))
+    (bin_ / "git").chmod(0o755)
+    e = {k: v for k, v in os.environ.items() if k not in LAB and k not in INPUTS}
+    e.update({"PATH": f"{bin_}:{os.environ['PATH']}", "TMPDIR": str(tmp_path), **INPUTS})
+    p = subprocess.run(["bash", str(kit / "fw-boxproof.sh"), "dry"], capture_output=True, text=True, cwd=tmp_path, env=e,
+                       stdin=subprocess.DEVNULL, check=False, timeout=120)
+    lines = p.stdout.splitlines()
+    at = {key: next((i for i, x in enumerate(lines) if key in x), None)
+          for key in ("> F0-runset.txt", "> F3-", "> F7-reboot.txt", "> F7-runset.txt", "== FW8", "== FE undo")}
+    assert None not in at.values() and "STOP:" not in p.stdout and "DONE (dry)" in p.stdout, (at, p.stdout + p.stderr)
+    assert at["> F0-runset.txt"] < at["> F3-"] and at["> F7-reboot.txt"] < at["> F7-runset.txt"] < at["== FW8"] < at["== FE undo"]
+
 # ---- G2-HWKITC-D B1: max_power 0 is Meshtastic's "the maximum", never a cap: no start at FW0, FW6, FW9 or r4's try ----------
 
 @pytest.mark.parametrize("body,tag", [("runset0", "F0-meshtastic@r2"), ("mtstart F6-r2", "F6-r2"), ("mtstart F9-r2", "F9-r2"),
