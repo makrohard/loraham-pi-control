@@ -26,7 +26,8 @@
 #    under pset/pread (PCTX) only that call's own rendered command (PAUTH), and no value that is not a literal number.
 #  - Every change pushes its undo first; a row FAIL runs its undos and the run goes on; a STOP or an interrupt runs all.
 #  - The USB guard before and after each row; one peer at a time under the peer lock (two peers on one hub never transmit
-#    at once); the RF logs' TX count per radio at most TXMAX in this run (RS; a missing or unreadable count fails).
+#    at once); each radio's physical frames of this run, each counted once, at most TXMAX (RS; TXC_PY + txjudge: a count
+#    that cannot be proven complete fails).
 #  - Every capture goes through the one redactor before it is written (the passwords, the PIN, the operator's call with any
 #    SSID); the RX judges write marker lines only; the end scan (RE) checks the evidence again. A box password EXACTLY equal
 #    to that box's login name (a lab box) is neither masked nor scanned: REPORT.md's header says so (pweq).
@@ -106,6 +107,59 @@ RADIOS_PY='from lhpc.core import paths, radios; s = radios.load(paths.resolve_pa
 CAPS_PY='import sys; sys.argv[1:] and sys.path.insert(0, sys.argv[1]); from lhpc.core import radio_models; [print("CAP", m.id, m.power_default_dbm) for m in radio_models.load().values()]'
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="cd {RT} && ./venv/lhpc/bin/python -c '$RUNSET_PY'"
+# TXC_PY <T0> <rid>:<band>:<head bytes>...: the facts of each radio's TX since T0 (the box clock at R0), for txjudge. Each RF
+# log is read with the product's one parser (rflog.parse_line: the common line and the meshtastic JSON), <log>.1 + <log>
+# (the copy-truncate roll): F <rid> <kind> <file> <records> <oldest record|-> <TX records with ts >= T0, plus every line
+# that does not parse after the last record before T0 (safe side)>. kind: daemon (rf-daemon.log: the frames the radio
+# aired), mirror (rf-kiss/-meshcom/-meshcore.log: the same frames again, logged on the daemon result), direct (any other
+# rf-*.log of the radio: meshtastic over SPI), rns (logs/rf-reticulum.log: the one-node stack, rid -). L <rid> <size>
+# <sha of the first <head bytes>> <transmit ERRORs> <prev state>: the daemon run log (no time stamps; daemon pin
+# f9b16468 daemon_tx.cpp:212 is the one airing path, its RF line is written only on success (:223), an error that may
+# have aired prints "transmit ERROR" (:219) to this log only); prev state = its cut file (inode:size:mtime_ns) or absent.
+TXC_PY='import calendar, hashlib, os, sys, time
+from lhpc.core import rflog, radio_start, runtime_fs
+from lhpc.core.services import ControllerService
+t0 = int(sys.argv[1])
+KIND = {"rf-daemon.log": "daemon", "rf-kiss.log": "mirror", "rf-meshcom.log": "mirror", "rf-meshcore.log": "mirror"}
+def epoch(ts):
+    try:
+        return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+def count(rid, kind, path):
+    seen = False; recs = tx = loose = 0; old = None
+    for p in (path + ".1", path):
+        if not os.path.exists(p):
+            continue
+        seen = True
+        with open(p, errors="replace") as f:
+            for ln in f:
+                if not ln.strip():
+                    continue
+                r = rflog.parse_line(ln); e = epoch(r.get("ts") or "")
+                if e is None or r.get("dir") not in ("TX", "RX"):
+                    loose += 1
+                    continue
+                recs += 1; old = e if old is None else min(old, e)
+                if e < t0:
+                    loose = 0
+                elif r["dir"] == "TX":
+                    tx += 1
+    if seen:
+        print("F", rid, kind, os.path.basename(path), recs, "-" if old is None else old, tx + loose)
+for a in sys.argv[2:]:
+    rid, band, hb = a.split(":"); d = "logs/" + rid
+    for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if n.startswith("rf-") and n.endswith(".log"):
+            count(rid, KIND.get(n, "direct"), d + "/" + n)
+    p = "logs/" + radio_start.start_log_name(ControllerService.DAEMON_ID, band, rid)
+    b = open(p, "rb").read() if os.path.exists(p) else b""
+    q = "logs/" + runtime_fs.prev_log_name(os.path.basename(p))
+    s = os.stat(q) if os.path.exists(q) else None
+    print("L", rid, len(b), hashlib.sha256(b[:int(hb)]).hexdigest()[:16], b.count(b" transmit ERROR:"),
+          "absent" if s is None else "%d:%d:%d" % (s.st_ino, s.st_size, s.st_mtime_ns))
+count("-", "rns", "logs/rf-reticulum.log")'
+RUNTX="cd {RT} && ./venv/lhpc/bin/python -c '$TXC_PY'"
 USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; esac; echo "${d##*/} $(cat $d/idVendor 2>/dev/null):$(cat $d/idProduct 2>/dev/null) dev=$(cat $d/devnum 2>/dev/null) ser=$(cat $d/serial 2>/dev/null)"; done'
 USBEV='USB disconnect|new (full|high|low|super)-speed USB|reset (full|high|low|super)-speed USB|over-current'
 rport() { local n=${2#r}; case "$n" in ''|*[!0-9]*) stop "rport: rid '$2'";; esac; echo $(( $1 + 133 * (n - 1) )); }   # a listed instance's port
@@ -672,7 +726,7 @@ row_R0() {
     else pmust $b "R0-$b-caps.txt" caps; fi   # the installed copy (its loader); unreadable = STOP
     grep -qE '^CAP [a-z0-9-]+ [0-9]+$' "$OUT/R0-$b-caps.txt" || stop "R0 $b: no model power cap read (R0-$b-caps.txt)"
     while read -r _ m c; do [ -n "${KITCAP[$m]:-}" ] && [ "$c" -gt "${KITCAP[$m]}" ] && c=${KITCAP[$m]}; keep "CAP_${b}_$m" "$c"; done < <(grep -E '^CAP ' "$OUT/R0-$b-caps.txt")
-    must $b "R0-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
+    must $b "R0-$b-tx.txt" "$(txcount $b)"   # each radio's RF-log and run-log facts at T0 (TXC_PY), for RS
     must $b "R0-$b-status.txt" "{LH} status"; must $b "R0-$b-runset.txt" "$RUNSET"
     [ "$MODE" = dry ] && continue
     body "R0-$b-status.txt" | zs_check || stop "R0 $b: an incomplete status"
@@ -862,6 +916,7 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   must "$b" 5-framing0.txt "$(form rt_get rid="$r" k=rnode_framing)"; o=$(body 5-framing0.txt | tail -n 1)
   [ "$MODE" = dry ] || case "$o" in yes|no) ;; *) stop "row 5: rnode_framing read '$o'";; esac
   undo_push "$b" "$(form rt_set rid="$r" k=rnode_framing v="${o:-no}")"; must "$b" 5-framing1.txt "$(form rt_set rid="$r" k=rnode_framing v=yes)"
+  keep "RNS_$b" "$r"   # RS counts logs/rf-reticulum.log on this radio (rnsrids)
   spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"; started "$b" 5-start.txt "meshchat@$r"
   hpower R5-rnode 5-rnode-power.txt
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
@@ -949,15 +1004,39 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
   elif [ "$rc" != 0 ]; then stop "row $r ended rc $rc (a STOP or a shell error, see above): the run ends"; fi
   usbguard "post-$r"; }
 
+# txcount <box> [<R0 count file>]: the TXC_PY command for the box's radios (R0's hardware list): T0, then <rid>:<band>:<head
+# bytes> each; the head is 4096 bytes at R0 and min(4096, the R0 size) at RS, so a run log that only grew keeps its head
+txcount() { local a= rid band h; while read -r _ rid _ band _; do h=4096
+    [ -n "${2:-}" ] && { h=$(awk -v r="$rid" '$1 == "L" && $2 == r {print ($3 < 4096 ? $3 : 4096)}' "$OUT/$2" | tail -n 1); [[ $h =~ ^[0-9]+$ ]] || h=0; }
+    a="$a $rid:$band:$h"; done < <(grep -E '^ROW ' "$OUT/R0-$1-radios.txt" 2>/dev/null); printf '%s %s%s' "$RUNTX" "$(getk "T0_$1" 0)" "$a"; }
+# rnsrids <box>: the radios Reticulum ran on in this run: reticulum@rN in R0's running set, and row 5's radio
+rnsrids() { { body "R0-$1-runset.txt" | sed -n 's/^reticulum@\(r[1-9][0-9]*\)$/\1/p'; getk "RNS_$1"; } | grep -E '^r[1-9][0-9]*$' | sort -u | tr '\n' ' '; }
+# txjudge <R0 facts> <RS facts> <T0> <reticulum radios>: "<rid> <frames>" per radio, else "<rid> UNREADABLE". frames = max(the
+# daemon's TX + its transmit ERRORs of the run, the mirrors' TX) + the direct TX + Reticulum's TX on its radio(s). UNREADABLE:
+# a count not a number; a file with records at R0 that keeps none from before T0 (lost lines: two rolls, a Clear); a run log
+# smaller, with another head, more ERRORs gone, or its cut file changed (any cut loses lines: runtime_fs.cap_start_log); a
+# radio of R0 without its facts at RS; Reticulum TX (or lost lines) with no radio named ("reticulum UNREADABLE")
+txjudge() {
+  awk -v t0="$3" -v rr="$4" '
+    function n(v) {return v ~ /^[0-9]+$/}
+    FNR == NR {if ($1 == "F" && n($5) && $5 > 0) had[$2 " " $4] = 1; if ($1 == "L") l0[$2] = $3 " " $4 " " $5 " " $6; next}
+    $1 == "F" {k = $2 " " $4; seen[k] = 1; if ($2 != "-") id[$2] = 1
+      if (!n($5) || !n($7) || (k in had && ($6 == "-" || $6 > t0))) u[$2] = 1; else c[$2, $3] += $7; next}
+    $1 == "L" {id[$2] = 1; ls[$2] = 1; split(l0[$2], a, " ")
+      if (($2 in l0) && n($3) && n($5) && n(a[1]) && n(a[3]) && $3 >= a[1] && $4 "" == a[2] "" && $5 >= a[3] && $6 "" == a[4] "") e[$2] = $5 - a[3]; else u[$2] = 1}
+    END {for (k in had) if (!(k in seen)) {split(k, p, " "); u[p[1]] = 1}
+      for (r in l0) if (!(r in ls)) {id[r] = 1; u[r] = 1}
+      m = split(rr, R, " "); x = c["-", "rns"] + 0
+      if (x > 0 || ("-" in u)) {if (m == 0) print "reticulum UNREADABLE"; for (i = 1; i <= m; i++) {id[R[i]] = 1; if ("-" in u) u[R[i]] = 1; add[R[i]] = x}}
+      for (r in id) if (r in u) print r, "UNREADABLE"; else {d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; print r, (d > g ? d : g) + c[r, "direct"] + add[r]}}' \
+    "$1" "$2" | sort; }
 row_RS() {
   undo_to 0 || stop "RS: an undo failed (UNRESOLVED.txt): the recovery runs it again"; [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved undo(s): $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   verify_set || fail "RS: the recorded running set is not back ($(tr '\n' '|' < "$EVD/UNRESOLVED.txt" 2>/dev/null))"
   [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved after verify: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
-  local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "for d in {RT}/logs/r*; do echo \"\${d##*/} \$(cat \$d/rf-*.log 2>/dev/null | grep -c ' TX ')\"; done"
+  local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "$(txcount $b "R0-$b-tx.txt")"
     must $b "RS-$b-boot.txt" "cat /proc/sys/kernel/random/boot_id"; [ "$MODE" = dry ] && continue; eq "RS $b: no reboot" "$(body "RS-$b-boot.txt")" "$(getk BOOT_$b)"
-    awk 'function n(v) {return v ~ /^[0-9]+$/} NR == FNR {a[$1] = $2; next}   # each radio: RS minus R0; a count missing or not a number = UNREADABLE
-      {s[$1] = 1; print $1, (n($2) && (!($1 in a) || n(a[$1])) ? $2 - a[$1] : "UNREADABLE")} END {for (k in a) if (!(k in s)) print k, "UNREADABLE"}' \
-      "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" > "$OUT/RS-$b-tx-run.txt"
+    txjudge "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" "$(getk "T0_$b" 0)" "$(rnsrids $b)" > "$OUT/RS-$b-tx-run.txt"
     data "RS $b: TX frames of this run per radio: $(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt")"
     awk -v m="$TXMAX" '$2 !~ /^-?[0-9]+$/ || $2 < 0 || $2 > m {exit 1}' "$OUT/RS-$b-tx-run.txt" \
       || fail "RS $b: a radio sent more than $TXMAX frames in this run (the physical TX count), or its count is missing or unreadable (RS-$b-tx-run.txt)"; done

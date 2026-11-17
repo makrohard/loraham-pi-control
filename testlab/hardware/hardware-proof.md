@@ -91,8 +91,9 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   value outside that domain, a power set outside the runner's setter and a send outside `tx`. That context guards
   against accidents only: never run `peer.py`'s power setters or senders by hand; they belong to the runner.
 - A radio sends at most 10 frames per run (`TXMAX`); the start prints each radio's worst case (`BUDGET` lines) and a sum
-  above 10 is a STOP before any transmission. After the run, each radio's TX count in its RF log (all its frames, the
-  stack's own included) must also be at most 10, else that is a FAIL.
+  above 10 is a STOP before any transmission. After the run, each radio's frames sent since the start (its RF logs,
+  each frame counted once, the stack's own included, plus a send the daemon reported as failed) must also be at most 10.
+  A count that cannot be proven complete (a log cut or cleared in the run) is a FAIL as well.
 - Every change is undone after its row, the undo recorded before the change. An unplanned reboot stops the run.
 - Every captured output is redacted before it is written: the passwords, the PIN and the operator's call with any SSID.
   A received radio line is never written; the receive judges write `SEEN <nonce> <time> rssi=<n>`. The end scan checks

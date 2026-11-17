@@ -3,6 +3,8 @@ live run, and the source-only mode (RFPROOF_SOURCE_ONLY=1: the functions, no std
 no radio: a box or PC command runs as a fake on PATH or as a plain shell command in a temporary evidence directory."""
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -154,7 +156,9 @@ def box_stand_in(tmp_path):
     rtbin = box / "rt" / "venv" / "lhpc" / "bin"
     rtbin.mkdir(parents=True)
     (rtbin / "lhpc").write_text(f'#!/bin/bash\n[ "$*" = status ] || exit 3\nprintf %s "{STATUS}"\n')
-    (rtbin / "python").write_text('#!/bin/bash\ncase "$2" in *radios.load*) echo "STATE valid";; '
+    # the TX count (TXC_PY) runs for real: the box's interpreter is this one, on this repo's lhpc (rflog.parse_line)
+    (rtbin / "python").write_text(f'#!/bin/bash\ncase "$2" in *rflog.parse_line*) PYTHONPATH="{HW.parents[1]}" exec "{sys.executable}" "$@";; '
+                                  '*radios.load*) printf "STATE valid\\nROW r1 ch341-rfm98pw-433 433 True serial=X port= hp=False\\n";; '
                                   '*radio_models*) echo "CAP ch341-rfm98pw-433 17";; *ControllerService*) echo kiss@r1;; '
                                   '*) exit 3;; esac\n')
     (box / "env.sh").write_text(f'git() {{ echo {HEAD40}; }}; ss() {{ echo "ESTAB 0 0 192.0.2.2:22 192.0.2.1:50000"; }}\n'
@@ -302,23 +306,124 @@ def test_the_evidence_file_is_opened_before_its_command_runs(tmp_path):
     assert not (evd / "ran").exists()
 
 
-# ---- RS counts each radio's physical TX of the run against TXMAX; a missing or unreadable count fails --------------------
+# ---- RS counts each radio's physical frames of the run once, against TXMAX; a count it cannot prove complete fails ---------
 
-@pytest.mark.parametrize("r0, frames, want", [("r1 0", 10, None), ("r1 0", 11, "more than 10"), ("r1 4", 14, None),
-                                              ("r1 0\nr2 0", 3, "missing or unreadable"), ("r1 x", 3, "missing or unreadable")])
-def test_rs_holds_each_radio_to_txmax_physical_frames(tmp_path, r0, frames, want):
-    # red-before (cd825a69): RS allowed 15 frames per radio (TXMAX is 10), and a count missing at RS or unreadable passed
+NOW = int(time.time())
+PRE, RUN = NOW - 3600, NOW + 300      # a record from before R0's clock (T0), and one of the run
+
+
+def _l(ts, d="TX", out="ok"):
+    rs = "rssi=- snr=-" if d == "TX" else "rssi=-50.0 snr=9.0"
+    return f'{time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts))}.045Z {d} {rs} len=2 outcome={out} hex=aabb ascii=".."\n'
+
+
+def _mt(ts, d="TX"):
+    rx = ',"rssi":-50' if d == "RX" else ""
+    return f'{{"timestamp":{ts},"from":0,"to":1,"size":2,"bytes":"AABB"{rx}}}\n'
+
+
+DMN, MCOM, MT, RNS = "logs/r1/rf-daemon.log", "logs/r1/rf-meshcom.log", "logs/r1/rf-meshtastic.log", "logs/rf-reticulum.log"
+RLOG, PREV = "logs/start-loraham-daemon-433-r1.log", "logs/start-loraham-daemon-433-r1.prev.log"
+BANNER = "loraham_daemon 1.4.1 r1 433: started\n" * 3
+ERR = "[433] transmit ERROR: -5\n"
+BASE = {DMN: _l(PRE), MCOM: _l(PRE), RNS: _l(PRE), RLOG: BANNER + ERR}   # one ERROR from before the run
+
+
+@pytest.mark.parametrize("after, rns, want", [
+    ({DMN: _l(PRE) + _l(RUN) * 2, MCOM: _l(PRE) + _l(RUN)}, "", "r1 2|"),                    # run 1C, Zero r1: 2, not 3
+    ({DMN: _l(PRE) + _l(RUN) * 6, MCOM: _l(PRE) + _l(RUN) * 6}, "", "r1 6|"),                # 6 frames, not 12 (a false FAIL)
+    ({DMN: _l(PRE) + _l(RUN) * 3, MCOM: _l(PRE) + _l(RUN) * 3 + _l(RUN, out="unconfirmed") * 2}, "", "r1 5|"),  # the mirror stands
+    ({DMN: _l(PRE) + _l(RUN) * 10}, "", "r1 10|"),
+    ({DMN: _l(PRE) + _l(RUN) * 11}, "", "FAIL r1 11|"),
+    ({DMN: _l(PRE) + _l(RUN) * 10, RLOG: BANNER + ERR * 2}, "", "FAIL r1 11|"),               # an ERROR may have aired: counted
+    ({DMN: _l(PRE) + _l(RUN) * 9, RLOG: BANNER + ERR * 2}, "", "r1 10|"),
+    ({DMN: _l(PRE) + _l(RUN) * 10, RLOG: BANNER + ERR}, "", "r1 10|"),                     # the ERROR from before the run: not this run's
+    ({MT: _mt(PRE) + _mt(RUN, "RX") + _mt(RUN) * 11}, "", "FAIL r1 11|"),                    # meshtastic's JSON trace (row 3)
+    ({MT: _mt(PRE) + _mt(RUN) * 3}, "", "r1 3|"),
+    ({DMN: _l(PRE) + _l(RUN) * 2, RNS: _l(PRE) + _l(RUN) * 4 + _l(RUN, "RX")}, "r1", "r1 6|"),         # Reticulum's one log (row 5)
+    ({RNS: _l(PRE) + _l(RUN)}, "", "FAIL r1 0|reticulum UNREADABLE|"),                                  # no radio named: never its own entry
+    ({RNS + ".1": _l(RUN) * 2, RNS: _l(RUN)}, "r1", "FAIL r1 UNREADABLE|"),                    # Reticulum's lines lost: its radio
+    ({DMN + ".1": _l(PRE) + _l(RUN) * 2, DMN: _l(RUN) * 3}, "", "r1 5|"),                    # a roll in the run: both parts
+    ({DMN + ".1": _l(PRE) + _l(RUN) * 6, DMN: _l(RUN) * 5}, "", "FAIL r1 11|"),
+    ({DMN + ".1": _l(RUN) * 2, DMN: _l(RUN)}, "", "FAIL r1 UNREADABLE|"),                    # two rolls: lines lost
+    ({DMN: ""}, "", "FAIL r1 UNREADABLE|"),                                                   # a Clear in the run
+    ({DMN: _l(PRE) + "garbled TX line\n"}, "", "r1 1|"),                                     # a line that does not parse: TX
+    ({RLOG: "", PREV: BANNER}, "", "FAIL r1 UNREADABLE|"),                                    # a cut
+    ({RLOG: "x" * 5000, PREV: BANNER}, "", "FAIL r1 UNREADABLE|"),                            # a cut, then regrown past R0
+    ({RLOG: BANNER + ERR, PREV: BANNER + ERR * 2}, "", "FAIL r1 UNREADABLE|"),                          # a cut + restart: the same head
+    ({RLOG: None}, "", "FAIL r1 UNREADABLE|"),
+    ({DMN: None}, "", "FAIL r1 UNREADABLE|"),                                                 # an RF log with records at R0 gone                                                # the run log gone
+])
+def test_rs_counts_each_physical_frame_of_the_run_once(tmp_path, after, rns, want):
+    # red-before (54ddaa4a): RS summed ' TX ' lines over rN/rf-*.log as RS minus R0: a daemon frame and its stack's line
+    # counted twice (run 1C), meshtastic's JSON and logs/rf-reticulum.log counted 0, a roll or a Clear hid frames, and the
+    # daemon's transmit ERRORs (which may have aired) were not counted
+    _rs(tmp_path, BASE, after, rns, want)
+
+
+def _rs(tmp_path, before, after, rns, want, box_env=""):
+    """R0 on the box stand-in with `before` in its runtime, then `after` laid over it (None = deleted), then RS."""
     box, setup, env = box_stand_in(tmp_path)
-    logs = box / "rt" / "logs" / "r1"
-    logs.mkdir(parents=True)
-    (logs / "rf-a.log").write_text("2026-11-17T10:00:00Z TX len=9\n" * frames)
-    r, _ = source_only(tmp_path, setup + f'printf "{r0}\\n" > "$EVD/R0-H-tx.txt"; keep RUN_H kiss@r1; '
-                                         'keep BOOT_H "$(cat /proc/sys/kernel/random/boot_id)"; : > "$EVD/undo.list"; : > "$EVD/undo.done"; '
-                                         'usbguard() { :; }; row_RS && echo RS-DONE', **env)   # the USB guard: another path
-    if want is None:
-        assert "RS-DONE" in r.stdout, r.stdout + r.stderr
+    rt = box / "rt"
+    with open(box / "env.sh", "a") as f:
+        f.write(box_env)
+    for f, c in before.items():
+        (rt / f).parent.mkdir(parents=True, exist_ok=True)
+        (rt / f).write_text(c)
+    ovl = tmp_path / "ovl"
+    gone = [str(rt / f) for f, c in after.items() if c is None]
+    for f, c in after.items():
+        if c is not None:
+            (ovl / f).parent.mkdir(parents=True, exist_ok=True)
+            (ovl / f).write_text(c)
+    rnsk = f"keep RNS_H {rns}; " if rns else ""
+    r, _ = source_only(tmp_path, setup + f'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; cp -r "{ovl}"/. "{rt}"/; rm -f {" ".join(gone) or "/dev/null/x"}; '
+                                         f'{rnsk}: > "$EVD/undo.list"; : > "$EVD/undo.done"; usbguard() {{ :; }}; row_RS && echo RS-DONE',
+                       **env)
+    assert f"data: RS H: TX frames of this run per radio: {want.removeprefix('FAIL ')}" in r.stdout, r.stdout + r.stderr
+    if want.startswith("FAIL"):
+        assert r.returncode == 1 and "RS-DONE" not in r.stdout and "RS H: a radio sent more than 10" in r.stderr, r.stdout + r.stderr
     else:
-        assert r.returncode == 1 and "RS-DONE" not in r.stdout and want in r.stderr, r.stdout + r.stderr
+        assert "RS-DONE" in r.stdout, r.stdout + r.stderr
+
+
+BIG = "".join(f"daemon line {i:05d}\n" for i in range(400))      # 7200 bytes: a run log over 4 KiB at R0
+
+
+@pytest.mark.parametrize("before, after", [
+    (BASE, {RLOG: "y" * 5000 + ERR}),                      # replaced by a new file (not the cap: no cut file), regrown past R0
+    ({**BASE, RLOG: BIG}, {RLOG: BIG[:4096] + "z\n"}),     # truncated outside the cap, regrown: the same first 4 KiB, shorter
+])
+def test_a_run_log_not_continuous_since_r0_is_unreadable(tmp_path, before, after):
+    # pins the head (a new file) and the size (a shorter file with the same head) checks of the daemon run log
+    _rs(tmp_path, before, after, "", "FAIL r1 UNREADABLE|")
+
+
+def test_a_frame_in_the_second_of_t0_counts(tmp_path):
+    # the box clock at R0 is T0 (whole seconds): a frame within that second counts (the safe side), one before it does not
+    t0 = NOW - 600
+    _rs(tmp_path, BASE, {DMN: _l(PRE) + _l(t0 - 1) + _l(t0)}, "", "r1 1|",
+        box_env=f'date() {{ [ "$*" = "-u +%s" ] && echo {t0} || command date "$@"; }}\n')
+
+
+def test_row_5_records_its_radio_for_the_reticulum_count(tmp_path):
+    # row 5 keeps RNS_<box> before Reticulum can send (rnsrids reads it at RS); the row stops at its power read here
+    r, evd = source_only(tmp_path, 'MODE=dry; SCRATCH=$EVD; needs() { return 0; }; must() { :; }; undo_push() { :; }; spower() { exit 0; }; '
+                                     'keep KZ r2; row_5 H:KZ')
+    assert "RNS_H=r2" in (evd / "state.env").read_text().splitlines(), r.stdout + r.stderr
+
+
+def test_a_radio_of_r0_without_its_facts_at_rs_is_unreadable(tmp_path):
+    r, _ = source_only(tmp_path, 'printf "L r1 9 aa 0 absent\\nL r2 9 bb 0 absent\\n" > "$EVD/a"; printf "L r1 9 aa 0 absent\\n" > "$EVD/b"; '
+                                     'txjudge "$EVD/a" "$EVD/b" 100 ""')
+    assert r.stdout.splitlines() == ["r1 0", "r2 UNREADABLE"], r.stdout + r.stderr
+
+
+def test_reticulum_counts_on_the_radios_it_ran_on(tmp_path):
+    # the radios from R0's running set (reticulum@rN) and row 5's radio, once each
+    r, _ = source_only(tmp_path, 'printf "kiss@r1\\nreticulum@r2\\nreticulum@r10\\n" > "$EVD/R0-H-runset.txt"; keep RNS_H r2; rnsrids H; echo; '
+                                   'keep RNS_H r3; rnsrids H')
+    assert r.stdout.splitlines() == ["r10 r2 ", "r10 r2 r3 "], r.stdout + r.stderr
 
 
 # ---- row 6 never runs a command line from the box's output: it builds the chat call from plain paths ----------------------
