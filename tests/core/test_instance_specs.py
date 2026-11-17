@@ -25,7 +25,8 @@ def _inst0(comp):
 
 def _argv(comp):
     """The real argv of the process the spec matches, as a band-addressed start renders it, default params."""
-    argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=_inst0(comp))
+    argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=_inst0(comp),
+                                daemon={"power": "14"})   # the bridge's --max-power: its instance's POWER
     if comp.id == "meshcore-webui":
         # meshcore-webui-run.sh:71 execs `"$venv/bin/python" -m uvicorn app.main:app --host
         # "$bind" --port "$port"` (venv = <source>/backend/.venv), bind/port the wrapper's last two arguments.

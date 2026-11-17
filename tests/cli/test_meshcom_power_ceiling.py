@@ -9,6 +9,7 @@
 - P4: `lhpc status` and the Apps row name "NO RADIO: power above panel" from the bridge's own log (its last configured
   or refused XR connection since its start), never by inference."""
 import dataclasses
+import re
 
 import pytest
 from radios_fixture import R1
@@ -82,7 +83,9 @@ def _running(monkeypatch, sids):
 
 
 def _with_ceiling(monkeypatch, svc):
-    """The bridge's run line as the pin commit ships it (`--max-power {daemon:power}`)."""
+    """The bridge's run line as the pin commit ships it (`--max-power {daemon:power}`): the manifest's own now."""
+    if any("{daemon:power}" in c.run_argv for s in svc.stacks() for c in s.components if c.id == "meshcom-bridge"):
+        return
     stacks = []
     for st in svc.stacks():
         comps = tuple(dataclasses.replace(c, run_argv=(*c.run_argv, "--max-power", "{daemon:power}"))
@@ -176,3 +179,20 @@ def test_the_dashboards_bridge_command_carries_the_instances_ceiling(box, monkey
     comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-bridge")
     cmd = svc.manual_start_command(comp, commands.Instance("r1", band="433"))
     assert "--max-power 12" in cmd, cmd
+
+
+def test_the_bridge_is_launched_with_the_instances_power_as_its_ceiling(box):
+    # the pin commit: the bridge at 0.3.0 (the release whose --max-power is required) and its run line, together, so
+    # the two never run apart; its argv for meshcom@r1 carries the POWER the node's --txpower takes
+    box((dataclasses.replace(R1, dp=(("POWER", "12"),)),))
+    svc = cli.ControllerService()
+    comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-bridge")
+    # the contract, not the pin: a full commit and a release at or above 0.3.0, whose --max-power is required
+    assert re.fullmatch(r"[0-9a-f]{40}", comp.source.pin_commit), comp.source.pin_commit
+    assert tuple(int(x) for x in re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", comp.source.pin_tag).groups()) >= (0, 3, 0)
+    r1 = commands.Instance("r1", band="433")
+    daemon = radio_start.daemon_values(svc, "meshcom", r1)
+    argv = commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, "433", r1), _Op(), "/rt", "/src",
+                                "433", inst=r1, daemon=daemon)
+    assert daemon == {"power": "12"} and argv[argv.index("--max-power") + 1] == "12", argv
+    assert comp.run_argv.count("{daemon:power}") == 1

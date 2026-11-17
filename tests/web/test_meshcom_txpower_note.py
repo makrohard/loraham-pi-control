@@ -30,8 +30,8 @@ def _svc(tmp_path, monkeypatch, state, step=STEP, bridge=()):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     st = svc.stack("meshcom")
     st = dataclasses.replace(st, components=tuple(     # the bridge as the pin commit launches it: with its ceiling
-        dataclasses.replace(c, run_argv=(*c.run_argv, "--max-power", "{daemon:power}")) if c.id == "meshcom-bridge"
-        else c for c in st.components))
+        dataclasses.replace(c, run_argv=(*c.run_argv, "--max-power", "{daemon:power}"))
+        if c.id == "meshcom-bridge" and "{daemon:power}" not in c.run_argv else c for c in st.components))
     snap = Snapshot(runtime_root_exists=True)
     ss = StackStatus(stack=st)
     for comp in st.components:

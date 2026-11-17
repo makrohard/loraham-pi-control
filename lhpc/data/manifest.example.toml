@@ -1756,7 +1756,9 @@ main = "meshcom-qemu"
   build = "cmake -S . -B build && cmake --build build"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"], attributable = true } ]
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {data_socket} {conf_socket} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-meshcom.log"
+  # --max-power (bridge 0.3.0, required): the TX power ceiling, the POWER this instance applies to its daemon (the
+  # node's --txpower takes the same value). A node asking more gets no radio until its power is set (G2 B1).
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {data_socket} {conf_socket} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-meshcom.log --max-power {daemon:power}"
   bin = "build/meshcom-loraham-bridge"
   # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
   # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
@@ -1861,8 +1863,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "8500df8bfa8f056fb926b388a4fb1d03b3f8b6e3"
-    pin_tag = "v0.2.0"
+    pin_commit = "47c8876beaf79b1b7bbc16e11ea1d98fb061ef17"
+    pin_tag = "v0.3.0"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
@@ -1979,8 +1981,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b9e5be2984b367e58dcf868a7dfce147dd8744aa"
-    pin_tag = "b9e5be2"
+    pin_commit = "b4d3bc0c286fcbe689d2ab8921d0eb4c45b0ca4d"
+    pin_tag = "pin/b4d3bc0"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2259,8 +2261,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b9e5be2984b367e58dcf868a7dfce147dd8744aa"
-    pin_tag = "b9e5be2"
+    pin_commit = "b4d3bc0c286fcbe689d2ab8921d0eb4c45b0ca4d"
+    pin_tag = "pin/b4d3bc0"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 

@@ -75,7 +75,8 @@ def test_argv_writers_get_the_switch_and_the_registry_file(tmp_path, surface, ba
     for value in ("on", "off"):
         # stage L5 (W3): a daemon client (the KISS TNC, the MeshCom bridge) renders as its radio's instance
         argv = commands.expand_argv(comp.run_argv, comp, {**base, "rf_log": value},
-                                    svc.config().operator, "/rt", "/src", band, inst=commands.Instance("r1"))
+                                    svc.config().operator, "/rt", "/src", band, inst=commands.Instance("r1"),
+                                    daemon={"power": "14"})
         assert argv[argv.index("--rflog") + 1] == value
         assert argv[argv.index("--rflog-path") + 1] == want
 

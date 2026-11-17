@@ -39,7 +39,8 @@
   names the node. After the update, restart running GPS stacks so their feeds move.
 - Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio): MeshCom per radio, each
   QEMU guest on its radio's ports and its own bridge (socat per connection, one XR password); rebuild it from source.
-- meshcom-qemu-raspi: 722b5e8e5 -> b9e5be298 (b9e5be2), used by meshcom-gps-relay, meshcom-qemu
+- meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
+- meshcom-loraham-bridge: 8500df8bf -> 47c8876be (v0.3.0), used by meshcom-bridge
 - `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
 - `lhpc kill <stack>@<band>` is gone: name the instance (`lhpc kill kiss@r1`); a band form is refused with the running ones.
 - The MeshCore Mode switch saves the shown radio's mode; with a hardware list, a request without a radio is refused, naming the radios.

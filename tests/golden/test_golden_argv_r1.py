@@ -28,6 +28,8 @@ EXCEPTIONS = {
     "meshtastic-gps": ["--state", "/rt/state/gps/meshtastic"],
     # K7 (DEC-W384s/af): each guest's run.sh instance, host ports and per-connection bridge redirect (the template: r1's)
     "meshcom-qemu": ["--instance", "0", "--ports", "18083:12323", "--xr-redirect", "7000:7000"],
+    # RADIO-POWER item 4 (bridge 0.3.0): the TX power ceiling, the POWER the instance applies to its daemon (here 14)
+    "meshcom-bridge": ["--max-power", "14"],
 }
 # Stage L5 (W3, an I11 difference, A:142): a daemon client's socket pairs are its radio's. They are compared apart
 # from the rest of the argv: each client carries exactly these pairs (on r1), and every other token is the base's.
@@ -80,7 +82,7 @@ def _resolve() -> dict:
             # stage L5 (W3): a daemon client runs as its radio's instance, here r1's
             inst = commands.Instance("r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.TEMPLATE
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
-                                        Config().operator, str(RT), src, c.band, inst=inst)
+                                        Config().operator, str(RT), src, c.band, inst=inst, daemon={"power": "14"})
             out[c.id] = ["<python>" if t == python else t.replace(pkg, "<lhpc>") for t in argv]
     return out
 
