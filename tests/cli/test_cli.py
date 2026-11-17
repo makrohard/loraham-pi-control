@@ -260,7 +260,7 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch, no_venv_sync):
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}
-    def fake_apply(self, *, force=False):
+    def fake_apply(self, *, force=False, stop_console=None):
         seen["force"] = force
         from lhpc.core import selfupdate
         return ActionResult(True, selfupdate.APPLIED_RESTART_MESSAGE,
@@ -281,7 +281,7 @@ def test_self_update_overwrite_implies_apply(capsys, monkeypatch, no_venv_sync):
     monkeypatch.delenv("INVOCATION_ID", raising=False)  # see test_self_update_apply_cli_yes
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}
-    def fake_apply(self, *, force=False):
+    def fake_apply(self, *, force=False, stop_console=None):
         seen["force"] = force
         return ActionResult(True, "Update applied — restart the web console to load it.")
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
@@ -297,7 +297,7 @@ def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
     from lhpc.core.services import ControllerService
     called = {"apply": False}
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: called.__setitem__("apply", True))
+                        lambda self, *, force=False, stop_console=None: called.__setitem__("apply", True))
     assert main(["self-update", "--apply"]) == 0
     assert "Aborted." in capsys.readouterr().out and called["apply"] is False
 
@@ -308,7 +308,7 @@ def test_self_update_busy_cli(capsys, monkeypatch):
     # refusal cannot pre-empt the busy path this test is about.
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None:
         ActionResult(False, "A self-update is already in progress — try again shortly.",
                      data={"busy": True}))
     assert main(["self-update", "--apply", "--yes"]) == 1

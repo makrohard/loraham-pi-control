@@ -617,20 +617,23 @@ def test_self_update_apply_operator_stops_and_restarts_web(op_svc, monkeypatch):
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService, ActionResult
     seen = []
+    # A real advance: the apply stops the running console through its hook right before the first change
+    # (a refusal or a no-op never calls it: test_selfupdate_operator_console.py).
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: (seen.append(force),
-                                                      ActionResult(True, "Update applied.",
-                                                                   data={"already": True}))[1])
+                        lambda self, *, force=False, stop_console=None: (seen.append(force), stop_console(),
+                                                      ActionResult(True, "Update applied.", data={}))[2])
     cmds = {
         ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),  # active
         ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),
         ("systemctl", "--user", "start", "lhpc-web.service"): CR(0, "", ""),
     }
     svc, fake = op_svc(cmds, invocation=False)
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "n/a"))   # a real advance refreshes
     r = svc.self_update_apply_operator(force=True)
     assert r.ok and seen == [True]
-    assert ["systemctl", "--user", "stop", "lhpc-web.service"] in fake.calls
-    assert ["systemctl", "--user", "start", "lhpc-web.service"] in fake.calls   # restarted after
+    svc_calls = [c for c in fake.calls if c[:3] == ["systemctl", "--user", "stop"] or c[:3] == ["systemctl", "--user", "start"]]
+    assert svc_calls == [["systemctl", "--user", "stop", "lhpc-web.service"],
+                         ["systemctl", "--user", "start", "lhpc-web.service"]]   # stopped once, restarted after
 
 
 def _pip_key(root):
@@ -648,7 +651,7 @@ def _op_inactive(op_svc, monkeypatch, apply_result, *, pip=None):
     """An operator svc with web INACTIVE and a stubbed self_update_apply; `pip` overrides the
     fixture's succeeding venv-sync row. Returns (svc, fake, root)."""
     from lhpc.core.services import ControllerService
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: apply_result)
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: apply_result)
     svc, fake = op_svc(dict(_WEB_INACTIVE), invocation=False)
     root = selfupdate.repo_root()
     if pip is not None:
@@ -678,7 +681,7 @@ def test_operator_apply_refuses_while_the_units_are_another_releases(op_svc, mon
     from lhpc.core import updater_units as U
     from lhpc.core.services import ActionResult, ControllerService
     applied = []
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: (
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: (
         applied.append(force), ActionResult(True, "already", data={"already": True}))[1])
     svc, fake = op_svc(dict(_WEB_INACTIVE), units=True, invocation=False)
     ud, root = svc._user_unit_dir(), str(svc._paths.runtime_root)
@@ -754,7 +757,7 @@ def test_a_failed_venv_sync_is_the_named_state_venv_unsynced_resolved_by_the_nex
     assert svc.self_update_incomplete()[0] == "venv-unsynced" and not refreshed
     assert any("venv-unsynced" in d and "lhpc self-update --apply" in d
                for d in svc.status().details), svc.status().details
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None:
                         ActionResult(True, "Already up to date.", data={"already": True}))
     fake.commands[_pip_key(root)] = CR(0, "", "")
     fake.calls.clear()
@@ -972,7 +975,7 @@ def test_operator_admission_held_across_apply_and_sync(op_svc, monkeypatch):
     # `_held_counts()` is the per-thread lock depth — the only in-process observer of a held
     # flock; a second process trying the lock would be the behavioural twin but costs a subprocess.
     held = {}
-    def fake_apply(self, *, force=False):
+    def fake_apply(self, *, force=False, stop_console=None):
         held["apply"] = self._held_counts().get(self.ADMISSION_KEY, 0)
         return ActionResult(True, "advanced", data={})
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
@@ -993,7 +996,7 @@ def test_operator_active_restart_failure_is_not_success(op_svc, monkeypatch):
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "advanced", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "advanced", data={}))
     cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),   # ON
             ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),
             ("systemctl", "--user", "start", "lhpc-web.service"): CR(1, "", "boom")}   # restart FAILS
@@ -1275,7 +1278,7 @@ def test_cleanup_partial_still_syncs_the_venv_and_refreshes_units(op_svc, monkey
 def test_cleanup_partial_does_not_advise_a_restart_already_done(op_svc, monkeypatch):
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: _cleanup_partial())
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: _cleanup_partial())
     cmds = {
         ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),
         ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),

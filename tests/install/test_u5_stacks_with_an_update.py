@@ -56,7 +56,7 @@ def _behind(tmp_path, monkeypatch, capsys):
 
 def _advancing(op_svc, monkeypatch, tmp_path, *, invocation, sweep=None, apply=None):
     svc, fake = op_svc(WEB_INACTIVE, units=True, invocation=invocation)
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: apply or
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: apply or
                         ActionResult(True, "Update applied.", data={"already": False}))
     if sweep is not None:
         fake.commands[SWEEP] = sweep

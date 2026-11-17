@@ -39,7 +39,7 @@ BUDGETS = {
     "service_params.py": (2516, 39),  # K4b: restart markers per instance (a bare id reads its instances'); MeshCore files by instance; K6: stores per radio, live consumers per instance, port_of, derived rows refused (DEC-W384q); RADIO-POWER: the KISS file's power from the panel (a panel_power row)
     "service_rflog.py": (490, 13),  # split-s1: split from service_lifecycle_ops.py; K6: the stack-wide switch sets every instance; G1-K6C: a partly saved switch names the saved and the failed instances; K7: a stack without a radio refuses the switch, --all skips it (G1-K6C-RE 3)
     "service_secrets.py": (399, 2),
-    "service_selfupdate.py": (1932, 22),
+    "service_selfupdate.py": (1933, 22),  # SELFUPDATE-REFUSED-RESTART: the running console stopped only right before the first change (stop hook, shared lock retry)
     "service_stop.py": (768, 5),  # split-s7: split from service_lifecycle_ops.py; K6: lowered (the band-marker clear out); K7: a released dependency is the stopped instance's own radio's; K8: a named stop never hides an unclaimed process
     "service_system.py": (759, 2),
     "service_webserver.py": (2399, 42),  # K4b: port suggestions radio by radio, a page's mode note per instance; K6: a password per instance; A21: the firewall's page-port read (_page_ports)

@@ -739,8 +739,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
             # fail-soft otherwise): only here is the reset path the actual remedy, and saying so is
             # what keeps the refusal from being a dead end.
             return {"ok": False, "needs_overwrite": True,
-                    "message": "Update could not be applied — the local branch has diverged "
-                    "from upstream." + (f" {detail}" if detail else "")}
+                    "message": DIVERGED_MESSAGE + (f" {detail}" if detail else "")}
         return {"ok": False,
                 "message": "Update could not be applied — git refused the fast-forward."
                 + (f" {detail}" if detail else "")}
@@ -769,6 +768,8 @@ def _index_lock(system: System, root: Path) -> str:
 
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).
 APPLIED_RESTART_MESSAGE = "Update applied — restart the web console to load it."
+# A proven divergence: apply_update's, and the operator's before it would stop the running console.
+DIVERGED_MESSAGE = "Update could not be applied — the local branch has diverged from upstream."
 
 LOCK_FILE = "requirements.lock"
 

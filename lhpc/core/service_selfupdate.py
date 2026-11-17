@@ -3,6 +3,7 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from os.path import exists as _op_exists
@@ -342,7 +343,7 @@ class SelfUpdateOpsMixin:
         return ActionResult(True, "Up to date.", data=view)
 
     @invalidates_snapshot
-    def self_update_apply(self, *, force: bool = False) -> ActionResult:
+    def self_update_apply(self, *, force: bool = False, stop_console=None) -> ActionResult:
         """Apply the update as ONE serialized, fail-closed transaction (the interprocess self-update
         lock covers fetch/ref resolution, merge/reset/clean and cache writes). BLOCKED while an lhpc
         job is active; a concurrent apply returns 'busy' with zero mutation. A DIRTY tree is refused
@@ -379,9 +380,17 @@ class SelfUpdateOpsMixin:
                                             next_commands=cmds, details=why)
                 # controller-runtime EXCLUSIVE (so the running web server, holding it SHARED, can never
                 # have its source mutated underneath it), THEN the self-update lock. Both non-blocking.
-                with (selfupdate.controller_runtime_lock(self._paths, exclusive=True),
-                      selfupdate.update_lock(self._paths)):
-                    return self._self_update_locked(force)
+                if stop_console is None:
+                    with (selfupdate.controller_runtime_lock(self._paths, exclusive=True),
+                          selfupdate.update_lock(self._paths)):
+                        return self._self_update_locked(force)
+                # The operator's RUNNING console: stopped, and the lock taken EXCLUSIVE, only right before
+                # the first change (`_self_update_locked`'s hook), so a refusal or a no-op leaves it alone.
+                # Lock order here: self-update, then controller-runtime — both non-blocking (busy, never a
+                # deadlock), and the held admission already excludes the one-click helper.
+                with contextlib.ExitStack() as held, selfupdate.update_lock(self._paths):
+                    return self._self_update_locked(force, before_advance=lambda: (
+                        stop_console() or self._runtime_lock_exclusive(held)))
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy:
@@ -503,20 +512,24 @@ class SelfUpdateOpsMixin:
     def _with_cleanup_note(self, res: ActionResult, summary: str) -> str:
         return summary + self._CLEANUP_NOTE if res.data.get("cleanup_failed") else summary
 
-    def _apply_and_sync(self, force: bool) -> ActionResult:
+    def _apply_and_sync(self, force: bool, stop_console=None) -> ActionResult:
         """Apply the source update, then — ONLY on a REAL advance — sync the editable venv install with the SAME
         `sys.executable -m pip install -e <repo-root>` the managed helper runs (a dependency change never leaves the
         install unusable). MUST be called with task admission HELD (the operator flow, the one-click unit), so nothing
         starts between apply and sync. A no-op/already-current or failed/refused apply runs NO pip. A real advance
-        carries `update_applied=True`; a pip failure `ok=False` + `venv_sync_failed=True`, the apply data kept."""
+        carries `update_applied=True`; a pip failure `ok=False` + `venv_sync_failed=True`, the apply data kept.
+        `stop_console` (the operator flow, console running): stops it right before the first change — see
+        `self_update_apply`; None once stopped, else the refusal."""
         import dataclasses as _dc
         import sys as _sys
         import time as _time
 
         from . import selfupdate
-        res = self.self_update_apply(force=force)
+        res = self.self_update_apply(force=force, stop_console=stop_console)
         if not (self._source_advanced(res) or self._resumes_sync(res)):
             return res                                        # no-op / already-current / failed / refused
+        if stop_console is not None and (refused := stop_console()) is not None:
+            return refused                    # a resumed sync changes the console's venv: stopped first (done if advanced)
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
         if root is not None:
@@ -576,7 +589,9 @@ class SelfUpdateOpsMixin:
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
         """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO under a CONTINUOUSLY-held task
         admission lock. If the managed web console is running it holds the controller-runtime lock
-        SHARED, so we STOP lhpc-web, apply + sync the venv, then START it again. When the console is NOT
+        SHARED, so we STOP lhpc-web right before the first change (after every gate and read-only check),
+        apply + sync the venv, then START it again — ONLY if it was stopped: a refusal or a no-op leaves the
+        running console alone. When the console is NOT
         running we STILL apply AND sync the venv (a dependency change must never leave it unusable) — the
         only difference is no service control. Admission is NEVER released between apply and sync in
         either case. REFUSES inside a managed unit (a managed process must never drive systemctl)."""
@@ -601,19 +616,30 @@ class SelfUpdateOpsMixin:
                 if not web_active:
                     # No service to orchestrate — but STILL apply AND sync the venv, under held admission.
                     return self._operator_outcome(self._apply_and_sync(force), restarted=False)
-                stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
-                if getattr(stop, "not_found", False) or stop.returncode != 0:
-                    return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
-                                        next_commands=["systemctl --user stop lhpc-web",
-                                                       "lhpc self-update --apply",
-                                                       "systemctl --user start lhpc-web"],
-                                        data={"stop_failed": True})
+                stopped = []
+
+                def stop_console():
+                    if stopped:
+                        return None
+                    stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
+                    if getattr(stop, "not_found", False) or stop.returncode != 0:
+                        return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
+                                            next_commands=["systemctl --user stop lhpc-web",
+                                                           "lhpc self-update --apply",
+                                                           "systemctl --user start lhpc-web"],
+                                            data={"stop_failed": True})
+                    stopped.append(True)
+                    return None
+                restart_failed = False
                 try:
-                    res = self._apply_and_sync(force)         # admission still held; venv synced here
+                    res = self._apply_and_sync(force, stop_console)   # admission still held; venv synced here
                 finally:
-                    start = self._system.runner.run(
-                        ["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
-                    restart_failed = getattr(start, "not_found", False) or start.returncode != 0
+                    if stopped:                                       # started again only if this apply stopped it
+                        start = self._system.runner.run(
+                            ["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
+                        restart_failed = getattr(start, "not_found", False) or start.returncode != 0
+                if not stopped:
+                    return res                                        # a refusal or a no-op: console untouched
                 if restart_failed:
                     # A failed REQUIRED restart is ALWAYS ok=False (the console is unavailable). Distinguish
                     # partial success: the source update may have applied (update_applied) — preserve that
@@ -675,12 +701,44 @@ class SelfUpdateOpsMixin:
                        "manually (no restart needed).")
         return _dc.replace(res, summary=summary, details=tuple(details), next_commands=[])
 
-    def _self_update_locked(self, force: bool) -> ActionResult:
+    def _runtime_lock_exclusive(self, held: contextlib.ExitStack) -> ActionResult | None:
+        """Take the controller-runtime lock EXCLUSIVE into `held`, retrying for `_LOCK_WAIT_S` while a just-stopped
+        console lets go of its SHARED hold. None once held, else the refusal (nothing was changed)."""
+        import time as _time
+
+        from . import selfupdate
+        deadline = _time.monotonic() + selfupdate.clip(self._LOCK_WAIT_S)   # within the one-click helper's budget
+        while True:
+            try:
+                held.enter_context(selfupdate.controller_runtime_lock(self._paths, exclusive=True))
+                return None
+            except selfupdate.ControllerRuntimeBusy:
+                if _time.monotonic() >= deadline:
+                    return ActionResult(False, "The console did not release the controller-runtime "
+                                        "lock — no changes made.", data={"web_running": True},
+                                        next_commands=["lhpc self-update --apply"])
+                _time.sleep(0.5)
+            except selfupdate.ControllerRuntimeLockError:
+                return ActionResult(False, "Could not acquire the controller-runtime lock "
+                                    "(unsafe runtime state) — no changes made.",
+                                    data={"lock_error": True},
+                                    details=["  nothing to run here — lhpc could not open "
+                                             "its lock file under state/locks/: a filesystem "
+                                             "error, or a path there that is a symlink or "
+                                             "escapes the runtime root; the box's operator "
+                                             "checks state/locks/, then retries"])
+
+    def _self_update_locked(self, force: bool, before_advance=None) -> ActionResult:
+        """`before_advance()` (the operator's running console): called after every refusal this apply can
+        decide without changing anything, right before the first change; None to go on, else its refusal."""
         from . import selfupdate
 
         class _FWAbort(Exception):
             def __init__(self, result):
                 self.result = result
+
+        class _Diverged(Exception):
+            pass
 
         def _before_mutation(_from_head, _to_head, _branch, _deps):
             # FW P1-2C: BEFORE the checkout advances, refuse if the managed firewall is installed,
@@ -689,6 +747,13 @@ class SelfUpdateOpsMixin:
             fw_abort = self.firewall_update_nginx_preflight()
             if fw_abort is not None:
                 raise _FWAbort(fw_abort)
+            if before_advance is not None:
+                # A proven divergence is refused by the merge below without a change: refused here, so the
+                # running console is not stopped for it.
+                if not force and selfupdate.ff_blocked(self._system, _branch):
+                    raise _Diverged()
+                if (refused := before_advance()) is not None:
+                    raise _FWAbort(refused)
             # The firewall follow-up is recorded BEFORE the checkout moves: an advance whose marker
             # was lost (a stop, a full disk) could otherwise never be reconciled, since the retry
             # finds the checkout current. A marker that cannot be written stops the update here.
@@ -702,8 +767,10 @@ class SelfUpdateOpsMixin:
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
                                           before_mutation=_before_mutation)
-        except _FWAbort as abort:                            # firewall preflight refused the advance
+        except _FWAbort as abort:                            # firewall preflight / before_advance refused
             return abort.result
+        except _Diverged:
+            res = {"ok": False, "needs_overwrite": True, "message": selfupdate.DIVERGED_MESSAGE}
 
         # FW P1-2 B/C: on a real advance, the firewall scripts + LHPC-owned nginx unit must be
         # regenerated with the NEW templates. This process imported the old modules BEFORE the
@@ -968,7 +1035,6 @@ class SelfUpdateOpsMixin:
         claim -> prove ownership -> apply -> venv sync -> durable record -> in-flight release."""
         import dataclasses as _dc
         import sys
-        import time as _time
 
         from . import runtime_fs, selfupdate, updater_units
         req_path = self._paths.under(*updater_units.REQUEST_REL)
@@ -1020,28 +1086,10 @@ class SelfUpdateOpsMixin:
         try:
             # Web is stopped (Conflicts+After) so its SHARED lock is released; take EXCLUSIVE with
             # a short bounded retry to cover the stop-completion window, then apply.
-            deadline = _time.monotonic() + selfupdate.clip(self._LOCK_WAIT_S)   # within the helper's budget
-            while True:
-                try:
-                    with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
-                        break
-                except selfupdate.ControllerRuntimeBusy:
-                    if _time.monotonic() >= deadline:
-                        res = ActionResult(False, "The console did not release the controller-runtime "
-                                           "lock — no changes made.", data={"web_running": True},
-                                           next_commands=["lhpc self-update --apply"])
-                        raise _StopRun() from None
-                    _time.sleep(0.5)
-                except selfupdate.ControllerRuntimeLockError:
-                    res = ActionResult(False, "Could not acquire the controller-runtime lock "
-                                       "(unsafe runtime state) — no changes made.",
-                                       data={"lock_error": True},
-                                       details=["  nothing to run here — lhpc could not open "
-                                                "its lock file under state/locks/: a filesystem "
-                                                "error, or a path there that is a symlink or "
-                                                "escapes the runtime root; the box's operator "
-                                                "checks state/locks/, then retries"])
-                    raise _StopRun() from None
+            with contextlib.ExitStack() as probe:
+                if (refused := self._runtime_lock_exclusive(probe)) is not None:
+                    res = refused
+                    raise _StopRun()
             res = self._apply_and_sync(force)                 # the one post-update path (venv sync, units)
             if "pip_sync_s" in res.data:  # the slow-target budget's L4 quantity (docs/test-matrix.md#slow-target-baseline)
                 print(f"[selfupdate] pip sync {res.data['pip_sync_s']:.1f} s", file=sys.stderr, flush=True)

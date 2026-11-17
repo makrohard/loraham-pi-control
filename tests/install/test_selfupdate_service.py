@@ -147,7 +147,7 @@ def test_run_service_claims_applies_records_no_systemctl(tmp_path, monkeypatch, 
     _write_request(tmp_path, "normal")
     order = []
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: (order.append(force),
+                        lambda self, *, force=False, stop_console=None: (order.append(force),
                                                       ActionResult(True, "Already up to date.",
                                                                    data={"already": True}))[1])
     res = svc.self_update_run_service()
@@ -165,7 +165,7 @@ def test_run_service_overwrite_mode_from_request(tmp_path, monkeypatch, op_svc):
     _write_request(tmp_path, "overwrite")
     seen = {}
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: (seen.__setitem__("f", force),
+                        lambda self, *, force=False, stop_console=None: (seen.__setitem__("f", force),
                                                       ActionResult(True, "ok", data={"already": True}))[1])
     assert svc.self_update_run_service().ok
     assert seen["f"] is True
@@ -255,7 +255,7 @@ def _advancing_svc(tmp_path, monkeypatch, op_svc):
     from lhpc.core.services import ActionResult, ControllerService
     svc, fake = op_svc(units=True, invocation=True)
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "Update applied.",
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "Update applied.",
                                                                   data={"already": False}))
     pip = next(k for k in fake.commands if k[1:4] == ("-m", "pip", "install"))
     _write_request(tmp_path, "normal")
@@ -298,7 +298,7 @@ def test_run_service_record_failure_retains_inflight(tmp_path, monkeypatch, op_s
     svc, fake = op_svc(units=True, invocation=True)
     _write_request(tmp_path, "normal")
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "ok", data={"already": True}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "ok", data={"already": True}))
     monkeypatch.setattr(_su, "record_last_apply_strict", lambda *a, **k: False)   # durable write fails
     res = svc.self_update_run_service()
     assert not res.ok and res.data.get("record_failed")
@@ -311,7 +311,7 @@ def test_run_service_refuses_preexisting_inflight_preserving_both(tmp_path, monk
     from lhpc.core.services import ControllerService
     applied = []
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: applied.append(1))
+                        lambda self, *, force=False, stop_console=None: applied.append(1))
     svc, fake = op_svc(units=True, invocation=True)
     (tmp_path / "state" / "selfupdate.inflight").write_text('{"mode":"normal","pid":4242,"start_time":7}')
     _write_request(tmp_path, "overwrite")
@@ -335,7 +335,7 @@ def test_run_service_concurrent_claim_admits_one(tmp_path, monkeypatch, op_svc):
     """Two claims against ONE request admit exactly one; the loser fails closed, evidence intact."""
     from lhpc.core.services import ActionResult, ControllerService
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "ok", data={"already": True}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "ok", data={"already": True}))
     svc, fake = op_svc(units=True, invocation=True)
     _write_request(tmp_path, "normal")
     r1 = svc.self_update_run_service()                 # claims + runs, releases inflight
@@ -352,7 +352,7 @@ def test_run_service_final_unlink_failure_retains_evidence(tmp_path, monkeypatch
     svc, fake = op_svc(units=True, invocation=True)
     _write_request(tmp_path, "normal")
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "ok", data={"already": True}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "ok", data={"already": True}))
     # Fail ONLY the final in-flight unlink (its intent) — NOT the admission flock-owner unlink that the
     # helper's task-admission release now also performs through runtime_fs.unlink.
     _real_unlink = runtime_fs.unlink
@@ -703,7 +703,7 @@ def test_apply_leaves_the_managed_units_canonical(op_svc, monkeypatch, tmp_path)
                         lambda self, *, restart=True: (calls.append(restart),
                                                        ActionResult(True, "repaired"))[1])
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "applied", data={}))
     res = svc.self_update_apply_operator()
     assert res.ok, res.summary
     assert res.data.get("units_refreshed") is True, res.data.get("units_refresh_detail")
@@ -795,7 +795,7 @@ def test_the_one_click_helper_verifies_the_units_it_refreshed(tmp_path, op_svc, 
     svc, _fake = op_svc(units=True, invocation=True)
     _write_request(tmp_path, "normal")
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "applied", data={}))
     repaired = []
     monkeypatch.setattr(ControllerService, "self_update_repair_integration",
                         lambda self, *, restart=True: (repaired.append(restart),
@@ -820,7 +820,7 @@ def test_a_failed_unit_refresh_makes_the_update_visibly_partial(op_svc, monkeypa
 
     svc, _fake = op_svc(_WEB_INACTIVE, invocation=False)
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "applied", data={}))
     monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
                         lambda self: (False, "units still not canonical"))
     res = svc.self_update_apply_operator()
@@ -845,7 +845,7 @@ def test_stale_units_after_an_applied_update_are_the_named_state_units_stale(
     if path != "operator":
         _write_request(tmp_path, "normal")
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "applied", data={}))
     monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
                         lambda self: (False, "units still not canonical"))
     res = (svc.self_update_apply_operator() if path == "operator"
@@ -892,7 +892,7 @@ def test_units_stale_says_what_boot_restore_does_with_those_units(op_svc, monkey
 
     svc, _fake = op_svc(_WEB_INACTIVE, invocation=False)
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+                        lambda self, *, force=False, stop_console=None: ActionResult(True, "applied", data={}))
     monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (False, detail))
     res = svc.self_update_apply_operator()
     assert res.ok is False and "units-stale" in res.summary, res.summary
@@ -942,7 +942,7 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
         next_commands=list(instr["commands"]),
         data={"restart": instr, "deps_changed": True})
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: service_path_result)
+                        lambda self, *, force=False, stop_console=None: service_path_result)
     monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (True, ""))
     res = svc.self_update_apply_operator()
     text = "\n".join((res.summary, *res.details, *res.next_commands))
@@ -969,7 +969,7 @@ def test_operator_apply_ending_units_stale_drops_the_advice_for_steps_it_took(op
 
     svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
     instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: ActionResult(
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE,
         details=(instr["note"], "Restart the web console to load the new version:",
                  *("  " + c for c in instr["commands"])),
@@ -994,7 +994,7 @@ def test_operator_apply_whose_venv_sync_failed_keeps_the_sync_advice(op_svc, mon
 
     svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
     instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: ActionResult(
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE, details=(instr["note"],),
         data={"restart": instr, "deps_changed": True}))
     monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: CR(1, "", "no index"))
@@ -1011,7 +1011,7 @@ def _partial_svc(tmp_path, monkeypatch, op_svc):
     msg = ("Update aligned to upstream, but some untracked files could NOT be removed "
            "— delete them manually, then restart the console.")
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(
+                        lambda self, *, force=False, stop_console=None: ActionResult(
                             False, msg, details=("cannot unlink 'x'",),
                             data={"cleanup_failed": True, "cleanup_error": "cannot unlink 'x'",
                                   "message": msg}))

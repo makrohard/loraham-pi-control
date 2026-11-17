@@ -18,10 +18,13 @@ START = ["systemctl", "--user", "start", "lhpc-web.service"]
 
 
 def _tree(root):
-    """Every file under state/ and config/ with its bytes (lock files are opened, never written)."""
+    """Every file under state/ and config/ with its bytes, except state/locks/: the locks the apply holds before
+    the stop (task admission with its owner record, the update lock) are bookkeeping, not a change."""
+    locks = root / "state" / "locks"
     return {str(p.relative_to(root)): p.read_bytes()
             for d in ("state", "config") if (root / d).is_dir()
-            for p in sorted((root / d).rglob("*")) if p.is_file()}
+            for p in sorted((root / d).rglob("*"))
+            if p.is_file() and locks not in p.parents}
 
 
 @pytest.fixture()
@@ -155,3 +158,15 @@ def test_another_holder_of_the_console_lock_is_busy_and_the_console_is_started_a
     assert "did not release the controller-runtime lock — no changes made." in out, out
     assert _service_calls(calls) == [STOP, START], calls
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
+
+
+def test_a_resumed_venv_sync_stops_the_console_first(env, cli, monkeypatch, capsys):
+    """Up to date, but the venv is behind the checkout: the sync the apply resumes changes what the running
+    console runs, so the console is stopped before the sync and started after it."""
+    main, calls = cli
+    monkeypatch.setattr(selfupdate, "venv_unsynced", lambda root: "installed 0.0.1, checkout 0.0.2")
+    monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: (
+        calls.append((["venv-sync"], None, None)), CommandResult(0, "", ""))[1])
+    assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
+    assert [c[0] for c in calls if c[0][0] == "venv-sync" or c[0][2] in ("stop", "start")] == [
+        STOP, ["venv-sync"], START], calls

@@ -152,7 +152,7 @@ def test_an_interrupted_sync_to_refresh_gap_keeps_the_record(op_svc, monkeypatch
     record is cleared only with the units refreshed."""
     import json
     from lhpc.core.services import ActionResult, ControllerService
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None:
                         ActionResult(True, "Already up to date.", data={"already": True}))
     svc, _fake = (op_svc(dict(WEB_INACTIVE), invocation=False) if path == "apply"
                   else op_svc(units=True, invocation=True))
