@@ -37,6 +37,11 @@ ERROR = "error"                      # the probe RAN and failed (ls-remote / rev
 LHPC_FIRST = "lhpc_first"            # at this LHPC's pin, and the fetched next LHPC pins another commit
 
 _STORED = frozenset({UNKNOWN, UP_TO_DATE, BEHIND, ERROR, LHPC_FIRST})
+# `source-check --json` always names these stack lists; an older self-updating process reads exactly these (any other
+# key is a later release's) and gives the lines in this order, plan rule R4's.
+SWEEP_LINES = (("Stacks with an update: {}.", "stacks_behind"),
+               ("Stacks that need LHPC updated first: {} (lhpc self-update --apply).", "stacks_lhpc_first"),
+               ("Could not check every source of: {}.", "stacks_unchecked"))
 
 # The lane verdict as the operator reads it (CLI detail, stack page, `status --versions`), one wording.
 _LABELS = {UP_TO_DATE: "current", BEHIND: "update available", LHPC_FIRST: "update LHPC first",

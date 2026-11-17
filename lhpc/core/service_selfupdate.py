@@ -9,7 +9,7 @@ from os.path import exists as _op_exists
 from os.path import join as _op_join
 from typing import ClassVar
 
-from . import proxy_rerender
+from . import proxy_rerender, stackupdates
 from .paths import ENV_RUNTIME_ROOT, PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
 from .snapshot_memo import invalidates_snapshot
@@ -559,17 +559,19 @@ class SelfUpdateOpsMixin:
         return res
 
     def _stacks_with_an_update(self, python: str) -> str:
-        """ONE run of the NEW code's `lhpc source-check --json` (this process: the old code) names the stacks behind
-        on their lane and those it could not check, or that it cannot finish. Never stops, starts or updates a stack."""
+        """ONE run of the NEW code's `lhpc source-check --json` (this process: the old code) names the stacks of each
+        `SWEEP_LINES` list, or that it cannot finish (timed out, exit not 0/1, a list missing). Never touches a stack."""
         r = self._system.runner.run([python, "-m", "lhpc", "source-check", "--json"], 60.0,
                                     env={ENV_RUNTIME_ROOT: str(self._paths.runtime_root)})
         try:
-            data = json.loads(r.stdout or "")["data"]
-            return " ".join(f"{h}: {', '.join(data[k])}." for h, k in (("Stacks with an update", "stacks_behind"),
-                            ("Could not check every source of", "stacks_unchecked")) if data.get(k))
-        except (ValueError, KeyError, TypeError, AttributeError):
-            why = "timed out after 60 s" if r.timed_out else f"failed (exit {r.returncode})"
-            return f"Could not list the stacks with an update: `lhpc source-check` {why}."
+            data = json.loads(r.stdout or "")["data"] if not r.timed_out and r.returncode in (0, 1) else None
+        except (ValueError, KeyError, TypeError):
+            data = None
+        if isinstance(data, dict) and all(isinstance(data.get(k), list) and all(isinstance(s, str) for s in data[k])
+                                          for _line, k in stackupdates.SWEEP_LINES):
+            return " ".join(line.format(", ".join(data[k])) for line, k in stackupdates.SWEEP_LINES if data[k])
+        why = "timed out after 60 s" if r.timed_out else f"failed (exit {r.returncode})"
+        return f"Could not list the stacks with an update: `lhpc source-check` {why}."
 
     @invalidates_snapshot
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:

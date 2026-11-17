@@ -186,8 +186,8 @@ class MaintenanceOpsMixin:
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         if not comps:
-            return ActionResult(True, f"Nothing to check for '{target or 'all'}' — "
-                                      "no component declares a source remote.")
+            return ActionResult(True, f"Nothing to check for '{target or 'all'}' — no component declares a source "
+                                "remote.", data={k: [] for _line, k in stackupdates.SWEEP_LINES})
         # An OPTIONAL component that was never installed has nothing to compare, and that is not a fault of the
         # stack: it must not make `lhpc source-check meshcore` report ERR. It is still probed, listed and recorded —
         # only excused from the pass/fail verdict. A component asked for BY NAME is never excused (the operator wants
@@ -216,17 +216,14 @@ class MaintenanceOpsMixin:
         stackupdates.record(self._paths, results)
         n = len(comps)
         behind, uptodate = counts[stackupdates.BEHIND], counts[stackupdates.UP_TO_DATE]
-        # What is left once the excused optionals are set aside. The SUMMARY uses these too, not the raw counts — an
-        # "ok" result whose text still says something could not be checked would just move the confusion.
+        # Left once the excused optionals are set aside; the SUMMARY uses these too, so an "ok" text never says unchecked.
         errs = counts[stackupdates.ERROR] - excused_counts[stackupdates.ERROR]
         unknown = counts[stackupdates.UNKNOWN] - excused_counts[stackupdates.UNKNOWN]
         excused_unresolved = sum(excused_counts.values())
         unresolved = errs + unknown
         who = target or "all"
-        # UNKNOWN is "nothing to compare" (no remote / not installed / invalid remote) — it is NOT
-        # a passing check, and must never be summarized as, or flashed green like, "up to date".
-        # `ok` therefore means "every component yielded a real comparison": a single unknown or
-        # error downgrades the flash to a warning, even when nothing is behind.
+        # UNKNOWN (no remote / not installed / invalid remote) is never "up to date": `ok` means every component
+        # yielded a real comparison, so a single unknown or error downgrades the flash to a warning.
         # Plan rule R4's order: update available > update LHPC first > could not check > current.
         first = counts[stackupdates.LHPC_FIRST]
         rest = ((f" {first} need LHPC updated first." if behind and first else "") + (
@@ -252,7 +249,8 @@ class MaintenanceOpsMixin:
                 source_fs.source_present(self._paths, self._paths.resolve_source(c.source.path))))
         return ActionResult(unresolved == 0, summary, details=details, data={
             "counts": counts, "checked": n, "excused": sorted(excused), "stacks_unchecked": stacks(unchecked),
-            "stacks_behind": stacks(lambda status, _c: status == stackupdates.BEHIND)})
+            "stacks_behind": stacks(lambda status, _c: status == stackupdates.BEHIND),
+            "stacks_lhpc_first": stacks(lambda status, _c: status == stackupdates.LHPC_FIRST)})
 
     def source_check_view(self) -> dict:
         """Cached, network-free freshness view for GET pages: `{checked_at, components}`."""
