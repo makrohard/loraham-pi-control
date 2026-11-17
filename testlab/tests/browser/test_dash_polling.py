@@ -16,8 +16,8 @@ DAEMON = re.compile(r".*/api/daemon/(r[0-9]+)$")
 LIVE = {"reachable": True, "ready": True, "radio_state": "READY", "channel": {}, "status": {}, "stats": {}, "feed": []}
 
 
-def _open(page, answer, hidden=False):
-    """Open the dashboard with `answer(route, band)` serving the daemon API; return the per-radio
+def _open(page, answer, hidden=False, path="/"):
+    """Open the dashboard (or `path`) with `answer(route, band)` serving the daemon API; return the per-radio
     request counts and a `settled()` that returns once every request issued before it has
     reached the handler. With `hidden`, the page is hidden from its first script on (a tab
     opened in the background)."""
@@ -39,7 +39,7 @@ def _open(page, answer, hidden=False):
             "Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});"
             "Object.defineProperty(document, 'visibilityState', {configurable: true,"
             " get: () => 'hidden'});")
-    page.goto(page.lab_base + "/", wait_until="load")
+    page.goto(page.lab_base + path, wait_until="load")
 
     def settled():
         assert page.evaluate("() => fetch('/__settled__').then(r => r.status)") == 204
@@ -180,7 +180,9 @@ def _answer_live(page):
 
 def _wait_list_rendered(page):
     page.wait_for_function(
-        "rids => rids.every(r => document.getElementById('hw-badge-' + r).textContent === 'daemon usable (READY)')",
+        # a lazily loaded body has no badge yet: a throwing predicate is not retried, so a missing badge reads ""
+        "rids => rids.every(r => (document.getElementById('hw-badge-' + r) || {}).textContent"
+        " === 'daemon usable (READY)')",
         arg=list(RIDS), timeout=15000)
 
 
@@ -198,3 +200,36 @@ def test_a_daemon_body_loaded_on_first_expand_polls_its_list_badges(page):
     assert page.locator("[id^='hw-badge-']").count() == 0          # the daemon's body is not loaded yet
     page.click("#stackrow-daemon > summary")
     _wait_list_rendered(page)
+
+
+def test_an_unchanged_answer_does_not_rewrite_a_list_badge(page):
+    """aria-live="polite": a badge's text is rewritten only when it changes, so a screen reader announces changes
+    only. Its class is set on every answer, which marks each answer as rendered."""
+    seen, settled = _open(page, _live, path="/hardware")
+    _wait_list_rendered(page)
+    page.evaluate(
+        "rids => { window.__writes = {text: 0, cls: 0}; rids.forEach(r => new MutationObserver(ms => ms.forEach("
+        "m => window.__writes[m.type === 'attributes' ? 'cls' : 'text']++)).observe("
+        "document.getElementById('hw-badge-' + r), {childList: true, characterData: true, subtree: true,"
+        " attributes: true, attributeFilter: ['class']})); }", list(RIDS))
+    page.clock.run_for(3500)
+    settled()
+    page.clock.run_for(3000)
+    settled()
+    assert seen == dict.fromkeys(RIDS, 3), seen                       # two more polls, the same answer
+    page.wait_for_function("n => window.__writes.cls >= n", arg=2 * len(RIDS), timeout=15000)
+    assert page.evaluate("() => window.__writes.text") == 0
+
+
+def test_a_radio_scanned_twice_is_still_polled_once(page):
+    """One poller per radio, however many badges show it: a second scan for list badges (a later Stacks body) adds
+    no request, so a radio still never has a second request out."""
+    seen, settled = _open(page, _live, path="/hardware")
+    _wait_list_rendered(page)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('lhpc:bodyloaded',"
+                  " {detail: {root: document.getElementById('hw-badge-r1').closest('table')}}))")
+    settled()
+    assert seen == dict.fromkeys(RIDS, 1), seen
+    page.clock.run_for(3500)
+    settled()
+    assert seen == dict.fromkeys(RIDS, 2), seen
