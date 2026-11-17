@@ -941,7 +941,7 @@ def _log_scan(s, end, t0, lbl):
     # that file afterwards and the deadline and the bound main still hold. Both descriptors are closed on every
     # exit, each on its own. Boundary: the files are LHPC's own, under its runtime and source roots on local block
     # storage; FUSE and network filesystems there are out of scope, and so are a rewrite within one mtime tick, an
-    # in-place rewrite that also grows the file during the read, and a log truncated and regrown on every pass.
+    # in-place rewrite that also grows the file during or right after the read, and a log truncated and regrown on every pass.
     path, pat = s["path"], s["pattern"].encode()
     tries, seen, nxt, warned, big, closewarn = 0, "", t0 + 30, False, False, False
     while True:

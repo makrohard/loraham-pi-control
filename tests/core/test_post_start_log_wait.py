@@ -475,6 +475,8 @@ def _do(a):
         _kill()
     elif a[0] == "remove":
         os.unlink(a[1])
+    elif a[0] == "rename":                        # another file takes the path's name
+        os.replace(a[2], a[1])
     elif a[0] == "arm":                           # the actions to run after the next stat or pin of the link
         _armed[:] = a[1]
 def _act(when):
@@ -573,7 +575,7 @@ def _close(fd):
     except OSError:
         pass
     _rclose(fd)
-    if cfg.get("close_eio") and not _eio[0] and target in _logs:
+    if cfg.get("close_eio") and (cfg["close_eio"] == "every" or not _eio[0]) and target in _logs:
         _eio[0] = True
         raise OSError(5, "Input/output error")            # released, but the close reports an error
 def _leaks():
@@ -1013,7 +1015,7 @@ def test_a_rotated_log_leaves_no_old_size_in_the_record(tmp_path):
 
 def _guest(behavior):
     """A fake console: each connection's first line goes to `behavior(line)`, whose return is the reply (then the
-    connection is closed). Returns (port, the lines received, stop)."""
+    connection is closed); a list is sent piece by piece, 0.5 s apart. Returns (port, the lines received, stop)."""
     import socket
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -1029,7 +1031,11 @@ def _guest(behavior):
             with conn:
                 line = conn.recv(256).decode()
                 got.append(line)
-                conn.sendall(behavior(line).encode())
+                reply = behavior(line)
+                for k, piece in enumerate(reply if isinstance(reply, list) else [reply]):
+                    if k:
+                        time.sleep(0.5)        # wallclock: a pause inside one answer, under the reader's 2 s silence limit
+                    conn.sendall(piece.encode())
     threading.Thread(target=serve, daemon=True).start()
     return srv.getsockname()[1], got, srv.close
 
@@ -1095,3 +1101,50 @@ def test_an_ack_counts_only_for_the_whole_call(tmp_path, reply, outcome):
     rc, steps, err, _t = _hooked(tmp_path, [_send(port, stop_on="Call:DL1AB-1")])
     stop()
     assert steps[0]["outcome"] == outcome, (steps, err)
+
+
+@pytest.mark.wallclock("a real pause inside one answer splits it across the reader's buffers")
+def test_an_ack_split_after_our_call_waits_for_the_rest(tmp_path):
+    """H4 (partial buffer): "Call:DL1AB-1" arrives alone and "2 Short:X set" follows: a buffer that ends at the call
+    does not count yet, and the whole answer names another call."""
+    port, got, stop = _guest(lambda ln: ["Call:DL1AB-1", "2 Short:X set\n"])
+    rc, steps, err, _t = _hooked(tmp_path, [_send(port, stop_on="Call:DL1AB-1")])
+    stop()
+    assert steps[0]["outcome"] == "sent-unacked", (steps, err)
+
+
+@pytest.mark.parametrize("info, outcome", [
+    ("Call:DL1AB-12 Short:X\n", "acked"),                # another call that starts with ours: not set, so sent
+    ("Call:DL1AB-1 Short:X\n", "probe-matched"),
+])
+def test_a_probe_matches_only_the_whole_call(tmp_path, info, outcome):
+    """N-c: probe_stop_on is matched as a whole token too; "Call:DL1AB-1" is not read in "Call:DL1AB-12"."""
+    port, got, stop = _guest(lambda ln: info if ln.startswith("--info") else "Call:DL1AB-1 Short:X set\n")
+    rc, steps, err, _t = _hooked(tmp_path, [_send(port, probe="--info\n", probe_stop_on="Call:DL1AB-1",
+                                                  stop_on="Call:DL1AB-1")])
+    stop()
+    assert steps[0]["outcome"] == outcome, (steps, got, err)
+
+
+def test_a_log_renamed_over_by_a_larger_file_after_the_read_is_read_again(tmp_path):
+    """M1: the read holds the line; before the path is looked at again, another, larger file is renamed onto it. The
+    line read is not that file's (another inode), so it is read again, and it has no line."""
+    log, other = tmp_path / "uart.log", tmp_path / "other.log"
+    log.write_text(LINE)
+    other.write_text("x" * (len(LINE) + 1000))
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], link=str(log),
+                                 before_stat=[["rename", str(log), str(other)]])
+    assert steps[0]["outcome"] == "timeout", (steps, err)
+
+
+def test_a_close_error_on_every_pass_is_said_once_per_step(tmp_path):
+    """N-a: every close of the log's descriptors reports EIO, pass after pass: stderr says it once for the step, both
+    descriptors are released every time, and the wait still ends with its outcome."""
+    log = tmp_path / "uart.log"
+    log.write_text("y" * 100)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 7, optional=True)], virtual=True, logs=[str(log)],
+                                    close_eio="every")
+    opens = [ln for ln in trace if ln.startswith("open ")]  # rule-10: a trace line's first word is its kind
+    assert steps[0]["outcome"] == "timeout" and len(opens) >= 3, (steps, trace)
+    assert len([ln for ln in err.splitlines() if "failed: Input/output error" in ln]) == 1, err
+    assert not [ln for ln in trace if ln.startswith("leak ")], trace  # rule-10: a trace line's first word is its kind

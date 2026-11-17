@@ -39,7 +39,7 @@ The layout is [the runtime root](architecture.md#the-runtime-root). The unit set
 reach it.
 The runtime root and the stacks' source roots are on local block storage: FUSE and network filesystems there
 are out of scope (the post-start waits read their logs there with no timeout of their own), and so is a log
-rewritten in place within one mtime tick, rewritten and grown during a read, or truncated and regrown on every pass.
+rewritten in place within one mtime tick, rewritten and grown during or right after a read, or truncated and regrown on every pass.
 
 `lhpc status` shows a `[controller]` row with its cached version / update / identity state; the
 identity verdicts: [controller identity](architecture.md#controller-identity--self-update).
