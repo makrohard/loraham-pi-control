@@ -15,7 +15,7 @@ import time
 import pytest
 
 from lhpc.core import commands
-from lhpc.core.lifecycle import REQUIRED_POST_TIMEOUT_S
+from lhpc.core.lifecycle import LOG_WAIT_MAX_S, REQUIRED_POST_TIMEOUT_S
 from lhpc.core.manifest import load_manifest
 
 LINE = "[CON ]...Console started on port 2323\n"
@@ -277,7 +277,7 @@ def _meshcom_steps(rid="r1"):
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
     inst = commands.Instance(rid, band="433")
     return commands.render_post_launcher(comp.post_steps, comp, {"mc_callsign": "DL1ABC"}, _Op(), "/rt", "/src/mc", "",
-                                         inst=inst)
+                                         inst=inst, daemon={"power": "14"})
 
 
 def _rendered(script):
@@ -313,11 +313,13 @@ def test_meshcoms_start_waits_on_its_own_nodes_verified_marker_as_a_required_ste
 
 
 def test_the_waits_nest_inside_the_required_post_starts_cap():
+    # every console window counts (RADIO-POWER item 4, plan audit B2): the boot waits, then each tcp_send's whole
+    # window plus one attempt, when the console never answers (callsign 904 s, then the TX power's 904 s)
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
-    send = next(s for s in _rendered(_meshcom_steps()) if s["kind"] == "tcp_send")
-    assert sum(send["intervals"]) == 904.0                     # the last slot: the documented worst Zero boot + 60 s
-    assert send["window_s"] == 934.0                           # the schedule's end: that slot plus its own 30 s
-    assert _wait_budget(comp.post_steps) + send["window_s"] + 64 <= REQUIRED_POST_TIMEOUT_S
+    sends = [s for s in _rendered(_meshcom_steps()) if s["kind"] == "tcp_send"]
+    assert [sum(s["intervals"]) for s in sends] == [904.0, 904.0]    # the last slot: the documented worst Zero boot + 60 s
+    assert [s["window_s"] for s in sends] == [934.0, 934.0]          # the schedule's end: that slot plus its own 30 s
+    assert _wait_budget(comp.post_steps) + sum(s["window_s"] + 64 for s in sends) <= REQUIRED_POST_TIMEOUT_S
 
 
 def test_only_waits_declaring_one_clock_count_once():
@@ -356,7 +358,7 @@ def _meshcom_runner(tmp_path, marker_after):
     in uart-latest.log; the harness's marker is written `marker_after` s after the start (0: already there, a normal
     restart). Returns (seconds from the start to each console connection, the step outcomes by label)."""
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
-    srv, seen = _console("...Call: <DL1ABC>\r\n")
+    srv, seen = _console("...Call: <DL1ABC>\r\n...LoRa RF-Power: <14 dBm>\r\n")    # the call and the power: already set
     steps = [{**s, "port": srv.getsockname()[1]} if s.get("kind") == "tcp_send" else dict(s) for s in comp.post_steps]
     src, root = tmp_path / "src", tmp_path / "rt"
     (src / ".run").mkdir(parents=True)
@@ -366,7 +368,8 @@ def _meshcom_runner(tmp_path, marker_after):
     (root / "state" / "post").mkdir(parents=True)
     rp = root / "state" / "post" / "r.json"
     script = commands.render_post_launcher(steps, comp, {"mc_callsign": "DL1ABC"}, _Op(), str(root), str(src), "",
-                                           result_path=str(rp), inst=commands.Instance("r1", band="433"))
+                                           result_path=str(rp), inst=commands.Instance("r1", band="433"),
+                                           daemon={"power": "14"})
     (tmp_path / "launcher.py").write_text(script)
 
     def write_marker():
@@ -406,7 +409,7 @@ def test_a_normal_restart_with_its_marker_kept_probes_the_callsign_at_once(tmp_p
 
 @pytest.mark.parametrize("step, why", [
     ({"kind": "log_wait", "path": "x", "pattern": "", "timeout": 10}, "pattern"),
-    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": REQUIRED_POST_TIMEOUT_S + 1}, "timeout"),
+    ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": LOG_WAIT_MAX_S + 1}, "timeout"),
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": 0}, "timeout"),
     ({"kind": "log_wait", "pattern": "p", "timeout": 10}, "path"),                     # no path
     ({"kind": "log_wait", "path": "x", "pattern": "p", "timeout": "1300"}, "timeout"),  # a string, not a number

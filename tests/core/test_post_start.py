@@ -553,7 +553,7 @@ def _meshcom_launcher(mc_callsign, saved=None):
     if mc_callsign is not None:
         cfg["mc_callsign"] = mc_callsign
     return commands.render_post_launcher(qemu.post_steps, qemu, cfg, svc.config().operator,
-                                         "/rt", "/src", "433"), svc
+                                         "/rt", "/src", "433", daemon={"power": "14"}), svc
 
 
 @pytest.mark.parametrize("name", ["__ROOT__", "__GATED__", "__META__", "__RESULT_REL__"])
@@ -1382,7 +1382,7 @@ def test_run_post_start_announces_detached_runner_log(tmp_path):
     class _L:
         def has_required_post_start(self, comp):
             return False
-        def spawn_post_start(self, stack, comp, cfg, band="", inst=None):
+        def spawn_post_start(self, stack, comp, cfg, band="", inst=None, daemon=None):
             return PostStartSchedule(True, "scheduled", log_path="/rt/logs/post-c-1-2.log")
     details = []
     ok, summary = svc._run_post_start(_L(), STK, _opt_comp(), {}, "",
@@ -1482,7 +1482,7 @@ def test_run_post_start_strict_flag_only_changes_the_optional_failure(tmp_path, 
     class _L:
         def has_required_post_start(self, comp):
             return False
-        def spawn_post_start(self, stack, comp, cfg, band="", inst=None):
+        def spawn_post_start(self, stack, comp, cfg, band="", inst=None, daemon=None):
             return PostStartSchedule(False, "launcher write failed: disk full")
     lax, s1 = svc._run_post_start(_L(), STK, _opt_comp(), {}, "")
     strict, s2 = svc._run_post_start(_L(), STK, _opt_comp(), {}, "", strict=True)

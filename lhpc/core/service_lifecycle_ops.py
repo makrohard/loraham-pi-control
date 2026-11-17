@@ -1647,15 +1647,15 @@ class LifecycleOpsMixin:
         scheduling failure stays visible-but-non-gating there."""
         if not comp.post_steps:
             return None, ""
+        daemon = {"power": radio_start.post_power(self, stack.id, inst.rid)} if inst is not None and inst.rid else {}
         if life.has_required_post_start(comp):
             # The retry window can legitimately run for minutes (MeshCom waits for a guest
             # console). Everything it consumes — comp_cfg, the rendered launcher, the GPS plan —
             # is materialized under the guard BEFORE the run, so the guard is released across the
             # EXECUTION: a config save during a long post-start is accepted and reported through
             # restart-required, exactly as a save during any other part of a launch already is.
-            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band, inst=inst,
-                                              on_log_open=announce, require_all=require_all,
-                                              while_running=self._config_unstable())
+            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band, inst=inst, daemon=daemon,
+                                              on_log_open=announce, require_all=require_all, while_running=self._config_unstable())
             if jr.ok:
                 warn = [ln for ln in self._required_post_outcomes(comp.id, inst, life) if " NOT applied " in ln]
                 return True, f"{'; '.join(warn)} (log {jr.log_path})" if warn else "required post-start completed"
@@ -1663,7 +1663,7 @@ class LifecycleOpsMixin:
         # OPTIONAL: scheduling never gates the start, but its typed result makes any
         # scheduling failure VISIBLE in the details (it is no longer swallowed by
         # `spawn_post_start`, so no blanket catch is needed here).
-        sched = life.spawn_post_start(stack, comp, comp_cfg, band=band, inst=inst)
+        sched = life.spawn_post_start(stack, comp, comp_cfg, band=band, inst=inst, daemon=daemon)
         if sched.ok:
             if announce is not None and sched.log_path:
                 announce(f"post-{comp.id}", sched.log_path)

@@ -152,12 +152,17 @@ class TxTestPlan:
 # ONE conservative outer bound for a synchronous required post-start run. The inner executor is
 # already bounded — finite retry counts, bounded socket operations, bounded tcp_wait, a 120 s cap
 # per exec — so this only has to be comfortably larger than the longest supported declared
-# sequence: MeshCom's firmware-boot wait (1300 s) plus its callsign schedule's end (934 s) plus one attempt (~64 s) = 2298 s
-# (B2a). Its "provisioning verified" wait shares the boot wait's clock (`shares_clock`): on a provisioning start both
+# sequence: MeshCom's firmware-boot wait (1300 s) plus its callsign schedule's end (934 s) plus one attempt (~64 s),
+# then its TX power schedule's end (934 s) plus one attempt = 3296 s, when a console never answers (B2a; RADIO-POWER
+# item 4: the power step keeps the full window, as the callsign's flash rewrite or a guest reboot can fall into it).
+# Its "provisioning verified" wait shares the boot wait's clock (`shares_clock`): on a provisioning start both
 # end by the harness's one deadline (run.sh:243, :274), on a normal restart the marker is there at once, so the two
 # count once (MESHCOM-VERIFY). A per-manifest calculator was tried and removed: it was a second, disagreeing model of
 # the executor's timing.
-REQUIRED_POST_TIMEOUT_S = 2400.0
+REQUIRED_POST_TIMEOUT_S = 3600.0
+# The longest one log_wait may wait (MeshCom's firmware boot, 1300 s); kept apart from the outer bound above, so a
+# longer sequence widens no single wait.
+LOG_WAIT_MAX_S = 2400.0
 
 
 @dataclass
@@ -784,7 +789,8 @@ class Lifecycle:
         return out
 
     def spawn_post_start(self, stack: Stack, comp: Component,
-                         params: dict | None = None, band: str = "", inst=None) -> PostStartSchedule:
+                         params: dict | None = None, band: str = "", inst=None,
+                         daemon: dict | None = None) -> PostStartSchedule:
         """Schedule typed OPTIONAL post-start steps detached, with NO shell: a self-
         contained Python launcher (delay/exec/tcp_wait/tcp_send) is generated and spawned
         via `python3 <launcher>`. NON-GATING, but every scheduling-stage failure (render,
@@ -811,7 +817,7 @@ class Lifecycle:
         try:
             script = commands.render_post_launcher(comp.post_steps, comp, params, op, runtime, src, band,
                                                    binding=binding, gated=True, inst=inst or commands.TEMPLATE,
-                                                   result_path=str(result),
+                                                   result_path=str(result), daemon=daemon,
                                                    gps=self._gps_post_values(getattr(stack, 'id', ''), inst))
         except (commands.CommandError, validators.ValidationError) as exc:
             return PostStartSchedule(False, f"launcher render failed: {exc}")
@@ -931,7 +937,8 @@ class Lifecycle:
     def run_required_post_start(self, stack: Stack, comp: Component,
                                 params: dict | None = None, band: str = "",
                                 timeout: float = REQUIRED_POST_TIMEOUT_S, on_log_open=None,
-                                require_all: bool = False, while_running=None, inst=None) -> JobResult:
+                                require_all: bool = False, while_running=None, inst=None,
+                                daemon: dict | None = None) -> JobResult:
         """Run a component's REQUIRED post-start steps SYNCHRONOUSLY and bounded (no
         shell): the generated Python launcher exits non-zero if any required step
         fails, so its return code is a typed pass/fail the caller gates VERIFIED on.
@@ -957,7 +964,7 @@ class Lifecycle:
         try:
             script = commands.render_post_launcher(
                 comp.post_steps, comp, params, op, runtime, src, band, binding=binding, inst=inst or commands.TEMPLATE,
-                result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', ''), inst),
+                result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', ''), inst), daemon=daemon,
                 meta={"comp": comp.id, "band": band or "", "role": "required"},
                 require_all=require_all)
         except (commands.CommandError, validators.ValidationError) as exc:

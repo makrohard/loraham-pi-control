@@ -493,13 +493,14 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                          band: str = "", binding: dict | None = None, gated: bool = False,
                          result_path: str = "", meta: dict | None = None,
                          gps: dict | None = None, require_all: bool = False,
-                         inst: Instance = TEMPLATE) -> str:
+                         inst: Instance = TEMPLATE, daemon: dict | None = None) -> str:
     """Serialize typed post-start steps into a self-contained Python launcher that runs them
     detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
     time + session/group) ties the runner to one exact main launch — it re-checks that main before
     every side-effectful step and stops if it ceased/was replaced. `gated=True` (DETACHED optional
     runners) makes it block on an arm byte from stdin before ANY step — the controller arms it only
-    after its ownership record is durable; the synchronous REQUIRED path leaves it False."""
+    after its ownership record is durable; the synchronous REQUIRED path leaves it False. `daemon` holds the values
+    the instance applies to its daemon ({"power": POWER}) for a tcp_send line's `{daemon:power}`."""
     if binding is not None:
         lid = binding.get("main_launch_id") if isinstance(binding, dict) else None
         ints_ok = isinstance(binding, dict) and all(
@@ -586,7 +587,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 if step.get("label"):
                     d["label"] = _post_label(step["label"])
             else:
-                d["data"] = _post_data(step.get("data", ""), comp, params, op, runtime, source, band, inst)
+                d["data"] = _post_data(step.get("data", ""), comp, params, op, runtime, source, band, inst, daemon)
                 # A slow guest (e.g. QEMU firmware) may open its console port long before it is
                 # ready to process a command. `repeat`/`interval` re-send the line until it lands
                 # (idempotent settings like --setcall); default = send once. `schedule` expresses a
@@ -627,7 +628,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 for fld in ("stop_on", "probe", "probe_stop_on"):
                     if step.get(fld):
                         d[fld] = _post_data(str(step[fld]), comp, params, op, runtime,
-                                            source, band, inst)
+                                            source, band, inst, daemon)
                 pv, pe = step.get("probe_value"), step.get("probe_expect")
                 if (pv is None) != (pe is None):
                     raise CommandError("tcp_send: probe_value and probe_expect come as a pair")
@@ -645,19 +646,19 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                         raise CommandError("tcp_send: probe_value needs exactly one capture group")
                     d["probe_value"] = str(pv)          # a pattern: never placeholder-expanded
                     d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
-                                                   source, band, inst)
+                                                   source, band, inst, daemon)
             resolved.append(d)
         elif kind == "log_wait":
             # B2a: wait for a line in a log file (MeshCom: the firmware's own console announcement); the path is
             # opened fresh on every poll, so a guest reboot's new log (a moved symlink) is read from its start.
-            from .lifecycle import REQUIRED_POST_TIMEOUT_S
+            from .lifecycle import LOG_WAIT_MAX_S
             path, pattern, timeout = step.get("path"), step.get("pattern"), step.get("timeout", 0)
             if not isinstance(path, str) or not path:
                 raise CommandError("log_wait: path must be a non-empty string")
             if not isinstance(pattern, str) or not pattern:
                 raise CommandError("log_wait: pattern must be a non-empty string")
-            if type(timeout) not in (int, float) or not 0 < timeout <= REQUIRED_POST_TIMEOUT_S:
-                raise CommandError(f"log_wait: timeout must be > 0 and <= {REQUIRED_POST_TIMEOUT_S:.0f} s")
+            if type(timeout) not in (int, float) or not 0 < timeout <= LOG_WAIT_MAX_S:
+                raise CommandError(f"log_wait: timeout must be > 0 and <= {LOG_WAIT_MAX_S:.0f} s")
             clock = step.get("shares_clock")
             if clock is not None and (not isinstance(clock, str) or not clock):
                 raise CommandError("log_wait: shares_clock must be a non-empty string")
@@ -709,11 +710,23 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                   lambda m: fills[m.group(1)], _POST_RUNNER)
 
 
-def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = TEMPLATE) -> str:
+# The values a tcp_send line may take from the instance's daemon apply, each with the shape its value must have.
+_DAEMON_VALUES = {"power": r"-?[0-9]{1,2}"}
+
+
+def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = TEMPLATE,
+               daemon: dict | None = None) -> str:
     """Expand a tcp_send data line: literal text with whole {param:…}/{operator:…}
-    placeholders replaced by their single validated value."""
+    placeholders replaced by their single validated value, and `{daemon:power}` by the POWER the instance applies to
+    its daemon (MeshCom's `--txpower`). No such value refuses the render: the line is never sent without it."""
     import re
     def repl(m):
+        kind, _, name = m.group(0)[1:-1].partition(":")
+        if kind == "daemon":
+            value = str((daemon or {}).get(name, ""))
+            if name not in _DAEMON_VALUES or not re.fullmatch(_DAEMON_VALUES[name], value):
+                raise CommandError(f"post-step: no {m.group(0)} value for this instance (got {value!r})")
+            return value
         return " ".join(expand_argv([m.group(0)], comp, params, op, runtime, source, band, inst=inst))
     return re.sub(r"\{[a-z]+:[a-z_]+\}", repl, template)
 
