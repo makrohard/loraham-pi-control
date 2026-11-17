@@ -1,30 +1,27 @@
-"""The Latest-stable lane (PLAN-UPDATE-v6 U1, D8; MESHCOM-STABLE slice A): ONE target for install, update and the
-freshness check, decided by the upstream's HISTORY, never by comparing version numbers.
+"""The git lanes' targets and moves (PLAN-UPDATE-v6 U1; STABLE-LANE): Latest stable is "the latest release or tag on
+the current branch", decided by the upstream's HISTORY, never by comparing version numbers.
 
-The history: one bare, treeless mirror per remote (`history_dir`), fetched on every resolve (commits and tag objects of
-all branches and tags, deleted refs pruned). A commit is PUBLISHED when a current branch or tag of the mirror reaches it;
-an object the mirror still holds after a force-push is not. Every ancestry answer is true, false or unknown (`_is`).
+The history: one bare, treeless mirror per remote AND branch (`history_dir`), fetched on every read: that branch and
+every tag, deleted ones pruned. A commit is PUBLISHED when the mirror's branch or a tag reaches it; an object the
+mirror still holds after a force-push is not. Every ancestry answer is true, false or unknown (`_is`).
 
-Target (`resolve`): the release R (GitHub `releases/latest`, no drafts, no prereleases) whatever its name (MeshCom's
-`v4.40a.11.14`: slice B), and the plain version-shaped tags (the WHOLE name an optional `v` and one to three
-numbers) in R's future; no release: every plain tag. The target is the candidate commit all others lead to;
-candidates that are not one line of history refuse by name (finally only when the release read is verified; else
-"could not check"). Tags in R's past or beside R's line are not successors of the release and never the target. No
-candidate: the default-branch HEAD. VERIFIED when every applicable source was read (the mirror; on GitHub also the
-releases API, a 404 meaning "no release"); a failed read, or a release the tags do not show (yet), leaves it
-DEGRADED.
+Stable target (`resolve`), the branch being the component's manifest branch (one the remote lacks refuses for good):
+GitHub's latest release (no drafts, no pre-releases) on any branch, unless a plain version tag (an optional `v` and
+one to three numbers, nothing else) on the branch's first-parent line comes after it: then the plain tag nearest to
+the branch tip. No release: that tag; none: the branch tip. A release read that fails (also a 404 from a repository
+the API does not show) gives no target: "try again later".
 
-Move (`classify`): from the installed commit I to the target S only when I is published and an ancestor of S; S in I's
-past, or a plain tag S numbered below I's highest tag (U1's floor; GitHub's release in I's future is forward), is "not
-newer", and such a plain tag gives way to GitHub's release when that is in I's future (`assess`: I's own target);
-anything else (diverged, unpublished, unknown) refuses by name. An explicit switch onto the lane
-(the user's choice) may go back, but only to a target the history places (`update_gate`).
+Moves, every git lane (`contains`, `classify`, `update_gate`): a routine bare update moves only when the checkout does
+not contain the lane's target (the badge's own predicate); one that contains it is kept ("not newer"). A move the user
+names (`--source`) installs the target wherever it lies. Back, sideways or away from own commits: a warning in the
+plan, applied on Confirm / `--yes`. An answer that cannot be read is "could not check", never a warning.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import NamedTuple
 
 STABLE_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+){0,2})$")                        # major[.minor[.patch]]
@@ -34,8 +31,16 @@ _VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+){0,2})$|^v?(\d+\.\d+\.\d+)\.[0-9a-f]{
 _GITHUB_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)"
                                r"(?:\.git)?/?$")
 
-FINAL_HINT = "use --source pinned or dev"            # every refusal no retry changes ends with it (`is_final`)
+FINAL_HINT = "use --source pinned"                   # every refusal no retry changes ends with it (`is_final`)
 TRY_LATER = "releases could not be checked — try again later"
+COULD_NOT_CHECK = "could not check the installed commit's history — try again later"
+# The plan's warnings (X4): a move the user chose that goes back, sideways or away from commits not upstream.
+WARN_LINE = ("the {lane} target ({label}) is {how} the installed version: its saved config/state may not match; "
+             "if the stack fails: remove it, reinstall Known working")
+WARN_OWN = ("the installed commit {installed} is not upstream; installing deletes {n} commit(s) only this checkout "
+            "has, not recoverable by LHPC: {commits}; to keep them, push or copy them first")
+WARN_MOVED = ("the checkout moved since LHPC installed it (HEAD {installed}, installed {recorded}); installing "
+              "replaces it")
 
 
 def is_final(why: str) -> bool:
@@ -46,7 +51,7 @@ def is_final(why: str) -> bool:
 def version_of(name):
     """THE version parser: `v?N[.N[.N]]`, or three numbers and a hex commit suffix, as an integer tuple without
     trailing zeros (`v1.2` = `v1.2.0`, `v2.8.0.7239fe8` and `v2.8.0.1234567` -> (2, 8)); None for anything else
-    (`v2.8.0.9`, `v99.0-dev`). It decides which names are versions, and the label among names on ONE commit."""
+    (`v2.8.0.9`, `v99.0-dev`). Only the label among names on ONE commit uses it."""
     m = _VERSION_RE.match(name) if isinstance(name, str) else None
     if not m:
         return None
@@ -58,9 +63,8 @@ def version_of(name):
 
 class StableRef(NamedTuple):
     """The target commit and its label ("" + `why` when unresolved), whether every applicable source was read, the
-    winning tag (`name`, "" = the default-branch HEAD), the history mirror, whether `name` is GitHub's release, the
-    release's own target when the target is a plain tag in its future (`fallback`), and the remote's target a fallback
-    stands in for (`canon`)."""
+    winning name (`name`, "" = the branch tip), the history mirror, whether `name` is GitHub's release, and the
+    branch it was resolved on."""
     sha: str = ""
     label: str = ""
     verified: bool = False
@@ -68,13 +72,7 @@ class StableRef(NamedTuple):
     name: str = ""
     history: str = ""
     released: bool = False
-    fallback: object = None
-    canon: object = None
-
-    @property
-    def key(self):
-        """The target's version (None = the default-branch HEAD, or a release whose name is not a version)."""
-        return version_of(self.name) if self.name else None
+    branch: str = ""
 
     def frozen(self) -> tuple:
         """The plan's `((sha, label), "")`, or `((None, None), why)` when unresolved."""
@@ -90,9 +88,17 @@ def remote_tip(run, remote: str, ref: str, timeout: float) -> str:
     return next((r[0] for r in rows if r[1:] == [full] and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", r[0])), "")
 
 
-def history_dir(paths, remote: str):
-    """The remote's history mirror: `state/stable-history/<16 hex of sha256(remote)>.git` under the runtime root."""
-    return paths.under("state", "stable-history", hashlib.sha256(remote.encode()).hexdigest()[:16] + ".git")
+def history_dir(paths, remote: str, branch: str):
+    """The (remote, branch) history mirror: `state/stable-history-v2/<16 hex of sha256(remote NUL branch)>.git` under
+    the runtime root. A new name: an older per-remote mirror holds every branch, so a commit only a stale branch
+    reaches would still read as published there."""
+    return paths.under("state", "stable-history-v2", hashlib.sha256(f"{remote}\0{branch}".encode()).hexdigest()[:16]
+                       + ".git")
+
+
+def lane_ref(branch: str) -> str:
+    """The mirror's ref for the branch (the remote's HEAD when the source names none)."""
+    return f"refs/heads/{branch}" if branch else "refs/heads/_default"
 
 
 # Reads never fetch a missing object from the remote (a treeless mirror is a partial clone; git >= 2.44 honours this,
@@ -104,18 +110,26 @@ def _git(run, mirror, *argv, timeout=10.0):
     return run(["git", "-C", str(mirror), *argv], timeout=timeout, env=_NO_LAZY)
 
 
-def _fetch(run, mirror, remote: str) -> bool:
-    """Bring the mirror up to the remote: all branches and tags, deleted ones pruned, no trees or blobs; never shallow."""
+def fetch_history(run, remote: str, branch: str, paths) -> tuple:
+    """`(mirror, "")` with the mirror up to the remote's branch and tags (deleted ones pruned, no trees or blobs,
+    never shallow), or `(None, why)`: the branch is not on the remote (final), or the remote could not be read."""
+    mirror = history_dir(paths, remote, branch)
     if not (mirror / "HEAD").exists():
         mirror.parent.mkdir(parents=True, exist_ok=True)
         if run(["git", "init", "--quiet", "--bare", str(mirror)], timeout=10.0).returncode != 0:
-            return False
+            return None, f"could not list tags on {remote}"
     out = _git(run, mirror, "fetch", "--quiet", "--filter=tree:0", "--prune", "--prune-tags", "--no-write-fetch-head",
-               "--end-of-options", remote, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", timeout=120.0)
+               "--end-of-options", remote, f"+{f'refs/heads/{branch}' if branch else 'HEAD'}:{lane_ref(branch)}",
+               "+refs/tags/*:refs/tags/*", timeout=120.0)
     if out.returncode != 0:
-        return False
+        if branch and run(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"],
+                          timeout=15.0).returncode == 2:
+            return None, f"branch {branch!r} is not on {remote}: refused; {FINAL_HINT}"
+        return None, f"could not list tags on {remote}"
     shallow = _git(run, mirror, "rev-parse", "--is-shallow-repository")
-    return shallow.returncode == 0 and shallow.stdout.strip() == "false"
+    if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+        return None, f"could not list tags on {remote}"
+    return mirror, ""
 
 
 def _is(run, mirror, older: str, newer: str) -> bool | None:
@@ -134,9 +148,9 @@ def _published(run, mirror, commit: str) -> bool | None:
     return bool(out.stdout.strip()) if out.returncode == 0 else None
 
 
-def resolve(run, remote: str, paths) -> StableRef:
-    """The stable target on `remote` (validated here first), through `run(argv, timeout=)`: the history mirror's fetch,
-    on GitHub ONE releases API call (curl, 10 s, no retry), and `git ls-remote <remote> HEAD` when no tag qualifies."""
+def resolve(run, remote: str, branch: str, paths) -> StableRef:
+    """The stable target on `remote`'s `branch` (the remote validated here first), through `run(argv, timeout=)`: the
+    mirror's fetch and, on GitHub, the releases API (curl, 10 s, no retry; on a 404 the repository's own page)."""
     from . import validators
     try:
         remote = validators.remote_url(remote or "", field="remote")
@@ -144,9 +158,9 @@ def resolve(run, remote: str, paths) -> StableRef:
         return StableRef(why=f"invalid remote ({exc})")
     if not remote:
         return StableRef(why="no remote configured")
-    mirror = history_dir(paths, remote)
-    if not _fetch(run, mirror, remote):
-        return StableRef(why=f"could not list tags on {remote}")
+    mirror, why = fetch_history(run, remote, branch, paths)
+    if mirror is None:
+        return StableRef(why=why)
     refs = _git(run, mirror, "for-each-ref", "refs/tags", "--format=%(refname:strip=2) %(objectname) %(*objectname)")
     if refs.returncode != 0:
         return StableRef(why=f"could not list tags on {remote}")
@@ -157,160 +171,246 @@ def resolve(run, remote: str, paths) -> StableRef:
             commits[parts[0]] = parts[-1]                    # an annotated tag: its peeled commit
     release, verified = "", True
     if gh := _GITHUB_REMOTE_RE.match(remote):
-        api = run(["curl", "-sSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json",
-                   "-w", "\n%{http_code}", f"https://api.github.com/repos/{gh[1]}/{gh[2]}/releases/latest"],
-                  timeout=12.0)
-        body, _, code = (api.stdout or "").rpartition("\n")
-        if api.returncode == 0 and code == "200":
+        code, body = _api(run, f"https://api.github.com/repos/{gh[1]}/{gh[2]}/releases/latest")
+        if code == "200":
             try:
                 tag = json.loads(body).get("tag_name")
             except (ValueError, AttributeError):
                 tag = None
             release = tag if isinstance(tag, str) else ""        # any name: the upstream's statement (MeshCom)
             verified = release in commits                         # unparseable, or not in the tag list yet: no answer
-            release = release if verified else ""
-        elif not (api.returncode == 0 and code == "404"):         # 404: no release, nothing missed
-            verified = False
-    note = "" if verified else " — releases not checked"
-    plain = [n for n in commits if STABLE_TAG_RE.match(n)]
-    if release:                                               # the release's line: R and the plain tags in its future
-        line = [release]
-        for n in plain:
-            if n != release:
-                if (fut := _is(run, mirror, commits[release], commits[n])) is None:
-                    return StableRef(why=f"could not read the history of {remote}")
-                if fut:
-                    line.append(n)
-    else:
-        line = plain
-    if line:                                                  # the tips: the candidates no other one leads to
-        tips = _git(run, mirror, "merge-base", "--independent", *sorted({commits[n] for n in line}))
-        if tips.returncode != 0:
+        else:                                                     # 404 is "no release" only from a repo the API shows
+            verified = code == "404" and _api(run, f"https://api.github.com/repos/{gh[1]}/{gh[2]}")[0] == "200"
+    if not verified:
+        return StableRef(why=TRY_LATER, history=str(mirror), branch=branch)
+    walk = _git(run, mirror, "rev-list", "--first-parent", lane_ref(branch))
+    line = walk.stdout.split() if walk.returncode == 0 else []
+    if not line:
+        return StableRef(why=f"could not read the history of {remote}")
+    plain: dict = {}
+    for n, c in commits.items():
+        if STABLE_TAG_RE.match(n):
+            plain.setdefault(c, []).append(n)
+    tagged = next((c for c in line if c in plain), "")          # the plain tag nearest to the branch tip
+    sha, name = (tagged, max(plain[tagged], key=lambda n: (version_of(n), n))) if tagged else (line[0], "")
+    if release and sha != commits[release]:
+        after = bool(tagged) and _is(run, mirror, commits[release], tagged)
+        if after is None:
             return StableRef(why=f"could not read the history of {remote}")
-        tip = tips.stdout.split()
-        if len(tip) != 1:
-            if not verified:                                  # only verified facts refuse for good
-                return StableRef(why=f"{remote}: its version tags are not one line of history and its releases "
-                                     "could not be checked")
-            return StableRef(why=f"{remote}: its release and version tags are not one line of history; refused; "
-                                 f"{FINAL_HINT}")
-        sha = tip[0]
-        on_tip = [n for n in line if commits[n] == sha]
-        name = release if release in on_tip else max(on_tip, key=lambda n: (version_of(n), n))   # a label, one commit
-        rel = release and StableRef(commits[release], f"stable {release} @ {commits[release][:9]}", True, "", release,
-                                    str(mirror), True)
-        return StableRef(sha, f"stable {name} @ {sha[:9]}{note}", verified, "", name, str(mirror), name == release,
-                         None if name == release else rel or None)
-    sha = remote_tip(run, remote, "HEAD", 15.0)
-    if not sha:
-        return StableRef(why=f"could not resolve HEAD on {remote}")
-    return StableRef(sha, f"stable: default branch @ {sha[:9]} (no release tags){note}", verified, "", "", str(mirror))
+        if not after:                                         # no plain tag after the release on this branch
+            sha, name = commits[release], release
+    elif release:
+        name = release                                        # the release and a tag on one commit: its label
+    label = f"stable {name} @ {sha[:9]}" if name else f"stable: branch {branch or 'HEAD'} @ {sha[:9]} (no release tags)"
+    return StableRef(sha, label, True, "", name, str(mirror), bool(release) and name == release, branch)
+
+
+def _api(run, url: str) -> tuple[str, str]:
+    """One GitHub API GET: (HTTP code, "" when the call itself failed; body)."""
+    out = run(["curl", "-sSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-w", "\n%{http_code}",
+               url], timeout=12.0)
+    body, _, code = (out.stdout or "").rpartition("\n")
+    return (code if out.returncode == 0 else ""), body
 
 
 def resolver(run, paths):
-    """`get(remote) -> StableRef`: ONE target per remote for one operation (an update gate, a source-check sweep; the
-    install plan keeps one frozen target per remote itself); two source paths that share a remote read it once and see
-    the same answer."""
+    """`get(remote, branch) -> StableRef`: ONE target per remote and branch for one operation (an update gate, a
+    source-check sweep); `get.history(remote, branch) -> (mirror, why)` the same for the other lanes' mirror reads."""
     seen: dict = {}
+    hist: dict = {}
 
-    def get(remote: str) -> StableRef:
-        if remote not in seen:
-            seen[remote] = resolve(run, remote, paths)
-        return seen[remote]
+    def get(remote: str, branch: str) -> StableRef:
+        if (remote, branch) not in seen:
+            seen[remote, branch] = resolve(run, remote, branch, paths)
+        return seen[remote, branch]
+
+    def history(remote: str, branch: str) -> tuple:
+        if (remote, branch) not in hist:
+            hist[remote, branch] = fetch_history(run, remote, branch, paths)
+        return hist[remote, branch]
+    get.history = history
     return get
 
 
-def classify(run, installed: str, ref: StableRef, mine=()) -> tuple[bool | None, str]:
-    """May the installed commit move to `ref`? `(older, why)`: older False = a forward move (or current), True = the
-    target is in the installed commit's past, or a plain tag after it whose version is below the highest of the
-    installed commit's tags (the mirror's and `mine`, the checkout's: U1's floor; GitHub's release is forward), None =
-    refused (`why` names the reason, "" = a read failed)."""
-    if not installed or not ref.sha or not ref.history:
-        return None, ""
-    if installed == ref.sha:
-        return False, ""
-    from pathlib import Path
-    mirror = Path(ref.history)
+def contains(run, mirror, src, installed: str, target: str) -> bool | None:
+    """The checkout at `src` (HEAD `installed`) already contains `target`: True, False, or None (could not check). The
+    badge and the routine update's "not newer" both ask this. Full history decides, never a missing object: the
+    mirror when it holds the installed commit; else the checkout when it holds the target or is a full clone (target
+    absent = not contained); a shallow checkout without the target cannot tell."""
+    if installed == target:
+        return True
+    if mirror is not None and (known := _is(run, mirror, target, installed)) is not None:
+        return known
+    have = run(["git", "-C", str(src), "cat-file", "-e", target], timeout=5.0, env=_NO_LAZY)
+    if have.returncode == 0:
+        return {0: True, 1: False}.get(run(["git", "-C", str(src), "merge-base", "--is-ancestor", target, "HEAD"],
+                                           timeout=10.0, env=_NO_LAZY).returncode)
+    if have.returncode != 1:
+        return None
+    shallow = run(["git", "-C", str(src), "rev-parse", "--is-shallow-repository"], timeout=5.0)
+    return False if shallow.returncode == 0 and shallow.stdout.strip() == "false" else None
+
+
+def classify(run, mirror, installed: str, target: str) -> str | None:
+    """Where `target` lies from the installed commit, for the plan's warning: "current", "forward", "back",
+    "sideways", "own" (the installed commit is not upstream), or None (a history read failed)."""
+    if installed == target:
+        return "current"
+    if mirror is None:
+        return None
     pub = _published(run, mirror, installed)
-    if pub is None:
-        return None, ""
     if not pub:
-        return None, f"the installed commit {installed[:9]} is not in the upstream's published history: refused"
-    fwd = _is(run, mirror, installed, ref.sha)
-    if fwd is None:
-        return None, ""
-    if fwd:
-        if ref.released or ref.key is None:
-            return False, ""
-        tags = _git(run, mirror, "tag", "--points-at", installed)
-        if tags.returncode != 0 or mine is None:
-            return None, ""
-        top = max(filter(None, map(version_of, [*tags.stdout.split(), *mine])), default=None)
-        return top is not None and ref.key < top, ""
-    back = _is(run, mirror, ref.sha, installed)
-    if back is None:
-        return None, ""
-    if back:
-        return True, ""
-    return None, f"the installed commit is not in the history of the stable target ({ref.label}): refused"
+        return None if pub is None else "own"
+    fwd = _is(run, mirror, installed, target)
+    back = _is(run, mirror, target, installed) if fwd is False else False
+    if fwd is None or back is None:
+        return None
+    return "forward" if fwd else "back" if back else "sideways"
 
 
-def assess(run, src, ref: StableRef) -> tuple[str, bool | None, str, StableRef]:
-    """The installed commit at `src` ("" when not read), `classify`'s `(older, why)` for it with the checkout's own
-    tags (None when not read), and the target for THIS checkout: the one reading of the checkout the update gate and
-    the freshness check share. A target the installed commit may not take (a plain tag the floor refuses) falls back
-    to GitHub's release when that is in the installed commit's future (`ref.fallback`, a forward move)."""
-    from pathlib import Path
+def assess(run, src) -> str:
+    """The installed commit at `src` ("" when not read): the one reading of the checkout the gate and the check share."""
     head = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
-    installed = (head.stdout or "").strip() if head.returncode == 0 else ""
-    tags = run(["git", "-C", str(src), "tag", "--points-at", "HEAD"], timeout=5.0)
-    older, why = classify(run, installed, ref, tags.stdout.split() if tags.returncode == 0 else None)
-    if older and ref.fallback and installed != ref.fallback.sha:
-        fwd = _is(run, Path(ref.history), installed, ref.fallback.sha)
-        if fwd is None:
-            return installed, None, "", ref
-        if fwd:
-            return installed, False, "", ref.fallback._replace(canon=ref)
-    return installed, older, why, ref
+    return (head.stdout or "").strip() if head.returncode == 0 else ""
+
+
+def own_commits(run, mirror, src) -> list | None:
+    """Every commit HEAD reaches that no branch or tag of the upstream reaches ("<short> <subject>", children first),
+    all of them, also behind a merge: what an update deletes with the old checkout. None = not readable. The checkout
+    may lack the upstream's tips (a shallow clone), so each remaining candidate is asked of the mirror, and a published
+    one (with its ancestors) is excluded in turn."""
+    refs = _git(run, mirror, "for-each-ref", "--format=%(objectname) %(*objectname)", "refs/heads", "refs/tags") \
+        if mirror is not None else None
+    if refs is None or refs.returncode != 0:
+        return None
+    stop = sorted({ln.split()[-1] for ln in refs.stdout.splitlines() if ln.split()})
+    for _ in range(64):                                  # each round excludes one more published commit
+        out = run(["git", "-C", str(src), "rev-list", "--topo-order", "--ignore-missing", "HEAD", "--not", *stop],
+                  timeout=10.0, env=_NO_LAZY)
+        if out.returncode != 0:
+            return None
+        cands = out.stdout.split()
+        for c in cands:
+            if (pub := _published(run, mirror, c)) is None:
+                return None
+            if pub:
+                stop.append(c)
+                break
+        else:
+            if not cands:
+                return []
+            log = run(["git", "-C", str(src), "log", "--no-walk=unsorted", "--format=%h %s", *cands], timeout=10.0,
+                      env=_NO_LAZY)
+            return [ln.strip() for ln in log.stdout.splitlines() if ln.strip()] if log.returncode == 0 else None
+    return None
+
+
+def warning(lane: str, how: str, label: str, installed: str, own=()) -> str:
+    """The plan's warning for a move `classify` placed `how` ("" for a plain forward move); `own` the commits it
+    deletes (`own_commits`)."""
+    if how == "own":
+        return WARN_OWN.format(installed=installed[:9], n=len(own), commits="; ".join(own[:10]) + (
+            f"; and {len(own) - 10} more" if len(own) > 10 else ""))
+    if how in ("back", "sideways"):
+        return WARN_LINE.format(lane=lane, label=label, how="older than" if how == "back" else "on another line than")
+    return ""
+
+
+def keeps(run, paths, src, comp, remote: str, selector: str, frozen: str) -> str:
+    """Why auto-install leaves the installed source at `src` where it is ("" = it moves to its target, `frozen` or
+    the pin): it already holds the target, or the target is back, sideways or over commits that are not upstream (a
+    move only the user names), or that cannot be read. Auto-install never moves a source back or sideways (P-5)."""
+    target = frozen or (comp.source.pin_commit if selector == "pinned" else "")
+    if not target or comp.source.artifact:
+        return ""
+    installed = assess(run, src)
+    mirror = fetch_history(run, remote, comp.source.branch, paths)[0]
+    if installed and contains(run, mirror, src, installed, target):
+        return f"already holds the {selector} target {target[:9]}"
+    how = classify(run, mirror, installed, target) if installed else None
+    if how == "forward":
+        return ""
+    why = {"sideways": f"the {selector} target {target[:9]} is on another line than the installed version",
+           "own": f"the installed commit {installed[:9]} is not upstream"}.get(how or "", COULD_NOT_CHECK)
+    return f"{why}; auto-install never moves it (to move it: lhpc update <stack> --source {selector})"
 
 
 def update_gate(run, paths, items, source: str, remote_of):
     """An update's selector per source (`source`, or for a bare update "" each source's recorded one, none: pinned) and
-    U1's gate on it: `(sel, refs, refused)`, refs the stable targets read for the plan (per source path), refused the
-    per-source refusal lines. ONE target per remote: two paths that share a remote read it once. Within the stable lane
-    no move goes back or sideways (`classify`); an explicit switch onto it (the source recorded another lane) is the
-    user's choice and may go back, but only to a verified release or tag the history places. The plan runs it without
-    locks; the apply runs it ONCE, under its locks."""
+    the gate on every installed git source: `(sel, refs, refused, kept, warned)`, refs the stable targets read for
+    the plan (per source path), refused the per-source refusal lines (nothing moves), kept the lines of the sources a
+    routine update leaves (per path: the checkout is ahead of the target), warned per path `(lines, HEAD)`: the plan's
+    warnings and the HEAD they name (a confirmed move may replace that HEAD, nothing else). A named `--source`
+    installs its target wherever it lies; a routine update moves only a source whose checkout lacks it. The plan runs
+    it without locks; the apply runs it ONCE, under its locks."""
     from . import source_fs, source_registry
     sel = {c.source.path: source or source_registry.recorded_selector(paths, c.source.path) for _, c in items}
-    refs, refused, target = {}, [], resolver(run, paths)
+    refs, refused, kept, warned, done, target = {}, [], {}, {}, set(), resolver(run, paths)
     for _, c in items:
-        if sel[c.source.path] == "stable" and not c.source.artifact and source_fs.source_present(
-                paths, src := paths.resolve_source(c.source.path)):
-            installed, older, why, refs[c.source.path] = assess(run, src, target(remote_of(c)))   # THIS checkout's
-            ref = refs[c.source.path]
-            if source_registry.recorded_selector(paths, c.source.path) != "stable":   # an explicit lane SWITCH:
-                if older is not None and not ref.name:                              # a release or tag target only
-                    older = None
-                why = update_refusal(ref, installed, None if older is None else False, why)
-            else:                                                                   # within the lane: forward only
-                why = update_refusal(ref, installed, older, why)
-            if why:
+        path, lane = c.source.path, sel[c.source.path]
+        if path in done or c.source.artifact or not source_fs.source_present(paths, src := paths.resolve_source(path)):
+            continue
+        done.add(path)
+        remote, branch = remote_of(c), c.source.branch
+        if lane == "stable":
+            ref = refs[path] = target(remote, branch)
+            if why := update_refusal(ref):
                 refused.append(f"  {c.id}: {why}")
-    return sel, refs, refused
+                continue
+            want, mirror, label = ref.sha, Path(ref.history), ref.label
+        elif not remote:
+            continue                                       # a local source: nothing upstream to place it against
+        else:
+            want = c.source.pin_commit if lane == "pinned" else remote_tip(run, remote, branch or "HEAD", 15.0)
+            if not want and lane == "dev" and not source and branch and c.source.pin_commit and (installed := assess(
+                    run, src)) and run(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"],
+                                       timeout=15.0).returncode == 2:   # the branch is gone: the pin, never back
+                held = history_dir(paths, remote, branch)              # the history this box already has
+                has = contains(run, held if (held / "HEAD").exists() else None, src, installed, c.source.pin_commit)
+                if has is None:                                         # retrying cannot help: name the way
+                    refused.append(f"  {c.id}: upstream branch {branch!r} gone and this box holds no history placing "
+                                   f"the pin: nothing moves; --source pinned goes back with the back warning")
+                if has:
+                    kept[path] = (f"  {c.id}: upstream branch {branch!r} gone; kept {installed[:9]}; --source pinned "
+                                  "goes back with the back warning")    # a plain Update never goes back (his rule)
+                if has is not False:
+                    continue
+            if not want:
+                continue                                   # no pin / dev unreachable: the adoption's own policy
+                #                                            (dev falls back to the pin, disclosed)
+            mirror, label = None, f"{'pinned' if lane == 'pinned' else 'development branch'} @ {want[:9]}"
+        installed = assess(run, src)
+        if not installed and lane != "stable":
+            continue                                       # not a readable checkout: the adoption's identity decides
+        mirror = mirror or (target.history(remote, branch)[0] if installed and installed != want else None)
+        if not source and installed:                       # routine: the badge's predicate first (never back)
+            if (has := contains(run, mirror, src, installed, want)) is None:
+                refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
+                continue
+            if has:
+                if installed != want:                      # ahead of it: kept; at it: the plan as before (no move)
+                    kept[path] = (f"  {c.id}: the {lane} target ({label}) is not newer than the installed version: "
+                                  f"kept (to install it anyway: --source {lane})")
+                continue
+        how = classify(run, mirror, installed, want) if installed else None
+        own = own_commits(run, mirror, src) if how == "own" else ()
+        if how is None or own is None:
+            refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
+            continue
+        rec = source_registry.read_record(paths, path)
+        lines = [ln for ln in (warning(lane, how, label, installed, own), how != "own" and rec is not None and
+                               rec.resolved_commit and rec.resolved_commit != installed and WARN_MOVED.format(
+                                   installed=installed[:9], recorded=rec.resolved_commit[:9])) if ln]
+        if lines:
+            warned[path] = ([f"  {c.id}: warning: {ln}" for ln in lines], installed)
+    return sel, refs, refused, kept, warned
 
 
-def update_refusal(ref: StableRef, installed: str, older: bool | None, why: str = "") -> str:
-    """Why an installed source at `installed` may not move to `ref` ("" = it may); `older`/`why` from `classify`."""
+def update_refusal(ref: StableRef) -> str:
+    """Why an installed source may not move to the stable `ref` ("" = it may): its branch is not on the remote
+    (final), or the target could not be read ("try again later")."""
     if is_final(ref.why):
         return ref.why
-    if not ref.sha or not ref.verified or older is None:
-        if why and ref.verified:                     # a reason about the target: only from a verified one
-            return why
-        why = ref.why or ("" if older is not None or not ref.verified
-                          else "the installed commit's history could not be read")
-        return TRY_LATER + (f" ({why})" if why else "")
-    if older:
-        return (f"the stable target ({ref.label}) is not newer than the installed version: refused; "
-                "use --source pinned to go back to LHPC's tested versions")
+    if not ref.sha:
+        return TRY_LATER + (f" ({ref.why})" if ref.why and ref.why != TRY_LATER else "")
     return ""

@@ -51,6 +51,8 @@
           <input type="hidden" name="target" value="{{ target }}{% if rid %}@{{ rid }}{% endif %}">
           <input type="hidden" name="confirmed" value="yes">
           {% if plan_hash %}<input type="hidden" name="plan_hash" value="{{ plan_hash }}">{% endif %}
+          {# STABLE-LANE R-3: an update's Confirm stands on the HEADs its warnings named #}
+          {% if op == 'update' %}<input type="hidden" name="warned_heads" value='{{ (plan.data or {}).get("warned_heads", {}) | tojson }}'>{% endif %}
           {% if band and not rid %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}

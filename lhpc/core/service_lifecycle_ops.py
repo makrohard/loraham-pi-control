@@ -3115,7 +3115,7 @@ class LifecycleOpsMixin:
     @invalidates_snapshot
     def run_action(self, op: str, target: str, apply: bool = False, source: str | None = None,
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", purge: bool = False, inst=None) -> ActionResult:
+                   band: str = "", purge: bool = False, inst=None, expect_heads: dict | None = None) -> ActionResult:
         """Dispatch a named action (plan when apply=False); no source: an update keeps the lane (""), an install `pinned`."""
         source = ("" if op == "update" else "pinned") if source is None else source
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
@@ -3125,7 +3125,7 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc {op} {target} --source pinned"])
         ops = {
             "install": lambda: self.install(target, apply=apply, source=source),
-            "update": lambda: self.update(target, apply=apply, source=source,
+            "update": lambda: self.update(target, apply=apply, source=source, expect_heads=expect_heads,
                                           build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band, inst=inst),

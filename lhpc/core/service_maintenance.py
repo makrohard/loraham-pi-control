@@ -125,28 +125,27 @@ class MaintenanceOpsMixin:
         if not local_sha:
             return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
         entry["remote"] = remote
-        ref = comp.source.branch or "HEAD"
         rec = source_registry.read_record(self._paths, comp.source.path)
         if unsafe:                                     # the start refuses it too: could not check, at the clone's head
             return {**entry, "status": stackupdates.ERROR}
         stable = planned is not None or (rec is not None and rec.selector == "stable" and not comp.source.artifact)
         pinned = "" if stable else stackupdates.pinned_target(self._paths, comp)
-        if pinned:                                     # the pinned lane is local: its target is this manifest's pin
-            sref, remote_sha = None, ""
-        elif stable:
-            sref = planned or (stable_target or stable_lane.resolver(run, self._paths))(remote)   # U1: one per remote
-            if not (sref.sha and sref.verified):
+        target, branch = stable_target or stable_lane.resolver(run, self._paths), comp.source.branch   # one per both
+        if stable:
+            sref = planned or target(remote, branch)
+            if not sref.sha:
                 return {**entry, "status": stackupdates.ERROR}    # tags or releases not read: could not check
-            remote_sha = sref.sha
-        else:
-            sref, remote_sha = None, stable_lane.remote_tip(run, remote, ref, 12.0)
-            if not remote_sha:
+            want, mirror = sref.sha, sref.history
+        elif pinned:                                   # this manifest's pin: local, the checkout answers (U6 N1)
+            want, mirror = pinned, None
+        else:                                          # the branch tip; its history only for the ancestry (P-2)
+            want = stable_lane.remote_tip(run, remote, branch or "HEAD", 12.0)
+            if not want:
                 return {**entry, "status": stackupdates.ERROR}        # unreachable / no such branch
-        _, older, _, sref = stable_lane.assess(run, src, sref) if sref is not None and planned is None else ("", False, "", sref)
-        want = sref.sha if sref else pinned or remote_sha
+            mirror = target.history(remote, branch)[0]
         entry["upstream_head"] = want
-        current = local_sha == want or older                       # older None: the checkout's tags not read
-        entry["status"] = stackupdates.ERROR if older is None else stackupdates.UP_TO_DATE if current else stackupdates.BEHIND
+        has = stable_lane.contains(run, mirror and Path(mirror), src, local_sha, want)   # X5: lacks the target?
+        entry["status"] = stackupdates.ERROR if has is None else stackupdates.UP_TO_DATE if has else stackupdates.BEHIND
         if pinned and local_sha == pinned and stackupdates.next_lhpc_pins(self._paths, run, lhpc).get(comp.id, pinned) != pinned:
             entry["status"] = stackupdates.LHPC_FIRST              # only the known-working lane (plan row U6)
         return entry
@@ -326,19 +325,20 @@ class MaintenanceOpsMixin:
         events; it carries no production behaviour."""
 
     def _adopt_dev_fallback(self, inst, comp, source: str, resolved, force: bool,
-                            locked: bool):
+                            locked: bool, accept_head: str = ""):
         """Adopt with the DEFAULT policy: on a FAILED `dev` adoption, retry ONCE at the
         manifest pin — DISCLOSED in the action detail, never silent. Non-dev selectors and
         fallback-less failures return unchanged."""
+        ok = {"accept_head": accept_head} if accept_head else {}           # the HEAD a confirmed move named
         a = inst.adopt_source(comp, force=force, source=source,
-                              pinned_expected=resolved, locked=locked)
+                              pinned_expected=resolved, locked=locked, **ok)
         if a.status != "failed" or source != "dev":
             return a
         fb = self._dev_fallback_expected(comp)
         if not fb[0]:
             return a
-        a2 = inst.adopt_source(comp, force=force, source="pinned",
-                               pinned_expected=fb, locked=locked)
+        a2 = inst.adopt_source(comp, force=force, source="pinned",         # no waiver: the pin was not the
+                               pinned_expected=fb, locked=locked)          # target the warning named
         if a2.status != "failed":
             a2.detail = (f"dev unreachable ({a.detail}) — FELL BACK to "
                          f"{fb[1]}: {a2.detail}")
@@ -381,7 +381,7 @@ class MaintenanceOpsMixin:
             label = ("declared artifact (default branch)" if spec.artifact
                      else f"development branch {ref}")
             return (sha, f"frozen: {label} @ {sha[:9]}"), ""
-        return stable_lane.resolve(run, remote, self._paths).frozen()    # stable: the lane's one target (U1)
+        return stable_lane.resolve(run, remote, spec.branch, self._paths).frozen()   # stable: the lane's one target
 
     def _plan_source_groups(self, items, source: str, freeze: bool = False,
                             stable_refs: dict | None = None) -> tuple:
@@ -404,12 +404,12 @@ class MaintenanceOpsMixin:
             spec = comp.source
             sel = _sel(st.id, comp)
             resolved = ("", "")                           # pinned: the adoption checks out the manifest pin
-            ident = (sel, bool(spec.artifact),
-                     source_registry.norm_remote(self._effective_remote(comp)), resolved)
+            ident = (sel, bool(spec.artifact),                # the branch too: one path, one line of history
+                     source_registry.norm_remote(self._effective_remote(comp)), spec.branch, resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
-        frozen_cache = {("stable", self._effective_remote(m[1])): (stable_refs[p].canon or stable_refs[p]).frozen()  # ONE per remote
-                        for p, ms in by_path.items() if p in (stable_refs or {}) for m in ms} | {   # | each read checkout's own:
+        frozen_cache = {("stable", self._effective_remote(m[1]), m[1].source.branch): stable_refs[p].frozen()  # ONE per
+                        for p, ms in by_path.items() if p in (stable_refs or {}) for m in ms} | {   # remote and branch
             p: r.frozen() for p, r in (stable_refs or {}).items()}
         for path, members in by_path.items():
             idents = {m[3] for m in members}
@@ -422,20 +422,18 @@ class MaintenanceOpsMixin:
             st, comp, sel, _, resolved = members[0]
             # A stable group is resolved here also unfrozen (U1): install and update take the lane's one target.
             if (freeze or sel == "stable") and not resolved[0] and (sel != "pinned" or comp.source.artifact):
-                # FROZEN selector resolution (auto-install plan): one exact immutable commit per group, resolved HERE —
-                # adoption never looks again. ARTIFACT sources freeze their default-branch HEAD for EVERY selector (an
-                # artifact has no pin), keyed by path, never the release. A path the gate read takes ITS
-                # target (maybe a release fallback); any other stable path the remote's ONE target.
-                once = ("stable", self._effective_remote(comp)) if sel == "stable" and not comp.source.artifact and path not in (stable_refs or {}) else path
+                # FROZEN here (adoption never looks again): an ARTIFACT its default-branch HEAD for every selector,
+                # keyed by path; a path the gate read ITS target; any other stable path its remote and branch's ONE.
+                once = (("stable", self._effective_remote(comp), comp.source.branch) if sel == "stable"
+                        and not comp.source.artifact and path not in (stable_refs or {}) else path)
                 (fz, why) = frozen_cache.get(once) or frozen_cache.setdefault(once, self._frozen_ref(comp, sel))
                 if fz[0] is None:
-                    # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
-                    # manifest pin when dev is unreachable — never a silent substitute,
-                    # never pinned-by-default.
+                    # DEFAULT POLICY: dev, with a DISCLOSED fallback to the manifest pin when dev is unreachable.
                     fb = self._dev_fallback_expected(comp)
                     if sel == "dev" and fb[0]:
                         resolved = fb
-                    elif freeze or stable_lane.is_final(why):   # unfrozen, unreadable: the local fallback decides
+                    elif freeze or stable_lane.is_final(why) or why.startswith(stable_lane.TRY_LATER):   # X3: an
+                        # unverified release read installs nothing; an unreadable remote: the local fallback decides
                         conflicts.append(f"source {path!r}: exact {sel} resolution "
                                          f"failed — {why}")
                         continue
@@ -1485,7 +1483,7 @@ class MaintenanceOpsMixin:
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "", auto_install_ctx=None,
-               build: bool = True) -> ActionResult:
+               build: bool = True, expect_heads: dict | None = None) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`, "" = each source's recorded one:
         dev/stable/pinned); a failed `dev` adoption retries once at the manifest pin,
         disclosed. A stack (or "all") updates its required sources,
@@ -1568,20 +1566,24 @@ class MaintenanceOpsMixin:
                                          "problem on the box; report it with this message"])
         # U1 + U2: the selectors and the stable gate (`stable_lane.update_gate`): the plan reads them, the apply ONCE locked.
         def gate():
-            sel, refs, refused = stable_lane.update_gate(self._system.runner.run, self._paths, items, source, self._effective_remote)
+            sel, refs, refused, kept, warned = stable_lane.update_gate(self._system.runner.run, self._paths, items, source, self._effective_remote)
+            lanes = {sel[c.source.path] for _, c in items if any(ln.startswith(f"  {c.id}: ") for ln in refused)}
             return sel, refs, refused and ActionResult(
-                False, f"Refusing to update '{target or 'all'}' to stable: nothing was changed.", details=refused,
-                next_commands=[f"lhpc source-check {target}".strip()])
+                False, f"Refusing to update '{target or 'all'}'{f' to {lanes.pop()}' if len(lanes) == 1 else ''}: "
+                "nothing was changed.", details=refused,
+                next_commands=[f"lhpc source-check {target}".strip()]), kept, warned
         _src = f"--source {source} " if source else ""          # an explicit selector stays in every command
         if not apply:
-            sel, stable_refs, refusal = gate()
+            sel, stable_refs, refusal, kept, warned = gate()
             if refusal:
                 return refusal
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
             # routes never do this — they show "unknown" until this is run.
-            details = []
+            details = [*kept.values(), *(ln for lines, _ in warned.values() for ln in lines)]   # kept: holds its target
             for _, c in items:
+                if c.source.path in kept:
+                    continue
                 fresh = self.update_status(c, stable_refs.get(c.source.path))   # the gate's target, no second read
                 details.append(f"  {c.id}: {stackupdates.label(fresh)} — this update fetches the "
                                f"{sel[c.source.path]} version from {c.source.remote or 'local checkout'}")
@@ -1589,14 +1591,11 @@ class MaintenanceOpsMixin:
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) from the remote.",
                 details=details,
                 next_commands=[f"lhpc update {target} {_src}--yes"] if items else [],
-                data={"changes": len(items)})
-        # HARD GATE: an update swaps source trees on disk, so it requires the affected stacks
-        # STOPPED — the target's components AND every other consumer of an affected SHARED
-        # source path (kiss running blocks an update of src/loraham-kiss-tnc). Never
-        # silently stops or restarts anything; typed refusal with the exact stop commands.
+                data={"changes": len(items), "warned_heads": {p: head for p, (_, head) in warned.items()}})
+        # HARD GATE: every consumer of an affected (also SHARED) source path must be STOPPED; never stopped or
+        # restarted here: a typed refusal names the exact stop commands.
         affected = {c.source.path for _, c in items}
-        # CHEAP PREFLIGHT (early typed refusal; NOT the authority — a Start may still land
-        # before the locks). The AUTHORITATIVE recheck runs below with every lock held.
+        # CHEAP PREFLIGHT, not the authority (a Start may land before the locks): rechecked below under them.
         running = self._running_source_consumers(affected)
         if running:
             owners = sorted({self._owner_stack_id(cid) for cid in running})
@@ -1608,20 +1607,15 @@ class MaintenanceOpsMixin:
                 next_commands=[f"lhpc stack stop {k} --yes" for o in owners for k in instances.stop_keys(self, o)])
         self._op_seam("update-preflight")
         from . import reslock
-        # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->
-        # source-txn index/recovery -> ALL affected source-path locks (one outer guard,
-        # held through plan + every group mutation) -> FRESH
-        # runtime-state recheck -> plan -> mutate. A concurrent Start contends on the
-        # same source locks; a concurrent config/remote save waits on config-stable.
+        # ORDER: config-stable shared lock -> source-txn index/recovery -> ALL affected source-path locks (held
+        # through plan + every mutation) -> FRESH runtime recheck -> plan -> mutate. A concurrent Start contends on
+        # the source locks; a concurrent config/remote save waits on config-stable.
         try:
-            # LOCK ORDER #1: admission OUTSIDE config-stability (the inner source guard reuses it
-            # reentrantly), so a source update never contends config/admission out of order.
+            # LOCK ORDER #1: admission OUTSIDE config-stability (the inner source guard reuses it reentrantly).
             with (self._admission_guard("update", target or ""), self._config_stable(),
                   self._source_operation_guard(sorted(affected), op="update")):
                 self._op_seam("update-locked")
-                # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
-                # slipped in after the preflight refuses the update with ZERO candidate/
-                # journal/source/registry/marker/config mutation.
+                # AUTHORITATIVE running recheck under every lock: a Start after the preflight refuses with ZERO mutation.
                 running = self._running_source_consumers(affected)
                 if running:
                     owners = sorted({self._owner_stack_id(cid) for cid in running})
@@ -1630,19 +1624,26 @@ class MaintenanceOpsMixin:
                         "using the affected source(s) started while the update was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {k} --yes" for o in owners for k in instances.stop_keys(self, o)])
-                # MeshCore's plugin manager runs out of the venv an update of its sources would
-                # replace; LHPC never spawned it and cannot see it. Its same-boot marker is the
-                # evidence — checked only once LHPC believes nothing runs (meshcore_plugins.py).
+                # MeshCore's plugin manager (never LHPC's) runs out of the venv this update replaces: its same-boot
+                # marker is the evidence, checked once nothing LHPC knows runs (meshcore_plugins.py).
                 if (_mp := self._meshcore_plugins_refusal(
                         f"update '{target or 'all'}'",
                         {cid for p in affected for cid in self._source_consumers().get(p, ())})):
                     return _mp
-                sel, stable_refs, refusal = gate()          # the apply's ONE read of selectors and gate, under the locks
+                sel, stable_refs, refusal, kept, warned = gate()   # the apply's ONE read of selectors and gate, locked
                 if refusal:
                     return refusal
-                # ONE effective remote per shared checkout + ONE immutable plan — both
-                # built UNDER the configuration-stable and source locks (a concurrent
-                # remote save waits; the plan can never use a stale config snapshot).
+                if expect_heads is not None and (moved := [f"  {p}: HEAD is now {h[:9]}" for p, (_, h) in sorted(
+                        warned.items()) if expect_heads.get(p) != h]):        # R-3: a Confirm stands on the HEAD it named
+                    return ActionResult(False, f"Refusing to update '{target or 'all'}': the checkout changed after the "
+                                        "warning you confirmed; nothing was changed.", details=moved,
+                                        next_commands=[f"lhpc update {target} {_src}".strip()])
+                items = [(s, c) for s, c in items if c.source.path not in kept]
+                if not items:
+                    return ActionResult(True, f"Nothing to update for '{target or 'all'}': every source already holds "
+                                        "its target.", details=[*kept.values()])
+                # ONE effective remote per shared checkout + ONE immutable plan, built UNDER the config-stable and
+                # source locks (never from a stale config snapshot).
                 conflicts = sorted({c for c in (self._shared_remote_conflict(p)
                                                 for p in affected) if c})
                 if conflicts:
@@ -1664,9 +1665,8 @@ class MaintenanceOpsMixin:
                                                  "that checkout ask for different versions; the "
                                                  "box's operator updates them with one --source, "
                                                  "then retries"])
-                # An update REPLACES the source tree, and the MeshCore identity may still
-                # live only in the template inside it. Copy it out now — after every
-                # refusal check, with all locks held, before the first mutation.
+                # The tree is REPLACED and the MeshCore identity may live only inside it: copy it out now, after
+                # every refusal, under the locks, before the first mutation.
                 _id_err = self.meshcore_identity_guard([c for _s, c in items])
                 if _id_err:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
@@ -1676,12 +1676,12 @@ class MaintenanceOpsMixin:
                                                  "box's operator checks the file named above, "
                                                  "then retries"])
                 inst = self._installer()
-                out, ok = [], True
+                out, ok = [*kept.values(), *(ln for lines, _ in warned.values() for ln in lines)], True
                 mutated_paths = []
                 for path, c, selector, resolved in groups:
-                    r = self._adopt_dev_fallback(
+                    r = self._adopt_dev_fallback(                 # a warned move was confirmed: its HEAD may go
                         inst, c, selector, resolved,
-                        force=True, locked=True)
+                        force=True, locked=True, **({"accept_head": warned[path][1]} if path in warned else {}))
                     out.append(f"  [{r.status}] {c.id}: {r.detail}")
                     if r.status == "failed":
                         ok = False                    # incl. prior-dirty: NEVER success

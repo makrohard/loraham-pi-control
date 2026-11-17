@@ -134,6 +134,7 @@ Fixed
   started by hand (`lhpc stack start daemon@<rid>`).
 - Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
   Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
+- Latest stable sources read "unchecked" once after the update, until `lhpc source-check` reads them on their branch.
 
 ## 0.13.8
 

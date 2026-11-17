@@ -18,6 +18,7 @@ Security posture:
 from __future__ import annotations
 
 import ipaddress as _ipaddress
+import json as _json
 import logging as _logging
 import re as _re
 import secrets as _secrets
@@ -2028,6 +2029,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, radio=rid or None)
                         + "#stack-settings-" + sid)
 
+    def _warned_heads() -> dict:
+        """The HEADs the confirmed update's warnings named (STABLE-LANE R-3); none shown = {} (any warning refuses)."""
+        try:
+            heads = _json.loads(request.form.get("warned_heads") or "{}")
+        except ValueError:
+            return {}
+        return {str(k): str(v) for k, v in heads.items()} if isinstance(heads, dict) else {}
+
     def _render_confirm(op: str, target: str, source: str, frm: str, plan=None, inst=None, rid="", band=""):
         """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
         (a resource conflict that stops another stack's owner, dependents a restart takes down) —
@@ -2209,7 +2218,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       "in the banner.", "ok")
             return _redirect_for(target, rid)
         result = service.run_action(op, target, apply=True, source=source,
-                                    cascade=cascade, band=band, purge=purge, inst=inst)
+                                    cascade=cascade, band=band, purge=purge, inst=inst,
+                                    expect_heads=_warned_heads() if op == "update" else None)
         if op == "update" and not result.ok and _pin_refusal(result):
             # The inline Update's pin refusal is shown on the confirm page itself, with the same
             # ways out (self-update first) as the dry run's — not flattened into a flash.

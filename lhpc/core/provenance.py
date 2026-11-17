@@ -159,7 +159,9 @@ def evaluate(runner, dest: str, spec, source: str,
     head = _head_commit(runner, dest)
     if head != pin:
         return ProvenanceResult(UNVERIFIED_BLOCKED, False, False,
-                                f"HEAD {head or '?'} != {label} {pin} (not at the pin)")
+                                f"HEAD {head or '?'} != {label} {pin} (not at the pin)"
+                                + ("" if expected_commit else "; to go back to it: choose Known working "
+                                   "(lhpc update <stack> --source pinned)"))
     if not trusted_fingerprints:
         return ProvenanceResult(PINNED_VERIFIED, True, True,
                                 f"at {label} {pin[:12]} (no trusted signer configured)")

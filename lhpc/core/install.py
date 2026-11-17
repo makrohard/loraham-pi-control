@@ -356,7 +356,7 @@ class Installer:
 
     def adopt_source(self, comp: Component, *, force: bool = False,
                      source: str = "pinned", pinned_expected: tuple | None = None,
-                     locked: bool = False) -> PlanAction:
+                     locked: bool = False, accept_head: str = "") -> PlanAction:
         """Install a component's source. `source` selects the version:
           * "pinned" (default) — the manifest pin;
           * "dev"    — newest commit on the configured branch;
@@ -382,7 +382,7 @@ class Installer:
             # HOLDS the index-successor source locks for every affected path — re-acquiring
             # them here would self-contend. Mutate directly under the caller's boundary.
             return self._adopt_locked(comp, spec, dest, action, force, source,
-                                      pinned_expected)
+                                      pinned_expected, **({"accept_head": accept_head} if accept_head else {}))
         # ONE operation boundary, deadlock-free order (index THEN source path).
         # Recovery runs under the INDEX lock ONLY — the per-source locks it takes must
         # NOT self-contend with a source lock adopt itself holds, so adopt acquires the
@@ -402,13 +402,13 @@ class Installer:
                 with reslock.operation_lock(self.paths, self._source_lock_key(spec.path),
                                             "update", comp.id):
                     return self._adopt_locked(comp, spec, dest, action, force, source,
-                                              pinned_expected)
+                                              pinned_expected, **({"accept_head": accept_head} if accept_head else {}))
         except reslock.ResourceBusy as busy:
             action.status, action.detail = "failed", f"another source operation is in progress: {busy}"
             return action
 
     def _adopt_locked(self, comp, spec, dest, action, force, source,
-                      pinned_expected: tuple | None = None):
+                      pinned_expected: tuple | None = None, accept_head: str = ""):
         # Index + target source-path locks are held by the caller. Recovery + the global
         # blocking decision already ran under the index lock.
         from . import runtime_fs, source_fs, source_registry
@@ -462,7 +462,7 @@ class Installer:
                     return action
                 rec, why = source_registry.verify_identity(
                     self.paths, self.system, self.config, comp, dest,
-                    components=self._path_consumers(spec.path), handle=prior)
+                    components=self._path_consumers(spec.path), handle=prior, accept_head=accept_head)
                 if rec is None:
                     action.status = "failed"
                     # Say how to RECOVER. Refusing to overwrite a tree lhpc did not move is

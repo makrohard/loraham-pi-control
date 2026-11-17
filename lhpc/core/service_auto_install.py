@@ -11,7 +11,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from . import instances, jobs, runtime_fs, validators
+from . import instances, jobs, runtime_fs, stable_lane, validators
 from . import lifecycle as lifecycle_mod
 from .abortflag import AbortFlag
 from .lifecycle import GUI_MISSING_HINT
@@ -1166,6 +1166,10 @@ class AutoInstallOpsMixin:
                 plan = {}                        # path -> (action, reason, comp, selector, resolved)
                 for path, comp, selector, resolved in groups:
                     action, reason = self._reconcile_group(path, comp)
+                    if action == "update" and (why := stable_lane.keeps(   # P-5: never back or sideways on its own
+                            self._system.runner.run, self._paths, self._paths.resolve_source(path), comp,
+                            self._effective_remote(comp), selector, resolved[0])):
+                        action, reason = "keep", why
                     plan[path] = (action, reason, comp, selector, resolved)
                 # STRICT TX ADMISSION GATE (tx=True): validated after the boundary +
                 # immutable plan, BEFORE any candidate/install/update/build/test. The
@@ -1331,21 +1335,17 @@ class AutoInstallOpsMixin:
                             action, reason, comp, selector, resolved = plan[path]
                             if action == "blocked":
                                 processed[path] = (False, f"blocked: {reason}")
+                            elif action == "keep":
+                                processed[path] = (True, f"kept: {reason}")
+                                emit(f"  [kept] {path}: {reason}")
                             else:
-                                # Announce the clone log BEFORE the (possibly minutes-long,
-                                # off-TTY-silent) adoption so the operator has a copy-pasteable
-                                # watch command while it runs.
-                                emit(f"  [log] {comp.id} -> tail -f "
-                                     f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
-                                a = self._adopt_dev_fallback(
-                                    inst, comp, selector, resolved,
-                                    force=(action == "update"), locked=True)
+                                # The clone log first: the adoption may run minutes, silent off a TTY.
+                                emit(f"  [log] {comp.id} -> tail -f {self._paths.under('logs', f'adopt-{comp.id}.log')}")
+                                a = self._adopt_dev_fallback(inst, comp, selector, resolved,
+                                                             force=(action == "update"), locked=True)
                                 emit(f"  [{a.status}] {path}: {a.detail}")
-                                # every non-failed adopt outcome is OK: done (mutated),
-                                # exists (already healthy), skipped (benign no-op) — only
-                                # "failed" fails.
-                                processed[path] = (a.status != "failed",
-                                                   f"{action}: {a.detail}")
+                                # done, exists (healthy) and skipped (benign no-op) are OK; only "failed" fails.
+                                processed[path] = (a.status != "failed", f"{action}: {a.detail}")
                         p_ok, p_detail = processed[path]
                         if not p_ok:
                             ok = False

@@ -165,7 +165,7 @@ def remove_record(paths: Paths, source_rel: str) -> bool:
 
 
 def verify_identity(paths: Paths, system, config, comp, dest: Path,
-                    components: tuple = (), handle=None) -> tuple:
+                    components: tuple = (), handle=None, accept_head: str = "") -> tuple:
     """THE authoritative CURRENT ownership-and-identity proof for an EXISTING managed source
     leaf — required (under the applicable source lock) before every destructive action
     (update overwrite, uninstall, clean). A valid
@@ -226,14 +226,16 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
             return None, (f"identity drift: origin {actual or '(none)'!r} != configured "
                           f"remote {effective!r} — refusing")
         proven = bool(actual)                     # a positive, non-vacuous origin match
-    # Commit check: the tree must still be at the exact recorded resolved commit.
+    # Commit check: the tree must still be at the exact recorded resolved commit, or at exactly the HEAD a move the
+    # user confirmed named (`accept_head`, only the source update path; STABLE-LANE R11/R-1): then the origin match
+    # above is the proof.
     if rec.resolved_commit:
         actual_head = _head(system, git_dest)
-        if actual_head != rec.resolved_commit:
+        if actual_head != rec.resolved_commit and not (accept_head and actual_head == accept_head):
             return None, (f"identity drift: HEAD {actual_head[:12] or '(unknown)'} != recorded "
                           f"{rec.resolved_commit[:12]} — the tree changed since LHPC adopted "
                           "it; refusing")
-        proven = True
+        proven = proven or actual_head == rec.resolved_commit
     if not proven:
         # Path + leaf kind alone is NOT ownership: a manually replaced clean non-Git
         # directory must never be destroyed merely because it occupies a registered path.

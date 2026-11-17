@@ -182,7 +182,7 @@ def lhpc_heads(paths: Paths) -> tuple[str, str]:
 def lane_key(svc, comp, binary: bool, lhpc: tuple[str, str]) -> str:
     """The ONE identity of every input a verdict of `comp` is computed from besides its head, for the probe and every
     reader (opaque): the binary lane's installed artifact; for a source the remote (an invalid one leaves nothing to
-    compare) and its lane: stable; the pinned lane's pin and both LHPC heads (the next LHPC's pins come from the
+    compare) and its lane: stable and its branch; the pinned lane's pin and both LHPC heads (the next LHPC's pins come from the
     fetched commit itself); the dev lane's branch."""
     from . import source_registry
     if binary:
@@ -193,18 +193,20 @@ def lane_key(svc, comp, binary: bool, lhpc: tuple[str, str]) -> str:
     rec, pin, remote = source_registry.read_record(svc._paths, comp.source.path), pinned_target(svc._paths, comp), \
         svc._effective_remote(comp)
     if rec is not None and rec.selector == "stable" and not comp.source.artifact:
-        return f"stable {remote}"
+        return f"stable {remote} {comp.source.branch}"           # the target is the branch's (STABLE-LANE O1)
     return f"pinned {remote} {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {remote} {comp.source.branch or 'HEAD'}"
 
 
-def source_words(lane: str, status, why: str = "") -> tuple[str, str]:
+def source_words(lane: str, status, why: str = "", ahead: bool = False) -> tuple[str, str]:
     """(source, profile) for `lhpc status`, `status --versions` and the info card: a clean checkout reads its lane
     verdict, a binary install `binary, <verdict>`, with the check's reason when it has one; a candidate only on
-    "update available". The probe's own facts (dirty, missing) stay."""
+    "update available"; a Known working checkout that contains its pin but is not at it (`ahead`) "ahead of the pin"
+    (no update, STABLE-LANE P-3). The probe's own facts (dirty, missing) stay."""
     state = status.source_state.value
     if state not in ("match", "differs", "binary"):
         return state, status.profile_state.value
-    words = ("binary, " if state == "binary" else "") + label(lane) + (f" — {why}" if why else "")
+    words = ("binary, " if state == "binary" else "") + ("ahead of the pin" if ahead else label(lane)) + (
+        f" — {why}" if why else "")
     return words, "candidate-available" if lane == BEHIND else status.profile_state.value
 
 
@@ -216,7 +218,9 @@ def verdicts(svc, snapshot) -> dict:
         for comp in ss.stack.components:
             st, entry = ss.components[comp.id], comps.get(comp.id) or {}
             v = effective_status(entry, st.source_head or "", lane_key(svc, comp, st.source_state.value == "binary", lhpc))
-            out[comp.id] = (v, *source_words(v, st, entry.get("why", "") if v == ERROR else ""))
+            ahead = v == UP_TO_DATE and st.source_state.value == "differs" and entry.get("lane_key", "").startswith(
+                "pinned ")                                # contains the pin, HEAD elsewhere (P-3)
+            out[comp.id] = (v, *source_words(v, st, entry.get("why", "") if v == ERROR else "", ahead))
     return out
 
 
