@@ -308,7 +308,7 @@ def test_the_evidence_file_is_opened_before_its_command_runs(tmp_path):
 
 # ---- RS counts each radio's physical frames of the run once, against TXMAX; a count it cannot prove complete fails ---------
 
-NOW = int(time.time())
+NOW = int(time.time())   # wallclock: the box stand-in stamps R0 with its real clock (date -u +%s), so the records sit around it
 PRE, RUN = NOW - 3600, NOW + 300      # a record from before R0's clock (T0), and one of the run
 
 
@@ -361,7 +361,7 @@ def test_rs_counts_each_physical_frame_of_the_run_once(tmp_path, after, rns, wan
     _rs(tmp_path, BASE, after, rns, want)
 
 
-def _rs(tmp_path, before, after, rns, want, box_env=""):
+def _rs(tmp_path, before, after, rns, want, box_env="", extra=""):
     """R0 on the box stand-in with `before` in its runtime, then `after` laid over it (None = deleted), then RS."""
     box, setup, env = box_stand_in(tmp_path)
     rt = box / "rt"
@@ -378,8 +378,11 @@ def _rs(tmp_path, before, after, rns, want, box_env=""):
             (ovl / f).write_text(c)
     rnsk = f"keep RNS_H {rns}; " if rns else ""
     r, _ = source_only(tmp_path, setup + f'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; cp -r "{ovl}"/. "{rt}"/; rm -f {" ".join(gone) or "/dev/null/x"}; '
-                                         f'{rnsk}: > "$EVD/undo.list"; : > "$EVD/undo.done"; usbguard() {{ :; }}; row_RS && echo RS-DONE',
+                                         f'{rnsk}{extra}: > "$EVD/undo.list"; : > "$EVD/undo.done"; usbguard() {{ :; }}; row_RS && echo RS-DONE',
                        **env)
+    if want.startswith("STOP-FAIL "):           # the judge itself failed: no count line at all
+        assert r.returncode == 1 and "RS-DONE" not in r.stdout and want.removeprefix("STOP-FAIL ") in r.stderr, r.stdout + r.stderr
+        return
     assert f"data: RS H: TX frames of this run per radio: {want.removeprefix('FAIL ')}" in r.stdout, r.stdout + r.stderr
     if want.startswith("FAIL"):
         assert r.returncode == 1 and "RS-DONE" not in r.stdout and "RS H: a radio sent more than 10" in r.stderr, r.stdout + r.stderr
@@ -411,6 +414,52 @@ def test_row_5_records_its_radio_for_the_reticulum_count(tmp_path):
     r, evd = source_only(tmp_path, 'MODE=dry; SCRATCH=$EVD; needs() { return 0; }; must() { :; }; undo_push() { :; }; spower() { exit 0; }; '
                                      'keep KZ r2; row_5 H:KZ')
     assert "RNS_H=r2" in (evd / "state.env").read_text().splitlines(), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("before, after, extra, want", [
+    ({RLOG: BANNER}, {}, "keep TXR_H_r1 2; ", "FAIL r1 UNREADABLE|"),                         # no RF log at R0 or RS, the kit sent
+    ({RLOG: BANNER}, {}, "", "FAIL r1 UNREADABLE|"),                                           # no RF log, an instance ran on r1 at R0
+    ({DMN: "", RLOG: BANNER}, {DMN: None}, "keep TXR_H_r1 2; ", "FAIL r1 UNREADABLE|"),       # an empty R0 log gone after the TX
+    ({DMN: "", RLOG: BANNER}, {DMN: None}, "", "FAIL r1 UNREADABLE|"),
+    (BASE, {}, "keep TXR_H_r1 2; ", "FAIL r1 UNREADABLE|"),                                    # the kit sent on r1, nothing counted
+    (BASE, {DMN: _l(PRE) + _l(RUN) * 2}, "keep TXR_H_r1 2; ", "r1 2|"),                        # a control: the kit's frames counted
+    (BASE, {}, 'rm "$EVD/R0-H-tx.txt"; ', "STOP-FAIL RS H: the TX count judge failed (rc 2)"),  # the judge fails: never a pass
+])
+def test_rs_never_reads_missing_tx_evidence_as_zero(tmp_path, before, after, extra, want):
+    # red-before (badc0a7b, G2-HWKIT-D B1/B2): each of these passed as r1 0 (no RF log; an empty R0 log removed; the kit's own
+    # frames not in any log), and a failing judge left an empty count that the TXMAX check accepted
+    _rs(tmp_path, before, after, "", want, extra=extra)
+
+
+@pytest.mark.parametrize("lines, ok", [("r1 3\nr2 0\n", True), ("r1 3\nr2 0\nreticulum UNREADABLE\n", True), ("", False),
+                                       ("r1 3\n", False), ("r1 3\nr1 3\nr2 0\n", False), ("r1 3\nr2 0\nr9 0\n", False),
+                                       ("r1 3\nr2 -1\n", False), ("r1 3\nr2 x\n", False)])
+def test_the_tx_count_has_exactly_one_valid_line_per_radio(tmp_path, lines, ok):
+    # red-before (badc0a7b, G2-HWKIT-D B2): an empty or short count passed the TXMAX check
+    r, _ = source_only(tmp_path, f'printf "{lines}" > "$EVD/c"; txlines "$EVD/c" "r1 r2" && echo OK')
+    assert ("OK" in r.stdout) == ok, r.stdout + r.stderr
+
+
+def test_reticulum_on_several_radios_is_unattributable_and_no_radio_is_charged(tmp_path):
+    # G2-HWKIT-D N2: the aggregate was charged to every named radio (a false FAIL on each)
+    r, _ = source_only(tmp_path, f'printf "F - rns rf-reticulum.log 1 {PRE} 0\\n" > "$EVD/a"; printf "F - rns rf-reticulum.log 4 {PRE} 3\\n" > "$EVD/b"; '
+                                   f'txjudge "$EVD/a" "$EVD/b" {NOW} "r2 r10"')
+    assert r.stdout.splitlines() == ["reticulum UNREADABLE"], r.stdout + r.stderr
+
+
+def test_a_radio_that_could_not_send_and_has_no_log_counts_zero(tmp_path):
+    # no RF log, no kit frames, no instance on it at R0: nothing of that radio could send (an idle radio of the list)
+    r, _ = source_only(tmp_path, 'printf "L r1 0 e3b0c44298fc1c14 0 absent\\n" > "$EVD/a"; cp "$EVD/a" "$EVD/b"; txjudge "$EVD/a" "$EVD/b" 100 "" "" ""')
+    assert r.stdout.splitlines() == ["r1 0"], r.stdout + r.stderr
+
+
+def test_a_radio_the_kit_started_an_instance_on_could_send(tmp_path):
+    # G2-D delta M1: the undo journal is empty by RS, so the start itself is kept: a stack sends at its start (meshtastic's
+    # nodeinfo) even when its row ends before the first tx; with no RF log and no reserved frame that radio is UNREADABLE
+    r, _ = source_only(tmp_path, 'undo_push() { :; }; must() { :; }; started H 3-start.txt meshtastic@r3; '
+                                   'printf "kiss@r1\\n" > "$EVD/R0-H-runset.txt"; echo "[$(runrids H)]"; '
+                                   ': > "$EVD/a"; : > "$EVD/b"; txjudge "$EVD/a" "$EVD/b" 100 "" "" "$(runrids H)"')
+    assert r.stdout.splitlines() == ["[r1 r3 ]", "r1 UNREADABLE", "r3 UNREADABLE"], r.stdout + r.stderr
 
 
 def test_a_radio_of_r0_without_its_facts_at_rs_is_unreadable(tmp_path):

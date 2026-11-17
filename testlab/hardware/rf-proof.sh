@@ -604,7 +604,8 @@ hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd:
   [ "$up" = yes ] || stop "rnode: the RNode 868 interface is not Up: no TX"
   [ "$tp" -le 7 ] || stop "rnode: the shared RNode is set to $tp dBm (above 7): no TX"
   keep "P_$k" "$tp"; pwok PC:rnode; ok "rnode: the shared RNode at $tp dBm (read now, <= 7)"; }
-started() { undo_push "$1" "$(gstop "$3")"; must "$1" "$2" "$(form start inst="$3")"; }   # its guarded stop, journalled BEFORE the start
+started() { keep "STARTED_$1_${3##*@}" 1; undo_push "$1" "$(gstop "$3")"; must "$1" "$2" "$(form start inst="$3")"; }   # its guarded stop, journalled BEFORE the start;
+# STARTED_<box>_<rid>: RS counts that radio as one that could send (runrids), even if the row ends before its first tx
 
 # ---- 9. the report, the results and the COVERAGE table ----------------------------------------------------------------------
 REPORT() {   # REPORT <id> <stack> <box (rid)> <band> <peer> <direction> <nonce seen> <power used> <result>
@@ -1011,32 +1012,53 @@ txcount() { local a= rid band h; while read -r _ rid _ band _; do h=4096
     a="$a $rid:$band:$h"; done < <(grep -E '^ROW ' "$OUT/R0-$1-radios.txt" 2>/dev/null); printf '%s %s%s' "$RUNTX" "$(getk "T0_$1" 0)" "$a"; }
 # rnsrids <box>: the radios Reticulum ran on in this run: reticulum@rN in R0's running set, and row 5's radio
 rnsrids() { { body "R0-$1-runset.txt" | sed -n 's/^reticulum@\(r[1-9][0-9]*\)$/\1/p'; getk "RNS_$1"; } | grep -E '^r[1-9][0-9]*$' | sort -u | tr '\n' ' '; }
-# txjudge <R0 facts> <RS facts> <T0> <reticulum radios>: "<rid> <frames>" per radio, else "<rid> UNREADABLE". frames = max(the
-# daemon's TX + its transmit ERRORs of the run, the mirrors' TX) + the direct TX + Reticulum's TX on its radio(s). UNREADABLE:
-# a count not a number; a file with records at R0 that keeps none from before T0 (lost lines: two rolls, a Clear); a run log
-# smaller, with another head, more ERRORs gone, or its cut file changed (any cut loses lines: runtime_fs.cap_start_log); a
-# radio of R0 without its facts at RS; Reticulum TX (or lost lines) with no radio named ("reticulum UNREADABLE")
+# txjudge <R0 facts> <RS facts> <T0> <reticulum radios> <kit radios> <running radios>: "<rid> <frames>" per radio, else "<rid>
+# UNREADABLE". frames = max(the daemon's TX + its transmit ERRORs of the run, the mirrors' TX) + the direct TX + Reticulum's TX
+# on its one radio. UNREADABLE (fail closed: no evidence is never 0): a count not a number; an RF log present at R0 (even
+# empty) gone at RS; a file with records at R0 that keeps none from before T0 (lost lines: two rolls, a Clear); a run log
+# smaller, with another head, ERRORs gone, or its cut file changed (any cut loses lines: runtime_fs.cap_start_log); a radio of
+# R0 without its facts at RS; a radio that could send (the kit sent on it: TXR > 0, an instance ran on it at R0, or the kit
+# started one there) with no RF
+# log at all (the daemon creates its log at start: daemon_rflog.cpp:67, so a running radio without one logs nothing); a radio
+# the kit sent on that counts 0. Reticulum's TX with no radio or several named: "reticulum UNREADABLE" (unattributable)
 txjudge() {
-  awk -v t0="$3" -v rr="$4" '
+  awk -v t0="$3" -v rr="$4" -v kr="${5:-}" -v ar="${6:-}" '
     function n(v) {return v ~ /^[0-9]+$/}
-    FNR == NR {if ($1 == "F" && n($5) && $5 > 0) had[$2 " " $4] = 1; if ($1 == "L") l0[$2] = $3 " " $4 " " $5 " " $6; next}
-    $1 == "F" {k = $2 " " $4; seen[k] = 1; if ($2 != "-") id[$2] = 1
+    FNR == NR {if ($1 == "F") {f0[$2 " " $4] = 1; cov[$2] = 1; if (n($5) && $5 > 0) had[$2 " " $4] = 1}
+      if ($1 == "L") l0[$2] = $3 " " $4 " " $5 " " $6; next}
+    $1 == "F" {k = $2 " " $4; seen[k] = 1; cov[$2] = 1; if ($2 != "-") id[$2] = 1
       if (!n($5) || !n($7) || (k in had && ($6 == "-" || $6 > t0))) u[$2] = 1; else c[$2, $3] += $7; next}
     $1 == "L" {id[$2] = 1; ls[$2] = 1; split(l0[$2], a, " ")
       if (($2 in l0) && n($3) && n($5) && n(a[1]) && n(a[3]) && $3 >= a[1] && $4 "" == a[2] "" && $5 >= a[3] && $6 "" == a[4] "") e[$2] = $5 - a[3]; else u[$2] = 1}
-    END {for (k in had) if (!(k in seen)) {split(k, p, " "); u[p[1]] = 1}
+    END {for (k in f0) if (!(k in seen)) {split(k, p, " "); u[p[1]] = 1}
       for (r in l0) if (!(r in ls)) {id[r] = 1; u[r] = 1}
-      m = split(rr, R, " "); x = c["-", "rns"] + 0
-      if (x > 0 || ("-" in u)) {if (m == 0) print "reticulum UNREADABLE"; for (i = 1; i <= m; i++) {id[R[i]] = 1; if ("-" in u) u[R[i]] = 1; add[R[i]] = x}}
-      for (r in id) if (r in u) print r, "UNREADABLE"; else {d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; print r, (d > g ? d : g) + c[r, "direct"] + add[r]}}' \
+      m = split(rr, R, " "); x = c["-", "rns"] + 0; split(kr, K, " "); for (i in K) {kit[K[i]] = 1; id[K[i]] = 1}
+      split(ar, A, " "); for (i in A) {act[A[i]] = 1; id[A[i]] = 1}
+      for (i = 1; i <= m; i++) if ("-" in cov) cov[R[i]] = 1
+      if (x > 0 || ("-" in u)) {if (m != 1) print "reticulum UNREADABLE"; else {id[R[1]] = 1; if ("-" in u) u[R[1]] = 1; add[R[1]] = x}}
+      for (r in id) {if ((r in kit || r in act) && !(r in cov)) u[r] = 1
+        if (r in u) {print r, "UNREADABLE"; continue}
+        d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; t = (d > g ? d : g) + c[r, "direct"] + add[r]
+        print r, (r in kit && t == 0 ? "UNREADABLE" : t)}}' \
     "$1" "$2" | sort; }
+# txlines <file> <radios>: exactly one "<rid> <frames|UNREADABLE>" per radio named, no other radio ("reticulum UNREADABLE" aside)
+txlines() { awk -v want="$2" 'BEGIN {split(want, W, " "); for (i in W) w[W[i]] = 1}
+    $0 == "reticulum UNREADABLE" {next} $0 !~ /^r[1-9][0-9]? ([0-9]+|UNREADABLE)$/ || !($1 in w) || ($1 in s) {bad = 1} {s[$1] = 1}
+    END {for (k in w) if (!(k in s)) bad = 1; exit bad}' "$1"; }
+# kitrids / runrids <box>: the box radios the kit reserved frames on (TXR > 0), and the radios with an instance at R0 or one
+# the kit started (STARTED_<box>_<rid>: a stack can send at its start, e.g. meshtastic's nodeinfo)
+kitrids() { sed -n "s/^TXR_$1_\(r[1-9][0-9]*\)=[0-9]*[1-9][0-9]*$/\1/p" "$OUT/state.env" | sort -u | tr '\n' ' '; }
+runrids() { { body "R0-$1-runset.txt" | sed -n 's/^[a-z0-9-]*@\(r[1-9][0-9]*\)$/\1/p'; sed -n "s/^STARTED_$1_\(r[1-9][0-9]*\)=.*/\1/p" "$OUT/state.env"; } | sort -u | tr '\n' ' '; }
 row_RS() {
   undo_to 0 || stop "RS: an undo failed (UNRESOLVED.txt): the recovery runs it again"; [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved undo(s): $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   verify_set || fail "RS: the recorded running set is not back ($(tr '\n' '|' < "$EVD/UNRESOLVED.txt" 2>/dev/null))"
   [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved after verify: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "$(txcount $b "R0-$b-tx.txt")"
     must $b "RS-$b-boot.txt" "cat /proc/sys/kernel/random/boot_id"; [ "$MODE" = dry ] && continue; eq "RS $b: no reboot" "$(body "RS-$b-boot.txt")" "$(getk BOOT_$b)"
-    txjudge "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" "$(getk "T0_$b" 0)" "$(rnsrids $b)" > "$OUT/RS-$b-tx-run.txt"
+    txjudge "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" "$(getk "T0_$b" 0)" "$(rnsrids $b)" "$(kitrids $b)" "$(runrids $b)" > "$OUT/RS-$b-tx-run.txt" \
+      || fail "RS $b: the TX count judge failed (rc $?): no count, no pass"
+    txlines "$OUT/RS-$b-tx-run.txt" "$(grep -E '^ROW ' "$OUT/R0-$b-radios.txt" | awk '{print $2}' | tr '\n' ' ')" \
+      || fail "RS $b: the TX count has not exactly one valid line per radio of R0's hardware list ($(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt"))"
     data "RS $b: TX frames of this run per radio: $(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt")"
     awk -v m="$TXMAX" '$2 !~ /^-?[0-9]+$/ || $2 < 0 || $2 > m {exit 1}' "$OUT/RS-$b-tx-run.txt" \
       || fail "RS $b: a radio sent more than $TXMAX frames in this run (the physical TX count), or its count is missing or unreadable (RS-$b-tx-run.txt)"; done
