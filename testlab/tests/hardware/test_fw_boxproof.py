@@ -74,16 +74,24 @@ def test_a_page_counts_as_reachable_only_when_it_answers(tmp_path, code, ok):
 CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
   *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf 'SIZE {size0}\\n3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
   *-txpower.txt) printf 'SIZE {size1}\\nCOUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
+  *-radios.txt) printf '{radios}';; *-caps.txt) printf '{caps}';; *-runset.txt) printf '{runset}';;
+  F6-r4.txt) printf 'refused: re-apply with firewall-apply.sh\\n'; XRC={r4rc};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
   r={stop1}; [ "$n" = 1 ] || r={stop2}; echo "stop rc $r"; return "$r"; }}
 {body}; echo RC=$?"""
 
 
+# radios.py's rows and the model caps of box H (r2 a loraham board, r4 the PineDio: 14 dBm), as RADIOS_PY and CAPS_PY print them
+RADIOS = "ROW r2 loraham 868 True serial= port=1-1 hp=None\\nROW r4 pinedio-usb-1262 868 True serial= port=1-2 hp=None\\n"
+CAPS = "CAP loraham 17\\nCAP pinedio-usb-1262 14\\nCAP meshstick-1262 22\\n"
+
+
 def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10",
-           size0="500", size1="600"):
+           size0="500", size1="600", radios=RADIOS, caps=CAPS, runset="meshtastic@r2\\n", r4rc="1"):
     return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
-                                         body=body, mp=mp, size0=size0, size1=size1))
+                                         body=body, mp=mp, size0=size0, size1=size1, radios=radios, caps=caps,
+                                         runset=runset, r4rc=r4rc))
 
 
 @pytest.mark.parametrize("mp,why", [("17", None), ("18", "max_power 18 above 17: no start"), ("20", "above 17"),
@@ -272,3 +280,110 @@ def test_an_equal_password_is_not_masked_and_the_end_scan_notes_it(tmp_path):
     assert p.returncode == 0 and "CLEAN" in p.stdout, p.stdout + p.stderr
     assert "ok: RE: box H password equals its login name (lab box): not scanned" in p.stdout
     assert "lhpc" in (evd / "x.txt").read_text()         # the fake prints the password: it stays as the login name
+
+
+# ---- G2-HWKITC B3: the power checks come BEFORE any start; r4's refusal counts only when r4 does not run ------------------
+
+@pytest.mark.parametrize("radios,caps,mp,why", [
+    (RADIOS.replace("hp=None\\nROW r4", "hp=True\\nROW r4"), CAPS, "10", "the high-power grant of r2 is 'True'"),
+    (RADIOS.replace("ROW r2 loraham", "ROW r2 pinedio-usb-1262"), CAPS, "17", "max_power 17 above 14 dBm"),
+    (RADIOS, CAPS.replace("CAP loraham 17\\n", ""), "10", "no single power cap of r2's model ('loraham')"),
+    (RADIOS + "ROW r2 loraham 868 True serial= port=1-3 hp=None\\n", CAPS, "10", "2 hardware row(s) of r2"),
+    (RADIOS.replace("ROW r2 ", "ROW r9 "), CAPS, "10", "0 hardware row(s) of r2")])
+def test_no_start_before_the_radios_grant_and_model_cap_are_read(tmp_path, radios, caps, mp, why):
+    # red-before (44b611ca): only max_power <= 17 was read before the start; a radio whose model tops out at 14 dBm, or one
+    # with a high-power grant, still started
+    p, evd = canned(tmp_path, radios=radios, caps=caps, mp=mp)
+    assert p.returncode == 2 and why in p.stdout and "no start" in p.stdout and "RC=" not in p.stdout, p.stdout + p.stderr
+    assert not (evd / "F6-r2-start.txt").exists() and not list(evd.glob("SAFESTOP-*.txt"))
+
+
+def test_a_max_power_within_its_models_cap_starts(tmp_path):
+    p, evd = canned(tmp_path, radios=RADIOS.replace("ROW r2 loraham", "ROW r2 pinedio-usb-1262"), mp="14")
+    assert "RC=0" in p.stdout and (evd / "F6-r2-start.txt").exists(), p.stdout + p.stderr
+
+
+@pytest.mark.parametrize("runset,r4rc,passed", [("meshtastic@r2\\n", "1", True), ("meshtastic@r2\\nmeshtastic@r4\\n", "1", False),
+                                                ("meshtastic@r2\\n", "0", False)])
+def test_r4s_refusal_counts_only_when_r4_does_not_run(tmp_path, runset, r4rc, passed):
+    # red-before (44b611ca): a start that returned non-zero naming firewall-apply.sh was a PASS and r4 left the safety stop's
+    # list, although a read of the running set showed meshtastic@r4 running
+    p, evd = canned(tmp_path, body="r4refused; echo STARTED=${STARTED[*]}", runset=runset, r4rc=r4rc)
+    assert "RC=0" in p.stdout and (evd / "F6-r4-runset.txt").exists(), p.stdout + p.stderr
+    if passed:
+        assert "1b | meshtastic@r4 (changed radio) refused, naming the apply, not running | PASS" in p.stdout
+        assert "STARTED=\n" in p.stdout and not (evd / "F6-r4-stop.txt").exists()
+    else:
+        assert "FAIL: FW6: meshtastic@r4" in p.stdout and (evd / "F6-r4-stop.txt").exists()
+
+
+def test_r4_is_never_started_above_its_models_cap(tmp_path):
+    # red-before (44b611ca): meshtastic@r4 went to gstart with no power read at all; the PineDio tops out at 14 dBm
+    p, evd = canned(tmp_path, body="r4refused", mp="15")
+    assert p.returncode == 2 and "F6-r4: max_power 15 above 14 dBm" in p.stdout, p.stdout + p.stderr
+    assert not (evd / "F6-r4.txt").exists() and not list(evd.glob("SAFESTOP-*.txt"))
+
+
+# ---- G2-HWKITC B4: a STOP or a signal replays the journalled undos, last first; one that fails is UNRESOLVED ------------
+
+REPLAY = """sshx() {{ shift; echo "$*" >> "$EVD/../replayed"; case "$*" in {fails}) return 1;; esac
+  case "$*" in *U2*) {during};; esac; return 0; }}
+undo "echo U1"; undo "echo U2"; {body}; echo RC=$?"""
+
+
+def replay(tmp_path, body="stop 'a later STOP'", fails="NONE", during=":"):
+    p, evd = proof(tmp_path, REPLAY.format(body=body, fails=fails, during=during))
+    f = tmp_path / "replayed"
+    return p, evd, f.read_text().splitlines() if f.exists() else []
+
+
+def test_a_stop_replays_every_undo_last_first(tmp_path):
+    # red-before (44b611ca): the EXIT trap stopped started stacks only; r4 disabled, the node identity and the stopped
+    # stacks stayed changed after a STOP
+    p, evd, ran = replay(tmp_path)
+    assert p.returncode == 2 and ran == ["echo U2", "echo U1"], p.stdout + p.stderr
+    assert (evd / "UNDO-1.txt").exists() and (evd / "UNDO-0.txt").exists() and "UNRESOLVED" not in p.stdout
+    assert [line.split(" ", 1)[1] for line in (evd / "UNDO.txt").read_text().splitlines()] == ["echo U1", "echo U2"]
+
+
+def test_an_undo_that_fails_is_named_and_the_rest_still_replays(tmp_path):
+    p, evd, ran = replay(tmp_path, fails="*U2*")
+    assert p.returncode == 4 and ran == ["echo U2", "echo U1"], p.stdout + p.stderr
+    assert "UNRESOLVED: undo 1 (rc 1): echo U2" in (evd / "STOP.txt").read_text()
+
+
+def test_a_failed_safety_stop_keeps_exit_3_over_an_unresolved_undo(tmp_path):
+    p, _, ran = replay(tmp_path, body="started meshtastic@r2; stop 'x'", fails="*")
+    assert p.returncode == 3 and "UNSAFE: meshtastic@r2" in p.stdout and "UNRESOLVED" in p.stdout, p.stdout + p.stderr
+    assert ran[-2:] == ["echo U2", "echo U1"]          # after the two safety stop attempts, both undos were still tried
+
+
+def test_a_signal_replays_the_undos_too(tmp_path):
+    p, _, ran = replay(tmp_path, body="kill -TERM $$; echo AFTER")
+    assert p.returncode == 130 and "AFTER" not in p.stdout and ran == ["echo U2", "echo U1"], p.stdout + p.stderr
+
+
+def test_a_signal_during_the_replay_does_not_cut_it_short(tmp_path):
+    p, _, ran = replay(tmp_path, during="kill -INT $$")
+    assert p.returncode == 2 and ran == ["echo U2", "echo U1"], p.stdout + p.stderr
+
+
+def test_after_fe_ran_the_undos_an_exit_replays_none(tmp_path):
+    p, evd, ran = replay(tmp_path, body="undone; stop 'a STOP after FE'")
+    assert p.returncode == 2 and ran == [] and not list(evd.glob("UNDO-*.txt")), p.stdout + p.stderr
+
+
+# ---- G2-HWKITC B5: the lab identity is never the operator's call ---------------------------------------------------------
+
+@pytest.mark.parametrize("call,key,value", [(CALL, "LABNAME", CALL), (CALL, "LABNAME", CALL.lower() + "-7"),
+                                            ("K1AB", "LABSHORT", "k1ab"), (CALL + "-9", "LABNAME", CALL)])
+def test_a_lab_identity_equal_to_the_operators_call_stops_before_any_box_call(tmp_path, call, key, value):
+    # red-before (44b611ca): LABNAME=<the call> passed its grammar and reached `lhpc config ... node_name <call>` over ssh
+    p, ssh = live_copy(tmp_path, env={"OPERATOR_CALL": call, key: value})
+    assert p.returncode == 2 and f"STOP: {key} is the operator's call" in p.stdout and not ssh, p.stdout + p.stderr
+    assert call.split("-")[0].lower() not in (p.stdout + p.stderr).lower()
+
+
+def test_a_lab_identity_that_only_contains_the_call_runs_on(tmp_path):
+    p, _ = live_copy(tmp_path, env={"OPERATOR_CALL": "K1AB", "LABNAME": "K1ABlab", "LABSHORT": "K1A"})
+    assert "operator's call" not in p.stdout and "STOP: FWSHA is not a 40-hex sha" in p.stdout, p.stdout + p.stderr

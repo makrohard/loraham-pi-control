@@ -8,11 +8,18 @@ Exit status: 0 = the expected result (a read: `SEEN <nonce> <time>`; a send: `SE
 (the runner STOPs). Output is sanitised: a received line is never printed; only the fixed fields below are.
 Power: every power action re-reads the hardware value after a set and prints that readback; the runner refuses a
 peer transmission unless the readback is the low value. The PIN comes on stdin only (never argv, a file or a log).
+The call itself is checked before any device opens (exit 2 otherwise): a power value is 1-2 ASCII digits in THE power
+domain 0..17 dBm (mt-power 1..17: Meshtastic's 0 is its maximum), the runner's one; a power SET runs only with
+RFPROOF_PEER_CTX=set|restore (the runner's one setter), a send and rns-exchange only with RFPROOF_PEER_CTX=tx (inside the
+runner's tx); a nonce is the runner's form (<a-z prefix> <8 hex>).
+A read counts only a frame the peer RECEIVED: the T-Deck's RX-LoRa2 text frame, the tracker's [LoRa Rx] APRS message, the
+nonce in that frame's text; a console echo or the peer's own TX line never counts.
 The runner holds an exclusive flock around every call, so two peers never act at once (they share USB hubs).
 
   peer.py meshcom-power [<p>]          T-Deck (MeshCom): `--lora` read (its RF-Power line); with <p>: `--txpower <p>` then the read again
   peer.py meshcom-send  <nonce>        T-Deck: `::<nonce>`
-  peer.py meshcom-read  <nonce> <s>    T-Deck: `--setinfo on` for the read (prints RX-LoRa2 lines; RAM only), `--setinfo off` after
+  peer.py meshcom-read  <nonce> <s>    T-Deck: `--setinfo on` for the read (prints RX-LoRa2 lines; RAM only), `--setinfo off` after,
+                                       also on SIGINT/SIGTERM; an off that cannot be sent exits non-zero, naming it
   peer.py aprs-read     <nonce> <s>    CA2RXU tracker console, read-only
   peer.py mt-power      [<p>]          Station G2: lora.tx_power (with <p>: set, then a NEW connection reads it back)
   peer.py mt-send       <nonce>        Station G2: one broadcast text
@@ -30,10 +37,14 @@ The runner holds an exclusive flock around every call, so two peers never act at
 """
 import os
 import re
+import signal
 import sys
 import time
 
 NOT_SEEN = 3
+PCAP = 17                                  # THE power cap (dBm), the runner's PCAP: every power value lies in 0..17
+CTX = "RFPROOF_PEER_CTX"                   # the runner's context of this call: set | restore (its one setter), tx (its tx)
+NONCE = re.compile(r"[a-z]{2,6} [0-9a-f]{8}")   # the runner's nonce: NONCE_PREFIX, a space, 8 hex
 
 # The actions, one table for the driver and its dry fake (fake_peer.py loads it from here): the peer each acts on and
 # its kind; the kind fixes the arguments. A call that does not fit is a usage error: exit 2, before any device opens.
@@ -46,17 +57,33 @@ ARGS = {"power": ("[<p>]",), "send": ("<nonce>",), "read": ("<nonce>", "<s>"),
         "exchange": ("<nonce-in>", "<box-name>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>")}
 
 
+def power_ok(act, v):
+    """`v` is a power value of THE domain: 1-2 ASCII digits, 0..17 dBm (mt-power 1..17: Meshtastic's 0 is its maximum)."""
+    return re.fullmatch(r"[0-9]{1,2}", v, re.ASCII) is not None and (1 if act == "mt-power" else 0) <= int(v) <= PCAP
+
+
 def usage_error(a):
-    """None when argv `a` is a call of the table, else the reason (the caller exits 2)."""
+    """None when argv `a` is a call of the table in the runner's context (RFPROOF_PEER_CTX), else the reason (the caller
+    exits 2, before any device opens): the arguments' forms, a power value in the domain, a SET only from the runner's
+    setter, a transmission only from its tx."""
     if not a or a[0] not in ACTIONS:
         return f"unknown action {a[0] if a else '(none)'}"
     kind, args = ACTIONS[a[0]][1], a[1:]
-    want = ARGS[kind]
+    want, ctx = ARGS[kind], os.environ.get(CTX, "")
     if kind == "power":
-        ok = len(args) == 0 or (len(args) == 1 and re.fullmatch(r"-?\d+", args[0]))
-    else:
-        ok = len(args) == len(want) and all(re.fullmatch(r"\d+(\.\d+)?", v) for w, v in zip(want, args, strict=True) if w == "<s>")
-    return None if ok else f"{a[0]}: {' '.join(want)}"
+        if len(args) > 1 or (args and not power_ok(a[0], args[0])):
+            return f"{a[0]}: [<p>], <p> 1-2 digits in {1 if a[0] == 'mt-power' else 0}..{PCAP} dBm"
+        if args and ctx not in ("set", "restore"):
+            return f"{a[0]} <p>: a power set runs only from the runner's one setter ({CTX}=set|restore)"
+        return None
+    ok = len(args) == len(want) and all(
+        re.fullmatch(r"\d+(\.\d+)?", v, re.ASCII) if w == "<s>" else NONCE.fullmatch(v) if w.startswith("<nonce") else True
+        for w, v in zip(want, args, strict=True))
+    if not ok:
+        return f"{a[0]}: {' '.join(want)} (a nonce: <a-z prefix> <8 hex>)"
+    if kind in ("send", "exchange") and ctx != "tx":
+        return f"{a[0]}: a transmission runs only inside the runner's tx ({CTX}=tx)"
+    return None
 
 
 def peer_fields(name):
@@ -96,22 +123,62 @@ def ts():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def serial_wait(port, nonce, secs, pre=(), post=()):
-    import serial
-    with serial.Serial(port, 115200, timeout=0.5) as s:
-        for c in pre:
+# The receive frames a read counts; anything else on the console (an echo, a TX line, a status line) is never evidence.
+# MeshCom (printBuffer_aprs): "<time> RX-LoRa2 <len> <type> x<id> H.. S. T. M.. <src>><dst><type><text> HW:..", printed only
+# for a frame received over LoRa, with --setinfo on (lora_functions.cpp); a text frame's type is ':'.
+MESHCOM_RX = re.compile(r"\bRX-LoRa2 \d{3} : x[0-9A-Fa-f]{8} (?:\S+ ){4}[^\s>]+>[^\s:]*:(?P<text>.*) HW:")
+# CA2RXU tracker (lora_utils.cpp receivePacket): its logger's "LoRa Rx" line "---> <TNC2 frame>"; an APRS message frame's
+# information field is ":<addressee, 9 characters>:<text>[{<id>]". Its own sends are "LoRa Tx" lines.
+APRS_RX = re.compile(r"\[LoRa Rx\]\s*---> [^\s>]+>[^:\s]*::.{9}:(?P<text>[^{]*)")
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def rx_text(form, line):
+    """The text of the received frame `line` holds in `form`, else None."""
+    m = form.search(ANSI.sub("", line))
+    return m.group("text") if m else None
+
+
+def on_term(signum, _frame):
+    raise SystemExit(128 + signum)             # a SIGTERM unwinds like a SIGINT: every finally (the console restore) runs
+
+
+def restore(s, post):
+    """Send `post` (the console restore) with SIGINT/SIGTERM held off; if it cannot be sent the call fails naming the device
+    state, never a clean result."""
+    held = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        for c in post:
             s.write(c)
             time.sleep(0.5)
-        end = time.monotonic() + secs
-        try:
-            while time.monotonic() < end:
-                line = s.readline().decode("utf-8", "replace")
-                if nonce in line:
-                    return ts()
-        finally:
-            for c in post:
-                s.write(c)
-                time.sleep(0.5)
+    except Exception as e:
+        raise RuntimeError(f"the console restore {b''.join(post)!r} was not sent ({e}): the peer may keep the changed mode") from e
+    finally:
+        for sig, h in held.items():
+            signal.signal(sig, h)
+
+
+def serial_wait(port, nonce, secs, form, pre=(), post=()):
+    """SEEN time when a frame the peer RECEIVED (`form`) carries `nonce` in its text before `secs`, else None. `pre` changes the
+    console (MeshCom's --setinfo on) inside the protected region: `post` is sent on every exit, a signal's included."""
+    import serial
+    term = signal.signal(signal.SIGTERM, on_term)
+    try:
+        with serial.Serial(port, 115200, timeout=0.5) as s:
+            try:
+                for c in pre:
+                    s.write(c)
+                    time.sleep(0.5)
+                end = time.monotonic() + secs
+                while time.monotonic() < end:
+                    text = rx_text(form, s.readline().decode("utf-8", "replace"))
+                    if text is not None and nonce in text:
+                        return ts()
+            finally:
+                if post:
+                    restore(s, post)
+    finally:
+        signal.signal(signal.SIGTERM, term)
     return None
 
 
@@ -209,8 +276,8 @@ def readback_ok(p, got):
 
 
 def meshcom_sentinel(o, p):
-    """The sentinel power of a SET to `p` from `o`: the lowest value of 2..17 dBm that is neither `o` nor `p`, so a SET
-    above 17 (the T-Deck's restore to 22) has one too."""
+    """The sentinel power of a SET to `p` from `o`: the lowest value of 2..17 dBm that is neither `o` nor `p` (a pre-state `o`
+    above 17 only by the read: the runner never sets one there)."""
     return next(v for v in range(2, 18) if v not in (o, p))
 
 
@@ -445,9 +512,10 @@ def main(a):
         return mc_send(a[1])
     nonce = a[1]
     if act == "meshcom-read":
-        h = serial_wait(port("tdeck"), nonce, float(a[2]), pre=[b"--setinfo on\r\n"], post=[b"--setinfo off\r\n"])   # --setinfo on prints received frames; --debug does not
+        h = serial_wait(port("tdeck"), nonce, float(a[2]), MESHCOM_RX, pre=[b"--setinfo on\r\n"],
+                        post=[b"--setinfo off\r\n"])   # --setinfo on prints received frames; --debug does not
     elif act == "aprs-read":
-        h = serial_wait(port("tracker"), nonce, float(a[2]))
+        h = serial_wait(port("tracker"), nonce, float(a[2]), APRS_RX)
     elif act == "mt-read":
         h = mt_read(nonce, float(a[2]))
     elif act == "mc-read":

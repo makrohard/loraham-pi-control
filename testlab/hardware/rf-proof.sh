@@ -372,11 +372,13 @@ peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a 
   guard "$f" "$*" -
   if [ "$pin" = pin ]; then drylog "CMD[${PCTX:-}] PC: (PIN on stdin) peer.py $*"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: peer.py $* (the PIN on stdin)"
   else drylog "CMD[${PCTX:-}] PC: $c"; [ "$MODE" = dry ] && echo "  [dry] PC > $f: $c"; fi
-  local -a run; if [ "$MODE" = dry ]; then run=(python3 -I "$FAKE_PEER" "$@")
-  elif [ "$pin" = pin ]; then run=(pinrun "$py" "$@"); else run=(bash -c "$c"); fi
+  local x=; case "${PCTX:-}" in set|restore) x=$PCTX;; esac; [ "${TXCTX:-}" = 1 ] && x=tx   # peer.py's RFPROOF_PEER_CTX: it refuses a
+  # power set outside set|restore and a send outside tx; always given (empty for a read), so an inherited value never counts
+  local -a run; if [ "$MODE" = dry ]; then run=(env "RFPROOF_PEER_CTX=$x" python3 -I "$FAKE_PEER" "$@")
+  elif [ "$pin" = pin ]; then run=(pinrun "$x" "$py" "$@"); else run=(env "RFPROOF_PEER_CTX=$x" bash -c "$c"); fi
   if [ "${BG:-0}" = 1 ]; then ( capture "$f" "${run[@]}" < /dev/null ) & SPAWN=$!; SPAWNF[$SPAWN]=$f
   else capture "$f" "${run[@]}" < /dev/null; peerdone "$f"; fi; }
-pinrun() { local py=$1; shift; printf '%s\n' "$MC_PIN" | flock -n -E 75 "$LOCK" "$py" -I "$PEER" "$@"; }
+pinrun() { local x=$1 py=$2; shift 2; printf '%s\n' "$MC_PIN" | RFPROOF_PEER_CTX=$x flock -n -E 75 "$LOCK" "$py" -I "$PEER" "$@"; }
 peerdone() { XRC=$(cat "${OUT:-$EVD}/$1.rc" 2>/dev/null || echo 99); [ "$XRC" != 75 ] || stop "$1: the peer lock is held (one peer at a time)"
   [ "$MODE" = live ] || { local l; while IFS= read -r l; do set -- $l; frame "$3" "${*:5}"; done < <(grep '^FRAME | ' "${OUT:-$EVD}/$1"); }; }
 reap() { [ -n "$1" ] || return 0; wait "$1"; peerdone "${SPAWNF[$1]}"; }

@@ -13,14 +13,19 @@
 #  A password EXACTLY equal to the login name (a lab box) is not masked; REPORT.md and run.log open with a NOTE that says so.
 # INPUTS (env): FWSHA (40 hex: the sha under proof, on FWREF, default cons/b4-cln-r1), FWFROM (40 hex: the box's sha before
 #  the update; FWSHA must contain it), FWCI (a green CI run of FWSHA), LANCIDR (the console's allowed CIDR, read at FW0 when
-#  empty), LABNAME/LABSHORT (the lab node identity; never a callsign).
-# RF: FW6 and FW9 start meshtastic@r2 (normal power; max_power read <= 17 first, "Final Tx power" <= 17 after, else STOP).
+#  empty), LABNAME/LABSHORT (the lab node identity; never a callsign: one equal to OPERATOR_CALL, any case, any SSID, STOPs
+#  before any box contact).
+# RF: FW6 and FW9 start meshtastic@r2, FW6 tries meshtastic@r4 (normal power). BEFORE any start (mtpre): the radio's row (one,
+#  no high-power grant), its model's power_max_dbm, and the stack's max_power (meshtasticd's cap before its first frame) <=
+#  min(17, that cap), else STOP; after a start, its "Final Tx power" <= 17 (corroboration), else STOP. r4's expected refusal
+#  counts only when a read of the running set shows it is not running.
 # Box writes, each with its undo journalled BEFORE it: r4 enabled off/on (undo: on); the running stacks stopped (undo:
 #  started); the lab identity (undo: --reset); the proxy of meshtastic@r2 (undo: --mode local + webserver apply); the firewall
 #  applies (root, /etc/lhpc + nft; not undone: the state at FWSHA; a return to FWFROM's rules = reset the checkout, then the
-#  same apply sequence); one planned reboot (FW7). A STOP leaves the box as it is until the operator decides.
+#  same apply sequence); one planned reboot (FW7). Any live exit before FE's end (a STOP, a signal) replays the journalled
+#  undos last first, after the safety stop (each checked; signals held off); one that fails is named UNRESOLVED in STOP.txt.
 # Exit: 0 done, 1 a FAIL row, 2 a STOP, 130 a signal, 3 any of them when the safety stop of a started stack failed (it may
-#  still be running).
+#  still be running), else 4 when an undo did not replay (the box may be left changed).
 # Evidence: $EVD_ROOT/fw-boxproof-<UTC time> (run.log, REPORT.md, UNDO.txt, SHA256SUMS).
 set -uo pipefail
 MODE=${1:-dry}; case "$MODE" in dry|live) ;; *) echo "usage: fw-boxproof.sh dry|live"; exit 2;; esac
@@ -47,6 +52,11 @@ PW=; [ "$MODE" = dry ] || IFS= read -r PW || true; exec 0< /dev/null   # stdin: 
 PW_H=$PW; PW_Z=; MC_PIN=; TRACKER_CALL=; OPERATOR_CALL=${OPERATOR_CALL:-}   # what the redactor masks
 # EXACTLY the login name (rf-proof.sh's pweq): a lab box, allowed unmasked and noted in REPORT.md and run.log; a part of it: STOP
 pweq H || case "lhpc ${HH%@*}" in *"$PW"*) [ "$MODE" = dry ] || { echo "STOP: the box password is part of the login name"; exit 2; };; esac
+# the lab identity is never the operator's call: compared without case and SSID, before any box contact (it would reach the
+#  box command's argv and the node's identity on air)
+callbase() { local c=${1^^}; printf '%s' "${c%%-*}"; }
+for k in LABNAME LABSHORT; do [ -z "$OPERATOR_CALL" ] || [ "$(callbase "${!k}")" != "$(callbase "$OPERATOR_CALL")" ] \
+  || { echo "STOP: $k is the operator's call (the lab identity is never a callsign)"; exit 2; }; done
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="$PY -c '$RUNSET_PY'"
 ENABLE_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; ok, msg = radio_start.set_enabled(ControllerService(), sys.argv[1], sys.argv[2] == "on"); print(("OK " if ok else "REFUSED ") + msg); sys.exit(0 if ok else 3)'
@@ -86,14 +96,22 @@ stop() { say "STOP: $*"; [ "$MODE" = live ] && echo "STOP: $*" >> "$EVD/STOP.txt
 #  (stopped). On ANY exit of a live run (a STOP, a FAIL, the end, a signal) the EXIT trap stops every marked stack: its guarded
 #  stop form, through the one redactor, checked (any rc but 0, ssh 255 too, failed), one retry. A stop that fails twice
 #  makes the exit 3: the stack may still be running and its TX power is unverified.
-STARTED=()
+#  Then the undo replay: every journalled undo (UNDOS, the commands of UNDO.txt) last first, each through the redactor and
+#  checked; FE's end clears the list (it ran them itself). Every undo is idempotent (a start/stop of the running set, r4 on,
+#  the identity reset, the proxy local), so one whose change never happened is harmless. One that fails: UNRESOLVED.
+STARTED=() UNDOS=()
 started() { STARTED+=("$1"); }
 stopped() { local k keep=(); for k in "${STARTED[@]}"; do [ "$k" = "$1" ] || keep+=("$k"); done; STARTED=("${keep[@]}"); }
-onexit() { local rc=$? k i; trap - EXIT; [ "$MODE" = live ] || exit "$rc"
+onexit() { local rc=$? k i; trap - EXIT; trap '' INT TERM HUP; [ "$MODE" = live ] || exit "$rc"   # the recovery runs to its end
   for k in "${STARTED[@]}"; do
     for i in 1 2; do capture "SAFESTOP-$k-$i.txt" sshx n "$(gstop "$k")"; [ "$XRC" = 0 ] && { say "safety stop: $k stopped"; continue 2; }; done
     say "UNSAFE: $k may still be running, TX power unverified"; echo "UNSAFE: $k may still be running, TX power unverified" >> "$EVD/STOP.txt"; rc=3
-  done; exit "$rc"; }
+  done
+  [ "${#UNDOS[@]}" = 0 ] || say "undo: replaying ${#UNDOS[@]} journalled change(s), last first"
+  for ((i = ${#UNDOS[@]} - 1; i >= 0; i--)); do capture "UNDO-$i.txt" sshx n "${UNDOS[$i]}"
+    if [ "$XRC" = 0 ]; then say "undo $i: replayed"; else say "UNRESOLVED: undo $i (rc $XRC, UNDO-$i.txt): ${UNDOS[$i]}"
+      echo "UNRESOLVED: undo $i (rc $XRC): ${UNDOS[$i]}" >> "$EVD/STOP.txt"; [ "$rc" = 3 ] || rc=4; fi; done
+  exit "$rc"; }
 trap onexit EXIT; trap 'exit 130' INT TERM HUP
 fail() { say "FAIL: $*"; [ "$MODE" = live ] && echo "$*" >> "$EVD/FAILED.txt"; }
 ok() { say "ok: $*"; }
@@ -110,16 +128,25 @@ XIN() { local f=$1 in=$2; shift 2; if [ "$MODE" = dry ]; then echo "  [dry] H > 
 must() { X "$@"; [ "$XRC" = 0 ] || stop "$1: rc $XRC"; }
 body() { [ "$MODE" = dry ] && return 0; cat "$EVD/$1"; }
 has() { [ "$MODE" = dry ] && return 0; grep -qF -- "$2" "$EVD/$1"; }
-undo() { [ "$MODE" = dry ] && { echo "  [dry] undo += $*"; return 0; }; echo "$(date -u +%FT%TZ) $*" >> "$EVD/UNDO.txt"; }
+undo() { [ "$MODE" = dry ] && { echo "  [dry] undo += $*"; return 0; }; echo "$(date -u +%FT%TZ) $*" >> "$EVD/UNDO.txt" || stop "UNDO.txt: not written"; UNDOS+=("$*"); }
+undone() { UNDOS=(); }   # FE ran every undo itself: an exit after it replays none
 gstart() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then echo ALREADY-RUNNING $1; else $LH stack start $1 --yes; fi"; }
 gstop() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then $LH stack stop $1 --yes; else echo ALREADY-STOPPED $1; fi"; }
 page_ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }   # a page answers 2xx or 3xx; 000 (no answer), 4xx and 5xx are not reachable
 lan() { if [ "$MODE" = dry ]; then echo "  [dry] PC > $1: curl -sk https://$HOSTIP:$2/"; LANCODE=200; return 0; fi
   LANCODE=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "https://$HOSTIP:$2/" 2>/dev/null); echo "$LANCODE" > "$EVD/$1"; }   # 000 = not reachable
 fwstate() { X "$1" "$LH firewall"; }
-mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: normal power, <= 17)
-  must "$1-maxpower.txt" "$LH config meshtastic@r2 list"; local mp; mp=$(body "$1-maxpower.txt" | sed -nE 's/^ *max_power *= *([0-9]+).*/\1/p' | head -n 1)
-  [ "$MODE" = dry ] || { case "$mp" in ''|*[!0-9]*) stop "$1: no max_power value";; esac; [ "$mp" -le 17 ] || stop "$1: max_power $mp above 17: no start"; }
+mtpre() {   # mtpre <file-tag> <rid>: BEFORE any start of meshtastic@<rid>: its max_power (meshtasticd's cap, read before its first
+  # frame) <= min(17, the power_max_dbm of the rid's radio model), the rid's one radio row with no high-power grant; else STOP. MP = max_power
+  must "$1-maxpower.txt" "$LH config meshtastic@$2 list"; MP=$(body "$1-maxpower.txt" | sed -nE 's/^ *max_power *= *([0-9]+).*/\1/p' | head -n 1)
+  must "$1-radios.txt" "$PY -c '$RADIOS_PY'"; must "$1-caps.txt" "$PY -c '$CAPS_PY'"; [ "$MODE" = dry ] && return 0
+  local o m c; case "$MP" in ''|*[!0-9]*) stop "$1: no max_power value";; esac; [ "$MP" -le 17 ] || stop "$1: max_power $MP above 17: no start"
+  o=$(jgrant "$(body "$1-radios.txt")" "$2") || stop "$1: $o: no start"
+  m=$(body "$1-radios.txt" | awk -v r="$2" '$1 == "ROW" && $2 == r {print $3}'); c=$(body "$1-caps.txt" | awk -v m="$m" '$1 == "CAP" && $2 == m {print $3}')
+  [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || stop "$1: no single power cap of $2's model ('$m'): no start"
+  [ "$c" -le 17 ] || c=17; [ "$MP" -le "$c" ] || stop "$1: max_power $MP above $c dBm (min(17, $m's power_max_dbm)): no start"; }
+mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: normal power, <= 17): mtpre before, Final Tx power after
+  mtpre "$1" r2; local mp=$MP
   must "$1-ftx0.txt" "echo SIZE \$($FSZ); $FTX"; local n0 n1 s0 s1 b; n0=$(body "$1-ftx0.txt" | tail -n 1); s0=$(body "$1-ftx0.txt" | sed -n 's/^SIZE //p')
   [ "$MODE" = dry ] || { [[ "$n0" =~ ^[0-9]+$ ]] && [[ "$s0" =~ ^[0-9]+$ ]]; } || stop "$1: no count or size of the start log before the start"
   undo "$(gstop meshtastic@r2)"; started meshtastic@r2; must "$1-start.txt" "$(gstart meshtastic@r2)"
@@ -131,6 +158,15 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   [ "$MODE" = dry ] || { [[ "$n1" =~ ^[0-9]+$ ]] && [ "$n1" -gt "$b" ]; } || stop "$1: no Final Tx power line of this start (count ${n1:-none}, ${b} before it)"
   local fp; fp=$(body "$1-txpower.txt" | sed -nE 's/.*Final Tx power: (-?[0-9]+) dBm.*/\1/p'); [ "$MODE" = dry ] || { case "$fp" in ''|*[!0-9-]*) stop "$1: no power value in this start's Final Tx power line";; esac; [ "$fp" -le 17 ] || stop "$1: Final Tx power $fp above 17"; }
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
+
+r4refused() {   # FW6 (claim 1b): meshtastic@r4's start (the changed radio) is refused naming the apply: its power checked first
+  # (mtpre), and the refusal counts only when a read of the running set shows it is not running (a start that half-ran is none)
+  local r4rc; mtpre F6-r4 r4; started meshtastic@r4; X F6-r4.txt "$(gstart meshtastic@r4)"; r4rc=$XRC
+  must F6-r4-runset.txt "$RUNSET"
+  if [ "$MODE" = dry ] || { [ "$r4rc" != 0 ] && grep -qF "firewall-apply.sh" "$EVD/F6-r4.txt" && ! grep -qxF meshtastic@r4 "$EVD/F6-r4-runset.txt"; }; then
+    report "1b | meshtastic@r4 (changed radio) refused, naming the apply, not running | PASS"; stopped meshtastic@r4
+  else fail "FW6: meshtastic@r4 rc $r4rc: not refused naming firewall-apply.sh, or it runs"; report "1b | meshtastic@r4 refused naming the apply | FAIL"
+    X F6-r4-stop.txt "$(gstop meshtastic@r4)"; [ "$XRC" != 0 ] || stopped meshtastic@r4; fi; }
 
 endscan() {   # RE: the captures are redacted, so any occurrence of the password in the evidence is a leak
   pweq H && { ok "RE: box H password equals its login name (lab box): not scanned"; return 0; }
@@ -186,13 +222,11 @@ fwstate F5-fw.txt
 
 echo "== FW6 (claim 1) the unchanged radio's Meshtastic starts; the changed radio's is refused naming the apply"
 mtstart F6-r2; report "1a | meshtastic@r2 (unchanged radio) starts after the radio change, no apply | PASS"
-started meshtastic@r4; X F6-r4.txt "$(gstart meshtastic@r4)"; r4rc=$XRC
-if [ "$MODE" = dry ] || { [ "$r4rc" != 0 ] && grep -qF "firewall-apply.sh" "$EVD/F6-r4.txt"; }; then report "1b | meshtastic@r4 (changed radio) refused, naming the apply | PASS"; stopped meshtastic@r4
-else fail "FW6: meshtastic@r4 rc $r4rc, the refusal does not name firewall-apply.sh"; report "1b | meshtastic@r4 refused naming the apply | FAIL"; X F6-r4-stop.txt "$(gstop meshtastic@r4)"; [ "$XRC" != 0 ] || stopped meshtastic@r4; fi
+r4refused
 must F6-stop.txt "$(gstop meshtastic@r2)"; stopped meshtastic@r2
 
 echo "== FW7 (claim 1) the console stays remote over a reboot (planned)"
-undo "none: a planned reboot"; XIN F7-reboot.txt "$PW" "sudo -S -p '' systemd-run --on-active=3 systemctl reboot"; [ "$XRC" = 0 ] || stop "FW7: the reboot was not scheduled (rc $XRC)"; say "reboot scheduled (3 s)"
+[ "$MODE" = dry ] || echo "$(date -u +%FT%TZ) none: a planned reboot" >> "$EVD/UNDO.txt"; XIN F7-reboot.txt "$PW" "sudo -S -p '' systemd-run --on-active=3 systemctl reboot"; [ "$XRC" = 0 ] || stop "FW7: the reboot was not scheduled (rc $XRC)"; say "reboot scheduled (3 s)"
 if [ "$MODE" = live ]; then sleep 60; for i in $(seq 1 60); do SSHPASS=$PW sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=5 "$HH" true 2>/dev/null && break; sleep 5; done; fi
 must F7-state.txt "echo boot \$(cat /proc/sys/kernel/random/boot_id)"; BOOT1=$(body F7-state.txt | sed -n 's/^boot //p')
 if [ "$MODE" = live ]; then [ -n "$BOOT1" ] && [ "$BOOT1" != "$BOOT0" ] || stop "FW7: no new boot id after the reboot"; fi
@@ -223,6 +257,7 @@ must FE-reset.txt "$LH config meshtastic@r2 --reset --yes < /dev/null"; must FE-
 for k in $KEYS; do must "FE-start-$k.txt" "$(gstart "$k")"; done
 must FE-runset.txt "$RUNSET"; [ "$MODE" = dry ] || [ "$(body FE-runset.txt | sort | tr '\n' ' ')" = "$(body F0-runset.txt | sort | tr '\n' ' ')" ] || fail "FE: the running set differs from FW0"
 fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; page_ok "$LANCODE" || fail "FE: the console is not reachable from the LAN after the undo (code $LANCODE)"; ok "FE: running set as at FW0, console LAN code $LANCODE"
+undone
 
 echo "== RE"
 if [ "$MODE" = live ]; then

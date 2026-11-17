@@ -75,7 +75,8 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   the command, the radio's power read in this row, the message (the row's nonce only, at most 16 characters), the
   budget, both boxes' boot ids and the USB lists, and only then runs the send. An automatic send of a protocol endpoint
   (the tracker's ACK, the LXMF delivery proof, the RNS path request) is reserved with `tx ... control --reserve` right
-  before the send that triggers it. Any failed check is a STOP.
+  before the send that triggers it. Any failed check is a STOP. The peer driver (`peer.py`) refuses on its own a power
+  value outside that domain, a power set outside the runner's setter and a send outside `tx`.
 - A radio sends at most 10 frames per run (`TXMAX`); the start prints each radio's worst case (`BUDGET` lines) and a sum
   above 10 is a STOP before any transmission. After the run, each radio's TX count in its RF log (all its frames, the
   stack's own included) must also be at most 10, else that is a FAIL.
@@ -83,7 +84,9 @@ is the next line, read only when row 4 runs. Stdin is then closed.
 - Every captured output is redacted before it is written: the passwords, the PIN and the operator's call with any SSID.
   A received radio line is never written; the receive judges write `SEEN <nonce> <time> rssi=<n>`. The end scan checks
   the evidence again.
-- Reading MeshCom's received frames switches `--setinfo` on for the read and off after: the read leaves setinfo off.
+- Reading MeshCom's received frames switches `--setinfo` on for the read and off after, an interrupt included; an off
+  that cannot be sent fails the read. A read counts only a frame the peer received (MeshCom's `RX-LoRa2`, the tracker's
+  `[LoRa Rx]`) with the nonce in its text, never a console echo.
 
 ## Running it
 
@@ -99,7 +102,8 @@ both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the 
 `tx`, the lhpc calls parsed at the head (`cliforms.py`) and the redaction.
 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,
-the password on stdin).
+the password on stdin). It checks a Meshtastic stack's power cap before each start, never takes the operator's call as
+the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails).
 
 ## The evidence
 
