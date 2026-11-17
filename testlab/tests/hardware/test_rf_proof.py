@@ -369,7 +369,7 @@ peerpin pin.txt mc-read n1 5
 def test_every_peer_start_names_its_context_and_only_it(tmp_path):
     # G2-HWKITC B1: peer.py refuses a power set outside set|restore and a send outside tx (RFPROOF_PEER_CTX); the one place a
     # peer starts gives the context of its caller on every path (the plain run, the PIN run), and an empty one to a read,
-    # whatever the environment held
+    # whatever the environment held (a value no row expects, so a path that passes the inherited one on fails its row)
     (tmp_path / "peer.py").write_text("import os, sys\nsys.stdin.read()\nprint('CTX=' + os.environ.get('RFPROOF_PEER_CTX', '-'))\n")
     evd = tmp_path / "evd"
     evd.mkdir()
@@ -384,7 +384,7 @@ TXCTX=1 VMT="{sys.executable}" peerpin pin.txt mc-send "{n}"
 peer read.txt "{sys.executable}" meshcom-read "{n}" 5
 """
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, check=False,
-                       env={**os.environ, "RFPROOF_PEER_CTX": "tx"}, timeout=60)
+                       env={**os.environ, "RFPROOF_PEER_CTX": "inherited"}, timeout=60)
     got = {f: (evd / f"{f}.txt").read_text().strip() for f in ("set", "restore", "tx", "pin", "read") if (evd / f"{f}.txt").exists()}
     assert got == {"set": "CTX=set", "restore": "CTX=restore", "tx": "CTX=tx", "pin": "CTX=tx", "read": "CTX="}, p.stdout + p.stderr
 

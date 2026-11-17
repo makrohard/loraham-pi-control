@@ -261,6 +261,7 @@ NOT_RX = {"meshcom-read": [f"TX command: {N1}\r\n".encode(), f"{N1}\r\n".encode(
           "aprs-read": [f"TX command: {N1}\r\n".encode(), rx_aprs(N1, "LoRa Tx"), f"[LoRa Rx] Rx failed {N1}\r\n".encode(),
                         rx_aprs("other").replace(b"{001", f"{{{N1}".encode())]}
 IS_RX = {"meshcom-read": rx_meshcom(N1), "aprs-read": rx_aprs(N1)}
+RX_LABEL = {"meshcom-read": b"RX-LoRa2", "aprs-read": b"[LoRa Rx]"}
 
 
 @pytest.mark.parametrize("act,line", [(a, x) for a, xs in NOT_RX.items() for x in xs])
@@ -272,7 +273,9 @@ def test_a_line_that_is_no_received_frame_is_not_seen(clock, monkeypatch, capsys
 
 @pytest.mark.parametrize("act", sorted(IS_RX))
 def test_a_received_frame_with_the_nonce_in_its_text_is_seen(clock, monkeypatch, capsys, act):
-    port = Port(clock, pending=b"\x1b[32m" + IS_RX[act])        # a colour code before it changes nothing
+    line = IS_RX[act].replace(RX_LABEL[act], RX_LABEL[act] + b"\x1b[0m")
+    assert line != IS_RX[act]
+    port = Port(clock, pending=b"\x1b[32m" + line)              # colour codes before and inside the frame change nothing
     monkeypatch.setitem(sys.modules, "serial", FakeSerialModule(port))
     assert peer.main([act, N1, "5"]) == 0 and capsys.readouterr().out.split()[:3] == ["SEEN", *N1.split()]
 

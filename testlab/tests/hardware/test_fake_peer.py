@@ -120,7 +120,7 @@ INVALID = [(["rns-send", N1], "tx"), (["rns-read", N1, "5"], ""), (["meshcom-sen
            (["rns-exchange", IN1, "b", "5", "d", OUT1], "tx"), ([], ""),
            (["mt-power", "20"], "set"), (["mt-power", "30"], "set"), (["mt-power", "-20"], "set"), (["mt-power", "0"], "set"),
            (["mt-power", "18"], "restore"), (["meshcom-power", "18"], "set"), (["meshcom-power", "22"], "restore"),
-           (["mc-power", "-2"], "set"), (["mc-power", "123"], "set"), (["mc-power", "\uff11"], "set"), (["mt-power", "1"], ""),
+           (["mc-power", "-2"], "set"), (["mc-power", "-0"], "set"), (["mc-power", "123"], "set"), (["mc-power", "\uff11"], "set"), (["mt-power", "1"], ""),
            (["mt-power", "1"], "tx"), (["mt-send", N1], ""), (["mt-send", N1], "set"), (["mc-send", N1], ""),
            (["meshcom-send", N1], "restore"), (["rns-exchange", IN1, "b", "5", "d", OUT1, "g"], ""),
            (["mt-send", "rfkit123"], "tx"), (["mt-send", N1 + "x" * 100], "tx"), (["mt-read", "rfkit123", "5"], ""),
