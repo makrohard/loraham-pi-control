@@ -27,12 +27,14 @@ strap, and touch ground before you touch the CH341A board, the EEPROM or the rad
 - A HopeRF RFM98PW module on a carrier with a ground plane, a 433 MHz antenna or a 50 Ω dummy load.
 - Other modules: a plain SX127x module (SX1276/77/78, without the RFM98PW's extra PA) or an SX126x module
   (SX1262) works the same way, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
-  Feed its VCC 3.3 V, never the 5 V feed of step 4. An SX127x module takes the signals of step 3 (NSS,
-  SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the model `ch341-rfm98pw-433` (433 MHz). An SX1262
-  module also needs BUSY and uses DIO1 where the SX127x uses DIO0: wire it as one of the two SX1262
-  [USB radios](usb-radios.md), the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY, D1 RXEN; model
-  `meshstick-1262`) or the PINE64 adapter (`pinedio-usb-1262`), both 868 MHz models in LHPC. Each
-  model's daemon preset fixes that stick's pins, TCXO and PA settings, so the module must match them.
+  Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the
+  5 V feed of step 4; the rating of the board's 3.3 V pads is unknown. An SX127x module takes the
+  signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the model `ch341-rfm98pw-433`
+  (433 MHz). An SX1262 module also needs BUSY and uses DIO1 where the SX127x uses DIO0: wire it as one
+  of the two SX1262 [USB radios](usb-radios.md), the Meshstick (D0 NSS, D6 DIO1, D2 RESET, D4 BUSY,
+  D1 RXEN; model `meshstick-1262`) or the PINE64 adapter (`pinedio-usb-1262`), both 868 MHz models in
+  LHPC. Each model's daemon preset fixes that stick's pins, TCXO and PA settings, so the module must
+  match them.
 - A 470 µF electrolytic capacitor (10 V or more; 16 V used) and a second 100 nF ceramic.
 - A multimeter, fine soldering tools and short insulated wires.
 
@@ -223,11 +225,12 @@ when the host needs it). The build needs no driver blacklist.
      values, the 2 included, before anything can transmit. A daemon that already runs takes it with
      `lhpc config daemon@<rid> --apply-daemon`, which must report no error.
    - Send one frame: `lhpc test daemon --tx --yes`. It sets no power of its own, so the frame goes out at
-     the 2. It needs the operator call sign, and this stick must be the only enabled 433 MHz radio in the
-     hardware list.
+     the 2. It needs the operator call sign, and it sends one frame on every band the daemon serves: make
+     this stick the only enabled radio in the hardware list for the test.
 
-   The daemon does not report the power back: the evidence of 2 is the daemon's OK to the apply and an
-   outside measurement (a power meter, or a peer's RSSI). Watch the kernel log for a USB disconnect, and
+   The daemon does not report the power back: the evidence of 2 is the daemon's OK to the apply (the
+   start prints `[ok] 433: POWER=2 sent`; a `[warn]` there means it was not applied) and an outside
+   measurement (a power meter, or a peer's RSSI). Watch the kernel log for a USB disconnect, and
    check the module's temperature. The reference build sent one MeshCom frame at the lowest drive,
    without a USB event. A client stack started later on this radio applies its own `POWER`.
 4. Before you trust the build, check that TX returns to RX, that a daemon restart works, and that the
