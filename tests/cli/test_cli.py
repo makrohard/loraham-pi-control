@@ -204,16 +204,23 @@ def test_self_update_check_cli(capsys, monkeypatch):
 def test_the_helper_runs_under_the_units_budget_and_only_there(capsys, monkeypatch):
     """`--run-service` runs the helper under ONE budget, the unit's TimeoutStartSec less a margin: inside it a
     step is clipped to what is left; outside the helper (the operator's shell) nothing is."""
+    import types
     from lhpc.core import selfupdate
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}
-    def fake_run(self):
-        seen["clip"] = selfupdate.clip(10_000.0)
-        return ActionResult(True, "Update applied; console back.")
-    monkeypatch.setattr(ControllerService, "self_update_run_service", fake_run)
+    def fake(key):
+        def run(self, **k):
+            seen[key] = selfupdate.clip(10_000.0)
+            return ActionResult(True, "done")
+        return run
+    monkeypatch.setattr(selfupdate, "time", types.SimpleNamespace(monotonic=lambda: 1000.0, time=selfupdate.time.time))
+    monkeypatch.setattr(ControllerService, "self_update_run_service", fake("helper"))
+    monkeypatch.setattr(ControllerService, "self_update_apply_operator", fake("operator"))
     monkeypatch.setenv("INVOCATION_ID", "test")
     assert main(["self-update", "--run-service"]) == 0
-    assert selfupdate.helper_budget_s() - 5 < seen["clip"] <= selfupdate.helper_budget_s(), seen
+    monkeypatch.delenv("INVOCATION_ID")
+    assert main(["self-update", "--apply", "--yes"]) == 0
+    assert seen == {"helper": selfupdate.helper_budget_s(), "operator": 10_000.0}, seen   # a still clock: exact
     assert selfupdate.clip(10_000.0) == 10_000.0                       # the budget ends with the helper
 
 

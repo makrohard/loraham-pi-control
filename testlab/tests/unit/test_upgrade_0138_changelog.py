@@ -25,9 +25,32 @@ def test_the_changelog_gives_the_tested_0138_step_line_by_line():
     assert sec.index(upgrade_0138.LOCK[0]) > at[1]                 # the lock line follows the reset it is keyed to
 
 
-def test_no_tracked_path_is_ignored_so_the_reset_never_writes_over_an_ignored_file():
-    """`git status --short` (the step's first line) does not list ignored files; the step's reset can replace one only
-    at a tracked path that .gitignore matches. There is none, so status shows everything the reset replaces."""
-    r = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-ci", "--exclude-standard"], capture_output=True,
-                       text=True, check=True, timeout=60)
-    assert r.stdout == "", r.stdout
+def _git(cwd, *args):
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True,
+                          text=True, check=True, timeout=60).stdout
+
+
+def test_the_steps_first_line_names_the_ignored_files_the_reset_replaces(tmp_path):
+    """The reset writes over ignored files the operator's .gitignore cannot vouch for: one excluded in
+    .git/info/exclude at a path the new commit adds, and an untracked directory of ignored files where it adds a file.
+    The step's first line, run as written, names both before the reset replaces them."""
+    up, co = tmp_path / "up", tmp_path / "co"
+    _git(tmp_path, "init", "-q", "-b", "main", str(up))
+    (up / "a").write_text("a\n")
+    _git(up, "add", "a")
+    _git(up, "commit", "-q", "-m", "one")
+    _git(tmp_path, "clone", "-q", str(up), str(co))
+    (up / "tool.sh").write_text("upstream\n")
+    (up / "cache").write_text("upstream\n")
+    _git(up, "add", "tool.sh", "cache")
+    _git(up, "commit", "-q", "-m", "two")
+    _git(co, "fetch", "-q")
+    (co / ".git" / "info" / "exclude").write_text("tool.sh\n*.pyc\n")
+    (co / "tool.sh").write_text("mine\n")
+    (co / "cache").mkdir()
+    (co / "cache" / "x.pyc").write_text("mine\n")
+    shown = subprocess.run(["sh", "-c", upgrade_0138.STEPS[0]], cwd=co, capture_output=True, text=True, check=True,
+                           timeout=60).stdout.splitlines()
+    assert "!! tool.sh" in shown and any(ln.startswith("!! cache") for ln in shown), shown
+    subprocess.run(["sh", "-c", upgrade_0138.STEPS[1]], cwd=co, capture_output=True, text=True, check=True, timeout=60)
+    assert (co / "tool.sh").read_text() == "upstream\n" and (co / "cache").is_file()   # the case is real: both replaced

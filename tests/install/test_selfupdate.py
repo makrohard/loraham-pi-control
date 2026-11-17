@@ -237,7 +237,7 @@ def test_an_advance_cut_off_by_its_limit_says_so_and_the_retry_lists_the_changes
     _hanging_git(tmp_path, monkeypatch)
     assert main(["self-update", "--apply", "--yes", *flags]) == 1
     out = capsys.readouterr().out
-    assert "git timed out after 1 s" in out and _PARTIAL in out and "refused" not in out, out
+    assert "git did not finish in the time it had" in out and _PARTIAL in out and "refused" not in out, out
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
     assert main(["self-update", "--apply", "--yes"]) == 1
     out = capsys.readouterr().out
@@ -389,7 +389,7 @@ def test_a_cleanup_cut_after_its_reset_is_listed_by_the_retry_and_finished_by_th
     first = selfupdate.apply_update(env["sys"], env["paths"], force=True)
     assert first["timed_out"] is True and gitrepo.git(w, "rev-parse", "HEAD") == new, first
     again = selfupdate.apply_update(env["sys"], env["paths"])
-    assert again.get("already") is True and again.get("changes") == ["?? b.txt"], again
+    assert again["ok"] is False and again.get("incomplete") and again.get("changes") == ["?? b.txt"], again
     assert "'overwrite local changes' discards them" in again["message"], again
     done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
     assert done["ok"] is True and not done.get("already") and not (w / "b.txt").exists(), done
@@ -423,7 +423,7 @@ def test_the_cli_retry_after_a_cut_cleanup_names_what_is_left_and_the_overwrite(
     main = _operator_cli(monkeypatch)
     _cut_cleanup(env, monkeypatch)
     capsys.readouterr()
-    assert main(["self-update", "--apply", "--yes"]) == 0
+    assert main(["self-update", "--apply", "--yes"]) == 1        # not complete: no success
     out = capsys.readouterr().out
     assert "These paths would be discarded by 'overwrite local changes':" in out and "b.txt" in out, out
     assert "lhpc self-update --apply --overwrite" in out, out
@@ -437,7 +437,7 @@ def test_an_unreadable_status_at_an_up_to_date_head_is_finished_by_the_overwrite
     monkeypatch.setattr(selfupdate, "local_state", lambda system: {**real_state(system), "status_ok": False,
                                                                     "dirty": False})
     plain = selfupdate.apply_update(env["sys"], env["paths"])
-    assert plain.get("already") is True and plain.get("status_unread") is True, plain
+    assert plain["ok"] is False and plain.get("incomplete") and plain.get("status_unread") is True, plain
     assert "could not be read" in plain["message"] and "'overwrite local changes'" in plain["message"], plain
     done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
     assert done["ok"] is True and not done.get("already") and not (env["work"] / "b.txt").exists(), done
@@ -475,6 +475,16 @@ def test_a_spent_budget_starts_no_git_and_no_venv_sync(env, monkeypatch):
     r = selfupdate._git(env["sys"], env["work"], ["merge", "--ff-only", "origin/main"], selfupdate._APPLY_TIMEOUT)
     v = selfupdate.venv_sync(env["sys"].runner, sys.executable, env["work"], 600.0)
     assert r.timed_out and v.timed_out and calls == [], calls
+
+
+def test_a_late_helpers_venv_sync_gets_only_what_is_left(env, monkeypatch):
+    """With 7 s of the budget left, each venv-sync step runs under a 7 s limit, not its own 600 s."""
+    seen = []
+    monkeypatch.setattr(env["sys"].runner, "run", lambda argv, timeout=None, *a, **k: (
+        seen.append(timeout), CommandResult(0, "", ""))[1])
+    frozen_budget(monkeypatch, 7.0)
+    assert selfupdate.venv_sync(env["sys"].runner, sys.executable, env["work"], 600.0).returncode == 0
+    assert seen == [7.0, 7.0], seen
 
 
 def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):

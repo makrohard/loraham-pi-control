@@ -634,7 +634,8 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
     steps = list(UPGRADE_STEP_0138)
     lock_text, lock_line = UPGRADE_LOCK_0138
     added = [ln.split("\t", 1)[1] for ln in changed if ln.startswith("A")]
-    # another git, elsewhere on the box, alive through every step: the step never looks at it
+    # another git, elsewhere on the box, alive through every step, the update run again included: the step never looks
+    # at it (if an assertion ends the test first, its stdin closes with this process and it ends at EOF)
     other = subprocess.Popen([real, "-C", str(tmp_path / "remote.git"), "cat-file", "--batch"],
                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
 
@@ -672,9 +673,10 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
         assert _git("-C", str(co), "rev-parse", "HEAD") == cand, name
         assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == "", name
         assert not lock.exists(), name
+    run(steps[2])
+    assert other.poll() is None, "the other git ended before the update ran again"
     other.kill()
     other.wait()
-    run(steps[2])
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand
     assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == ""
     have = subprocess.run([str(venv / "bin" / "python"), "-c", "from importlib.metadata import "

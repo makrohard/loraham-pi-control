@@ -659,16 +659,17 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
     if up["upstream_head"] and up["upstream_head"] == local.get("head") and not (
             force and (local.get("dirty") or unknown)):
         # Up to date by HEAD, but the tree decides whether the update is done: a forced cleanup cut off
-        # after its reset leaves untracked files. They are listed here, and the operator's overwrite (the
-        # forced path below, run again) finishes the cleanup it had agreed to.
+        # after its reset leaves untracked files. "Already up to date" is a success only for a tree read
+        # clean; else the update is not complete (ok=False), the paths are listed, and the operator's
+        # overwrite (the forced path below, run again, with fresh consent) finishes the cleanup.
         if local.get("dirty"):
-            return {"ok": True, "already": True, "deps_changed": False, "changes": list(local_changes(system)),
-                    "message": "Already up to date, but local changes are present (modified or untracked "
-                               "files) — 'overwrite local changes' discards them."}
+            return {"ok": False, "incomplete": True, "changes": list(local_changes(system)),
+                    "message": "Up to date by HEAD, but the update is not complete: local changes are present "
+                               "(modified or untracked files) — 'overwrite local changes' discards them."}
         if unknown:                                   # the tree's state is not known: say so, offer the finish
-            return {"ok": True, "already": True, "deps_changed": False, "status_unread": True,
-                    "message": "Already up to date by HEAD; the checkout's state could not be read — "
-                               "'overwrite local changes' finishes a cut cleanup."}
+            return {"ok": False, "incomplete": True, "status_unread": True,
+                    "message": "Up to date by HEAD, but the checkout's state could not be read, so the update "
+                               "is not confirmed complete — 'overwrite local changes' finishes a cut cleanup."}
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if not force and not local.get("status_ok", True):
         # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing
@@ -714,7 +715,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         # kill can leave (HEAD.lock, a ref's) are named by git's own error at that next update.
         lock = _index_lock(system, root)
         return {"ok": False, "timed_out": True, "lock": lock,
-                "message": f"Update could not be applied — git timed out after {_APPLY_TIMEOUT:g} s and "
+                "message": "Update could not be applied — git did not finish in the time it had and "
                 "may have written part of the update; nothing was undone."
                 + (f" Once no git runs in this checkout, remove git's leftover lock: rm {shlex.quote(lock)}."
                    " Then run" if lock else " Run")

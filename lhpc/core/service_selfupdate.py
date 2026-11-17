@@ -747,7 +747,7 @@ class SelfUpdateOpsMixin:
                 refusal = ["  nothing to run here — the box could not reach the checkout's origin "
                            "(network, DNS or the remote itself); once it can, run the same "
                            "command again"]
-            elif res.get("needs_overwrite") or refusal:
+            elif res.get("needs_overwrite") or res.get("incomplete") or refusal:
                 refusal.append("Resetting the checkout to upstream discards exactly those local "
                                "commits/changes and keeps nothing of them.")
                 nxt = ["lhpc self-update --apply --overwrite"]
@@ -761,9 +761,8 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, res["message"], data=data,
                                 details=tuple(d for d in details if d),
                                 next_commands=list(instr["commands"]))
-        if res.get("already"):                               # nothing to update
-            return ActionResult(True, res["message"], data=data, details=tuple(refusal), next_commands=(
-                ["lhpc self-update --apply --overwrite"] if refusal or res.get("status_unread") else []))
+        if res.get("already"):                               # nothing to update: a tree read clean
+            return ActionResult(True, res["message"], data=data)
         details = [n for n in (instr.get("note", ""),) if n]
         details += ["Restart the web console to load the new version:"]
         details += ["  " + c for c in instr["commands"]]
