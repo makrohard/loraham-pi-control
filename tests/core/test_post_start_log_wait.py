@@ -473,6 +473,8 @@ def _do(a):
             f.write(b"".join(c.encode() * k for c, k in a[2]))
     elif a[0] == "kill":
         _kill()
+    elif a[0] == "remove":
+        os.unlink(a[1])
     elif a[0] == "arm":                           # the actions to run after the next stat or pin of the link
         _armed[:] = a[1]
 def _act(when):
@@ -502,6 +504,9 @@ def _chunk(read):
         _now[0] += cfg.get("read_cost", 0.0)
     if _pat and _pat in d:
         _hit[0] = True
+    if cfg.get("append_each"):                    # a writer appending to the log during every read
+        with _ropen(cfg["append_each"], "ab") as f:
+            f.write(b"z" * 61)
     _act("after")
     return d
 class _Log:
@@ -543,8 +548,14 @@ def _osopen(p, flags=os.O_RDONLY, *a, **k):
     if isinstance(p, str) and flags & getattr(os, "O_PATH", 0):
         _touched(p)
     return fd
-_rstat = os.stat
+_rstat, _before = os.stat, [list(cfg.get("before_stat", []))]
 def _stat(p, *a, **k):
+    if _before[0] and p == cfg.get("link"):       # actions just before the post-read look at the path, once
+        acts, _before[0] = _before[0], []
+        for a_ in acts:
+            _do(a_)
+    if cfg.get("trace_stat") and p == cfg.get("link"):
+        _trace.write("stat %.2f\n" % _now[0])
     r = _rstat(p, *a, **k)
     if isinstance(p, str):
         _touched(p)
@@ -552,7 +563,8 @@ def _stat(p, *a, **k):
 def _pread(fd, n, off):
     if cfg.get("short"):
         n = min(n, cfg["short"])                          # the kernel may return less than asked
-    return _chunk(lambda: _rpread(fd, n, off)) if n >= 65536 or off == 0 else _rpread(fd, n, off)
+    counted = n >= 65536 or off == 0 or cfg.get("short")  # with short pieces, every piece is a read
+    return _chunk(lambda: _rpread(fd, n, off)) if counted else _rpread(fd, n, off)
 _rclose, _eio = os.close, [False]
 def _close(fd):
     target = ""
@@ -917,6 +929,7 @@ def test_an_error_closing_one_descriptor_still_closes_the_other_and_keeps_the_re
     rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 3, optional=True), {"kind": "delay", "seconds": 1}],
                                     virtual=True, logs=[str(log)], close_eio=True)
     assert [st["kind"] for st in steps] == ["log_wait"] and steps[0]["outcome"] in ("ready", "timeout"), (steps, err)
+    assert len([ln for ln in err.splitlines() if "failed: Input/output error" in ln]) == 1, err
     assert not [ln for ln in trace if ln.startswith("leak ")], trace  # rule-10: a trace line's first word is its kind
 
 
@@ -926,3 +939,156 @@ def test_an_expired_budget_starts_no_connect(tmp_path):
     rc, steps, err, trace = _hooked(tmp_path, [{"kind": "tcp_wait", "host": "127.0.0.1", "port": _closed_port(),
                                                 "timeout": 1, "required": True}], virtual=True, delta=0.5)
     assert steps[0]["outcome"] == "timeout" and not [ln for ln in trace if ln.startswith("connect ")], (steps, trace)  # rule-10: a trace line's first word is its kind
+
+
+def test_a_log_appended_to_during_every_read_is_still_read(tmp_path):
+    """R1: the UART log grows by appends (QEMU's output, `>>`), here during every read; an append keeps the bytes read
+    before it valid, so the line at the log's start counts."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE + "y" * 600_000)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], append_each=str(log))
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_a_log_rewritten_after_the_read_before_the_path_is_looked_at_again_is_read_again(tmp_path):
+    """R2: the read holds the line; then, before the path is looked at again, the file is rewritten in place (same
+    inode and size) without it: the line read is no longer the file's, and the next read has none."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE + "y" * 100)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], link=str(log),
+                                 before_stat=[["rewrite", str(log), [["x", len(LINE) + 100]]]])
+    assert steps[0]["outcome"] == "timeout", (steps, err)
+
+
+def test_no_piece_of_a_read_starts_after_the_deadline(tmp_path):
+    """R3: a read returned in short pieces, each taking 0.3 s of a 1 s budget: the stop check runs before every piece,
+    so none starts at or after the deadline."""
+    log = tmp_path / "uart.log"
+    log.write_text("y" * 200)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, logs=[str(log)], short=16, read_cost=0.3)
+    starts = [float(ln.split()[1]) for ln in trace if ln.startswith("read ")]  # rule-10: a trace line's first word is its kind
+    assert steps[0]["outcome"] == "timeout" and starts and max(starts) < 1.0, (steps, trace)
+
+
+def test_a_read_that_overlaps_a_rewrite_is_read_once_more_in_the_same_pass(tmp_path):
+    """R4: the first read overlaps an in-place rewrite (same size, a new mtime) that puts the line in: the file is read
+    once more in the same pass, and that consistent read holds the line - ready at the first attempt."""
+    log = tmp_path / "uart.log"
+    log.write_text("x" * 200)
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 5)], virtual=True, logs=[str(log)],
+                                 on_read={"1": ["rewrite", str(log), [[LINE, 1], ["y", 200 - len(LINE)]]]})
+    assert (rc, steps[0]["outcome"], steps[0]["attempts"]) == (0, "ready", 1), (steps, err)
+
+
+def test_a_log_truncated_during_the_read_is_read_again_and_counts(tmp_path):
+    """R5: the log shrinks during a read returned in pieces: the read stops at the new end (no spinning on empty
+    reads), is not taken as the file's version, and the read that follows finds the line."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE + "y" * (1 << 17))
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], short=1 << 16,
+                                 read_cost=0.01, on_read={"1": ["rewrite", str(log), [[LINE, 1]]]})
+    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+
+
+def test_no_look_at_the_path_starts_after_the_deadline(tmp_path):
+    """N1: the read that holds the line ends past the deadline: the path is not looked at again (no stat after the
+    stop), and the step ends in timeout."""
+    log = tmp_path / "uart.log"
+    log.write_text(LINE)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 1)], virtual=True, logs=[str(log)], link=str(log),
+                                    trace_stat=True, read_cost=1.5)
+    stats = [ln for ln in trace if ln.startswith("stat ")]  # rule-10: a trace line's first word is its kind
+    assert steps[0]["outcome"] == "timeout" and stats == [], (steps, trace)
+
+
+def test_a_rotated_log_leaves_no_old_size_in_the_record(tmp_path):
+    """H3: the first pass reads a log larger than the cap; the path then names no file. The timeout record and its
+    stderr line speak of what the last pass saw, not of the old file's size."""
+    log = tmp_path / "uart.log"
+    log.write_bytes(b"y" * ((16 << 20) + 1))              # one byte over the launcher's _CAP
+    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)],
+                                 on_read={"1": ["remove", str(log)]})
+    assert steps[0]["outcome"] == "timeout" and "detail" not in steps[0] and "MiB" not in err, (steps, err)
+
+
+def _guest(behavior):
+    """A fake console: each connection's first line goes to `behavior(line)`, whose return is the reply (then the
+    connection is closed). Returns (port, the lines received, stop)."""
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    got = []
+
+    def serve():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            with conn:
+                line = conn.recv(256).decode()
+                got.append(line)
+                conn.sendall(behavior(line).encode())
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1], got, srv.close
+
+
+def _send(port, **kw):
+    return {"kind": "tcp_send", "host": "127.0.0.1", "port": port, "data": "--setcall DL1AB-1\n", "required": True,
+            "label": "callsign", **kw}
+
+
+def test_no_send_reaches_a_main_replaced_during_the_probe(tmp_path):
+    """H1: the main ends while the console answers the probe (a read of up to 30 s): no --setcall is sent to what
+    runs now, and the required step ends main-gone."""
+    main, binding = _bound_main()
+    try:
+        port, got, stop = _guest(lambda ln: (main.kill(), main.wait(), "Call: <OTHER>\r\n")[2] if ln.startswith("--info")
+                                 else "Call:DL1AB-1 Short:X set\n")
+        rc, steps, err, _t = _hooked(tmp_path, [_send(port, probe="--info\n", probe_value="Call: <([^>]*)>",
+                                                      probe_expect="DL1AB-1", stop_on="Call:DL1AB-1")], binding)
+        stop()
+    finally:
+        main.kill()
+        main.wait()
+    assert (rc, steps[0]["outcome"]) == (1, "main-gone") and not [g for g in got if g.startswith("--setcall")], \
+        (steps, got, err)
+
+
+def test_an_ack_from_a_main_gone_during_the_read_is_not_counted(tmp_path):
+    """H2: the main ends while the console sends its ACK: the step ends main-gone, not acked (exit 1, not 0)."""
+    main, binding = _bound_main()
+    try:
+        port, got, stop = _guest(lambda ln: (main.kill(), main.wait(), "Call:DL1AB-1 Short:X set\n")[2])
+        rc, steps, err, _t = _hooked(tmp_path, [_send(port, stop_on="Call:DL1AB-1")], binding)
+        stop()
+    finally:
+        main.kill()
+        main.wait()
+    assert (rc, steps[0]["outcome"]) == (1, "main-gone"), (steps, err)
+
+
+def test_an_exec_whose_main_ended_meanwhile_is_not_ok(tmp_path):
+    """H2: a required exec completes (rc 0) after the main has ended: its result is not the main's, main-gone."""
+    main, binding = _bound_main()
+    try:
+        rc, steps, err, _t = _hooked(tmp_path, [{"kind": "exec", "argv": ["kill", str(main.pid)], "required": True}],
+                                     binding)
+    finally:
+        main.kill()
+        main.wait()
+    assert (rc, steps[0]["outcome"]) == (1, "main-gone"), (steps, err)
+
+
+@pytest.mark.parametrize("reply, outcome", [
+    ("Call:DL1AB-12 Short:X set\n", "sent-unacked"),      # another call that starts with ours
+    ("Call:DL1AB-1 Short:X set\n", "acked"),
+    ("Call:DL1AB-1", "acked"),                             # the answer ends right after the call
+])
+def test_an_ack_counts_only_for_the_whole_call(tmp_path, reply, outcome):
+    """H4: stop_on has no closing character; "Call:DL1AB-1" must not be read in "Call:DL1AB-12"."""
+    port, got, stop = _guest(lambda ln: reply)
+    rc, steps, err, _t = _hooked(tmp_path, [_send(port, stop_on="Call:DL1AB-1")])
+    stop()
+    assert steps[0]["outcome"] == outcome, (steps, err)

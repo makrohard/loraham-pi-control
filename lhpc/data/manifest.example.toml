@@ -2079,6 +2079,9 @@ main = "meshcom-qemu"
   # window until it lands (idempotent). `skip_if_param` sends NO
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
+    # Neither log_wait can see a stale generation (a previous run's console line, a marker for another sha) only
+    # because run.sh removes both files before QEMU opens the endpoints (run.sh:126, :330) and this runner starts after
+    # `readiness = "endpoint"`: a change to either breaks that silently.
     # Ready = the firmware's own line in this guest's current UART log (run.sh moves uart-latest.log at every
     # (re)boot), not the host forward QEMU opens long before the firmware runs (B2a, his C).
     { kind = "log_wait", path = "{source}/.run/{instance_index_dir}uart-latest.log", pattern = "Console started on port 2323", timeout = 1300, label = "firmware boot", shares_clock = "meshcom-provisioning" },

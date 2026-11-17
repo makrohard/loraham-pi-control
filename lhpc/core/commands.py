@@ -906,9 +906,20 @@ def _why_stop(end):
 
 _CAP = 16 << 20                            # a log is read from its start up to this; a larger one is said so
 
+def _said(text, t, final):
+    # `text` in the answer `t` as a whole token: a text ending in a letter, digit or "-" must not run on into one
+    # ("Call:DL1AB-1" is not in "Call:DL1AB-12"); while the answer still arrives, a match at its end waits for more.
+    tail = "" if not _re.match(r"[A-Za-z0-9-]", text[-1:]) else "(?![A-Za-z0-9-])" if final else "(?=[^A-Za-z0-9-])"
+    return _re.search(_re.escape(text) + tail, t) is not None
+
+def _kept(a, b):
+    # The same file, unchanged or only grown since `a` (an append keeps the bytes read before it valid).
+    return a.st_ino == b.st_ino and (b.st_size > a.st_size or (b.st_size, b.st_mtime_ns) == (a.st_size, a.st_mtime_ns))
+
 def _snapshot(rfd, end):
-    # The file's first _CAP bytes, read to that size or EOF, as one consistent version: (inode, size, mtime_ns)
-    # before and after the read must agree, else it is read once more. None: no consistent read in two (or a stop).
+    # The file's first _CAP bytes, read to that size, as one consistent version: read in full and the file kept
+    # (_kept) from before the read to after it, else it is read once more. Returns (bytes, larger than the cap,
+    # the fstat before the read); None: no consistent read in two (or a stop).
     for _ in (1, 2):
         a = os.fstat(rfd)
         want, data = min(a.st_size, _CAP), b""
@@ -917,11 +928,10 @@ def _snapshot(rfd, end):
                 return None                       # nothing starts after the deadline or main's end
             chunk = os.pread(rfd, want - len(data), len(data))
             if not chunk:
-                break
+                break                             # shrunk meanwhile: this read is not the whole version
             data += chunk
-        b = os.fstat(rfd)
-        if (a.st_ino, a.st_size, a.st_mtime_ns) == (b.st_ino, b.st_size, b.st_mtime_ns):
-            return data, a.st_size > _CAP
+        if len(data) == want and _kept(a, os.fstat(rfd)):
+            return data, a.st_size > _CAP, a
     return None
 
 def _log_scan(s, end, t0, lbl):
@@ -930,9 +940,10 @@ def _log_scan(s, end, t0, lbl):
     # its start through the pin as one consistent version (_snapshot); a hit counts only if the path still names
     # that file afterwards and the deadline and the bound main still hold. Both descriptors are closed on every
     # exit, each on its own. Boundary: the files are LHPC's own, under its runtime and source roots on local block
-    # storage; FUSE and network filesystems there are out of scope, and so is a rewrite within one mtime tick.
+    # storage; FUSE and network filesystems there are out of scope, and so are a rewrite within one mtime tick, an
+    # in-place rewrite that also grows the file during the read, and a log truncated and regrown on every pass.
     path, pat = s["path"], s["pattern"].encode()
-    tries, seen, nxt, warned, big = 0, "", t0 + 30, False, False
+    tries, seen, nxt, warned, big, closewarn = 0, "", t0 + 30, False, False, False
     while True:
         why = _why_stop(end)
         if why:
@@ -940,6 +951,7 @@ def _log_scan(s, end, t0, lbl):
         tries += 1
         hit = again = False
         pfd = rfd = None
+        seen, big = "", False                     # what THIS pass saw: a rotated or absent file keeps no old state
         try:
             pfd = os.open(path, os.O_PATH | os.O_CLOEXEC)
             st = os.fstat(pfd)
@@ -955,11 +967,11 @@ def _log_scan(s, end, t0, lbl):
                 rfd = os.open("/proc/self/fd/%d" % pfd, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
                 got = _snapshot(rfd, end)         # checks the stop before every read, the reopen's time included
                 if got is not None:
-                    data, big = got
-                    if pat in data:
+                    data, big, snap = got
+                    if pat in data and not _why_stop(end):   # nothing starts after a stop, this look included
                         cur = os.stat(path)
-                        hit = (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino)
-                        again = not hit           # the path names another file now: read that one at once
+                        hit = cur.st_dev == st.st_dev and _kept(snap, cur)
+                        again = not hit           # another file, or this one rewritten since the read: read again
         except OSError:
             pass                                  # absent (a guest provisioning) or unreadable: not yet
         finally:
@@ -967,8 +979,10 @@ def _log_scan(s, end, t0, lbl):
                 if fd is not None:
                     try:
                         os.close(fd)              # each on its own: an error closing one never skips the other
-                    except OSError:
-                        pass                      # the descriptor is released even when close reports an error
+                    except OSError as e:          # the descriptor is released anyway; said once per step
+                        if not closewarn:
+                            sys.stderr.write("log_wait %s: closing %s failed: %s\\n" % (lbl, path, e.strerror))
+                            closewarn = True
         if hit:
             now = time.monotonic()
             return _why_stop(end) or "ready", tries, seen, now, big
@@ -1022,6 +1036,12 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.exit(1)
                 continue
+            if not _main_ok():          # the exec ran up to 120 s: its result counts only for a main still running
+                _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "main-gone", "rc": rc,
+                         "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1)})
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])
             _record({"kind": "exec", "label": s.get("label", "exec"),
                      "outcome": ("ok" if rc == 0 else "failed"), "rc": rc, "attempts": 1,
                      "elapsed_s": round(time.monotonic() - t0, 1),
@@ -1126,9 +1146,11 @@ for _si, s in enumerate(STEPS):
             probing = valued or bool(s.get("probe") and s.get("probe_stop_on"))
             skipped = False
             answered = False             # some probe got a reply (value form only)
-            # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and
-            # none starts once the window is over — a required run sits inside the start's
-            # outer timeout, so slow reads must not stretch the window.
+            # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and no
+            # NEW attempt starts once the window is over (checked between attempts) — a required run
+            # sits inside the start's outer timeout, so slow reads must not stretch the window. An
+            # attempt begun inside it may still send after it, behind a slow probe (2 s + 30 s): the
+            # required budget counts one whole attempt (lifecycle.py).
             ivs = s.get("intervals") or [s.get("interval", 0)] * (reps - 1)
             window_end = t0 + sum(ivs)
             n = 0
@@ -1154,7 +1176,7 @@ for _si, s in enumerate(STEPS):
                         if valued:
                             _hit = lambda t: _re.search(s["probe_value"], t) is not None
                         else:
-                            _hit = lambda t: s["probe_stop_on"] in t
+                            _hit = lambda t: _said(s["probe_stop_on"], t, False)
                         with socket.create_connection((s["host"], s["port"]), 2) as pc:
                             pc.sendall(s["probe"].encode())
                             r = _read(pc, _hit)
@@ -1176,15 +1198,17 @@ for _si, s in enumerate(STEPS):
                                                  "set, skipping\\n" % (s["host"], s["port"]))
                                 skipped = True
                                 break
-                        elif s["probe_stop_on"] in r:
+                        elif _said(s["probe_stop_on"], r, True):
                             sys.stderr.write("tcp_send %s:%s: probe matched -> already "
                                              "set, skipping\\n" % (s["host"], s["port"]))
                             skipped = True
                             break
+                    if not _main_ok():   # the probe read takes up to 30 s: the main is checked again before the send
+                        break
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
                         if s.get("stop_on"):
-                            acked = s["stop_on"] in _read(c, lambda t: s["stop_on"] in t)
+                            acked = _said(s["stop_on"], _read(c, lambda t: _said(s["stop_on"], t, False)), True)
                     sent += 1                # one complete connect + sendall succeeded
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
@@ -1201,6 +1225,12 @@ for _si, s in enumerate(STEPS):
                     wait = t0 + sum(ivs[:i + 1]) - time.monotonic()
                     if wait > 0:
                         time.sleep(wait)
+            if not _main_ok():           # a probe or ack read takes up to 30 s: no result counts for a main gone since
+                sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop\\n" % (s["host"], s["port"]))
+                _done("main-gone", n)
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])
             if skipped:
                 _done("probe-matched", n)
                 continue                 # desired state already present
