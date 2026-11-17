@@ -149,10 +149,11 @@ def test_a_launch_records_the_bases_it_ran_on(tmp_path):
         p.wait(timeout=5)
 
 
-def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True, argv=None):
+def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True, argv=None, stopped=None):
     """kiss@r2 launched with the record's `bases` (a real process: the record verifies), then saved again at 9500
     (:9633); the launch's own port :9133 still listens on every address. `argv`: the process's command line (None:
-    unreadable, so a running kiss's port reads "unverified"). The kiss rows that are not "absent", and the pill."""
+    unreadable, so a running kiss's port reads "unverified"); `stopped`: a monkeypatch, and the snapshot reads kiss
+    as not started though its launch still runs (its main down). The kiss rows that are not "absent", and the pill."""
     from lhpc.core.probes.backends import Listener
     radios_fixture.write(tmp_path, (R1, radios.Radio("r2", "b", "uputronics", "433", ce="ce1")))
     p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
@@ -168,6 +169,12 @@ def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True, argv=None):
         if not alive:
             p.kill()
             p.wait(timeout=5)
+        if stopped is not None:
+            from lhpc.core.model import RunState
+            snap = svc.build_snapshot()
+            for cs in next(ss for ss in snap.stacks if ss.stack.id == "kiss").components.values():
+                cs.run_state = RunState.STOPPED
+            stopped.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
         rows = svc.dashboard_webservers()
         return (sorted((r["rid"], r["port"], r["live_scope"], r["exposure"]["label"]) for r in rows
                        if r.get("kind") == "port" and r.get("sid") == "kiss" and r["live_scope"] != "absent"),
@@ -191,6 +198,31 @@ def test_a_listener_whose_argv_names_no_port_is_still_its_launchs_row(tmp_path):
     assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}) == (
         [("r2", "9133", "unverified", "unverified"), ("r2", "9633", "unverified", "unverified")], "warn")
 
+
+def test_a_not_started_stacks_leftover_on_an_earlier_saved_port_is_its_launchs_row(tmp_path, monkeypatch):
+    # second read v7 M1 (Y1): kiss reads as not started (its main down) while r2's verified launch still listens on
+    # :9133, its port before the move to 9500. The launch record still names it: one public r2 row, pill "bad"
+    assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}, stopped=monkeypatch) == (
+        [("r2", "9133", "exposed", "public")], "bad")
+
+
+def test_a_start_records_the_bases_of_the_instance_it_launches(tmp_path, monkeypatch):
+    # second read v7 M1 (Y3): Lifecycle.start hands the launched instance's own bases to its record
+    from lhpc.core import commands
+    from lhpc.core.config import Config, OperatorConfig
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.model import Component, ComponentKind, Stack
+    life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()), FakeSystem().system,
+                     spawn=lambda argv, log, cwd=None, env=None: 4321)
+    life.OBSERVE_TIMEOUT_S = 0.0
+    monkeypatch.setattr(life, "_proc_alive", lambda pid: True)
+    monkeypatch.setattr(life, "_argv_confirms", lambda cmd, argv: True)
+    monkeypatch.setattr(life, "_capture_identity", lambda pid: None)
+    extras = []
+    monkeypatch.setattr(life, "record_launch", lambda *a, **k: extras.append(k.get("extra")) or True)
+    comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, run_argv=("true",))
+    assert life.start(Stack(id="s", name="s", main="c"), comp, inst=commands.Instance("r2", bases={8001: 9000})).ok
+    assert extras == [{"rid": "r2", "bases": {"8001": 9000}}]
 
 def test_a_record_without_bases_or_with_bad_ones_adds_no_row(tmp_path):
     # FIX-PLAN-v2 §6: a record written before "bases" names no port (the stated residual); a bad value adds nothing

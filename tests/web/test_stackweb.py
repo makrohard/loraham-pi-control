@@ -2510,6 +2510,17 @@ def _kiss_box(tmp_path, monkeypatch, listeners, run, state, pids=(), sid="kiss")
     return svc
 
 
+def test_a_radio_less_fallback_never_stands_for_an_observed_radios_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R3 (second read v7 M2): no hardware list, kiss started, its running set unknown; r1's :8001 and r2's
+    # :8134 listen on every address. Each is its own radio's line: the radio-less fallback never takes r1's.
+    # red on bbeb87a3: :8001 is the line "LoRaHAM KISS TNC" with no radio
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8001), _public(8134, 2)], run=None, state="RUNNING")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = {n: [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")]
+           for n, _h, line in lines if n.startswith("LoRaHAM KISS")}
+    assert got == {"LoRaHAM KISS TNC @r1": ["localhost:8001 · public"],
+                   "LoRaHAM KISS TNC @r2": ["localhost:8134 · public"]}, got
+
 def _public(port, inode=1):
     return {"family": "ipv4", "ip": "0.0.0.0", "port": port, "inode": inode}
 

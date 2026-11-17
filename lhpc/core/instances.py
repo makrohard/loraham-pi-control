@@ -168,8 +168,8 @@ def listener_rows(svc, stk, comps, snap, fw_status, get_argvs, pages, configured
         return svc._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=comps.get(comp.id),
                                        get_argvs=get_argvs, inst=i, pages=pages)
     own = [(n, i, one(comp, ep, i)) for n, comp, ep in eps if svc._is_raw_endpoint(ep) for i in configured]
-    shown = {(r["component"], r["port"]) for _n, _i, r in own} | \
-        {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
+    shown = {(r["component"], r["port"]) for _n, i, r in own if i is not None} | \
+        {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}   # a fallback names no radio
     seen = []
     for n, comp, ep in eps:
         for i in evidence:
