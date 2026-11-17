@@ -164,6 +164,18 @@ def test_stack_page_names_the_uncovered_case(web, tmp_path, update_available):
     assert "other commits" not in scope.text
 
 
+
+def test_a_dismissed_refusal_banner_is_not_shown(web, tmp_path, update_available):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    update_available(True)
+    paths = Paths(runtime_root=tmp_path)
+    _failed_install_job(paths, "meshtastic")
+    assert _stack_page(web(), "meshtastic").by_id("pin-refusal-meshtastic") is not None
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    assert svc.task_dismiss("job", "install-meshtastic.log", "d" * 32)
+    assert _stack_page(web(), "meshtastic").by_id("pin-refusal-meshtastic") is None
+
 def test_a_legacy_override_shows_no_pill_and_no_warning(web, tmp_path, binary_receipt, monkeypatch,
                                                         update_available):
     # U10a (D6): an override an older lhpc recorded in the receipt is ignored by the console.

@@ -677,8 +677,22 @@ def test_a_kept_binary_is_identified_by_its_sha_never_by_its_file_name(tmp_path,
     for apply in (False, True):
         res = svc.install("meshcom", apply=apply, source="binary")
         assert res.ok and res.data["changes"] == 0, (res.summary, res.details)
+        assert any("not newer than the installed one" in d for d in res.details), res.details   # kept, not "same"
     assert state["adopted"] == [] and state["commit"] == "b" * 40
 
+
+def test_the_same_artifact_keeps_its_checkouts_at_its_receipts_commits(tmp_path, monkeypatch, binary_receipt):
+    # The index lists the installed sha with other commits (its metadata re-published): the same artifact's checkout
+    # is checked against ITS receipt's commits, so nothing moves, in the plan and the apply.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _owned_at_install(svc)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "a" * 40, INSTALLED))
+    for apply in (False, True):
+        res = svc.install("meshcom", apply=apply, source="binary")
+        assert res.ok and res.data["changes"] == 0, (res.summary, res.details)
+    assert state["adopted"] == [] and state["commit"] == "b" * 40
 
 
 def test_a_repair_whose_receipt_reads_back_unreadable_is_refused_and_moves_the_checkout_back(
