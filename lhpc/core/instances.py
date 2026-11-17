@@ -131,6 +131,55 @@ def listener_insts(svc, stack, running, started: bool, live_ports=()) -> tuple:
     return configured + ([None] if not (configured or evidence) or (started and running is None) else []), evidence
 
 
+def off_list_page_rows(svc, stk, configured, page_rows, snap, fw_status) -> list:
+    """G2-UIU3-R3 H5: the page rows of a configured radio that has no page now (disabled, removed from the hardware
+    list, or of another band), only for a listener no row shows yet (the class rule: its live proxy port, or its live
+    upstream (component, port); a fixed-port stack's pages share one upstream); `radio_off` says which."""
+    from .model import web_pages
+    off = [i for i in configured if i is not None and i.rid not in {p["rid"] for p in page_rows}]
+    if not off:
+        return []
+    hw = {r.id: r for r in radios.load(svc._paths).radios}
+    proxy = {str(p["port"]) for p in page_rows if p["live"]}
+    direct = {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
+    out = []
+    for page in web_pages(stk, instances=off, paths=svc._paths):
+        r = {**svc._dashboard_web_row(stk, page, snap, fw_status), "comp_state": ""}
+        up = r["direct_scope"] not in ("absent", None, "") and (r["component"], r["direct_port"]) not in direct
+        if (r["live"] and str(r["port"]) not in proxy) or up:
+            proxy |= {str(r["port"])} if r["live"] else set()
+            direct.add((r["component"], r["direct_port"]))
+            rad = hw.get(r["rid"])
+            out.append({**r, "radio_off": "removed" if rad is None else "disabled" if not rad.enabled
+                        else "on another band"})
+    return out
+
+
+def listener_rows(svc, stk, comps, snap, fw_status, get_argvs, pages, configured, evidence, page_rows) -> list:
+    """The raw rows of one stack's Home box (G2-UIU3-R3 class: every live listener no row explains has a row). A
+    CONFIGURED instance's row for every raw endpoint, at its saved ports; then an EVIDENCE instance's row (a
+    radio whose default port is live) for every network endpoint, raw or a page's upstream, kept only when its
+    listener is live and no row shows the same (component, port): evidence only adds, never replaces. In the box's
+    order: by endpoint, then by radio, a configured row before an evidence one."""
+    eps = [(n, comp, ep) for n, (comp, ep) in enumerate((c, e) for c in stk.components for e in c.endpoints)
+           if svc._is_raw_endpoint(ep) or (getattr(ep, "client", False) and ":" in ep.address)]
+
+    def one(comp, ep, i):
+        return svc._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=comps.get(comp.id),
+                                       get_argvs=get_argvs, inst=i, pages=pages)
+    own = [(n, i, one(comp, ep, i)) for n, comp, ep in eps if svc._is_raw_endpoint(ep) for i in configured]
+    shown = {(r["component"], r["port"]) for _n, _i, r in own} | \
+        {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
+    seen = []
+    for n, comp, ep in eps:
+        for i in evidence:
+            r = one(comp, ep, i)
+            if r["live_scope"] != "absent" and (r["component"], r["port"]) not in shown:
+                shown.add((r["component"], r["port"]))          # two evidence radios on one port: one row
+                seen.append((n, i, r))
+    return [r for _n, _i, r in sorted(own + seen, key=lambda t: (t[0], rid_order(t[1])))]
+
+
 def launched_insts(svc, sid: str) -> list:
     """rN at the bases its launch recorded ("bases", lifecycle._observe_and_record), for each verified owned launch of
     `sid`, started or not (G2-UIU3-R3 H2a/H3: a listener left on an earlier saved port). A record without "bases"
@@ -167,18 +216,22 @@ def rid_order(inst) -> int:
 
 
 def stored_insts(svc, sid: str) -> list:
-    """rN for each `config/stacks/<sid>@rN.toml` on disk (G2-UIU3-R3 class): a radio the hardware list no longer holds,
-    or one whose band left the stack's bands, keeps its saved ports. Listed no-follow: a link is not a settings file."""
+    """rN for each `config/stacks/<sid>@rN.toml` on disk and each saved page proxy `<page>@rN` of `sid` ([stackweb])
+    (G2-UIU3-R3 class): a radio the hardware list no longer holds, or one whose band left the stack's bands, keeps its
+    saved ports and its page. Listed no-follow: a link is not a settings file."""
     import os
 
+    from .model import web_pages
     from .paths import PathContainmentError
     try:
         with os.scandir(svc._paths.under("config", "stacks")) as it:
             names = [e.name for e in it if e.is_file(follow_symlinks=False)]
     except (OSError, PathContainmentError):
-        return []
-    rids = (n[len(sid) + 1:-len(".toml")] for n in names if n.startswith(f"{sid}@") and n.endswith(".toml"))
-    return [commands.Instance(r) for r in rids if commands.is_rid(r)]
+        names = []
+    rids = {n[len(sid) + 1:-len(".toml")] for n in names if n.startswith(f"{sid}@") and n.endswith(".toml")}
+    pages = {p.page_id for p in web_pages(svc.stack(sid), instances=[None])} if svc.stack(sid) is not None else set()
+    rids |= {k.partition("@")[2] for k in svc.config().stackweb if k.partition("@")[0] in pages}
+    return [commands.Instance(r) for r in sorted(rids) if commands.is_rid(r)]
 
 
 def observed_insts(stack, live_ports) -> list:

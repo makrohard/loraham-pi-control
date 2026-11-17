@@ -137,7 +137,7 @@ def test_a_launch_records_the_bases_it_ran_on(tmp_path):
     try:
         life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()), FakeSystem().system)
         life.OBSERVE_TIMEOUT_S = 0
-        comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, run_argv=("sleep", "30"))
+        comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, run_argv=("x",))
         for rid, bases, want in (("r2", {8001: 9000}, {"8001": 9000}), ("r3", None, {}), ("", {8001: 9000}, None)):
             assert life._observe_and_record(Stack(id="s", name="s", main="c"), comp, p.pid, "", ["x"], rid=rid,
                                             bases=bases) == "ok"
@@ -149,15 +149,16 @@ def test_a_launch_records_the_bases_it_ran_on(tmp_path):
         p.wait(timeout=5)
 
 
-def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True):
+def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True, argv=None):
     """kiss@r2 launched with the record's `bases` (a real process: the record verifies), then saved again at 9500
-    (:9633); the launch's own port :9133 still listens on every address. The kiss rows of a live socket, and the
-    pill (the process makes kiss read as running: r2's saved :9633 row is "unverified", no socket)."""
+    (:9633); the launch's own port :9133 still listens on every address. `argv`: the process's command line (None:
+    unreadable, so a running kiss's port reads "unverified"). The kiss rows that are not "absent", and the pill."""
     from lhpc.core.probes.backends import Listener
     radios_fixture.write(tmp_path, (R1, radios.Radio("r2", "b", "uputronics", "433", ce="ce1")))
     p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
     try:
-        svc = ControllerService(system=FakeSystem(listeners=[Listener("ipv4", "0.0.0.0", 9133, 1)]).system,
+        svc = ControllerService(system=FakeSystem(listeners=[Listener("ipv4", "0.0.0.0", 9133, 1)],
+                                                  cmdlines_data={p.pid: argv} if argv else {}).system,
                                 paths=Paths(runtime_root=tmp_path))
         kiss = svc.stack("kiss")
         assert svc._lifecycle().record_launch(kiss, kiss.component("loraham-kiss-tnc"), p.pid, band="433",
@@ -168,8 +169,8 @@ def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True):
             p.kill()
             p.wait(timeout=5)
         rows = svc.dashboard_webservers()
-        return ([(r["rid"], r["port"], r["live_scope"], r["exposure"]["label"]) for r in rows
-                 if r.get("kind") == "port" and r.get("sid") == "kiss" and r["live_scope"] in ("exposed", "loopback")],
+        return (sorted((r["rid"], r["port"], r["live_scope"], r["exposure"]["label"]) for r in rows
+                       if r.get("kind") == "port" and r.get("sid") == "kiss" and r["live_scope"] != "absent"),
                 svc.security_pill(rows)["level"])
     finally:
         p.kill()
@@ -177,14 +178,23 @@ def _kiss_rows_after_a_second_move(tmp_path, bases, alive=True):
 
 
 def test_a_listener_left_on_an_earlier_saved_port_is_its_launchs_row(tmp_path):
-    # G2-UIU3-R3 H2a/H3 (SWEEP-CLASS-UI-U3-LISTENER-v2): r2 launched at 9000 (:9133), saved again at 9500. Only the
-    # launch record names :9133: it is r2's public row and the pill is not "ok". red on d9436671: no row, "ok"
-    assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}) == ([("r2", "9133", "exposed", "public")], "bad")
+    # G2-UIU3-R3 H2a/H3 (SWEEP-CLASS-UI-U3-LISTENER-v2): r2 launched at 9000 (:9133), saved again at 9500. Its argv
+    # names :9133: r2's one row is that public socket, the pill "bad"
+    assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}, argv=["./loraham-kiss-tnc", "--kiss-port", "9133"]) \
+        == ([("r2", "9133", "exposed", "public")], "bad")
+
+
+def test_a_listener_whose_argv_names_no_port_is_still_its_launchs_row(tmp_path):
+    # The same with an argv that names no port: only the launch record names :9133, so it has its own r2 row beside
+    # the saved :9633 one; a running kiss with no port in its argv reads "unverified" (review) on both. red on
+    # d9436671: no :9133 row
+    assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}) == (
+        [("r2", "9133", "unverified", "unverified"), ("r2", "9633", "unverified", "unverified")], "warn")
 
 
 def test_a_record_without_bases_or_with_bad_ones_adds_no_row(tmp_path):
     # FIX-PLAN-v2 §6: a record written before "bases" names no port (the stated residual); a bad value adds nothing
     for bases in (None, {"8001": "9000"}, {"x": 9000}, {"8001": 80}, [9000]):
-        assert _kiss_rows_after_a_second_move(tmp_path, bases)[0] == [], bases
+        assert _kiss_rows_after_a_second_move(tmp_path, bases)[0] == [("r2", "9633", "unverified", "unverified")], bases
     # a record whose process is gone is no launch's (verify_owned), whatever its bases
     assert _kiss_rows_after_a_second_move(tmp_path, {"8001": 9000}, alive=False)[0] == []

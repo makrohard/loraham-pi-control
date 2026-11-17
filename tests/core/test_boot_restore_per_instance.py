@@ -211,7 +211,7 @@ def test_a_launch_records_its_instances_radio_and_no_slot(tmp_path, monkeypatch,
     monkeypatch.setattr(life, "record_launch", lambda *a, **k: extras.append(k.get("extra")) or True)
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, run_argv=("true",))
     assert life.start(Stack(id="s", name="s", main="c"), comp, inst=commands.Instance(rid)).ok
-    assert extras == [{"rid": rid}]
+    assert extras == [{"rid": rid, "bases": {}}]                       # G2-UIU3-R3: its launch ports, {} = defaults
 
 
 def test_an_instance_whose_radio_moved_band_after_the_plan_is_not_started_there(tmp_path, monkeypatch):

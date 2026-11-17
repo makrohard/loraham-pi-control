@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 
-from . import commands, instances, radios
+from . import commands, instances
 from . import listeners as _listener_inv
 from . import openhop_store as _openhop_store
 from . import webserver as _ws
@@ -953,52 +953,10 @@ class WebserverOpsMixin:
             pages = self.stack_web_pages(stk.id)               # one row per proxied page; F3b: its component's state
             stack_rows = [{**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": cs.run_state.value if cs else ""}
                           for page in pages for cs in [comps.get(page.component_id)]]
-            stack_rows += self._off_list_page_rows(stk, configured, pages, snap, fw_status)
-            stack_rows += self._listener_rows(stk, comps, snap, fw_status, _argvs, pages, configured, evidence, stack_rows)
+            stack_rows += instances.off_list_page_rows(self, stk, configured, stack_rows, snap, fw_status)
+            stack_rows += instances.listener_rows(self, stk, comps, snap, fw_status, _argvs, pages, configured, evidence, stack_rows)
             rows.extend(_ws.home_rows(stack_rows, insts, started=started))   # U3 (K2)
         return rows
-
-    def _off_list_page_rows(self, stk, configured, pages, snap, fw_status) -> list:
-        """G2-UIU3-R3 H5: the page rows of a configured radio that has no page now (disabled, removed from the hardware
-        list, or of another band), only while its proxy or its upstream still listens; `radio_off` says which."""
-        from .model import web_pages
-        listed = {p.page_id.partition("@")[2] for p in pages}
-        off = [i for i in configured if i is not None and i.rid not in listed]
-        if not off:
-            return []
-        hw = {r.id: r for r in radios.load(self._paths).radios}
-        out = []
-        for page in web_pages(stk, instances=off, paths=self._paths):
-            r = {**self._dashboard_web_row(stk, page, snap, fw_status), "comp_state": ""}
-            if r["live"] or r["direct_scope"] not in ("absent", None, ""):
-                rad = hw.get(r["rid"])
-                out.append({**r, "radio_off": "removed" if rad is None else "disabled" if not rad.enabled
-                            else "on another band"})
-        return out
-
-    def _listener_rows(self, stk, comps, snap, fw_status, get_argvs, pages, configured, evidence, page_rows) -> list:
-        """The raw rows of one stack's Home box (G2-UIU3-R3 class: every live listener no row explains has a row). A
-        CONFIGURED instance's row for every raw endpoint, at its saved ports; then an EVIDENCE instance's row (a
-        radio whose default port is live) for every network endpoint, raw or a page's upstream, kept only when its
-        listener is live and no row shows the same (component, port): evidence only adds, never replaces. In the box's
-        order: by endpoint, then by radio, a configured row before an evidence one."""
-        eps = [(n, comp, ep) for n, (comp, ep) in enumerate((c, e) for c in stk.components for e in c.endpoints)
-               if self._is_raw_endpoint(ep) or (getattr(ep, "client", False) and ":" in ep.address)]
-
-        def one(comp, ep, i):
-            return self._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=comps.get(comp.id),
-                                            get_argvs=get_argvs, inst=i, pages=pages)
-        own = [(n, i, one(comp, ep, i)) for n, comp, ep in eps if self._is_raw_endpoint(ep) for i in configured]
-        shown = {(r["component"], r["port"]) for _n, _i, r in own} | \
-            {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
-        seen = []
-        for n, comp, ep in eps:
-            for i in evidence:
-                r = one(comp, ep, i)
-                if r["live_scope"] != "absent" and (r["component"], r["port"]) not in shown:
-                    shown.add((r["component"], r["port"]))          # two evidence radios on one port: one row
-                    seen.append((n, i, r))
-        return [r for _n, _i, r in sorted(own + seen, key=lambda t: (t[0], instances.rid_order(t[1])))]
 
     @staticmethod
     def _is_raw_endpoint(ep) -> bool:
