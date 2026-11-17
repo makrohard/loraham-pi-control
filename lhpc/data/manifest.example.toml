@@ -853,8 +853,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "e0d9adac2c2ddbd53c88b205965bbbcea898fa6b"
-    pin_tag = "v0.6.3"
+    pin_commit = "ef4ceb561a41a69dc043f2ce95ddb16a766850c9"
+    pin_tag = "v0.6.4"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -905,8 +905,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "e0d9adac2c2ddbd53c88b205965bbbcea898fa6b"
-    pin_tag = "v0.6.3"
+    pin_commit = "ef4ceb561a41a69dc043f2ce95ddb16a766850c9"
+    pin_tag = "v0.6.4"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -917,7 +917,7 @@ main = "loraham-kiss-tnc"
     # RUNNING/DEGRADED and blocked unrelated stack starts ("kiss must be stopped first") with
     # nothing of ours actually running. The PTY link path is ours and appears in the real argv: "/loraham_kiss,"
     # (the link token's leaf and its option comma) matches every instance's link (state/[<rid>/]loraham_kiss) and not
-    # the TNC's loraham_kiss_tnc.conf.example.
+    # the TNC's config path (config/files/<rid>/loraham_kiss_tnc.conf).
     all_args = ["/loraham_kiss,"]
 
     [[stack.component.require]]
