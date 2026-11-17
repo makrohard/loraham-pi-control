@@ -543,7 +543,7 @@ def _summary(doc, el_id):
 
 @pytest.mark.parametrize("rid, other", [("r1", "r2"), ("r2", "r1")])
 def test_one_webserver_submenu_switches_radio_in_place_and_heads_each_page_by_its_instance(tmp_path, web, rid, other):
-    # red on 6b82239a: a "Web Proxies" panel per instance page, no radio in its heading, no switcher
+    # red on 6b82239a: a "Webserver (web UI proxy)" panel per instance page, no radio in its heading, no switcher
     c = _two_radio_web(tmp_path, web)
     r = c.get(f"/stacks?open=meshcom&radio={rid}")
     assert r.status_code == 200
