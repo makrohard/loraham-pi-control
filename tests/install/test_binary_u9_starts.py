@@ -182,3 +182,44 @@ def test_a_receipt_without_its_publication_time_and_no_listed_entry_offers_only_
     assert fresh["state"] == "error" and fresh["offer"] == "" and "no publication time" in fresh["why"], fresh
     plan = svc.install("daemon", apply=False, source="binary")
     assert plan.ok and plan.data["changes"] == 0 and "no publication time" in " ".join(plan.details), plan.details
+
+
+def test_an_install_the_start_refuses_is_not_current_and_not_kept(tmp_path, monkeypatch, binary_receipt):
+    # One readiness rule: the installed binary records no commit for a covered component, so the start refuses it.
+    # Its freshness is then never "current" (the stack's verdict is "update available"), and the install does not
+    # keep it: a listed entry that covers it is installed although it is not newer.
+    from lhpc.core import stackupdates
+    svc = _svc(tmp_path, monkeypatch)
+    covers = _other(svc, "daemon")
+    dropped = sorted(covers)[0]
+    partial = {k: v for k, v in covers.items() if k != dropped}
+    binary_receipt(svc, "daemon", sha="1" * 64, commits=partial, provenance={"published_at": "2026-11-12T00:00:00Z"})
+    full = _entry("daemon", "2" * 64, covers, "2026-11-10T00:00:00Z")
+    _serve(monkeypatch, "daemon", full)
+    comp = svc.stack("daemon").component(dropped)
+    assert "the installed binary predates" in svc.install_blocker(comp)
+    assert svc.binary_freshness("daemon") == {"state": "behind", "offer": full["filename"]}
+    assert svc._update_probe(comp)["status"] == stackupdates.BEHIND
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 1 and any(full["filename"] in d for d in plan.details), plan.details
+
+
+def test_an_install_the_start_refuses_with_nothing_covering_it_is_not_current(tmp_path, monkeypatch, binary_receipt):
+    # Nothing published covers the missing component: never "current", and never "update available" (no update
+    # exists): could not check, with the start's own reason, in the freshness and in the source check's detail.
+    from lhpc.core import stackupdates
+    svc = _svc(tmp_path, monkeypatch)
+    covers = _other(svc, "daemon")
+    dropped = sorted(covers)[0]
+    partial = {k: v for k, v in covers.items() if k != dropped}
+    binary_receipt(svc, "daemon", sha="1" * 64, commits=partial, provenance={"published_at": "2026-11-10T00:00:00Z"})
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, partial, "2026-11-10T00:00:00Z"))
+    comp = svc.stack("daemon").component(dropped)
+    reason = svc.install_blocker(comp)
+    fresh = svc.binary_freshness("daemon")
+    assert fresh["state"] == "error" and fresh["offer"] == "" and reason in fresh["why"], (fresh, reason)
+    assert svc._update_probe(comp)["status"] == stackupdates.ERROR
+    check = svc.source_check("daemon")
+    assert any(d.startswith(f"  {dropped}: could not check — {fresh['why']}") for d in check.details), check.details
+    res = svc.install("daemon", apply=False, source="binary")
+    assert not res.ok and res.data.get("binary_refusal") == "none_compatible", res.summary

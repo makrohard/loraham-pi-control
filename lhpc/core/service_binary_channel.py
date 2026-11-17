@@ -135,9 +135,20 @@ class BinaryChannelMixin:
             return why or f"the binary install of {sid!r} is unsafe — resolve it first"
         if state != "valid":
             return None
-        if comp.id not in rec.components:
-            return f"the installed binary predates {comp.id}: lhpc update {sid} or install it from source"
+        if comp.id in self.binary_missing(sid, rec):
+            return self.binary_predates(sid, [comp.id])
         return ""
+
+    def binary_missing(self, sid: str, rec) -> list:
+        """THE binary readiness rule (U8): the covered components the installed receipt records no commit for. The
+        start refuses each (`_binary_ready`), freshness never calls such an install current (`binary_freshness`)
+        and the install never keeps it (`_binary_current`): one rule, so the three cannot disagree."""
+        spec = self.binary_spec(sid)
+        return sorted(c for c in (spec.covers if spec else ()) if c not in rec.components)
+
+    @staticmethod
+    def binary_predates(sid: str, cids) -> str:
+        return f"the installed binary predates {', '.join(cids)}: lhpc update {sid} or install it from source"
 
     def binary_install_refusal(self, stack_id: str) -> dict | None:
         """The typed refusal of this stack's last FAILED console install job (no published binary

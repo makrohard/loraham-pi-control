@@ -88,6 +88,7 @@ class MaintenanceOpsMixin:
             _st, rec, _why = self.binary_receipt_state(sid)
             # Tied to the receipt's component commit (what the status probe reports), else it renders "unchecked".
             return {**entry, "source_path": comp.source.path, "channel": "binary",
+                    **({"why": fresh["why"]} if fresh.get("why") else {}),
                     "local_head_at_check": rec.components.get(comp.id, "") if rec else "",
                     "status": {"behind": stackupdates.BEHIND, "error": stackupdates.ERROR}.get(
                         fresh["state"], stackupdates.UP_TO_DATE)}
@@ -205,7 +206,7 @@ class MaintenanceOpsMixin:
             entry = self._update_probe(c, stable_target)
             results[c.id] = entry
             counts[entry["status"]] = counts.get(entry["status"], 0) + 1
-            note = stackupdates.label(entry["status"])
+            note = stackupdates.label(entry["status"]) + (f" — {entry['why']}" if entry.get("why") else "")
             if c.id in excused:
                 if entry["status"] in excused_counts:
                     excused_counts[entry["status"]] += 1
