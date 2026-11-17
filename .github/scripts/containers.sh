@@ -80,6 +80,7 @@ lhpc_on_exit() {
     lhpc_clean "$LHPC_CONTAINER" "$LHPC_GROUP" || { [ "$rc" -ne 0 ] || rc=1; }
   fi
   LHPC_CONTAINER="" LHPC_GROUP=""
+  [ "$rc" -ne 0 ] || rc=${LHPC_PENDING:-0}        # a signal held during the cleanup fails a step that was at 0
   exit "$rc"
 }
 

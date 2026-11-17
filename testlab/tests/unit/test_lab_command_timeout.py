@@ -9,6 +9,7 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import pytest
@@ -166,6 +167,55 @@ def test_a_command_that_ends_while_its_child_holds_its_output_returns_when_it_en
             os.kill(int((tmp_path / "kid").read_text()), signal.SIGKILL)
         except (ProcessLookupError, FileNotFoundError):
             pass
+
+
+class _WritesMidRead:
+    """A capture file whose other holder (a real child, on its stdout or stderr) writes once between the reader's
+    first and second call on it: the boundary inside a readback."""
+
+    def __init__(self, f, go: int, done: int):
+        self._f, self._go, self._done, self._calls = f, go, done, 0
+
+    def _tick(self):
+        self._calls += 1
+        if self._calls == 2:
+            os.write(self._go, b".")
+            os.read(self._done, 1)                       # the child's write has landed
+
+    def fileno(self):
+        self._tick()
+        return self._f.fileno()
+
+    def seek(self, *a):
+        self._tick()
+        return self._f.seek(*a)
+
+    def read(self, *a):
+        self._tick()
+        return self._f.read(*a)
+
+
+@pytest.mark.parametrize("stream", [1, 2], ids=["stdout", "stderr"])
+def test_a_child_that_writes_during_the_readback_loses_no_output(stream):
+    """G2-TESTSG B1: the readback rewound the file and read on; a child the command left running shares that offset,
+    so its write in between landed over the start and moved the offset past it: the read came back empty. The file
+    is read by position now, whatever its other holders do with the offset."""
+    go_r, go_w = os.pipe()
+    done_r, done_w = os.pipe()
+    with tempfile.TemporaryFile() as f:
+        child = subprocess.Popen(
+            [sys.executable, "-c", f"import os\nos.write({stream}, b'HEAD\\n')\nos.write({done_w}, b'.')\n"
+                                   f"os.read({go_r}, 1)\nos.write({stream}, b'TAIL\\n')\nos.write({done_w}, b'.')\n"],
+            pass_fds=(go_r, done_w), **{"stdout" if stream == 1 else "stderr": f})
+        try:
+            os.read(done_r, 1)                                # HEAD is written
+            got = testing._read_back(_WritesMidRead(f, go_w, done_r))
+            assert child.wait(10) == 0
+        finally:
+            child.kill()
+            for fd in (go_r, go_w, done_r, done_w):
+                os.close(fd)
+    assert got in (b"HEAD\n", b"HEAD\nTAIL\n"), got       # never the empty or overwritten start
 
 
 def test_a_kill_reaches_the_listed_process_or_nothing():

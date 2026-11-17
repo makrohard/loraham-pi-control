@@ -131,7 +131,7 @@ def _docker(tmp_path: Path, mode: str) -> Path:
     never ends by itself. `rm -f NAME...` ends each container that exists, says "No such container" for the others
     (rc 1); tmp/rm-fails: it fails with that file's words; tmp/hang-rm: it hangs and ignores TERM (the worst case:
     a hung client that inherited an ignored TERM, which the runner's `timeout` leaves ignored; only its -k KILL ends
-    it, rc 137). `ps -aq --filter name=RE` lists
+    it, rc 137); tmp/slow-rm: it takes 1 s, then works. `ps -aq --filter name=RE` lists
     the containers whose "/name" matches RE (tmp/ps-fails, tmp/hang-ps as for rm)."""
     t, b = tmp_path, tmp_path / "bin"
     b.mkdir()
@@ -151,6 +151,7 @@ def _docker(tmp_path: Path, mode: str) -> Path:
         f'       while kill -0 "$(cat {t}/$name.pid 2>/dev/null)" 2>/dev/null; do sleep 0.05; done\n'  # wallclock: poll
         '       exit 137 ;;\n'
         f'  rm)  shift; [ "$1" = -f ] && shift; [ -f {t}/hang-rm ] && {{ trap \"\" TERM; exec tail -f /dev/null; }}\n'
+        f'       [ -f {t}/slow-rm ] && sleep 1\n'                                          # wallclock: a slow removal
         f'       [ -f {t}/rm-fails ] && {{ cat {t}/rm-fails >&2; exit 1; }}\n'
         '       st=0\n'
         '       for n in "$@"; do\n'
@@ -532,6 +533,24 @@ def _boxes_named(tmp_path, names) -> dict:
     for n, p in boxes.items():
         (tmp_path / f"{n}.pid").write_text(f"{p.pid}\n")
     return boxes
+
+
+@pytest.mark.wallclock("a real step shell; its removal takes 1 s; waits bounded at 15 s")
+def test_a_signal_during_a_successful_exit_cleanup_fails_the_step(tmp_path):
+    """G2-TESTSE F4: a TERM during the EXIT cleanup of a step at status 0 was held (LHPC_PENDING) and then dropped:
+    the cleanup worked and the step reported 0. A held signal now ends the step with its status unless an earlier
+    failure already did."""
+    (tmp_path / "slow-rm").touch()
+    proc = _step(tmp_path, f"lhpc_start {PREFIX}x docker run -d --name {PREFIX}x img sleep 300\necho started",
+                 mode="running")
+    try:
+        _started(proc)
+        _wait_calls(tmp_path, "rm -f ", 1)
+        proc.send_signal(signal.SIGTERM)                     # mid-removal, inside the EXIT trap
+        assert proc.wait(15) == 143
+        _gone(tmp_path, f"{PREFIX}x")
+    finally:
+        _end(tmp_path, proc)
 
 
 @pytest.mark.parametrize("ours", [[], [f"{PREFIX}1-2", f"{PREFIX}quota-3"]], ids=["none", "two"])

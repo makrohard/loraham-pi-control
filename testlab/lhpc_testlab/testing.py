@@ -61,8 +61,8 @@ def _text(data: bytes | None) -> str:
 
 
 def _read_back(f) -> bytes:
-    f.seek(0)
-    return f.read()
+    """All `f` holds, read by position: a child the command left running shares its offset (and may write on)."""
+    return os.pread(f.fileno(), os.fstat(f.fileno()).st_size, 0)
 
 
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
@@ -77,8 +77,10 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     includes the lab daemons this command started: a timed-out command leaves none of them (the lab
     reset tolerates that: it signals a recorded pid only while it is still that daemon). A command
     that ends in time leaves what it started on purpose (a lab daemon) running; it ends when its
-    keeper does (its output goes to files, so a child it left holding them holds up nothing). It runs
-    without core dumps (set by the keeper, single-threaded, before its exec of the command)."""
+    keeper does (its output goes to files, so a child it left holding them holds up nothing; one that
+    goes on writing grows them until the lab teardown ends it). The output has no size bound: it is
+    read whole, into memory. It runs without core dumps (set by the keeper, single-threaded, before
+    its exec of the command)."""
     argv = [sys.executable, "-I", "-S", str(Path(reaper.__file__)), str(lab_bin()), *args]
     # Files, not pipes: a pipe's EOF waits for every holder, a child the command left running included.
     with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
