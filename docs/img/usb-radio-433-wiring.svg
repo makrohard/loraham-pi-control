@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="900" viewBox="0 0 980 900" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">Wiring: CH341A board, RFM98PW, capacitors and EEPROM</title>
-<desc id="d">Functional wiring. Seven signal wires from the CH341A board to the RFM98PW: W1 D0/CS0 (IC 15) to 13 NSS; W2 D3/SCK (IC 18) to 12 SCK; W3 D5/MOSI (IC 20) to 11 MOSI; W4 D7/MISO (IC 22) from 10 MISO; W5 D2/CS2 (IC 17) to 14 RESET; W6 D6 (IC 21) from 6 DIO0; W7 D4 (IC 19) from 7 DIO1. Board GND (IC 12) to module 2, 16 and pad 17. USB 5 V to module pin 5, with a 470 µF electrolytic (plus to pin 5, stripe to GND) and a 100 nF ceramic across pin 5 and GND at the module. Pin 9 open; pin 1 to the antenna. EEPROM AT24C02N: pins 1, 2, 3, 4 and 7 to GND, 5 SDA to the board's SDA (IC 23), 6 SCL to the board's SCL (IC 24), 8 VCC to the board's 3V3, 100 nF across pins 8 and 4.</desc>
+<desc id="d">Functional wiring. Seven signal wires from the CH341A board to the RFM98PW: W1 D0/CS0 (IC 15) to 13 NSS; W2 D3/SCK (IC 18) to 12 SCK; W3 D5/MOSI (IC 20) to 11 MOSI; W4 D7/MISO (IC 22) from 10 MISO; W5 D2/CS2 (IC 17) to 14 RESET; W6 D6 (IC 21) from 6 DIO0; W7 D4 (IC 19) from 7 DIO1. Board GND (IC 12) to module 2, 16 and pad 17. The USB plug's VBUS (5 V) to module pin 5, with a 470 µF electrolytic (plus to pin 5, stripe to GND) and a 100 nF ceramic across pin 5 and GND at the module. Pin 9 open; pin 1 to the antenna. EEPROM AT24C02N: pins 1, 2, 3, 4 and 7 to GND, 5 SDA to the board's SDA (IC 23), 6 SCL to the board's SCL (IC 24), 8 VCC to the board's 3V3, 100 nF across pins 8 and 4.</desc>
 <defs><marker id="aW1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker><marker id="aW2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a85400"/></marker><marker id="aW3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#237a3b"/></marker><marker id="aW4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00707a"/></marker><marker id="aW5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="aW6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a8245a"/></marker><marker id="aW7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4a2e"/></marker></defs>
 <rect x="0.5" y="0.5" width="979" height="899" rx="12" fill="#ffffff" stroke="#c9ced6" stroke-width="1"/>
 <text x="490" y="36" text-anchor="middle" font-size="14" fill="#1b2430" font-weight="bold">WIRING (functional drawing: not the physical pin order)</text>
@@ -71,7 +71,7 @@
 <line x1="270" y1="428" x2="660" y2="428" stroke="#1b2430" stroke-width="2.5"/>
 <circle cx="270" cy="428" r="4" fill="#1b2430" stroke="none" stroke-width="1"/>
 <circle cx="660" cy="428" r="4" fill="#1b2430" stroke="none" stroke-width="1"/>
-<text x="54" y="502" text-anchor="start" font-size="13" fill="#b3261e" font-weight="bold">USB 5 V (VBUS)</text>
+<text x="54" y="502" text-anchor="start" font-size="13" fill="#b3261e" font-weight="bold">USB plug VBUS (5 V)</text>
 <text x="674" y="502" text-anchor="start" font-size="13" fill="#b3261e" font-weight="bold">5 VCC (5.0–6.0 V)</text>
 <line x1="270" y1="498" x2="660" y2="498" stroke="#b3261e" stroke-width="2.5"/>
 <circle cx="270" cy="498" r="4" fill="#b3261e" stroke="none" stroke-width="1"/>
@@ -157,5 +157,5 @@
 <line x1="738" y1="750" x2="742" y2="750" stroke="#1b2430" stroke-width="1.5"/>
 <text x="758" y="726" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">100 nF across</text>
 <text x="758" y="741" text-anchor="start" font-size="11" fill="#5b6573">pins 8 and 4</text>
-<text x="40" y="874" text-anchor="start" font-size="12" fill="#5b6573">SDA and SCL are the board's I2C pins, not D5 or D6. Program the EEPROM before the radio is wired (steps 3–5).</text>
+<text x="40" y="874" text-anchor="start" font-size="12" fill="#5b6573">SDA and SCL are the board's I2C pins, not D5 or D6.</text>
 </svg>

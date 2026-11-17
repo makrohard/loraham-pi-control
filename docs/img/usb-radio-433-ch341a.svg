@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560" role="img" aria-labelledby="t d" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif" font-size="13">
 <title id="t">CH341A board pads and CH341A pinout</title>
-<desc id="d">Left: the CH341A board seen from its underside, USB plug to the right, with the two edge rows of pads as printed (D0 to D7, WR, VCC; SLCT, INT, PEMP, ERR, DS, AS, RST, WAIT, GND, 3V3). The pads this build uses are filled and carry their wire tag: D0 W1, D2 W5, D3 W2, D4 W7, D5 W3, D6 W6, D7 W4, plus GND and 3V3. Right: the CH341A IC, SOP-28, top view, pin 1 at the dot; pins 9 V3, 12 GND, 15 to 22 D0 to D7, 23 SDA, 24 SCL and 28 VCC are labelled.</desc>
+<desc id="d">Left: the CH341A board seen from its underside, USB plug to the right, with the two edge rows of pads as printed (D0 to D7, WR, VCC; SLCT, INT, PEMP, ERR, DS, AS, RST, WAIT, GND, 3V3). The pads this build uses are filled and carry their wire tag: D0 W1, D2 W5, D3 W2, D4 W7, D5 W3, D6 W6, D7 W4, plus GND and 3V3. The pads printed VCC follow the voltage jumpers: 3.3 V here, not 5 V. Right: the CH341A IC, SOP-28, top view, pin 1 at the dot; pins 9 V3, 12 GND, 15 to 22 D0 to D7, 23 SDA, 24 SCL and 28 VCC are labelled.</desc>
 <rect x="0.5" y="0.5" width="979" height="559" rx="12" fill="#ffffff" stroke="#c9ced6" stroke-width="1"/>
 <text x="40" y="40" text-anchor="start" font-size="14" fill="#1b2430" font-weight="bold">CH341A BOARD: UNDERSIDE (pads as printed), USB plug to the right</text>
 <rect x="40" y="90" width="440" height="250" rx="6" fill="#f2f4f7" stroke="#1b2430" stroke-width="1.5"/>
@@ -88,6 +88,10 @@
 <text x="414" y="390" text-anchor="end" font-size="12" fill="#1b2430" font-weight="bold">GND</text>
 <line x1="454" y1="325" x2="454" y2="374" stroke="#1b2430" stroke-width="2"/>
 <text x="462" y="390" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">3V3 (EEPROM pin 8)</text>
+<line x1="462" y1="112" x2="488" y2="112" stroke="#5b6573" stroke-width="1"/>
+<text x="492" y="102" text-anchor="start" font-size="11" fill="#1b2430">VCC pads follow the</text>
+<text x="492" y="116" text-anchor="start" font-size="11" fill="#1b2430">jumpers: 3.3 V here,</text>
+<text x="492" y="130" text-anchor="start" font-size="11" fill="#1b2430" font-weight="bold">not the radio's 5 V</text>
 <text x="40" y="432" text-anchor="start" font-size="12" fill="#1b2430" font-weight="bold">Use D2 / CS2 for RESET (W5), not the pad marked RST.</text>
 <text x="40" y="452" text-anchor="start" font-size="12" fill="#5b6573">Filled = used by this build. Tags W1–W7 are this guide's labels, not board marks.</text>
 <text x="40" y="472" text-anchor="start" font-size="12" fill="#5b6573">Check each pad against the IC pin on the right by continuity.</text>

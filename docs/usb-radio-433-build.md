@@ -5,17 +5,17 @@ serial, and a HopeRF RFM98PW (SX127x, 433 MHz, high power). It reports the USB i
 the other [USB radios](usb-radios.md). In LHPC it is the model `ch341-rfm98pw-433`, which needs
 LoRaHAM daemon 1.4.0 (see the [changelog](../CHANGELOG.md) for the release that ships it).
 
-Keep power off while soldering. The EEPROM is programmed before the radio is wired (steps 3–5).
+Keep power off while soldering.
 
 ## Contents
 
 - [1. Parts and tools](#1-parts-and-tools)
 - [2. Prepare the CH341 board](#2-prepare-the-ch341-board)
-- [3. Solder the EEPROM](#3-solder-the-eeprom)
-- [4. Program the EEPROM](#4-program-the-eeprom)
-- [5. Boot from the EEPROM](#5-boot-from-the-eeprom)
-- [6. Wire the radio](#6-wire-the-radio)
-- [7. Power and capacitors](#7-power-and-capacitors)
+- [3. Wire the radio](#3-wire-the-radio)
+- [4. Power and capacitors](#4-power-and-capacitors)
+- [5. Solder the EEPROM](#5-solder-the-eeprom)
+- [6. Program the EEPROM](#6-program-the-eeprom)
+- [7. Boot from the EEPROM](#7-boot-from-the-eeprom)
 - [8. First test at low power](#8-first-test-at-low-power)
 - [Sources](#sources)
 
@@ -42,11 +42,74 @@ With USB unplugged and nothing attached:
 4. Measure against the IC, not against a header numbering: CH341A pin 12 is GND, pins 28 and 9 are on
    the 3.3 V supply (each about 3.3 V with USB on; near 5 V means the voltage caps are wrong — unplug).
 
-## 3. Solder the EEPROM
+## 3. Wire the radio
+
+![RFM98PW module pinout, top view](img/usb-radio-433-rfm98pw.svg)
+
+![Wiring of the CH341A board, the RFM98PW, the capacitors and the EEPROM](img/usb-radio-433-wiring.svg)
+
+With USB unplugged, solder the seven signal wires and the grounds. The tags W1–W7 are this guide's
+labels, not board markings. Use the board's underside D-line pads; the IC pin numbers are for checking
+continuity. RFM98PW pin numbers are the module's (top view, shield side, as in HopeRF's drawing), not
+the chip's.
+
+| wire | CH341 pad | CH341A IC pin | RFM98PW pin |
+|---|---|---|---|
+| W1 | D0 / CS0 | 15 | 13 NSS |
+| W2 | D3 / SCK | 18 | 12 SCK |
+| W3 | D5 / MOSI | 20 | 11 MOSI |
+| W4 | D7 / MISO | 22 | 10 MISO |
+| W5 | D2 / CS2 | 17 | 14 RESET |
+| W6 | D6 | 21 | 6 DIO0 (the interrupt) |
+| W7 | D4 | 19 | 7 DIO1 |
+| — | GND | 12 | 2, 16 and the underside pad 17 |
+
+- RESET is **D2 / CS2**. Do not use the board's separate pad labelled RST.
+- Compared with the Meshstick (an SX1262), D6 carries DIO0 instead of DIO1, and D4 carries DIO1 instead of
+  BUSY: the SX127x has no BUSY line.
+- Solder the underside pad 17 to grounded copper. Pin 1 (ANT) goes to the antenna or the dummy load.
+  Pins 3, 4, 8 and 15 (DIO3, DIO4, DIO2, DIO5) stay open.
+- After soldering, check every wire end to end, radio pins 2, 16 and pad 17 to the board GND, and each
+  neighbour for a solder bridge, with power off.
+
+## 4. Power and capacitors
+
+The module's VCC (pin 5) is fed **5 V directly** from USB, as in the reference build.
+
+1. **Find the 5 V pickup** with power off: the VBUS contact of the USB plug, found by continuity, or a
+   rated USB breakout. The pads printed VCC follow the voltage jumpers and are 3.3 V here, not 5 V.
+   Continuity does not prove a pad's current rating; if it is unknown, use the breakout.
+2. **Solder the capacitors** across VCC (pin 5) and GND, as close to the module as possible: the 470 µF
+   electrolytic (its stripe, the minus side, to GND) and the 100 nF ceramic. Without them the PA's current
+   pulse at each transmission drops the CH341 off USB.
+3. **Check the feed alone**, its wire not yet on pin 5: with USB on, its positive reads 5.0–6.0 V
+   against GND, with the right polarity. Unplug.
+4. **Connect the feed to pin 5.** Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V
+   **output**: never tie it to anything.
+5. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
+   out-of-range supply. USB VBUS can sit below 5.0 V (a USB 2.0 port may give 4.75 V, less after the
+   cable), which is under HopeRF's minimum: the fix is the regulated supply below.
+
+What the USB feed means:
+- HopeRF specifies 650 mA typical and 700 mA maximum for the module alone at +30 dBm on 433 MHz, plus
+  the bridge's own current.
+- The stick's USB descriptor asks the host for 100 mA, and a USB 2.0 device gets no more than 500 mA
+  from a standard port.
+- So start at the **lowest** transmit power and watch the kernel log (`journalctl -k -f`) for a USB
+  disconnect or an over-current message.
+- Measured with those capacitors on a USB-powered port: up to `POWER` 14 the stick stays; from 15 it drops off
+  USB (brown-out). LHPC starts it at 14.
+- +20 dBm (`lhpc hardware --high-power <rid> on`, `POWER=20`) on this stick is **unmeasured**. LHPC admits it,
+  because the model has the high-power switch, but it has not been tried on USB power. Leave it off until it is
+  measured with an antenna or a dummy load.
+- A separately regulated 5–6 V supply, with the grounds joined and its positive never tied to USB VBUS,
+  is the alternative for high power.
+
+## 5. Solder the EEPROM
 
 The EEPROM holds the CH341's USB configuration, including an eight-character serial that tells this
 stick apart from every other `1a86:5512` device. It holds no radio firmware. Its wiring is the lower
-part of the drawing in [step 6](#6-wire-the-radio).
+part of the drawing in [step 3](#3-wire-the-radio).
 
 | AT24C02N pin | connect to |
 |---|---|
@@ -60,10 +123,10 @@ part of the drawing in [step 6](#6-wire-the-radio).
 SDA and SCL are not D5 or D6. Add 4.7 kΩ pull-ups to 3.3 V on SDA and SCL only if the idle lines do
 not sit near 3.3 V with USB on.
 
-## 4. Program the EEPROM
+## 6. Program the EEPROM
 
-Keep the radio disconnected, keep the mode jumper on **I2C-SPI**, and keep only this CH341 plugged in:
-the tool opens the first `1a86:5512` it finds.
+The reference EEPROM was programmed with the radio wired and on USB 5 V. Keep the mode jumper on
+**I2C-SPI**, and keep only this CH341 plugged in: the tool opens the first `1a86:5512` it finds.
 
 1. Build the tool at the commit the guide checked:
 
@@ -118,7 +181,7 @@ the tool opens the first `1a86:5512` it finds.
    Do not unplug during the write. If it fails, check 3.3 V on EEPROM pin 8, WP at 0 V, idle SDA/SCL,
    the address pins and the chip's orientation. Name each new readback file differently (02, 03 …).
 
-## 5. Boot from the EEPROM
+## 7. Boot from the EEPROM
 
 Measured on the reference board:
 
@@ -133,64 +196,8 @@ Measured on the reference board:
    loaded: check the jumper and the SDA/SCL wiring.
 
 Rewrites also work with the jumper removed (the stick stays `1a86:5512`). Programming a *blank* EEPROM
-with the jumper removed was not tested. To restore the old contents, write `backup-a.bin` as in step 4
+with the jumper removed was not tested. To restore the old contents, write `backup-a.bin` as in step 6
 and verify it.
-
-## 6. Wire the radio
-
-![RFM98PW module pinout, top view](img/usb-radio-433-rfm98pw.svg)
-
-![Wiring of the CH341A board, the RFM98PW, the capacitors and the EEPROM](img/usb-radio-433-wiring.svg)
-
-With USB unplugged, solder the seven signal wires and the grounds. The tags W1–W7 are this guide's
-labels, not board markings. Use the board's underside D-line pads; the IC pin numbers are for checking
-continuity. RFM98PW pin numbers are the module's (top view, shield side, as in HopeRF's drawing), not
-the chip's.
-
-| wire | CH341 pad | CH341A IC pin | RFM98PW pin |
-|---|---|---|---|
-| W1 | D0 / CS0 | 15 | 13 NSS |
-| W2 | D3 / SCK | 18 | 12 SCK |
-| W3 | D5 / MOSI | 20 | 11 MOSI |
-| W4 | D7 / MISO | 22 | 10 MISO |
-| W5 | D2 / CS2 | 17 | 14 RESET |
-| W6 | D6 | 21 | 6 DIO0 (the interrupt) |
-| W7 | D4 | 19 | 7 DIO1 |
-| — | GND | 12 | 2, 16 and the underside pad 17 |
-
-- RESET is **D2 / CS2**. Do not use the board's separate pad labelled RST.
-- Compared with the Meshstick (an SX1262), D6 carries DIO0 instead of DIO1, and D4 carries DIO1 instead of
-  BUSY: the SX127x has no BUSY line.
-- Solder the underside pad 17 to grounded copper. Pin 1 (ANT) goes to the antenna or the dummy load.
-  Pins 3, 4, 8 and 15 (DIO3, DIO4, DIO2, DIO5) stay open.
-- After soldering, check every wire end to end, radio pins 2, 16 and pad 17 to the board GND, and each
-  neighbour for a solder bridge, with power off.
-
-## 7. Power and capacitors
-
-1. Feed the module's VCC (pin 5) with **5 V directly** from the USB supply, as in the reference build.
-   Never feed pin 5 from the board's 3.3 V. Pin 9 is the module's 3.3 V **output**: never tie it to
-   anything.
-2. Across VCC (pin 5) and GND, as close to the module as possible: the 470 µF electrolytic (its stripe,
-   the minus side, to GND) and the 100 nF ceramic. Without them the PA's current pulse at each
-   transmission drops the CH341 off USB.
-3. At power-up, radio pin 5 must read 5.0–6.0 V and the board 3V3 about 3.3 V. Stop at a reversed or
-   out-of-range supply.
-
-What the USB feed means:
-- HopeRF specifies 650 mA typical and 700 mA maximum for the module alone at +30 dBm on 433 MHz, plus
-  the bridge's own current.
-- The stick's USB descriptor asks the host for 100 mA, and a USB 2.0 device gets no more than 500 mA
-  from a standard port.
-- So start at the **lowest** transmit power and watch the kernel log (`journalctl -k -f`) for a USB
-  disconnect or an over-current message.
-- Measured with those capacitors on a USB-powered port: up to `POWER` 14 the stick stays; from 15 it drops off
-  USB (brown-out). LHPC starts it at 14.
-- +20 dBm (`lhpc hardware --high-power <rid> on`, `POWER=20`) on this stick is **unmeasured**. LHPC admits it,
-  because the model has the high-power switch, but it has not been tried on USB power. Leave it off until it is
-  measured with an antenna or a dummy load.
-- A separately regulated 5–6 V supply, with the grounds joined and its positive never tied to USB VBUS,
-  is the alternative for high power.
 
 ## 8. First test at low power
 
@@ -213,10 +220,10 @@ This page is translated from the build guide (v2, 23 Oct 2026). Its drawings are
 datasheets' pin tables:
 - HopeRF, RFM98PW/RFM95PW datasheet, REV1.1 (module pins, supply, current);
 - WCH, CH341 datasheet CH341DS1, version 2D (pins, 3.3 V operation, EEPROM format);
-- Atmel, AT24C01A/02/04/08A/16A datasheet, doc0180 (EEPROM pins);
+- Atmel, AT24C01A/02/04/08A/16A datasheet, doc0180 rev. Z1, 05/2007 (EEPROM pins);
 - command-tab/ch341eeprom at 7cffbef7;
 - the USB-IF power policy;
 - markbirss/MESHSTICK (the Meshstick reference wiring).
 
-The jumper table in step 5, the `POWER` limit in step 7 and the receive and transmit results in step 8 were
+The `POWER` limit in step 4, the jumper table in step 7 and the receive and transmit results in step 8 were
 measured on the reference build.
