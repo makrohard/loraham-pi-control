@@ -17,7 +17,8 @@ from a web interface, also on your phone, or from the command line.
   > ## → [Get a ready-made image](https://github.com/makrohard/loraham-images)
 
 - **A Linux PC (x86) with a [USB stick](#hardware)?** Install it yourself:
-  **[manual install](#manual-install)** (the steps are written and proven for a Pi).
+  **[manual install](#manual-install)** (the steps are written and proven for a Pi). Skip the Pi-specific steps: use
+  `--spi-mode skip`, leave out `lhpc hardware loraham`; add your stick as in [USB radios](docs/usb-radios.md).
 
 - **No hardware?** Try it in your browser or in the test lab:
 
@@ -99,6 +100,9 @@ Other boards with those chips: choose the preset whose wiring matches
 | <img src="docs/img/readme/logo-meshcom.png" height="48" alt="ICSSW"> | `meshcom` | 📜🛜 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
 | <img src="docs/img/readme/logo-meshcore.png" height="64" alt="openHop and MeshCore"> | `meshcore` | ✅ | MeshCore on openHop — chat node and/or repeater | [meshcore](docs/stacks/meshcore.md) |
 | <img src="docs/img/readme/logo-reticulum.png" height="48" alt="Reticulum"> | `reticulum` | ✅ | Reticulum node, drives the radio directly over SPI | [reticulum](docs/stacks/reticulum.md) |
+
+✅ no licence needed, within the ISM limits (frequency, power, duty cycle)\
+📜🛜 amateur-radio licence needed, no encryption
 
 Daemon-backed stacks start the daemon automatically; Meshtastic and Reticulum drive the radio
 themselves and cannot share a band with the daemon (`lhpc` refuses the conflict).
@@ -218,7 +222,7 @@ section gives it as one command.
 #### 5. Install lhpc
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh -o install.sh && bash install.sh
 #   or from a checkout: ./install.sh
 #   options: --target <dir> · --no-service (skip the web service) · --no-path (skip the CLI symlink)
 ```
@@ -411,7 +415,7 @@ lhpc logs <target>                 # tail a component log
 lhpc rflog <stack>@<rid>          # tail an instance's RF log (what the radio heard and sent)
 lhpc rflog <stack>@<rid> --decrypt # the same, decoded with the keys on this box (encrypted stacks)
 lhpc doctor                        # environment / dependency checks
-lhpc test <stack> [--tx] --yes     # host tests; --tx transmits
+lhpc test <stack> [--tx] --yes     # --tx: antenna required; obey RF limits
 ```
 
 Full reference: [`docs/cli.md`](docs/cli.md); the RF rules: [TX safety](docs/operations.md#tx-safety).

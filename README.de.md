@@ -19,7 +19,8 @@ Smartphone, oder über die Kommandozeile.
 
 - **Ein Linux-PC (x86) mit [USB-Stick](#hardware)?** Selbst installieren:
   **[manuelle Installation](#manuelle-installation)** (die Schritte sind für einen Pi geschrieben und
-  erprobt).
+  erprobt). Überspring die Pi-spezifischen Schritte: nimm `--spi-mode skip`, lass `lhpc hardware loraham` weg;
+  richte deinen Stick ein wie unter [USB-Funkgeräte](docs/usb-radios.md).
 
 - **Keine Hardware?** Im Browser oder im Test-Lab ausprobieren:
 
@@ -96,7 +97,7 @@ Andere Boards mit diesen Chips: das Preset wählen, dessen Verdrahtung passt
 
 | | Stack | Frei nutzbar | Was es ist | Doku |
 |:---:|---|:---:|---|---|
-| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `daemon` | | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit | [daemon](docs/stacks/daemon.md) |
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `daemon` | | LoRaHAM-Daemon — besitzt die Funkgeräte, ein Prozess und Socket-Satz pro Funkgerät | [daemon](docs/stacks/daemon.md) |
 | <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `chat` | 📜🛜 | APRS-/Chat-TUI (lokal oder über SSH) | [chat](docs/stacks/chat.md) |
 | <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `voice` | 📜🛜 | LoRa-Sprache — GTK-App auf Desktop, ncurses-Terminal auf Lite | [voice](docs/stacks/voice.md) |
 | | `kiss` | | KISS-TNC über TCP (graywolf, xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
@@ -105,6 +106,9 @@ Andere Boards mit diesen Chips: das Preset wählen, dessen Verdrahtung passt
 | <img src="docs/img/readme/logo-meshcom.png" height="48" alt="ICSSW"> | `meshcom` | 📜🛜 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
 | <img src="docs/img/readme/logo-meshcore.png" height="64" alt="openHop und MeshCore"> | `meshcore` | ✅ | MeshCore auf openHop — Chat-Node und/oder Repeater | [meshcore](docs/stacks/meshcore.md) |
 | <img src="docs/img/readme/logo-reticulum.png" height="48" alt="Reticulum"> | `reticulum` | ✅ | Reticulum-Node, steuert das Funkmodul direkt über SPI | [reticulum](docs/stacks/reticulum.md) |
+
+✅ ohne Lizenz nutzbar, innerhalb der ISM-Grenzen (Frequenz, Leistung, Duty-Cycle)\
+📜🛜 Amateurfunklizenz nötig, keine Verschlüsselung
 
 Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic und Reticulum steuern das
 Funkgerät selbst und können sich kein Band mit dem Daemon teilen (`lhpc` verweigert den Konflikt).
@@ -199,7 +203,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```bash
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du das WebGUI willst)
 sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx iw ca-certificates curl zstd
-sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
+sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential libusb-1.0-0-dev  # daemon / RadioLib / Meshstick-Bibliothek
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / voice (Terminal)
 sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses-Terminal-UI — keine grafischen Pakete)
 sudo apt install -y --no-install-recommends socat                                       # kiss
@@ -225,7 +229,7 @@ aus, solange sie fehlen.
 #### 5. lhpc installieren
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh -o install.sh && bash install.sh
 #   oder aus einem Checkout: ./install.sh
 #   Optionen: --target <dir> · --no-service (ohne Web-Dienst) · --no-path (ohne CLI-Symlink)
 ```
@@ -340,7 +344,7 @@ erneuter Lauf setzt am bereits Gebauten auf. Host-Tests und `--tx`: [auto-instal
 <details><summary><em>Stack für Stack statt alles auf einmal</em></summary>
 
 ```bash
-# daemon — LoRaHAM-Daemon, besitzt die Funkgeräte (beide Bänder); standardmäßig Binary
+# daemon — LoRaHAM-Daemon, besitzt die Funkgeräte (ein Prozess pro Funkgerät); standardmäßig Binary
 lhpc install daemon
 #   stattdessen aus Quellen:  lhpc install daemon --source pinned && lhpc build daemon
 
@@ -380,9 +384,9 @@ lhpc build reticulum
 ```
 
 ```bash
-lhpc stack start <stack>
+lhpc stack start <stack>@<rid>
 lhpc status
-lhpc stack stop <stack>
+lhpc stack stop <stack>@<rid>
 ```
 </details>
 
@@ -411,14 +415,14 @@ pro Stack: Einstellungen, Start/Stopp, Logs, Passwort. Die Konsole:
 lhpc status                        # was läuft (nur lesend)
 lhpc config <stack>                # Optionen des Stacks samt aktueller Werte
 lhpc config chat call YOURCALL-10 # eine Option setzen (YOURCALL-10 = dein Rufzeichen+SSID)
-lhpc config <stack> --band 868 <param> <wert>     # bandabhängiger Wert bei umschaltbaren Stacks
-lhpc stack start|stop|restart <stack>             # zeigt den Plan, fragt nach; --yes überspringt
-lhpc stack stop daemon --band 433                 # stoppt den Daemon nur auf einem Band (nur Daemon)
-lhpc logs <ziel>                   # Komponenten-Log verfolgen
-lhpc rflog <stack> [--band B]      # RF-Log eines Stacks verfolgen (was der Funk hörte und sendete); --band: Daemon
-lhpc rflog <stack> --decrypt       # dasselbe, mit den Schlüsseln dieser Box entschlüsselt (verschlüsselte Stacks)
+lhpc config <stack>@<rid> <param> <value>         # Wert einer Instanz (der ihres Funkgeräts)
+lhpc stack start|stop|restart <stack>@<rid>       # zeigt den Plan, fragt nach; --yes überspringt
+lhpc stack stop daemon@r1                         # stoppt nur den Daemon eines Funkgeräts
+lhpc logs <target>                 # Komponenten-Log verfolgen
+lhpc rflog <stack>@<rid>          # RF-Log einer Instanz verfolgen (was der Funk hörte und sendete)
+lhpc rflog <stack>@<rid> --decrypt # dasselbe, mit den Schlüsseln dieser Box entschlüsselt (verschlüsselte Stacks)
 lhpc doctor                        # Umgebungs-/Abhängigkeits-Checks
-lhpc test <stack> [--tx] --yes     # Host-Tests; --tx sendet
+lhpc test <stack> [--tx] --yes     # --tx: Antenne nötig; HF-Grenzen einhalten
 ```
 
 Vollständige Referenz: [`docs/cli.md`](docs/cli.md); die HF-Regeln: [TX safety](docs/operations.md#tx-safety).
