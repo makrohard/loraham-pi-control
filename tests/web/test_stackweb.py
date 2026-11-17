@@ -1924,7 +1924,7 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
             f"{p} not denied in nginx config"
 
 
-# ===== 'Stacks WebGUIs' — ONE common policy for every eligible stack web UI =====
+# ===== 'Stacks Web Proxies' — ONE common policy for every eligible stack web UI =====
 
 def _bulk_spies(svc, monkeypatch, apply_ok=True):
     """Count the single-write save and the single nginx apply; keep persistence REAL."""
@@ -2112,8 +2112,8 @@ def test_bulk_saved_but_gated_apply_stays_truthfully_pending(tmp_path, monkeypat
 def test_webserver_panel_renders_both_webgui_subpanels(tmp_path, web):
     c, _svc_ = _app(web, tmp_path)
     doc = parse(c.get("/stacks").get_data(as_text=True))
-    assert "LHPC WebGUI" in doc.text and "Stacks WebGUIs" in doc.text
-    assert "Apply to all Stack WebGUIs" in doc.text
+    assert "LHPC Webserver" in doc.text and "Stacks Web Proxies" in doc.text
+    assert "Apply to all stack web proxies" in doc.text
     # target-policy form: the bulk form carries NO port input
     bulk = doc.within(doc.by_id("ws-stackwebs"))
     assert not _controls(bulk, "port")
@@ -2315,7 +2315,7 @@ def _controls(scope, name):
 
 
 def test_bulk_refuses_an_unset_field_instead_of_defaulting_to_local(tmp_path, monkeypatch):
-    """The trap this closes, reported from a real box: the operator opened Stacks WebGUIs to
+    """The trap this closes, reported from a real box: the operator opened Stacks Web Proxies to
     EXPOSE everything, filled in the CIDRs and the confirm phrase, and left the Access select
     where the form opened it. The form did not preselect the saved policy, so its first option
     (`local`) won and one submit took every already-exposed page back to loopback — silently,

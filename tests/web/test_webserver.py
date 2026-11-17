@@ -1781,7 +1781,7 @@ def test_webserver_reachable_from_stacks_and_not_a_managed_stack(tmp_path, web):
     # stack (a bogus stack-detail 404s; it never enters build_snapshot).
     c, _ = _app_svc(web, tmp_path)
     body = c.get("/stacks").data.decode()
-    assert 'id="webserver-row"' in body and "Webserver (HTTPS / mTLS)" in body
+    assert 'id="webserver-row"' in body and "Webserver and mTLS proxy" in body
     assert c.get("/stacks/loraham-pi-control").status_code == 302        # old path -> redirect
     assert c.get("/stacks/loraham-pi-control-bogus").status_code == 404
 

@@ -857,7 +857,7 @@ class WebserverOpsMixin:
         return {
             # The page and the component behind it (`page_id` is the key of every saved policy).
             "page_id": page_id, "stack": page.stack_id, "component_id": page.component_id,
-            "name": page.name, "label": page.label, "primary": page.primary, "rid": page_id.partition("@")[2],   # U3: its radio
+            "name": page.name, "label": page.label, "primary": page.primary, "rid": page_id.partition("@")[2], "heading": page.heading,   # U3: its radio
             "mode_note": self.page_mode_note(page),
             "cfg": swc, "upstream_address": address,
             "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
@@ -1301,7 +1301,7 @@ class WebserverOpsMixin:
                             next_commands=ar.next_commands, data=ar.data)
 
     def _stack_webs_candidates(self) -> list:
-        """THE candidate port walk for the 'Stacks WebGUIs' bulk policy — the ONE place that
+        """THE candidate port walk for the 'Stacks Web Proxies' bulk policy — the ONE place that
         decides, per eligible stack, which port a bulk Apply uses: the saved nonzero port (kept), else the panel's
         suggested default, candidate-aware (unique). The form's overview, the bulk Apply and `_page_ports` all consume
         this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
@@ -1337,7 +1337,7 @@ class WebserverOpsMixin:
                 "cidrs": one(lambda c: ",".join(c.allowed_cidrs))}
 
     def stack_webs_overview(self) -> dict:
-        """READ-ONLY context for the 'Stacks WebGUIs' bulk form (the shared candidate walk)."""
+        """READ-ONLY context for the 'Stacks Web Proxies' bulk form (the shared candidate walk)."""
         from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
         pages = {p.page_id: p for p in self.web_pages()}
         return {"stacks": [{"sid": sid, "port": port, "keeps": keeps, "label": pages[sid].label}
@@ -1348,7 +1348,7 @@ class WebserverOpsMixin:
     @invalidates_snapshot
     def stack_webs_configure_apply(self, *, mode, scheme, access_mode, cidrs,
                                    confirm=False, confirm_public=False) -> ActionResult:
-        """Apply ONE common web-UI proxy policy to EVERY eligible stack — the 'Stacks WebGUIs'
+        """Apply ONE common web-UI proxy policy to EVERY eligible stack — the 'Stacks Web Proxies'
         bulk form. Ports stay per-stack: an existing nonzero port is NEVER changed; a missing one
         gets the same suggested default its own panel offers (candidate-aware, so the assigned
         set stays unique). The COMPLETE candidate set is validated through the same rules as a

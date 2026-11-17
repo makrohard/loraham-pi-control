@@ -1046,6 +1046,7 @@ main = "graywolf"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:{port:8080}"
+    proxy_name = "Graywolf UI"
     ready = true
     role = "listener"
     description = "Graywolf web UI"
@@ -1622,6 +1623,7 @@ main = "meshtastic"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:{port:9443}"
+    proxy_name = "Meshtastic UI"
     # Managed Firewall DENY-DEFAULT (see 4403): the stack web proxy (suggested :8447) is the sanctioned path.
     firewall = { auth = "none", deny = true }
     role = "listener"
@@ -2273,6 +2275,7 @@ main = "meshcom-qemu"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:{port:18083}"
+    proxy_name = "MeshCom UI"
     firewall = { auth = "none" }
     role = "listener"
     description = "MeshCom web UI"
@@ -2783,6 +2786,7 @@ main = "meshcore-node"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:{port:8000}"
+    proxy_name = "openHop repeater"
     ready = true
     role = "listener"
     description = "openHop repeater dashboard"
@@ -2885,6 +2889,7 @@ main = "meshcore-node"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:{port:8788}"
+    proxy_name = "MeshCore UI"
     ready = true
     role = "listener"
     client = true
@@ -3910,6 +3915,7 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   [[stack.component.endpoint]]
   kind = "tcp"
   address = "127.0.0.1:8790"
+  proxy_name = "Reticulum UI"
   ready = true
   role = "listener"
   client = true

@@ -52,9 +52,9 @@ def controller_menus(ctx: dict) -> list[Submenu]:
     if ctx.get("ws_mon"):
         ws = {"mon": ctx["ws_mon"], "certs": ctx["ws_certs"], "modes": ctx["ws_modes"],
               "loopback": ctx["ws_loopback"]}
-        add("webserver-row", "controller-row", "Webserver (HTTPS / mTLS)", "_webserver.html", **ws)
-        add("webserver-row--lhpc-webgui", "webserver-row", "LHPC WebGUI", "_ws_console.html", **ws)
-        add("ws-stackwebs", "webserver-row", "Stacks WebGUIs", "_ws_stackwebs.html", **ws)
+        add("webserver-row", "controller-row", "Webserver and mTLS proxy", "_webserver.html", **ws)
+        add("webserver-row--lhpc-webgui", "webserver-row", "LHPC Webserver", "_ws_console.html", **ws)
+        add("ws-stackwebs", "webserver-row", "Stacks Web Proxies", "_ws_stackwebs.html", **ws)
         add("webserver-row--monitor", "webserver-row", "Monitor", "_ws_monitor.html", **ws)
         add("webserver-row--certificates", "webserver-row", "Certificates", "_ws_certs.html", **ws)
     if ctx.get("firewall_view"):
@@ -130,8 +130,7 @@ def stack_menus(g: dict) -> list[Submenu]:
         add(f"stack-webservers-{sid}", top, "Webserver (web UI proxy)", "_stackwebs.html")
     for sw in g["stack_webs"]:
         wid, rs = f"stack-webserver-{sw['page_id']}", _radio_suffix(sw["page_id"])
-        label = sw["name"] + (f" · {sid}@{sw['rid']}" if sw["rid"] else "")
-        add(wid, f"stack-webservers-{sid}", label, "_stackweb.html", stack_web=sw)
+        add(wid, f"stack-webservers-{sid}", sw["heading"], "_stackweb.html", stack_web=sw)
         add(f"{wid}--settings", wid, "Settings" + rs, "_stackweb_settings.html", stack_web=sw)
         add(f"{wid}--monitor", wid, "Monitor" + rs, "_stackweb_monitor.html", stack_web=sw)
     return out

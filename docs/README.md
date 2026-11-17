@@ -28,7 +28,7 @@ The `lhpc` docs by task; the top-level README covers install. Start with Archite
 ## Reach it
 
 - [Deployment](deployment.md) — the console's systemd units and self-update.
-- [Webserver (HTTPS + mTLS)](webserver.md) — the nginx front end and remote access.
+- [Webserver and mTLS proxy](webserver.md) — the nginx front end and remote access.
 - [SSH tunnel](ssh-tunnel.md) — the console and stack UIs over SSH only.
 - [WiFi access point](wifi-access-point.md) — the Pi as its own WiFi network.
 - [Firewall](firewall.md) — the managed nftables firewall.

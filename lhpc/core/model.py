@@ -258,6 +258,8 @@ class EndpointSpec:
     proxy_deny_notice: bool = False
     # The manifest's address when it carries instance tokens; `address` is its template value (no radio). "" = none.
     address_template: str = ""
+    # A web UI's short name, as its proxy entry names it ("Proxy · Graywolf UI · r1"); "" = none (not a web UI).
+    proxy_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -596,6 +598,7 @@ class WebPage:
     scheme: str                  # upstream "http" | "https"
     deny_paths: tuple = ()
     deny_notice: bool = False
+    heading: str = ""            # its menu entry and panel heading: "Proxy · <web UI> · rN" (WEBSERVER-RENAME)
 
     @property
     def primary(self) -> bool:
@@ -650,7 +653,11 @@ def web_pages(stack: Stack, instances=None, paths=None) -> tuple:
                                  else ep.address),
                         scheme=ep.scheme,
                         deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
-                        deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
+                        deny_notice=bool(getattr(ep, "proxy_deny_notice", False)),
+                        # the radio part only where the page is the radio's own (a templated port; a fixed-port
+                        # stack's one page serves whichever radio it runs on)
+                        heading=f"Proxy · {getattr(ep, 'proxy_name', '') or shown}"
+                                + (f" · {inst.rid}" if slot_k and ep.address_template else "")))
                     break
     return tuple(out)
 

@@ -1,12 +1,12 @@
 {% from "_macros.html" import panel_banner -%}
 {% set wsg_results = panel_results('ws-stackwebs') -%}
 <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
-    <summary>Stacks WebGUIs</summary>
+    <summary>Stacks Web Proxies</summary>
     {{ panel_banner(wsg_results) }}
     <section class="cfgsec">
-      <p class="muted">Applies the selected policy to <strong>every</strong> Stack WebGUI below.
+      <p class="muted">Applies the selected policy to <strong>every</strong> stack web proxy below.
         Ports remain individual per-stack settings: existing ports are kept, a stack without one
-        gets its normal suggested default. Each stack's own Webserver panel remains available for
+        gets its normal suggested default. Each stack's own Proxy entry remains available for
         individual exceptions.</p>
       {% if ws_stackwebs.stacks %}
         <p class="muted">Will affect:
@@ -49,7 +49,7 @@
                 <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth remote,
                 or an unencrypted <code>http</code> remote listener</td></tr>
           </table>
-          <button type="submit">Apply to all Stack WebGUIs</button>
+          <button type="submit">Apply to all stack web proxies</button>
         </form>
       {% else %}
         <p class="muted">No installed stack currently exposes a web UI.</p>

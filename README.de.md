@@ -310,12 +310,12 @@ Zuerst das Datum prüfen (`timedatectl`; falls falsch:
 synchronisiert ist, das Häkchen **Accept unverified clock** setzen
 ([clock gate](docs/webserver.md#the-clock-gate), englisch).
 
-1. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Certificates → Issue client cert**
+1. **Apps → LoRaHAM Pi Control → Webserver and mTLS proxy → Certificates → Issue client cert**
    — die angezeigte Einmal-Passphrase kopieren.
-2. **… → Stacks WebGUIs** — eine Richtlinie für alle Stack-Oberflächen (Access `lan`, Scheme
+2. **… → Stacks Web Proxies** — eine Richtlinie für alle Stack-Oberflächen (Access `lan`, Scheme
    `https`, Access mode `local-open-remote-auth`, Allowed CIDRs, Confirm `enable-remote`); bleibt leer,
    bis die Stacks installiert sind (Schritt 9).
-3. **… → LHPC WebGUI** — dieselben Werte, mit **Bind** `0.0.0.0`; zuletzt, denn es ist die Seite,
+3. **… → LHPC Webserver** — dieselben Werte, mit **Bind** `0.0.0.0`; zuletzt, denn es ist die Seite,
    auf der du arbeitest. Die **IP SANs** müssen jede Adresse nennen, die du aufrufst (auf einer
    AP-Box `10.42.0.1` ergänzen), dann mit `lhpc webserver tls-renew` neu ausstellen: Apply stellt das
    Zertifikat nur neu aus, wenn die eigene LAN-Adresse der Box darin fehlt, nie für eine andere SAN.

@@ -1014,6 +1014,7 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         firewall=_parse_firewall_meta(raw.get("firewall")),
         proxy_deny_paths=_parse_proxy_deny_paths(raw.get("proxy_deny_paths")),
         proxy_deny_notice=_parse_deny_notice(raw.get("proxy_deny_notice", False)),
+        proxy_name=str(raw.get("proxy_name", "")),
     )
 
 

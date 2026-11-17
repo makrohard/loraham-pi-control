@@ -5,7 +5,7 @@
    the controller-only Certificates section. Requires: mon, modes, certs, loopback. GET is read-only. #}
 {% from "_macros.html" import webserver_pills %}
 <details class="advcfg ws-comp" id="webserver-row">
-  <summary>Webserver (HTTPS / mTLS)
+  <summary>Webserver and mTLS proxy
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
        address = the reached host:port. Second pill = RUNNING: green "nginx" when THIS session is proxied
        through nginx, yellow "lhpc-web" if served direct. #}
@@ -17,14 +17,14 @@
      not reliably keyboard/AT reachable. #}
   {% if ws_console_addr %}<p class="wsopen"><a class="wsurl" href="{{ mon.posture.scheme }}://{{ ws_console_addr }}">Open {{ mon.posture.scheme }}://{{ ws_console_addr }}</a></p>{% endif %}
 
-  {# ===== LHPC WebGUI (the console's own settings) ===== #}
+  {# ===== LHPC Webserver (the console's own settings) ===== #}
   <div class="ws-sub-wrap">
   {% include "_ws_console.html" %}
   {# logs link OUTSIDE the summary (a11y) but overlaid on the header — identical to the main stack rows. #}
   <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a>{{ page_link('controller', 'webserver-row--lhpc-webgui') }}</div>
   </div>
 
-  {# ===== Stacks WebGUIs: ONE common policy for every eligible stack web-UI proxy.
+  {# ===== Stacks Web Proxies: ONE common policy for every eligible stack web-UI proxy.
      Target-policy form — no per-stack ports here (each stack keeps its own; a missing one
      gets the same suggested default its per-stack panel offers). #}
   <div class="stackrow-wrap">

@@ -103,7 +103,7 @@ Flags: [CLI](cli.md#webserver).
    lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12    # encrypted .p12, mode 0600
    ```
    The label is what the device's certificate chooser shows; prefix it with `lhpc-`. The
-   console's **Webserver → Certificates** panel offers **Download .p12** on a loopback session
+   console's **Webserver and mTLS proxy → Certificates** panel offers **Download .p12** on a loopback session
    only.
 4. **Copy the bundle and the server CA to the remote machine**, one file per `scp` (the panel
    shows equivalent commands with the box's current address, fetching the `.p12` straight from
@@ -171,8 +171,8 @@ lhpc webserver apply
   port, or leave 1024..65535, is refused and names the other owner. The MeshCom bridge's port 0 is
   refused too: it must equal the firmware's `XR_PORT`.
 
-**Webserver → Stacks WebGUIs** applies one policy (access, scheme, access mode, CIDRs) to
-**every** page in one confirmed action (**LHPC WebGUI** is the console's own). Existing ports
+**Webserver and mTLS proxy → Stacks Web Proxies** applies one policy (access, scheme, access mode, CIDRs) to
+**every** page in one confirmed action (**LHPC Webserver** is the console's own). Existing ports
 are kept; a page without one gets its suggested default. The whole set is validated first, and
 any problem (confirmation, CIDRs, http + cert-auth, a port that cannot be assigned) refuses the
 whole action. Activation is one apply behind the firewall gate. Per-stack panels still take

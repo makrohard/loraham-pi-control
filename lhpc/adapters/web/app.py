@@ -1375,7 +1375,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                            .get("clients", []))
                                                           if c.get("state") == "active"]),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
-            # 'Stacks WebGUIs' bulk form (read-only overview; ?wsg=1 re-opens it after a POST)
+            # 'Stacks Web Proxies' bulk form (read-only overview; ?wsg=1 re-opens it after a POST)
             "ws_stackwebs": service.stack_webs_overview(),
             "wsg_open": bool(request.args.get("wsg")),
             "tasks": service.running_tasks(),
@@ -2986,7 +2986,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/webserver/stacks")
     def stack_webs_configure():
-        """ONE common policy for every eligible stack web UI ('Stacks WebGUIs'). Same typed-
+        """ONE common policy for every eligible stack web UI ('Stacks Web Proxies'). Same typed-
         confirmation contract as the per-stack form; ports stay per-stack (preserved, or the
         suggested default where missing). Validation/persistence live in the service layer."""
         if not _csrf_ok():
