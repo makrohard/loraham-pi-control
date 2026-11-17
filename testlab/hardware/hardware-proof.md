@@ -76,7 +76,8 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   budget, both boxes' boot ids and the USB lists, and only then runs the send. An automatic send of a protocol endpoint
   (the tracker's ACK, the LXMF delivery proof, the RNS path request) is reserved with `tx ... control --reserve` right
   before the send that triggers it. Any failed check is a STOP. The peer driver (`peer.py`) refuses on its own a power
-  value outside that domain, a power set outside the runner's setter and a send outside `tx`.
+  value outside that domain, a power set outside the runner's setter and a send outside `tx`. That context guards
+  against accidents only: never run `peer.py`'s power setters or senders by hand; they belong to the runner.
 - A radio sends at most 10 frames per run (`TXMAX`); the start prints each radio's worst case (`BUDGET` lines) and a sum
   above 10 is a STOP before any transmission. After the run, each radio's TX count in its RF log (all its frames, the
   stack's own included) must also be at most 10, else that is a FAIL.
@@ -102,8 +103,8 @@ both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the 
 `tx`, the lhpc calls parsed at the head (`cliforms.py`) and the redaction.
 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,
-the password on stdin). It checks a Meshtastic stack's power cap before each start (the running ones at its first read,
-before any change), needs the operator's call and never takes it as the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails).
+the password on stdin). It checks a Meshtastic stack's power cap before each start (and the units on its radios, r2 and r4, at its first read
+and before every restart; units on other radios stay untouched; `max_power` 0 is refused), needs the operator's call and never takes it as the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails).
 
 ## The evidence
 

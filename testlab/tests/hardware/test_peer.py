@@ -351,6 +351,24 @@ def test_a_setinfo_off_that_cannot_be_sent_fails_the_read_by_name(clock, monkeyp
     assert "SEEN" not in capsys.readouterr().out
 
 
+def test_a_signal_while_the_off_fails_leaves_the_failed_restore_as_the_error(clock, monkeypatch):
+    # G2-HWKITC-D N2: the deferred signal no longer replaces the error that names the device state; it is named in it
+    # (red-before 3ea308da: the SIGTERM raised in the finally turned the RuntimeError into a bare SystemExit)
+    import signal
+    port = Port(clock, pending=rx_meshcom(N1))
+    write = port.write
+
+    def failing(b):
+        if b == b"--setinfo off\r\n":
+            signal.raise_signal(signal.SIGTERM)
+            raise OSError("the port is gone")
+        write(b)
+    port.write = failing
+    monkeypatch.setitem(sys.modules, "serial", FakeSerialModule(port))
+    with pytest.raises(RuntimeError, match=r"may keep the changed mode; SIGTERM came meanwhile"):
+        peer.main(["meshcom-read", N1, "5"])
+
+
 # G2-HWKITC B1: the driver itself refuses a power value outside THE domain, a set outside the runner's setter and a
 # transmission outside its tx, before any device opens (`peer.py mt-power 20`, `peer.py mt-send rfkit123` ran on their own)
 @pytest.mark.parametrize("act,ctx", [(["mt-power", "20"], "set"), (["mt-power", "30"], "set"), (["mt-power", "-20"], "set"),

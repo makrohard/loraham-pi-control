@@ -147,18 +147,20 @@ def on_term(signum, _frame):
 def restore(s, post):
     """Send `post` (the console restore) with SIGINT/SIGTERM held off (deferred: raised after it); if it cannot be sent the
     call fails naming the device state, never a clean result."""
-    got = []                                           # a SIGINT/SIGTERM meanwhile is kept and raised once the restore is sent
+    got, sent = [], False                              # a SIGINT/SIGTERM meanwhile is kept and raised once the restore is sent
     held = {sig: signal.signal(sig, lambda n, _f: got.append(n)) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         for c in post:
             s.write(c)
             time.sleep(0.5)
-    except Exception as e:
-        raise RuntimeError(f"the console restore {b''.join(post)!r} was not sent ({e}): the peer may keep the changed mode") from e
+        sent = True
+    except Exception as e:                             # the failed restore stays the error; a signal meanwhile is named in it
+        note = f"; {signal.Signals(got[0]).name} came meanwhile" if got else ""
+        raise RuntimeError(f"the console restore {b''.join(post)!r} was not sent ({e}): the peer may keep the changed mode{note}") from e
     finally:
         for sig, h in held.items():
             signal.signal(sig, h)
-        if got:
+        if got and sent:
             signal.raise_signal(got[0])
 
 

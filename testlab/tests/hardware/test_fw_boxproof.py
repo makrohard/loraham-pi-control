@@ -75,6 +75,7 @@ CANNED = """X() {{ local f=$1; shift; XRC=0; case $f in
   *-maxpower.txt) printf '  max_power = {mp}\\n';; *-ftx0.txt) printf 'SIZE {size0}\\n3\\n';; *-start.txt) printf 'start\\n'; XRC={start};;
   *-txpower.txt) printf 'SIZE {size1}\\nCOUNT {count}\\n... Final Tx power: {power} dBm\\n'; XRC={read};;
   *-radios.txt) printf '{radios}';; *-caps.txt) printf '{caps}';; *-runset.txt) printf '{runset}';;
+  *-status.txt) printf '{status}'; XRC={statusrc};;
   F6-r4.txt) printf 'refused: re-apply with firewall-apply.sh\\n'; XRC={r4rc};;
   *) printf 'ok\\n';; esac > "$EVD/$f"; [ "$XRC" != 255 ] || stop "$f: ssh transport rc 255"; }}
 sshx() {{ local n r; n=$(( $(cat "$EVD/../stops" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$EVD/../stops"   # a file: capture runs it in a pipe
@@ -88,10 +89,11 @@ CAPS = "CAP loraham 17\\nCAP pinedio-usb-1262 14\\nCAP meshstick-1262 22\\n"
 
 
 def canned(tmp_path, count="4", power="10", start="0", read="0", stop1="0", stop2="0", body="mtstart F6-r2", mp="10",
-           size0="500", size1="600", radios=RADIOS, caps=CAPS, runset="meshtastic@r2\\n", r4rc="1"):
+           size0="500", size1="600", radios=RADIOS, caps=CAPS, runset="meshtastic@r2\\n", r4rc="1",
+           status="POWER=10 HIGHPOWER=0\\n", statusrc="0"):
     return proof(tmp_path, CANNED.format(count=count, power=power, start=start, read=read, stop1=stop1, stop2=stop2,
                                          body=body, mp=mp, size0=size0, size1=size1, radios=radios, caps=caps,
-                                         runset=runset, r4rc=r4rc))
+                                         runset=runset, r4rc=r4rc, status=status, statusrc=statusrc))
 
 
 @pytest.mark.parametrize("mp,why", [("17", None), ("18", "max_power 18 above 17: no start"), ("20", "above 17"),
@@ -325,11 +327,12 @@ def test_r4_is_never_started_above_its_models_cap(tmp_path):
 
 
 
-# ---- G2C-SR B1: FE and the undo replay start FW0's running stacks again: FW0 checks each running meshtastic@rN first ----
+# ---- FW0: the units on the row radios (r2, r4) are power-checked before any change; units on other radios stay untouched -----
+# (G2C-SR B1; G2-HWKITC-D B3 as the coordinator decided: FW3 stops, FE and a STOP's replay restart only the row radios' units)
 
-@pytest.mark.parametrize("runset,mp,stop", [("meshtastic@r2\\nmeshcom@r1\\n", "20", "F0-r2: max_power 20 above 17"),
-                                            ("meshtastic@r4\\n", "15", "F0-r4: max_power 15 above 14"),
-                                            ("meshcom@r1\\nmeshtastic@r2\\n", "18", "F0-r2: max_power 18 above 17")])
+@pytest.mark.parametrize("runset,mp,stop", [("meshtastic@r2\\nmeshcom@r1\\n", "20", "F0-meshtastic@r2: max_power 20 above 17"),
+                                            ("meshtastic@r4\\n", "15", "F0-meshtastic@r4: max_power 15 above 14"),
+                                            ("meshtastic@r2\\nmeshtastic@r4\\n", "15", "F0-meshtastic@r4: max_power 15 above 14")])
 def test_a_running_meshtastic_above_its_cap_stops_at_fw0_before_any_change(tmp_path, runset, mp, stop):
     # red-before (3a4a0af3's FW0 read, shimmed as runset0): KEYS were read and nothing checked; FW3 then journalled their
     # starts, and a later STOP's replay (or FE) started meshtastic@r2 at max_power 20
@@ -338,22 +341,150 @@ def test_a_running_meshtastic_above_its_cap_stops_at_fw0_before_any_change(tmp_p
     assert not (evd / "UNDO.txt").exists() and not list(evd.glob("UNDO-*.txt"))
 
 
-def test_running_stacks_within_their_caps_pass_fw0_each_checked(tmp_path):
-    p, evd = canned(tmp_path, body='runset0; echo "KEYS=$KEYS"', runset="meshtastic@r2\\nmeshcom@r1\\nmeshtastic@r4\\n", mp="14")
-    assert "KEYS=meshtastic@r2 meshcom@r1 meshtastic@r4 " in p.stdout and "RC=0" in p.stdout, p.stdout + p.stderr
-    assert sorted(f.name for f in evd.glob("F0-*-maxpower.txt")) == ["F0-r2-maxpower.txt", "F0-r4-maxpower.txt"]
+def test_running_units_within_their_caps_pass_fw0_each_checked(tmp_path):
+    p, evd = canned(tmp_path, body='runset0; echo "TOUCH=$TOUCH"', runset="meshtastic@r2\\nmeshtastic@r4\\ndaemon@r4\\n", mp="14")
+    assert "TOUCH=meshtastic@r2 meshtastic@r4 daemon@r4 " in p.stdout and "RC=0" in p.stdout, p.stdout + p.stderr
+    assert sorted(f.name for f in evd.glob("F0-*-maxpower.txt")) == ["F0-meshtastic@r2-maxpower.txt", "F0-meshtastic@r4-maxpower.txt"]
+    assert (evd / "F0-daemon@r4-status.txt").exists()
+
+
+def test_units_on_other_radios_are_untouched_and_never_stop_fw0(tmp_path):
+    # red-before (a6528391): any non-Meshtastic running stack was a STOP at FW0; box H rests on its own units (an r1/r3
+    # stack here): this proof never stops or starts them, so they need no check and stop nothing
+    p, evd = canned(tmp_path, body='runset0; echo "TOUCH=$TOUCH KEYS=$KEYS"',
+                    runset="meshtastic@r2\\nmeshcom@r1\\nreticulum@r3\\n")
+    assert "TOUCH=meshtastic@r2  KEYS=meshtastic@r2 meshcom@r1 reticulum@r3 " in p.stdout and "RC=0" in p.stdout, p.stdout + p.stderr
+    assert not list(evd.glob("F0-meshcom*")) and not list(evd.glob("F0-reticulum*"))
+
+
+@pytest.mark.parametrize("status,statusrc,why", [("POWER=15 HIGHPOWER=0\\n", "0", "POWER 15 above 14 dBm"),
+                                                 ("\\n", "0", "0 POWER field(s)"), ("POWER=10 HIGHPOWER=0\\n", "1", "the power was not read (rc 1)"),
+                                                 ("POWER=10 HIGHPOWER=1\\n", "0", "HIGHPOWER is '1'")])
+def test_a_daemon_on_a_row_radio_whose_power_fails_or_cannot_be_read_stops_fw0(tmp_path, status, statusrc, why):
+    # the daemon box H rests on (daemon@r4) is stopped at FW3 (r4 is disabled there) and restarted at FE: its STATUS first,
+    # against the same cap table (r4's model: 14), fail closed
+    p, evd = canned(tmp_path, body="runset0; echo AFTER", runset="daemon@r4\\n", status=status, statusrc=statusrc)
+    assert p.returncode == 2 and f"STOP: F0-daemon@r4: {why}" in p.stdout and "AFTER" not in p.stdout, p.stdout + p.stderr
+    assert not (evd / "UNDO.txt").exists()
+
+
+def test_another_stack_on_a_row_radio_stops_fw0(tmp_path):
+    p, _ = canned(tmp_path, body="runset0; echo AFTER", runset="meshcore@r2\\n")
+    assert p.returncode == 2 and "STOP: F0-meshcore@r2: no power check for a meshcore stack" in p.stdout, p.stdout + p.stderr
+
+
+# ---- G2-HWKITC-D B1: max_power 0 is Meshtastic's "the maximum", never a cap: no start at FW0, FW6, FW9 or r4's try ----------
+
+@pytest.mark.parametrize("body,tag", [("runset0", "F0-meshtastic@r2"), ("mtstart F6-r2", "F6-r2"), ("mtstart F9-r2", "F9-r2"),
+                                      ("r4refused", "F6-r4")])
+def test_a_max_power_of_0_stops_before_any_start(tmp_path, body, tag):
+    # red-before (3ea308da): 0 passed both upper bounds (<= 17, <= the model cap) and the stack started
+    p, evd = canned(tmp_path, body=f"{body}; echo AFTER", mp="0")
+    assert p.returncode == 2 and f"STOP: {tag}: max_power 0 is outside 1..17" in p.stdout, p.stdout + p.stderr
+    assert "AFTER" not in p.stdout and not list(evd.glob("*-start.txt")) and not (evd / "F6-r4.txt").exists()
+
+
+# ---- after FW7's reboot (FW5 changed r4's config) every unit running on a row radio is power-checked -------------------------
+
+def test_after_the_reboot_a_row_radios_unit_above_its_cap_stops_and_is_safety_stopped(tmp_path):
+    p, evd = canned(tmp_path, body="rowcheck F7; echo AFTER", runset="daemon@r4\\nmeshcom@r1\\n", status="POWER=16 HIGHPOWER=0\\n")
+    assert p.returncode == 2 and "STOP: F7-daemon@r4: POWER 16 above 14 dBm" in p.stdout and "AFTER" not in p.stdout, p.stdout + p.stderr
+    assert (evd / "SAFESTOP-daemon@r4-1.txt").exists() and not list(evd.glob("SAFESTOP-meshcom*"))
+
+
+def test_after_the_reboot_row_radios_units_within_their_caps_run_on(tmp_path):
+    p, evd = canned(tmp_path, body='rowcheck F7; echo "STARTED=${STARTED[*]}"', runset="daemon@r4\\nmeshcom@r1\\n")
+    assert "STARTED=daemon@r4" in p.stdout and "RC=0" in p.stdout and (evd / "F7-daemon@r4-status.txt").exists(), p.stdout
+
+
+# ---- G2-HWKITC-D B2: FE's restore is checked; one that did not hold is a STOP and the journal replays ----------------------
+
+FE_EMPTY = r"$'  node_name * = (empty)\n  node_short * = (empty)\n'"
+FE = """X() {{ local f=$1; shift; XRC=0; case $f in FE-mtid.txt) printf '%s' "$MTID";; FE-runset.txt) printf {feset};;
+  *-radios.txt) printf '{radios}';; *-caps.txt) printf '{caps}';; *-maxpower.txt) printf '  max_power = 10\\n';;
+  *-status.txt) printf '{status}';; *) printf 'ok\\n';; esac > "$EVD/$f"; }}; lan() {{ LANCODE={code}; }}
+MTID={mtid}; printf {f0set} > "$EVD/F0-runset.txt"; KEYS={touch}; TOUCH={touch}; fe; {after}"""
+
+
+def fe_run(tmp_path, mtid=FE_EMPTY, f0set="'meshtastic@r2\\n'", feset="'meshtastic@r2\\n'", code="200", touch="'meshtastic@r2 '",
+           status="POWER=10 HIGHPOWER=0\\n", after="echo FE-DONE"):
+    return replay(tmp_path, body=FE.format(mtid=mtid, f0set=f0set, feset=feset, code=code, touch=touch, status=status,
+                                           radios=RADIOS, caps=CAPS, after=after))
+
+
+@pytest.mark.parametrize("kw,why", [({"mtid": r"$'  node_name * = LabH2\n  node_short * = LH2\n'"}, "identity is not empty"),
+                                    ({"touch": "'meshtastic@r2 daemon@r4 '", "f0set": "'meshtastic@r2\\ndaemon@r4\\n'"},
+                                     "daemon@r4 does not run again"),
+                                    ({"code": "000"}, "the console is not reachable from the LAN")])
+def test_a_failed_fe_restore_check_stops_and_replays_the_journal(tmp_path, kw, why):
+    # red-before (3ea308da): a failed FE check was a FAIL, then `undone` cleared the journal: the exit replayed nothing and
+    # the box stayed changed (here: --reset answered 0 but the lab identity is still there)
+    p, _, ran = fe_run(tmp_path, **kw)
+    assert p.returncode == 2 and "STOP: FE" in p.stdout and why in p.stdout, p.stdout + p.stderr
+    assert "FE-DONE" not in p.stdout and ran == ["echo U2", "echo U1"]
+
+
+def test_an_fe_whose_every_restore_held_clears_the_journal(tmp_path):
+    p, _, ran = fe_run(tmp_path, after="echo FE-DONE; stop 'a STOP after FE'")
+    assert "FE-DONE" in p.stdout and p.returncode == 2 and ran == [], p.stdout + p.stderr
+
+
+def test_fe_restarts_the_daemon_only_after_its_power_check(tmp_path):
+    kw = {"touch": "'meshtastic@r2 daemon@r4 '", "f0set": "'meshtastic@r2\\ndaemon@r4\\n'", "feset": "'meshtastic@r2\\ndaemon@r4\\n'"}
+    p, evd, _ = fe_run(tmp_path, **kw)
+    assert "FE-DONE" in p.stdout and (evd / "FE-daemon@r4-status.txt").exists() and (evd / "FE-start-daemon@r4.txt").exists(), p.stdout
+    (tmp_path / "hot").mkdir()
+    p, evd, ran = fe_run(tmp_path / "hot", status="POWER=16 HIGHPOWER=0\\n", **kw)
+    assert p.returncode == 2 and "STOP: FE-daemon@r4: POWER 16 above 14 dBm" in p.stdout and ran == ["echo U2", "echo U1"], p.stdout
+    assert not (evd / "FE-start-daemon@r4.txt").exists()
+
+
+def test_fe_releases_the_units_it_restored_so_a_clean_end_stops_none(tmp_path):
+    # rowcheck registered daemon@r4 after the reboot (a STOP safety-stops it); FE restores it, so the exit leaves it running
+    kw = {"touch": "'meshtastic@r2 daemon@r4 '", "f0set": "'meshtastic@r2\\ndaemon@r4\\n'", "feset": "'meshtastic@r2\\ndaemon@r4\\n'"}
+    body = FE.format(mtid=FE_EMPTY, code="200", status="POWER=10 HIGHPOWER=0\\n", radios=RADIOS, caps=CAPS, after="echo FE-DONE", **kw)
+    p, evd, ran = replay(tmp_path, body="started daemon@r4; " + body)
+    assert "FE-DONE" in p.stdout and ran == [] and not list(evd.glob("SAFESTOP-*")), p.stdout + p.stderr
+
+
+def test_a_unit_off_the_row_radios_that_differs_at_fe_is_a_note_not_a_stop(tmp_path):
+    p, _, ran = fe_run(tmp_path, f0set="'meshtastic@r2\\nmeshcom@r1\\n'")
+    assert "FE-DONE" in p.stdout and "note: FE's running set differs from FW0 off the row radios" in p.stdout and ran == [], p.stdout
+
 
 # ---- G2-HWKITC B4: a STOP or a signal replays the journalled undos, last first; one that fails is UNRESOLVED ------------
 
-REPLAY = """sshx() {{ shift; echo "$*" >> "$EVD/../replayed"; case "$*" in {fails}) return 1;; esac
+REPLAY = """sshx() {{ shift; echo "$*" >> "$EVD/../replayed"; case "$*" in {fails}) return {failrc};; esac
   case "$*" in *U2*) {during};; esac; return 0; }}
 undo "echo U1"; undo "echo U2"; {body}; echo RC=$?"""
 
 
-def replay(tmp_path, body="stop 'a later STOP'", fails="NONE", during=":"):
-    p, evd = proof(tmp_path, REPLAY.format(body=body, fails=fails, during=during))
+def replay(tmp_path, body="stop 'a later STOP'", fails="NONE", during=":", failrc="1"):
+    p, evd = proof(tmp_path, REPLAY.format(body=body, fails=fails, during=during, failrc=failrc))
     f = tmp_path / "replayed"
     return p, evd, f.read_text().splitlines() if f.exists() else []
+
+
+PSTART_X = """X() {{ local f=$1; shift; XRC=0; case $f in *-radios.txt) printf '{radios}';; *-caps.txt) printf '{caps}';;
+  *-status.txt) printf '{status}';; *) printf 'ok\\n';; esac > "$EVD/$f"; }}; undo "PSTART daemon@r4"; stop 'a later STOP'"""
+
+
+@pytest.mark.parametrize("status,started", [("POWER=10 HIGHPOWER=0\\n", True), ("POWER=20 HIGHPOWER=0\\n", False), ("\\n", False)])
+def test_a_replayed_restart_runs_only_after_its_power_check(tmp_path, status, started):
+    # PSTART: the replay restarts a unit FW3 stopped only when its power reads within its cap; else it stays stopped, named
+    # UNRESOLVED (exit 4)
+    p, evd, ran = replay(tmp_path, body=PSTART_X.format(radios=RADIOS, caps=CAPS, status=status))
+    starts = [r for r in ran if "stack start daemon@r4" in r]
+    assert (len(starts) == 1) is started and ran[-2:] == ["echo U2", "echo U1"], p.stdout + p.stderr
+    assert p.returncode == (2 if started else 4)
+    assert started or "UNRESOLVED: undo 2 (rc power check: " in (evd / "STOP.txt").read_text()
+
+
+def test_an_ssh_error_in_a_replayed_power_check_leaves_that_unit_stopped_and_the_rest_replays(tmp_path):
+    # the recovery's own reads never STOP (an ssh transport error, rc 255, would otherwise end the replay early)
+    p, evd, ran = replay(tmp_path, body='undo "PSTART daemon@r4"; stop x', fails="*radios.load*", failrc="255")
+    assert p.returncode == 4 and ran[-2:] == ["echo U2", "echo U1"] and not [r for r in ran if "stack start" in r], p.stdout
+    assert "UNRESOLVED: undo 2 (rc power check: the radio rows were not read (rc 255))" in (evd / "STOP.txt").read_text()
 
 
 def test_a_stop_replays_every_undo_last_first(tmp_path):
