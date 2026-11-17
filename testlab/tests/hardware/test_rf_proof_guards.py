@@ -84,6 +84,69 @@ def test_the_redactor_masks_a_password_whatever_the_login_names(tmp_path):
     assert r.stdout == "auth <REDACTED>\n"
 
 
+NOTE_H = "NOTE: box H password equals its login name (lab box); not masked"
+
+
+def live_start(tmp_path, stdin, **extra):
+    return subprocess.run(["bash", str(HW / "rf-proof.sh"), "live"], input=stdin,
+                          env=_env(tmp_path, LAB_ENV=str(HW / "lab.example.env"), **extra),
+                          capture_output=True, text=True, timeout=60, check=False)
+
+
+def test_a_password_equal_to_its_login_name_passes_the_start_with_the_note(tmp_path):
+    # red-before (849fb082): 'lhpc' for box H (BOX_H_USER=lhpc) was refused as part of a login name
+    r = live_start(tmp_path, "lhpc\n\n")
+    assert NOTE_H in r.stdout, r.stdout + r.stderr
+    assert stop_lines(r) == ["STOP: FORMS_OK is empty: confirm the forms at INTHEAD first"], r.stderr
+
+
+@pytest.mark.parametrize("pw", ["lhp", "hpc", "lhpc "])
+def test_a_password_only_part_of_the_login_name_is_still_refused(tmp_path, pw):
+    # only the EXACT login name is allowed: a part of it (a trailing blank too) stays a STOP before any row
+    r = live_start(tmp_path, f"{pw}\n\n")
+    assert stop_lines(r) == ["STOP: box H's password is part of a login name ('lhpc' or BOX_<B>_USER): it cannot be masked "
+                             "in the evidence; set another password"], r.stderr
+    assert NOTE_H not in r.stdout and "== ROW" not in r.stdout
+
+
+def test_another_password_passes_the_start_without_the_note(tmp_path):
+    r = live_start(tmp_path, "LHPC\n\n")      # not the login name (case counts), not part of it: masked as before
+    assert NOTE_H not in r.stdout and stop_lines(r) == ["STOP: FORMS_OK is empty: confirm the forms at INTHEAD first"], r.stderr
+
+
+def test_a_password_equal_to_the_other_boxs_login_name_is_still_refused(tmp_path):
+    # equal to box Z's login, not its own (box H logs in as lhpc): masking it would garble box Z's login, so STOP
+    r = live_start(tmp_path, "zed\n\n", BOX_Z_USER="zed")
+    assert stop_lines(r)[:1] == ["STOP: box H's password is part of a login name ('lhpc' or BOX_<B>_USER): it cannot be "
+                                 "masked in the evidence; set another password"], r.stderr
+
+
+def test_a_password_equal_to_its_login_name_is_not_masked_and_another_still_is(tmp_path):
+    r, _ = source_only(tmp_path, "PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; printf 'login lhpc auth zz-Q71\\n' | redact")
+    assert r.stdout == "login lhpc auth <REDACTED>\n", r.stderr
+
+
+def test_the_report_header_carries_the_note_only_for_an_equal_password(tmp_path):
+    r, _ = source_only(tmp_path, "PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; BOX_Z_USER=lhpc; pwnote; echo --; "
+                                 "PW_Z=lhpc; pwnote; echo --; PW_H=x9; PW_Z=; pwnote")
+    assert r.stdout == (NOTE_H + "\n--\n" + NOTE_H + "\nNOTE: box Z password equals its login name (lab box); not masked\n--\n"), r.stderr
+
+
+@pytest.mark.parametrize("pw,head", [("lhpc", [NOTE_H, ""]), ("x9", [])])
+def test_row_r0_writes_the_note_above_the_report_table(tmp_path, pw, head):
+    # R0 opens REPORT.md, then stops (INTHEAD unset) with the header already written
+    r, evd = source_only(tmp_path, f'EVD="$EVD/run"; OUT=$EVD; PW_H={pw}; BOX_H_USER=lhpc; row_R0')
+    lines = (evd / "run" / "REPORT.md").read_text().splitlines()
+    assert lines[:len(head) + 1] == [*head, "| row | stack | box | band | peer | direction | nonce seen | power used | result |"], r.stderr
+
+
+def test_the_end_scan_skips_an_equal_password_and_still_scans_the_other(tmp_path):
+    r, _ = source_only(tmp_path, 'PW_H=lhpc; BOX_H_USER=lhpc; PW_Z=zz-Q71; OPERATOR_CALL=XX9TST; '
+                                   'printf "login lhpc\\nzz-Q71\\n" > "$EVD/x.txt"; secret_scan')
+    assert "ok: RE: box H password equals its login name (lab box): not scanned" in r.stdout, r.stdout + r.stderr
+    assert "RE: box password in the evidence" in r.stdout + r.stderr, r.stdout + r.stderr
+
+
 # ---- power is set only by the one setter and read only by the one reader; sends run only inside tx -----------------------
 
 TX_SETUP = ('BOXES=; CURROW=9; printf "%s\\n" "rfkit 0000aaaa" > "$EVD/nonces"; usbsnap() { :; }; '

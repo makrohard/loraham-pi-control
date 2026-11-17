@@ -25,7 +25,8 @@
 #  - The USB guard before and after each row; one peer at a time under the peer lock (two peers on one hub never transmit
 #    at once); the RF logs' TX count per radio at most 15 after the run (RS).
 #  - Every capture goes through the one redactor before it is written (the passwords, the PIN, the operator's call with any
-#    SSID); the RX judges write marker lines only; the end scan (RE) checks the evidence again.
+#    SSID); the RX judges write marker lines only; the end scan (RE) checks the evidence again. A box password EXACTLY equal
+#    to that box's login name (a lab box) is neither masked nor scanned: REPORT.md's header says so (pweq).
 # EXIT: 0 = every run row PASS or NOT RUN; 1 = a FAIL; 2 = a STOP. Dry exits 0 or 2.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 2; REPO=$(cd "$HERE/../.." && pwd) || exit 2
@@ -270,14 +271,18 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 # pid in SPAWN; `reap <pid>` waits for it). Dry prints each command ([dry]) and runs nothing on a box or a peer: the fake box
 # answers from the dry inventory and prints the FRAME lines of a send, the fake peer is fake_peer.py.
 redact() {   # the passwords, the PIN, the tracker call and the operator's call (any SSID or none, any case) -> masked
-  local t s c=${OPERATOR_CALL:-}; t=$(cat; echo x); t=${t%x}
-  for s in "${PW_H:-}" "${PW_Z:-}" "${MC_PIN:-}" "${TRACKER_CALL:-}"; do [ -n "$s" ] || continue
+  local t s c=${OPERATOR_CALL:-} m=(); t=$(cat; echo x); t=${t%x}
+  pweq H || m+=("${PW_H:-}"); pweq Z || m+=("${PW_Z:-}")   # a password equal to its login name stays (masking it = the login)
+  for s in "${m[@]}" "${MC_PIN:-}" "${TRACKER_CALL:-}"; do [ -n "$s" ] || continue
     t=${t//"$s"/<REDACTED>}; done
   [[ "$c" =~ ^[A-Za-z0-9]+$ ]] || { printf '%s' "$t"; return; }; printf '%s' "$t" | sed -E "s/\\b$c(-[0-9]{1,2})?\\b/<CALL>/Ig"; }
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
   local f=$1 o=${OUT:-$EVD} s; shift; "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
   [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc" || stop "$f.rc: not written"; }
 boxvar() { local v="BOX_${1}_$2" d=; case $2 in USER) d=lhpc;; RUNTIME) d='~/loraham-pi-control';; esac; printf '%s' "${!v:-$d}"; }
+# pweq <H|Z>: box <b>'s password is EXACTLY its login name (a lab box): allowed, not masked, not scanned; pwnote: the header lines
+pweq() { local p="PW_$1"; [ -n "${!p:-}" ] && [ "${!p}" = "$(boxvar "$1" USER)" ]; }
+pwnote() { local b; for b in H Z; do pweq "$b" && echo "NOTE: box $b password equals its login name (lab box); not masked"; done; return 0; }
 # shq <value>: the value as one shell word (printf %q); a leading ~/ stays the login's home on the box ("$HOME"/...)
 shq() { case "$1" in "~/"*) printf '"$HOME"/%s' "$(printf %q "${1#\~/}")";; *) printf %q "$1";; esac; }
 # rt <box|PC> <text> [raw]: {RT} -> the box's runtime path, quoted for a shell command (raw: as it is, for a script's text on stdin)
@@ -571,7 +576,8 @@ peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; ca
   else grep -q "^$id " "$OUT/R0-usb-byid.txt" || PK="absent: peer $1"; fi; }
 row_R0() {
   [ "$MODE" = dry ] || { [ ! -e "$EVD" ] || stop "$EVD exists"; mkdir -p "$EVD" || stop "$EVD: mkdir"; : > "$EVD/state.env"; : > "$EVD/undo.list"; : > "$EVD/undo.done"
-    printf '| row | stack | box | band | peer | direction | nonce seen | power used | result |\n|---|---|---|---|---|---|---|---|---|\n' > "$EVD/REPORT.md"; }
+    { pwnote | awk '{ print } END { if (NR) print "" }'
+      printf '| row | stack | box | band | peer | direction | nonce seen | power used | result |\n|---|---|---|---|---|---|---|---|---|\n'; } > "$EVD/REPORT.md" || stop "REPORT.md: not written"; }
   for v in INTHEAD INTCI; do [ -n "${!v:-}" ] || stop "$v is not set"; done; [[ "$INTHEAD" =~ ^[0-9a-f]{40}$ ]] || stop "INTHEAD: 40 hex"
   INTHEAD_H=${INTHEAD_H:-$INTHEAD}; [[ "$INTHEAD_H" =~ ^[0-9a-f]{40}$ ]] || stop "INTHEAD_H: 40 hex"; data "R0: lane $LANE, rows $RUN; boxes present: '${BOXES}'"
   [ "$MODE" = dry ] || [ "$FORMS_HEAD" = "$INTHEAD" ] || stop "FORMS_HEAD '$FORMS_HEAD' is not INTHEAD: confirm the forms at this head first"
@@ -852,7 +858,8 @@ check_listener() {
   LP=$pids; }
 secret_scan() {
   scan() { local w=$1 rc=0; shift; grep -rlq "$@" "$EVD" || rc=$?; case $rc in 0) fail "RE: $w in the evidence";; 1) ok "RE: no $w";; *) stop "RE: the scan for $w failed (rc $rc)";; esac; }
-  local pw; for pw in "${PW_H:-}" "${PW_Z:-}"; do [ -z "$pw" ] || scan "box password" -F -- "$pw"; done
+  local b p; for b in H Z; do p="PW_$b"; [ -n "${!p:-}" ] || continue
+    if pweq "$b"; then ok "RE: box $b password equals its login name (lab box): not scanned"; else scan "box password" -F -- "${!p}"; fi; done
   [ -z "${MC_PIN:-}" ] || scan "PIN" -F -- "$MC_PIN"
   scan "the operator's call (any SSID)" -iE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b"; [ -z "${TRACKER_CALL:-}" ] || scan "tracker call" -iF -- "$TRACKER_CALL"
   scan "full node id" -E -- '![0-9a-f]{8}'; coords; }
@@ -1053,6 +1060,7 @@ if [ "$MODE" = live ]; then
 else PW_H=; PW_Z=; MC_PIN=; fi
 declare +x PW_H PW_Z MC_PIN; exec </dev/null
 for b in H Z; do p="PW_$b"; [ -n "${!p}" ] || continue   # a password inside a fixed name could not be masked or scanned: STOP before anything
+  pweq "$b" && { say "$(pwnote | grep -F "box $b ")"; continue; }   # EXACTLY its login name: a lab box, unmasked, noted in REPORT.md
   case " lhpc $(boxvar H USER) $(boxvar Z USER) " in *"${!p}"*) stop "box $b's password is part of a login name ('lhpc' or BOX_<B>_USER): it cannot be masked in the evidence; set another password";; esac; done
 BOXES=; declare -A ABSENT=()
 for b in H Z; do h="BOX_${b}_HOST"; p="PW_$b"

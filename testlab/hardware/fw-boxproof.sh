@@ -10,6 +10,7 @@
 #  apply) -> FW6 starts (1) -> FW7 reboot (1) -> FW8 apply (2) -> FW9 page (3) -> FE undo -> RE.
 # Lab values: testlab/hardware/lab.local.env (git-ignored; dry reads lab.example.env): BOX_H_HOST, BOX_H_USER (default lhpc),
 #  BOX_H_RUNTIME (default ~/loraham-pi-control), EVD_ROOT. Box H's password: live reads it from stdin, line 1; sudo -S with it.
+#  A password EXACTLY equal to the login name (a lab box) is not masked; REPORT.md and run.log open with a NOTE that says so.
 # INPUTS (env): FWSHA (40 hex: the sha under proof, on FWREF, default cons/b4-cln-r1), FWFROM (40 hex: the box's sha before
 #  the update; FWSHA must contain it), FWCI (a green CI run of FWSHA), LANCIDR (the console's allowed CIDR, read at FW0 when
 #  empty), LABNAME/LABSHORT (the lab node identity; never a callsign).
@@ -43,8 +44,9 @@ LH="$RTB/venv/lhpc/bin/lhpc"; CK="$RTB/src/loraham-pi-control"; PY="cd $RTB && .
 FWSHA=${FWSHA:-}; FWCI=${FWCI:-}; LANCIDR=${LANCIDR:-}; LABNAME=${LABNAME:-LabH2}; LABSHORT=${LABSHORT:-LH2}
 PW=; [ "$MODE" = dry ] || IFS= read -r PW || true; exec 0< /dev/null   # stdin: one line, then closed
 [ "$MODE" = dry ] || [ -n "$PW" ] || { echo "STOP: no box H password on stdin (line 1)"; exit 2; }
-case "lhpc ${HH%@*}" in *"$PW"*) [ "$MODE" = dry ] || { echo "STOP: the box password is part of the login name"; exit 2; };; esac
 PW_H=$PW; PW_Z=; MC_PIN=; TRACKER_CALL=; OPERATOR_CALL=${OPERATOR_CALL:-}   # what the redactor masks
+# EXACTLY the login name (rf-proof.sh's pweq): a lab box, allowed unmasked and noted in REPORT.md and run.log; a part of it: STOP
+pweq H || case "lhpc ${HH%@*}" in *"$PW"*) [ "$MODE" = dry ] || { echo "STOP: the box password is part of the login name"; exit 2; };; esac
 RUNSET_PY='from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); [print(k) for st in s.stacks() for k in instances.running_keys(s, st.id)]'
 RUNSET="$PY -c '$RUNSET_PY'"
 ENABLE_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; ok, msg = radio_start.set_enabled(ControllerService(), sys.argv[1], sys.argv[2] == "on"); print(("OK " if ok else "REFUSED ") + msg); sys.exit(0 if ok else 3)'
@@ -78,6 +80,7 @@ fwapply() { XIN "$1-apply.txt" "$PW" "$APPLY"; [ "$XRC" = 0 ] || stop "$1: the a
 LITS=("re-apply the firewall before you reboot" "firewall-apply.sh" "Firewall: Active" "Firewall: Changes pending" "Remote listener active" "def _page_ports" "TRANSITIONAL" "firewall-cleanup.sh" "def _stack_webs_candidates" "firewall.transition.json")   # meshtasticd's 'Final Tx power' is the firmware's own log text (measured on the Zero 2026-11-15)
 LOG=/dev/null; [ "$MODE" = live ] && { mkdir -p "$EVD" || exit 2; LOG=$EVD/run.log; }
 say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
+[ "$MODE" = live ] && pweq H && { pwnote | awk '{ print } END { print "" }' > "$EVD/REPORT.md" || exit 2; say "$(pwnote)"; }
 stop() { say "STOP: $*"; [ "$MODE" = live ] && echo "STOP: $*" >> "$EVD/STOP.txt"; exit 2; }
 # The safety stop: a stack the proof starts is marked (started) before its start and unmarked once its stop is checked
 #  (stopped). On ANY exit of a live run (a STOP, a FAIL, the end, a signal) the EXIT trap stops every marked stack: its guarded
@@ -130,6 +133,7 @@ mtstart() {   # mtstart <file-tag>: meshtastic@r2 with the power guards (RF: nor
   ok "$1: meshtastic@r2 runs, Final Tx power ${fp:-dry} dBm (max_power ${mp:-dry})"; }
 
 endscan() {   # RE: the captures are redacted, so any occurrence of the password in the evidence is a leak
+  pweq H && { ok "RE: box H password equals its login name (lab box): not scanned"; return 0; }
   local c; c=$(grep -rlF -- "$PW" "$EVD" | wc -l); [ "$c" = 0 ] || stop "RE: the box password is in $c evidence file(s): do not publish"; }
 
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence

@@ -239,3 +239,36 @@ def test_a_password_inside_the_login_name_is_refused_before_any_box_call(tmp_pat
     p, ssh = live_copy(tmp_path, lab={"BOX_H_USER": f"u{PW}x"})
     assert p.returncode == 2 and "STOP: the box password is part of the login name" in p.stdout, p.stdout + p.stderr
     assert not ssh
+
+
+NOTE = "NOTE: box H password equals its login name (lab box); not masked"
+
+
+def test_a_password_equal_to_the_login_name_runs_on_with_the_note_in_every_header(tmp_path):
+    # red-before (849fb082): 'lhpc' with BOX_H_USER=lhpc stopped as "part of the login name", before any box call
+    p, _ = live_copy(tmp_path, stdin="lhpc\n")      # it runs on to the PC prep (FWSHA unset there: a STOP, no box call)
+    assert "part of the login name" not in p.stdout + p.stderr and "STOP: FWSHA is not a 40-hex sha" in p.stdout, p.stdout
+    (evd,) = (tmp_path / "evd").glob("fw-boxproof-*")
+    assert (evd / "REPORT.md").read_text().splitlines()[:2] == [NOTE, ""]
+    assert (evd / "run.log").read_text().splitlines()[0].endswith(" " + NOTE)
+
+
+@pytest.mark.parametrize("user", ["lhpcx", "xlhpc"])
+def test_a_password_only_part_of_the_login_name_is_still_refused(tmp_path, user):
+    p, ssh = live_copy(tmp_path, lab={"BOX_H_USER": user}, stdin="lhpc\n")   # lhpc is part of the login, not equal to it
+    assert p.returncode == 2 and "STOP: the box password is part of the login name" in p.stdout and not ssh, p.stdout + p.stderr
+
+
+def test_another_password_has_no_note(tmp_path):
+    p, _ = live_copy(tmp_path)
+    (evd,) = (tmp_path / "evd").glob("fw-boxproof-*")
+    assert "STOP: FWSHA is not a 40-hex sha" in p.stdout and NOTE not in (evd / "run.log").read_text(), p.stdout
+    assert not (evd / "REPORT.md").exists()          # no header written before the first row
+
+
+def test_an_equal_password_is_not_masked_and_the_end_scan_notes_it(tmp_path):
+    p, evd = proof(tmp_path, 'PW=lhpc; PW_H=lhpc; BOX_H_USER=lhpc; X x.txt "echo hello"; endscan; echo CLEAN',
+                   fake_ssh(tmp_path))
+    assert p.returncode == 0 and "CLEAN" in p.stdout, p.stdout + p.stderr
+    assert "ok: RE: box H password equals its login name (lab box): not scanned" in p.stdout
+    assert "lhpc" in (evd / "x.txt").read_text()         # the fake prints the password: it stays as the login name
