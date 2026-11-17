@@ -120,18 +120,18 @@ class BinaryOpsMixin:
             # the packages, then the same artifact). The apply decides nothing and moves nothing before its locks:
             # it takes them, recovers, then decides (below).
             _settled = bi.read_journal(self._paths)[1] == "absent"
-            _have, _stuck = self._binary_current(stack_id, entry) if _settled else ("", "")
+            _how, _rec, _stuck = self._binary_current(stack_id, entry) if _settled else ("", None, "")
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
-            if _have and _have != entry.filename:
-                return self._binary_already_installed(stack_id, entry, _have, [])
+            if _how == "kept":
+                return self._binary_already_installed(stack_id, entry, _rec, _how, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
-            if _have:   # the same intact artifact: what its checkout repair would move (or refuse), as the apply
-                _moves, _refuse = bi.inspect_clones(self, stack_id, spec, entry, src_cmd)
+            if _how == "same":   # the same intact artifact: what its checkout repair would move (or refuse), as the apply
+                _moves, _refuse = bi.inspect_clones(self, stack_id, spec, _rec.components, src_cmd)
                 return _refuse if _refuse is not None else self._binary_already_installed(
-                    stack_id, entry, _have, [f"  moves the pinned source for {c.id} to {w[:9]} (run scripts)"
-                                             for c, w, _p in _moves])
+                    stack_id, entry, _rec, _how, [f"  moves the pinned source for {c.id} to {w[:9]} (run scripts)"
+                                                  for c, w, _p in _moves])
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
@@ -197,25 +197,26 @@ class BinaryOpsMixin:
             prev_receipt_raw = brx.read_raw(self._paths, stack_id)
             # THE decision, under the locks after recovery and before any clone is touched (D10): another
             # installed binary `entry` is not newer than stays, clones and files untouched; then the packages.
-            _have, _stuck = self._binary_current(stack_id, entry)
+            _how, _rec, _stuck = self._binary_current(stack_id, entry)
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
-            if _have and _have != entry.filename:
-                return self._binary_already_installed(stack_id, entry, _have, [])
+            if _how == "kept":
+                return self._binary_already_installed(stack_id, entry, _rec, _how, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
-            _moves, _refuse = bi.inspect_clones(self, stack_id, spec, entry, src_cmd)
+            _moves, _refuse = bi.inspect_clones(self, stack_id, spec,
+                                                _rec.components if _how == "same" else entry.components, src_cmd)
             if _refuse is not None:
                 return _refuse
             # Nothing is moved here. A running stack runs its scripts from these checkouts: refused.
             if _moves and (_run := self._binary_running_refusal(stack_id)) is not None:
                 return _run
-            if _have:   # the same artifact, intact: only its checkouts may need the repair (journaled, undoable)
+            if _how == "same":   # the same artifact, intact: only its checkouts may need the repair (journaled, undoable)
                 notes, _cerr = bi.repair_clones(self, stack_id, _moves, locked, prev_receipt_raw) if _moves else ([], "")
                 if _cerr:
                     return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_cerr}",
                                         next_commands=[src_cmd], data={"binary_failed": True})
-                return self._binary_already_installed(stack_id, entry, _have, notes)
+                return self._binary_already_installed(stack_id, entry, _rec, _how, notes)
 
             baseline, berr = bi.registry_baseline(self._paths, self._binary_source_paths(stack_id))
             if berr:
@@ -374,28 +375,30 @@ class BinaryOpsMixin:
                 data={"channel": "binary", "changes": 1})
 
     @staticmethod
-    def _binary_already_installed(stack_id: str, entry, have: str, notes: list) -> ActionResult:
-        older = [] if have == entry.filename else [
-            f"  newest published: {entry.filename} — not newer than the installed one"]
+    def _binary_already_installed(stack_id: str, entry, rec, how: str, notes: list) -> ActionResult:
+        older = [f"  newest published: {entry.filename} — not newer than the installed one"] if how == "kept" else []
         return ActionResult(True, f"'{stack_id}' already has the published binary "
-                                  f"{have} installed — nothing to download.",
+                                  f"{rec.filename} installed — nothing to download.",
                             details=[*notes, *older], next_commands=[f"lhpc status {stack_id}"],
                             data={"changes": 1 if notes else 0, "channel": "binary"})
 
-    def _binary_current(self, stack_id: str, entry) -> tuple[str, str]:
-        """(installed file name, refusal): the one "nothing to install" decision. The installed binary stays when
-        `entry` is the same artifact or is not newer (D10, also when its own entry was withdrawn), and only while
-        its files still hash as installed: verified whatever the entry's age. Changed files of the same artifact:
-        ("", ""), the reinstall is the repair; changed files and nothing newer: the refusal, never an older
-        replacement."""
+    def _binary_current(self, stack_id: str, entry) -> tuple[str, object, str]:
+        """(how, the installed receipt, refusal): the one "nothing to install" decision, by the artifact's sha256,
+        never its file name. "same": `entry` IS the installed artifact; "kept": another one `entry` is not newer
+        than (D10, also when its own entry was withdrawn); both only while the installed files still hash as
+        installed, verified whatever the entry's age. ("", None, "") installs `entry`: changed files of the same
+        artifact (the reinstall is the repair) or a newer entry. Changed files and nothing newer: the refusal, never
+        an older replacement. Plan and apply branch on `how`; a kept or same artifact's checkouts are checked
+        against ITS receipt's commits, never another entry's."""
         state, rec, _why = self.binary_receipt_state(stack_id)
-        if state != "valid" or (rec.artifact_sha256 != entry.sha256 and bi.is_newer(entry, rec)):
-            return "", ""
+        same = state == "valid" and rec.artifact_sha256 == entry.sha256
+        if state != "valid" or (not same and bi.is_newer(entry, rec)):
+            return "", None, ""
         if brx.verify_files(self._paths, rec)[0]:
-            return rec.filename, ""
-        if rec.artifact_sha256 == entry.sha256:
-            return "", ""
-        return "", f"the installed binary {rec.filename} changed since its install and no newer one is published"
+            return ("same" if same else "kept"), rec, ""
+        if same:
+            return "", None, ""
+        return "", None, f"the installed binary {rec.filename} changed since its install and no newer one is published"
 
     @staticmethod
     def _binary_changed(stack_id: str, why: str, src_cmd: str) -> ActionResult:

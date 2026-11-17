@@ -659,3 +659,22 @@ def test_plan_and_apply_refuse_a_dirty_stale_checkout_of_the_same_artifact_alike
         assert not res.ok and "the artifact's run scripts must come from that checkout" in res.summary, res.summary
     assert plan.summary == apply.summary and plan.next_commands == apply.next_commands
     assert state["adopted"] == []
+
+
+# ---- G2-UPDCHAIN-A named fixes: identity, a repair's receipt, a recovery's journaled checkouts ----------------
+
+
+def test_a_kept_binary_is_identified_by_its_sha_never_by_its_file_name(tmp_path, monkeypatch, binary_receipt):
+    # B installed and intact, its receipt naming the file of the listed entry C (another sha, other commits, not
+    # newer): B is kept by its sha, so its checkout stays at B's commit; C's commits are never applied to it.
+    svc = _svc(tmp_path, monkeypatch)
+    rec = _installed(svc, binary_receipt, "meshcom")
+    c = _entry("meshcom", "c" * 64, "a" * 40, OLDER)
+    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, filename=c["filename"]))
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _owned_at_install(svc)
+    _serve(monkeypatch, "meshcom", c)
+    for apply in (False, True):
+        res = svc.install("meshcom", apply=apply, source="binary")
+        assert res.ok and res.data["changes"] == 0, (res.summary, res.details)
+    assert state["adopted"] == [] and state["commit"] == "b" * 40

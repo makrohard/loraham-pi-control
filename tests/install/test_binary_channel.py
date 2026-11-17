@@ -1767,7 +1767,7 @@ def _to_commit(svc, monkeypatch):
     monkeypatch.setattr(bi, "publish", lambda *a, **k: None)
     monkeypatch.setattr(bi, "run_probe", lambda *a, **k: "")
     monkeypatch.setattr(type(svc), "_binary_provision", lambda self, *a, **k: ())
-    monkeypatch.setattr(type(svc), "_binary_current", lambda self, *a: ("", ""))
+    monkeypatch.setattr(type(svc), "_binary_current", lambda self, *a: ("", None, ""))
     monkeypatch.setattr(bi, "build_receipt", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(brx, "write_receipt", lambda *a, **k: True)
     monkeypatch.setattr(brx, "receipt_state", lambda *a, **k: ("valid", None, ""))

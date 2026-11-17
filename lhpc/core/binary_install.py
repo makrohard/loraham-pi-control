@@ -655,10 +655,11 @@ def repair_clones(svc, stack_id: str, moves, locked: bool, old_receipt) -> tuple
     return [], why if ok else f"{why}; the previous state could not be fully restored: {rwhy}"
 
 
-def inspect_clones(svc, stack_id: str, spec, entry, src_cmd: str):
-    """(moves, refusal | None): the supporting checkouts `entry` needs moved [(component, the binary's commit, its
-    commit now or "")], or the refusal of an unproven or dirty one. Reads only: the plan and the apply (under its
-    locks) ask the same question."""
+def inspect_clones(svc, stack_id: str, spec, commits: dict, src_cmd: str):
+    """(moves, refusal | None): the supporting checkouts that must move to the binary's `commits` (the entry's to
+    install it, the installed receipt's to keep it) [(component, its binary commit, its commit now or "")], or the
+    refusal of an unproven or dirty one. Reads only: the plan and the apply (under its locks) ask the same
+    question."""
     # HYBRID stacks: some covered components still need their PINNED clone, because the
     # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
     # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
@@ -676,7 +677,7 @@ def inspect_clones(svc, stack_id: str, spec, entry, src_cmd: str):
             if comp is None or comp.source is None:
                 continue
             dest = svc._paths.resolve_source(comp.source.path)
-            want = entry.components[cid]            # U9: the commit the binary was built from
+            want = commits[cid]                     # U9: the commit the binary was built from
             if dest.is_dir():
                 # PRESENT is not PROVEN: the artifact's binaries run scripts FROM this
                 # checkout, so a dev/stale/foreign tree would be executed by it. Require the
