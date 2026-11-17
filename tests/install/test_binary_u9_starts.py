@@ -291,3 +291,24 @@ def test_a_receipt_gone_between_the_branch_and_its_freshness_is_could_not_check(
         return real(self, sid)
     monkeypatch.setattr(ControllerService, "binary_freshness", retired_meanwhile)
     assert svc._update_probe(comp)["status"] == stackupdates.ERROR
+
+
+def test_a_receipt_gone_between_the_branch_and_its_freshness_names_the_stack_could_not_check(
+        tmp_path, monkeypatch, binary_receipt, capsys):
+    # The same race through `lhpc source-check --json`, the sweep a self-update reads (U5): the stack is in
+    # `stacks_unchecked` and in no other list, so the update says "Could not check every source of: daemon."
+    svc = _svc(tmp_path, monkeypatch)
+    covers = _other(svc, "daemon")
+    binary_receipt(svc, "daemon", sha="1" * 64, commits=covers, provenance={"published_at": "2026-11-10T00:00:00Z"})
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, covers, "2026-11-10T00:00:00Z"))
+    real = ControllerService.binary_freshness
+
+    def retired_meanwhile(self, sid):
+        brx.remove_receipt(self._paths, sid)
+        self.invalidate_snapshot()
+        return real(self, sid)
+    monkeypatch.setattr(ControllerService, "binary_freshness", retired_meanwhile)
+    capsys.readouterr()
+    assert cli.main(["source-check", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert (data["stacks_unchecked"], data["stacks_behind"], data["stacks_lhpc_first"]) == (["daemon"], [], []), data
