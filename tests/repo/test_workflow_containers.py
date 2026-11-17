@@ -153,7 +153,7 @@ def _docker(tmp_path: Path, mode: str) -> Path:
 
 def _env(tmp_path: Path, **extra) -> dict:
     return dict(os.environ, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", GITHUB_ENV=str(tmp_path / "github_env"),
-                LHPC_CLEAN_S="2", LHPC_POLL_S="0.1", **RUN, **extra)
+                **{"LHPC_CLEAN_S": "2", "LHPC_POLL_S": "0.1", **RUN, **extra})
 
 
 def _step(tmp_path, body: str, mode: str = "running", cwd: Path | None = None, **extra):
@@ -379,6 +379,47 @@ def test_a_signal_during_a_cleanup_after_the_client_ended_lets_it_finish(tmp_pat
         _end(tmp_path, proc)
         if member.exists() and _alive(_pid(member)):
             os.kill(_pid(member), signal.SIGKILL)
+
+
+@pytest.mark.wallclock("a real step shell under a 4 s cleanup bound, signalled 3 s into it; waits bounded at 15 s")
+def test_a_signal_late_in_a_cleanup_keeps_its_one_deadline(tmp_path):
+    """G2-TESTSD B3/B6: a TERM that ended the step from inside a client's normal-end cleanup left the name to the EXIT
+    cleanup, which started its deadline over: up to twice LHPC_CLEAN_S, past the runner's KILL. The signal is held
+    and the cleanup ends by its own deadline (its loop, one last removal and a poll)."""
+    member = tmp_path / "member.pid"
+    proc = _step(tmp_path, f"lhpc_wait_for {PREFIX}x bash -c '(trap \"\" TERM INT; exec tail -f /dev/null) "
+                           f"& echo $! > {member}; echo started'", mode="exits", LHPC_CLEAN_S="4")
+    try:
+        _started(proc)
+        _wait_calls(tmp_path, "rm -f ", 1)
+        first = time.monotonic()                             # wallclock: the cleanup's first removal
+        time.sleep(3)                                        # wallclock: 3 s into its 4 s bound
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(15) == 143
+        took = time.monotonic() - first                      # wallclock: against the bound; a restart takes 7 s
+        assert took < 5.5, f"the cleanup ended {took:.1f} s after its first removal: its deadline started over"
+        assert "was killed" in _rest(proc)
+        assert _ended(_pid(member)), "the group's member outlived the cleanup"
+    finally:
+        _end(tmp_path, proc)
+        if member.exists() and _alive(_pid(member)):
+            os.kill(_pid(member), signal.SIGKILL)
+
+
+@pytest.mark.wallclock("a real step shell; its EXIT cleanup's removal hangs under a 2 s bound; waits bounded at 15 s")
+def test_a_signal_during_the_exit_cleanup_of_a_step_that_failed_by_itself_is_held(tmp_path):
+    """G2-TESTSD B6: the EXIT cleanup of a step that ended without a signal (here: an error after the probe started) has
+    no `trap ''` of its own; a TERM during it is held by the one guard, so the cleanup ends by its bound, says why,
+    and the step keeps its own status."""
+    proc = _step(tmp_path, f'name="${{LHPC_CI_PREFIX}}disk-$$"\nlhpc_start "$name" docker run -d --name "$name" img '
+                           f'sleep 300 >/dev/null\ntouch {tmp_path}/hang-rm\nfalse')
+    try:
+        _wait_calls(tmp_path, "rm -f ", 1)
+        proc.send_signal(signal.SIGTERM)                     # mid-cleanup, inside the EXIT trap
+        assert proc.wait(15) == 1
+        assert re.search(r"::error::container \S+: its removal failed \(docker rm -f rc 124\)", _rest(proc))
+    finally:
+        _end(tmp_path, proc)
 
 
 @pytest.mark.wallclock("the real sizing program and a step shell; waits bounded at 10 s")

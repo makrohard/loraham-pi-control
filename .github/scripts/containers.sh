@@ -75,7 +75,6 @@ lhpc_release() {  # clean the name this step owns, now; an INT/TERM that came me
 
 lhpc_on_exit() {
   local rc=$?
-  trap '' INT TERM                                # from here on no signal reaches the step; lhpc_on_signal covers the line above
   if [ -n "$LHPC_CONTAINER" ]; then
     lhpc_clean "$LHPC_CONTAINER" "$LHPC_GROUP" || { [ "$rc" -ne 0 ] || rc=1; }
   fi
@@ -83,7 +82,9 @@ lhpc_on_exit() {
   exit "$rc"
 }
 
-lhpc_on_signal() {  # lhpc_on_signal STATUS: a function, so its `return` leaves only itself, never the cleanup
+lhpc_on_signal() {  # lhpc_on_signal STATUS: a function, so its `return` leaves only itself, never the cleanup.
+  # The one guard for every cleanup: an `exit` from inside one would cut it short (on EXIT) or leave the name to the
+  # EXIT cleanup, which starts its deadline over (past the runner's KILL).
   case " ${FUNCNAME[*]:1} " in
     *" lhpc_clean "* | *" lhpc_on_exit "*) LHPC_PENDING=${LHPC_PENDING:-$1}; return 0 ;;   # mid-cleanup: it goes on
   esac
