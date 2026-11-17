@@ -201,6 +201,22 @@ def test_self_update_check_cli(capsys, monkeypatch):
     assert "Update available" in capsys.readouterr().out
 
 
+def test_the_helper_runs_under_the_units_budget_and_only_there(capsys, monkeypatch):
+    """`--run-service` runs the helper under ONE budget, the unit's TimeoutStartSec less a margin: inside it a
+    step is clipped to what is left; outside the helper (the operator's shell) nothing is."""
+    from lhpc.core import selfupdate
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_run(self):
+        seen["clip"] = selfupdate.clip(10_000.0)
+        return ActionResult(True, "Update applied; console back.")
+    monkeypatch.setattr(ControllerService, "self_update_run_service", fake_run)
+    monkeypatch.setenv("INVOCATION_ID", "test")
+    assert main(["self-update", "--run-service"]) == 0
+    assert selfupdate.helper_budget_s() - 5 < seen["clip"] <= selfupdate.helper_budget_s(), seen
+    assert selfupdate.clip(10_000.0) == 10_000.0                       # the budget ends with the helper
+
+
 def test_self_update_run_service_cli_plumbing(capsys, monkeypatch):
     """`--run-service` (called by the updater unit) dispatches to self_update_run_service with
     NO arguments — the normal/overwrite mode is read from the claimed request marker, not a flag."""

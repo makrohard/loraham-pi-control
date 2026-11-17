@@ -268,7 +268,7 @@ def test_after_a_cut_no_git_command_changes_the_checkout(env, tmp_path, monkeypa
     assert (w / "note.txt").exists()                              # the cut git's own write stays too
 
 
-@pytest.mark.parametrize("make", ["file", "symlink"])
+@pytest.mark.parametrize("make", ["file", "symlink", "dangling"])
 def test_a_lock_the_cut_left_is_named_with_its_rm_and_never_removed_or_followed(env, tmp_path, monkeypatch, make):
     """A git killed at the limit can leave `.git/index.lock`. Whether a git still owns it cannot be
     proven, so it is only named, with the command to remove it once no git runs there; a symlinked
@@ -277,12 +277,12 @@ def test_a_lock_the_cut_left_is_named_with_its_rm_and_never_removed_or_followed(
     outside = tmp_path / "important.txt"
     outside.write_text("keep\n")
     _hanging_git(tmp_path, monkeypatch, meanwhile="touch .git/index.lock" if make == "file"
-                 else f"ln -s '{outside}' .git/index.lock")
+                 else f"ln -s '{outside if make == 'symlink' else tmp_path / 'gone'}' .git/index.lock")
     res = selfupdate.apply_update(env["sys"], env["paths"])
     lock = env["work"] / ".git" / "index.lock"
     assert res["timed_out"] is True and res["lock"] == str(lock), res
     assert f"rm {shlex.quote(str(lock))}." in res["message"] and _AGAIN in res["message"], res["message"]
-    assert os.path.lexists(lock) and lock.is_symlink() == (make == "symlink")
+    assert os.path.lexists(lock) and lock.is_symlink() == (make != "file")      # a dangling link is named too
     assert outside.read_text() == "keep\n"
 
 
@@ -326,6 +326,7 @@ def test_a_status_that_fails_is_never_read_as_a_clean_tree(env, monkeypatch):
     monkeypatch.setattr(selfupdate, "_git", status_times_out)
     res = selfupdate.apply_update(env["sys"], env["paths"])
     assert res["ok"] is False and res.get("status_unread") is True and "nothing was changed" in res["message"], res
+    assert "'overwrite local changes' updates without it and discards any local change" in res["message"], res
     assert "merge" not in seen and selfupdate.local_state(env["sys"])["head"] == old
 
 
@@ -440,6 +441,42 @@ def test_an_unreadable_status_at_an_up_to_date_head_is_finished_by_the_overwrite
     assert "could not be read" in plain["message"] and "'overwrite local changes'" in plain["message"], plain
     done = selfupdate.apply_update(env["sys"], env["paths"], force=True)
     assert done["ok"] is True and not done.get("already") and not (env["work"] / "b.txt").exists(), done
+
+
+def test_the_helpers_budget_is_the_shipped_units_limit_less_the_margin_for_its_message():
+    """The budget comes from the helper unit as shipped (its bytes are frozen): the unit's TimeoutStartSec less
+    HELPER_MARGIN_S, a margin the helper's own message and record need. If either drifts, this fails."""
+    import re
+
+    from lhpc.core import updater_units
+    unit = updater_units.render(updater_units.HELPER_UNIT, "/r", "/c", "/v")
+    limit = float(re.search(r"^TimeoutStartSec=(\d+)\s*$", unit, re.MULTILINE).group(1))
+    assert selfupdate.helper_budget_s() == limit - selfupdate.HELPER_MARGIN_S and selfupdate.HELPER_MARGIN_S >= 15
+
+
+def test_under_the_helpers_budget_each_step_gets_only_what_is_left(env, monkeypatch):
+    """With 10 s of the budget left, the advance runs under a 10 s limit, not its own 300 s, so the helper's
+    timeout message speaks before systemd would stop it (the forced path's 1255 s of bounds no longer can)."""
+    import time as _t
+    gitrepo.upstream_commit(env["up"], version="0.1.1")
+    real = env["sys"].runner.run
+    seen = []
+    monkeypatch.setattr(env["sys"].runner, "run", lambda argv, timeout=None, *a, **k: (
+        seen.append((argv[3] if argv[:1] == ["git"] else argv[0], timeout)) or real(argv, timeout, *a, **k)))
+    monkeypatch.setattr(selfupdate, "_BUDGET_END", [_t.monotonic() + 10.0])
+    assert selfupdate.apply_update(env["sys"], env["paths"])["ok"] is True
+    merge = [t for op, t in seen if op == "merge"]
+    assert merge and merge[0] <= 10.0, seen
+
+
+def test_a_spent_budget_starts_no_git_and_no_venv_sync(env, monkeypatch):
+    import time as _t
+    calls = []
+    monkeypatch.setattr(env["sys"].runner, "run", lambda argv, timeout=None, *a, **k: calls.append(argv))
+    monkeypatch.setattr(selfupdate, "_BUDGET_END", [_t.monotonic() - 1.0])
+    r = selfupdate._git(env["sys"], env["work"], ["merge", "--ff-only", "origin/main"], selfupdate._APPLY_TIMEOUT)
+    v = selfupdate.venv_sync(env["sys"].runner, sys.executable, env["work"], 600.0)
+    assert r.timed_out and v.timed_out and calls == [], calls
 
 
 def test_the_advance_runs_under_the_generous_limit_and_the_reads_keep_theirs(env, monkeypatch):

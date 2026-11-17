@@ -1762,7 +1762,9 @@ def _run(argv: list[str] | None = None) -> int:
                                              "`lhpc self-update --apply`")
             if refused is not None:
                 return refused
-            return _render(svc.self_update_run_service())
+            from lhpc.core import selfupdate as _su
+            with _su.helper_budget():               # every step clipped under the unit's TimeoutStartSec
+                return _render(svc.self_update_run_service())
         if args.repair_integration:
             return _render(svc.self_update_repair_integration())
         if args.recover_request:

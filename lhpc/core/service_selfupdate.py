@@ -1022,7 +1022,7 @@ class SelfUpdateOpsMixin:
         try:
             # Web is stopped (Conflicts+After) so its SHARED lock is released; take EXCLUSIVE with
             # a short bounded retry to cover the stop-completion window, then apply.
-            deadline = _time.monotonic() + self._LOCK_WAIT_S
+            deadline = _time.monotonic() + selfupdate.clip(self._LOCK_WAIT_S)   # within the helper's budget
             while True:
                 try:
                     with selfupdate.controller_runtime_lock(self._paths, exclusive=True):

@@ -28,7 +28,7 @@ from pathlib import Path
 from ..version import __version__
 from . import runtime_fs
 from .paths import PathContainmentError, Paths
-from .probes.backends import System
+from .probes.backends import CommandResult, System
 
 _REMOTE = "origin"
 _LOCAL_TIMEOUT = 5.0
@@ -161,8 +161,40 @@ def venv_unsynced(root: Path | None) -> str:
     return "" if m.group(1) == have else f"installed {have}, checkout {m.group(1)}"
 
 
+# ONE budget for the one-click helper: lhpc-selfupdate.service stops it at its TimeoutStartSec (900 s; a unit's
+# bytes are frozen), less than the helper's own bounds add up to on a slow forced path (fetch 25 + reset 300 +
+# clean 300 + venv sync 600 + lock wait 30 s). Under the helper every step is clipped to what is left of the unit's
+# limit less HELPER_MARGIN_S, so the helper's own message is recorded before systemd would stop it; a spent budget
+# starts nothing (that step reads as timed out). Outside the helper (the operator's shell) nothing is clipped.
+HELPER_MARGIN_S = 30.0
+_BUDGET_END = [None]                           # the helper's monotonic deadline while it runs, else None
+
+
+def helper_budget_s() -> float:
+    from . import updater_units
+    unit = updater_units.render(updater_units.HELPER_UNIT, "/r", "/c", "/v")
+    return float(re.search(r"^TimeoutStartSec=(\d+)\s*$", unit, re.MULTILINE).group(1)) - HELPER_MARGIN_S
+
+
+@contextmanager
+def helper_budget():
+    _BUDGET_END[0] = time.monotonic() + helper_budget_s()
+    try:
+        yield
+    finally:
+        _BUDGET_END[0] = None
+
+
+def clip(timeout: float) -> float:
+    """`timeout`, or less: what is left of the helper's budget (0.0 when it is spent)."""
+    end = _BUDGET_END[0]
+    return timeout if end is None else max(0.0, min(timeout, end - time.monotonic()))
+
+
 def _git(system: System, root: Path, args: list[str], timeout: float):
-    return system.runner.run(["git", "-C", str(root), *args], timeout=timeout)
+    if (t := clip(timeout)) <= 0:
+        return CommandResult(124, "", "", timed_out=True)       # the helper's budget is spent: nothing starts
+    return system.runner.run(["git", "-C", str(root), *args], timeout=t)
 
 
 # Strip ANSI/OSC escapes, C0/C1 control chars, and Unicode box-drawing/block glyphs — the noise that
@@ -208,7 +240,7 @@ def local_state(system: System) -> dict:
     # honouring .gitignore, so ignored runtime artifacts (e.g. a `.venv/`) never count as dirty.
     s = _git(system, root, ["status", "--porcelain"], _LOCAL_TIMEOUT)
     st["dirty"] = bool(s.returncode == 0 and s.stdout.strip())
-    st["status_ok"] = s.returncode == 0 and not getattr(s, "timed_out", False)   # a failed read is not "clean"
+    st["status_ok"] = s.returncode == 0                  # a failed or timed-out read is not "clean"
     return st
 
 
@@ -634,7 +666,8 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         return {"ok": False, "status_unread": True,
                 "message": "Could not read the checkout's state (git status failed or timed out) — nothing "
                            "was changed. Run the update again; if this repeats, run 'git status' in the "
-                           "checkout to see why."}
+                           "checkout to see why ('overwrite local changes' updates without it and discards "
+                           "any local change)."}
     if local.get("dirty") and not force:
         # Name the paths in `changes` (the caller renders them as details). `message` stays SINGLE
         # LINE — it is flashed verbatim in the GUI, and the sanitizer contract forbids newlines.
@@ -747,7 +780,9 @@ def venv_sync_command(python: str, root) -> str:
 def venv_sync(runner, python: str, root, timeout: float):
     """Run the venv sync's steps in order; the first failing result, else the last one."""
     for argv in venv_sync_argvs(python, root):
-        result = runner.run(argv, timeout)
+        if (t := clip(timeout)) <= 0:
+            return CommandResult(124, "", "", timed_out=True)   # the helper's budget is spent
+        result = runner.run(argv, t)
         if result.returncode != 0:
             break
     return result
