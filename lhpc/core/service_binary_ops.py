@@ -86,13 +86,17 @@ class BinaryOpsMixin:
     @invalidates_snapshot
     def binary_install(self, stack_id: str, apply: bool = False, **kw) -> ActionResult:
         """`_binary_install`; meshtastic's web client then follows the daemon in the same run,
-        outside the install's locks (web_client.after_daemon)."""
-        res = self._binary_install(stack_id, apply, **kw)
+        outside the install's locks (web_client.after_daemon). What a successful recovery of an interrupted install
+        reports leads the details of whatever the install then returns."""
+        recovered: list = []
+        res = self._binary_install(stack_id, apply, recovered=recovered, **kw)
+        if recovered:
+            res.details = [f"  recovered first: {n}" for n in recovered] + list(res.details)
         return web_client.after_daemon(self, res) if apply and stack_id == web_client.DAEMON else res
 
     @invalidates_snapshot
     def _binary_install(self, stack_id: str, apply: bool = False, *,
-                        locked: bool = False) -> ActionResult:
+                        locked: bool = False, recovered: list | None = None) -> ActionResult:
         """Install `stack_id` from the newest published artifact for this box (`bi.newest_entry`, plan R2), when
         it is newer than the installed one; none that covers this lhpc is ONE typed refusal (`none_compatible`). Every
         refusal offers the source channel explicitly. The APPLY path holds a source install's
@@ -123,15 +127,25 @@ class BinaryOpsMixin:
             # PLAN text only, in the apply's order (D10: an installed binary the entry would not replace stays, then
             # the packages, then the same artifact). The apply decides nothing and moves nothing before its locks:
             # it takes them, recovers, then decides (below). What the apply refuses before any decision (an unreadable
-            # or earlier version's journal, an unreadable receipt) the plan refuses alike.
+            # or earlier version's journal, a checkout it cannot move back, an unreadable receipt) the plan refuses
+            # alike. An open journal: what the recovery restores decides the rest, so the plan says only that.
             _j, _jstate = bi.read_journal(self._paths)
             if _jstate != "absent" and self._journal_prev_auth(_j) is None:
                 return self._binary_blocked(stack_id, _UNREADABLE_JOURNAL)
-            _settled = _jstate == "absent"   # an open journal: the apply recovers it first, then reads the receipt
+            if _jstate == "valid" and _j.get("state") != "committed":     # a committed one only drops bookkeeping
+                if _lost := bi.journaled_clones(self, _j.get("stack", ""), _j.get("clones") or {})[1]:
+                    return self._binary_blocked(stack_id, _lost)
+                return ActionResult(
+                    True, f"Binary install of '{stack_id}': an interrupted binary install of '{_j.get('stack', '')}' "
+                          "is open",
+                    details=[f"  the apply first tries to recover it; whether {entry.filename} is then downloaded "
+                             "depends on what that restores"],
+                    next_commands=[f"lhpc install {stack_id} --source binary --yes"],
+                    data={"changes": 1, "channel": "binary"})
             _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
-            if _settled and _pstate == "unsafe" and _prec is None:
+            if _pstate == "unsafe" and _prec is None:
                 return self._binary_unreadable_receipt(stack_id, _pwhy)
-            _how, _rec, _stuck = self._binary_current(stack_id, entry, entries) if _settled else ("", None, "")
+            _how, _rec, _stuck = self._binary_current(stack_id, entry, entries)
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
             if _how in ("kept", "unordered"):
@@ -189,6 +203,8 @@ class BinaryOpsMixin:
             _rec_ok, _rec_why = self.binary_recover(sources_locked=True)
             if not _rec_ok:
                 return self._binary_blocked(stack_id, _rec_why)
+            if _rec_why and recovered is not None:
+                recovered.append(_rec_why)
             _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
             if _pstate == "unsafe" and _prec is None:
                 # UNREADABLE ownership evidence: we cannot know which files the previous
@@ -199,7 +215,9 @@ class BinaryOpsMixin:
             # A SUPERSEDED receipt still names files this box owns — they are displaced into
             # the transaction below, never left behind unowned.
             prev_files = list(_prec.files) if (_prec and _pstate in ("valid", "superseded")) else []
-            prev_receipt_raw = brx.read_raw(self._paths, stack_id)
+            prev_receipt_raw, _bwhy = self._receipt_backup(stack_id)
+            if _bwhy:
+                return self._binary_blocked(stack_id, _bwhy)
             # THE decision, under the locks after recovery and before any clone is touched (D10): another
             # installed binary `entry` is not newer than stays, clones and files untouched; then the packages.
             _how, _rec, _stuck = self._binary_current(stack_id, entry, entries)

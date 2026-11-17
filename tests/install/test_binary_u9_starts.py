@@ -184,6 +184,38 @@ def test_a_receipt_without_its_publication_time_and_no_listed_entry_offers_only_
     assert plan.ok and plan.data["changes"] == 0 and "no publication time" in " ".join(plan.details), plan.details
 
 
+def test_a_re_publication_of_the_installed_sha_never_dates_it_after_its_install(tmp_path, monkeypatch, binary_receipt):
+    # G2-UPDCHAIN-A D3: an older lhpc installed A on Nov 5 (no publication time); A's original entry is gone and its
+    # sha is listed again Nov 10, a re-publication. B, published Nov 10 after A's install, is newer whatever A's
+    # date: offered, never "current" by the re-publication's stamp.
+    svc = _svc(tmp_path, monkeypatch)
+    other = _other(svc, "daemon")
+    _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
+                  "2026-11-05T00:00:00Z")
+    b = _entry("daemon", "2" * 64, other, "2026-11-10T12:00:00Z")
+    _serve(monkeypatch, "daemon", b, _entry("daemon", "1" * 64, other, "2026-11-10T12:00:00Z"))
+    assert svc.binary_freshness("daemon") == {"state": "behind", "offer": b["filename"]}
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 1 and any(b["filename"] in d for d in plan.details), plan.details
+
+
+def test_a_re_publication_under_another_target_never_dates_the_installed_sha(tmp_path, monkeypatch, binary_receipt):
+    # G2-UPDCHAIN-A D3 (second read): A installed Nov 16 by an older lhpc; B for this box published Nov 10, before
+    # that install; A's sha listed again Nov 18 under ANOTHER target (never this box's offer). That later listing is
+    # a re-publication, never A's date: B cannot be ordered against A: could not check, and the install keeps A.
+    svc = _svc(tmp_path, monkeypatch)
+    other = _other(svc, "daemon")
+    _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
+                  "2026-11-16T00:00:00Z")
+    b = _entry("daemon", "2" * 64, other, "2026-11-10T00:00:00Z")
+    _serve(monkeypatch, "daemon", b, {**_entry("daemon", "1" * 64, other, "2026-11-18T00:00:00Z"),
+                                      "target": "aarch64-bookworm", "os": "bookworm"})
+    fresh = svc.binary_freshness("daemon")
+    assert fresh["state"] == "error" and fresh["offer"] == "" and "no publication time" in fresh["why"], fresh
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 0 and "no publication time" in " ".join(plan.details), plan.details
+
+
 def test_an_install_the_start_refuses_is_not_current_and_not_kept(tmp_path, monkeypatch, binary_receipt):
     # One readiness rule: the installed binary records no commit for a covered component, so the start refuses it.
     # Its freshness is then never "current" (the stack's verdict is "update available"), and the install does not

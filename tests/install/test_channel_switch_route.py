@@ -120,3 +120,19 @@ def test_a_failed_switch_to_source_restores_the_binary_install(box, csrf, monkey
     assert proof.read_text() == "artifact"
     assert bi.read_journal(svc._paths)[1] == "absent"
     assert list((tmp_path / "state" / "binary").glob(".backup-*")) == []
+
+
+def test_a_switch_to_source_whose_receipt_backup_cannot_be_read_is_refused_and_keeps_the_binary(
+        box, csrf, monkeypatch, stub_adopt, tmp_path):
+    # G2-UPDCHAIN-A D2 (retirement): the receipt reads as installed but its raw text cannot be read for the
+    # transaction's backup. Taken for "no receipt", a failed switch's rollback would delete it: refused first.
+    from lhpc.core import binary_receipt as brx
+    client, svc = box
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    assert _switch(client, csrf, monkeypatch, "binary") == 0
+    stub_adopt(svc, fail_paths=("src/MeshCom-Firmware",))
+    monkeypatch.setattr(brx, "read_raw", lambda *a, **k: None)
+    assert _switch(client, csrf, monkeypatch, "pinned") != 0
+    assert _state(svc) == ("valid", False, "none")
+    assert bi.read_journal(svc._paths)[1] == "absent"

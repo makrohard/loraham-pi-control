@@ -756,8 +756,10 @@ def test_a_journaled_checkout_the_manifest_no_longer_names_there_blocks_the_reco
                       if c.id == "meshcom-qemu" else c for c in st.components)
     changed = dataclasses.replace(st, components=comps)
     monkeypatch.setattr(ControllerService, "stack", lambda self, sid: changed if sid == "meshcom" else real(self, sid))
+    plan = svc.install("meshcom", apply=False, source="binary")
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and "meshcom-qemu" in res.summary and comp.source.path in res.summary, res.summary
+    assert not plan.ok and plan.summary == res.summary, (plan.summary, res.summary)     # G2-UPDCHAIN-A D4
     assert state["adopted"] == ["a" * 40] and state["commit"] == "a" * 40, state
     assert bi.read_journal(svc._paths)[1] == "valid"
 
@@ -773,6 +775,52 @@ def test_a_failed_install_names_the_checkout_it_created_and_kept(tmp_path, monke
     res = svc.install("meshcom", apply=True, source="binary")
     assert not res.ok and state["adopted"] == ["a" * 40], res.summary
     assert any(path in d and "kept" in d for d in res.details), res.details
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+@pytest.mark.parametrize("manifest", ["as-journaled", "moved-since"])
+def test_a_crashed_install_s_kept_checkout_is_named_by_the_install_that_recovers_it(tmp_path, monkeypatch, manifest):
+    # G2-UPDCHAIN-A D5: a first install created its checkout and died before its own unwind; the next install
+    # recovers it (the checkout is kept: nothing older, also when the manifest moved that source since: nothing to
+    # move back) and stops at its packages. Its result names the kept checkout first, never drops what the recovery
+    # said.
+    svc = _svc(tmp_path, monkeypatch)
+    _moving_clone(monkeypatch, svc, "b" * 40)
+    path = svc.stack("meshcom").component("meshcom-qemu").source.path
+    svc._paths.resolve_source(path).rmdir()                                          # a first install: no checkout
+    _fails_after_the_move(monkeypatch, svc, _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    with monkeypatch.context() as m:
+        m.setattr(ControllerService, "binary_recover", lambda self, **k: (True, ""))   # no unwind: it died
+        svc.install("meshcom", apply=True, source="binary")
+    assert bi.read_journal(svc._paths)[1] == "valid"
+    if manifest == "moved-since":
+        real, st = ControllerService.stack, svc.stack("meshcom")
+        moved = dataclasses.replace(st, components=tuple(
+            dataclasses.replace(c, source=dataclasses.replace(c.source, path="src/elsewhere"))
+            if c.id == "meshcom-qemu" else c for c in st.components))
+        monkeypatch.setattr(ControllerService, "stack", lambda self, sid: moved if sid == "meshcom" else real(self, sid))
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, pkg: pkg != "libonly-extra")
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER, deps=("libonly-extra",)))
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and res.data.get("missing_runtime_deps") == ["libonly-extra"], res.summary
+    assert res.details[0] == (f"  recovered first: the {path} checkout this install created was kept: nothing older "
+                              "to return to"), res.details
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_a_receipt_whose_backup_cannot_be_read_is_never_deleted_by_a_failed_install(tmp_path, monkeypatch,
+                                                                                     binary_receipt):
+    # G2-UPDCHAIN-A D2: the receipt reads as installed, its raw text for the transaction's backup cannot be read.
+    # Taken for "no receipt", the rollback of a failed install would delete it: refused before anything moves.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    state = _moving_clone(monkeypatch, svc, "b" * 40)
+    _fails_after_the_move(monkeypatch, svc, _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    monkeypatch.setattr(brx, "read_raw", lambda *a, **k: None)
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "could not be read for its backup" in res.summary, res.summary
+    assert state["adopted"] == [], state
+    assert brx.receipt_state(svc._paths, "meshcom")[0] == "valid"
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
@@ -820,14 +868,47 @@ def test_the_plan_refuses_what_the_apply_refuses_when_its_state_cannot_be_read(t
     assert not plan.ok and plan.summary == res.summary, (plan.summary, res.summary)
 
 
-def test_the_plan_of_an_interrupted_install_is_the_plan_the_apply_takes_after_its_recovery(tmp_path, monkeypatch,
-                                                                                           binary_receipt):
-    # An interrupted (valid, uncommitted) journal of this stack makes the receipt read "in progress": the apply
-    # recovers it first and then decides, so the plan is never the unreadable-receipt refusal.
+@pytest.mark.parametrize("served", ["newer", "same", "older-needing-packages"])
+def test_the_plan_of_an_interrupted_install_claims_nothing_the_recovery_decides(tmp_path, monkeypatch,
+                                                                                binary_receipt, served):
+    # G2-UPDCHAIN-A D4: an interrupted (valid, uncommitted) journal of this stack. The apply recovers it first, then
+    # decides from what it restored: a download (newer entry), nothing (the same intact artifact), or the restored
+    # newer artifact kept (an older entry needing packages). The plan cannot read that state without the recovery:
+    # it says the recovery comes first and claims no download, no "nothing to download", no package verdict.
     svc = _svc(tmp_path, monkeypatch)
     _installed(svc, binary_receipt, "meshcom")
-    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    _clean_clone_at(monkeypatch, svc, "b" * 40)
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, pkg: pkg != "libonly-extra")
+    entry = {"newer": _entry("meshcom", "a" * 64, "a" * 40, NEWER),
+             "same": _entry("meshcom", "b" * 64, "b" * 40, INSTALLED),
+             "older-needing-packages": _entry("meshcom", "a" * 64, "a" * 40, OLDER, deps=("libonly-extra",))}[served]
+    _serve(monkeypatch, "meshcom", entry)
     bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
     svc.invalidate_snapshot()
     plan = svc.install("meshcom", apply=False, source="binary")
-    assert plan.ok and any(d.startswith("  download ") for d in plan.details), (plan.summary, plan.next_commands)
+    assert plan.ok and plan.data["changes"] == 1, (plan.summary, plan.details)
+    assert "interrupted binary install of 'meshcom' is open" in plan.summary, plan.summary
+    assert plan.details == [f"  the apply first tries to recover it; whether {entry['filename']} is then downloaded "
+                            "depends on what that restores"], plan.details
+    res = svc.install("meshcom", apply=True, source="binary")
+    if served == "newer":
+        assert not res.ok and "DOWNLOAD-REACHED" in res.summary, res.summary
+    else:
+        assert res.ok and res.data["changes"] == 0 and "nothing to download" in res.summary, res.summary
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_the_plan_with_a_committed_journal_decides_as_the_apply_does(tmp_path, monkeypatch, binary_receipt):
+    # A committed journal only drops its bookkeeping in the recovery: the plan decides as without one.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _clean_clone_at(monkeypatch, svc, "b" * 40)
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "b" * 64, "b" * 40, INSTALLED))
+    bi.open_txn(svc._paths, "meshcom", "t" * 16, old_receipt=brx.read_raw(svc._paths, "meshcom"), auth={})
+    assert bi.write_journal(svc._paths, {**bi.read_journal(svc._paths)[0], "state": "committed"})
+    svc.invalidate_snapshot()
+    plan = svc.install("meshcom", apply=False, source="binary")
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert plan.ok and plan.data["changes"] == 0 and "nothing to download" in plan.summary, plan.summary
+    assert res.ok and res.data["changes"] == 0 and plan.summary == res.summary, res.summary
+    assert bi.read_journal(svc._paths)[1] == "absent"

@@ -354,17 +354,21 @@ def newest_entry(entries: list, target: str, covers) -> IndexEntry:
 def is_newer(entry: IndexEntry, rec, entries) -> bool | None:
     """`entry` is offered over the installed receipt `rec` only when it was published later (D10: a withdrawn
     installed binary stays, never replaced by an older one). The installed artifact's publication time is its
-    receipt's, else that of the listed entry with its sha (a receipt an older lhpc wrote records none). Neither:
-    it was published no later than it was installed, so an entry published after the install time is newer, and
-    one published before it cannot be ordered: None (never offered, never "current": could not check)."""
+    receipt's. A receipt an older lhpc wrote records none: the artifact was published no later than it was
+    installed, so an entry published after the install time is newer, decided first; else a listed entry with its
+    sha dates it, only when listed no later than the install (a later one is a re-publication, also one under
+    another target, which `newest_entry` never picks); else it cannot be ordered: None (never offered, never
+    "current": could not check)."""
     published = entry.published_at or ""
     installed = rec.provenance.get("published_at")
-    if not _utc_stamp(installed):
-        installed = next((e.published_at for e in entries
-                          if e.sha256 == rec.artifact_sha256 and _utc_stamp(e.published_at)), None)
-    if installed:
+    if _utc_stamp(installed):
         return published > installed
-    return True if published > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at)) else None
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at))
+    if published > at:
+        return True
+    listed = next((e.published_at for e in entries if e.sha256 == rec.artifact_sha256
+                   and _utc_stamp(e.published_at) and e.published_at <= at), None)
+    return published > listed if listed else None
 
 
 def select_web(entries: list, channel: str, daemon_commit: str) -> IndexEntry:
@@ -571,8 +575,8 @@ def read_journal(paths: Paths):
         return None, "unsafe"
     clones = d.get("clones", {})                # {component: {commit, path}} (`record_clone`): the recovery reads both
     if not isinstance(clones, dict) or not all(
-            isinstance(v, dict) and isinstance(v.get("commit"), str) and isinstance(p := v.get("path"), str)
-            and validators.safe_rel(p) for v in clones.values()):
+            isinstance(v, dict) and isinstance(v.get("commit"), str) and validators.safe_rel(v.get("path"))
+            for v in clones.values()):
         return None, "unsafe"
     made = d.get("created_dirs", [])
     if not isinstance(made, list) or not all(isinstance(x, str) and validators.safe_rel(x) for x in made):
@@ -732,15 +736,10 @@ def inspect_clones(svc, stack_id: str, spec, commits: dict, src_cmd: str):
     return _moves, None
 
 
-def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
-    """Move every checkout a rolled-back binary transaction moved back to its journaled commit, at its journaled
-    path. One that did not exist before stays as adopted: nothing older to return to. One the manifest no longer
-    names at that path is refused by name with the journal kept: never skipped, never moved at another path. Under THAT stack's source locks, taken here (sorted;
-    re-entrant when the install of that stack holds them): another stack's install never moves them under its own
-    locks, and a busy lock refuses by name with the journal kept. (ok, why, the moved paths' ownership baseline read
-    under those locks for the restored receipt, None when a record is damaged)."""
-    from . import reslock
-    from .service_base import SourceTxnBlocked
+def journaled_clones(svc, stack_id: str, clones: dict) -> tuple[list, str]:
+    """(the (component, journaled commit) pairs the recovery moves back, refusal), by reading alone: the recovery
+    and the plan of an install with that journal open give the same refusal. A checkout to move back the manifest
+    no longer names at its journaled path is refused by name; one created by the install ("" commit) is not."""
     st = svc.stack(stack_id)
     by_id = {c.id: c for c in (st.components if st else ())}
     comps, lost = [], []
@@ -751,9 +750,24 @@ def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
             comps.append((c, prev))
         elif prev:                                   # a checkout to move back that cannot be found as journaled
             lost.append(f"{cid} at {rel} (was at {prev[:9]})")
-    if lost:                                   # never skipped, never redirected to another path: the journal stays
-        return False, (f"an interrupted binary install of '{stack_id}' moved checkouts the manifest no longer names "
-                       f"at that path: {'; '.join(lost)} — resolve state/binary/install.journal.json by hand"), {}
+    if lost:
+        return [], (f"an interrupted binary install of '{stack_id}' moved checkouts the manifest no longer names "
+                    f"at that path: {'; '.join(lost)} — resolve state/binary/install.journal.json by hand")
+    return comps, ""
+
+
+def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
+    """Move every checkout a rolled-back binary transaction moved back to its journaled commit, at its journaled
+    path. One that did not exist before stays as adopted: nothing older to return to. One the manifest no longer
+    names at that path is refused by name with the journal kept: never skipped, never moved at another path. Under THAT stack's source locks, taken here (sorted;
+    re-entrant when the install of that stack holds them): another stack's install never moves them under its own
+    locks, and a busy lock refuses by name with the journal kept. (ok, why, the moved paths' ownership baseline read
+    under those locks for the restored receipt, None when a record is damaged)."""
+    from . import reslock
+    from .service_base import SourceTxnBlocked
+    comps, why = journaled_clones(svc, stack_id, clones)
+    if why:                                    # never skipped, never redirected to another path: the journal stays
+        return False, why, {}
     try:
         with svc._source_operation_guard(svc._binary_source_paths(stack_id), op="binary-recover"):
             for comp, prev in comps:

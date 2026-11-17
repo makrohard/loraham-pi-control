@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from . import binary_install as binary_install_mod
-from . import binary_receipt as binary_receipt_mod
 from . import config as _cfgmod
 from . import instance_liveness, instances, radio_start, spi_mode, stackupdates
 from . import manifest as manifest_mod
@@ -1638,10 +1637,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # matches the pins, which is precisely what an operator switching to source is
             # working around. `locked=False` so retirement rechecks running.
             _switch_txn = secrets.token_hex(8)
+            _old_raw, _bwhy = self._receipt_backup(stack_id)
+            if _bwhy:
+                _adm_stack.close()
+                return ActionResult(False, f"Refusing to install '{stack_id}': {_bwhy}",
+                                    details=[f"  nothing was changed: {stack_id} stays on the binary"],
+                                    next_commands=[f"lhpc install {stack_id} --source {source} --yes"])
             try:
-                binary_install_mod.open_txn(
-                    self._paths, stack_id, _switch_txn,
-                    old_receipt=binary_receipt_mod.read_raw(self._paths, stack_id))
+                binary_install_mod.open_txn(self._paths, stack_id, _switch_txn, old_receipt=_old_raw)
             except binary_install_mod.BinaryInstallError as _exc:
                 _adm_stack.close()
                 return ActionResult(False, f"Refusing to install '{stack_id}': {_exc.message}",

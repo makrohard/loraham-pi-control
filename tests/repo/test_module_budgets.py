@@ -20,7 +20,7 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2266, 23),  # co-16: doctor names an AP the firewall drops; split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin
+    "services.py": (2269, 23),  # co-16: doctor names an AP the firewall drops; split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin; chain-A G2 D2: a switch to source refuses an unreadable receipt backup
     "service_base.py": (166, 0),
     "service_admission.py": (457, 0),  # split-s4: split from services.py; K4b: a stop locks its running instances' bands; K6: lowered
     "service_auto_install.py": (1875, 16),

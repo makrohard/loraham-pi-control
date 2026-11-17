@@ -12,6 +12,7 @@ or re-derive manifest facts.
 
 from __future__ import annotations
 
+import os
 import platform
 
 from . import binary_receipt as brx
@@ -114,6 +115,15 @@ class BinaryChannelMixin:
             return "unsafe", None, (f"a binary install of {stack_id!r} is in progress or was "
                                     "interrupted — run it again to recover")
         return brx.receipt_state(self._paths, stack_id)
+
+    def _receipt_backup(self, stack_id: str) -> tuple:
+        """(the receipt's raw text a transaction journals before a change, refusal); None = no receipt, so the
+        rollback removes the failed change's one. A receipt file that is there but whose text cannot be read
+        refuses: taken for none, the rollback would delete it (G2-UPDCHAIN-A D2)."""
+        raw = brx.read_raw(self._paths, stack_id)
+        if raw is None and os.path.lexists(brx.receipt_path(self._paths, stack_id)):
+            return None, "the installed binary receipt could not be read for its backup"
+        return raw, ""
 
     def on_binary_channel(self, stack_id: str) -> bool:
         """True while the stack is installed from a binary artifact (receipt VALID)."""

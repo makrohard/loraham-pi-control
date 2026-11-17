@@ -122,11 +122,17 @@ def test_csrf_is_enforced(web, published):
 
 # ---- the stack page: a job's typed refusal, an override in force ---------------------------------
 
-def _failed_install_job(svc_paths, stack):
+def _failed_install_job(svc_paths, stack, refusal="none_compatible"):
     log, aid = f"install-{stack}.log", "d" * 32
     assert jobresult.reserve(svc_paths, log, aid, "install", stack, stack, [])
-    assert jobresult.terminalize(svc_paths, log, aid, "failed", detail="install failed",
-                                 refusal="none_compatible")
+    assert jobresult.terminalize(svc_paths, log, aid, "failed", detail="install failed", refusal=refusal)
+
+
+def test_a_failed_install_that_was_no_refusal_shows_no_refusal_banner(web, tmp_path, update_available):
+    from lhpc.core.paths import Paths
+    update_available(True)
+    _failed_install_job(Paths(runtime_root=tmp_path), "meshtastic", refusal=None)
+    assert _stack_page(web(), "meshtastic").by_id("pin-refusal-meshtastic") is None
 
 
 def _stack_page(c, stack):
