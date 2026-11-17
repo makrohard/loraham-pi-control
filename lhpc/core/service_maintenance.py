@@ -90,8 +90,10 @@ class MaintenanceOpsMixin:
             return {**entry, "source_path": comp.source.path, "channel": "binary",
                     **({"why": fresh["why"]} if fresh.get("why") else {}),
                     "local_head_at_check": rec.components.get(comp.id, "") if rec else "",
-                    "status": {"behind": stackupdates.BEHIND, "error": stackupdates.ERROR}.get(
-                        fresh["state"], stackupdates.UP_TO_DATE)}
+                    # Only "current" is up to date: any other state (also "n/a", a receipt gone since the branch
+                    # was taken) is could not check, never "fine".
+                    "status": {"current": stackupdates.UP_TO_DATE, "behind": stackupdates.BEHIND}.get(
+                        fresh["state"], stackupdates.ERROR)}
         if comp is None or comp.source is None or not comp.source.remote:
             return {**entry, "status": stackupdates.UNKNOWN}
         entry["source_path"] = comp.source.path

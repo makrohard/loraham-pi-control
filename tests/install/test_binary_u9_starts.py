@@ -223,3 +223,22 @@ def test_an_install_the_start_refuses_with_nothing_covering_it_is_not_current(tm
     assert any(d.startswith(f"  {dropped}: could not check — {fresh['why']}") for d in check.details), check.details
     res = svc.install("daemon", apply=False, source="binary")
     assert not res.ok and res.data.get("binary_refusal") == "none_compatible", res.summary
+
+
+def test_a_receipt_gone_between_the_branch_and_its_freshness_is_could_not_check(tmp_path, monkeypatch, binary_receipt):
+    # The source check takes the binary branch on a valid receipt, then its freshness reads the receipt again: a
+    # retire or failed install in between leaves "n/a". Never "current": could not check.
+    from lhpc.core import stackupdates
+    svc = _svc(tmp_path, monkeypatch)
+    covers = _other(svc, "daemon")
+    binary_receipt(svc, "daemon", sha="1" * 64, commits=covers, provenance={"published_at": "2026-11-10T00:00:00Z"})
+    _serve(monkeypatch, "daemon", _entry("daemon", "1" * 64, covers, "2026-11-10T00:00:00Z"))
+    comp = svc.stack("daemon").component(sorted(covers)[0])
+    real = ControllerService.binary_freshness
+
+    def retired_meanwhile(self, sid):
+        assert brx.remove_receipt(self._paths, sid)
+        self.invalidate_snapshot()
+        return real(self, sid)
+    monkeypatch.setattr(ControllerService, "binary_freshness", retired_meanwhile)
+    assert svc._update_probe(comp)["status"] == stackupdates.ERROR
