@@ -354,21 +354,17 @@ def newest_entry(entries: list, target: str, covers) -> IndexEntry:
 def is_newer(entry: IndexEntry, rec, entries) -> bool | None:
     """`entry` is offered over the installed receipt `rec` only when it was published later (D10: a withdrawn
     installed binary stays, never replaced by an older one). The installed artifact's publication time is its
-    receipt's. A receipt an older lhpc wrote records none: the artifact was published no later than it was
-    installed, so an entry published after the install time is newer, decided first; else a listed entry with its
-    sha dates it, only when listed no later than the install (a later one is a re-publication, also one under
-    another target, which `newest_entry` never picks); else it cannot be ordered: None (never offered, never
-    "current": could not check)."""
+    receipt's. A receipt an older lhpc wrote records none: its install time and every listed stamp of its sha (any
+    of them may be a re-publication, under any target) are only upper bounds on that publication, so an entry
+    published after the earliest of them is newer; else it cannot be ordered: None, never False (never offered,
+    never "current": could not check)."""
     published = entry.published_at or ""
     installed = rec.provenance.get("published_at")
     if _utc_stamp(installed):
         return published > installed
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at))
-    if published > at:
-        return True
-    listed = next((e.published_at for e in entries if e.sha256 == rec.artifact_sha256
-                   and _utc_stamp(e.published_at) and e.published_at <= at), None)
-    return published > listed if listed else None
+    bound = min([time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at)),
+                 *(e.published_at for e in entries if e.sha256 == rec.artifact_sha256 and _utc_stamp(e.published_at))])
+    return True if published > bound else None
 
 
 def select_web(entries: list, channel: str, daemon_commit: str) -> IndexEntry:

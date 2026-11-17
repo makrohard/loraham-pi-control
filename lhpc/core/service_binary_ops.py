@@ -400,8 +400,8 @@ class BinaryOpsMixin:
     @staticmethod
     def _binary_already_installed(stack_id: str, entry, rec, how: str, notes: list) -> ActionResult:
         older = {"kept": [f"  newest published: {entry.filename} — not newer than the installed one"],
-                 "unordered": [f"  newest published: {entry.filename} — the installed one is no longer listed and "
-                               "records no publication time, so which is newer could not be checked: kept"]}.get(how, [])
+                 "unordered": [f"  newest published: {entry.filename} — the installed one records no publication "
+                               "time, so which is newer could not be checked: kept"]}.get(how, [])
         return ActionResult(True, f"'{stack_id}' already has the published binary "
                                   f"{rec.filename} installed — nothing to download.",
                             details=[*notes, *older], next_commands=[f"lhpc status {stack_id}"],
@@ -1002,6 +1002,6 @@ class BinaryOpsMixin:
             return {"state": "behind", "offer": entry.filename}
         if newer is None:
             return {"state": "error", "offer": "", "why": (
-                f"the installed binary is no longer listed and records no publication time, so whether "
-                f"{entry.filename} is newer could not be checked")}
+                f"the installed binary records no publication time, so whether {entry.filename} is newer "
+                "could not be checked")}
         return {"state": "current", "offer": ""}

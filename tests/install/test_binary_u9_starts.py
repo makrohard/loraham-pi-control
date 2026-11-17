@@ -6,6 +6,7 @@ install refuses it typed."""
 import json
 import os
 
+import pytest
 import radios_fixture
 
 from lhpc.adapters.cli import main as cli
@@ -166,7 +167,7 @@ def test_a_receipt_without_its_publication_time_takes_it_from_its_listed_entry(t
 
 def test_a_receipt_without_its_publication_time_and_no_listed_entry_offers_only_what_is_proven_newer(
         tmp_path, monkeypatch, binary_receipt):
-    # A's entry is no longer listed and A's receipt has no publication time. A was published no later than it was
+    # A's sha is not listed and A's receipt has no publication time. A was published no later than it was
     # installed (Nov 16): an entry published after that is proven newer and offered; one published before it may be
     # older, so it is never offered and never "current": could not check, and the install keeps A.
     svc = _svc(tmp_path, monkeypatch)
@@ -199,21 +200,37 @@ def test_a_re_publication_of_the_installed_sha_never_dates_it_after_its_install(
     assert plan.ok and plan.data["changes"] == 1 and any(b["filename"] in d for d in plan.details), plan.details
 
 
-def test_a_re_publication_under_another_target_never_dates_the_installed_sha(tmp_path, monkeypatch, binary_receipt):
-    # G2-UPDCHAIN-A D3 (second read): A installed Nov 16 by an older lhpc; B for this box published Nov 10, before
-    # that install; A's sha listed again Nov 18 under ANOTHER target (never this box's offer). That later listing is
-    # a re-publication, never A's date: B cannot be ordered against A: could not check, and the install keeps A.
+@pytest.mark.parametrize("re_published", ["2026-11-18T00:00:00Z", "2026-11-12T00:00:00Z"],
+                         ids=["after-the-install", "before-the-install"])
+def test_a_re_publication_under_another_target_never_dates_the_installed_sha(tmp_path, monkeypatch, binary_receipt,
+                                                                            re_published):
+    # G2-UPDCHAIN-A D3 (second read) and D2 B1: A (originally Nov 1, no longer listed) installed Nov 16 by an older
+    # lhpc; B for this box published Nov 10, before that install; A's sha listed again under ANOTHER target, after
+    # the install or before it. Any listing of A's sha is only an upper bound on A's publication (it may be a
+    # re-publication): B cannot be ordered against A: could not check, never "current", and the install keeps A.
     svc = _svc(tmp_path, monkeypatch)
     other = _other(svc, "daemon")
     _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
                   "2026-11-16T00:00:00Z")
     b = _entry("daemon", "2" * 64, other, "2026-11-10T00:00:00Z")
-    _serve(monkeypatch, "daemon", b, {**_entry("daemon", "1" * 64, other, "2026-11-18T00:00:00Z"),
+    _serve(monkeypatch, "daemon", b, {**_entry("daemon", "1" * 64, other, re_published),
                                       "target": "aarch64-bookworm", "os": "bookworm"})
     fresh = svc.binary_freshness("daemon")
     assert fresh["state"] == "error" and fresh["offer"] == "" and "no publication time" in fresh["why"], fresh
     plan = svc.install("daemon", apply=False, source="binary")
     assert plan.ok and plan.data["changes"] == 0 and "no publication time" in " ".join(plan.details), plan.details
+
+
+def test_an_entry_published_in_the_second_of_the_install_is_not_proven_newer(tmp_path, monkeypatch, binary_receipt):
+    # D2 N1: a legacy receipt installed at 12:00:00; B published at that same second is not proven later (">"):
+    # could not check, kept.
+    svc = _svc(tmp_path, monkeypatch)
+    other = _other(svc, "daemon")
+    _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
+                  "2026-11-16T12:00:00Z")
+    _serve(monkeypatch, "daemon", _entry("daemon", "2" * 64, other, "2026-11-16T12:00:00Z"))
+    fresh = svc.binary_freshness("daemon")
+    assert fresh["state"] == "error" and "no publication time" in fresh["why"], fresh
 
 
 def test_an_install_the_start_refuses_is_not_current_and_not_kept(tmp_path, monkeypatch, binary_receipt):
