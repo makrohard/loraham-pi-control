@@ -257,6 +257,7 @@ issend() { local t i; t=$(pnorm "$1"); i=$(pnorm "${2:-}")
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
 fail() { echo "FAIL: $*" >&2; printf '%s\n' "$*" > "$OUT/rowfail.txt"; exit 1; }   # a row FAIL (the marker); its undos run
+leg() { dirtext "$1" > "$OUT/rowleg.txt" || stop "rowleg.txt: not written"; }   # leg <dir>: the direction a stack row runs now
 eq() { [ "$2" = "$3" ] && ok "$1" || fail "$1: got '$2', want '$3'"; }
 stop() { echo "STOP: $*" >&2; exit 2; }
 pcpath() { case "$1" in "~"/*) printf '%s\n' "$HOME/${1#\~/}";; *) printf '%s\n' "$1";; esac; }
@@ -432,6 +433,7 @@ ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX PAUTH; done; }   # e
 recover() { trap - EXIT INT TERM; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
   ( secret_scan ) || rec "recover: the evidence scan found a secret or failed: do not publish $EVD" || lost=1
+  echo "== RESULT"; ( restable STOPPED ) || rec "recover: RESULT.md not written" || lost=1   # a STOP after the table: it says STOPPED
   [ -s "$EVD/UNRESOLVED.txt" ] && echo "RECOVERY: unresolved, for the coordinator: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")" >&2
   [ "$lost" = 0 ] || echo "RECOVERY INCOMPLETE: an unreadable journal or a record that could not be written (see the STOP lines above)" >&2; return 0; }
 keyset_ok() { local bad; bad=$(body "$1" | grep -v '^$' | grep -vE '^[a-z0-9_-]+@r([1-9]|[1-9][0-9])$') || true; [ -z "$bad" ]; }   # every line one instance key
@@ -558,6 +560,11 @@ nonce() { local n; while :; do n="$NPREFIX $(od -An -N4 -tx1 /dev/urandom | tr -
 boxrx() {   # boxrx <box> <file> <form> <rid> <nonce> <secs>: a marker line only (SEEN <nonce> <time> rssi=<n>), never the RF-log line
   X "$1" "$2" "for i in \$(seq 1 $6); do l=\$($(form "$3" rid="$4" n="$5") | head -n 1); [ -n \"\$l\" ] && { echo \"SEEN $5 \$(date -u +%H:%M:%SZ) rssi=\$(printf '%s' \"\$l\" | sed -nE 's/.*rssi=(-?[0-9.]+).*/\\1/p')\"; exit 0; }; sleep 1; done; echo NOT-SEEN; exit 3"
   result "$2" "$5"; }
+chatrx() {   # chatrx <box> <file> <rid> <nonce> <secs>: the nonce on the chat client's screen (its pane rfchat-<rid>, wrapped lines
+  # joined); marker lines only, never a screen line (it holds received on-air text): SEEN <nonce> <time> screen, or on a miss
+  # the pane's count of non-empty lines and NOT-SEEN (rc 3)
+  X "$1" "$2" "for i in \$(seq 1 $5); do tmux capture-pane -p -J -t rfchat-$3 2>/dev/null | grep -qF -- '$4' && { echo \"SEEN $4 \$(date -u +%H:%M:%SZ) screen\"; exit 0; }; sleep 1; done; echo \"pane lines=\$(tmux capture-pane -p -J -t rfchat-$3 2>/dev/null | grep -c .)\"; echo NOT-SEEN; exit 3"
+  result "$2" "$4"; }
 result() { [ "$MODE" = dry ] && return 0
   if [ "$XRC" = 0 ] && grep -qxE "SEEN $(printf '%s' "$2" | sed 's/[.[\*^$]/\\&/g') .*" "$OUT/$1"; then return 0; fi
   if [ "$XRC" = 3 ] && [ "$(tail -n 1 "$OUT/$1")" = NOT-SEEN ]; then return 1; fi
@@ -577,6 +584,25 @@ coverage() {   # one line per item (a model, a stack, a check), row and directio
   for m in $(sed -n 's/^CAP \([^ ]*\) .*/\1/p' "$OUT"/R0-*-caps.txt 2>/dev/null | awk '!s[$0]++'); do
     case "$seen" in *" $m "*) ;; *) covline "$m" model - - "not present" "no row carries this model";; esac; done; }
 
+# restable [STOPPED]: THE result table for people: the verdict on top, then one line per chosen row with each direction's
+# PASS / FAIL / NOT RUN and its reason; printed, and (live) written to RESULT.md; rc 1 if the file cannot be written
+restable() {
+  local id d r c cells rows= n=0 np=0 nf=0 nn=0 nd=0 v out
+  for id in $RUN; do cells=
+    for d in $(dirs "$id"); do d=$(dirtext "$d"); n=$((n + 1))
+      r=$(awk -F'|' -v i="$id" -v d="$d" '$1 == i && $2 == d {sub(/^[^|]*[|][^|]*[|]/, ""); l = $0} END {print l}' "$OUT/results.txt" 2>/dev/null)
+      case "$r" in PASS) np=$((np + 1)); c="✅ PASS";; DRY-PASS) nd=$((nd + 1)); c="⚪ DRY (rehearsed)";;
+        "FAIL: "*) nf=$((nf + 1)); c="❌ FAIL: ${r#FAIL: }";; "NOT RUN: "*) nn=$((nn + 1)); c="⚪ NOT RUN: ${r#NOT RUN: }";;
+        *) nn=$((nn + 1)); if [ "${1:-}" = STOPPED ]; then c="⚪ NOT RUN: not reached (the run stopped)"; else c="⚪ NOT RUN: no result"; fi;; esac
+      cells="${cells:+$cells · }$d ${c//|//}"; done
+    rows="$rows| $id | $(rowname "$id") | $cells |"$'\n'; done
+  if [ "${1:-}" = STOPPED ]; then v="⛔ STOPPED: the run ended early ($np passed, $nf failed, $nn not run)"
+  elif [ "$nf" -gt 0 ]; then v="❌ FAIL: $nf of $n directions failed"; [ "$nn" = 0 ] || v="$v, $nn not run"
+  elif [ "$nd" -gt 0 ]; then v="⚪ DRY RUN: a rehearsal, nothing sent: $nd of $n directions rehearsed"; [ "$nn" = 0 ] || v="$v, $nn not run"
+  elif [ "$nn" -gt 0 ] || [ "$n" = 0 ]; then v="⚪ NOT COMPLETE: $nn of $n directions not run"
+  else v="✅ PASS: all $n directions passed"; fi
+  out="RESULT: $v"$'\n\n'"| row | stack | directions |"$'\n'"|---|---|---|"$'\n'"$rows"; printf '%s' "$out"
+  [ "$MODE" = dry ] || printf '%s' "$out" > "$EVD/RESULT.md"; }
 # ---- 10. R0 (what is present) and R1 (stop what runs) -----------------------------------------------------------------------
 radios_ok() {   # radios_ok <file>: exactly one 'STATE valid' line, and every other line a well-formed ROW (blank lines aside)
   local t; t=$(body "$1" | grep -v '^[[:space:]]*$'); [ "$(printf '%s\n' "$t" | grep -c '^STATE ')" = 1 ] && printf '%s\n' "$t" | grep -qx 'STATE valid' \
@@ -701,6 +727,7 @@ row_1() {   # MeshCom box radio 433.175 <-> the MeshCom T-Deck (receive only: it
   started "$b" 1-daemon.txt "daemon@$r"; dpower "$b" "$r" "R1-$b-$r-d"   # the daemon's STATUS before the stack's own start
   started "$b" 1-start.txt "meshcom@$r"; dpower "$b" "$r" "R1-$b-$r"
   X "$b" 1-provision.txt "$(printf "$PROVWAIT" "$r")"; [ "$MODE" = dry ] || [ "$XRC" = 0 ] || fail "row 1: the node's provisioning check did not finish ($(tail -n 1 "$OUT/1-provision.txt"))"
+  leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peer 1-peer-read.txt "$VMT" meshcom-read "$n" 150; pr=$SPAWN; [ "$MODE" = dry ] || sleep 8
   for a in 1 2 3; do [ "$a" = 1 ] || [ "$MODE" = dry ] || sleep 5   # at most 3 console attempts, one tx each (dry rehearses all three)
     tx "R1-$b-$r" 1 "$n" -- XIN "$b" "1-box-send-$a.txt" "$MCSEND_PY" "python3 - '$n' $(rport 12323 "$r")"; src=$XRC
@@ -721,12 +748,14 @@ row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): bo
   started "$b" 2-start.txt "graywolf@$r"; undo_push "$b" "$(gstop "kiss@$r")"; dpower "$b" "$r" "R2-$b-$r"
   BG=1 peer 2-peer-read.txt "$VMT" aprs-read "$n" 150; pr=$SPAWN; [ "$MODE" = dry ] || sleep 8
   keep P_R2-tracker "$TRACKER_DBM"; radk R2-tracker PC:tracker; pwok PC:tracker   # the tracker's power from its portal (as-is)
+  leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   tx R2-tracker 1 control --reserve                                                # its ACK, which the message triggers
   tx "R2-$b-$r" 1 "$n" -- XIN "$b" 2-box-send.txt "TO = '$TRACKER_CALL'"$'\n'"$GW_PY" "{RT}/venv/lhpc/bin/python - '$n' $(rport 8080 "$r") $r"; grc=$XRC
   reap "$pr"
   [ "$MODE" = dry ] || grep -q '^SENT ' "$OUT/2-box-send.txt" || fail "row 2 box -> peer: the Graywolf send failed (rc $grc): no message was sent"
   result 2-peer-read.txt "$n" || fail "not heard: $n"
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "box -> peer" yes "$(getk "P_R2-$b-$r" as-is) dBm (as-is)" PASS
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   [ "$MODE" = dry ] || { [ "$grc" = 0 ] && grep -q '^ACKED ' "$OUT/2-box-send.txt"; } || fail "row 2 peer -> box: no ACK: call not verified ('$n', graywolf rc $grc)"
   [ "$MODE" = dry ] || ackjudge 2-box-send.txt "$n"
   REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "peer -> box" "the tracker's ACK (acked in Graywolf; the frame's source = the given call)" "the tracker's $TRACKER_DBM dBm, from its portal (not read)" PASS
@@ -750,9 +779,11 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
     || fail "row 3: meshtastic@$r's meshtasticd listens on '$got', want exactly '$ap $wp' (its own API and web ports)"; ok "row 3: meshtastic@$r binds $ap + $wp, ready on $ap"; }
   spower "$b" mt_pget "$r" "R3-$b-$r"
   ppower R3-g2 g2 mt-power 1
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   tx R3-g2 1 "$n1" -- peer 3-peer-send.txt "$VMT" mt-send "$n1"; [ "$XRC" = 0 ] || stop "row 3: the G2 send failed"
   boxrx "$b" 3-box-rx.txt rx_mt "$r" "$n1" 90 || fail "not heard: $n1"
   REPORT 3 meshtastic "$b ($r)" "868, EU_868 LongFast" "Station G2" "peer -> box" "yes (RX on $r)" "the G2 at 1 (lowest)" PASS
+  leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peer 3-peer-read.txt "$VMT" mt-read "$n2" 90; pr=$SPAWN; [ "$MODE" = dry ] || sleep 10
   tx "R3-$b-$r" 1 "$n2" -- must "$b" 3-box-send.txt "$(form mt_send rid="$r" n="$n2")"; reap "$pr"
   result 3-peer-read.txt "$n2" || fail "not heard: $n2"
@@ -775,9 +806,11 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   tp=$(body 4-peer-power.txt | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || pdom "$tp" || stop "row 4: the T-Deck Pro reads '${tp}' dBm (outside 0..17 or unreadable); its power is never changed: no TX"
   keep P_R4-tdpro "${tp:-dry}"; radk R4-tdpro PC:tdpro; pwok PC:tdpro; data "row 4: the T-Deck Pro at its own ${tp:-dry} dBm, not changed"
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   tx R4-tdpro 1 "$n1" -- peerpin 4-peer-send.txt mc-send "$n1"; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro send failed"
   boxrx "$b" 4-box-rx.txt rx_mc "$r" "$n1" 90 || fail "not heard: $n1"
   REPORT 4 meshcore "$b ($r)" "869.618 MHz, eu_uk_narrow" "T-Deck Pro (BLE companion)" "peer -> box" "yes (RX on $r)" "the T-Deck Pro at its own ${tp:-dry} dBm (not changed)" PASS
+  leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peerpin 4-peer-read.txt mc-read "$n2" 90; pr=$SPAWN; [ "$MODE" = dry ] || sleep 15
   tx "R4-$b-$r" 1 "$n2" -- must "$b" 4-box-send.txt "$(form mc_send rid="$r" n="$n2")"; reap "$pr"
   result 4-peer-read.txt "$n2" || fail "not heard: $n2"
@@ -796,6 +829,7 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   undo_push "$b" "$(form rt_set rid="$r" k=rnode_framing v="${o:-no}")"; must "$b" 5-framing1.txt "$(form rt_set rid="$r" k=rnode_framing v=yes)"
   spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"; started "$b" 5-start.txt "meshchat@$r"
   hpower R5-rnode 5-rnode-power.txt
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists
   BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 240 "$pcd" "$n1" "$go"; pr=$SPAWN
   mp=$(mcport 5-start.txt); [ "$MODE" = dry ] && mp=8790
@@ -813,6 +847,7 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   [ "$MODE" = dry ] || grep -qxE "DELIVERED $n1 .*" "$OUT/5-peer.txt" || fail "row 5 peer -> box: no delivery proof of '$n1' from the box (5-peer.txt)"
   boxrx "$b" 5-box-rx.txt rx_mchat "$r" "$n1" 30 || fail "not heard: $n1"
   REPORT 5 "reticulum + meshchat" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored" "the RNode at $(getk P_R5-rnode unrecorded) dBm" PASS
+  leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   XRC=$prc; if needs rt_send; then result 5-peer.txt "$n2" || fail "not heard: $n2"
     REPORT 5 "reticulum + meshchat" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
   else notrun 5 box-\>peer "form not confirmed: rt_send"; fi
@@ -842,22 +877,36 @@ row_6() {   # chat: the chat CLIENT in the foreground of a tmux pane on each box
     if [ "$MODE" != dry ] && [ "$XRC" != 0 ]; then X "$b" "6-pane-$b.txt" "tmux capture-pane -p -t rfchat-$rr 2>&1"
       fail "row 6: the chat client on $b ($rr) is not ready after $wt s (pane: 6-pane-$b.txt)"; fi
     dpower "$b" "$rr" "R6-$b-$rr"; done
+  local w1 w2   # a direction passes only when its word is in the receiving radio's log AND on the other box's chat screen
   tx "R6-$ba-$ra" 1 "$na" -- must "$ba" "6-say-$ba.txt" "tmux send-keys -t rfchat-$ra -- '$na' Enter"
-  boxrx "$bb" "6-rx-$bb.txt" rx_rf "$rb" "$na" 60 || fail "not heard: $na"
-  REPORT 6 chat "$ba ($ra) -> $bb ($rb)" "433.775 MHz" "the other box" "box -> peer" "yes (RX on $bb:$rb)" "$(getk "P_R6-$ba-$ra" as-is) dBm (as-is)" PASS
+  chatdir "$ba" "$ra" "$bb" "$rb" "$na" "box -> peer"; w1=$WHY
   tx "R6-$bb-$rb" 1 "$nb" -- must "$bb" "6-say-$bb.txt" "tmux send-keys -t rfchat-$rb -- '$nb' Enter"
-  boxrx "$ba" "6-rx-$ba.txt" rx_rf "$ra" "$nb" 60 || fail "not heard: $nb"
-  REPORT 6 chat "$bb ($rb) -> $ba ($ra)" "433.775 MHz" "the other box" "peer -> box" "yes (RX on $ba:$ra)" "$(getk "P_R6-$bb-$rb" as-is) dBm (as-is)" PASS
+  chatdir "$bb" "$rb" "$ba" "$ra" "$nb" "peer -> box"; w2=$WHY
+  [ -z "$w1$w2" ] || fail "${w1:-$w2}"
   undo_to "$m"; }
+chatdir() {   # chatdir <from box> <rid> <to box> <rid> <nonce> <direction>: one row-6 direction's checks and its REPORT; WHY = a FAIL's reason
+  WHY=; boxrx "$3" "6-rx-$3.txt" rx_rf "$4" "$5" 60 || WHY="not heard: $5"
+  [ -n "$WHY" ] || chatrx "$3" "6-screen-$3.txt" "$4" "$5" 30 || WHY="not on the chat screen of $3 ($4): $5"
+  if [ -z "$WHY" ]; then REPORT 6 chat "$1 ($2) -> $3 ($4)" "433.775 MHz" "the other box" "$6" "yes (RX on $3:$4 and on its chat screen)" "$(getk "P_R6-$1-$2" as-is) dBm (as-is)" PASS
+  else REPORT 6 chat "$1 ($2) -> $3 ($4)" "433.775 MHz" "the other box" "$6" no "$(getk "P_R6-$1-$2" as-is) dBm (as-is)" "FAIL: $WHY"; fi; }
 
 runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos run, the run goes on; any other rc = STOP
   local r=$1 m rc sk d; sk=$(getk "SKIP_$r"); [ -z "$sk" ] || { notrun_row "$r" "$sk"; return 0; }
-  m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; usbguard "pre-$r"; : > "$OUT/rowfail.txt"
+  m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; usbguard "pre-$r"; : > "$OUT/rowfail.txt"; : > "$OUT/rowleg.txt"
   if [ "$(rowf "$r" kind)" = frame ]; then ( CURROW=$r; frame_row "$r" "$(rowf "$r" a)" "$(rowf "$r" b)" "$(rowf "$r" power)" "$(rowf "$r" flags)" ); rc=$?
   else ( CURROW=$r; "row_$r" "$(rowf "$r" a)" "$(rowf "$r" b)" ); rc=$?; fi
   if [ "$rc" = 1 ] && [ -s "$OUT/rowfail.txt" ]; then
-    for d in $(dirs "$r"); do grep -qF "$r|$(dirtext "$d")|" "$OUT/results.txt" 2>/dev/null && continue
-      REPORT "$r" "$(rowname "$r")" — — — "$(dirtext "$d")" no — "FAIL: $(head -n 1 "$OUT/rowfail.txt")"; done
+    # a stack row: the leg it named last (leg) FAILed, else (a FAIL before any leg) its first direction without a result;
+    # every other direction without a result did not run (NOT RUN, naming that FAIL). A frame row's FAIL (an incompatible
+    # radio) is every direction's.
+    local why lg fd= ds= d2; why=$(head -n 1 "$OUT/rowfail.txt"); lg=$(head -n 1 "$OUT/rowleg.txt" 2>/dev/null)
+    for d in $(dirs "$r"); do d2=$(dirtext "$d")
+      awk -F'|' -v i="$r" -v d="$d2" '$1 == i && $2 == d {f = 1} END {exit !f}' "$OUT/results.txt" 2>/dev/null && continue
+      ds="$ds $d"; [ "$d2" != "$lg" ] || fd=$d2; done
+    ds=${ds# }; [ -n "$fd" ] || fd=$(dirtext "${ds%% *}")
+    for d in $ds; do d2=$(dirtext "$d")
+      if [ "$d2" = "$fd" ] || [ "$(rowf "$r" kind)" = frame ]; then REPORT "$r" "$(rowname "$r")" — — — "$d2" no — "FAIL: $why"
+      else notrun "$r" "$d" "after $fd FAIL: $why"; fi; done
     [ "$MODE" = dry ] || echo "row $r: $(head -n 1 "$OUT/rowfail.txt")" >> "$EVD/FAILED.txt" || stop "FAILED.txt: append failed"
     [ "$MODE" = live ] || [ ! -f "$SCRATCH/needed" ] || { awk -v r="$r" '$1 != r' "$SCRATCH/needed" > "$SCRATCH/needed.n" \
       && mv -f "$SCRATCH/needed.n" "$SCRATCH/needed"; } || stop "needed: not rewritten"   # a FAILed row renders no later forms
@@ -1119,7 +1168,7 @@ trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap '
 [ "$MODE" = dry ] || echo "LIVE: this run transmits. It needs the transmit and lab permission and the GO for this run, with the hardware connected, reachable and set up."
 for r in R0 R1; do echo "== ROW $r"; "row_$r"; done
 for r in $RUN; do echo "== ROW $r"; runrow "$r"; done
-echo "== ROW RS"; row_RS; coverage; echo "== ROW RE"; row_RE
+echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; echo "== ROW RE"; row_RE
 [ "$MODE" = live ] || selfcheck
 trap - EXIT; rm -rf "$SCRATCH"
 if [ "$MODE" = live ] && [ -s "$EVD/FAILED.txt" ]; then echo "FAIL rows, for the coordinator: $(tr '\n' '|' < "$EVD/FAILED.txt")" >&2; exit 1; fi

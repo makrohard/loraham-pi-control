@@ -33,6 +33,10 @@ The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that
 | 5 | Reticulum + MeshChat | the Zero, board 868 | the Heltec RNode through the PC's shared rnsd | as-is / read only |
 | 6 | chat | box H, board 433 | the Zero, board 433 | as-is / as-is |
 
+A row-6 direction passes only when its word is in the receiving radio's log and on the other box's chat screen (the
+chat client's pane, written as `SEEN <nonce> <time> screen`; a miss writes only the screen's line count, never a screen
+line); a failed direction does not skip the other.
+
 A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; a difference is a FAIL (the radio is
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
 Row 5 has no on-air PASS yet.
@@ -45,6 +49,9 @@ A missing box, radio or peer makes its rows NOT RUN, naming what is missing (`ab
 The report ends with a COVERAGE table: per supported model, stack and check, and per direction, `proven`, `FAIL`,
 `NOT RUN` with the reason, or `not present`. An absence is never a PASS; whether a release ships with a NOT RUN row is the
 release's decision.
+Last comes the result table for people, printed and kept as `RESULT.md`: the verdict on top (PASS, FAIL, NOT COMPLETE,
+a dry run's rehearsal, or STOPPED), then one line per row with each direction's PASS, FAIL or NOT RUN and its reason.
+Rows 1–5 stop at a FAIL: their later direction is NOT RUN, naming that FAIL, and sends nothing.
 
 ## The local file
 
