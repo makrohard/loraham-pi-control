@@ -7,7 +7,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 |---|---|
 | Components | `loraham-kiss-tnc` (main) · `loraham-kiss-serial` (optional socat PTY, needs `socat`) |
 | Source / pin | `src/loraham-kiss-tnc` ← `makrohard/loraham-kiss-tnc` |
-| Run | `./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example` + the params below as flags (`--kiss-port`, `--bind`, `--kiss-host`, `--rx-freq`, `--tx-freq`, `--data-socket`, `--conf-socket`, `--rx-only`, `--verbose`, `--rflog`) |
+| Run | `./loraham-kiss-tnc --config <runtime>/config/files/<rid>/loraham_kiss_tnc.conf` (LHPC writes it before each start; it holds `power`, kiss's daemon-panel POWER, which takes effect at the next start) + the params below as flags (`--kiss-port`, `--bind`, `--kiss-host`, `--rx-freq`, `--tx-freq`, `--data-socket`, `--conf-socket`, `--rx-only`, `--verbose`, `--rflog`) |
 | Endpoints | KISS over TCP `127.0.0.1:8001` on r1, + 133 per further radio (no auth — `--bind` is the only gate) · serial PTY `<runtime>/state/<rid>/loraham_kiss` (`socat PTY,link=… TCP:127.0.0.1:<port>`) |
 | Resources | `tcp.port.<port>` exclusive · `loraham.daemon-socket.{radio:433}` / `{radio:868}` consumer (one per band it may run on) · `serial.loraham-kiss-<rid>` exclusive (PTY) |
 | Depends on | `loraham-daemon`, `requires_daemon_tx = MANAGED` |

@@ -3,6 +3,7 @@ base, dev after step D (0af1d413), token for token, with the named exceptions an
 - each `_gps-bridge` feed gains `--state <state/gps/<stack>>` (L3);
 - a daemon client carries its radio's `--data-socket` / `--conf-socket` (r1's, stage L5);
 - K4b (no slots): an instance's own paths sit under `<rid>/` on r1 too (K4B_PATHS, each base token named).
+- RADIO-POWER 3b: the KISS TNC's `--config` is its instance's file (in K4B_PATHS, named).
 
 The fixture `argv_r1_0af1d413.json` was resolved at 0af1d413 with this module's `_resolve`; the
 package's own directory reads `<lhpc>` and the controller's interpreter `<python>`, so neither the
@@ -43,7 +44,9 @@ SOCKETS = {
 K4B_PATHS = {
     "loraham-voice": {"/rt/config/files/loraham_voice": "/rt/config/files/r1/loraham_voice"},
     "loraham-voice-cli": {"/rt/config/files/loraham_voice_cli": "/rt/config/files/r1/loraham_voice_cli"},
-    "loraham-kiss-tnc": {"/rt/logs/rf-kiss.log": "/rt/logs/r1/rf-kiss.log"},
+    "loraham-kiss-tnc": {"/rt/logs/rf-kiss.log": "/rt/logs/r1/rf-kiss.log",
+                         # RADIO-POWER 3b: the TNC reads its instance's conf file (its `power`), not the example
+                         "loraham_kiss_tnc.conf.example": "/rt/config/files/r1/loraham_kiss_tnc.conf"},
     "meshcom-bridge": {"/rt/logs/rf-meshcom.log": "/rt/logs/r1/rf-meshcom.log"},
 }
 

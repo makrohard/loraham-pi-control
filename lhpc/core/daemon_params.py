@@ -24,6 +24,12 @@ ALL_PARAMS = RADIO_PARAMS + LBT_PARAMS
 # Operator-owned params: the client app never SETs these, so they are never greyed/overwritten.
 OPERATOR_PARAMS = ("CADWAIT", "CADIDLE", "TXQUEUE", "CADMONITOR", "CADRSSI", "CADTXAFTERTIMEOUT")
 
+# RADIO-POWER (his P4; plan audit B1): the stacks whose POWER the operator owns (the app takes LHPC's: never greyed),
+# and of those the ones whose app puts its start-time POWER back on every frequency switch or reconnect, so a POWER
+# change takes effect at their next start (Apply live leaves it out).
+POWER_OWNED = frozenset({"chat", "kiss"})
+POWER_AT_START = frozenset({"kiss"})
+
 # Params rendered as a dropdown (fixed enum or small discrete range). Must match daemon_control.
 DROPDOWN_CHOICES = {
     "MODE": ("LORA", "FSK"),
@@ -171,7 +177,7 @@ def default_value(stack_id: str, band: str, name: str, power_default: int | None
 def _app_owned(stack_id: str, band: str, name: str) -> bool:
     """True when the client app SETs this param after start (so the panel greys it, and it is
     overwritten). The daemon has no app (never greyed); LBT timing is never app-owned."""
-    if not is_client(stack_id) or name in OPERATOR_PARAMS:
+    if not is_client(stack_id) or name in OPERATOR_PARAMS or (name == "POWER" and stack_id in POWER_OWNED):
         return False
     per = STACK_DEFAULTS.get(stack_id, {})
     return any(name in per.get(key, {}) for key in (band, "*"))
@@ -182,7 +188,8 @@ def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None
                power_top: int | None = None) -> list[dict]:
     """Grouped, ordered parameter rows for one stack+band. Every param is editable; `overrides`
     are persisted operator values. Each row: name, group, value (override or default), default,
-    app_owned (greyed hint — still applied, but the app overwrites it), desc.
+    app_owned (greyed hint — still applied, but the app overwrites it), at_start (a POWER that takes effect at the
+    stack's next start), desc.
 
     `family` ("sx127x" / "sx1262") narrows the POWER input to what the fitted chip accepts; ""
     shows the union of both."""
@@ -195,6 +202,7 @@ def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None
             rows.append({"name": name, "group": group,
                          "value": overrides.get(name) or dv, "default": dv,
                          "app_owned": _app_owned(stack_id, band, name),
+                         "at_start": name == "POWER" and stack_id in POWER_AT_START,
                          "desc": PARAM_DESC.get(name, ""),
                          "choices": list(DROPDOWN_CHOICES.get(name, ())),
                          "num": {"min": num[0], "max": num[1]} if num else None})

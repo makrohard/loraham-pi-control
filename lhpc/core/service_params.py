@@ -79,7 +79,7 @@ def _derived(p) -> bool:
     """DEC-W384q: a hidden row computed from the instance (its sockets, ports, paths): LHPC sets it; a save refuses it
     and a stored value is never read. Secret hidden rows (keys, passwords) are not derived."""
     return bool(getattr(p, "hidden", False) and not getattr(p, "secret_file", "")
-                and (getattr(p, "default_template", "") or "{rid}" in str(p.default)))             # restart_marker_payload: read the committed marker itself
+                and (getattr(p, "default_template", "") or "{rid}" in str(p.default) or getattr(p, "panel_power", False)))             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -1956,6 +1956,11 @@ class ParamsConfigMixin:
                         values[p.name] = self._controller_secret(p.secret_file, inst)
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
+                        break
+                    continue
+                if getattr(p, "panel_power", False):    # RADIO-POWER 3c: the panel's POWER; none refuses (never `power=`)
+                    values[p.name], secret_error = _radio_start.panel_power(self, self._owner_stack_id(target), getattr(inst, "rid", ""))
+                    if secret_error:
                         break
                     continue
                 if p.name == _rflog.MESHTASTIC_TRACE_PARAM and c.id == _rflog.entry("meshtastic").writer:

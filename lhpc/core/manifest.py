@@ -80,6 +80,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             secret_ref=str(p.get("secret_ref", "")),
             secret_file=str(p.get("secret_file", "")),
             radio_power=p.get("radio_power", False) is True,
+            panel_power=p.get("panel_power", False) is True,
         )
         for p in raw.get("param", [])
     )
@@ -121,6 +122,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
     for prm in params:
         if prm.radio_power and prm.kind != "int":
             raise ManifestError(f"param {prm.name!r} has radio_power and must be kind int")
+        if prm.panel_power and not (prm.hidden and prm.kind == "int"):
+            raise ManifestError(f"param {prm.name!r} has panel_power and must be a hidden int")
         if prm.secret_ref and prm.secret_file:
             raise ManifestError(f"param {prm.name!r} declares both secret_ref and secret_file "
                                 f"— a secret has exactly one source")

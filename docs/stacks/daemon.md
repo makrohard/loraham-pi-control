@@ -135,7 +135,8 @@ The daemon never echoes `POWER`: a sent 20 is "sent", not "confirmed".
 
 A client app re-`SET`s its own radio params and `TXMODE` on connect, so those rows are
 **app-owned** (applied, then overwritten; greyed in the panel); the LBT timing params (`CADWAIT`,
-`CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADTXAFTERTIMEOUT`) are operator-owned and stick.
+`CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADTXAFTERTIMEOUT`) are operator-owned and stick, and so is
+`POWER` for chat and kiss (kiss's from its next start: its TNC sends the start-time value in every SET).
 A profile is the app's default, not a legal ceiling; the licence-free stacks sit inside the SRD
 limits in [reticulum](reticulum.md#band-limits). Defaults:
 

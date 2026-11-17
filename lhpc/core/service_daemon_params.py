@@ -376,7 +376,7 @@ class DaemonParamsMixin:
         radio params the daemon does not echo are reported SENT (never claimed as read-back
         confirmed). Valid settings were persisted first (by the caller); a live-apply failure never
         rolls that back — `data['persisted']` says so."""
-        from . import reslock
+        from . import daemon_params, reslock
         sid = self._owner_stack_id(target)                       # owner-stack profile + lock scope
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
@@ -406,8 +406,9 @@ class DaemonParamsMixin:
                 if not daemon_control.read_view(self._system, radio_start.daemon_key(self, rid)).reachable:
                     return ActionResult(False, radio_start.socket_refusal(self._paths, b, rid) or f"{rid}'s daemon is not running — start it first",
                                         data={"band": b, "rid": rid, "persisted": True})
-                applies = self._daemon_param_applies(sid, rid)
-                applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
+                applies = self._daemon_param_applies(sid, rid)          # B1: the app puts an at-start POWER back
+                at_start = ["POWER"] if sid in daemon_params.POWER_AT_START and applies.pop("POWER", None) else []
+                applied, failed, confirmed, unconfirmed, details = [], [], [], [], [f"{k}: takes effect at the next start of {sid}@{rid}" for k in at_start]
                 for key, val in applies.items():
                     ok, detail = self._apply_daemon_param(b, key, val, rid)
                     if ok:
@@ -419,7 +420,7 @@ class DaemonParamsMixin:
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"radio {rid} is busy ({busy}); try again",
                                 data={"band": b, "busy": True, "persisted": True})
-        data = {"band": b, "attempted": list(applies), "applied": applied, "failed": failed,
+        data = {"band": b, "attempted": list(applies), "applied": applied, "failed": failed, "at_start": at_start,
                 "confirmed": confirmed, "sent_unconfirmed": unconfirmed, "persisted": True}
         n = len(applies)
         if n == 0:

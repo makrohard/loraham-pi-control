@@ -52,7 +52,7 @@
                        data-dpdefault="{{ r.default }}" data-config="{{ r.value }}">
               {% endif %}
             </td>
-            <td class="dphelp muted">{{ r.desc }}</td>
+            <td class="dphelp muted">{{ r.desc }}{% if r.at_start %} <em>Takes effect at the next start.</em>{% endif %}</td>
           </tr>
         {% endfor %}
       </table>

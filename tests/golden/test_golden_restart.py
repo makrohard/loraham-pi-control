@@ -25,7 +25,8 @@ STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc
             "lock:lifecycle.daemon", "lock:lifecycle.graywolf", "lock:lifecycle.meshcom",
             "lock:lifecycle.voice", "mutate:signal:loraham-daemon", "mutate:feed-floor:433",
             "final:clear-restart-marker:kiss@r1"]                         # K5: per instance
-START_LEG = ["recheck:start", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
+START_LEG = ["recheck:start", "mutate:feed-floor:433", "mutate:config-files:loraham-kiss-tnc",  # RADIO-POWER 3a
+             "mutate:spawn:loraham-kiss-tnc",
              "verify:endpoints:loraham-kiss-tnc", "verify:post-start",    # K4b: no per-stack band marker
              "final:clear-restart-marker:kiss@r1",
              "final:clear-stop-intent:kiss@r1"]

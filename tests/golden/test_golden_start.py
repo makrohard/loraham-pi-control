@@ -23,7 +23,8 @@ KISS_LOCKS = [
     "lock:source.src/loraham-kiss-tnc",
 ]
 RECHECK = ["recheck:start", "recheck:identity"]
-KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
+KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:config-files:loraham-kiss-tnc",  # RADIO-POWER 3a
+             "mutate:spawn:loraham-kiss-tnc",
             "verify:endpoints:loraham-kiss-tnc", "verify:post-start",        # K4b: no running-band marker
             "final:clear-restart-marker:kiss@r1",   # markers per instance
             "final:clear-stop-intent:kiss@r1"]
@@ -53,7 +54,7 @@ def test_plan_then_apply_happy_path(kiss_box, run_op):
     assert run.res.details[-1] == ("  [verified] loraham-kiss-tnc: started; ready endpoint(s) up "
                                    "(127.0.0.1:8001: present (family=ipv4))")
     assert run.kinds == ["admission", "lock", "recheck", "mutate", "verify", "final"]
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+    assert run.files == {"added": ["config/files/r1/loraham_kiss_tnc.conf", "logs/start-loraham-kiss-tnc-433-r1.log",
                                    "state/daemon-feed-floor-433-r1",
                                    "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json"],
                          "removed": [], "changed": []}
@@ -170,9 +171,10 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
         "  [unverified] loraham-kiss-tnc: ready endpoint(s) never came up "
         "(127.0.0.1:8001: absent (family=ipv4)); cleanup: stopped")
     assert run.phases == KISS_LOCKS + RECHECK + [
-        "recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
+        "recheck:preflight", "mutate:feed-floor:433", "mutate:config-files:loraham-kiss-tnc",  # RADIO-POWER 3a
+        "mutate:spawn:loraham-kiss-tnc",
         "verify:endpoints:loraham-kiss-tnc", "mutate:signal:loraham-kiss-tnc"]
-    assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433-r1.log",
+    assert run.files == {"added": ["config/files/r1/loraham_kiss_tnc.conf", "logs/start-loraham-kiss-tnc-433-r1.log",
                                    "state/daemon-feed-floor-433-r1"], "removed": [], "changed": []}
     assert box.owned() == []
 

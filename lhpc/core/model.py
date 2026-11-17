@@ -351,6 +351,7 @@ class FileParam:
     # The manifest's default when it carries instance tokens; `default` is its template value (no radio). "" = none.
     default_template: str = ""
     radio_power: bool = False    # a TX power: its default is at most the instance radio's model default (USB 14, SPI 17)
+    panel_power: bool = False    # hidden, derived: the instance's daemon-panel POWER (radio_start.post_power), never stored
 
 
 @dataclass(frozen=True)

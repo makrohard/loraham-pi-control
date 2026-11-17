@@ -65,7 +65,7 @@ pytestmark = pytest.mark.needs_session
 PATHS = ("cli", "web", "job", "boot")
 _BOOKKEEPING = re.compile(r"^(state/(jobresults|jobs|owned|locks)/|state/boot-restore\.json$|"
                           r"logs/web-|config/secrets/web_session\.key$|config/\.lock$|state/hotplug\.json\.lock$)")
-KISS_STARTED = ["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"]   # K4b: no band marker
+KISS_STARTED = ["config/files/r1/loraham_kiss_tnc.conf", "logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"]   # K4b: no band marker
 
 
 def _files(root):
@@ -560,7 +560,7 @@ def test_unverified_termination(entry):
     exits 0: its driver completed)."""
     res = _all(entry, "start", "kiss", lambda b: b.endpoint_never_up())
     _same(res, started=False, refusal="unverified", live=[],
-          files=["logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"])
+          files=["config/files/r1/loraham_kiss_tnc.conf", "logs/start-loraham-kiss-tnc-433-r1.log", "state/daemon-feed-floor-433-r1"])
     assert _renders(res) == FAILED_AFTER_ADMISSION
 
 

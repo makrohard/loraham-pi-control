@@ -737,6 +737,19 @@ def band_rids(paths, band: str) -> list:
     return [r[0] for r in view_radios(paths) if r[2] == band]
 
 
+def post_power(svc, stack_id: str, rid: str) -> str:
+    """The POWER instance `<stack_id>@<rid>` applies (its own set over its radio's row over the default,
+    `_daemon_param_applies`); "" when `rid` is no enabled radio. The KISS file's `power` and MeshCom's `--txpower`."""
+    return svc._daemon_param_applies(stack_id, rid).get("POWER", "")
+
+
+def panel_power(svc, stack_id: str, rid: str) -> tuple:
+    """(value, "") of a config file's `panel_power` row: the instance's POWER (`post_power`), or ("", why) when it has
+    none (no enabled radio): the file is refused, never written with a bare `power=` (the KISS TNC exits on one)."""
+    value = post_power(svc, stack_id, rid)
+    return value, "" if value else f"{stack_id}@{rid}: no POWER for its radio"
+
+
 def power_window(svc, rid: str) -> tuple:
     """Radio `rid`'s model (power_default_dbm, power_max_dbm): the POWER every stack starts at, at most (USB 14, SPI
     17), and the raised top (the Meshstick's 22, else None = the chip range); (None, None) without its row or model."""
