@@ -4,11 +4,16 @@ them there), and the slow-build lane runs them as written, in the checkout, at t
 # In the checkout: what the cut wrote and any file of the operator's the reset will replace, ignored ones included
 # (`!!`: a .git/info/exclude entry, an untracked directory's ignored contents), the new commit over the half-written
 # files, then the update run again (the venv sync and the unit refresh 0.13.8 never reached).
-STEPS = ("git status --short --ignored", "git reset --hard origin/main", "lhpc self-update --apply --yes")
+STEPS = ("git status --short --ignored", "git log --oneline origin/main..HEAD", "git reset --hard origin/main",
+         "lhpc self-update --apply --yes")
+# What to do with a commit the log line lists (the reset abandons it).
+KEEP = "git branch keep-local"
 # If the reset fails with this text, the lock line (once no git runs in that checkout), then the reset again.
 LOCK = ("index.lock': File exists", "rm .git/index.lock")
 # Where the step runs, and the overwrite if the update run again still finds local changes (the operator's consent).
 CHECKOUT = "~/loraham-pi-control/src/loraham-pi-control"
 FINISH = "lhpc self-update --apply --overwrite --yes"
 # Every command the CHANGELOG's delimited block names, in its order, and nothing else.
-PROCEDURE = (CHECKOUT, *STEPS, FINISH, LOCK[1])
+PROCEDURE = (CHECKOUT, STEPS[0], STEPS[1], KEEP, *STEPS[2:], FINISH, LOCK[1])
+# The lock line's precondition: the lock is removed only once no git runs in the checkout.
+LOCK_SAFE = "once no git runs in that checkout"

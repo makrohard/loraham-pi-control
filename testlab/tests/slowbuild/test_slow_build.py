@@ -666,9 +666,10 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
         shown = [ln[3:] for ln in run(steps[0]).splitlines() if ln.startswith("?? ")]
         assert not mine or any(mine == e or (e.endswith("/") and mine.startswith(e)) for e in shown), \
             f"{name}: `status` does not name {mine}: {shown}"
-        assert lock_text in run(steps[1], ok=False), name     # the lock stops the reset, unchanged
+        assert run(steps[1]).strip() == "", name             # no local commit for the reset to abandon
+        assert lock_text in run(steps[2], ok=False), name     # the lock stops the reset, unchanged
         run(lock_line)
-        run(steps[1])
+        run(steps[2])
         assert other.poll() is None, "the other git ended early"
         assert _git("-C", str(co), "rev-parse", "HEAD") == cand, name
         assert _git("-C", str(co), "status", "--porcelain", "--untracked-files=all") == "", name
@@ -676,7 +677,7 @@ def test_slow_build_selfupdate_cut_from_0138(tmp_path):
     # The lab's manifest overlay is a lab file rendered by the code installed: release-1 wrote it, and this commit's
     # parser no longer reads that release's manifest (a box has no overlay). Render it again with this commit's code.
     _release1_overlay(venv / "bin" / "python", root, env)
-    run(steps[2])
+    run(steps[3])
     assert other.poll() is None, "the other git ended before the update ran again"
     other.kill()
     other.wait()

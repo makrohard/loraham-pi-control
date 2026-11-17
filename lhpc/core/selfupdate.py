@@ -670,7 +670,8 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, before_mu
         if unknown:                                   # the tree's state is not known: say so, offer the finish
             return {"ok": False, "unconfirmed": True, "status_unread": True,
                     "message": "The checkout is at upstream HEAD but its state could not be read, so a clean finish "
-                               "cannot be confirmed — 'overwrite local changes' finishes a cut cleanup."}
+                               "cannot be confirmed — 'overwrite local changes' retries the update and may discard "
+                               "local changes."}
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if not force and not local.get("status_ok", True):
         # A status that failed or timed out (a slow card re-hashing a half-written tree) says nothing

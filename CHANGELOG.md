@@ -76,10 +76,11 @@ Upgrading from 0.13.x
   whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
 <!-- upgrade-0138: the slow-build lane runs these commands (lhpc_testlab.upgrade_0138); a test keeps them equal -->
 - 0.13.8's update stopped with "git refused the fast-forward": in `~/loraham-pi-control/src/loraham-pi-control` run
-  `git status --short --ignored` (what the next line replaces, ignored files marked !! included: copy away any you need),
-  `git reset --hard origin/main`, `lhpc self-update --apply --yes`. If that last one reports local changes still
-  present, copy away anything you need, then run `lhpc self-update --apply --overwrite --yes` only if you agree to
-  discard them.
+  `git status --short --ignored` (what the reset replaces, ignored files marked !! included: copy away any you need),
+  `git log --oneline origin/main..HEAD` (local commits the reset abandons: if it lists any, keep them first, e.g.
+  `git branch keep-local`), `git reset --hard origin/main`, `lhpc self-update --apply --yes`. If that last one
+  reports local changes still present, copy away anything you need, then run
+  `lhpc self-update --apply --overwrite --yes` only if you agree to discard them.
 - If that reset fails with "index.lock': File exists": once no git runs in that checkout, `rm .git/index.lock`, then
   run the reset again.
 <!-- /upgrade-0138 -->
