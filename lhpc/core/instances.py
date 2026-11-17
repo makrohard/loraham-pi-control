@@ -118,11 +118,13 @@ def running_insts(svc, sid: str):
 def listener_insts(svc, stack, running, started: bool, live_ports=()) -> list:
     """The instances whose listeners the Home box reads, running or not (G2-PRELAND7B10-R2, G2-UIU3-R3): every radio of
     the stack's bands, a disabled one too (saved_insts), its instances and any running one (`running`, None: unknown),
-    by rid. Without one: the radios whose own port of an endpoint has a live listener (`live_ports`, observed_insts),
-    one row each, else None. A started stack's unknown running set adds None, the radio-less read of its unattributed
-    processes: a fallback that only adds a row, never stands for an instance's."""
-    every = list({i.rid: i for i in (*commands.stack_instances(stack, svc._paths), *filter(None, saved_insts(svc, stack.id)),
-                                     *(running or ()))}.values()) or observed_insts(stack, live_ports)
+    by rid, and every radio whose own port of an endpoint has a live listener (`live_ports`, observed_insts: a listed
+    radio's own entry wins), one row each, a radio the stack no longer lists too; without any: None. A started stack's
+    unknown running set adds None, the radio-less read of its unattributed processes: a fallback that only adds a row,
+    never stands for an instance's."""
+    every = sorted({i.rid: i for i in (*observed_insts(stack, live_ports), *commands.stack_instances(stack, svc._paths),
+                                       *filter(None, saved_insts(svc, stack.id)), *(running or ()))}.values(),
+                   key=lambda i: int(i.rid[1:]))                                   # r1, r2, ...: the box's order
     return every + ([None] if not every or (started and running is None) else [])
 
 

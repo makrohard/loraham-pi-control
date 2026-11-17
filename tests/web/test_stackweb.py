@@ -2801,3 +2801,41 @@ def test_a_port_on_two_addresses_is_one_line_naming_both(tmp_path, monkeypatch, 
            if n.startswith("LoRaHAM KISS TNC")}
     assert got == want
     assert _box_pill(box) == "exposed"
+
+
+@pytest.mark.parametrize("listed,port,rid,state,run", [
+    ("R1", 8134, "r2", "STOPPED", []),                                # r2 removed while kiss was stopped
+    ("R1 R3", 8134, "r2", "STOPPED", []),                             # ... and its id retired: the new r3 is 868
+    ("R1 R2", 8267, "r3", "STOPPED", []),                             # r3 removed, r1 + r2 still listed
+    ("R1 R2", 8267, "r3", "RUNNING", []),                             # started, nothing running
+    ("R1 R2", 8267, "r3", "RUNNING", None),                           # started, the running set unknown
+], ids=["r2-gone", "r2-gone-r3-868", "r3-gone", "r3-gone-started", "r3-gone-unknown-set"])
+def test_a_leftover_listener_of_a_radio_no_longer_listed_has_its_own_line(tmp_path, monkeypatch, web, listed, port,
+                                                                          rid, state, run):
+    # SECOND-READ-CODE-UI-U3-DELTA-v5 B1: a kiss process left over on the own port of a radio the hardware list no
+    # longer gives (removed while kiss was stopped) still listens on every address, while another radio is listed.
+    # It is its own line, after r1's (the box's radio order), and neither the box nor the status reads "secure".
+    # red on a038768b: no line, pill "secure"; with r1's own :8001 public too, only r1's line
+    radios_fixture.write(tmp_path, tuple(getattr(radios_fixture, r) for r in listed.split()))
+    for listeners in ([_public(port)], [_public(8001), _public(port, 2)]):
+        svc = _kiss_box(tmp_path, monkeypatch, listeners, run=run, state=state)
+        _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+        got = [(n, [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")]) for n, _h, line in lines
+               if n.startswith("LoRaHAM KISS TNC @")]
+        r1 = [("LoRaHAM KISS TNC @r1", ["localhost:8001 · public"])] if len(listeners) == 2 else []
+        assert got == r1 + [(f"LoRaHAM KISS TNC @{rid}", [f"localhost:{port} · public"])]
+        assert _box_pill(box) == "exposed"
+        assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
+def test_a_leftover_listeners_line_keeps_the_radio_order(tmp_path, monkeypatch, web):
+    # r1 runs with its :8001 down; a leftover on r3's :8267 (r3 no longer listed). r1's line comes first, as in the
+    # Hardware list's order, even though r3 is the radio read from a live port
+    from lhpc.core import commands
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8267)], run=[commands.Instance("r1")], state="RUNNING")
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    got = [(n, [a.text.strip() for a in box.within(line).find("span", class_="wsaddr")]) for n, _h, line in lines
+           if n.startswith("LoRaHAM KISS TNC")]
+    assert got == [("LoRaHAM KISS TNC @r1", [":8001 · listener absent"]),
+                   ("LoRaHAM KISS TNC @r3", ["localhost:8267 · public"])]
