@@ -2248,7 +2248,7 @@ def test_a_plain_update_keeps_a_dev_source_whose_upstream_branch_is_gone(box, ca
 
 def test_a_gone_branch_with_no_history_to_place_the_pin_names_the_way_out(box, capsys, git):
     """N-c: a shallow dev checkout, no history copy on the box, its branch gone upstream: nothing moves, and the line
-    names --source pinned (a retry cannot help)."""
+    names the way that works without one (a retry cannot help; --source pinned would need a copy: G2 S1 N2)."""
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # depth 1, no history copy
     bare = git(box.work, "remote", "get-url", "origin")
     git(box.work, "push", "-q", "origin", f"{box.c[2]}:refs/heads/keep")
@@ -2256,4 +2256,126 @@ def test_a_gone_branch_with_no_history_to_place_the_pin_names_the_way_out(box, c
     git(bare, "update-ref", "-d", "refs/heads/main")
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc != 0 and "upstream branch 'main' gone and this box holds no history placing the pin: nothing moves; " \
-        "--source pinned goes back with the back warning" in out and box.head() == box.c[2], out
+        "to go back to the pin: remove the stack, reinstall Known working" in out and box.head() == box.c[2], out
+
+
+def test_a_shallow_checkout_holding_an_older_target_is_could_not_check(box, capsys, git):
+    """G2-STABLELANE-S1 B1: a depth-1 dev checkout at c3 that also holds the older c2 (fetched shallow), the upstream
+    rewound to c2, a new mirror without c3: the cut history hides c2 -> c3, so "not an ancestor" proves nothing."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # depth 1, at c3
+    _rewind(box, git, box.c[1])
+    shutil.rmtree(box.rt / "state" / "stable-history-v2", ignore_errors=True)   # a new mirror: c3 never fetched
+    bare = git(box.work, "remote", "get-url", "origin")
+    git(box.dest, "-c", "protocol.file.allow=always", "fetch", "-q", "--depth", "1", f"file://{bare}",
+        "v2.8.0.7239fe8")                            # the older target's object, shallow
+    assert git(box.dest, "cat-file", "-t", box.c[1]) == "commit"
+    box.cli("source-check", "s")
+    assert box.status() == su.ERROR                  # RED before: "update available" (an older target)
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "could not check" in out and box.head() == box.c[2], out   # RED before: moved back to c2
+
+
+def test_containment_answers_for_the_installed_commit_not_the_live_head(box, git):
+    """G2-STABLELANE-S1 N1: the checkout fallback places the target against the installed commit it was given,
+    never against whatever HEAD is now (moved during the network reads)."""
+    from lhpc.core import stable_lane
+    assert box.cli("install", "s", "--yes") == 0     # Known working: the pin c1, a full clone
+    git(box.dest, "checkout", "-q", box.c[2])        # HEAD moved to c3 after c1 was read
+    run = backends.RealCommandRunner().run
+    assert stable_lane.contains(run, None, box.dest, box.c[0], box.c[1]) is False   # RED before: True (c3 has c2)
+
+
+def test_the_own_commits_are_those_of_the_installed_commit_not_the_live_head(box, git):
+    """G2-STABLELANE-S1 N1: the warning's commit list is walked from the captured installed commit."""
+    from lhpc.core import stable_lane
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    box.cli("source-check", "s")                     # the box's history copy
+    git(box.dest, "checkout", "-q", box.c[0])        # HEAD back at c1 after `mine` was read
+    run = backends.RealCommandRunner().run
+    mirror = next((box.rt / "state" / "stable-history-v2").iterdir())
+    own = stable_lane.own_commits(run, mirror, box.dest, mine)
+    assert [ln.split()[1] for ln in own] == ["mine"], own   # RED before: no `installed` (HEAD c1: nothing own)
+
+
+def test_a_head_restored_after_the_web_warning_is_refused(box, capsys, git, web, csrf):
+    """G2-STABLELANE-S1 B2: the Confirm named HEAD H (a local commit); the checkout is put back at the recorded c1
+    before Confirm, so the apply gate warns no more: the confirmed HEAD is still checked, and nothing moves."""
+    import html
+    import re
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    _local_commit(box, git)
+    box.push_tag("v2.9.0", box.c[1])
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s",
+                                        "source": "stable"}).get_data(as_text=True)
+    heads = html.unescape(re.search(r"name=\"warned_heads\" value='([^']*)'", page).group(1))
+    assert OWN in page and REL in heads, page
+    git(box.dest, "checkout", "-q", box.c[0])        # put back at the recorded commit after the warning was shown
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s", "source": "stable",
+                                        "confirmed": "yes", "warned_heads": heads},
+                       follow_redirects=True).get_data(as_text=True)
+    assert box.head() == box.c[0]                    # RED before: moved to c2 on a Confirm that named another HEAD
+    assert "the checkout changed after the warning you confirmed" in html.unescape(page)
+
+
+def test_the_pinned_way_out_of_a_gone_branch_goes_back_to_the_pin(box, capsys, git):
+    """G2-STABLELANE-S1 N2: the kept line's way out (--source pinned) places the pin with the history this box
+    holds, the branch being gone upstream, and goes back with the back warning."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.cli("source-check", "s")                      # the box's history copy
+    git(box.work, "push", "-q", "origin", f"{box.c[2]}:refs/heads/keep")
+    git(git(box.work, "remote", "get-url", "origin"), "symbolic-ref", "HEAD", "refs/heads/keep")
+    git(git(box.work, "remote", "get-url", "origin"), "update-ref", "-d", "refs/heads/main")
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
+    assert rc == 0 and "older than" in out and box.head() == box.c[0], out      # RED before: could not check
+
+
+def test_a_confirmed_head_put_back_at_the_recorded_commit_is_refused(box, git):
+    """G2-STABLELANE-S2 B1: a confirmed move names HEAD `mine`; the checkout reset to the recorded commit before the
+    adoption no longer matches what was confirmed (the record no longer stands in for it)."""
+    from lhpc.core import source_registry as sr
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    git(box.dest, "reset", "-q", "--hard", box.c[0])  # back at the recorded commit after the gate checked `mine`
+    svc, paths = box.svc(), Paths(runtime_root=box.rt)
+    comp = svc.stack("s").component("app")
+    rec, why = sr.verify_identity(paths, svc._system, svc.config(), comp, box.dest, accept_head=mine)
+    assert rec is None and "identity drift" in why, why   # RED before: accepted (HEAD == the recorded commit)
+    rec, why = sr.verify_identity(paths, svc._system, svc.config(), comp, box.dest)
+    assert rec is not None, why                           # control: with nothing confirmed, the recorded commit holds
+
+
+def test_auto_install_never_moves_an_installed_source_sideways(box, capsys):
+    """G2-STABLELANE-S2 NOTE: the pin on a sibling history of the installed dev checkout: auto-install keeps it."""
+    side = box.side(box.c[0])
+    box.push_tag("sibling", side)                     # in the lane's history copy (its tags), not on main
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], side))   # the pin beside main
+    rc, out = _run(box, capsys, "auto-install", "--source", "pinned", "--yes")
+    assert f"the pinned target {side[:9]} is on another line than the installed version" in out, out
+    assert box.head() == box.c[2]
+
+
+@pytest.mark.parametrize("field", ["unchanged", "missing", "edited"])
+def test_the_web_confirm_moves_only_on_the_warned_heads_it_showed(box, capsys, git, web, csrf, field):
+    """G2-STABLELANE-S2 NOTE: the Confirm carrying the HEADs its warning showed moves; a missing or edited field
+    refuses and nothing moves (a forged field naming the live HEAD is a stated limit: the field guards a stale
+    page, an operator's CLI `--yes` has the same authority)."""
+    import html
+    import re
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    mine = _local_commit(box, git)
+    box.push_tag("v2.9.0", box.c[1])
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "update", "target": "s",
+                                        "source": "stable"}).get_data(as_text=True)
+    heads = html.unescape(re.search(r"name=\"warned_heads\" value='([^']*)'", page).group(1))
+    data = {"_csrf": csrf(client), "op": "update", "target": "s", "source": "stable", "confirmed": "yes"}
+    if field != "missing":
+        data["warned_heads"] = heads if field == "unchanged" else json.dumps({REL: box.c[0]})
+    page = client.post("/action", data=data, follow_redirects=True).get_data(as_text=True)
+    if field == "unchanged":
+        assert box.head() == box.c[1], page
+    else:
+        assert box.head() == mine and "the checkout changed after the warning you confirmed" in html.unescape(page)
