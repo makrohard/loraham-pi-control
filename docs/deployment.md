@@ -40,6 +40,10 @@ reach it.
 The runtime root and the stacks' source roots are on local block storage: FUSE and network filesystems there
 are out of scope (the post-start waits read their logs there with no timeout of their own), and so is a log
 rewritten in place within one mtime tick, rewritten and grown during or right after a read, or truncated and regrown on every pass.
+A post-start `log_wait` reads only a file that resolves, symlinks followed, inside the runtime or a source root (else
+it times out), and needs `/proc/self/fd`; a `tcp_wait`/`tcp_send` host is an IP address in canonical form (no names,
+no leading zeros); a `tcp_send` with a `schedule` or `interval` starts no new attempt after the schedule's end, its
+last slot plus that slot's own interval.
 
 `lhpc status` shows a `[controller]` row with its cached version / update / identity state; the
 identity verdicts: [controller identity](architecture.md#controller-identity--self-update).

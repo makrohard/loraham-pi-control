@@ -462,7 +462,7 @@ def test_schedule_spacing_measured():
 
 @pytest.mark.slow                                      # ~3.5 s of real timed retries
 @pytest.mark.wallclock("the rendered launcher runs in its own process on the real clock; a probe that answers in "
-                       "0.5 s overruns its 0.4 s schedule window")
+                       "0.7 s overruns its 0.6 s schedule (last slot 0.4 s + its 0.2 s)")
 def test_no_attempt_starts_after_the_schedule_window():
     """The schedule is a clock, not a count: an attempt that overruns (a probe waiting on a slow
     node) eats into the window, and no attempt starts once the window has passed. A required
@@ -480,7 +480,7 @@ def test_no_attempt_starts_after_the_schedule_window():
             while True:
                 c, _a = s.accept()
                 probes.append(c.recv(64))
-                _t.sleep(0.5)                          # slow, and never a complete value
+                _t.sleep(0.7)                          # slow, and never a complete value
                 c.sendall(b"...Call: <XX0"); c.close()
         except OSError:
             pass
@@ -492,7 +492,7 @@ def test_no_attempt_starts_after_the_schedule_window():
                     "probe": "--info\n", "probe_value": "Call: <([^>]*)>",
                     "probe_expect": "XX0XXB", "schedule": [[3, 0.2]]}])
     t.join(10)
-    assert probes == [b"--info\n"]                    # window 0.4 s ended inside attempt 1
+    assert probes == [b"--info\n"]                    # the schedule's end (0.6 s) passed inside attempt 1
 
 
 def test_result_file_on_exhaustion(tmp_path):

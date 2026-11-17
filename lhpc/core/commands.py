@@ -604,10 +604,12 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                            for _ in range(cnt)]
                     d["repeat"] = len(per)
                     d["intervals"] = per[:-1]
+                    d["window_s"] = sum(per)            # the schedule's END: the last slot plus its own interval
                 else:
                     d["repeat"] = _post_repeat(step.get("repeat", 1))
                     d["interval"] = _post_interval(step.get("interval", 0))
                     d["intervals"] = [d["interval"]] * (d["repeat"] - 1)
+                    d["window_s"] = d["interval"] * d["repeat"]
                 if step.get("label") is not None:
                     d["label"] = _post_label(step["label"])
                 if step.get("on_exhausted") == "warn":     # a console that never answers warns, never fails
@@ -907,10 +909,13 @@ def _why_stop(end):
 _CAP = 16 << 20                            # a log is read from its start up to this; a larger one is said so
 
 def _said(text, t, final):
-    # `text` in the answer `t` as a whole token: a text ending in a letter, digit or "-" must not run on into one
-    # ("Call:DL1AB-1" is not in "Call:DL1AB-12"); while the answer still arrives, a match at its end waits for more.
-    tail = "" if not _re.match(r"[A-Za-z0-9-]", text[-1:]) else "(?![A-Za-z0-9-])" if final else "(?=[^A-Za-z0-9-])"
-    return _re.search(_re.escape(text) + tail, t) is not None
+    # `text` in the answer `t` as a whole token: on each side where it starts or ends in a letter, digit or "-", it
+    # must not run on into one ("Call:DL1AB-1" is in neither "OldCall:DL1AB-1" nor "Call:DL1AB-12"). A match at the
+    # answer's end counts only for a complete answer (`final`: the peer closed it); before that it waits for more.
+    tok = r"[A-Za-z0-9-]"
+    head = "(?<!" + tok + ")" if _re.match(tok, text[:1]) else ""
+    tail = "" if not _re.match(tok, text[-1:]) else "(?!" + tok + ")" if final else "(?=[^A-Za-z0-9-])"
+    return _re.search(head + _re.escape(text) + tail, t) is not None
 
 def _kept(a, b):
     # The same file, unchanged or only grown since `a` (an append keeps the bytes read before it valid).
@@ -1012,6 +1017,7 @@ for _si, s in enumerate(STEPS):
                 if not s.get("optional", True):
                     sys.exit(1)         # a required step that never ran is not a success
                 _main_gone_stop(STEPS[_si + 1:])   # no further side effects; a required rest fails
+            rc, err, cut = None, "", None    # cut: (outcome, detail) of an exec that timed out or could not start
             try:
                 # stdout stays DEVNULL (the volume source); ONLY stderr is captured, re-emitted
                 # verbatim to OUR stderr (the post-start log keeps full fidelity) and stored as a
@@ -1023,25 +1029,21 @@ for _si, s in enumerate(STEPS):
                 if err:
                     sys.stderr.write(err if err.endswith("\\n") else err + "\\n")
             except subprocess.TimeoutExpired:
-                _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "timeout",
-                         "rc": None, "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1),
-                         "detail": ""})
-                if not s.get("optional", True):
-                    sys.exit(1)
-                continue
+                cut = ("timeout", "")
             except OSError as e:        # ENOENT: the binary is not there at all
-                _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "failed",
-                         "rc": None, "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1),
-                         "detail": _clean(str(e))})
-                if not s.get("optional", True):
-                    sys.exit(1)
-                continue
-            if not _main_ok():          # the exec ran up to 120 s: its result counts only for a main still running
+                cut = ("failed", _clean(str(e)))
+            if not _main_ok():          # every outcome of an exec that ran up to 120 s counts only for a main still running
                 _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "main-gone", "rc": rc,
                          "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1)})
                 if not s.get("optional", True):
                     sys.exit(1)
                 _main_gone_stop(STEPS[_si + 1:])
+            if cut:
+                _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": cut[0],
+                         "rc": None, "attempts": 1, "elapsed_s": round(time.monotonic() - t0, 1), "detail": cut[1]})
+                if not s.get("optional", True):
+                    sys.exit(1)
+                continue
             _record({"kind": "exec", "label": s.get("label", "exec"),
                      "outcome": ("ok" if rc == 0 else "failed"), "rc": rc, "attempts": 1,
                      "elapsed_s": round(time.monotonic() - t0, 1),
@@ -1124,8 +1126,9 @@ for _si, s in enumerate(STEPS):
             def _read(conn, done):
                 # ONE answer, read to its end: a slow guest (QEMU on a Zero 2 W) may take many
                 # seconds for its first byte and pause between chunks. Up to 30 s for the first
-                # byte, then at most 2 s of silence; stop as soon as `done` holds.
-                buf = b""
+                # byte, then at most 2 s of silence; stop as soon as `done` holds. Returns (the answer,
+                # closed): only an answer the peer closed is complete - not one cut by the cap, a timeout or an error.
+                buf, closed = b"", False
                 end2 = time.monotonic() + 30.0
                 while len(buf) < 4096:
                     left = end2 - time.monotonic()
@@ -1137,24 +1140,28 @@ for _si, s in enumerate(STEPS):
                     except OSError:              # includes socket.timeout
                         break
                     if not chunk:
+                        closed = True
                         break
                     buf += chunk
                     if done(buf.decode("utf-8", "replace")):
                         break
-                return buf.decode("utf-8", "replace")
+                return buf.decode("utf-8", "replace"), closed
             valued = bool(s.get("probe") and s.get("probe_value"))
             probing = valued or bool(s.get("probe") and s.get("probe_stop_on"))
             skipped = False
             answered = False             # some probe got a reply (value form only)
             # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and no
-            # NEW attempt starts once the window is over (checked between attempts) — a required run
-            # sits inside the start's outer timeout, so slow reads must not stretch the window. An
-            # attempt begun inside it may still send after it, behind a slow probe (2 s + 30 s): the
-            # required budget counts one whole attempt (lifecycle.py).
+            # NEW attempt starts after its END, the last slot plus its own interval (checked at each
+            # attempt's entry, after the sleep) — a required run sits inside the start's outer timeout,
+            # so slow reads or a late sleep must not stretch it. An attempt begun before the end may
+            # still send after it, behind a slow probe (2 s + 30 s): the required budget counts one
+            # whole attempt (lifecycle.py).
             ivs = s.get("intervals") or [s.get("interval", 0)] * (reps - 1)
-            window_end = t0 + sum(ivs)
+            window_end = t0 + s.get("window_s", 0)
             n = 0
             for i in range(reps):
+                if i and window_end > t0 and time.monotonic() > window_end:
+                    break                # the schedule is over: no NEW attempt
                 n = i + 1
                 if not _main_ok():
                     sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop (no send)\\n"
@@ -1179,7 +1186,7 @@ for _si, s in enumerate(STEPS):
                             _hit = lambda t: _said(s["probe_stop_on"], t, False)
                         with socket.create_connection((s["host"], s["port"]), 2) as pc:
                             pc.sendall(s["probe"].encode())
-                            r = _read(pc, _hit)
+                            r, closed = _read(pc, _hit)
                         if not r.strip():
                             sys.stderr.write("tcp_send %s:%s: console not ready "
                                              "(attempt %d/%d) -> no send\\n"
@@ -1198,7 +1205,7 @@ for _si, s in enumerate(STEPS):
                                                  "set, skipping\\n" % (s["host"], s["port"]))
                                 skipped = True
                                 break
-                        elif _said(s["probe_stop_on"], r, True):
+                        elif _said(s["probe_stop_on"], r, closed):
                             sys.stderr.write("tcp_send %s:%s: probe matched -> already "
                                              "set, skipping\\n" % (s["host"], s["port"]))
                             skipped = True
@@ -1208,7 +1215,7 @@ for _si, s in enumerate(STEPS):
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
                         if s.get("stop_on"):
-                            acked = _said(s["stop_on"], _read(c, lambda t: _said(s["stop_on"], t, False)), True)
+                            acked = _said(s["stop_on"], *_read(c, lambda t: _said(s["stop_on"], t, False)))
                     sent += 1                # one complete connect + sendall succeeded
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
@@ -1217,11 +1224,7 @@ for _si, s in enumerate(STEPS):
                     sys.stderr.write("tcp_send %s:%s: acknowledged on attempt %d\\n"
                                      % (s["host"], s["port"], i + 1))
                     break                # ACK received: no further blind repeats
-                if i + 1 < reps:
-                    # Decided BEFORE sleeping, so the last on-time attempt is never lost to the
-                    # sleep's own overshoot. A zero-length window (plain `repeat`) has no clock.
-                    if window_end > t0 and time.monotonic() > window_end:
-                        break
+                if i + 1 < reps:         # a zero-length schedule (plain `repeat`, no interval) has no clock
                     wait = t0 + sum(ivs[:i + 1]) - time.monotonic()
                     if wait > 0:
                         time.sleep(wait)

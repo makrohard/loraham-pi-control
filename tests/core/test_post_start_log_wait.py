@@ -315,8 +315,9 @@ def test_meshcoms_start_waits_on_its_own_nodes_verified_marker_as_a_required_ste
 def test_the_waits_nest_inside_the_required_post_starts_cap():
     comp = next(c for s in load_manifest() for c in s.components if c.id == "meshcom-qemu")
     send = next(s for s in _rendered(_meshcom_steps()) if s["kind"] == "tcp_send")
-    assert sum(send["intervals"]) == 904.0                     # the documented worst Zero boot + 60 s
-    assert _wait_budget(comp.post_steps) + sum(send["intervals"]) + 64 <= REQUIRED_POST_TIMEOUT_S
+    assert sum(send["intervals"]) == 904.0                     # the last slot: the documented worst Zero boot + 60 s
+    assert send["window_s"] == 934.0                           # the schedule's end: that slot plus its own 30 s
+    assert _wait_budget(comp.post_steps) + send["window_s"] + 64 <= REQUIRED_POST_TIMEOUT_S
 
 
 def test_only_waits_declaring_one_clock_count_once():
@@ -455,7 +456,7 @@ if cfg.get("virtual"):
     def _sleep(s):
         if s < 0 and cfg.get("strict_sleep"):
             raise ValueError("sleep length must be non-negative")      # the real sleep's rule
-        _now[0] += max(0.0, s)
+        _now[0] += max(0.0, s) + cfg.get("late_sleep", 0.0)     # a sleep that returns late by that much
     time.monotonic, time.sleep = _mono, _sleep
     _cc = socket.create_connection
     def _connect(*a, **k):
@@ -463,6 +464,33 @@ if cfg.get("virtual"):
         _now[0] += cfg.get("connect_cost", 0.0)
         return _cc(*a, **k)
     socket.create_connection = _connect
+if cfg.get("answers") is not None:
+    _script = cfg["answers"]          # per connection: its answer's pieces; null = a receive timeout; the end = closed
+    class _Conn:
+        def __init__(s, p): s.p = list(p)
+        def sendall(s, d): _trace.write("send %s\n" % d.decode().strip())
+        def settimeout(s, t): pass
+        def recv(s, n):
+            if not s.p:
+                return b""
+            x = s.p.pop(0)
+            if x is None:
+                raise socket.timeout("timed out")
+            return x.encode()
+        def __enter__(s): return s
+        def __exit__(s, *a): pass
+    def _scripted(*a, **k):
+        _trace.write("connect %.2f\n" % _now[0])
+        return _Conn(_script.pop(0) if _script else [])
+    socket.create_connection = _scripted
+if cfg.get("exec_cut"):
+    import subprocess as _sp
+    def _cut(argv, *a, **k):
+        _kill()                                   # the bound main ends while the exec runs
+        if cfg["exec_cut"] == "timeout":
+            raise _sp.TimeoutExpired(argv, k.get("timeout"))
+        raise FileNotFoundError(2, "No such file or directory")
+    _sp.run = _cut
 def _do(a):
     if a[0] == "retarget":
         os.symlink(a[2], a[1] + ".next")
@@ -908,8 +936,9 @@ def test_a_log_read_in_short_pieces_is_read_to_its_end_before_deciding(tmp_path)
     counts."""
     log = tmp_path / "uart.log"
     log.write_text(LINE + "y" * 1000)
-    rc, steps, err, _t = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], short=16)
-    assert (rc, steps[0]["outcome"]) == (0, "ready"), (steps, err)
+    rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 3)], virtual=True, logs=[str(log)], short=16)
+    got = [int(ln.split()[1]) for ln in trace if ln.startswith("got ")]  # rule-10: a trace line's first word is its kind
+    assert (rc, steps[0]["outcome"]) == (0, "ready") and sum(got) == len(LINE) + 1000, (steps, err, got)
 
 
 def test_a_log_rewritten_during_the_read_is_judged_by_a_consistent_read(tmp_path):
@@ -930,7 +959,8 @@ def test_an_error_closing_one_descriptor_still_closes_the_other_and_keeps_the_re
     log.write_text(LINE)
     rc, steps, err, trace = _hooked(tmp_path, [_lw(log, 3, optional=True), {"kind": "delay", "seconds": 1}],
                                     virtual=True, logs=[str(log)], close_eio=True)
-    assert [st["kind"] for st in steps] == ["log_wait"] and steps[0]["outcome"] in ("ready", "timeout"), (steps, err)
+    assert [st["kind"] for st in steps] == ["log_wait"] and (steps[0]["outcome"], steps[0]["attempts"]) == ("ready", 1), \
+        (steps, err)                                  # the hit of the pass whose close failed counts
     assert len([ln for ln in err.splitlines() if "failed: Input/output error" in ln]) == 1, err
     assert not [ln for ln in trace if ln.startswith("leak ")], trace  # rule-10: a trace line's first word is its kind
 
@@ -1015,7 +1045,7 @@ def test_a_rotated_log_leaves_no_old_size_in_the_record(tmp_path):
 
 def _guest(behavior):
     """A fake console: each connection's first line goes to `behavior(line)`, whose return is the reply (then the
-    connection is closed); a list is sent piece by piece, 0.5 s apart. Returns (port, the lines received, stop)."""
+    connection is closed). Returns (port, the lines received, stop)."""
     import socket
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -1031,11 +1061,7 @@ def _guest(behavior):
             with conn:
                 line = conn.recv(256).decode()
                 got.append(line)
-                reply = behavior(line)
-                for k, piece in enumerate(reply if isinstance(reply, list) else [reply]):
-                    if k:
-                        time.sleep(0.5)        # wallclock: a pause inside one answer, under the reader's 2 s silence limit
-                    conn.sendall(piece.encode())
+                conn.sendall(behavior(line).encode())
     threading.Thread(target=serve, daemon=True).start()
     return srv.getsockname()[1], got, srv.close
 
@@ -1103,13 +1129,11 @@ def test_an_ack_counts_only_for_the_whole_call(tmp_path, reply, outcome):
     assert steps[0]["outcome"] == outcome, (steps, err)
 
 
-@pytest.mark.wallclock("a real pause inside one answer splits it across the reader's buffers")
 def test_an_ack_split_after_our_call_waits_for_the_rest(tmp_path):
-    """H4 (partial buffer): "Call:DL1AB-1" arrives alone and "2 Short:X set" follows: a buffer that ends at the call
-    does not count yet, and the whole answer names another call."""
-    port, got, stop = _guest(lambda ln: ["Call:DL1AB-1", "2 Short:X set\n"])
-    rc, steps, err, _t = _hooked(tmp_path, [_send(port, stop_on="Call:DL1AB-1")])
-    stop()
+    """H4 (partial buffer), B6: "Call:DL1AB-1" is received alone and "2 Short:X set" follows in the next receive: a
+    buffer that ends at the call does not count yet, and the whole answer names another call."""
+    rc, steps, err, _t = _hooked(tmp_path, [_send(1, stop_on="Call:DL1AB-1")], virtual=True,
+                                 answers=[["Call:DL1AB-1", "2 Short:X set\n"]])
     assert steps[0]["outcome"] == "sent-unacked", (steps, err)
 
 
@@ -1148,3 +1172,62 @@ def test_a_close_error_on_every_pass_is_said_once_per_step(tmp_path):
     assert steps[0]["outcome"] == "timeout" and len(opens) >= 3, (steps, trace)
     assert len([ln for ln in err.splitlines() if "failed: Input/output error" in ln]) == 1, err
     assert not [ln for ln in trace if ln.startswith("leak ")], trace  # rule-10: a trace line's first word is its kind
+
+
+
+@pytest.mark.parametrize("probe, ack, outcome", [
+    ("OldCall:DL1AB-1\n", "Call:DL1AB-1 Short:X set\n", "acked"),          # the probe names another call: sent
+    ("Call:DL1AB-0\n", "OldCall:DL1AB-1 Short:X set\n", "sent-unacked"),   # the ACK names another call
+])
+def test_a_call_counts_only_with_nothing_run_on_before_it(tmp_path, probe, ack, outcome):
+    """B1: the whole-token match has a left edge too: "Call:DL1AB-1" is not in "OldCall:DL1AB-1", for the probe and
+    for the ACK."""
+    rc, steps, err, trace = _hooked(tmp_path, [_send(1, probe="--info\n", probe_stop_on="Call:DL1AB-1",
+                                                     stop_on="Call:DL1AB-1")], virtual=True, answers=[[probe], [ack]])
+    assert steps[0]["outcome"] == outcome, (steps, err, trace)
+
+
+@pytest.mark.parametrize("pieces", [
+    ["." * (4096 - len("Call:DL1AB-1")) + "Call:DL1AB-1", "2 Short:X set\n"],   # cut by the 4096-byte cap
+    ["Call:DL1AB-1", None],                                                       # cut by a receive timeout
+])
+def test_an_answer_cut_before_its_end_is_no_ack(tmp_path, pieces):
+    """B2: an answer that ends at our call because reading stopped (the cap, a timeout), not because the peer closed
+    it, is not complete: the next byte may run on into the call."""
+    rc, steps, err, _t = _hooked(tmp_path, [_send(1, stop_on="Call:DL1AB-1")], virtual=True, answers=[pieces])
+    assert steps[0]["outcome"] == "sent-unacked", (steps, err)
+
+
+def test_a_probe_cut_before_its_end_does_not_skip_the_send(tmp_path):
+    """B2: a probe answer cut by a receive timeout right after our call is no proof the call is set: the send runs."""
+    rc, steps, err, trace = _hooked(tmp_path, [_send(1, probe="--info\n", probe_stop_on="Call:DL1AB-1",
+                                                     stop_on="Call:DL1AB-1")], virtual=True,
+                                    answers=[["Call:DL1AB-1", None], ["Call:DL1AB-1 Short:X set\n"]])
+    assert steps[0]["outcome"] == "acked", (steps, err, trace)
+
+
+@pytest.mark.parametrize("cut", ["timeout", "oserror"])
+def test_an_exec_cut_short_whose_main_ended_meanwhile_stops_the_run(tmp_path, cut):
+    """B3: the main ends while an optional exec runs, which then times out or could not start: that outcome too is
+    checked against the main, so the step ends main-gone and the delay after it does not run."""
+    main, binding = _bound_main()
+    try:
+        rc, steps, err, trace = _hooked(tmp_path, [{"kind": "exec", "argv": ["/bin/true"], "optional": True},
+                                                   {"kind": "delay", "seconds": 10}], binding, virtual=True,
+                                        exec_cut=cut)
+    finally:
+        main.kill()
+        main.wait()
+    assert steps[0]["outcome"] == "main-gone" and trace[-1] == "end 0.0", (steps, err, trace)
+
+
+@pytest.mark.parametrize("repeat, late, connects", [
+    (3, 0.01, ["0.00", "1.01", "2.01"]),       # a normal run: every attempt, the last one just after its slot (2.0)
+    (2, 2.0, ["0.00"]),                        # the sleep returns at 3.0, after the end (2.0): no new attempt
+])
+def test_no_attempt_starts_after_the_schedules_end(tmp_path, repeat, late, connects):
+    """B4: the end is the last slot plus its own interval, checked when an attempt would start, after the sleep."""
+    rc, steps, err, trace = _hooked(tmp_path, [_send(1, repeat=repeat, interval=1)], virtual=True, late_sleep=late,
+                                    answers=[[], [], []])
+    got = [ln.split()[1] for ln in trace if ln.startswith("connect ")]  # rule-10: a trace line's first word is its kind
+    assert got == connects, (steps, err, trace)
