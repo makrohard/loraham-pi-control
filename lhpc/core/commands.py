@@ -12,6 +12,8 @@ entry is either a literal token or a single whole placeholder. Placeholders:
     {band}            -> one token (the selected band)
     {port:BASE}       -> BASE + 133 x (n - 1) on rN (DEC-W348; r1: BASE), anywhere in a token
     {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
+    {daemon:power}    -> one token: the POWER the instance applies to its radio's daemon (the MeshCom bridge's
+                         --max-power ceiling); a launch without that value is refused (`daemon=` of expand_argv)
     {instance_dir}    -> "<rid>/": a per-radio path level ("" for the manifest's TEMPLATE values only)
     {instance_suffix} -> "-<rid>": a per-radio file name in a shared directory
     {instance_index}  -> N - 1 on rN ("0" for r1 and the TEMPLATE): a helper's own instance number (meshcom's run.sh
@@ -174,8 +176,9 @@ _RFLOG = re.compile(r"\{runtime\}/logs/r[1-9][0-9]?/rf-daemon\.log")
 
 
 def expand_argv(tokens, comp, params, op, runtime: str, source: str,
-                band: str = "", *, inst: Instance = TEMPLATE) -> list[str]:
-    """Expand an argv token template to a validated argv list (no shell)."""
+                band: str = "", *, inst: Instance = TEMPLATE, daemon: dict | None = None) -> list[str]:
+    """Expand an argv token template to a validated argv list (no shell). `daemon`: the instance's daemon values
+    for `{daemon:…}` ({"power": POWER}); none refuses a template that names one."""
     by_name = {p.name: p for p in comp.run_params}
     out: list[str] = []
     for tok in tokens:
@@ -212,6 +215,9 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                           .replace("{band}", band or ""))
                 val = validators.validate_param(p, raw)
                 out.extend(emit_param(p, val))
+                continue
+            if kind == "daemon":
+                out.append(_daemon_value(tok, name, daemon))
                 continue
             if kind == "operator" and name == "callsign":
                 # Requires a genuinely configured operator identity — starts that need it
@@ -387,13 +393,13 @@ def build_step_argv(step: dict, runner, runtime: str, source: str) -> list[str]:
 
 
 def display_command(comp, op, runtime: str, source: str, band: str = "",
-                    params: dict | None = None, *, inst: Instance = TEMPLATE) -> str:
+                    params: dict | None = None, *, inst: Instance = TEMPLATE, daemon: dict | None = None) -> str:
     """Human-readable, shell-quoted rendering of the structured run command — for
     manual wrappers and the dashboard ONLY. Never executed. `params` are the saved
     values a start would use (None = manifest defaults); one a start would refuse
     renders no command."""
     try:
-        argv = expand_argv(comp.run_argv, comp, params, op, runtime, source, band, inst=inst)
+        argv = expand_argv(comp.run_argv, comp, params, op, runtime, source, band, inst=inst, daemon=daemon)
     except (CommandError, validators.ValidationError):
         return ""
     return " ".join(shlex.quote(a) for a in argv)
@@ -630,7 +636,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                         d[fld] = _post_data(str(step[fld]), comp, params, op, runtime,
                                             source, band, inst, daemon)
                 pv, pe = step.get("probe_value"), step.get("probe_expect")
-                if (pv is None) != (pe is None):
+                if (pv is None) != (pe is None) and step.get("probe_line") is None:
                     raise CommandError("tcp_send: probe_value and probe_expect come as a pair")
                 if pv is not None:
                     if not step.get("probe"):
@@ -647,17 +653,14 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                     d["probe_value"] = str(pv)          # a pattern: never placeholder-expanded
                     d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
                                                    source, band, inst, daemon)
-                #  * refused_on: a regex for the device's refusal in the reply to a send (read only
-                #    with stop_on); an unconfirmed step names the refusal it matched.
-                ro = step.get("refused_on")
-                if ro is not None:
-                    if not step.get("stop_on"):
-                        raise CommandError("tcp_send: refused_on needs a stop_on (the reply is read only then)")
-                    try:
-                        re.compile(str(ro))
-                    except re.error as exc:
-                        raise CommandError(f"tcp_send: refused_on is not a regex: {exc}") from exc
-                    d["refused_on"] = str(ro)           # a pattern: never placeholder-expanded
+                #  * probe_line/ack_line/refused_line: the LINE form (MeshCom's TX power, G2 B2-B4) — fixed
+                #    templates, each matched against WHOLE reply lines only, compiled here into linear patterns
+                #    (no manifest regex reaches the runner). The probe's lines that match give the device's
+                #    value (the whole reply is read); two different ones prove nothing. A send is confirmed only by
+                #    a fresh probe after its ACK line; a refusal line in the reply is named.
+                if any(step.get(k) is not None for k in _LINE_KEYS):
+                    d.update(_line_form(step, lambda t: _post_data(t, comp, params, op, runtime, source, band, inst,
+                                                                   daemon)))
             resolved.append(d)
         elif kind == "log_wait":
             # B2a: wait for a line in a log file (MeshCom: the firmware's own console announcement); the path is
@@ -721,8 +724,49 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                   lambda m: fills[m.group(1)], _POST_RUNNER)
 
 
-# The values a tcp_send line may take from the instance's daemon apply, each with the shape its value must have.
+# The line form's template slots (G2 B4): bounded atoms only, so a compiled line pattern is linear in the line.
+_LINE_SLOTS = {"{value}": "(-?[0-9]{1,3})", "{int}": "-?[0-9]{1,3}", "{float}": "[0-9]{1,4}[.][0-9]{1,6}",
+               "{word}": "[A-Za-z]{1,16}"}
+_LINE_KEYS = ("probe_line", "ack_line", "refused_line")
+# MeshCom's printdeb(n) may put the number on the same line before a printfdeb reply (UART); allowed, never required.
+_LINE_ECHO = "(?:-?[0-9]{1,3})?"
+
+
+def _line_rx(name: str, template, expand) -> str:
+    """The anchored pattern of a line-form template: literal text (its `{daemon:…}`/`{param:…}` placeholders
+    expanded first) and the slots of _LINE_SLOTS. `probe_line` carries exactly one `{value}`, the others none."""
+    if not isinstance(template, str) or not 0 < len(template) <= 120 or "\n" in template or "\r" in template:
+        raise CommandError(f"tcp_send: {name} must be one line of 1..120 characters")
+    want = 1 if name == "probe_line" else 0
+    if template.count("{value}") != want:
+        raise CommandError(f"tcp_send: {name} needs {want} {{value}} slot(s)")
+    parts = re.split(r"(\{value\}|\{int\}|\{float\}|\{word\})", expand(template))
+    body = "".join(_LINE_SLOTS.get(p) or re.escape(p) for p in parts)
+    return body if name == "probe_line" else f"{_LINE_ECHO}({body})"     # group 1: the line without the echo
+
+
+def _line_form(step: dict, expand) -> dict:
+    """The rendered line form of a tcp_send step: all three templates, a probe and a probe_expect, and none of the
+    regex form's keys (one way to read one reply)."""
+    if any(step.get(k) is None for k in _LINE_KEYS) or not step.get("probe") or step.get("probe_expect") is None:
+        raise CommandError("tcp_send: the line form needs probe, probe_expect, probe_line, ack_line and refused_line")
+    if any(step.get(k) is not None for k in ("probe_value", "probe_stop_on", "stop_on", "refused_on")):
+        raise CommandError("tcp_send: the line form takes no probe_value, probe_stop_on, stop_on or refused_on")
+    return {"probe": expand(str(step["probe"])), "probe_expect": expand(str(step["probe_expect"])),
+            **{k: _line_rx(k, step[k], expand) for k in _LINE_KEYS}}
+
+
+# The values a run line or a tcp_send line may take from the instance's daemon apply, each with the shape its value
+# must have.
 _DAEMON_VALUES = {"power": r"-?[0-9]{1,2}"}
+
+
+def _daemon_value(tok: str, name: str, daemon: dict | None) -> str:
+    """`{daemon:<name>}`'s value for this instance, or CommandError: a launch or a line never goes out without it."""
+    value = str((daemon or {}).get(name, ""))
+    if name not in _DAEMON_VALUES or not re.fullmatch(_DAEMON_VALUES[name], value):
+        raise CommandError(f"no {tok} value for this instance (got {value!r})")
+    return value
 
 
 def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = TEMPLATE,
@@ -734,10 +778,7 @@ def _post_data(template: str, comp, params, op, runtime, source, band, inst: Ins
     def repl(m):
         kind, _, name = m.group(0)[1:-1].partition(":")
         if kind == "daemon":
-            value = str((daemon or {}).get(name, ""))
-            if name not in _DAEMON_VALUES or not re.fullmatch(_DAEMON_VALUES[name], value):
-                raise CommandError(f"post-step: no {m.group(0)} value for this instance (got {value!r})")
-            return value
+            return _daemon_value(m.group(0), name, daemon)
         return " ".join(expand_argv([m.group(0)], comp, params, op, runtime, source, band, inst=inst))
     return re.sub(r"\{[a-z]+:[a-z_]+\}", repl, template)
 
@@ -1149,7 +1190,7 @@ for _si, s in enumerate(STEPS):
                          "attempts": n, "elapsed_s": round(time.monotonic() - t0, 1)}
                 if reported is not None:     # the value the node last reported (an unconfirmed one keeps it)
                     entry["reported"] = "".join(c for c in reported if c.isprintable())[:32]
-                if refusal is not None:      # the device's refusal of the last send (refused_on)
+                if refusal is not None:      # the device's refusal of the last send (refused_line)
                     entry["refusal"] = "".join(c for c in refusal if c.isprintable())[:64]
                 _record(entry)
             def _read(conn, done):
@@ -1175,13 +1216,25 @@ for _si, s in enumerate(STEPS):
                     if done(buf.decode("utf-8", "replace")):
                         break
                 return buf.decode("utf-8", "replace"), closed
-            valued = bool(s.get("probe") and s.get("probe_value"))
+            lined = bool(s.get("probe_line"))
+            valued = lined or bool(s.get("probe") and s.get("probe_value"))
             probing = valued or bool(s.get("probe") and s.get("probe_stop_on"))
             skipped = False
-            answered = False             # some probe got a reply (value form only)
-            reported = None              # the value the node last reported (value form only)
-            refusal = None               # the last send's reply matched refused_on
-            _ro = s.get("refused_on")
+            answered = False             # some probe got a reply (value forms only)
+            reported = None              # the value the node last reported (value forms only)
+            refusal = None               # the last send's reply held a refusal line (line form)
+            def _full(t):
+                # The reply's COMPLETE lines (a last line still arriving is not one yet), without their CR.
+                return [ln.rstrip("\\r") for ln in t.split("\\n")[:-1]]
+            def _has(rx, t):
+                return any(_re.fullmatch(rx, ln) for ln in _full(t))
+            def _values(t):
+                # The line form's values: every complete line matching probe_line. Two different ones prove nothing.
+                return {m.group(1) for ln in _full(t) if (m := _re.fullmatch(s["probe_line"], ln))}
+            def _probe_values():
+                with socket.create_connection((s["host"], s["port"]), 2) as pc:
+                    pc.sendall(s["probe"].encode())
+                    return _read(pc, lambda t: False)[0]    # the WHOLE reply: a second power line is seen
             # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and no
             # NEW attempt starts after its END, the last slot plus its own interval (checked at each
             # attempt's entry, after the sleep) — a required run sits inside the start's outer timeout,
@@ -1212,7 +1265,9 @@ for _si, s in enumerate(STEPS):
                         # is alive, and it serves ONE exchange per connection. Probe on
                         # its OWN connection; NO REPLY = still booting -> retry WITHOUT
                         # sending; a matching reply = already set -> ZERO sends, ever.
-                        if valued:
+                        if lined:
+                            _hit = lambda t: False                  # the whole reply (G2 B2: every power line)
+                        elif valued:
                             _hit = lambda t: _re.search(s["probe_value"], t) is not None
                         else:
                             _hit = lambda t: _said(s["probe_stop_on"], t, False)
@@ -1224,7 +1279,25 @@ for _si, s in enumerate(STEPS):
                                              "(attempt %d/%d) -> no send\\n"
                                              % (s["host"], s["port"], i + 1, reps))
                             raise OSError("console deaf")
-                        if valued:
+                        if lined:
+                            answered = True
+                            vals = _values(r)
+                            if not vals:
+                                sys.stderr.write("tcp_send %s:%s: probe reply incomplete "
+                                                 "(attempt %d/%d) -> no send\\n"
+                                                 % (s["host"], s["port"], i + 1, reps))
+                                raise OSError("probe reply incomplete")
+                            reported = vals.pop() if len(vals) == 1 else None
+                            if reported is None:
+                                sys.stderr.write("tcp_send %s:%s: the probe reply names different values "
+                                                 "(attempt %d/%d) -> no proof, send\\n"
+                                                 % (s["host"], s["port"], i + 1, reps))
+                            elif reported == s["probe_expect"]:
+                                sys.stderr.write("tcp_send %s:%s: probe matched -> already "
+                                                 "set, skipping\\n" % (s["host"], s["port"]))
+                                skipped = True
+                                break
+                        elif valued:
                             answered = True
                             m = _re.search(s["probe_value"], r)
                             if m is None:
@@ -1247,12 +1320,25 @@ for _si, s in enumerate(STEPS):
                         break
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
-                        if s.get("stop_on"):
-                            ans, done = _read(c, lambda t: _said(s["stop_on"], t, False) or bool(_ro and _re.search(_ro, t)))
-                            acked = _said(s["stop_on"], ans, done)
-                            rm = _re.search(_ro, ans) if _ro and not acked else None
-                            refusal = rm.group(0) if rm else None
+                        if lined:
+                            ans, _ = _read(c, lambda t: _has(s["ack_line"], t) or _has(s["refused_line"], t))
+                            refusal = next((m.group(1) for ln in _full(ans)
+                                            if (m := _re.fullmatch(s["refused_line"], ln))), None)
+                            acked = _has(s["ack_line"], ans)     # only starts the confirming probe below
+                        elif s.get("stop_on"):
+                            acked = _said(s["stop_on"], *_read(c, lambda t: _said(s["stop_on"], t, False)))
                     sent += 1                # one complete connect + sendall succeeded
+                    if acked and lined:
+                        # An ACK line only says the console printed one: the set holds when a FRESH probe reports
+                        # exactly the wanted value (G2 B3). Unconfirmed until then, a failed probe included.
+                        acked = False
+                        vals = _values(_probe_values())
+                        if vals:
+                            reported = next(iter(vals)) if len(vals) == 1 else None
+                        acked = vals == {s["probe_expect"]}
+                        if not acked:
+                            sys.stderr.write("tcp_send %s:%s: acknowledged, but the probe does not confirm "
+                                             "(attempt %d/%d)\\n" % (s["host"], s["port"], i + 1, reps))
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
                                      % (s["host"], s["port"], i + 1, reps, e))

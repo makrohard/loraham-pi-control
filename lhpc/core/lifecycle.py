@@ -468,7 +468,8 @@ class Lifecycle:
 
     def start(self, stack: Stack, comp: Component, params: dict | None = None,
               band: str = "", *, requested_target: str = "",
-              start_scope: str = "", inst: commands.Instance = commands.TEMPLATE) -> StartLaunch:
+              start_scope: str = "", inst: commands.Instance = commands.TEMPLATE,
+              daemon: dict | None = None) -> StartLaunch:
         """Launch a component detached with NO shell: typed pre-steps run in Python,
         then the target is exec'd directly via Popen(shell=False, cwd, env). The real
         process identity is observed before ownership is recorded (no shell-to-exec
@@ -502,7 +503,7 @@ class Lifecycle:
         try:
             # `inst`: the instance's radio (stage L5: a daemon client's sockets are its radio's, W3)
             commands.run_pre_steps(comp.pre_steps, runtime, src, band, inst=inst)
-            argv = commands.expand_argv(comp.run_argv, comp, params, op, runtime, src, band, inst=inst)
+            argv = commands.expand_argv(comp.run_argv, comp, params, op, runtime, src, band, inst=inst, daemon=daemon)
             extra = commands.build_env(comp.run_env, runtime, src, band, inst=inst)
             cwd = commands._paths_subst(comp.run_cwd, runtime, src, band, inst=inst) if comp.run_cwd else src
         except (commands.CommandError, validators.ValidationError) as exc:

@@ -1032,10 +1032,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return {"target": e.writer, "radio": rid or None, "job": own if rid and _rflog.by_job(own) else e.job()}
 
     def _unconfirmed_post(stack):
-        """A running stack's post-start setting the node never confirmed (MeshCom's TX power: the node may still use its
-        own value), on the stack's row like its other warnings, with the re-apply command (RADIO-POWER item 4, N2)."""
-        return [(c.id, ln.removeprefix("post-start: ")) for c in stack.components if c.post_steps
-                for ln in service._post_start_outcomes(c.id) if " UNVERIFIED " in ln]
+        """A running stack's post-start setting the node never confirmed or never got (MeshCom's TX power: the node may
+        still use its own value), and a node with no radio for its power above the panel's ceiling, on the stack's row
+        like its other warnings, with the command that sets it (RADIO-POWER item 4, N2; G2 B1)."""
+        return [(c.id, ln.removeprefix("post-start: ")) for c in stack.components
+                if c.post_steps or "{daemon:power}" in c.run_argv
+                for ln in service._post_start_outcomes(c.id)
+                if " UNVERIFIED " in ln or " NOT applied " in ln or ln.startswith("radio: NO RADIO: ")]
 
     def _shown_instance(stack):
         """G4-web: the instance a stack's Settings view shows without a page radio it can use (what the band default

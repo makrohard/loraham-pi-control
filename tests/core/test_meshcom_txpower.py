@@ -1,10 +1,13 @@
 """RADIO-POWER item 4: MeshCom's node, not LHPC, configures the daemon's POWER at every XR connect (the bridge applies
 what the firmware reports), so after the callsign LHPC sends the node `--txpower N`, N = the POWER the instance applies
-to its daemon (its own set over the radio row's over the default). Ack-aware and idempotent like the callsign:
-`--info` reports the node's power (`TXPWR N dBm`); equal -> no send; a refusal ends `unverified` and the node keeps running. Driven
-through `lhpc stack poststart meshcom@r1` (the verb a start's post-start shares, `_run_post_start`) against a stand-in
-net-console that answers as the firmware does (command_functions.cpp:5793-5815, :6782)."""
+to its daemon (its own set over the radio row's over the default). The LINE form (G2 B2-B4): `--info`'s whole power
+line gives the node's value (two different ones prove nothing); equal -> no send; an ACK line counts only once a fresh
+probe reports the value; a refusal line is named; the step then ends `unverified` and the node keeps running.
+Driven through `lhpc stack poststart meshcom@r1` (the verb a start's post-start shares, `_run_post_start`) against a
+stand-in net-console that answers as the firmware does (command_functions.cpp:5793-5815, :6782), on short schedules
+under a watchdog (G2 N3: a regression ends the module, never a production-length wait)."""
 import ast
+import faulthandler
 import dataclasses
 import pathlib
 import re
@@ -12,6 +15,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 import radios_fixture
@@ -29,11 +33,25 @@ CALL = "DL9XYZ-1"
 INFO_REPLY = (pathlib.Path(__file__).parents[1] / "data" / "meshcom-4.40a-info-reply.txt").read_bytes().decode()
 
 
-class _Node:
-    """The node's net-console: one command per connection, answered as the firmware answers it."""
+@pytest.fixture(autouse=True)
+def _watchdog():
+    """G2 N3: a row that would wait a production window instead dumps its stack and ends the run after 120 s."""
+    faulthandler.dump_traceback_later(120, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
-    def __init__(self, power: int, call: str = CALL, top: int = 20):
+
+class _Node:
+    """The node's net-console: one command per connection, answered as the firmware answers it. The faults a G2 row
+    needs: `info_extra` lines added to `--info`'s reply, `info_late` lines sent 0.5 s after it in a second write (a
+    slow console's later chunk), `txpower_reply` replacing the `--txpower` reply (`None`: as
+    the firmware), `sets` False: a `--txpower` that answers but never changes the node's power."""
+
+    def __init__(self, power: int, call: str = CALL, top: int = 20, info_extra=(), txpower_reply=None, sets=True,
+                 info_late=()):
         self.power, self.call, self.top, self.got = power, call, top, []
+        self.info_extra, self.txpower_reply, self.sets = tuple(info_extra), txpower_reply, sets
+        self.info_late = tuple(info_late)
         self.srv = socket.socket()
         self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.srv.bind(("127.0.0.1", 0))
@@ -44,7 +62,7 @@ class _Node:
     def _answer(self, line: str) -> str:
         if line == "--info":           # printfdeb: the console gets it (command_functions.cpp:7553, :7648)
             return (INFO_REPLY.replace("Call: <XX0XXX-00>", f"Call: <{self.call}>")
-                    .replace("TXPWR 17 dBm", f"TXPWR {self.power} dBm"))
+                    .replace("TXPWR 17 dBm", f"TXPWR {self.power} dBm")) + "".join(ln + "\n" for ln in self.info_extra)
         if line == "--lora":           # a plain printf: the UART gets it, the console none of it (:6782-6794)
             return ""
         if m := re.fullmatch(r"--setcall (\S+)", line):
@@ -52,9 +70,12 @@ class _Node:
             return f"Call:{self.call} Short:x set\n"
         if m := re.fullmatch(r"--txpower (-?\d+)", line):
             n = int(m.group(1))
+            if self.txpower_reply is not None:
+                return self.txpower_reply.format(n=n, top=self.top)
             if not 0 <= n <= self.top:
                 return f"{n}txpower {n} dBm not between 0 and max {self.top} dBm\n"
-            self.power = n
+            if self.sets:
+                self.power = n
             return f"{n}set txpower to {n} dBm\n"
         return "?\n"
 
@@ -75,6 +96,12 @@ class _Node:
                 line = buf.decode().strip()
                 self.got.append(line)
                 c.sendall(self._answer(line).encode())
+                if line == "--info" and self.info_late:
+                    time.sleep(0.5)          # wallclock: a slow console's later chunk, under the reader's 2 s of silence
+                    try:
+                        c.sendall("".join(ln + "\n" for ln in self.info_late).encode())
+                    except OSError:
+                        pass                                 # a reader that stopped early (the callsign's probe) has gone
 
     def sent(self, command: str) -> list:
         """The lines it got that are `command` (its first word)."""
@@ -121,16 +148,17 @@ def _main(svc):
     return p
 
 
-def _poststart(tmp_path, node_power, row_dp=(), own=None, schedule=None, call=CALL, top=20):
+def _poststart(tmp_path, node_power, row_dp=(), own=None, schedule=((3, 0.1),), call=CALL, top=20, **faults):
     """`lhpc stack poststart meshcom@r1` against a node reporting `node_power` -> (result, the node, the service); the
-    node's `status` holds the post-start lines `lhpc status` shows for it."""
+    node's `status` holds the post-start lines `lhpc status` shows for it. Three attempts 0.1 s apart (N3): the
+    production window is the manifest row's."""
     svc = _svc(tmp_path, row_dp)
     r1 = instances.parse_target(svc, "meshcom@r1", "start")[1]
     assert svc.save_config_bundle("meshcom", values={"mc_callsign": CALL}, inst=r1).ok
     if own is not None:
         assert svc.save_daemon_params("meshcom", {"POWER": own}, rid="r1").ok
-    node = _Node(node_power, call=call, top=top)
-    _on_console(svc, node.port, schedule)
+    node = _Node(node_power, call=call, top=top, **faults)
+    _on_console(svc, node.port, [list(x) for x in schedule])
     p = _main(svc)
     try:
         res = svc.poststart("meshcom", apply=True, inst=r1)
@@ -196,13 +224,15 @@ def test_a_refused_power_is_unverified_and_the_node_keeps_running(tmp_path):
     assert res.ok, (res.summary, res.details)
     # N2 (the coordinator's decision): a warning, not a refusal, that names the power the node may still use: in
     # `lhpc status`, in the poststart's answer and in the post-start log
-    # plan E13: the line also names the firmware's own refusal (`refused_on`, command_functions.cpp:5803)
+    # plan E13: the line also names the firmware's own refusal line (refused_line, command_functions.cpp:5803), without
+    # the number printdeb echoes before it on the UART
     refused = f"txpower {n} dBm not between 0 and max 8 dBm"
     line = (r"post-start: tx power UNVERIFIED — not confirmed \(the node may use 7\): the node answered but never "
             r"reported the expected value within [0-9.]+s \(2 attempts\); it refused: '" + refused + r"'; "
             r"re-apply with: lhpc stack poststart meshcom@r1")
     assert any(re.fullmatch(line, ln) for ln in node.status), node.status
-    assert any(re.search(line[len("post-start: "):].split(":", 1)[0], d) for d in res.details), res.details
+    # G2 B5: the poststart's answer carries the WHOLE warning, the refusal and the re-apply command included
+    assert any(re.fullmatch(r"  \[verified\] meshcom-qemu: " + line + r" \(log \S+\)", d) for d in res.details), res.details
     log = next(d.split(" -> tail -f ", 1)[1] for d in res.details if " -> tail -f " in d)
     assert (f"value never confirmed in 2 attempt(s); the node may use its own value '7'; it refused: '{refused}'"
             in pathlib.Path(log).read_text())
@@ -231,18 +261,82 @@ def test_no_power_refuses_the_render_and_nothing_is_sent(daemon):
     assert _rendered(step, {"power": "14"})[0]["data"] == "--txpower 14\n"
 
 
+_LINE = {"probe": "--info\n", "probe_expect": "{daemon:power}", "ack_line": "set txpower to {daemon:power} dBm",
+         "probe_line": "...FREQ {float} MHz TXPWR {value} dBm RXBOOST {word}",
+         "refused_line": "txpower {int} dBm not between {int} and max {int} dBm"}
+
+
 @pytest.mark.contract
-@pytest.mark.parametrize("extra, why", [({}, r"refused_on needs a stop_on"),
-                                        ({"stop_on": "set"}, r"refused_on is not a regex")],
-                         ids=["no-stop_on", "not-a-regex"])
-def test_a_refusal_pattern_is_checked_at_render(extra, why):
-    # the reply is read only with stop_on: a refused_on without it would never match; a broken regex is the
-    # manifest's error, never the runner's
-    step = {"kind": "tcp_send", "port": 1, "data": "--txpower {daemon:power}\n", "refused_on": "(", **extra}
+@pytest.mark.parametrize("change, why", [
+    ({"refused_line": None}, r"the line form needs probe, probe_expect, probe_line, ack_line and refused_line"),
+    ({"probe": None}, r"the line form needs"),
+    ({"probe_line": "TXPWR {int} dBm"}, r"probe_line needs 1 \{value\} slot"),
+    ({"ack_line": "set {value}"}, r"ack_line needs 0 \{value\} slot"),
+    ({"stop_on": "set"}, r"the line form takes no probe_value, probe_stop_on, stop_on or refused_on"),
+    ({"refused_on": "x"}, r"the line form takes no"),
+    ({"ack_line": "a\nb"}, r"ack_line must be one line of 1\.\.120 characters"),
+    ({"ack_line": "x" * 121}, r"ack_line must be one line"),
+], ids=["no-refused_line", "no-probe", "no-value-slot", "a-value-slot-in-ack", "with-stop_on", "with-refused_on",
+        "two-lines", "too-long"])
+def test_the_line_form_is_checked_at_render(change, why):
+    step = {"kind": "tcp_send", "port": 1, "data": "--txpower {daemon:power}\n",
+            **{k: v for k, v in {**_LINE, **change}.items() if v is not None}}
     with pytest.raises(commands.CommandError, match=why):
         _rendered(step, {"power": "14"})
-    step.update(stop_on="set", refused_on="txpower {daemon:power} -?[0-9]+")
-    assert _rendered(step, {"power": "14"})[0]["refused_on"] == "txpower {daemon:power} -?[0-9]+"   # a pattern: not expanded
+
+
+@pytest.mark.contract
+def test_a_template_never_becomes_a_pattern_that_can_stall():
+    # G2 B4: the verdict's `(a+)+$` against 32 x "a" + "!" stalled a regex search; a template is literal text and
+    # bounded slots, so the same text is matched as text, at once, and the {daemon:power} value is expanded
+    step = {"kind": "tcp_send", "port": 1, "data": "--txpower {daemon:power}\n", **_LINE,
+            "refused_line": "(a+)+$ {int}", "ack_line": "set txpower to {daemon:power} dBm"}
+    d = _rendered(step, {"power": "14"})[0]
+    assert re.fullmatch(d["refused_line"], "a" * 32 + "!") is None          # at once: the module's watchdog bounds it
+    assert re.fullmatch(d["refused_line"], "a" * 5000 + "!") is None
+    assert re.fullmatch(d["refused_line"], "(a+)+$ 12").group(1) == "(a+)+$ 12"
+    assert re.fullmatch(d["ack_line"], "14set txpower to 14 dBm").group(1) == "set txpower to 14 dBm"
+    assert re.fullmatch(d["ack_line"], "set txpower to 15 dBm") is None and d["probe_expect"] == "14"
+
+
+@pytest.mark.needs_session
+def test_a_second_power_line_proves_nothing_and_a_spoofed_one_is_no_line(tmp_path):
+    # G2 B2: the node's power comes from WHOLE `...FREQ … TXPWR N dBm RXBOOST …` lines only. Another field holding
+    # the text (a NAME line) is no such line; two power lines that disagree are no proof, so the power is sent.
+    n = _default_power(_svc(tmp_path / "a"))
+    spoof = [f"...NAME: ...FREQ 433.1750 MHz TXPWR {n} dBm RXBOOST off"]
+    res, node, _ = _poststart(tmp_path / "b", 9, info_extra=spoof)
+    assert res.ok and node.sent("--txpower") == [f"--txpower {n}"], node.got          # the spoof did not skip it
+    twice = [f"...FREQ 433.1750 MHz TXPWR {n} dBm RXBOOST off"]                           # 9 and n: no proof
+    res, node, _ = _poststart(tmp_path / "c", 9, info_extra=twice, sets=False)
+    assert node.sent("--txpower") and not any("confirmed on attempt" in ln for ln in node.status), node.status
+    log = next(d.split(" -> tail -f ", 1)[1] for d in res.details if " -> tail -f " in d)
+    assert "the probe reply names different values (attempt 1/3) -> no proof, send" in pathlib.Path(log).read_text()
+    # the second line in a LATER write of the same reply (a slow console): the probe reads the reply to its end
+    res, node, _ = _poststart(tmp_path / "d", 9, info_late=twice, sets=False)
+    log = next(d.split(" -> tail -f ", 1)[1] for d in res.details if " -> tail -f " in d)
+    assert "the probe reply names different values (attempt 1/3) -> no proof, send" in pathlib.Path(log).read_text()
+
+
+@pytest.mark.needs_session
+@pytest.mark.parametrize("reply, refusal", [
+    ("12:00:01 RX-LoRa2 040 : xAB DL1AB>*:set txpower to {n} dBm HW:1\n", None),   # someone's text: not the ACK line
+    ("{n}set txpower to {n} dBm\n", None),                                         # an ACK the node never applied
+    ("{n}set txpower to {n} dBm\n{n}txpower {n} dBm not between 0 and max {top} dBm\n",
+     "txpower {n} dBm not between 0 and max {top} dBm"),                             # a stale ACK, then the refusal
+    ("{n}txpower {n} dBm not between 0 and max {top} dBm", None),                   # a line never ended: a cut reply
+], ids=["rx-line-with-the-text", "ack-not-applied", "refusal-after-ack", "unterminated-refusal"])
+def test_only_a_fresh_probe_confirms_the_power(tmp_path, reply, refusal):
+    # G2 B3: the ACK line is no proof by itself; a fresh `--info` must report the value; a refusal line in the reply,
+    # after an ACK too, is named
+    res, node, svc = _poststart(tmp_path, 7, txpower_reply=reply, sets=False)
+    n = _default_power(svc)
+    assert res.ok and node.power == 7 and node.sent("--txpower"), node.got
+    assert not any("confirmed on attempt" in ln for ln in node.status), node.status
+    line = next(ln for ln in node.status if " UNVERIFIED " in ln)
+    assert "(the node may use 7)" in line
+    want = refusal and refusal.format(n=n, top=20)
+    assert (f"it refused: '{want}'" in line) if want else ("it refused" not in line), line
 
 
 def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():
@@ -251,12 +345,21 @@ def test_meshcoms_power_step_follows_the_callsign_with_the_same_window():
     labels = [s.get("label") for s in comp.post_steps]
     assert labels[-2:] == ["callsign", "tx power"], labels
     call, power = comp.post_steps[-2], comp.post_steps[-1]
+    # the production window is the callsign's (the rows above run three attempts 0.1 s apart)
     assert power["schedule"] == call["schedule"] and power["on_exhausted"] == "warn" and power["required"] is True
     assert "skip_if_param" not in power
     # its probe is one the console answers: `--lora` prints to the UART only (a plain printf, command_functions.cpp:6782-
-    # 6794); `--info`'s TXPWR line is printfdeb (:7648), the line the callsign's probe reads too (testlab 43991217519:
+    # 6794); `--info`'s power line is printfdeb (:7648), the reply the callsign's probe reads too (testlab 43991217519:
     # 25 `--lora` probes "incomplete", the start cut at 600 s)
-    assert (power["probe"], power["probe_value"]) == ("--info\n", "TXPWR (-?[0-9]+) dBm")
-    # its refusal pattern matches the firmware's own text (printfdeb, command_functions.cpp:5803)
-    assert re.search(power["refused_on"], "22txpower 22 dBm not between 0 and max 20 dBm\n").group(0) == \
-        "txpower 22 dBm not between 0 and max 20 dBm"
+    d = _rendered({"kind": "tcp_send", "port": 1, **{k: power[k] for k in ("data", "probe", "probe_expect",
+                                                                           "probe_line", "ack_line", "refused_line")}},
+                  {"power": "14"})[0]
+    assert d["probe"] == "--info\n" and d["probe_expect"] == "14"
+    # each template matches the recorded firmware's own line: --info's (the recording), the ACK (:5809) and the
+    # refusal (:5803), the last two with and without the number printdeb echoes on the UART
+    assert [re.fullmatch(d["probe_line"], ln).group(1) for ln in INFO_REPLY.splitlines()
+            if re.fullmatch(d["probe_line"], ln)] == ["17"]
+    for echo in ("", "14", "22"):
+        assert re.fullmatch(d["ack_line"], f"{echo}set txpower to 14 dBm").group(1) == "set txpower to 14 dBm"
+        assert re.fullmatch(d["refused_line"], f"{echo}txpower 22 dBm not between 0 and max 20 dBm").group(1) == \
+            "txpower 22 dBm not between 0 and max 20 dBm"

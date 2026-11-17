@@ -92,6 +92,8 @@ def _ok(comp: dict):
                  id="test_unknown_parameter_placeholder_rejected"),
     pytest.param({"run_argv": ["./app", "{operator:secret}"], "readiness": "process"}, None,
                  id="test_unknown_operator_placeholder_rejected"),
+    pytest.param({"run_argv": ["./app", "{daemon:freq}"], "readiness": "process"}, None,
+                 id="test_unknown_daemon_placeholder_rejected"),
     pytest.param({"run_argv": ["./app"], "readiness": "process",
                   "pre_steps": [{"kind": "danger"}]}, None,
                  id="test_invalid_pre_step_kind_rejected"),
@@ -449,3 +451,12 @@ def test_components_sharing_a_source_path_must_declare_the_same_source(field, ot
         parse_manifest(base)
     base["stack"][0]["component"][1]["source"][field] = spec[field]
     assert parse_manifest(base)                        # identical specs -> valid
+
+
+def test_a_run_string_takes_the_daemon_power_as_its_own_token():
+    # G2 B1: the MeshCom bridge's `--max-power {daemon:power}`, written in the `run` shorthand, stays the daemon token
+    # (never a run-param named "daemon:power"); another daemon name is refused at load
+    st = _ok({"run": "./app --max-power {daemon:power} {band}", "readiness": "process"})
+    assert tuple(st[0].components[0].run_argv) == ("./app", "--max-power", "{daemon:power}", "{band}")
+    with pytest.raises(ManifestError, match=r"unknown daemon placeholder '\{daemon:freq\}'"):
+        _ok({"run": "./app --max-power {daemon:freq}", "readiness": "process"})

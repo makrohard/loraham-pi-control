@@ -1461,7 +1461,7 @@ class LifecycleOpsMixin:
                 record(comp, stack, Outcome.BLOCKED, why)
                 continue
             res = life.start(stack, comp, comp_cfg, band=cfg_band,
-                             requested_target=_req_target, start_scope=_req_scope, inst=inst)
+                             requested_target=_req_target, start_scope=_req_scope, inst=inst, daemon=radio_start.daemon_values(self, stack.id, inst))
             if res.log_path:
                 announcer(f"start-{comp.id}", res.log_path)
             if not res.ok:
@@ -1647,7 +1647,7 @@ class LifecycleOpsMixin:
         scheduling failure stays visible-but-non-gating there."""
         if not comp.post_steps:
             return None, ""
-        daemon = {"power": radio_start.post_power(self, stack.id, inst.rid)} if inst is not None and inst.rid else {}
+        daemon = radio_start.daemon_values(self, stack.id, inst)
         if life.has_required_post_start(comp):
             # The retry window can legitimately run for minutes (MeshCom waits for a guest
             # console). Everything it consumes — comp_cfg, the rendered launcher, the GPS plan —
@@ -2630,7 +2630,7 @@ class LifecycleOpsMixin:
         run_over, _file_over = self._materialize_inherited_identity(sid, hint, inst)
         params.update(self._overrides_for_comp(sid, "run", run_over, comp.id))
         inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band, inst)   # W3: the radio's sockets
-        cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst) if inst else ""
+        cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst, daemon=radio_start.daemon_values(self, sid, inst)) if inst else ""
         if not cmd:
             return f"(no run command: {_why})" if _why else "(no run command)"
         cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "", inst=inst) if comp.run_cwd else src)   # its dir
@@ -2766,7 +2766,7 @@ class LifecycleOpsMixin:
                              f"after {n} attempts/{el}s")
             elif oc == "exhausted":
                 lines.append(f"post-start: {label} NOT applied — console never became "
-                             f"ready within {el}s ({n} attempts); re-apply with: "
+                             f"ready within {el}s ({n} attempts); the node keeps its own value (unknown); re-apply with: "
                              f"lhpc stack poststart {instances.named(self, stack_hint, inst)}")
             elif oc == "unverified":
                 held = f"the node may use {self._safe_label(st['reported'], '?')}" if "reported" in st else "its own value unknown"
@@ -2867,7 +2867,7 @@ class LifecycleOpsMixin:
                                                  rec.get("stack", comp_id), rinst))
         for inst in insts if insts is not None else [None]:
             lines.extend(self._required_post_outcomes(comp_id, inst))
-        return lines
+        return lines + radio_start.ceiling_outcomes(self, comp_id)
 
     def _daemon_installed(self, dstat) -> bool:
         """`dstat` (the daemon's ComponentStatus) is installed: a source tree, the binary channel (source-less), or anything

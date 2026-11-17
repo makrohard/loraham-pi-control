@@ -259,7 +259,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
     monkeypatch.setattr(
         lifecycle_mod.Lifecycle, "start",
         lambda self, stack, comp, params=None, band="", *, requested_target="",
-               start_scope="", inst=None:
+               start_scope="", inst=None, daemon=None:
         (captured.setdefault(comp.id, []).append((requested_target, start_scope)) or
          lifecycle_mod.StartLaunch(True, "")))
     assert not svc.start("loraham-kiss-tnc", apply=True).ok  # the stubbed spawn opens no endpoint: unverified

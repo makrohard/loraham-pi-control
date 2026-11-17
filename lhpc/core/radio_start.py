@@ -5,6 +5,7 @@ BOUND=) and the exit actions stay with the wiring. A module of its own, so the s
 from __future__ import annotations
 
 import dataclasses
+import re
 
 from . import config as cfgmod
 from . import radio_daemon, radio_models, radios, rflog
@@ -843,6 +844,11 @@ def save_params(svc, target: str, rid: str, values: dict):
                             inherited=row_dp(svc, rid), pwin=power_window(svc, rid))
     if err:
         return ActionResult(False, err)
+    if "POWER" in edits and sid in running_ceiling_stacks(svc, rid):
+        why = ceiling_change(svc, rid, {sid: edits["POWER"] or row_dp(svc, rid).get("POWER", "")},
+                             cfgmod.apply_config_transaction)
+        if why:
+            return ActionResult(False, f"the daemon settings of {sid}@{rid} not saved: {why}")
     try:
         cfgmod.update_stack_config(svc._paths, sid, {f"dp_{n}": v for n, v in edits.items()}, inst=commands.Instance(rid))
     except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
@@ -897,11 +903,19 @@ def set_row_dp(svc, rid: str, updates, save=None):
 
 
 def _set_row_dp(svc, rid: str, updates, save=None):
+    from . import commands
     from .service_base import ActionResult
     if save is not None:
         updates, why = _radio_updates(svc, save[0], rid, save[1])
         if why:
             return ActionResult(False, why)
+    if "POWER" in updates and updates["POWER"] != row_dp(svc, rid).get("POWER", ""):
+        # A running stack that inherits the row's POWER (no own dp_POWER) launched its ceiling from the old one.
+        heirs = {s: updates["POWER"] for s in running_ceiling_stacks(svc, rid)
+                 if not cfgmod.load_stack_config(svc._paths, s, inst=commands.Instance(rid)).get("dp_POWER")}
+        why = ceiling_change(svc, rid, heirs, cfgmod._apply_config_transaction_locked)   # the list lock IS the config lock
+        if why:
+            return ActionResult(False, f"{rid}'s settings not saved: {why}")
     return _save_row(svc, rid, lambda row: {"dp": tuple(sorted({k: v for k, v in {**dict(row.dp), **updates}.items()
                                                                   if v}.items()))},
                      f"saved the daemon settings of {rid}")
@@ -961,6 +975,91 @@ def view_radio(svc, band: str, rid: str) -> tuple:
 def view_radios(paths) -> list:
     """Every enabled radio of the hardware list as (rid, name, band), by rid: the per-radio views' chooser."""
     return [(r.id, r.name, r.band) for r in sorted(radios.load(paths).radios, key=lambda r: int(r.id[1:])) if r.enabled]
+
+
+def daemon_values(svc, stack_id: str, inst) -> dict:
+    """The `{daemon:…}` values of instance `inst` of `stack_id`: the POWER it applies to its radio's daemon, the one
+    value both the MeshCom bridge's --max-power and the node's --txpower take. {} without a radio."""
+    return {"power": post_power(svc, stack_id, inst.rid)} if inst is not None and inst.rid else {}
+
+
+# The MeshCom bridge's own log lines (meshcom-loraham-bridge 0.3.0): its start, a connection it configured, one it
+# refused for a power above --max-power. The last of them since the bridge's start is the radio's state.
+_BRIDGE_START = "meshcom-loraham-bridge: listening on "
+_BRIDGE_CONFIGURED = "[bridge] XR configured: power "
+_BRIDGE_REFUSED = re.compile(r"^(\S{1,40}) \[bridge\] XR CONFIGURE refused: power (-?[0-9]{1,3}) dBm is above "
+                             r"--max-power ([0-9]{1,2}) dBm$")
+
+
+def ceiling_outcomes(svc, comp_id: str) -> list:
+    """A running instance of a component launched with `{daemon:power}` (the MeshCom bridge's --max-power) whose last
+    XR connection the bridge refused: the node asks more power than the panel's ceiling, so it has NO RADIO until its power
+    is set (read from the bridge's own log, never inferred)."""
+    from . import commands, instances, runtime_fs
+    stack = svc.stack(sid := svc.stack_of(comp_id) or comp_id)
+    comp = next((c for c in stack.components if c.id == comp_id), None) if stack else None
+    if comp is None or "{daemon:power}" not in comp.run_argv:
+        return []
+    life, lines = svc._lifecycle(), []
+    for rec in life.owned_records(comp_id):
+        if life._original_ceased(rec) or not commands.is_rid(rid := rec.get("rid")):
+            continue
+        refused = None
+        for ln in runtime_fs.tail(life.paths, life.logs_dir() / start_log_name(comp_id, rec.get("band", ""), rid),
+                                  lines=400):
+            if _BRIDGE_START in ln or _BRIDGE_CONFIGURED in ln:
+                refused = None
+            elif m := _BRIDGE_REFUSED.match(ln):
+                refused = m
+        if refused:
+            at, asked, cap = refused.groups()
+            at = "".join(c for c in at if c.isprintable())[:19]
+            lines.append(f"radio: NO RADIO: power above panel — the node asks {asked} dBm, the panel's ceiling is {cap} "
+                         f"dBm (the bridge refused it at {at}); set the node's power with: lhpc stack poststart "
+                         f"{instances.named(svc, sid, commands.Instance(rid))}")
+    return lines
+
+
+def running_ceiling_stacks(svc, rid: str) -> list:
+    """The stacks running on radio `rid` whose launch takes `{daemon:power}` (the MeshCom bridge's --max-power): their
+    TX power ceiling is fixed at their start, so a POWER change reaches it only through a restart."""
+    _inst, band, why = daemon_radio(svc, rid)
+    on = None if why else radio_dependents(svc, band, daemon_inst(rid))
+    sids = sorted({d.partition("@")[0] for d in on or ()})
+    return [s for s in sids if (st := svc.stack(s)) is not None
+            and any("{daemon:power}" in c.run_argv for c in st.components)]
+
+
+def ceiling_change(svc, rid: str, new: dict, apply) -> str:
+    """A POWER change for running stacks with a ceiling on radio `rid` (`new`: stack -> its new own-or-row value, ""
+    for the default). Lower than the running ceiling: refused (why), as the bridge would keep the old, higher one until
+    a restart (never above the panel on air). Higher: the restart-required marker. "" when allowed."""
+    from . import daemon_params
+    band, pdef, raised = daemon_radio(svc, rid)[1], power_window(svc, rid)[0], []
+    for sid, value in new.items():
+        now, after = post_power(svc, sid, rid), value or daemon_params.default_value(sid, band, "POWER", pdef)
+        if now and after and int(after) < int(now):
+            return (f"{sid}@{rid} runs with its TX power ceiling at {now} dBm, and a lower POWER takes effect only "
+                    f"with a restart: stop it (lhpc stack stop {sid}@{rid}), save, then start it")
+        if after != now:
+            raised.append(sid)
+    return mark_ceiling_restart(svc, rid, raised, apply)
+
+
+def mark_ceiling_restart(svc, rid: str, sids, apply) -> str:
+    """Each `<sid>@<rid>`'s restart-required marker for its POWER (one config transaction through `apply`, merged with
+    the marker as it stands; an unreadable marker already demands attention); "" when written or nothing to mark."""
+    from . import config, restart_required
+    band = daemon_radio(svc, rid)[1]
+    targets = [("state", restart_required.marker_path(svc._paths, key),
+                svc.restart_marker_payload(key, ["dp_POWER"], band), 0o600)
+               for sid in sids if not (svc.restart_required(key := f"{sid}@{rid}") or {}).get("unsafe")]
+    try:
+        if targets:
+            apply(svc._paths, targets)
+    except (OSError, config.ConfigError) as exc:
+        return f"the restart-required marker failed ({exc})"
+    return ""
 
 
 def radio_dependents(svc, band: str, inst=None):

@@ -248,6 +248,9 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         elif kind == "operator":
             if name != "callsign":
                 raise ManifestError(f"{cid}: unknown operator placeholder {tok!r}")
+        elif kind == "daemon":                       # the instance's daemon apply (the MeshCom bridge's ceiling)
+            if name not in commands._DAEMON_VALUES:
+                raise ManifestError(f"{cid}: unknown daemon placeholder {tok!r}")
         # `controller_python` is controller-derived like runtime/source: it resolves to THIS
         # controller's interpreter, so lhpc's own internal services (the GPS bridge) never
         # run through whatever python3 happens to be on PATH.
@@ -686,7 +689,7 @@ def _tok(t: str) -> str:
         name = t[1:-1]
         if name == "callsign":
             return "{operator:" + name + "}"
-        if name in ("runtime", "source", "band"):
+        if name in ("runtime", "source", "band") or name.startswith("daemon:"):
             return t
         return "{param:" + name + "}"
     return t
