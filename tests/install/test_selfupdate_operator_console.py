@@ -17,38 +17,72 @@ STOP = ["systemctl", "--user", "stop", "lhpc-web.service"]
 START = ["systemctl", "--user", "start", "lhpc-web.service"]
 
 
+# The locks the apply holds before the stop (task admission with its owner record, the update lock) and the
+# console's own lock file are bookkeeping, not a change; any other file under state/locks/ counts.
+_LOCK_BOOKKEEPING = {"state/locks/controller-task-admission.lock", "state/locks/controller-task-admission.owner",
+                     "state/locks/selfupdate.lock", "state/locks/controller-runtime"}
+
+
 def _tree(root):
-    """Every file under state/ and config/ with its bytes, except state/locks/: the locks the apply holds before
-    the stop (task admission with its owner record, the update lock) are bookkeeping, not a change."""
-    locks = root / "state" / "locks"
-    return {str(p.relative_to(root)): p.read_bytes()
+    """Every file under state/ and config/ with its bytes, except the lock bookkeeping above."""
+    return {rel: p.read_bytes()
             for d in ("state", "config") if (root / d).is_dir()
             for p in sorted((root / d).rglob("*"))
-            if p.is_file() and locks not in p.parents}
+            if p.is_file() and (rel := str(p.relative_to(root))) not in _LOCK_BOOKKEEPING}
+
+
+class _Calls(list):
+    """The systemctl calls; `locked`: (step, controller-runtime lock held EXCLUSIVE then) per mutation step and
+    start; `answer`: verb -> a replacement answer for that systemctl verb (a result, or raises); `console`: the
+    console's SHARED hold while it runs."""
+
+
+def _exclusive_held(paths) -> bool:
+    try:
+        with selfupdate.controller_runtime_lock(paths, exclusive=False):
+            return False
+    except selfupdate.ControllerRuntimeBusy:
+        return True
 
 
 @pytest.fixture()
 def cli(env, monkeypatch):
-    """`main` with the console ACTIVE: each systemctl call is recorded with the HEAD and the state/ +
-    config/ files at that moment; the venv sync and the unit refresh are stubbed (not this behaviour)."""
+    """`main` with the console ACTIVE, holding the controller-runtime lock SHARED until it is stopped: each
+    systemctl call is recorded with the HEAD and the state/ + config/ files at that moment; the venv sync
+    and the unit refresh are stubbed (not this behaviour) and record whether the lock is held EXCLUSIVE."""
     from lhpc.adapters.cli.main import main
     from lhpc.core.probes.backends import RealCommandRunner
     from lhpc.core.services import ControllerService
     root = env["paths"].runtime_root
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(root))
     monkeypatch.delenv("INVOCATION_ID", raising=False)
-    calls = []
+    calls = _Calls()
+    calls.locked, calls.answer = [], {}
+    console = calls.console = [selfupdate.controller_runtime_lock(env["paths"], exclusive=False)]
+    console[0].__enter__()
     real = RealCommandRunner.run
 
     def run(self, argv, timeout=None, *a, **kw):
         if argv[0] != "systemctl":
             return real(self, argv, timeout, *a, **kw)
         calls.append((list(argv), gitrepo.git(env["work"], "rev-parse", "HEAD"), _tree(root)))
+        if argv[2] == "stop" and console:
+            console.pop().__exit__(None, None, None)          # the stopped console lets go of its hold
+        if argv[2] == "start":
+            calls.locked.append(("start", _exclusive_held(env["paths"])))
+        if (answer := calls.answer.get(argv[2])) is not None:
+            return answer()
         return CommandResult(0, "", "")                      # is-active: active; stop/start: done
+
+    def step(name, result):
+        calls.locked.append((name, _exclusive_held(env["paths"])))
+        return result
     monkeypatch.setattr(RealCommandRunner, "run", run)
-    monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: CommandResult(0, "", ""))
-    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (True, "n/a"))
-    return main, calls
+    monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: step("venv-sync", CommandResult(0, "", "")))
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: step("units", (True, "n/a")))
+    yield main, calls
+    if console:
+        console.pop().__exit__(None, None, None)
 
 
 def _service_calls(calls):
@@ -125,19 +159,29 @@ def test_an_advance_stops_the_console_before_anything_changes_then_starts_it(env
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == new
 
 
-def test_a_late_release_of_the_console_lock_is_waited_for(env, cli, monkeypatch, capsys):
-    """The stopped console lets go of its SHARED lock a moment late: the bounded retry takes it and the
-    update goes on. The release happens in the retry's own wait (no real clock)."""
+def _retry_clock(monkeypatch, on_wait=lambda: None):
+    """The lock retry's clock moves only by its own waits (no real clock); a retry past ten waits fails the test
+    instead of hanging it. Returns the waits."""
     import time as _time
-    main, calls = cli
-    holder = selfupdate.controller_runtime_lock(env["paths"], exclusive=False)
-    holder.__enter__()
-    waits = []
+    waits, clock = [], [0.0]
 
     def wait(s):
         waits.append(s)
-        holder.__exit__(None, None, None)
+        clock[0] += s
+        assert len(waits) <= 10, "the retry never reached its deadline"
+        on_wait()
     monkeypatch.setattr(_time, "sleep", wait)
+    monkeypatch.setattr(_time, "monotonic", lambda: clock[0])
+    return waits
+
+
+def test_a_late_release_of_the_console_lock_is_waited_for(env, cli, monkeypatch, capsys):
+    """The stopped console lets go of its SHARED lock a moment late: the bounded retry takes it and the
+    update goes on. The release happens in the retry's own wait (no real clock)."""
+    main, calls = cli
+    holder = selfupdate.controller_runtime_lock(env["paths"], exclusive=False)
+    holder.__enter__()
+    waits = _retry_clock(monkeypatch, lambda: holder.__exit__(None, None, None))
     new = gitrepo.upstream_commit(env["up"])
     assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
     assert len(waits) == 1 and _service_calls(calls) == [STOP, START], (waits, calls)
@@ -146,17 +190,19 @@ def test_a_late_release_of_the_console_lock_is_waited_for(env, cli, monkeypatch,
 
 def test_another_holder_of_the_console_lock_is_busy_and_the_console_is_started_again(env, cli, monkeypatch, capsys):
     """Something else keeps the controller-runtime lock past the retry: the apply refuses with nothing
-    changed, without hanging, and starts the console it had stopped."""
+    changed, without hanging (the retry's clock moves only by its own waits: 2 s of 0.5 s waits), and starts the
+    console it had stopped."""
     from lhpc.core.services import ControllerService
     main, calls = cli
-    monkeypatch.setattr(ControllerService, "_LOCK_WAIT_S", 0.0)        # the deadline is reached at once
+    monkeypatch.setattr(ControllerService, "_LOCK_WAIT_S", 2.0)
+    waits = _retry_clock(monkeypatch)
     old = gitrepo.git(env["work"], "rev-parse", "HEAD")
     gitrepo.upstream_commit(env["up"])
     with selfupdate.controller_runtime_lock(env["paths"], exclusive=False):
         assert main(["self-update", "--apply", "--yes"]) == 1
     out = capsys.readouterr().out
     assert "did not release the controller-runtime lock — no changes made." in out, out
-    assert _service_calls(calls) == [STOP, START], calls
+    assert waits == [0.5] * 4 and _service_calls(calls) == [STOP, START], (waits, calls)
     assert gitrepo.git(env["work"], "rev-parse", "HEAD") == old
 
 
@@ -170,3 +216,88 @@ def test_a_resumed_venv_sync_stops_the_console_first(env, cli, monkeypatch, caps
     assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
     assert [c[0] for c in calls if c[0][0] == "venv-sync" or c[0][2] in ("stop", "start")] == [
         STOP, ["venv-sync"], START], calls
+
+
+def test_the_console_lock_is_held_exclusive_through_the_venv_sync_and_the_unit_refresh(env, cli, capsys):
+    """An advance changes the venv and the units after the checkout: the controller-runtime lock taken
+    before the first change is still held EXCLUSIVE there, so no console can start on a half-synced venv."""
+    main, calls = cli
+    gitrepo.upstream_commit(env["up"])
+    assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
+    assert calls.locked == [("venv-sync", True), ("units", True), ("start", False)], calls.locked
+    assert _service_calls(calls) == [STOP, START], calls
+
+
+def test_a_resumed_venv_sync_holds_the_console_lock(env, cli, monkeypatch, capsys):
+    main, calls = cli
+    monkeypatch.setattr(selfupdate, "venv_unsynced", lambda root: "installed 0.0.1, checkout 0.0.2")
+    assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
+    assert calls.locked == [("venv-sync", True), ("units", True), ("start", False)], calls.locked
+
+
+def test_with_the_console_not_running_the_lock_is_still_held_through_the_venv_sync(env, cli, capsys):
+    main, calls = cli
+    calls.answer["is-active"] = lambda: CommandResult(3, "", "")
+    calls.console.pop().__exit__(None, None, None)
+    gitrepo.upstream_commit(env["up"])
+    assert main(["self-update", "--apply", "--yes"]) == 0, capsys.readouterr().out
+    assert calls.locked == [("venv-sync", True), ("units", True)] and _service_calls(calls) == [], calls
+
+
+def test_a_resumed_venv_sync_is_refused_while_another_holder_keeps_the_console_lock(env, cli, monkeypatch, capsys):
+    """Another process keeps the lock SHARED past the retry: the resumed sync does not run under it, and
+    the console this apply stopped is started again."""
+    from lhpc.core.services import ControllerService
+    main, calls = cli
+    monkeypatch.setattr(ControllerService, "_LOCK_WAIT_S", 2.0)
+    waits = _retry_clock(monkeypatch)
+    monkeypatch.setattr(selfupdate, "venv_unsynced", lambda root: "installed 0.0.1, checkout 0.0.2")
+    with selfupdate.controller_runtime_lock(env["paths"], exclusive=False):
+        assert main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "did not release the controller-runtime lock — no changes made." in out, out
+    assert waits == [0.5] * 4 and calls.locked == [("start", False)], (waits, calls.locked)
+    assert _service_calls(calls) == [STOP, START], calls
+
+
+def _stop_times_out():
+    return CommandResult(1, "", "", timed_out=True)
+
+
+def _stop_interrupted():
+    raise KeyboardInterrupt
+
+
+@pytest.mark.parametrize("stop, rc", [(_stop_times_out, 1), (_stop_interrupted, 130)], ids=["timeout", "ctrl-c"])
+def test_a_stop_that_did_not_return_cleanly_still_starts_the_console_again(env, cli, capsys, stop, rc):
+    """systemd took the stop, but `systemctl stop` timed out or the operator pressed Ctrl-C before it
+    returned: the console may be stopped, so this apply starts it again; nothing changed."""
+    main, calls = cli
+    calls.answer["stop"] = stop
+    old = gitrepo.git(env["work"], "rev-parse", "HEAD")
+    gitrepo.upstream_commit(env["up"])
+    assert main(["self-update", "--apply", "--yes"]) == rc
+    assert _service_calls(calls) == [STOP, START], calls
+    assert calls.locked == [("start", False)] and gitrepo.git(env["work"], "rev-parse", "HEAD") == old
+
+
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, OSError], ids=["ctrl-c", "error"])
+def test_an_apply_that_raises_and_a_failed_restart_say_the_console_did_not_restart(env, cli, monkeypatch, capsys,
+                                                                                  raised):
+    """The venv sync is interrupted (Ctrl-C) or raises, and starting the console again fails: the operator
+    is still told the console did NOT restart, with the command to start it."""
+    main, calls = cli
+
+    def sync(*a, **k):
+        raise raised("pip interrupted")
+    monkeypatch.setattr(selfupdate, "venv_sync", sync)
+    calls.answer["start"] = lambda: CommandResult(1, "", "Job for lhpc-web.service failed.")
+    gitrepo.upstream_commit(env["up"])
+    try:
+        rc = main(["self-update", "--apply", "--yes"])
+    except Exception as exc:                                  # noqa: BLE001 - the red-before shape: it escaped
+        rc = f"raised {type(exc).__name__}"
+    cap = capsys.readouterr()
+    assert rc == 1, (rc, cap)
+    assert "lhpc-web did NOT restart" in cap.out and "systemctl --user start lhpc-web.service" in cap.out, cap
+    assert _service_calls(calls) == [STOP, START] and calls.locked == [("start", False)], calls
