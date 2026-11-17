@@ -131,24 +131,36 @@ def listener_insts(svc, stack, running, started: bool, live_ports=()) -> tuple:
     return configured + ([None] if not (configured or evidence) or (started and running is None) else []), evidence
 
 
+def represented(rows) -> set:
+    """The listeners Home's rows really show (G2-UIU3-R4 B1, one rule for every row): a raw row its (component,
+    port); a page row its proxy ("proxy", port) while that listens, and its direct upstream (component, port) only
+    when it is not proxied (dashboard.html shows a proxied page's proxy alone, so its upstream needs its own line)."""
+    out = set()
+    for r in rows:
+        if r["kind"] == "port":
+            out.add((r["component"], r["port"]))
+        elif r.get("posture"):
+            out |= {("proxy", str(r["port"]))} if r["live"] else set()
+        elif r.get("direct_port"):
+            out.add((r["component"], r["direct_port"]))
+    return out
+
+
 def off_list_page_rows(svc, stk, configured, page_rows, snap, fw_status) -> list:
     """G2-UIU3-R3 H5: the page rows of a configured radio that has no page now (disabled, removed from the hardware
-    list, or of another band), only for a listener no row shows yet (the class rule: its live proxy port, or its live
-    upstream (component, port); a fixed-port stack's pages share one upstream); `radio_off` says which."""
+    list, or of another band), only for a live listener no row represents yet (`represented`: a fixed-port stack's
+    pages share one upstream); `radio_off` says which."""
     from .model import web_pages
     off = [i for i in configured if i is not None and i.rid not in {p["rid"] for p in page_rows}]
     if not off:
         return []
     hw = {r.id: r for r in radios.load(svc._paths).radios}
-    proxy = {str(p["port"]) for p in page_rows if p["live"]}
-    direct = {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}
-    out = []
+    shown, out = represented(page_rows), []
     for page in web_pages(stk, instances=off, paths=svc._paths):
         r = {**svc._dashboard_web_row(stk, page, snap, fw_status), "comp_state": ""}
-        up = r["direct_scope"] not in ("absent", None, "") and (r["component"], r["direct_port"]) not in direct
-        if (r["live"] and str(r["port"]) not in proxy) or up:
-            proxy |= {str(r["port"])} if r["live"] else set()
-            direct.add((r["component"], r["direct_port"]))
+        mine = {k for k in represented([r]) if k[0] == "proxy" or r["direct_scope"] not in ("absent", None, "")}
+        if mine - shown:
+            shown |= mine
             rad = hw.get(r["rid"])
             out.append({**r, "radio_off": "removed" if rad is None else "disabled" if not rad.enabled
                         else "on another band"})
@@ -156,11 +168,11 @@ def off_list_page_rows(svc, stk, configured, page_rows, snap, fw_status) -> list
 
 
 def listener_rows(svc, stk, comps, snap, fw_status, get_argvs, pages, configured, evidence, page_rows) -> list:
-    """The raw rows of one stack's Home box (G2-UIU3-R3 class: every live listener no row explains has a row). A
-    CONFIGURED instance's row for every raw endpoint, at its saved ports; then an EVIDENCE instance's row (a
-    radio whose default port is live) for every network endpoint, raw or a page's upstream, kept only when its
-    listener is live and no row shows the same (component, port): evidence only adds, never replaces. In the box's
-    order: by endpoint, then by radio, a configured row before an evidence one."""
+    """The raw rows of one stack's Home box (G2-UIU3-R3/R4 class: every live listener no row represents has a row).
+    A CONFIGURED instance's row for every raw endpoint, at its saved ports; then an EVIDENCE instance's row (a radio
+    whose default port is live, a launch's recorded port) for every network endpoint, raw or a page's upstream, kept
+    only for a live listener no row represents yet (`represented`: a proxied page's upstream is not). Evidence only
+    adds, never replaces. In the box's order: by endpoint, then by radio."""
     eps = [(n, comp, ep) for n, (comp, ep) in enumerate((c, e) for c in stk.components for e in c.endpoints)
            if svc._is_raw_endpoint(ep) or (getattr(ep, "client", False) and ":" in ep.address)]
 
@@ -168,8 +180,7 @@ def listener_rows(svc, stk, comps, snap, fw_status, get_argvs, pages, configured
         return svc._dashboard_port_row(stk, comp, ep, snap, fw_status, comp_state=comps.get(comp.id),
                                        get_argvs=get_argvs, inst=i, pages=pages)
     own = [(n, i, one(comp, ep, i)) for n, comp, ep in eps if svc._is_raw_endpoint(ep) for i in configured]
-    shown = {(r["component"], r["port"]) for _n, i, r in own if i is not None} | \
-        {(p["component"], p["direct_port"]) for p in page_rows if p.get("direct_port")}   # a fallback names no radio
+    shown = represented([r for _n, i, r in own if i is not None] + list(page_rows))   # a fallback names no radio
     seen = []
     for n, comp, ep in eps:
         for i in evidence:

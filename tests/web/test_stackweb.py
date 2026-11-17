@@ -2510,6 +2510,7 @@ def _kiss_box(tmp_path, monkeypatch, listeners, run, state, pids=(), sid="kiss")
     return svc
 
 
+@pytest.mark.no_default_hardware
 def test_a_radio_less_fallback_never_stands_for_an_observed_radios_line(tmp_path, monkeypatch, web):
     # G2-UIU3-R3 (second read v7 M2): no hardware list, kiss started, its running set unknown; r1's :8001 and r2's
     # :8134 listen on every address. Each is its own radio's line: the radio-less fallback never takes r1's.
@@ -2920,6 +2921,59 @@ def test_a_page_upstream_of_a_radio_with_no_page_left_listening_has_a_line(tmp_p
     assert mine, [n for n, _h, _l in lines]
     assert any(box.within(line).find("span", **{"data-state": "radio-off"}) for line in mine) == (case == "r2-disabled")
     assert f":{port}" in " ".join(line.text for line in mine)
+
+
+def test_a_proxied_pages_public_upstream_has_its_own_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R4 B1: graywolf@r1 runs; its web UI (a page endpoint, not a raw one) listens on every address (:8080)
+    # and its page is proxied (an enabled proxy on :8590). The page line shows the proxy alone, so the public
+    # upstream is a line of its own, and the box and the security verdict read it. red on 4e64fd56: no :8080 line
+    from lhpc.core import commands
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    svc = _kiss_box(tmp_path, monkeypatch, [_public(8080), _public(8590, 2)], run=[commands.Instance("r1")],
+                    state="RUNNING", sid="graywolf")
+    assert svc.stack_web_configure("graywolf@r1", mode="public", port=8590, cidrs=["0.0.0.0/0"], confirm=True,
+                                   confirm_public=True).ok
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    addrs = [a.text.strip() for n, _h, line in lines if n.endswith("@r1") for a in box.within(line).find("span", class_="wsaddr")]
+    assert addrs == ["localhost:8080 · public"], [n for n, _h, _l in lines]
+    assert _box_pill(box) == "exposed"
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
+def test_an_off_list_page_on_a_proxy_port_a_listed_page_shows_adds_no_line(tmp_path, monkeypatch, web):
+    # G2-UIU3-R4 (known gap OS): meshcom@r2's proxy was saved on :8578 and switched off; a hand edit of local.toml
+    # (Settings refuses a port another page holds) gives r1's page :8578, and nginx serves r1 there; r2 is then
+    # disabled. r2's page reads :8578 live, but that listener is r1's proxy, which r1's line already shows: no r2 line
+    import dataclasses
+
+    from lhpc.core import config
+    svc = _meshcom_box(tmp_path, monkeypatch, [_mc_listener("127.0.0.1"), _R2_PROXY])
+    _r2_public_proxy(svc)
+    assert svc.stack_web_configure("meshcom@r2", mode="local").ok
+    config.save_stackweb_config(svc._paths, "meshcom@r1", mode="public", port=8578, allowed_cidrs=["0.0.0.0/0"])
+    radios_fixture.write(tmp_path, (radios_fixture.R1, dataclasses.replace(radios_fixture.R2, enabled=False)))
+    _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
+    names = [n for n, _h, _l in lines]
+    assert "MeshCom (QEMU) @r1" in names and "MeshCom (QEMU) @r2" not in names, names
+
+
+def test_an_evidence_radio_whose_listener_is_absent_adds_no_row():
+    # G2-UIU3-R4 (known gap L1), the helper's own rule: an evidence radio's row stays only for a live listener. Read
+    # directly: through Home, every path to an absent evidence row also has that radio's own row on the same port
+    # (both read the live port from the same process) or loses the absent row in home_rows
+    from types import SimpleNamespace as NS
+
+    from lhpc.core import commands, instances
+    ports = {"r1": ("8001", "exposed"), "r2": ("9133", "absent"), "r3": ("8267", "exposed")}
+
+    def port_row(stk, comp, ep, snap, fw, comp_state=None, get_argvs=None, inst=None, pages=()):
+        return {"kind": "port", "component": "c", "rid": inst.rid, "port": ports[inst.rid][0],
+                "live_scope": ports[inst.rid][1]}
+    svc = NS(_is_raw_endpoint=lambda ep: True, _dashboard_port_row=port_row)
+    stk = NS(components=[NS(id="c", endpoints=[NS(address="127.0.0.1:8001")])])
+    rows = instances.listener_rows(svc, stk, {}, [], None, None, (), [commands.Instance("r1")],
+                                   [commands.Instance("r2"), commands.Instance("r3")], [])
+    assert [(r["rid"], r["port"]) for r in rows] == [("r1", "8001"), ("r3", "8267")]
 
 
 
