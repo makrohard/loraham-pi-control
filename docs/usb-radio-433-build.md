@@ -250,8 +250,9 @@ A plain 433 MHz module (without the RFM98PW's extra PA) whose antenna is on PA_B
 daemon drives ([radio parameters](stacks/daemon.md#radio-parameters)), or an SX126x module (SX1262) can
 take the RFM98PW's place, wired by signal name: its pin numbers and layout differ from the RFM98PW's.
 Feed its VCC 3.3 V from a supply rated for the module's transmit current (its datasheet), never the 5 V
-feed of step 4; the rating of the board's 3.3 V pads is unknown. The drawings below replace steps 3 and 4;
-the EEPROM steps 5–7 stay the same.
+feed of step 4; the rating of the board's 3.3 V pads is unknown. For these 3.3 V modules the drawings
+below replace steps 2.5–2.6, 3 and 4: the 5 V wire of step 2 is not made. The EEPROM steps 5–7 stay
+the same.
 
 - **SX127x (433 MHz):** the signals of step 3 (NSS, SCK, MOSI, MISO, RESET, DIO0, DIO1) and GND, as the
   model `ch341-rfm98pw-433`.
@@ -265,3 +266,7 @@ the EEPROM steps 5–7 stay the same.
   that stick's pins, TCXO and PA settings, so the module must match them.
 
   ![Wiring of an SX1262 module as the model meshstick-1262](img/usb-radio-433-sx1262-meshstick.svg)
+
+Step 8 applies with the module's own band: an SX1262 on 868 MHz takes 0 as its lowest `POWER` (the daemon's
+SX1262 range is 0–20), its start prints `[ok] 868: POWER=0 sent`, it needs an 868 MHz peer, and it has no
+0x42 version register: READY is the SPI check.
