@@ -136,3 +136,49 @@ def test_a_newer_entry_missing_a_covered_component_offers_nothing_and_the_instal
     res = svc.install("daemon", apply=False, source="binary")
     assert not res.ok and f"no published binary covers {dropped} yet: install from source" in res.summary, res.summary
     assert res.data.get("binary_refusal") == "none_compatible"
+
+
+# ---- G2-UPDCHAIN-A named fixes: a receipt's publication time, one readiness rule ------------------------------
+
+
+def _installed_at(svc, rec, stamp):
+    import calendar
+    import dataclasses
+    import time
+    at = calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, installed_at=float(at)))
+    svc.invalidate_snapshot()
+
+
+def test_a_receipt_without_its_publication_time_takes_it_from_its_listed_entry(tmp_path, monkeypatch, binary_receipt):
+    # An older lhpc installed A (published Nov 1) on Nov 16 and recorded no publication time; B (Nov 10) is newer
+    # than A, so it is offered: A's entry dates it, never the install time.
+    svc = _svc(tmp_path, monkeypatch)
+    other = _other(svc, "daemon")
+    _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
+                  "2026-11-16T00:00:00Z")
+    b = _entry("daemon", "2" * 64, other, "2026-11-10T00:00:00Z")
+    _serve(monkeypatch, "daemon", b, _entry("daemon", "1" * 64, other, "2026-11-01T00:00:00Z"))
+    assert svc.binary_freshness("daemon") == {"state": "behind", "offer": b["filename"]}
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 1 and any(b["filename"] in d for d in plan.details), plan.details
+
+
+def test_a_receipt_without_its_publication_time_and_no_listed_entry_offers_only_what_is_proven_newer(
+        tmp_path, monkeypatch, binary_receipt):
+    # A's entry is no longer listed and A's receipt has no publication time. A was published no later than it was
+    # installed (Nov 16): an entry published after that is proven newer and offered; one published before it may be
+    # older, so it is never offered and never "current": could not check, and the install keeps A.
+    svc = _svc(tmp_path, monkeypatch)
+    other = _other(svc, "daemon")
+    _installed_at(svc, binary_receipt(svc, "daemon", sha="1" * 64, commits=other, provenance={}),
+                  "2026-11-16T00:00:00Z")
+    after = _entry("daemon", "2" * 64, other, "2026-11-16T12:00:00Z")
+    _serve(monkeypatch, "daemon", after)
+    assert svc.binary_freshness("daemon") == {"state": "behind", "offer": after["filename"]}
+    before = _entry("daemon", "3" * 64, other, "2026-11-10T00:00:00Z")
+    _serve(monkeypatch, "daemon", before)
+    fresh = svc.binary_freshness("daemon")
+    assert fresh["state"] == "error" and fresh["offer"] == "" and "no publication time" in fresh["why"], fresh
+    plan = svc.install("daemon", apply=False, source="binary")
+    assert plan.ok and plan.data["changes"] == 0 and "no publication time" in " ".join(plan.details), plan.details

@@ -120,10 +120,10 @@ class BinaryOpsMixin:
             # the packages, then the same artifact). The apply decides nothing and moves nothing before its locks:
             # it takes them, recovers, then decides (below).
             _settled = bi.read_journal(self._paths)[1] == "absent"
-            _how, _rec, _stuck = self._binary_current(stack_id, entry) if _settled else ("", None, "")
+            _how, _rec, _stuck = self._binary_current(stack_id, entry, entries) if _settled else ("", None, "")
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
-            if _how == "kept":
+            if _how in ("kept", "unordered"):
                 return self._binary_already_installed(stack_id, entry, _rec, _how, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
@@ -197,10 +197,10 @@ class BinaryOpsMixin:
             prev_receipt_raw = brx.read_raw(self._paths, stack_id)
             # THE decision, under the locks after recovery and before any clone is touched (D10): another
             # installed binary `entry` is not newer than stays, clones and files untouched; then the packages.
-            _how, _rec, _stuck = self._binary_current(stack_id, entry)
+            _how, _rec, _stuck = self._binary_current(stack_id, entry, entries)
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
-            if _how == "kept":
+            if _how in ("kept", "unordered"):
                 return self._binary_already_installed(stack_id, entry, _rec, _how, [])
             if (_deps := self._binary_deps_refusal(stack_id, entry)) is not None:
                 return _deps
@@ -376,26 +376,30 @@ class BinaryOpsMixin:
 
     @staticmethod
     def _binary_already_installed(stack_id: str, entry, rec, how: str, notes: list) -> ActionResult:
-        older = [f"  newest published: {entry.filename} — not newer than the installed one"] if how == "kept" else []
+        older = {"kept": [f"  newest published: {entry.filename} — not newer than the installed one"],
+                 "unordered": [f"  newest published: {entry.filename} — the installed one is no longer listed and "
+                               "records no publication time, so which is newer could not be checked: kept"]}.get(how, [])
         return ActionResult(True, f"'{stack_id}' already has the published binary "
                                   f"{rec.filename} installed — nothing to download.",
                             details=[*notes, *older], next_commands=[f"lhpc status {stack_id}"],
                             data={"changes": 1 if notes else 0, "channel": "binary"})
 
-    def _binary_current(self, stack_id: str, entry) -> tuple[str, object, str]:
+    def _binary_current(self, stack_id: str, entry, entries) -> tuple[str, object, str]:
         """(how, the installed receipt, refusal): the one "nothing to install" decision, by the artifact's sha256,
         never its file name. "same": `entry` IS the installed artifact; "kept": another one `entry` is not newer
-        than (D10, also when its own entry was withdrawn); both only while the installed files still hash as
+        than (D10, also when its own entry was withdrawn); "unordered": another one whose order against `entry`
+        cannot be checked (`bi.is_newer` None: never replaced by what may be older); all only while the files hash as
         installed, verified whatever the entry's age. ("", None, "") installs `entry`: changed files of the same
         artifact (the reinstall is the repair) or a newer entry. Changed files and nothing newer: the refusal, never
         an older replacement. Plan and apply branch on `how`; a kept or same artifact's checkouts are checked
         against ITS receipt's commits, never another entry's."""
         state, rec, _why = self.binary_receipt_state(stack_id)
         same = state == "valid" and rec.artifact_sha256 == entry.sha256
-        if state != "valid" or (not same and bi.is_newer(entry, rec)):
+        newer = False if same or state != "valid" else bi.is_newer(entry, rec, entries)
+        if state != "valid" or newer:
             return "", None, ""
         if brx.verify_files(self._paths, rec)[0]:
-            return ("same" if same else "kept"), rec, ""
+            return ("same" if same else "kept" if newer is False else "unordered"), rec, ""
         if same:
             return "", None, ""
         return "", None, f"the installed binary {rec.filename} changed since its install and no newer one is published"
@@ -922,20 +926,26 @@ class BinaryOpsMixin:
 
     def binary_freshness(self, stack_id: str) -> dict:
         """NETWORK (the index read the install makes): the binary lane's verdict from the SAME target the install
-        takes (`bi.newest_entry`, plan R2). {state: current|behind|error|n/a, offer: file name}: `behind` = a newer
-        entry is published; `error` = the index could not be read (could not check). No entry for this box, or a
+        takes (`bi.newest_entry`, plan R2). {state: current|behind|error|n/a, offer: file name[, why]}: `behind` = a
+        newer entry is published; `error` = the index could not be read, or (with `why`) the newest entry cannot be
+        ordered against the installed one (`bi.is_newer` None) (could not check). No entry for this box, or a
         newest one that does not cover this lhpc, offers nothing: the installed binary stays current (D10)."""
         state, rec, _why = self.binary_receipt_state(stack_id)
         spec = self.binary_spec(stack_id)
         if state != "valid" or rec is None or spec is None:
             return {"state": "n/a", "offer": ""}
         try:
-            entry = bi.newest_entry(bi.index_entries(bi.fetch_index(spec.index_url), stack_id),
-                                    self.binary_target(), spec.covers)
+            entries = bi.index_entries(bi.fetch_index(spec.index_url), stack_id)
+            entry = bi.newest_entry(entries, self.binary_target(), spec.covers)
         except bi.BinaryNoneCompatible:
             return {"state": "current", "offer": ""}
         except bi.BinaryInstallError:
             return {"state": "error", "offer": ""}
-        if entry.sha256 != rec.artifact_sha256 and bi.is_newer(entry, rec):
+        newer = entry.sha256 != rec.artifact_sha256 and bi.is_newer(entry, rec, entries)
+        if newer:
             return {"state": "behind", "offer": entry.filename}
+        if newer is None:
+            return {"state": "error", "offer": "", "why": (
+                f"the installed binary is no longer listed and records no publication time, so whether "
+                f"{entry.filename} is newer could not be checked")}
         return {"state": "current", "offer": ""}

@@ -351,14 +351,20 @@ def newest_entry(entries: list, target: str, covers) -> IndexEntry:
     return best
 
 
-def is_newer(entry: IndexEntry, rec) -> bool:
+def is_newer(entry: IndexEntry, rec, entries) -> bool | None:
     """`entry` is offered over the installed receipt `rec` only when it was published later (D10: a withdrawn
-    installed binary stays, never replaced by an older one). A receipt written before its entry's `published_at`
-    was recorded falls back to its install time."""
+    installed binary stays, never replaced by an older one). The installed artifact's publication time is its
+    receipt's, else that of the listed entry with its sha (a receipt an older lhpc wrote records none). Neither:
+    it was published no later than it was installed, so an entry published after the install time is newer, and
+    one published before it cannot be ordered: None (never offered, never "current": could not check)."""
+    published = entry.published_at or ""
     installed = rec.provenance.get("published_at")
     if not _utc_stamp(installed):
-        installed = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at))
-    return (entry.published_at or "") > installed
+        installed = next((e.published_at for e in entries
+                          if e.sha256 == rec.artifact_sha256 and _utc_stamp(e.published_at)), None)
+    if installed:
+        return published > installed
+    return True if published > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rec.installed_at)) else None
 
 
 def select_web(entries: list, channel: str, daemon_commit: str) -> IndexEntry:
