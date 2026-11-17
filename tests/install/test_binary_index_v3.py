@@ -67,7 +67,6 @@ def test_nothing_published_for_this_box_is_the_typed_refusal(tmp_path, monkeypat
     monkeypatch.setattr(bi, "download_artifact", lambda *a: pytest.fail("must refuse first"))
     res = svc.binary_install("daemon", apply=True)
     assert not res.ok and res.data["binary_refusal"] == "none_compatible"
-    assert res.data["pin_mismatch"] == {}
     assert res.next_commands == ["lhpc self-update --apply", "lhpc install daemon --source pinned --yes"]
 
 

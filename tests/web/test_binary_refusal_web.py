@@ -122,26 +122,26 @@ def test_csrf_is_enforced(web, published):
 
 # ---- the stack page: a job's typed refusal, an override in force ---------------------------------
 
-def _failed_install_job(svc_paths, stack, pairs):
+def _failed_install_job(svc_paths, stack):
     log, aid = f"install-{stack}.log", "d" * 32
     assert jobresult.reserve(svc_paths, log, aid, "install", stack, stack, [])
     assert jobresult.terminalize(svc_paths, log, aid, "failed", detail="install failed",
-                                 refusal={"pin_mismatch": pairs})
+                                 refusal="none_compatible")
 
 
 def _stack_page(c, stack):
     return parse(c.get(f"/stacks?open={stack}").get_data(as_text=True))
 
 
-@pytest.mark.parametrize("stack,cid", [("daemon", None), ("meshcom", "meshcom-qemu")])
+@pytest.mark.parametrize("stack", ["daemon", "meshcom"])
 def test_stack_page_shows_the_jobs_refusal_without_fetching(web, monkeypatch, tmp_path,
-                                                           update_available, stack, cid):
-    """The job result holds the lagging pairs; the GET does not fetch the index (a fetch fails the
+                                                           update_available, stack):
+    """The job result holds the typed refusal; the GET does not fetch the index (a fetch fails the
     test); the banner leads with Update LHPC first and offers Install again, never an override."""
     from lhpc.core.paths import Paths
     update_available(True)
     monkeypatch.setattr(bi, "fetch_index", lambda url: pytest.fail("a GET must not fetch"))
-    _failed_install_job(Paths(runtime_root=tmp_path), stack, {cid or _daemon_cid(): [A, B]})
+    _failed_install_job(Paths(runtime_root=tmp_path), stack)
     doc = _stack_page(web(), stack)
     box = doc.by_id(f"pin-refusal-{stack}")
     assert box is not None
@@ -151,12 +151,12 @@ def test_stack_page_shows_the_jobs_refusal_without_fetching(web, monkeypatch, tm
     assert not scope.find("input", name="consent") and "--accept-pin-mismatch" not in scope.text
 
 
-def test_stack_page_names_the_uncovered_case_when_no_commit_lags(web, tmp_path, update_available):
-    """U9's refusal (no published binary covers this LHPC): the banner still leads with Update LHPC
-    first and says what is missing."""
+def test_stack_page_names_the_uncovered_case(web, tmp_path, update_available):
+    """U9's refusal (no published binary covers this LHPC): the banner leads with Update LHPC first
+    and says what is missing."""
     from lhpc.core.paths import Paths
     update_available(True)
-    _failed_install_job(Paths(runtime_root=tmp_path), "meshtastic", {})
+    _failed_install_job(Paths(runtime_root=tmp_path), "meshtastic")
     box = _stack_page(web(), "meshtastic").by_id("pin-refusal-meshtastic")
     assert box is not None
     scope = _stack_page(web(), "meshtastic").within(box)

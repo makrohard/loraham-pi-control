@@ -2366,8 +2366,7 @@ def test_auto_install_none_compatible_row_leads_with_self_update_and_names_no_ov
     source command, and offers no way over the pin check (decision D1)."""
     _happy_ops(monkeypatch)
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    data = {"binary_failed": True, "binary_refusal": "none_compatible",
-            "pin_mismatch": {"meshtastic": ["a" * 40, "b" * 40]}}
+    data = {"binary_failed": True, "binary_refusal": "none_compatible"}
     monkeypatch.setattr(ControllerService, "binary_install",
                         lambda self, sid, apply=False, locked=False, **_k:
                         ActionResult(False, f"Binary install of '{sid}' refused: x",

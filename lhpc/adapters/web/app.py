@@ -2067,15 +2067,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
             offer_source=bool(plan.data.get("offer_source")),
-            # No published binary built for this LHPC: the newest entry's lagging pairs.
-            pin_refusal=_pin_refusal(plan) if op in ("install", "update") else None)
+            # No published binary this LHPC can install: the typed refusal.
+            pin_refusal=op in ("install", "update") and _pin_refusal(plan))
 
-    def _pin_refusal(plan):
+    def _pin_refusal(plan) -> bool:
         """The confirm page's view of a `none_compatible` refusal, read from its typed data only
-        (never its text): the newest entry's lagging pairs (none when the commits are not what
-        differs)."""
-        ref = jobresult.refusal_from(plan)
-        return {"lagging": jobresult.lagging(ref)} if ref else None
+        (never its text)."""
+        return jobresult.refusal_from(plan) is not None
 
     @app.post("/action")
     def action():

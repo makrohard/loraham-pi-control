@@ -13,7 +13,7 @@
         {# The last console install was refused: no published binary this LHPC can install (the job's typed refusal). #}
         <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
           {{ update_lhpc_first(selfupdate.update_available) }} —
-          the install was refused: {% if g.pin_refusal.lagging %}the published binary was built from other commits than this LHPC pins.{% else %}no published binary for this box covers this LHPC's components.{% endif %}
+          the install was refused: no published binary for this box covers this LHPC's components.
             <form method="post" action="{{ url_for('action') }}" class="act">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
               <input type="hidden" name="op" value="install">

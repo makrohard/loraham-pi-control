@@ -118,40 +118,23 @@ def _valid(d, log: str) -> bool:
     return not (di is not None and not isinstance(di, dict))
 
 
-_CID_RE = re.compile(r"[0-9A-Za-z._-]{1,64}")
-_MAX_PAIRS = 16
+REFUSAL = "none_compatible"
 
 
 def valid_refusal(v) -> bool:
-    """The optional typed `refusal` of a binary install (no published binary built for this
-    lhpc: the newest entry's lagging pairs, empty when the commits are not what differs): bounded and
-    structurally checked. A record that fails it is read WITHOUT the field (never trusted)."""
-    if not isinstance(v, dict) or set(v) != {"pin_mismatch"}:
-        return False
-    pm = v["pin_mismatch"]
-    if not isinstance(pm, dict) or len(pm) > _MAX_PAIRS:
-        return False
-    return all(isinstance(k, str) and _CID_RE.fullmatch(k) and isinstance(p, list) and len(p) == 2
-               and all(validators.is_hex(x, 40) for x in p)
-               for k, p in pm.items())
+    """The optional typed `refusal` of a binary install: the marker "none_compatible" (no published binary this
+    lhpc can install). Anything else, also a record written before 0.14.0 (`{"pin_mismatch": ...}`), is read
+    WITHOUT the field (never trusted)."""
+    return isinstance(v, str) and v == REFUSAL
 
 
-def refusal_from(res) -> dict | None:
-    """The typed refusal a binary install's ActionResult carries (`none_compatible`, with its lagging
-    commits), or None: no result, a success, or any other failure."""
+def refusal_from(res) -> str | None:
+    """The typed refusal a binary install's ActionResult carries (`none_compatible`), or None: no result, a
+    success, or any other failure."""
     data = getattr(res, "data", None) if res is not None else None
     if getattr(res, "ok", True) or not isinstance(data, dict):
         return None
-    pm = data.get("pin_mismatch")
-    if data.get("binary_refusal") != "none_compatible" or not isinstance(pm, dict):
-        return None
-    ref = {"pin_mismatch": {k: list(v) for k, v in pm.items()}}
-    return ref if valid_refusal(ref) else None
-
-
-def lagging(ref: dict) -> list:
-    """A typed refusal's lagging commits, by component: [(component, the binary's commit, the pin)]."""
-    return [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]
+    return REFUSAL if data.get("binary_refusal") == REFUSAL else None
 
 
 def _read_raw(paths, log: str) -> dict | None:

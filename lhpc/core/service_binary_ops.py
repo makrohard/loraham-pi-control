@@ -417,15 +417,14 @@ class BinaryOpsMixin:
     @staticmethod
     def _binary_none_compatible(stack_id: str, exc, src_cmd: str) -> ActionResult:
         """No published binary this lhpc can install: ONE typed refusal (`none_compatible`), self-update first,
-        source second. `pin_mismatch` stays empty since U9 (no commit comparison)."""
+        source second."""
         return ActionResult(
             False, f"Binary install of '{stack_id}' refused: {exc.message}",
             details=["  1. Update LHPC first, then install again (about a minute): lhpc self-update --apply",
                      f"  2. Or build from source: {src_cmd} (a full local build, this can take hours on a Pi).",
                      f"  Staying on the binary keeps {stack_id} exactly as it is."],
             next_commands=["lhpc self-update --apply", src_cmd],
-            data={"binary_failed": True, "offer_source": True, "binary_refusal": "none_compatible",
-                  "pin_mismatch": {}})
+            data={"binary_failed": True, "offer_source": True, "binary_refusal": "none_compatible"})
 
     def _binary_deps_refusal(self, stack_id: str, entry) -> ActionResult | None:
         """The refusal for `entry`'s missing system packages; lhpc never installs them itself, it names the command."""

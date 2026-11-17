@@ -1,5 +1,5 @@
-"""The typed `none_compatible` refusal (the newest entry's lagging pairs) travels from the detached
-web install job to the console (the job result's `refusal` field)."""
+"""The typed `none_compatible` refusal travels from the detached web install job to the console (the job
+result's `refusal` field)."""
 import os
 
 import pytest
@@ -9,8 +9,6 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
-
-A, B = "a" * 40, "b" * 40
 
 
 def _svc(tmp_path):
@@ -49,11 +47,10 @@ def _child(tmp_path, monkeypatch, install_result, *, dep_gate_blocked=False, ext
 @pytest.mark.needs_session                 # the job marker carries this process's identity
 def test_web_install_job_result_carries_the_typed_refusal(tmp_path, monkeypatch):
     res = ActionResult(False, "Binary install of 'daemon' refused",
-                       data={"binary_failed": True, "binary_refusal": "none_compatible",
-                             "pin_mismatch": {"loraham-daemon": [A, B]}})
+                       data={"binary_failed": True, "binary_refusal": "none_compatible"})
     d, _seen = _child(tmp_path, monkeypatch, res)
     assert d["state"] == "failed"
-    assert d["refusal"] == {"pin_mismatch": {"loraham-daemon": [A, B]}}
+    assert d["refusal"] == "none_compatible"
 
 
 @pytest.mark.needs_session                 # the job marker carries this process's identity
@@ -82,23 +79,10 @@ def test_spawn_web_job_puts_no_override_on_the_install_argv(tmp_path, monkeypatc
     assert not any(a.startswith("--accept-pin-mismatch") for a in seen["argv"])  # rule-10: the option and its =value form are both absent
 
 
-def test_a_none_compatible_refusal_is_transported_also_when_only_the_inputs_differ():
-    """The lagging pairs travel; an inputs-only refusal (index-v3: same commits, other build inputs)
-    travels with an EMPTY map, so its banner still shows. A record from before the removal
-    (`override_refused`) is read WITHOUT the field."""
-    ok = {"pin_mismatch": {"loraham-daemon": [A, B]}}
-    assert jobresult.valid_refusal(ok) and jobresult.valid_refusal({"pin_mismatch": {}})
-    assert not jobresult.valid_refusal({**ok, "override_refused": ""})
-    res = ActionResult(False, "x", data={"binary_failed": True, "binary_refusal": "none_compatible",
-                                         "pin_mismatch": {}})
-    assert jobresult.refusal_from(res) == {"pin_mismatch": {}}
-
-
 @pytest.mark.needs_session                 # the job marker carries this process's identity
-def test_the_lagging_pairs_are_listed_by_component(tmp_path, monkeypatch):
+def test_the_jobs_refusal_is_read_back_for_the_stack(tmp_path, monkeypatch):
     res = ActionResult(False, "Binary install of 'daemon' refused",
-                       data={"binary_failed": True, "binary_refusal": "none_compatible",
-                             "pin_mismatch": {"z-comp": [A, B], "a-comp": [B, A]}})
+                       data={"binary_failed": True, "binary_refusal": "none_compatible"})
     _child(tmp_path, monkeypatch, res)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.binary_install_refusal("daemon") == {"lagging": [("a-comp", B, A), ("z-comp", A, B)]}
+    assert svc.binary_install_refusal("daemon") is True
