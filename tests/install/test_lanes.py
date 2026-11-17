@@ -1610,3 +1610,45 @@ def test_a_component_without_a_source_is_listed_by_status_versions(box, capsys):
     assert box.cli("status", "--versions") == 0
     out = capsys.readouterr().out
     assert any(ln.split()[:1] == ["app"] for ln in out.splitlines()) and "tool " not in out, out
+
+
+# ---- G2 class sweep (U6): a branch is read by its exact name, "unknown" stands on its inputs ----
+
+def test_a_dev_auto_install_freezes_its_branch_by_its_exact_name(box):
+    """The auto-install plan freezes one commit per dev group (`_frozen_ref`); a plain install clones the branch."""
+    box.side(box.c[0], "feature/main")                                 # its name ends like the branch
+    assert box.cli("auto-install", "--source", "dev", "--yes") == 0
+    assert box.head() == box.c[2]                                      # RED before: the feature/main commit
+
+
+def test_a_dev_check_reads_its_branch_by_its_exact_name(box, capsys):
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    box.side(box.c[0], "feature/main")
+    assert _check_detail(box, capsys)[0] == "current"                  # RED before: "update available"
+
+
+def test_an_unknown_verdict_reads_unchecked_once_the_source_is_installed(box, capsys, web):
+    assert _check_detail(box, capsys)[0] == "unknown"                  # not installed: nothing to compare
+    assert box.cli("install", "s", "--yes") == 0
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "unknown"
+
+
+def test_an_unknown_verdict_reads_unchecked_once_the_invalid_remote_override_is_gone(box, capsys, web):
+    assert box.cli("install", "s", "--yes") == 0
+    local = box.rt / "config" / "local.toml"
+    local.write_text('[remotes]\napp = "--upload-pack=evil"\n')
+    assert _check_detail(box, capsys)[0] == "unknown"                  # an invalid override: nothing to compare
+    local.write_text("")
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "unknown"
+
+
+def test_the_stack_page_words_an_unknown_verdict_as_every_reader(box, capsys, web):
+    """One wording for one verdict: the Installed-version pill says what `lhpc status` says."""
+    assert box.cli("install", "s", "--yes") == 0
+    (box.rt / "config" / "local.toml").write_text('[remotes]\napp = "--upload-pack=evil"\n')
+    assert _check_detail(box, capsys)[0] == "unknown"
+    client = web(system=RealSystem(), manifest=box.manifest, paths=Paths(runtime_root=box.rt))
+    doc = htmlq.parse(client.get("/stacks/s/body").get_data(as_text=True))
+    words = " ".join(doc.within(doc.by_id("stack-install-s")).text.split())
+    assert _status_src(box, capsys) == "unknown"
+    assert "Installed version: unknown" in words, words                # RED before: "no remote"
