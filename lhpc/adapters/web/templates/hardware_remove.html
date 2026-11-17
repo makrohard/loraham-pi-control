@@ -3,7 +3,6 @@
 {% block content %}
 {% with here = "Remove " ~ plan.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-remove">
-  <header><h2>Hardware</h2></header>
   <div class="body">
     {% if plan.row is none %}
       <p class="depnote depnote-warn">Not removed: {{ plan.reason }}.</p>

@@ -121,7 +121,7 @@ def test_the_old_daemon_spawn_detect_is_gone(web, tmp_path, monkeypatch, csrf):
     assert "hardware/probe" not in c.get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
 
 
-@pytest.mark.parametrize("url,here", [("/hardware", "Hardware"), ("/hardware/radio/r2", "r2"),
+@pytest.mark.parametrize("url,here", [("/hardware", "Hardware"), ("/hardware/radio/r2", "r2 — high"),
                                       ("/hardware/add", "Add Hardware"), ("/hardware/remove/r2", "Remove r2")])
 def test_each_hardware_page_says_where_it_sits(web, tmp_path, monkeypatch, url, here):
     # W245: Home › Apps › <the daemon row> › Hardware [› here], each crumb but the last a link; U5: the daemon row
@@ -132,7 +132,19 @@ def test_each_hardware_page_says_where_it_sits(web, tmp_path, monkeypatch, url, 
     row = parse(c.get("/stacks/daemon/menu/stackrow-daemon").get_data(as_text=True)).find("nav", class_="crumbs")[0]
     assert row.text == "Home › Apps › LoRaHAM daemon"
     assert re.findall(r">([^<>›]+)</a>", crumbs)[:3] == ["Home", "Apps", "LoRaHAM daemon"]
-    assert crumbs.rstrip().endswith(f'<span class="here">{here}</span>'), crumbs
+    assert crumbs.rstrip().endswith(f'<h2 class="here">{here}</h2>'), crumbs
+
+
+@pytest.mark.parametrize("url,gone", [("/hardware", "<h2>The radios</h2>"), ("/hardware/add", "<h2>Add Hardware</h2>"),
+                                      ("/hardware/radio/r2", "<h2>r2 — high</h2>"),
+                                      ("/hardware/remove/r2", "<h2>Hardware</h2>")])
+def test_each_hardware_page_has_one_heading_after_all_menus(web, tmp_path, monkeypatch, url, gone):
+    # STACKS-PAGE-HEADERS: the card's double heading is gone; the last crumb is the page's only h2, and
+    # "All menus" stands right before the crumbs' <nav>
+    page = _box(web, tmp_path, monkeypatch).get(url).get_data(as_text=True)
+    assert gone not in page and len(re.findall(r"<h2[ >]", page)) == 1, re.findall(r"<h2[^>]*>.*?</h2>", page)
+    assert re.search(r'<div class="crumbline"><a class="crumbs-all" href="/stacks/menus">All menus</a>'
+                     r'<span class="crumbs-sep" aria-hidden="true"> · </span><nav class="crumbs"', page)
 
 
 def test_the_daemon_entries_read_install_hardware_settings_info(web, tmp_path, monkeypatch):

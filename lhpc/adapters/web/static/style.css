@@ -813,6 +813,11 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .note-bad { display: block; color: var(--bad); font-size: .88rem; }
 .crumbs { font-size: .9rem; margin: 0 0 .8rem; color: var(--muted); }
 .crumbs .here { color: var(--ink); font-weight: 600; }
+/* The breadcrumb's current item is the page's heading (h2) with the crumb's look; "All menus" stands before the
+   crumbs' <nav> (a screen reader reaches it first) and on screen is the line's first entry. */
+.crumbs h2.here { display: inline; font-size: inherit; margin: 0; line-height: inherit; }
+.crumbline { font-size: .9rem; margin: 0 0 .8rem; color: var(--muted); }
+.crumbline > .crumbs { display: inline; margin: 0; }
 
 /* U4 (W423): "page ›" opens a Stacks level on its own page. It sits in the level's .row-actions
    overlay (after "logs"), so every summary carrying one keeps the room free on its right. The top

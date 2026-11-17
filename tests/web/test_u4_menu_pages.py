@@ -186,12 +186,12 @@ def test_a_stack_row_page_renders_its_body_inline_and_opened(tmp_path, web):
     assert _crumbs(doc).text == "Home › Apps › " + svc.stack("kiss").name
 
 
-def test_the_page_bar_leads_back_to_the_stacks_row_its_logs_and_the_tree(tmp_path, web):
+def test_the_page_bar_leads_back_to_the_stacks_row_and_its_logs(tmp_path, web):
     c, svc = _client(web, tmp_path)
     doc = parse(_html(c, "/stacks/meshcore/menu/stack-install-meshcore--dependencies"))
     bar = [a["href"] for a in doc.within(doc.find("p", class_="pagebar")[0]).find("a")]
     assert bar == ["/stacks?open=meshcore#stack-install-meshcore--dependencies",
-                   "/logs/" + svc.stack("meshcore").main, "/stacks/menus"]       # the row's own logs link
+                   "/logs/" + svc.stack("meshcore").main]       # the row's own logs link; "All menus" is in the crumbs' line
     crumbs = [a["href"] for a in doc.within(_crumbs(doc)).find("a")]
     assert crumbs[2:] == ["/stacks/meshcore/menu/stackrow-meshcore", "/stacks/meshcore/menu/stack-install-meshcore"]
 
@@ -314,9 +314,46 @@ def test_the_tree_page_lists_every_level_nested_without_script(tmp_path, web):
     assert "controller-row" in tree["controller"]
     for sid in [s.id for s in svc.stacks()]:
         assert {f"stackrow-{sid}", f"stack-install-{sid}", f"stack-settings-{sid}"} <= tree[sid], sid
-    tree = body[body.index("<h2>All menus</h2>"):]
+    tree = body[body.index('<h2 class="here">All menus</h2>'):]
     assert "<script" not in tree.split("</main>")[0] and "<details>" in tree
     assert parse(_html(c, "/stacks")).find("a", href="/stacks/menus")             # "All menus (tree) ›"
+
+
+_HEADERS_PAGES = ["/stacks", "/stacks/menus", "/stacks/meshcore/menu/stack-install-meshcore--dependencies",
+                  "/stacks/controller/menu/firewall-apply--other-commands"]
+
+
+@pytest.mark.parametrize("url", _HEADERS_PAGES)
+def test_a_stacks_page_has_one_heading_the_crumbs_current_item(tmp_path, web, url):
+    # STACKS-PAGE-HEADERS: the breadcrumb's last item is the page's only h2; the hidden or card double is gone
+    c, _svc = _client(web, tmp_path)
+    body = _html(c, url)
+    crumbs = _crumbs(parse(body))
+    h2 = re.findall(r"<h2[^>]*>(.*?)</h2>", body, re.S)
+    assert len(h2) == 1 and re.search(r'<h2 class="here">' + re.escape(h2[0]) + r"</h2></nav>", body), h2
+    assert crumbs.text.endswith(h2[0]) and 'class="visually-hidden">' + h2[0] not in body
+
+
+@pytest.mark.parametrize("url", [u for u in _HEADERS_PAGES if u != "/stacks/menus"])
+def test_all_menus_stands_right_before_the_crumbs(tmp_path, web, url):
+    # STACKS-PAGE-HEADERS: "All menus" first in the crumbs' line, before their <nav> (a screen reader reaches it first)
+    c, _svc = _client(web, tmp_path)
+    body = _html(c, url + "?radio=r2" if "/menu/" in url else url)
+    line = re.search(r'<div class="crumbline">(.*?)<nav class="crumbs"', body, re.S)
+    assert line and re.fullmatch(r'<a class="crumbs-all" href="/stacks/menus(\?radio=r2)?">All menus</a>'
+                                 r'<span class="crumbs-sep" aria-hidden="true"> · </span>', line.group(1)), line
+
+
+def test_the_tree_page_does_not_link_itself_before_its_crumbs(tmp_path, web):
+    c, _svc = _client(web, tmp_path)
+    body = _html(c, "/stacks/menus")
+    main = body[body.index("<main"):]
+    assert 'class="crumbs-all"' not in body and main.count("All menus") == 1        # only its own heading
+
+
+def test_the_stacks_page_keeps_its_tree_link(tmp_path, web):
+    c, _svc = _client(web, tmp_path)
+    assert "All menus (tree) ›</a>" in _html(c, "/stacks")                              # his "Nah": it stays
 
 
 def test_descriptor_chain_and_children_follow_the_parents():
@@ -626,7 +663,7 @@ def test_a_flash_pending_before_a_post_still_shows_after_it(tmp_path, web, csrf)
 def test_the_tree_and_its_links_keep_the_pages_radio(tmp_path, web):
     c, _svc = _client(web, tmp_path, radios=True)
     page = parse(_html(c, "/stacks/daemon/menu/stack-settings-daemon?radio=r2"))
-    tree_link = [a["href"] for a in page.within(page.find("p", class_="pagebar")[0]).find("a")][-1]
+    tree_link = page.find("a", class_="crumbs-all")[0]["href"]
     assert tree_link == "/stacks/menus?radio=r2"
     links = [a["href"] for a in parse(_html(c, tree_link)).find("a") if "/menu/" in a["href"]]
     assert links and all(_query(h) == {"radio": "r2"} for h in links)

@@ -4,7 +4,6 @@
 {% block content %}
 {% with here = "Add Hardware" %}{% include "_hw_crumbs.html" %}{% endwith %}
 <section class="card" id="hardware-add">
-  <header><h2>Add Hardware</h2></header>
   <div class="body">
     {# Detect and Add share one form per row: Detect posts the same fields to /hardware/detect (formaction), no JS. #}
     {% if not valid %}

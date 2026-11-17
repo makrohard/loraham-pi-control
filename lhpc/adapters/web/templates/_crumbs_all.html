@@ -1,0 +1,3 @@
+{#- "All menus" in the breadcrumb line, before the crumbs' <nav> so a screen reader reaches it first; on screen the
+   line's first entry, in the crumbs' font, then their separator. The page's radio goes along. -#}
+<a class="crumbs-all" href="{{ url_for('menu_tree', radio=request.args.get('radio') or None) }}">All menus</a><span class="crumbs-sep" aria-hidden="true"> · </span>
