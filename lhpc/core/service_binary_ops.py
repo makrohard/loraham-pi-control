@@ -45,6 +45,10 @@ CLI_VENV_TIMEOUT_S = 900.0
 
 
 
+_UNREADABLE_JOURNAL = ("an unreadable binary-install journal is present (an earlier version's: CHANGELOG 0.14.0 "
+                       "upgrade steps) — resolve state/binary/install.journal.json by hand")
+
+
 class BinaryOpsMixin:
 
     # ---- helpers ----------------------------------------------------------------------------
@@ -118,8 +122,15 @@ class BinaryOpsMixin:
         if not apply:
             # PLAN text only, in the apply's order (D10: an installed binary the entry would not replace stays, then
             # the packages, then the same artifact). The apply decides nothing and moves nothing before its locks:
-            # it takes them, recovers, then decides (below).
-            _settled = bi.read_journal(self._paths)[1] == "absent"
+            # it takes them, recovers, then decides (below). What the apply refuses before any decision (an unreadable
+            # or earlier version's journal, an unreadable receipt) the plan refuses alike.
+            _j, _jstate = bi.read_journal(self._paths)
+            if _jstate != "absent" and self._journal_prev_auth(_j) is None:
+                return self._binary_blocked(stack_id, _UNREADABLE_JOURNAL)
+            _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
+            if _pstate == "unsafe" and _prec is None:
+                return self._binary_unreadable_receipt(stack_id, _pwhy)
+            _settled = _jstate == "absent"
             _how, _rec, _stuck = self._binary_current(stack_id, entry, entries) if _settled else ("", None, "")
             if _stuck:
                 return self._binary_changed(stack_id, _stuck, src_cmd)
@@ -177,20 +188,14 @@ class BinaryOpsMixin:
             # stopped, THEN open the journal and mutate.
             _rec_ok, _rec_why = self.binary_recover(sources_locked=True)
             if not _rec_ok:
-                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_rec_why}",
-                                    details=["  nothing to run here — an earlier binary install left "
-                                             "state under state/binary/ that lhpc could not undo; "
-                                             "the box's operator fixes what is named above, then "
-                                             "the next binary install recovers it"])
+                return self._binary_blocked(stack_id, _rec_why)
             _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
             if _pstate == "unsafe" and _prec is None:
                 # UNREADABLE ownership evidence: we cannot know which files the previous
                 # install owns, so we must not displace or overwrite anything. (A receipt that
                 # merely DRIFTED — a file gone or changed — is readable, and re-installing is
                 # exactly the documented repair, so it flows on below.)
-                return ActionResult(
-                    False, f"Binary install of '{stack_id}' blocked: {_pwhy}",
-                    next_commands=[f"lhpc clean {stack_id} --purge --yes"])
+                return self._binary_unreadable_receipt(stack_id, _pwhy)
             # A SUPERSEDED receipt still names files this box owns — they are displaced into
             # the transaction below, never left behind unowned.
             prev_files = list(_prec.files) if (_prec and _pstate in ("valid", "superseded")) else []
@@ -415,6 +420,28 @@ class BinaryOpsMixin:
                             next_commands=[src_cmd], data={"binary_failed": True, "offer_source": True})
 
     @staticmethod
+    def _binary_blocked(stack_id: str, why: str) -> ActionResult:
+        """What an earlier binary install left and lhpc could not undo: refused (the apply, the plan alike)."""
+        return ActionResult(False, f"Binary install of '{stack_id}' blocked: {why}",
+                            details=["  nothing to run here — an earlier binary install left "
+                                     "state under state/binary/ that lhpc could not undo; "
+                                     "the box's operator fixes what is named above, then "
+                                     "the next binary install recovers it"])
+
+    @staticmethod
+    def _binary_unreadable_receipt(stack_id: str, why: str) -> ActionResult:
+        """UNREADABLE ownership evidence: nothing is displaced or overwritten (the apply, the plan alike)."""
+        return ActionResult(False, f"Binary install of '{stack_id}' blocked: {why}",
+                            next_commands=[f"lhpc clean {stack_id} --purge --yes"])
+
+    @staticmethod
+    def _journal_prev_auth(j) -> dict | None:
+        """The journal's saved mesh-password settings, or None for an unreadable journal or an earlier version's
+        (G1-K8F-S4-4C B1, W269): refused by the recovery and the plan alike, never recovered."""
+        p = (a.get("previous") or {}) if j is not None and isinstance(a := j.get("auth") or {}, dict) else None
+        return p if isinstance(p, dict) else None
+
+    @staticmethod
     def _binary_none_compatible(stack_id: str, exc, src_cmd: str) -> ActionResult:
         """No published binary this lhpc can install: ONE typed refusal (`none_compatible`), self-update first,
         source second."""
@@ -470,10 +497,8 @@ class BinaryOpsMixin:
         j, jstate = bi.read_journal(self._paths)
         if jstate == "absent":
             return True, ""
-        prev_auth = (a.get("previous") or {}) if j is not None and isinstance(a := j.get("auth") or {}, dict) else None
-        if not isinstance(prev_auth, dict):      # unreadable, or G1-K8F-S4-4C B1: an earlier version's (W269, refused)
-            return False, ("an unreadable binary-install journal is present (an earlier version's: CHANGELOG 0.14.0 "
-                           "upgrade steps) — resolve state/binary/install.journal.json by hand")
+        if (prev_auth := self._journal_prev_auth(j)) is None:   # unreadable, or an earlier version's (refused)
+            return False, _UNREADABLE_JOURNAL
         stack_id = j.get("stack", "")
         if j.get("state") == "committed":
             # The commit is durable: the NEW install is the truth. Only bookkeeping remains.

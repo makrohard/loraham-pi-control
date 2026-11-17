@@ -759,3 +759,22 @@ def test_a_failed_install_names_the_checkout_it_created_and_kept(tmp_path, monke
     assert not res.ok and state["adopted"] == ["a" * 40], res.summary
     assert any(path in d and "kept" in d for d in res.details), res.details
     assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+@pytest.mark.parametrize("unreadable", ["journal", "receipt"])
+def test_the_plan_refuses_what_the_apply_refuses_when_its_state_cannot_be_read(tmp_path, monkeypatch, binary_receipt,
+                                                                              unreadable):
+    # An unreadable install journal or receipt: the apply refuses before any download; the dry run says the same,
+    # never a download plan.
+    svc = _svc(tmp_path, monkeypatch)
+    _installed(svc, binary_receipt, "meshcom")
+    _serve(monkeypatch, "meshcom", _entry("meshcom", "a" * 64, "a" * 40, NEWER))
+    bad = bi.journal_path(svc._paths) if unreadable == "journal" else brx.receipt_path(svc._paths, "meshcom")
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("{not json")
+    svc.invalidate_snapshot()
+    monkeypatch.setattr(bi, "download_artifact", lambda *a, **k: pytest.fail("must refuse first"))
+    plan = svc.install("meshcom", apply=False, source="binary")
+    res = svc.install("meshcom", apply=True, source="binary")
+    assert not res.ok and "blocked" in res.summary, res.summary
+    assert not plan.ok and plan.summary == res.summary, (plan.summary, res.summary)
