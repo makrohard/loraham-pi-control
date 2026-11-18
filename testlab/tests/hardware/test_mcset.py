@@ -34,7 +34,8 @@ FAKE_LHPC = textwrap.dedent('''\
         if not s.get("fail_undo"): s["vals"] = dict(s["pre"])
         print("OK reset")
     elif len(a) == 1:
-        print(f"OK {a[0]}"); print(f"  value   = {v[a[0]] or '(empty)'}")
+        g = s.get("get_bad", {}).get(a[0])                      # [rc, first word]: a read that fails or is not an OK answer
+        print(f"{g[1] if g else 'OK'} {a[0]}"); print(f"  value   = {v[a[0]] or '(empty)'}"); rc = g[0] if g else 0
     else:
         n, x = a; c = s["sets"][n] = s["sets"].get(n, 0) + 1
         if c == 1 and n in s.get("fail_set", []): rc = 1; print("refused")
@@ -219,6 +220,16 @@ def test_meshcore_in_chat_mode_copies_the_name_and_never_writes_the_mode(tmp_pat
                        inst_file='x = 1\n')
     assert v == "JOB J4 meshcore@r2 PASS: set node_name"
     assert sets == ["config meshcore@r2 node_name LAB"] and end == {"node_name": "LAB", "mode": "chat"}
+
+
+@pytest.mark.parametrize("bad", [[1, "OK"], [0, "ERROR"]])
+def test_a_mode_read_that_fails_stops_even_with_a_chat_value_line(tmp_path, page_server, bad):
+    # a24 M1 (r4): only `cur not in ok` was tested; a refused read (rc 1, or no OK answer) that still prints chat is no check
+    v, sets, _ = run(tmp_path, page_server, *MC, ("meshcore.toml", LAB), {"node_name": "OLD", "mode": "chat"}, MCF,
+                     inst_file='x = 1\n', get_bad={"mode": bad})
+    assert v == ("JOB J4 meshcore@r2 STOP: M1: the node's mode reads 'chat', not chat: row 4's node would relay frames "
+                 "the kit never counts; nothing set"), v
+    assert sets == []
 
 
 def test_a_job_that_asks_to_copy_the_mode_stops(tmp_path, page_server):
