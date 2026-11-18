@@ -168,7 +168,7 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
     view shows, so the levels are read from the stack's view on each radio (and with none)."""
     c, svc = _client(web, tmp_path, radios)
     tree = _tree(c)
-    web_level = re.compile(r"stack-webserver-[^@]+@(r\d+)(--settings|--monitor)?")
+    web_level = re.compile(r"stack-webserver-[^@]+@(r\d+)(--settings|--info)?")
     for owner in _owners(svc):
         menus = tree[owner]
         # the view with no radio, then (its Webserver levels only) the view of each radio an instance page names
@@ -611,12 +611,12 @@ def test_a_refused_apply_from_the_standalone_settings_child_returns_there(tmp_pa
     assert _slot(parse(_html(c, page)), "stack-webserver-meshcore@r2--settings"), "the refusal shows in that block"
 
 
-def test_a_return_to_the_monitor_child_goes_to_the_panel_that_holds_the_settings(tmp_path, web, csrf):
-    """The Monitor child has no form of the Settings Apply: its nearest ancestor holding it, the
+def test_a_return_to_the_info_child_goes_to_the_panel_that_holds_the_settings(tmp_path, web, csrf):
+    """The Info child has no form of the Settings Apply: its nearest ancestor holding it, the
     instance's Webserver panel, is the page returned to."""
     c, _svc = _client(web, tmp_path, radios=True)
-    monitor = "/stacks/meshcore/menu/stack-webserver-meshcore@r2--monitor?radio=r2"
-    r = _post(c, csrf, "/stacks/meshcore/webserver", monitor, "/stacks/meshcore/menu/stack-webserver-meshcore@r2?radio=r2",
+    info = "/stacks/meshcore/menu/stack-webserver-meshcore@r2--info?radio=r2"
+    r = _post(c, csrf, "/stacks/meshcore/webserver", info, "/stacks/meshcore/menu/stack-webserver-meshcore@r2?radio=r2",
               **_REFUSED_PROXY)
     assert r.headers["Location"] == ("/stacks/meshcore/menu/stack-webserver-meshcore@r2?radio=r2"
                                      "#stack-webserver-meshcore@r2")

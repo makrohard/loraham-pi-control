@@ -1,0 +1,5 @@
+{#- GUI-SMALL: where a page outside the tree sits (Auto-install, Dependency Overview, both opened from the Apps page):
+    "All menus" first in the line, then Home › Apps › `here`, the look of the tree pages' crumbs. `here` is plain text:
+    the page's cards keep their own headings. -#}
+<div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
+  <a href="{{ url_for('stacks_overview') }}">Apps</a> › <span class="here">{{ here }}</span></nav></div>

@@ -1009,7 +1009,7 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
     assert any((a["href"] or "").startswith("https://") for a in doc.find("a", class_="wsurl"))  # rule-10: a URL is judged by its scheme
 
 
-def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
+def test_stack_info_carries_the_same_exposure_warnings_as_the_console(tmp_path):
     from lhpc.core import webserver as _ws
     svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom@r1", mode="local", port=8444).ok
     v = svc.stack_web_view("meshcom@r1")

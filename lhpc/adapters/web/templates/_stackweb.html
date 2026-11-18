@@ -5,7 +5,7 @@
    `<stack>-<component>` and carry the component's name in the heading.
 
    Same shape as the controller Webserver panel: status pills in the summary, a Settings section (one
-   "Apply" that saves + validates + reloads), and a Monitor section. The proxy reuses the console's
+   "Apply" that saves + validates + reloads), and an Info section. The proxy reuses the console's
    client CA; `scheme` is the PUBLIC LISTENER scheme, the upstream scheme is fixed by the manifest. #}
 {% from "_macros.html" import webserver_pills %}{% from "_stackweb_port.html" import live_port_of %}
 {% set sw = stack_web %}
@@ -51,10 +51,10 @@
     {{ page_actions(g.stack.id, 'stack-webserver-' ~ sw.page_id ~ '--settings') }}
     </div>
 
-    {# ===== Monitor ===== #}
+    {# ===== Info ===== #}
     <div class="stackrow-wrap">
-    {% include "_stackweb_monitor.html" %}
-    {{ page_actions(g.stack.id, 'stack-webserver-' ~ sw.page_id ~ '--monitor') }}
+    {% include "_stackweb_info.html" %}
+    {{ page_actions(g.stack.id, 'stack-webserver-' ~ sw.page_id ~ '--info') }}
     </div>
   </div>
 </details>

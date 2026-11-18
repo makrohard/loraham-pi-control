@@ -2,6 +2,7 @@
 {% from "_macros.html" import cmdbox %}
 {% block title %}Auto-install — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+  {% with here = "Auto-install" %}{% include "_apps_crumbs.html" %}{% endwith %}
   {% if needs_ack %}
   <div class="depnote depnote-bad">
     {% if st and st.unsafe %}

@@ -153,7 +153,7 @@ _WEB_SUBMENU = """() => { const w = document.getElementById('stack-webservers-me
 @pytest.mark.parametrize("width", [390, 1280])
 def test_the_webserver_submenu_switcher_and_headings_fit_without_sideways_scroll(page, width):
     """U3 (K2): Meshtastic's one Webserver submenu on r2, opened by the Home box link's anchor: the radio switcher and
-    every shown heading ("Proxy · Meshtastic UI · r2", its Settings and Monitor) sit inside the viewport, none clips its
+    every shown heading ("Proxy · Meshtastic UI · r2", its Settings and Info) sit inside the viewport, none clips its
     text, and the page does not scroll sideways."""
     page.set_viewport_size({"width": width, "height": 900})
     assert page.goto(page.lab_base + "/stacks?open=meshtastic&radio=r2#stack-webserver-meshtastic@r2",

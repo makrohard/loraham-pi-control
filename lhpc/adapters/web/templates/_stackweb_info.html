@@ -1,6 +1,6 @@
 {% from "_macros.html" import depnote_classes %}{% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) -%}
-<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--monitor">
-      <summary>Monitor</summary>
+<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--info">
+      <summary>Info</summary>
       <div class="body">
         {# Same remote-exposure/auth/listener warnings as the controller console (identical wording). #}
         {% for w in sw.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}

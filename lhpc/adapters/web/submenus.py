@@ -205,7 +205,7 @@ def stack_menus(g: dict) -> list[Submenu]:
         wid, rs = f"stack-webserver-{sw['page_id']}", _radio_suffix(sw["page_id"])
         add(wid, f"stack-webservers-{sid}", sw["heading"], "_stackweb.html", stack_web=sw)
         add(f"{wid}--settings", wid, "Settings" + rs, "_stackweb_settings.html", stack_web=sw)
-        add(f"{wid}--monitor", wid, "Monitor" + rs, "_stackweb_monitor.html", stack_web=sw)
+        add(f"{wid}--info", wid, "Info" + rs, "_stackweb_info.html", stack_web=sw)
     # LOGS-IN-TREE: every row ends with its Logs: a program's log and the RF log open their log page (own_page)
     logs = f"logs-{sid}"
     add(logs, top, "Logs", "_stack_logs.html")
