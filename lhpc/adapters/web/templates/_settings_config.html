@@ -1,5 +1,7 @@
 {% from "_macros.html" import instance_btn -%}
-<form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
+{#- #76: Save configuration (its button outside the form, `form=` it: still the form's default button for Enter) and
+    Reset to defaults stand in one button row, as the other rows (.actrow), wrapping on a narrow screen. -#}
+<form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}" id="cfg-form-{{ stack.id }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
 
@@ -76,14 +78,16 @@
         </section>
       {% endif %}
 
-      <button type="submit">Save configuration</button>
     </form>
 
-    <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act cfgreset">
+    <div class="actrow cfgacts">
+    <button type="submit" form="cfg-form-{{ stack.id }}">Save configuration</button>
+    <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
       <button type="submit">Reset to defaults</button>
     </form>
+    </div>
 
     {% if view.optional %}
       <section class="cfgsec">
