@@ -253,3 +253,56 @@ def test_row_4_with_mcset_off_is_not_run_by_name(tmp_path):
                                                            r"J4 did not check MeshCore's mode", ln)]
     assert len(got) == 2, d.out[-3000:]
     assert not re.search(r"^  \[dry\] Z > 4-", d.out, re.MULTILINE)        # nothing of row 4 runs
+
+
+# ---- Meshtastic's air count (row 3): packets to the node itself are local; the kit's own sends come from its ledger ----------
+
+from test_rf_proof_guards import BASE, MT, PRE, RUN, _rs  # noqa: E402
+
+
+def _mj(ts, frm, to, **kw):
+    import json as _json
+    return _json.dumps({"timestamp": ts, "from": frm, "to": to, "size": 5, "bytes": "AABB", **kw}) + "\n"
+
+
+SELF = _mj(PRE, 7, 7) + _mj(RUN, 7, 7) * 7 + _mj(RUN, 0, 7, want_ack=True) * 6   # GO-F row 3: 13 local API packets
+AIR = _mj(RUN, 7, 4294967295, type="position")                                    # its one broadcast
+
+
+@pytest.mark.parametrize("log, extra, want", [
+    (SELF + AIR, "", "r1 1|"),                              # red-before (81c0f431): 14, FAIL (the GO-F row 3 run)
+    (SELF + AIR, "keep MTX_H_r1 1; ", "r1 2|"),            # + the kit's own text send (never in this log)
+    (SELF + AIR, "keep MTX_H_r1 1; keep MTX_H_r1 2; ", "r1 3|"),   # the ledger's last value counts
+    (_mj(PRE, 0, 1) + _mj(RUN, 0, 1) * 11, "", "FAIL r1 11|"),     # no self-addressed packet: the node's number unknown, all count
+], ids=["self-local", "ledger", "ledger-last", "unknown-node"])
+def test_meshtastic_counts_air_frames_and_the_kits_own_sends(tmp_path, log, extra, want):
+    _rs(tmp_path, BASE, {MT: log}, "", want, extra=extra)
+
+
+def test_row_3_records_its_own_send_before_it_runs():
+    text = (HW / "rf-proof.sh").read_text()
+    body = text[text.index("row_3() {"):text.index("row_4() {")]
+    assert body.index('keep "MTX_${b}_$r"') < body.index('form mt_send rid="$r" n="$n2"')
+
+
+# ---- row 2: the tracker as-is (his word 2026-11-18) ------------------------------------------------------------------------
+
+ROW2 = ('MODE=live; needs() { return 0; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; keep H433 r1; '
+        'started() { echo REACHED; exit 0; }; row_2 H:H433')
+
+
+@pytest.mark.parametrize("env, out", [
+    ({"TRACKER_CALL": "N0CALL-7", "TRACKER_DBM": "", "TRACKER_ASIS": "1"}, "row 2: the tracker as-is (his word 11-18: run as-is without power check)"),
+    ({"TRACKER_CALL": "N0CALL-7", "TRACKER_DBM": "", "TRACKER_ASIS": ""}, "NOT RUN: row 2 kiss + graywolf box -> peer: no tracker power given at GO"),
+    ({"TRACKER_CALL": "N0CALL-7", "TRACKER_DBM": "9", "TRACKER_ASIS": ""}, "REACHED"),
+])
+def test_row_2_runs_the_tracker_as_is_only_with_tracker_asis(tmp_path, env, out):
+    # red-before (81c0f431): without TRACKER_DBM row 2 was always NOT RUN (no as-is input)
+    r, _ = source_only(tmp_path, ROW2, **env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert any(ln.startswith(out) for ln in r.stdout.splitlines()), r.stdout
+
+
+def test_a_bad_tracker_asis_stops_at_the_start(tmp_path):
+    d = dry(tmp_path, TRACKER_ASIS="yes")
+    assert d.rc == 2 and "STOP: TRACKER_ASIS is '' or 1" in d.err, d.err[-500:]

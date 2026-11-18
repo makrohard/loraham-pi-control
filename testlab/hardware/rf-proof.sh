@@ -11,7 +11,8 @@
 # INPUTS (env): LANE (fast|full, default fast); ROWS_ONLY (row ids, overrides the lane); LAB_ENV (the lab file); INTHEAD (the
 #  Zero's head, 40 hex), INTHEAD_H (box H's head, default INTHEAD), INTCI (a green CI run of INTHEAD); FORMS_OK (the confirmed
 #  form names at FORMS_HEAD = INTHEAD); TRACKER_CALL (row 2: the tracker's call-SSID, on stdin to the box only); TRACKER_DBM
-#  (row 2: the tracker's power from its portal); NONCE_PREFIX (default rfkit); MCSET (on|off, the pre-step M; default on in
+#  (row 2: the tracker's power from its portal); TRACKER_ASIS (1: row 2 runs the tracker as-is, no TRACKER_DBM, no power check;
+#  his word 11-18); NONCE_PREFIX (default rfkit); MCSET (on|off, the pre-step M; default on in
 #  LANE=full); MCSET_J1 (M's row-1 callsign[-SSID] or 'global'; on the box's stdin only). Dry takes placeholders for INTHEAD/INTCI.
 # STDIN (live only, read once before R0, then closed): line 1 box H's password, line 2 the Zero's; an EMPTY line = that box is
 #  ABSENT (its rows NOT RUN, no ssh). Line 3 = the MeshCore PIN, only when row 4 runs (empty = the stored bond).
@@ -131,7 +132,7 @@ RUNSET="cd {RT} && ./venv/lhpc/bin/python -c '$RUNSET_PY'"
 # <sha of the first <head bytes>> <transmit ERRORs> <prev state>: the daemon run log (no time stamps; daemon pin
 # f9b16468 daemon_tx.cpp:212 is the one airing path, its RF line is written only on success (:223), an error that may
 # have aired prints "transmit ERROR" (:219) to this log only); prev state = its cut file (inode:size:mtime_ns) or absent.
-TXC_PY='import calendar, hashlib, os, sys, time
+TXC_PY='import calendar, hashlib, json, os, sys, time
 from lhpc.core import rflog, radio_start, runtime_fs
 from lhpc.core.services import ControllerService
 t0 = int(sys.argv[1])
@@ -141,8 +142,24 @@ def epoch(ts):
         return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
     except (TypeError, ValueError):
         return None
+def jline(ln):
+    try:
+        j = json.loads(ln) if ln.lstrip().startswith("{") else None
+    except ValueError:
+        return None
+    return j if isinstance(j, dict) else None
+def selfnums(path):   # meshtastic: a packet to the node itself is handled locally, never aired; its number = from == to
+    out = set()
+    for p in (path + ".1", path):
+        if os.path.exists(p):
+            with open(p, errors="replace") as f:
+                for ln in f:
+                    j = jline(ln)
+                    if j and j.get("from") == j.get("to") and j.get("to") not in (None, 0, 4294967295):
+                        out.add(j["to"])
+    return out
 def count(rid, kind, path):
-    seen = False; recs = tx = loose = 0; old = None
+    seen = False; recs = tx = loose = 0; old = None; own = selfnums(path)
     for p in (path + ".1", path):
         if not os.path.exists(p):
             continue
@@ -158,7 +175,7 @@ def count(rid, kind, path):
                 recs += 1; old = e if old is None else min(old, e)
                 if e < t0:
                     loose = 0
-                elif r["dir"] == "TX":
+                elif r["dir"] == "TX" and not (own and (jline(ln) or {}).get("to") in own):
                     tx += 1
     if seen:
         print("F", rid, kind, os.path.basename(path), recs, "-" if old is None else old, tx + loose)
@@ -934,12 +951,13 @@ row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): bo
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 2) || { notrun_row 2 "form not confirmed: $NEEDS_MISSING"; return 0; }
   [ -n "$TRACKER_CALL" ] || { notrun_row 2 "no tracker call-SSID given at GO (TRACKER_CALL)"; return 0; }
-  [ -n "$TRACKER_DBM" ] || { notrun_row 2 "no tracker power given at GO (TRACKER_DBM, from its portal): its ACK is a TX"; return 0; }
+  [ -n "$TRACKER_DBM" ] || [ "${TRACKER_ASIS:-}" = 1 ] || { notrun_row 2 "no tracker power given at GO (TRACKER_DBM, from its portal; or TRACKER_ASIS=1): its ACK is a TX"; return 0; }
+  [ -n "$TRACKER_DBM" ] || say "row 2: the tracker as-is (his word 11-18: run as-is without power check)"
   local m r n pr grc; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n=$(nonce)
   started "$b" 2-daemon.txt "daemon@$r"; dpower "$b" "$r" "R2-$b-$r-d"
   started "$b" 2-start.txt "graywolf@$r"; undo_push "$b" "$(gstop "kiss@$r")"; dpower "$b" "$r" "R2-$b-$r"
   BG=1 peer 2-peer-read.txt "$VMT" aprs-read "$n" 150; pr=$SPAWN; [ "$MODE" = dry ] || sleep 8
-  keep P_R2-tracker "$TRACKER_DBM"; radk R2-tracker PC:tracker; pwok PC:tracker   # the tracker's power from its portal (as-is)
+  keep P_R2-tracker "${TRACKER_DBM:-as-is}"; radk R2-tracker PC:tracker; pwok PC:tracker   # its power from its portal, or as-is (TRACKER_ASIS)
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   tx R2-tracker 1 control --reserve                                                # its ACK, which the message triggers
   tx "R2-$b-$r" 1 "$n" -- XIN "$b" 2-box-send.txt "TO = '$TRACKER_CALL'"$'\n'"$GW_PY" "{RT}/venv/lhpc/bin/python - '$n' $(rport 8080 "$r") $r"; grc=$XRC
@@ -950,7 +968,7 @@ row_2() {   # KISS + Graywolf box radio 433.775 <-> the APRS tracker (as-is): bo
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   [ "$MODE" = dry ] || { [ "$grc" = 0 ] && grep -q '^ACKED ' "$OUT/2-box-send.txt"; } || fail "row 2 peer -> box: no ACK: call not verified ('$n', graywolf rc $grc)"
   [ "$MODE" = dry ] || ackjudge 2-box-send.txt "$n"
-  REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "peer -> box" "the tracker's ACK (acked in Graywolf; the frame's source = the given call)" "the tracker's $TRACKER_DBM dBm, from its portal (not read)" PASS
+  REPORT 2 "kiss + graywolf (APRS)" "$b ($r)" "433.775 MHz" "the APRS tracker" "peer -> box" "the tracker's ACK (acked in Graywolf; the frame's source = the given call)" "$([ -n "$TRACKER_DBM" ] && echo "the tracker's $TRACKER_DBM dBm, from its portal (not read)" || echo "the tracker as-is (his word 11-18: no power check)")" PASS
   undo_to "$m"; }
 
 ackjudge() {   # ackjudge <file> <nonce>: row 2 peer -> box: the Graywolf helper found the ACK frame from the given call, else FAIL
@@ -983,6 +1001,7 @@ row_3() {   # Meshtastic box radio 868 (EU_868 LongFast) <-> the Station G2 (set
   REPORT 3 meshtastic "$b ($r)" "868, EU_868 LongFast" "Station G2" "peer -> box" "yes (RX on $r, in Meshtastic)" "the G2 at 1 (lowest)" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   BG=1 peer 3-peer-read.txt "$VMT" mt-read "$n2" 90; pr=$SPAWN; [ "$MODE" = dry ] || sleep 10
+  keep "MTX_${b}_$r" $(( $(getk "MTX_${b}_$r" 0) + 1 ))   # its log never carries this send: RS adds it (mtled)
   tx "R3-$b-$r" 1 "$n2" -- must "$b" 3-box-send.txt "$(form mt_send rid="$r" n="$n2")"; reap "$pr"
   result 3-peer-read.txt "$n2" || fail "not heard: $n2"
   REPORT 3 meshtastic "$b ($r)" "868, EU_868 LongFast" "Station G2" "box -> peer" yes "$(getk "P_R3-$b-$r" as-is) dBm (as-is)" PASS
@@ -1134,11 +1153,11 @@ rnsrids() { { body "R0-$1-runset.txt" | sed -n 's/^reticulum@\(r[1-9][0-9]*\)$/\
 # log at all (the daemon creates its log at start: daemon_rflog.cpp:67, so a running radio without one logs nothing); a radio
 # the kit sent on that counts 0. Reticulum's TX with no radio or several named: "reticulum UNREADABLE" (unattributable)
 txjudge() {
-  awk -v t0="$3" -v rr="$4" -v kr="${5:-}" -v ar="${6:-}" '
+  awk -v t0="$3" -v rr="$4" -v kr="${5:-}" -v ar="${6:-}" -v ml="${7:-}" '
     function n(v) {return v ~ /^[0-9]+$/}
     FNR == NR {if ($1 == "F") {f0[$2 " " $4] = 1; cov[$2] = 1; if (n($5) && $5 > 0) had[$2 " " $4] = 1}
       if ($1 == "L") l0[$2] = $3 " " $4 " " $5 " " $6; next}
-    $1 == "F" {k = $2 " " $4; seen[k] = 1; cov[$2] = 1; if ($2 != "-") id[$2] = 1
+    $1 == "F" {k = $2 " " $4; seen[k] = 1; cov[$2] = 1; if ($2 != "-") id[$2] = 1; if ($4 == "rf-meshtastic.log") mf[$2] = 1
       if (!n($5) || !n($7) || (k in had && ($6 == "-" || $6 > t0))) u[$2] = 1; else c[$2, $3] += $7; next}
     $1 == "L" {id[$2] = 1; ls[$2] = 1; split(l0[$2], a, " ")
       if (($2 in l0) && n($3) && n($5) && n(a[1]) && n(a[3]) && $3 >= a[1] && $4 "" == a[2] "" && $5 >= a[3] && $6 "" == a[4] "") e[$2] = $5 - a[3]; else u[$2] = 1}
@@ -1146,11 +1165,12 @@ txjudge() {
       for (r in l0) if (!(r in ls)) {id[r] = 1; u[r] = 1}
       m = split(rr, R, " "); x = c["-", "rns"] + 0; split(kr, K, " "); for (i in K) {kit[K[i]] = 1; id[K[i]] = 1}
       split(ar, A, " "); for (i in A) {act[A[i]] = 1; id[A[i]] = 1}
+      split(ml, M, " "); for (i in M) {split(M[i], q, "="); if (n(q[2])) mled[q[1]] = q[2]}
       for (i = 1; i <= m; i++) if ("-" in cov) cov[R[i]] = 1
       if (x > 0 || ("-" in u)) {if (m != 1) print "reticulum UNREADABLE"; else {id[R[1]] = 1; if ("-" in u) u[R[1]] = 1; add[R[1]] = x}}
       for (r in id) {if ((r in kit || r in act) && !(r in cov)) u[r] = 1
         if (r in u) {print r, "UNREADABLE"; continue}
-        d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; t = (d > g ? d : g) + c[r, "direct"] + add[r]
+        d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; t = (d > g ? d : g) + c[r, "direct"] + add[r] + (r in mf ? mled[r] : 0)
         print r, (r in kit && t == 0 ? "UNREADABLE" : t)}}' \
     "$1" "$2" | sort; }
 # txlines <file> <radios>: exactly one "<rid> <frames|UNREADABLE>" per radio named, no other radio ("reticulum UNREADABLE" aside)
@@ -1159,6 +1179,7 @@ txlines() { awk -v want="$2" 'BEGIN {split(want, W, " "); for (i in W) w[W[i]] =
     END {for (k in w) if (!(k in s)) bad = 1; exit bad}' "$1"; }
 # kitrids / runrids <box>: the box radios the kit reserved frames on (TXR > 0), and the radios with an instance at R0 or one
 # the kit started (STARTED_<box>_<rid>: a stack can send at its start, e.g. meshtastic's nodeinfo)
+mtled() { sed -n "s/^MTX_$1_\(r[1-9][0-9]*\)=\([0-9]*\)$/\1=\2/p" "$OUT/state.env" | awk -F= '{v[$1] = $2} END {for (k in v) print k "=" v[k]}' | sort | tr '\n' ' '; }   # the kit's own Meshtastic sends per radio
 kitrids() { sed -n "s/^TXR_$1_\(r[1-9][0-9]*\)=[0-9]*[1-9][0-9]*$/\1/p" "$OUT/state.env" | sort -u | tr '\n' ' '; }
 runrids() { { body "R0-$1-runset.txt" | sed -n 's/^[a-z0-9-]*@\(r[1-9][0-9]*\)$/\1/p'; sed -n "s/^STARTED_$1_\(r[1-9][0-9]*\)=.*/\1/p" "$OUT/state.env"; } | sort -u | tr '\n' ' '; }
 row_RS() {
@@ -1167,7 +1188,7 @@ row_RS() {
   [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved after verify: $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }
   local b pr; for b in $BOXES; do must $b "RS-$b-tx.txt" "$(txcount $b "R0-$b-tx.txt")"
     must $b "RS-$b-boot.txt" "cat /proc/sys/kernel/random/boot_id"; [ "$MODE" = dry ] && continue; eq "RS $b: no reboot" "$(body "RS-$b-boot.txt")" "$(getk BOOT_$b)"
-    txjudge "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" "$(getk "T0_$b" 0)" "$(rnsrids $b)" "$(kitrids $b)" "$(runrids $b)" > "$OUT/RS-$b-tx-run.txt" \
+    txjudge "$OUT/R0-$b-tx.txt" "$OUT/RS-$b-tx.txt" "$(getk "T0_$b" 0)" "$(rnsrids $b)" "$(kitrids $b)" "$(runrids $b)" "$(mtled $b)" > "$OUT/RS-$b-tx-run.txt" \
       || fail "RS $b: the TX count judge failed (rc $?): no count, no pass"
     txlines "$OUT/RS-$b-tx-run.txt" "$(grep -E '^ROW ' "$OUT/R0-$b-radios.txt" | awk '{print $2}' | tr '\n' ' ')" \
       || fail "RS $b: the TX count has not exactly one valid line per radio of R0's hardware list ($(tr '\n' '|' < "$OUT/RS-$b-tx-run.txt"))"
@@ -1422,6 +1443,7 @@ INTHEAD=${INTHEAD:-}; INTCI=${INTCI:-}; [ "$MODE" = live ] || { INTHEAD=${INTHEA
 TRACKER_CALL=${TRACKER_CALL:-}; TRACKER_DBM=${TRACKER_DBM:-}; [ "$MODE" = live ] || { TRACKER_CALL=${TRACKER_CALL:-$OPERATOR_CALL-9}; TRACKER_DBM=${TRACKER_DBM:-10}; }
 declare +x TRACKER_CALL
 [ -z "$TRACKER_DBM" ] || pdom "$TRACKER_DBM" || stop "TRACKER_DBM is not a power value in 0..17 dBm"
+TRACKER_ASIS=${TRACKER_ASIS:-}; case "$TRACKER_ASIS" in ''|1) ;; *) stop "TRACKER_ASIS is '' or 1";; esac   # his word 11-18: the tracker as-is
 [ -z "$TRACKER_CALL" ] || [[ "$TRACKER_CALL" =~ ^[A-Z0-9]{3,8}-[0-9]{1,2}$ ]] || stop "TRACKER_CALL is not a call-SSID"
 MCSET=${MCSET:-$([ "$LANE" = full ] && echo on || echo off)}; case "$MCSET" in on|off) ;; *) stop "MCSET=on|off";; esac
 MCSET_J1=${MCSET_J1:-}; case "$MCSET_J1" in ''|global) ;; *) [[ "$MCSET_J1" =~ ^[A-Z0-9]{3,8}(-[0-9]{1,2})?$ ]] || stop "MCSET_J1 is not a callsign[-SSID] or 'global'";; esac

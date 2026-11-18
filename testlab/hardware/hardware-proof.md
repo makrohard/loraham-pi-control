@@ -70,6 +70,10 @@ release's decision.
 Last comes the result table for people, printed and kept as `RESULT.md`: the verdict on top (PASS, FAIL, NOT COMPLETE,
 a dry run's rehearsal, or STOPPED), then one line per row with each direction's PASS, FAIL or NOT RUN and its reason.
 Rows 1–5 stop at a FAIL: their later direction is NOT RUN, naming that FAIL, and sends nothing.
+Row 2 needs the tracker's call-SSID (`TRACKER_CALL`) and either its power from its portal (`TRACKER_DBM`) or
+`TRACKER_ASIS=1`: the tracker runs as it is, with no power check (the maintainer's word of 2026-11-18). Meshtastic (row 3):
+a packet the node addresses to itself (a local API exchange) is never aired and not counted; the node's own API-sent text is not
+in its RF log, so RS adds the kit's own Meshtastic sends from its ledger.
 
 ## The local file
 
