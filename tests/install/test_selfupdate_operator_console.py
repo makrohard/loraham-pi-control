@@ -66,6 +66,7 @@ def cli(env, monkeypatch):
     console = calls.console = [selfupdate.controller_runtime_lock(env["paths"], exclusive=False)]
     console[0].__enter__()
     sock_path, listeners, up = tempfile.mkdtemp(prefix="lhpc-web-") + "/lhpc-web.sock", [], threading.Event()
+    threads = []
     calls.sock_path = sock_path
     monkeypatch.setattr(ControllerService, "_web_socket_path", lambda self: sock_path, raising=False)
     real = RealCommandRunner.run
@@ -83,7 +84,8 @@ def cli(env, monkeypatch):
         if argv[2] == "start" and not listeners:            # the console comes up and answers
             listeners.append(_listen(sock_path))
             up.set()
-            threading.Thread(target=_answer_http, args=(listeners[0], up), daemon=True).start()
+            threads.append(threading.Thread(target=_answer_http, args=(listeners[0], up), daemon=True))
+            threads[0].start()
         return CommandResult(0, "", "")                      # is-active: active; stop/start: done
 
     def step(name, result):
@@ -96,6 +98,8 @@ def cli(env, monkeypatch):
     if console:
         console.pop().__exit__(None, None, None)
     up.clear()
+    for thread in threads:                    # it has stopped using the socket before the socket goes
+        thread.join(timeout=5)
     for listener in listeners:
         listener.close()
 
@@ -105,13 +109,13 @@ def _listen(path):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(path)
     listener.listen()
+    listener.settimeout(0.2)                  # here, not in the thread: the thread may run after teardown
     return listener
 
 
 def _answer_http(listener, up):
     """The console serving: each connection gets an HTTP status line, until the test ends."""
     import contextlib
-    listener.settimeout(0.2)
     while up.is_set():
         try:
             conn, _ = listener.accept()
