@@ -26,6 +26,19 @@ def _svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
+def _identities(root, rid=""):
+    """The files each decoder reads its node's identity from (#74: a decoder runs only when they exist): MeshCore's
+    Companion and repeater keys, Meshtastic's channels.proto; under the instance's own dirs for `rid`."""
+    own = (rid,) if rid else ()
+    secrets = root.joinpath("config", "secrets", *own)
+    secrets.mkdir(parents=True, exist_ok=True)
+    for name in ("meshcore_identity.key", "openhop_repeater_identity.key"):
+        (secrets / name).write_text("00" * 32)
+    prefs = root.joinpath("state", *own, "meshtasticd", "prefs")
+    prefs.mkdir(parents=True, exist_ok=True)
+    (prefs / "channels.proto").write_bytes(b"")
+
+
 def _records(n):
     return [rflog.parse_line(f"{LINE[:-1]}{i}\"") for i in range(n)]
 
@@ -57,6 +70,7 @@ def test_meshtastic_argv_is_the_managed_cli_interpreter_and_the_prefs_dir(tmp_pa
     e = rflog.entry("meshtastic")
     argv, err = svc._rflog_decoder_argv(e)
     assert argv == () and "not built" in err                              # no venv: typed, no run
+    _identities(tmp_path)
     py = tmp_path / "build" / "tools" / "meshtastic-cli" / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("")
@@ -76,6 +90,7 @@ def test_source_stacks_use_their_own_venv_and_name_only_paths(tmp_path, surface,
     svc = _svc(tmp_path)
     e = rflog.entry(surface)
     assert "not built" in svc._rflog_decoder_argv(e)[1]
+    _identities(tmp_path)
     py = tmp_path / rel / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("")
@@ -96,6 +111,7 @@ def test_a_venv_interpreter_is_a_symlink_out_of_the_root_and_still_resolves(tmp_
     venv was refused as a symlink escape (`under()` is for paths LHPC writes); the decoder path
     is one LHPC executes, contained lexically."""
     svc = _svc(tmp_path)
+    _identities(tmp_path)
     for rel, surface in (("build/tools/meshtastic-cli/.venv/bin/python", "meshtastic"),
                          ("src/openhop-core/.venv/bin/python", "meshcore"),
                          ("src/reticulum/.venv/bin/python", "reticulum")):
@@ -284,6 +300,7 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     py = tmp_path / "src" / "openhop-core" / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("")
+    _identities(tmp_path)
     assert svc.save_config_bundle("meshcore", values={"file_repeater_name": "LAB-REP", "file_mode": "repeater"}).ok
     live = {"running": True, "mode": "chat"}
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, s: live["running"] and s == "meshcore")

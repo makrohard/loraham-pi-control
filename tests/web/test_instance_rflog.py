@@ -58,6 +58,8 @@ def test_an_instances_records_are_decoded_with_its_own_mode_stores_and_secrets(t
     py.parent.mkdir(parents=True)
     py.write_text("")
     py.chmod(0o755)
+    (tmp_path / "config" / "secrets" / "r4").mkdir(parents=True)
+    (tmp_path / "config" / "secrets" / "r4" / "openhop_repeater_identity.key").write_text("00" * 32)   # r4's repeater key
     seen = []
     monkeypatch.setattr(ControllerService, "_rflog_run", lambda self, argv, misses: (seen.append(list(argv)), ({}, ""))[1])
     _path, records = svc.rflog_records("meshcore-node", JOB)

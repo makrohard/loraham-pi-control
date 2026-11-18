@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 from . import instances, radio_start, runtime_fs, validators
+from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import rflog as _rflog
 from .model import RunState
@@ -307,7 +308,7 @@ class RflogOpsMixin:
             # The venv's `bin/python` is a symlink to the system interpreter by design, so this
             # is lexical containment (an executable we run), never `under()` (paths we write).
             py = self._paths.runtime_root.joinpath(*meshtastic_tool.MANAGED_CLI_REL[:-1], "python")
-            extra = ["--prefs", str(self._paths.under("state", "meshtasticd", "prefs"))]
+            extra = _rflog.meshtastic_decode_args(self, rid)
         elif e.decoder == "meshcore":
             comp = self.stack(e.owner).component(e.writer) if self.stack(e.owner) else None
             if comp is None or comp.source is None:
@@ -340,7 +341,29 @@ class RflogOpsMixin:
             return (), f"no decoder for {e.surface}"
         if not py.is_file():
             return (), f"{e.surface} is not built — nothing to decode with ({py})"
+        if missing := self._rflog_identity_missing(e, extra, rid):     # after "not built": the decoder exists, its key not
+            return (), missing
         return (str(py), str(script), "--runtime", rt, *extra), ""
+
+    @staticmethod
+    def _rflog_identity_missing(e, extra: list, rid: str) -> str:
+        """The decoder's own identity input, by the decoder's rule: MeshCore's repeater mode reads the repeater's key,
+        every other mode the Companion's (decode_meshcore.make_decoder); Meshtastic the node's channels.proto
+        (decode_meshtastic._load_channels). "" when it exists; else the note a node that never started on this radio
+        gets (no decoder run, no errno). A present but unreadable file stays the decoder's own error."""
+        from pathlib import Path as _P
+        args = dict(zip(extra[::2], extra[1::2], strict=True))
+        if e.decoder == "meshcore":
+            need = _P(args["--secrets"]) / (_meshcore_identity.REPEATER_IDENTITY_FILENAME if args["--mode"] == "repeater"
+                                            else _meshcore_identity.IDENTITY_FILENAME)
+        elif e.decoder == "meshtastic":
+            need = _P(args["--prefs"]) / "channels.proto"
+        else:
+            return ""
+        if need.exists():
+            return ""
+        return (f"no identity yet for {rid}: {e.surface} has not started on this radio" if rid
+                else "no identity yet for this log (no radio)") + "; the frames show undecoded"
 
     def _rflog_lru(self, job: str):
         from collections import OrderedDict

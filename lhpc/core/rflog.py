@@ -329,6 +329,13 @@ def log_runs(svc, e, rid: str) -> bool:
     return not why and comp is not None and instances.instance_runs(svc, comp, inst, inst.band)
 
 
+def meshtastic_decode_args(svc, rid: str = "") -> list:
+    """The Meshtastic RF decoder's prefs: the instance's own node's (state/<rid>/meshtasticd/prefs, its `-d` dir,
+    manifest `state/{instance_dir}meshtasticd`); without a radio, the stack's."""
+    own = (rid,) if rid else ()
+    return ["--prefs", str(svc._paths.under("state", *own, "meshtasticd", "prefs"))]
+
+
 def meshcore_decode_args(svc, sid: str, rid: str = "") -> list:
     """The MeshCore RF decoder's mode, secrets and stores: the instance's own (7f: its mode, config/secrets/<rid>,
     state/<rid>/…); without a radio, the stack's (a log from the slot builds)."""
