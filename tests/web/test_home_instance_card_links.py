@@ -161,6 +161,12 @@ MC_NODE = {"r2": 5133, "r4": 5399}
 MC_WEB = {"r2": 8921, "r4": 9187}
 
 
+def _shows_port(text, port):
+    """The port as a card shows it (an address `:port`, the CLI's `-p port`): a bare number would also match the paths
+    the cards carry (tmp_path's, the checkout's)."""
+    return f":{port}" in text or f"-p {port}" in text
+
+
 def _mc(tmp_path, running, ports=()):
     """meshcore on r2 and r4 (868): `running` {rid: the component ids running as that instance, by own argv token};
     `ports`: the 127.0.0.1 listeners that are up."""
@@ -238,7 +244,7 @@ def test_each_cards_rows_and_links_are_its_own_instances(tmp_path, web):
     assert _row(r4, "meshcore-node").find("span", class_="badge-degraded")
     assert f"127.0.0.1:{MC_NODE['r4']}" in _row(r4, "meshcore-node").text                # r4's own note
     assert f"tcp: 127.0.0.1:{MC_NODE['r2']}" in _row(r2, "meshcore-node").text            # r2's own address
-    assert str(MC_NODE["r2"]) not in r4.text and str(MC_NODE["r4"]) not in r2.text
+    assert not _shows_port(r4.text, MC_NODE["r2"]) and not _shows_port(r2.text, MC_NODE["r4"])
     assert _hrefs(r2, "iface-web") == [f"http://127.0.0.1:{MC_WEB['r2']}"] and _hrefs(r4, "iface-web") == []
     assert _forms(_row(r2, "meshcore-webui")) == [("stop", "meshcore-webui@r2")]
     assert _forms(_row(r4, "meshcore-webui")) == [("start", "meshcore-webui@r4")]
@@ -256,7 +262,7 @@ def test_an_interactive_part_keeps_its_banner_and_this_radios_command(tmp_path, 
     # this card's radio: its own lock and node port, never r2's (by those parts: the paths in the box are tmp_path's and
     # the checkout's, which may contain "r2" themselves)
     assert "/state/r4/" in box.text and f"-p {MC_NODE['r4']}" in box.text, box.text
-    assert "/state/r2/" not in box.text and str(MC_NODE["r2"]) not in box.text, box.text
+    assert "/state/r2/" not in box.text and not _shows_port(box.text, MC_NODE["r2"]), box.text
 
 
 def test_the_cards_run_and_stop_post_with_csrf_and_name_the_instance(tmp_path, web, monkeypatch):
