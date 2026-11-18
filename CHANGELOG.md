@@ -94,9 +94,10 @@ Stacks:
 - Then on every box `lhpc stack start reticulum@<rid>`: `rnstatus` shows the LoRa interface's MTU 508 (255 = still
   bare). Until every box has started, a started box and one not yet started cannot hear each other.
 - Every other installed stack whose pin moved (from 0.13.8: daemon, chat, kiss, meshcom; from 0.13.0–0.13.7 also
-  meshcore, voice): stop it (`lhpc stack stop <stack>@<rid> --yes`), `lhpc update <stack> --yes`, start it.
-- A source-built daemon: once `lhpc install daemon --source <your lane> --yes` (adds the Meshstick library clone; needs
-  `libusb-1.0-0-dev`), then `lhpc build daemon --yes` after the update.
+  meshcore, voice), in this order: stop it (`lhpc stack stop <stack>@<rid> --yes`);
+- for a source-built daemon: install `libusb-1.0-0-dev`, then once `lhpc install daemon --source <your lane> --yes`
+  (adds the Meshstick library clone);
+- `lhpc update <stack> --yes`, then for a source-built daemon `lhpc build daemon --yes`, then start it.
 - Re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n − 1)); restart running GPS
   stacks so their feeds move.
 - Scripts: `lhpc stack <verb> <stack> [--band B]` and `lhpc kill <stack>[@<band>]` name the instance now,
