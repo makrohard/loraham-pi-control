@@ -65,7 +65,7 @@ def test_status_and_stats_ask_once_per_open_and_per_reload_and_never_while_close
         page.click(_sel(kind) + " > summary")
         page.wait_for_function("([s, w]) => document.querySelector(s + ' .daemonview-text').textContent.includes(w)",
                                arg=[_sel(kind), want], timeout=15000)
-        assert _text(page, kind).startswith(f"{kind.upper()} — {RID} (live)")
+        assert _text(page, kind).split("\n")[0] == f"{kind.upper()} — {RID} (live)"
         page.click(_sel(kind) + " .daemonview-reload")
         settled()
         assert seen[before:] == ["", ""]                                     # one per open, one per Reload
@@ -94,6 +94,39 @@ def test_the_socket_view_polls_each_second_only_while_open(flask_page):
     page.clock.run_for(5000)
     settled()
     assert len(seen) == 5
+
+
+def test_a_second_toggle_while_open_starts_no_second_run(flask_page):
+    # the accordion or a restore may announce an open panel again: still one poll, and closing stops it
+    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    seen, settled = _serve(page)
+    page.click(_sel("socket") + " > summary")
+    page.wait_for_function("s => document.querySelector(s + ' .daemonview-text').textContent.includes('RADIO=READY')",
+                           arg=_sel("socket"), timeout=15000)
+    page.evaluate("s => document.querySelector(s).dispatchEvent(new Event('toggle'))", _sel("socket"))
+    page.clock.run_for(3000)
+    settled()
+    assert seen == ["/socket"] * 4
+    _close(page, "socket")
+    page.clock.run_for(5000)
+    settled()
+    assert len(seen) == 4
+
+
+def test_a_scripted_close_stops_the_socket_poll(flask_page):
+    # the second read's probe (N2): the accordion or a restore closes a panel by setting open=false, no click
+    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    seen, settled = _serve(page)
+    page.click(_sel("socket") + " > summary")
+    page.wait_for_function("s => document.querySelector(s + ' .daemonview-text').textContent.includes('RADIO=READY')",
+                           arg=_sel("socket"), timeout=15000)
+    page.evaluate("s => { document.querySelector(s).open = false; }", _sel("socket"))
+    page.wait_for_function("s => !document.querySelector(s).dvRunning", arg=_sel("socket"), timeout=15000)
+    settled()
+    n = len(seen)
+    page.clock.run_for(5000)
+    settled()
+    assert len(seen) == n, seen
 
 
 def test_the_rxtx_view_polls_every_3_s_only_while_open(flask_page):
