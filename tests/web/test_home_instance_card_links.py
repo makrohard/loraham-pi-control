@@ -253,7 +253,10 @@ def test_an_interactive_part_keeps_its_banner_and_this_radios_command(tmp_path, 
     assert [a["href"] for a in row.find("a") if "View" in a.text] == [
         "/stacks?open=meshcore&radio=r4#stackrow-meshcore"]                              # its blocker: this radio
     (box,) = row.find("pre")
-    assert "r4" in box.text and "r2" not in box.text                                    # this card's radio
+    # this card's radio: its own lock and node port, never r2's (by those parts: the paths in the box are tmp_path's and
+    # the checkout's, which may contain "r2" themselves)
+    assert "/state/r4/" in box.text and f"-p {MC_NODE['r4']}" in box.text, box.text
+    assert "/state/r2/" not in box.text and str(MC_NODE["r2"]) not in box.text, box.text
 
 
 def test_the_cards_run_and_stop_post_with_csrf_and_name_the_instance(tmp_path, web, monkeypatch):
