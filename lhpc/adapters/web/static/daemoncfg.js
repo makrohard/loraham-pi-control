@@ -1,9 +1,11 @@
 // DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html), each a closed panel under its Monitor, read-only
 // over the /api/daemon endpoints. A view asks only while it is open, driven by the panel's open state (a click, the
-// accordion, a restore or a page that opens it at load): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per
+// accordion, a restore or a page that opens it at load; a closed Monitor or Settings around it counts as closed):
+// "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per
 // open and per Reload; "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View"
 // the dashboard's RX/TX feed every 3 s. Closing stops the polling; Reload starts the view afresh. A reply to an earlier
-// run of the view (before a close or a Reload) is dropped. textContent only, never innerHTML; no setting is changed.
+// run of the view (before a close or a Reload) is dropped, and a view has one request out at a time (a slow reply is
+// never overtaken by a newer one). textContent only, never innerHTML; no setting is changed.
 // Delegated on the document, so a Stacks body that arrives later needs no wiring.
 (function () {
   "use strict";
@@ -21,13 +23,19 @@
   }
 
   // GET `path` under /api/daemon/<rid>; `done(data or null, failed)` only while this run of the view is the current one.
+  // One request per run at a time: a poll that comes while the last one is out is skipped, so replies never cross.
   function ask(panel, path, done) {
     var gen = panel.dvGen;
+    if (panel.dvBusy === gen) return;
+    panel.dvBusy = gen;
     fetch("/api/daemon/" + encodeURIComponent(panel.getAttribute("data-rid")) + path,
           { headers: { Accept: "application/json" }, cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) { return { d: d, failed: false }; }, function () { return { d: null, failed: true }; })
-      .then(function (res) { if (panel.dvGen === gen && panel.dvRunning) done(res.d, res.failed); });
+      .then(function (res) {
+        if (panel.dvBusy === gen) panel.dvBusy = 0;
+        if (panel.dvGen === gen && panel.dvRunning) done(res.d, res.failed);
+      });
   }
 
   function stop(panel) {
@@ -79,16 +87,24 @@
       return;
     }
     status.textContent = "live — every " + POLL_MS[kind] / 1000 + " s while open";
-    var tick = function () { if (!panel.isConnected) { stop(panel); return; } poll(); };   // a replaced body: stop
+    var tick = function () { if (!shown(panel)) { stop(panel); return; } poll(); };   // closed around, replaced: stop
     tick();
     panel.dvTimer = setInterval(tick, POLL_MS[kind]);
   }
 
-  function sync(panel) { if (panel.open) start(panel); else stop(panel); }
+  // Open and shown: the panel and every <details> around it open, and in the page.
+  function shown(panel) {
+    if (!panel.isConnected) return false;
+    for (var d = panel; d; d = d.parentElement ? d.parentElement.closest("details") : null) if (!d.open) return false;
+    return true;
+  }
+  function sync(panel) { if (shown(panel)) start(panel); else stop(panel); }
 
   document.addEventListener("toggle", function (e) {
-    var panel = e.target;
-    if (panel && panel.classList && panel.classList.contains("daemonview")) sync(panel);
+    var el = e.target;
+    if (!el || !el.classList) return;
+    if (el.classList.contains("daemonview")) sync(el);
+    else if (el.querySelectorAll) el.querySelectorAll(".daemonview").forEach(sync);   // a Monitor or Settings around them
   }, true);                                          // toggle does not bubble: caught on the way down
   document.addEventListener("click", function (e) {
     var btn = e.target && e.target.closest ? e.target.closest(".daemonview-reload") : null;

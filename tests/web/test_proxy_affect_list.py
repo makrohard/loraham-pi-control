@@ -61,5 +61,5 @@ def test_will_affect_is_one_row_per_proxy_with_its_own_text(tmp_path, web, path)
 def test_the_served_css_lays_the_list_out_in_columns_that_wrap(tmp_path, web):
     c, _svc = _client(web, tmp_path)
     css = " ".join(c.get("/static/style.css").get_data(as_text=True).split())
-    assert "grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));" in css
+    assert "grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));" in css   # never wider than its box
     assert ".affectlist li { overflow-wrap: anywhere; }" in css

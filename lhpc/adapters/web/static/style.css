@@ -507,7 +507,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
    panel holds (three on a desktop page, one on a phone); an item longer than its column wraps inside it. */
 .affecthead { margin-bottom: .2rem; }
 .affectlist { list-style: none; margin: 0 0 .8rem; padding: 0; display: grid;
-              grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: .15rem 1.2rem; }
+              grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); gap: .15rem 1.2rem; }
 .affectlist li { overflow-wrap: anywhere; }
 .logbox-tall { max-height: 44rem; }
 .logbox-half { max-height: 22rem; }
