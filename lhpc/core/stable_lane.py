@@ -123,13 +123,30 @@ def fetch_history(run, remote: str, branch: str, paths) -> tuple:
                "+refs/tags/*:refs/tags/*", timeout=120.0)
     if out.returncode != 0:
         if branch and run(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"],
-                          timeout=15.0).returncode == 2:
+                          timeout=15.0).returncode == 2 and _forget_gone(run, mirror, remote, branch):
             return None, f"branch {branch!r} is not on {remote}: refused; {FINAL_HINT}"
         return None, f"could not list tags on {remote}"
     shallow = _git(run, mirror, "rev-parse", "--is-shallow-repository")
     if shallow.returncode != 0 or shallow.stdout.strip() != "false":
         return None, f"could not list tags on {remote}"
     return mirror, ""
+
+
+def _forget_gone(run, mirror, remote: str, branch: str) -> bool:
+    """The branch is gone upstream: its cached tip moves to `refs/gone/` (kept as history, never as publication: G2
+    R2 B1) and the copy's tags are read again, so only refs the upstream still has count. False: not done."""
+    tip = _git(run, mirror, "rev-parse", "--verify", "-q", lane_ref(branch))
+    if tip.returncode == 0 and (_git(run, mirror, "update-ref", f"refs/gone/{branch}", tip.stdout.strip()).returncode
+                                or _git(run, mirror, "update-ref", "-d", lane_ref(branch)).returncode):
+        return False
+    return _git(run, mirror, "fetch", "--quiet", "--filter=tree:0", "--prune", "--prune-tags", "--no-write-fetch-head",
+                "--end-of-options", remote, "+refs/tags/*:refs/tags/*", timeout=120.0).returncode == 0
+
+
+def held_copy(run, paths, remote: str, branch: str, installed: str):
+    """The history copy this box holds for `branch` when it holds the installed commit, else None."""
+    held = history_dir(paths, remote, branch)
+    return held if (held / "HEAD").exists() and _git(run, held, "cat-file", "-e", installed).returncode == 0 else None
 
 
 def _is(run, mirror, older: str, newer: str) -> bool | None:
@@ -364,21 +381,18 @@ def update_gate(run, paths, items, source: str, remote_of):
         else:
             want = c.source.pin_commit if lane == "pinned" else remote_tip(run, remote, branch or "HEAD", 15.0)
             if not want and lane == "dev" and not source and branch and c.source.pin_commit and (installed := assess(
-                    run, src)) and run(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"],
-                                       timeout=15.0).returncode == 2:   # the branch is gone: the pin, never back
-                held = history_dir(paths, remote, branch)              # the history this box already has
-                copy = (held / "HEAD").exists()                        # --source pinned places the pin with it only
-                way = "--source pinned goes back with the back warning" if copy else \
-                    "to go back to the pin: remove the stack, reinstall Known working"
-                has = contains(run, held if copy else None, src, installed, c.source.pin_commit)
-                if has is None:                                         # retrying cannot help: name the way
-                    refused.append(f"  {c.id}: upstream branch {branch!r} gone and this box holds no history placing "
-                                   f"the pin: nothing moves; {way}")
-                if has:
+                    run, src)) and is_final(target.history(remote, branch)[1]):   # gone: the pin only forward
+                copy = held_copy(run, paths, remote, branch, installed)     # --source pinned places the pin with it
+                way = "--source pinned moves it to the pin, after a warning" if copy else \
+                    "to go to the pin: remove the stack, reinstall Known working"
+                has = contains(run, copy, src, installed, c.source.pin_commit)
+                how = classify(run, copy, installed, c.source.pin_commit) if has is False and copy else None
+                if has is None or (has is False and how is None):          # no copy: retrying cannot help
+                    refused.append(f"  {c.id}: " + (COULD_NOT_CHECK if copy else f"upstream branch {branch!r} gone and "
+                                   f"this box holds no history placing the pin: nothing moves; {way}"))
+                elif how != "forward":                                      # back, sideways, over own commits
                     kept[path] = f"  {c.id}: upstream branch {branch!r} gone; kept {installed[:9]}; {way}"
-                    #                                                     a plain Update never goes back (his rule)
-                if has is not False:
-                    continue
+                    #                  a plain Update moves only forward (his rule); forward: the adoption's pin below
             if not want:
                 continue                                   # no pin / dev unreachable: the adoption's own policy
                 #                                            (dev falls back to the pin, disclosed)
@@ -388,8 +402,8 @@ def update_gate(run, paths, items, source: str, remote_of):
             continue                                       # not a readable checkout: the adoption's identity decides
         if mirror is None and installed and installed != want:
             mirror, why = target.history(remote, branch)
-            if mirror is None and is_final(why) and (history_dir(paths, remote, branch) / "HEAD").exists():
-                mirror = history_dir(paths, remote, branch)        # the branch is gone upstream: the box's copy
+            if mirror is None and is_final(why):
+                mirror = held_copy(run, paths, remote, branch, installed)   # the branch is gone upstream: the box's copy
         if not source and installed:                       # routine: the badge's predicate first (never back)
             if (has := contains(run, mirror, src, installed, want)) is None:
                 refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
