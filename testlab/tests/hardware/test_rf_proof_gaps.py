@@ -63,6 +63,14 @@ def test_row_5_listens_before_the_meshchat_start_and_counts_its_announce(tmp_pat
     assert sum(1 for x in lines if x.startswith("  [dry] Z > 5-start.txt:")) == 1
 
 
+def test_row_5_journals_the_meshchat_stop_before_its_start(tmp_path):
+    # a24 M2 (G3): a STOP after the start must stop MeshChat: its guarded stop is journalled before the start runs
+    lines = block(dry(tmp_path).out, 5).splitlines()
+    st = next(i for i, x in enumerate(lines) if x.startswith("  [dry] Z > 5-start.txt:"))
+    un = [i for i, x in enumerate(lines) if x.startswith("  [dry] undo += Z: ") and "stack stop meshchat@r2 --yes" in x]
+    assert un and un[-1] < st, "no MeshChat stop journalled before its start"
+
+
 def test_row_5_needs_no_set_form():
     text = (HW / "rf-proof.sh").read_text()
     assert re.search(r'\[5\]="start stop rt_get rt_pget rx_mchat"', text)
@@ -165,6 +173,8 @@ MJOB_LIVE = ('MCSET=on; MCSET_J1=; MCSET_PY=x; RUN="2"; WEBPORT=8443; RADIO_H433
     ("JOB J2 graywolf@r1 STOP: M1: x", "0", "| J2 | H | graywolf@r1 | STOP: M1: x |", True, False),
     ("JOB J2 graywolf@r1 UNRESOLVED: M3: y", "0", "| J2 | H | graywolf@r1 | UNRESOLVED: M3: y |", True, True),
     ("", "1", "| J2 | H | graywolf@r1 | UNKNOWN: helper rc 1 |", True, True),
+    # a24 M3 (G13): a helper that ended rc != 0 after printing a verdict: its state is unknown, never that verdict
+    ("JOB J2 graywolf@r1 PASS: set call", "1", "| J2 | H | graywolf@r1 | UNKNOWN: helper rc 1 |", True, True),
 ])
 def test_m_records_each_jobs_verdict_and_names_what_is_not_a_pass(tmp_path, v, xr, md, notrun, unres):
     r, evd = source_only(tmp_path, MJOB_LIVE, V=v, XR=xr)

@@ -25,6 +25,9 @@ RT = os.path.expanduser(sys.argv[7])
 LH = RT + "/venv/lhpc/bin/lhpc"
 ST = RT + "/config/stacks"
 inst = f"{sid}@{rid}"
+# a value the kit's rows cannot run with: MeshCore in a repeater mode relays every frame it hears (sends no tx counts), so
+# the job STOPs before any set when the instance would end in one (the source's value, or the instance file's on KEEP)
+ONLY = {("meshcore", "file_mode"): ("chat",)}
 
 
 def mask(t):
@@ -119,6 +122,10 @@ def main():
             done("STOP", f"M1: '{f['name']}' shows no single value line")
         if f'name="{f["field"]}"' not in p0:
             done("STOP", f"M1: the field {f['field']} is absent from PAGE0")
+        end = tstr(idat[k]) if k in idat else v
+        if (sid, k) in ONLY and end not in ONLY[(sid, k)]:
+            done("STOP", f"M1: {k} would be '{end}', not {'/'.join(ONLY[(sid, k)])}: row {job[1:]}'s node would relay "
+                         "frames the kit never counts; nothing set")
         if k in idat:
             say(f"KEEP {k}: the instance file holds it (a 0.14.0 entry wins): SKIP-SET")
             continue
