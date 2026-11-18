@@ -4,6 +4,8 @@ the body server-side, so the settings are always reachable."""
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from htmlq import parse
 from lhpc.core.paths import Paths
@@ -135,3 +137,28 @@ def test_the_stacks_page_is_the_same_byte_for_byte(tmp_path, web, monkeypatch, h
 def test_which_rows_render_their_body_inline(jobs, cookie, args, inline):
     from lhpc.adapters.web.app import _row_inline
     assert _row_inline("kiss", jobs, cookie, args) is inline
+
+
+def test_the_noscript_fallback_link_keeps_the_page_radio(tmp_path, web):
+    """G2-RELP3d B1: the no-JS Open link of a deferred row carries the page's ?radio= like its body fetch does,
+    so the server-side render shows the radio the operator picked, not the default one."""
+    c, svc = _client(web, tmp_path)
+    doc = parse(c.get("/stacks?radio=r1").get_data(as_text=True))
+    rows = doc.find("div", class_="lazy-body")
+    assert len(rows) == len(svc.stacks())
+    for row in rows:
+        assert "radio=r1" in row["data-body-url"]
+        links = doc.within(row).find("a")
+        assert len(links) == 1 and "radio=r1" in links[0]["href"] and "open=" in links[0]["href"]
+
+
+@pytest.mark.parametrize("query, target", [("open=gps", "gps-row"), ("open=gps&cfg=gps", "gps-settings"),
+                                           ("open=network", "controller-network"), ("open=firewall", "firewall-row")])
+def test_a_controller_deep_link_opens_the_controller_row_server_side(tmp_path, web, query, target):
+    """G2-RELP3a B1: a link to a panel inside the LHPC controller row (the dashboard's GNSS / Net / Firewall links)
+    renders that row open too, so the panel is visible without JS; a link to a stack row leaves it closed."""
+    c, _svc = _client(web, tmp_path)
+    with patch.object(ControllerService, "network_supported", lambda self: True):     # the Network panel renders
+        doc = parse(c.get("/stacks?" + query).get_data(as_text=True))
+        assert doc.by_id(target).has_attr("open") and doc.by_id("controller-row").has_attr("open")
+        assert not parse(c.get("/stacks?open=kiss").get_data(as_text=True)).by_id("controller-row").has_attr("open")

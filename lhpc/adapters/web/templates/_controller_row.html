@@ -1,6 +1,8 @@
 {% from "_menu.html" import page_actions -%}
+{# A link to a panel inside this row (?open=firewall|network|gps: the dashboard's links) opens the row too, so the
+   panel shows without JS (G2-RELP3a). #}
 {% set _explicit_row = request.args.get('open') or request.args.get('cfg') or request.args.get('dp') or request.args.get('inst') -%}
-<details class="stackrow" id="controller-row"{% if confirm or request.args.get('open') == 'firewall' or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
+<details class="stackrow" id="controller-row"{% if confirm or request.args.get('open') in ('firewall', 'network', 'gps') or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
         <summary>
           <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
           {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
