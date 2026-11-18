@@ -79,6 +79,8 @@ Radios and settings:
   ticks are no longer read: set them per radio, and re-enter settings and pages.
 - Per-band daemon values (`dp_<band>_<PARAM>`) are no longer read: move each by hand to `dp_<PARAM>` in
   `<stack>@<rid>.toml`, or to the radio's row with `lhpc config daemon@<rid> --daemon-param`.
+- The 0.13.x daemon RF logs are not compatible and no longer listed: delete them,
+  `rm -f ~/loraham-pi-control/logs/rf-daemon-433.log* ~/loraham-pi-control/logs/rf-daemon-868.log*`.
 - Grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried). A POWER you set by hand stays;
   a USB stick that should keep 17 dBm: set it (`lhpc config daemon@<rid> --daemon-param POWER=17`).
 - KISS: edits you made in a `loraham_kiss_tnc.conf.example` are no longer read: note them, set POWER in kiss's settings.
