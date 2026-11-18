@@ -608,7 +608,8 @@ def test_check_upstream_fetch_error_is_sanitized(tmp_path, monkeypatch):
     assert out["ok"] is False
     err = out["error"]
     assert "\n" not in err and "\x1b" not in err and "─" not in err and "│" not in err
-    assert err.startswith("fatal: unable to access remote")    # rule-10: git's own message; no typed field
+    # git's own words are never shown (they may name the remote with its secret): the exit code is
+    assert err == f"fetch failed (git rc 1); run git fetch in {tmp_path} for details", err
     res = selfupdate.apply_update(FakeSystem(commands=cmds).system, gitrepo.runtime_paths(tmp_path))
     assert res["ok"] is False and "\n" not in res["message"] and "─" not in res["message"]
 

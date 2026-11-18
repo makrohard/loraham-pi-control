@@ -174,12 +174,15 @@ def test_the_console_shows_where_updates_come_from(world, web, capsys):
 
 
 # Credentialed URLs as an operator may configure them; S3C and R3T are the token's two halves, neither may show.
-# `{s}`/`{h}`: scheme and the rest. A quote (git's http transport takes it), a space (git keeps it as typed) and
-# an `@` are removed with the userinfo; what cannot be bounded (an unescaped slash, a malformed URL) is not shown.
+# `{s}`/`{h}`: scheme and the rest. A shown URL is rebuilt as scheme://host[:port]/path: the userinfo (with a
+# quote, a space or an `@` in it), the query and the fragment go; what is not such a URL (an unescaped slash, a
+# malformed URL, an `@` typed as `/`) is not shown.
 CRED = [("{s}://user:S3CR3T@{h}", True), ("{s}://user:S3C'R3T@{h}", True), ("{s}://user:S3C/R3T@{h}", False),
         ("{s}://user:S3C R3T@{h}", True), ("{s}://user:S3C@R3T@{h}", True), ("{s}:/user:S3CR3T@{h}", False),
-        ("user:S3CR3T@{s}://{h}", False)]
-CRED_IDS = ["plain", "quote", "slash", "space", "at", "one-slash", "userinfo-before-scheme"]
+        ("user:S3CR3T@{s}://{h}", False), ("{s}://user:S3CR3T/{h}", False), ("{s}://{h}?access_token=S3CR3T", True),
+        ("{s}://{h}#S3CR3T", True), ("{s}://S3C-R3T/{h}", False), ("{s}://user:1234/{h}", False)]
+CRED_IDS = ["plain", "quote", "slash", "space", "at", "one-slash", "userinfo-before-scheme", "at-typed-as-slash",
+            "token-in-the-query", "token-in-the-fragment", "token-as-host", "password-as-port"]
 
 
 def _cred(template, clean, s, h):
@@ -201,6 +204,7 @@ def test_a_token_in_the_origin_is_never_shown_or_stored(world, web, capfd, templ
     url, display = _cred(template, clean, "http", "127.0.0.1:1/lhpc.git")
     gitrepo.git(world.co, "remote", "set-url", "origin", url)
     gitrepo.git(world.co, "config", "core.sshCommand", "false")  # a malformed URL git reads as ssh: no ssh
+    gitrepo.git(world.co, "config", "http.proxy", "http://127.0.0.1:1")  # no DNS for a host that is a token
     shown = _line(display, world.official)
     assert world.main(["self-update"]) == 1                    # unreachable, port 1
     seen = capfd.readouterr()
@@ -231,32 +235,39 @@ def test_a_token_in_the_official_url_is_never_shown(world, monkeypatch, capfd, t
 @pytest.mark.parametrize("url,display", [
     ("git@github.com:makrohard/loraham-pi-control.git", "git@github.com:makrohard/loraham-pi-control.git"),
     ("/srv/git/lhpc.git", "/srv/git/lhpc.git"), ("origin", "origin"), ("ssh://git@host.invalid/lhpc.git",
-     "ssh://host.invalid/lhpc.git"), ("https://git.invalid/team@work/lhpc.git", HIDDEN)],
-    ids=["scp", "local-path", "literal-origin", "ssh-user", "at-in-the-path"])
+     "ssh://host.invalid/lhpc.git"), ("https://git.invalid/team@work/lhpc.git", "https://git.invalid/team@work/lhpc.git"),
+    ("file:///srv/git/lhpc.git", "file:///srv/git/lhpc.git"), ("https://[::1]:8443/lhpc.git", "https://[::1]:8443/lhpc.git"),
+    ("https://git.invalid:x/lhpc.git", HIDDEN), ("git.invalid/lhpc.git?access_token=S3CR3T", HIDDEN),
+    ("git.invalid/lhpc.git#S3CR3T", HIDDEN), ("http://localhost:8080/lhpc.git", "http://localhost:8080/lhpc.git")],
+    ids=["scp", "local-path", "literal-origin", "ssh-user", "at-in-the-path", "file-url", "ipv6-port",
+         "port-not-a-number", "query-without-scheme", "fragment-without-scheme", "localhost"])
 def test_a_url_without_a_secret_is_shown_as_it_is(url, display):
-    """Test 8: an scp-style address, a local path, the literal `origin` keep their form, an ssh user is
-    dropped like any userinfo; an `@` the userinfo rule cannot place (in the path) is not shown at all."""
+    """Test 8: an scp-style address, a local path, the literal `origin`, a file URL keep their form; an ssh
+    user is dropped like any userinfo; an `@` in the path is a path; a port that is not a number, a query or
+    fragment on a path without a scheme are not the whitelist's: not shown."""
     assert selfupdate.redact_url(url) == display
 
 
 @pytest.mark.parametrize("token,pad,colour", [("S3CR3T", 0, ""), ("S3CR3T", 173, ""), ("S3C'R3T", 0, ""),
                                               ("S3C/R3T", 0, ""), ("S3CR3T", 0, "\x1b[31m"), ("S3C R3T", 0, ""),
-                                              ("S3C R3T", 173, "")],
-                         ids=["short", "cut-before-the-at", "quote", "slash", "coloured", "space", "space-cut"])
+                                              ("S3C R3T", 173, ""), ("S3CR3T/x", 0, ""), ("?access_token=S3CR3T", 0, "")],
+                         ids=["short", "cut-before-the-at", "quote", "slash", "coloured", "space", "space-cut",
+                              "at-typed-as-slash", "token-in-the-query"])
 def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch, web, token, pad, colour):
-    """Test 8: a git (or a transport helper) that echoes the credentialed URL in its fetch error: the
-    error is returned without the token, and the result still says where it tried to update from. With
-    `pad`, the error's 200-character cut falls between the token and its `@`; with `colour`, an ANSI
-    colour code is glued to the URL's scheme; with a space in the token the userinfo cannot be bounded
-    in free text, and the error is the generic "fetch failed" (fail closed). The answer goes on through
-    the cache, the controller data and the console page without the token too."""
+    """Test 8: a git (or a transport helper) that echoes the credentialed URL in its fetch error: git's
+    words are never returned; the error names the exit code and where to look, and the result still says
+    where it tried to update from. `pad`, `colour` and the token's form vary what git printed (a cut
+    point, an ANSI colour code, a space, an `@` typed as `/`, a token in the query). The answer goes on
+    through the cache, the controller data and the console page without the token too."""
     import json
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     monkeypatch.setattr(selfupdate, "repo_root", lambda: tmp_path)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     (tmp_path / "rt" / "state").mkdir(parents=True)
-    url = f"https://user:{token}@example.invalid/lhpc.git"
+    url = (f"https://example.invalid/lhpc.git{token}" if token.startswith("?") else
+           f"https://user:{token[:-2]}/example.invalid/lhpc.git" if token.endswith("/x") else
+           f"https://user:{token}@example.invalid/lhpc.git")
     g = lambda *a: ("git", "-C", str(tmp_path), *a)
     cmds = {g("rev-parse", "HEAD"): CommandResult(0, "h\n", ""),
             g("rev-parse", "--abbrev-ref", "HEAD"): CommandResult(0, "main\n", ""),
@@ -270,10 +281,7 @@ def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch, web, 
     out = selfupdate.check_upstream(system, "main", official="https://x.invalid/o.git")
     assert out["ok"] is False, out
     _no_token(json.dumps(out))
-    if " " in token:
-        assert out["error"] == "fetch failed", out
-    else:
-        assert "https://example.invalid" in out["error"] or pad, out
+    assert out["error"] == f"fetch failed (git rc 128); run git fetch in {tmp_path} for details", out
     shown = HIDDEN if "/" in token else "https://example.invalid/lhpc.git"
     assert out["origin"]["line"] == _line(shown, "https://x.invalid/o.git")
     svc = ControllerService(system=system, paths=Paths(runtime_root=tmp_path / "rt"))
