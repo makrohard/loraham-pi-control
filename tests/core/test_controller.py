@@ -666,8 +666,8 @@ def test_stacks_renders_controller_row_first_with_embedded_update(tmp_path):
     body = _app(tmp_path).get("/stacks").get_data(as_text=True)   # packaged manifest HAS a controller
     assert 'id="controller-row"' in body and "LoRaHAM Pi Control" in body
     assert "/self-update/check" in body and "Self-Update" not in body   # embedded Update UI, renamed
-    # it is the FIRST entry — before the first managed stack's log link
-    assert body.index('id="controller-row"') < body.index('logslink')
+    # it is the FIRST entry — before the first managed stack's row (its "logs" link went: LOGS-IN-TREE §2b)
+    assert body.index('id="controller-row"') < body.index('id="stackrow-')
 
 
 def test_stacks_omits_controller_row_when_absent(tmp_path):

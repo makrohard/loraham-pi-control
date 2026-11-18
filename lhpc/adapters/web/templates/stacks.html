@@ -56,7 +56,6 @@
       <div class="row-actions">
         {% if controller.update_available %}<a class="update-link"
           href="{{ url_for('stacks_overview') }}#controller-update">Update</a>{% endif %}
-        <a class="logslink" href="{{ url_for('controller_logs') }}" aria-label="controller logs">logs</a>
         {{ page_link('controller', 'controller-row') }}
       </div>
       </div>

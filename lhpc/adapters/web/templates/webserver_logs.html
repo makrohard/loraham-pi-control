@@ -3,9 +3,10 @@
 {% block content %}
   {# LHPC-managed nginx front-end logs (on disk under the runtime root). Static tail — reload to
      refresh; no polling and no liveness probe (the controller-owned component is read-only). #}
+  {% include "_log_crumbs.html" %}
   <div class="card">
     <header>
-      <h2>Webserver logs <span class="pill">nginx {{ src }}</span></h2>
+      <span class="pill">nginx {{ src }}</span>
       <span class="tabs">
         <a href="{{ url_for('webserver_logs', src='error') }}"
            class="pill{{ ' mono' if src == 'error' else '' }}">error log</a>

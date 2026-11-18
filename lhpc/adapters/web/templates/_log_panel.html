@@ -1,0 +1,20 @@
+{#- LOGS-IN-TREE (v4 N2/N3): one log entry on the Apps page, a closed native panel named by the entry's label.
+    Opened, logpanel.js fetches its LAST 30 lines (an RF log: its last 30 records, raw, never decoded) once, and once
+    per Reload; nothing while closed, no timer. The text is a plain <pre>; a polite status line outside it says what
+    happened. The full, live log is the entry's own page ("page ›", an ordinary link). `lp`: {id, owner, label, kind
+    ("program" | "rf"; none for the controller's), sources: ((name, preview source), …) for the controller's}. -#}
+{%- set _radio = request.args.get('radio') %}
+{%- set _srcs = lp.sources or () %}
+<details class="advcfg logpanel" id="{{ lp.id }}" data-kind="{{ 'records' if lp.kind == 'rf' else 'lines' }}"
+         data-src="{{ log_preview_url('', '', source=_srcs[0][1]) if _srcs else log_preview_url(lp.owner, lp.id, _radio) }}">
+  <summary>{{ lp.label }}</summary>
+  <div class="body">
+    {% if _srcs|length > 1 %}<label class="logpanel-pick">Log <select class="logpanel-src">
+      {%- for name, src in _srcs %}<option value="{{ log_preview_url('', '', source=src) }}">{{ name }}</option>{% endfor -%}
+    </select></label>{% endif %}
+    <button type="button" class="logpanel-reload">Reload</button>
+    <span class="logpanel-status muted" role="status" aria-live="polite"></span>
+    <pre class="logbox logpanel-text"></pre>
+    <noscript><p class="muted">The last 30 lines need JavaScript; "page ›" opens the full log.</p></noscript>
+  </div>
+</details>

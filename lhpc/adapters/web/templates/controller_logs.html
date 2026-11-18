@@ -4,9 +4,10 @@
   {# LoRaHAM Pi Control's OWN process logs — the lhpc-web / lhpc-selfupdate / lhpc-boot-restore
      units append to on-disk files under logs/, tailed here at request time (same as the nginx
      front-end logs). #}
+  {% include "_log_crumbs.html" %}
   <div class="card">
     <header>
-      <h2>Controller logs <span class="pill">{{ unit }}</span></h2>
+      <span class="pill">{{ unit }}</span>
       <span class="tabs">
         <a href="{{ url_for('controller_logs', src='web') }}"
            class="pill{{ ' mono' if src == 'web' else '' }}">web console</a>

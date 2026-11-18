@@ -4,12 +4,12 @@
   {# The managed firewall's own per-check diagnostic (firewall.log), written by the root helper to
      tmpfs. Static tail — reload to refresh. NOT the nginx access/error logs (those live on the
      Webserver logs page). #}
+  {% include "_log_crumbs.html" %}
   <div class="card">
     <header>
-      <h2>Firewall log <span class="pill">firewall.log</span></h2>
+      <span class="pill">firewall.log</span>
       <span class="tabs">
         <a href="{{ url_for('firewall_logs') }}" class="pill">reload</a>
-        <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}" class="pill">← Firewall</a>
       </span>
     </header>
     <div class="body">

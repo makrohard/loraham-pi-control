@@ -56,10 +56,10 @@ class _Tree(HTMLParser):
         elif tag == "a" and self._a is not None:
             (href, text), self._a = self._a, None
             m = re.fullmatch(r"/stacks/([^/]+)/menu/([^?]+)", href)
-            if m:
-                text = " ".join(text.split())
-                own = () if text.endswith(" page ›") else (text,)
-                self.levels[(m.group(1), m.group(2))] = tuple(self.path) + own
+            text = " ".join(text.split())
+            own = () if text.endswith(" page ›") else (text,)
+            # a level whose page is an existing route (/hardware, the log pages: U5, LOGS-IN-TREE) by its link
+            self.levels[(m.group(1), m.group(2)) if m else ("", href)] = tuple(self.path) + own
 
 
 def _levels(c) -> dict:

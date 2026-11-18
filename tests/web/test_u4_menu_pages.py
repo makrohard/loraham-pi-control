@@ -5,6 +5,7 @@ lists every level. A form sent from a level's page returns there."""
 from __future__ import annotations
 
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from htmlq import parse
@@ -78,23 +79,41 @@ def _expanded(c, owner, radio=""):
             else _html(c, f"/stacks/{owner}/body" + (f"?radio={radio}" if radio else "")))
 
 
-# U5 (rule 21): a level whose page is an existing route; its "page ›" and its tree entry link that route
-_OWN_PAGES = {"/hardware": ("daemon", "stack-hardware-daemon")}
+# U5 (rule 21): a level whose page is an existing route; its "page ›" and its tree entry link that route.
+# LOGS-IN-TREE: the controller's, the webserver's and the firewall's logs; a program's log is /logs/<program>, a
+# stack's RF log /logs/<its writer>?job=… (the writers by hand, the registry's)
+_OWN_PAGES = {"/hardware": ("daemon", "stack-hardware-daemon"), "/controller/logs": ("controller", "controller-logs"),
+              "/webserver/logs": ("controller", "webserver-row--logs"), "/firewall/logs": ("controller", "firewall-row--log")}
+_RF_WRITERS = {"daemon": "loraham-daemon", "kiss": "loraham-kiss-tnc", "meshcom": "meshcom-bridge",
+               "meshtastic": "meshtastic", "meshcore": "meshcore-node", "reticulum": "rns"}
 
 
 def _href(owner, mid):
-    """The link a level's "page ›" and tree entry carry."""
+    """The link a level's "page ›" and tree entry carry (without its query)."""
+    if mid.startswith("log-"):
+        return "/logs/" + mid[4:]
+    if mid.startswith("rflog-") and owner in _RF_WRITERS:
+        return "/logs/" + _RF_WRITERS[owner]
     return next((url for url, level in _OWN_PAGES.items() if level == (owner, mid)), f"/stacks/{owner}/menu/{mid}")
 
 
 def _tree(c):
-    """owner -> its levels, read through the tree page's links (the public path)."""
-    out = {}
+    """owner -> its levels, read through the tree page's links (the public path). A log page's link is the level of
+    the owner whose levels it stands among (each owner's branch starts with its row's own link)."""
+    out, cur = {}, None
     doc = parse(_html(c, "/stacks/menus"))
     for a in doc.within(doc.find("div", class_="card")[0]).find("a"):
-        m = re.fullmatch(r"/stacks/([^/]+)/menu/([^?]+)", a["href"])
-        owner, mid = (m.group(1), m.group(2)) if m else _OWN_PAGES.get(a["href"], (None, None))
+        url = urlsplit(a["href"])
+        m = re.fullmatch(r"/stacks/([^/]+)/menu/([^?]+)", url.path)
+        log = re.fullmatch(r"/logs/([^/]+)", url.path)
+        if m:
+            owner, mid = m.group(1), m.group(2)
+        elif log and cur:
+            owner, mid = cur, ("rflog-" + cur if "job" in parse_qs(url.query) else "log-" + log.group(1))
+        else:
+            owner, mid = _OWN_PAGES.get(url.path, (None, None))
         if owner:
+            cur = owner
             out.setdefault(owner, set()).add(mid)
     return out
 
@@ -114,20 +133,20 @@ def _crumbs(doc):
 
 # ---- red on the base (085034cf): no "page ›", no page for a nested level ------------------------
 
-def test_every_row_and_submenu_has_a_page_link_right_of_logs(tmp_path, web):
+def test_every_row_and_submenu_has_a_page_link_at_the_right_of_its_overlay(tmp_path, web):
     c, _svc = _client(web, tmp_path)
     doc = parse(_html(c, "/stacks?open=meshcore"))
     hrefs = [a["href"] for a in doc.find("a", class_="pagelink")]
     assert "/stacks/controller/menu/controller-row" in hrefs
     assert "/stacks/meshcore/menu/stackrow-meshcore" in hrefs
     assert "/stacks/controller/menu/firewall-apply--other-commands" in hrefs
-    # each top row's overlay: "logs" first, then "page ›" at the very right
+    # each top row's overlay: "page ›" at the very right; its "logs" link went (LOGS-IN-TREE §2b: the row's Logs entry)
     for owner, row in (("controller", "controller-row"), ("meshcore", "stackrow-meshcore")):
         overlay = [d for d in doc.find("div", class_="row-actions")
                    if any(a["href"] == f"/stacks/{owner}/menu/{row}" for a in doc.within(d).find("a"))]
         assert len(overlay) == 1, row
         links = doc.within(overlay[0]).find("a")
-        assert links[-1].text == "page ›" and links[-2].has_class("logslink"), row
+        assert links[-1].text == "page ›" and not any(a.has_class("logslink") for a in links), row
 
 
 def test_firewall_other_commands_opens_on_its_own_page(tmp_path, web):
@@ -198,12 +217,12 @@ def test_a_stack_row_page_renders_its_body_inline_and_opened(tmp_path, web):
     assert _crumbs(doc).text == "Home › Apps › " + svc.stack("kiss").name
 
 
-def test_the_page_bar_leads_back_to_the_stacks_row_and_its_logs(tmp_path, web):
-    c, svc = _client(web, tmp_path)
+def test_the_page_bar_leads_back_to_the_stacks_row(tmp_path, web):
+    c, _svc = _client(web, tmp_path)
     doc = parse(_html(c, "/stacks/meshcore/menu/stack-install-meshcore--dependencies"))
     bar = [a["href"] for a in doc.within(doc.find("p", class_="pagebar")[0]).find("a")]
-    assert bar == ["/stacks?open=meshcore#stack-install-meshcore--dependencies",
-                   "/logs/" + svc.stack("meshcore").main]       # the row's own logs link; "All menus" is in the crumbs' line
+    # its "logs" link went (LOGS-IN-TREE §2b: the row's Logs entry); "All menus" is in the crumbs' line
+    assert bar == ["/stacks?open=meshcore#stack-install-meshcore--dependencies"]
     crumbs = [a["href"] for a in doc.within(_crumbs(doc)).find("a")]
     assert crumbs[2:] == ["/stacks/meshcore/menu/stackrow-meshcore", "/stacks/meshcore/menu/stack-install-meshcore"]
 

@@ -11,10 +11,64 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from lhpc.core import rflog as _rflog
+from lhpc.core.radio_start import link_kinds
+
 CONTROLLER = "controller"
-# U5 (rule 21): a level whose page is an existing route (its endpoint): its "page ›" and tree entry link that
-# route, and its /stacks/<owner>/menu/<id> answers 302 there, so one block has one page.
-OWN_PAGES = {"stack-hardware-daemon": "hardware_view"}
+
+
+@dataclass(frozen=True)
+class Dest:
+    """An existing route a level opens as its page (U5 rule 21): its endpoint and fixed, whitelisted arguments.
+    `radio`: the page's validated ?radio= goes along (a stack's program log); `rf`: an RF log, the stack that owns
+    the registry entry (its writer and job come from the registry, never from the URL)."""
+    endpoint: str
+    args: tuple = ()
+    radio: bool = False
+    rf: str = ""
+
+
+# U5 (rule 21): a level whose page is an existing route: its "page ›" and tree entry link that route, and its
+# /stacks/<owner>/menu/<id> answers 302 there, so one block has one page. LOGS-IN-TREE: the log levels too; a
+# program's log and a stack's RF log by their id prefix (own_page).
+OWN_PAGES = {"stack-hardware-daemon": Dest("hardware_view"),
+             "controller-logs": Dest("controller_logs"),
+             "webserver-row--logs": Dest("webserver_logs"),
+             "firewall-row--log": Dest("firewall_logs")}
+_PROGRAM_LOG, _RF_LOG = "log-", "rflog-"
+
+
+def rf_entry(sid: str):
+    """The RF-log registry entry the stack `sid` owns (its config store holds the switch), or None."""
+    return next((e for e in _rflog.REGISTRY if e.owner == sid), None)
+
+
+def own_page(mid: str) -> Dest | None:
+    """The route a level opens as its page, or None (its page is /stacks/<owner>/menu/<id>)."""
+    if mid in OWN_PAGES:
+        return OWN_PAGES[mid]
+    if mid.startswith(_PROGRAM_LOG):
+        return Dest("logs_view", (("target", mid[len(_PROGRAM_LOG):]),), radio=True)
+    if mid.startswith(_RF_LOG) and rf_entry(mid[len(_RF_LOG):]) is not None:
+        return Dest("logs_view", radio=True, rf=mid[len(_RF_LOG):])
+    return None
+
+
+def stack_logs(stack) -> list[dict]:
+    """LOGS-IN-TREE: the entries of a stack's Logs level, in page order (the descriptors and the template read
+    this one list): a "program" entry for each program that writes a log (the code's `writes_log`, as Home's log
+    links; labelled with its manifest name), then the "rf" entry of the RF log of the registry entry the stack owns,
+    or a "note" when another stack writes the RF log of this one's surface (Graywolf's: the KISS TNC writes it)."""
+    sid = stack.id
+    out = [{"id": _PROGRAM_LOG + c.id, "owner": sid, "label": c.name, "kind": "program"}
+           for c in stack.components if link_kinds(c)["writes_log"]]
+    own = rf_entry(sid)
+    other = next((e for e in _rflog.REGISTRY if e.surface == sid and e.owner != sid), None)
+    if own is not None:
+        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "rf"})
+    elif other is not None:
+        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "note", "rf_owner": other.owner})
+    return out
 
 
 @dataclass(frozen=True)
@@ -26,9 +80,9 @@ class Submenu:
     vars: dict = field(default_factory=dict, compare=False, hash=False)
 
     @property
-    def page(self) -> str:
-        """The endpoint of the level's own page when it is an existing route (OWN_PAGES), else ""."""
-        return OWN_PAGES.get(self.id, "")
+    def page(self) -> Dest | None:
+        """The level's own page when it is an existing route (own_page), else None."""
+        return own_page(self.id)
 
 
 def _radio_suffix(key: str) -> str:
@@ -67,7 +121,26 @@ def controller_menus(ctx: dict) -> list[Submenu]:
         add("gps-row", "controller-row", "Position (GPS)", "_gps.html")
         add("gps-monitor", "gps-row", "Monitor", "_gps_monitor.html")
         add("gps-settings", "gps-row", "Settings", "_gps_settings.html")
+    # LOGS-IN-TREE: each at the end of its row; the page is the existing log page (OWN_PAGES)
+    if ctx.get("ws_mon"):
+        add("webserver-row--logs", "webserver-row", "Logs", "_log_panel.html", lp=LOG_PANELS["webserver-row--logs"])
+    if ctx.get("firewall_view"):
+        add("firewall-row--log", "firewall-row", "Log", "_log_panel.html", lp=LOG_PANELS["firewall-row--log"])
+    add("controller-logs", "controller-row", "Logs", "_log_panel.html", lp=LOG_PANELS["controller-logs"])
     return out
+
+
+# LOGS-IN-TREE B2: the controller's, the webserver's and the firewall's log panels, their preview sources
+# (/api/logpreview/<source>, a fixed whitelist) in the order of their full page's selector
+LOG_PANELS = {
+    "controller-logs": {"id": "controller-logs", "owner": CONTROLLER, "label": "Logs",
+                        "sources": (("web", "controller-web"), ("self-update", "controller-selfupdate"),
+                                    ("boot-restore", "controller-boot-restore"))},
+    "webserver-row--logs": {"id": "webserver-row--logs", "owner": CONTROLLER, "label": "Logs",
+                            "sources": (("error", "webserver-error"), ("access", "webserver-access"))},
+    "firewall-row--log": {"id": "firewall-row--log", "owner": CONTROLLER, "label": "Log",
+                          "sources": (("firewall.log", "firewall"),)},
+}
 
 
 def stack_menus(g: dict) -> list[Submenu]:
@@ -133,6 +206,11 @@ def stack_menus(g: dict) -> list[Submenu]:
         add(wid, f"stack-webservers-{sid}", sw["heading"], "_stackweb.html", stack_web=sw)
         add(f"{wid}--settings", wid, "Settings" + rs, "_stackweb_settings.html", stack_web=sw)
         add(f"{wid}--monitor", wid, "Monitor" + rs, "_stackweb_monitor.html", stack_web=sw)
+    # LOGS-IN-TREE: every row ends with its Logs: a program's log and the RF log open their log page (own_page)
+    logs = f"logs-{sid}"
+    add(logs, top, "Logs", "_stack_logs.html")
+    for lp in stack_logs(g["stack"]):
+        add(lp["id"], logs, lp["label"], "_rflog_note.html" if lp["kind"] == "note" else "_log_panel.html", lp=lp)
     return out
 
 

@@ -1025,16 +1025,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             lis = None
         return fw, lis
 
-    def _stack_rflog(stack_id):
-        """W4: a running stack's RF log link on its first running instance's radio, that instance's own `<rid>/<file>`
-        where the stack writes one (else its one file: Reticulum's one node, DEC-W342); None for a banded one."""
-        e = _rflog.entry(stack_id)
-        if e is None or e.banded:
-            return None
-        rid = min(_instances.recorded(service, stack_id), key=lambda r: int(r[1:]), default="")
-        own = f"{rid}/{e.job()}"
-        return {"target": e.writer, "radio": rid or None, "job": own if rid and _rflog.by_job(own) else e.job()}
-
     def _unconfirmed_post(stack):
         """A running stack's post-start setting the node never confirmed or never got (MeshCom's TX power: the node may
         still use its own value), and a node with no radio for its power above the panel's ceiling, on the stack's row
@@ -1190,7 +1180,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "notes": [(cid, n) for cid, cs in ss.components.items() if (n := component_note(cs))]   # W272: its row
                          + (_unconfirmed_post(stack) if rollup[stack.id] in _RUNNING else []),
                 # W250: what Home's card showed for a running stack: its RF log (W4: its instance's), its tools' launch lines
-                "rflog": _stack_rflog(stack.id) if rollup[stack.id] in _RUNNING else None,
                 "tools": [(c.id, c.name, service.manual_start_command(c, _inst)) for c in _tool_comps] if _tools_here else [],
                 "inline": inline,
             }
@@ -1466,7 +1455,55 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return Markup('<input type="hidden" name="return" value="%s">') % here if here else ""
 
     app.jinja_env.globals["menu_return_field"] = _menu_return_field
-    app.jinja_env.globals["menu_own_pages"] = _submenus.OWN_PAGES
+    def _own_page(owner: str, mid: str, radio=None):
+        """LOGS-IN-TREE B3: (endpoint, arguments) of a level whose page is an existing route, else None. The ONE
+        rule for its tree link, its "page ›" and menu_page's redirect: the page's radio goes along only where the
+        destination takes it and the stack runs on that radio; an RF log's writer and job come from the registry. An
+        RF log without a page radio opens on the radio the stack runs on (W4: its first running instance's), a
+        per-radio file else on the stack's first radio, else its first registered file."""
+        d = _submenus.own_page(mid)
+        if d is None:
+            return None
+        args = dict(d.args)
+        stack = service.stack(owner) if d.radio else None
+        rids = _instances.can_run_on(service, stack) if stack is not None else []
+        rid = radio if radio in rids else ""
+        if d.rf:
+            e = _submenus.rf_entry(d.rf)
+            rid = rid or min(_instances.recorded(service, owner), key=lambda r: int(r[1:]), default="")
+            if e.per_radio:
+                rid = rid or (rids[0] if rids else "")
+                job = e.radio_job(rid) if rid else e.jobs[0][1]
+            else:
+                job = e.job()
+            args.update(target=e.writer, job=job)
+        if rid:
+            args["radio"] = rid
+        return d.endpoint, args
+
+    def _own_page_url(owner: str, mid: str, radio=None) -> str:
+        dest = _own_page(owner, mid, radio)
+        return url_for(dest[0], **dest[1]) if dest else ""
+
+    def _level_url(owner: str, mid: str, radio=None) -> str:
+        """A level's link: its own route (_own_page), else its menu page (both keep the page's radio)."""
+        return _own_page_url(owner, mid, radio) or url_for("menu_page", owner=owner, mid=mid, radio=radio or None)
+
+    def _log_preview_url(owner: str, mid: str, radio=None, source: str = "") -> str:
+        """LOGS-IN-TREE: what a log panel fetches: a fixed preview source (the controller's, the webserver's, the
+        firewall's), else its own page's data: a program's /api/logs/<target>, an RF log's /api/rflog/<target>."""
+        if source:
+            return url_for("log_preview_api", source=source)
+        _endpoint, args = _own_page(owner, mid, radio)
+        if "job" in args:
+            return url_for("rflog_records_api", target=args["target"], job=args["job"])
+        return url_for("logs_api", **args)
+
+    app.jinja_env.globals["own_page_url"] = _own_page_url
+    app.jinja_env.globals["level_url"] = _level_url
+    app.jinja_env.globals["log_preview_url"] = _log_preview_url
+    app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
+    app.jinja_env.globals["log_panels"] = _submenus.LOG_PANELS
     # U5: a page outside the Stacks page names a stack's row as the Stacks crumbs do (its stack's name)
     app.jinja_env.globals["stack_label"] = lambda sid: s.name if (s := service.stack(sid)) is not None else sid
 
@@ -1481,20 +1518,35 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not path:
             abort(404)
         here = path[-1]
-        if here.page:
-            return redirect(url_for(here.page))
+        own = _own_page_url(owner, mid, request.args.get("radio"))
+        if own:
+            return redirect(own)
         request.environ["lhpc.menu_return"] = _menu_url(owner, mid)
         body = _level_html(owner, here, ctx)
         if owner == _submenus.CONTROLLER:
-            show, logs = url_for("stacks_overview") + "#" + mid, url_for("controller_logs")
+            show = url_for("stacks_overview") + "#" + mid
         else:
-            g = path[0].vars["g"]
             show = url_for("stacks_overview", open=owner, radio=request.args.get("radio") or None) + "#" + mid
-            logs = url_for("logs_view", target=g["main"][0].id) if g["main"] else ""
         # `body` is the output of Jinja's own autoescaped render of the level's partial, not request text
         return render_template("menu_page.html", body=Markup(_open_first_details(body)), here=here,  # noqa: S704
-                               crumbs=[(m.label, _menu_url(owner, m.id)) for m in path],
-                               show_url=show, logs_url=logs, **ctx)
+                               crumbs=[(m.label, _level_url(owner, m.id, request.args.get("radio"))) for m in path],
+                               show_url=show, **ctx)
+
+    def _log_crumbs(owner: str, mid: str, fallback: tuple = ()):
+        """LOGS-IN-TREE: a log page's crumbs below Apps, from the tree: the chain down to its level `mid`, the last
+        crumb its one heading. A page that is no tree entry (v4 B4, G1-R2 N7): the tree-derived chain down to the
+        nearest existing level, then a synthetic last crumb `fallback` = (anchor level id, its heading)."""
+        _ctx, menus = _owner_menus(owner)
+        radio = request.args.get("radio")
+        path = _submenus.chain(menus, mid)
+        last = None
+        if not path and fallback:
+            top = "controller-row" if owner == _submenus.CONTROLLER else f"stackrow-{owner}"
+            path, last = _submenus.chain(menus, fallback[0]) or _submenus.chain(menus, top), fallback[1]
+        crumbs = [(m.label, _level_url(owner, m.id, radio)) for m in path]
+        if last:
+            crumbs.append((last, ""))
+        return crumbs
 
     @app.get("/stacks/menus")
     def menu_tree():
@@ -2322,12 +2374,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # the header carries the radio row and the stack row, the bottom the switches and Clear.
         switcher = service.rflog_switcher(job, rid) if rf else None
         return render_template("logs.html", version=__version__, target=target, job=job,
+                               log_crumbs=_logs_view_crumbs(target, job, rf),
                                radio=switcher["radio"] if rf else rid,
                                stack_id=service.stack_of(target), path=path, lines=lines,
                                running=_log_running(target, job, rid, rf),
                                rflog=rf, switcher=switcher,
                                switch=service.rflog_switch(rf["surface"]) if rf else None,
                                logging=service.rflog_logging_state() if rf else "")
+
+    def _logs_view_crumbs(target, job, rf):
+        """/logs/<target>'s crumbs: an RF log's entry, a program's (a stack's own name: its main program's), else
+        (v4 B4) a run's job log below the stack's Install, a program the tree does not list below its Dependencies
+        row (each with a synthetic last crumb)."""
+        if rf:
+            return _log_crumbs(rf["owner"], f"rflog-{rf['owner']}")
+        owner = service.stack_of(target)
+        st = service.stack(owner)
+        if job:
+            return _log_crumbs(owner, "", (f"stack-install-{owner}", "Job log"))
+        comp = st.main_component.id if st is not None and target == st.id and st.main_component else target
+        return _log_crumbs(owner, f"log-{comp}", (f"comp-{comp}", "Log"))
 
     def _log_running(target, job, rid, rf) -> bool:
         """The log page's badge: an RF log's writer; a radio's process log, that instance's verified launch record
@@ -2862,14 +2928,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # a bounded no-follow tail (no service probe). `src` is whitelisted to error|access.
         src = "access" if request.args.get("src") == "access" else "error"
         path, lines = service.webserver_log_tail(src, 300)
-        return render_template("webserver_logs.html", version=__version__, src=src, path=path, lines=lines)
+        return render_template("webserver_logs.html", version=__version__, src=src, path=path, lines=lines,
+                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "webserver-row--logs",
+                                                      ("webserver-row", "Logs")))
 
     @app.get("/firewall/logs")
     def firewall_logs():
         # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
-        return render_template("firewall_logs.html", version=__version__, path=path, lines=lines)
+        return render_template("firewall_logs.html", version=__version__, path=path, lines=lines,
+                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "firewall-row--log", ("firewall-row", "Log")))
 
     @app.get("/controller/logs")
     def controller_logs():
@@ -2885,7 +2954,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         unit = _SRC_UNITS[src]
         path, lines = service.controller_log_tail(src, 300)
         return render_template("controller_logs.html", version=__version__, src=src, unit=unit,
-                               path=path, lines=lines)
+                               path=path, lines=lines,
+                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "controller-logs", ("controller-row", "Logs")))
+
+    # LOGS-IN-TREE B2 (G1-R2 N5): the Apps page's preview of the controller's, the webserver's and the firewall's logs.
+    # A fixed whitelist, each source the bounded tail reader its full page uses; any other value is 404. The answer
+    # is the source and its LAST 30 lines (no file path); never cached (every answer's no-store, _SECURITY_HEADERS).
+    _PREVIEW = {"controller-web": lambda n: service.controller_log_tail("web", n),
+                "controller-selfupdate": lambda n: service.controller_log_tail("selfupdate", n),
+                "controller-boot-restore": lambda n: service.controller_log_tail("boot-restore", n),
+                "webserver-error": lambda n: service.webserver_log_tail("error", n),
+                "webserver-access": lambda n: service.webserver_log_tail("access", n),
+                "firewall": lambda n: service.firewall_log_tail(lines=n)}
+    _PREVIEW_LINES = 30
+
+    @app.get("/api/logpreview/<source>")
+    def log_preview_api(source: str):
+        read = _PREVIEW.get(source)
+        if read is None:
+            abort(404)
+        _path, lines = read(_PREVIEW_LINES)
+        return jsonify(source=source, lines=list(lines)[-_PREVIEW_LINES:])
 
     def _ws_back():
         return redirect(url_for("stacks_overview") + "#webserver-row")

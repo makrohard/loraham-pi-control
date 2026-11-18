@@ -1636,11 +1636,11 @@ def test_webserver_logs_page_and_component_link(tmp_path, web):
     runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-access.log"),
                             "GET / 200\n", 0o644)
     body = c.get("/stacks").data.decode()
-    # each of the three webserver sub-section headers (Settings/Monitor/Certificates) carries its own
-    # "logs" affordance, laid out like the main stack rows (overlay OUTSIDE the summary).
-    assert len(parse(body).find("a", **{"aria-label": "webserver logs"})) == 3
-    # component on /stacks links to the logs page
-    assert "/webserver/logs" in body
+    # LOGS-IN-TREE: the three sub-sections' "logs" links went; the Webserver's own Logs entry opens the logs page
+    doc = parse(body)
+    assert doc.find("a", **{"aria-label": "webserver logs"}) == []
+    wrap = [d for d in doc.find("div", class_="ws-sub-wrap") if doc.within(d).present("webserver-row--logs")]
+    assert [a["href"] for a in doc.within(wrap[0]).find("a", class_="pagelink")] == ["/webserver/logs"]
     # error log (default + explicit) and access log render their tails
     assert "[emerg] mkdir failed" in c.get("/webserver/logs").data.decode()
     assert "[emerg] mkdir failed" in c.get("/webserver/logs?src=error").data.decode()

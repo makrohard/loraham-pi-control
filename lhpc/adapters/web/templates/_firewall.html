@@ -11,8 +11,7 @@
     <div class="body">
       <p class="muted">lhpc renders the ruleset; you apply it with one sudo command (the console
         never runs privileged commands). It never edits your own firewall configuration, and an
-        lhpc allow never guarantees reachability — a foreign chain may still drop.
-        <a class="logslink" href="{{ url_for('firewall_logs') }}" aria-label="firewall log">firewall log</a></p>
+        lhpc allow never guarantees reachability — a foreign chain may still drop.</p>
 
       {# ---- Policy: read-only view of the EFFECTIVE config right now ---- #}
       <div class="stackrow-wrap">
@@ -30,6 +29,11 @@
       <div class="stackrow-wrap">
       {% include "_fw_apply.html" %}
       {{ page_actions('controller', 'firewall-apply') }}
+      </div>
+      {# LOGS-IN-TREE: the firewall's own per-check log, last #}
+      <div class="stackrow-wrap">
+      {% with lp = log_panels['firewall-row--log'] %}{% include "_log_panel.html" %}{% endwith %}
+      {{ page_actions('controller', 'firewall-row--log') }}
       </div>
     </div>
   </details>

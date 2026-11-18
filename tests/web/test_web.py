@@ -291,7 +291,7 @@ def test_only_web_ui_links_open_a_new_tab(web):
     # /stacks (log links etc.) never opens a new tab — the nav chrome is the Home/Apps buttons.
     body = web(guard=ReadOnlyGuard).get("/stacks").get_data(as_text=True)
     found = _log_anchors(body)
-    assert len(found) >= 3
+    assert len(found) >= 2                  # LOGS-IN-TREE: the Logs entries' "page ›" (the row "logs" links went)
     for a in found:
         assert 'target="_blank"' not in a, a
     assert 'target="_blank"' not in body

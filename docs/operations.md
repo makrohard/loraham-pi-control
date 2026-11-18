@@ -43,7 +43,7 @@ a `kill` hint instead ([safety model](architecture.md#safety-model)).
   "auto-start with the stack" tick) is started again after its stack; one that was stopped stays
   stopped.
 - A failed restore is not retried: the dashboard banner and `lhpc autostart` give the number of
-  failed stacks and the command `lhpc stack start <id>`. Log: `logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
+  failed stacks and the command `lhpc stack start <id>`. Log: `logs/lhpc-boot-restore.log` (web: **Apps → LoRaHAM Pi Control → Logs**, boot-restore).
 
 ## Install channels
 
@@ -273,9 +273,12 @@ exposure: [webserver.md](webserver.md).
   ([adding-a-stack](adding-a-stack.md#run--readiness)). **Auto-install** installs (or updates),
   builds and optionally tests every stack in one run.
   Every row and every submenu in it, at any depth, also opens on its own page: **page ›** at the
-  right of its header (after **logs**), same browser tab, with the breadcrumb on top
+  right of its header, same browser tab, with the breadcrumb on top
   (`/stacks/<stack or controller>/menu/<id>`). A form sent there comes back to that page.
   **All menus (tree) ›** (`/stacks/menus`) lists every level.
+  Each row ends with **Logs**: one entry per program that writes a log, then the stack's **RF log**
+  (the Webserver and the Firewall end with theirs). Opened, an entry shows the last 30 lines
+  (**Reload** reads again); its **page ›** is the full, live log page.
 - **Settings** (per stack, on the Apps page) — where a stack's own configuration changes: run
   params, config-file params and, for daemon clients, the daemon radio parameters. The console also
   changes it on the operator call sign, Hardware (incl. high power) and GPS pages and a stack's mode

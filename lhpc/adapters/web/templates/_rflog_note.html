@@ -1,0 +1,7 @@
+{#- LOGS-IN-TREE: a stack whose RF traffic another stack's program writes (Graywolf's: the KISS TNC): its Logs keep an
+    RF log entry with no log of its own, a note and the link to that RF log. `lp`: {id, owner, label, rf_owner}. -#}
+<details class="advcfg" id="{{ lp.id }}">
+  <summary>{{ lp.label }}</summary>
+  <div class="body"><p class="muted">{{ stack_label(lp.owner) }}'s RF traffic is written by the {{ stack_label(lp.rf_owner) }}:
+    <a href="{{ level_url(lp.rf_owner, 'rflog-' ~ lp.rf_owner, request.args.get('radio')) }}">RF log ›</a></p></div>
+</details>

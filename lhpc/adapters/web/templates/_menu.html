@@ -1,9 +1,9 @@
 {# U4 (W423): one Stacks submenu level's "page ›" link (its own page, same tab), at the very right of
    the level's .row-actions overlay, after "logs". `owner` = "controller" or the stack id. It keeps the
    radio the view shows (`?radio=`), so the page shows that radio's level. A level whose page is an existing
-   route (submenus.OWN_PAGES, U5) links that route. #}
+   route (submenus.own_page, U5; LOGS-IN-TREE: the log pages) links that route, by the one rule app._own_page. #}
 {% macro page_link(owner, id) -%}
-<a class="pagelink" href="{{ url_for(menu_own_pages[id]) if id in menu_own_pages else url_for('menu_page', owner=owner, mid=id, radio=request.args.get('radio') or None) }}" title="Open on its own page">page ›</a>
+<a class="pagelink" href="{{ level_url(owner, id, request.args.get('radio')) }}" title="Open on its own page">page ›</a>
 {%- endmacro %}
 {# The overlay for a level that has no other row action. #}
 {% macro page_actions(owner, id) -%}

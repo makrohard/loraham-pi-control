@@ -65,6 +65,11 @@
           {{ page_actions('controller', 'gps-row') }}
           </div>
           {% endif %}
+          {# LOGS-IN-TREE: the controller's own logs (web | self-update | boot-restore), the row's last entry #}
+          <div class="stackrow-wrap">
+          {% with lp = log_panels['controller-logs'] %}{% include "_log_panel.html" %}{% endwith %}
+          {{ page_actions('controller', 'controller-logs') }}
+          </div>
 
         </div>
       </details>

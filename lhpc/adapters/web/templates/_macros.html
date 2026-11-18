@@ -191,7 +191,6 @@
     >Update</a>{% else %}<a class="update-link"
     href="{{ url_for('stacks_overview', open=g.stack.id, inst=g.stack.id) }}#stack-install-{{ g.stack.id }}"
     >Update</a>{% endif %}{% endif %}
-  {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}" aria-label="{{ g.main[0].id }} logs">logs</a>{% endif %}
   {{ page_link(g.stack.id, 'stackrow-' ~ g.stack.id) }}
 </div>
 {% endmacro %}

@@ -30,7 +30,6 @@
   {% endfor %}
   {# W272: the stack's warnings in its own row, like jobs: a degraded or failed component's reason, a feed without a fix #}
   {% for cid, note in g.notes %}<p class="depnote depnote-warn" data-note="{{ cid }}">⚠ {{ cid }}: {{ note }}</p>{% endfor %}
-  {% if g.rflog %}<p class="links"><a class="pill" href="{{ url_for('logs_view', target=g.rflog.target, job=g.rflog.job, radio=g.rflog.radio) }}">RF log</a></p>{% endif %}
   {% for cid, name, cmd in g.tools %}<div class="muted">{{ name }} — run local:</div>{{ cmdbox('runc-' ~ cid, cmd) }}{% endfor %}
 
   {% if g.interactive %}
@@ -99,4 +98,10 @@
     {{ page_actions(g.stack.id, 'stack-webservers-' ~ g.stack.id) }}
     </div>
   {% endif %}
+
+  {# ===== Logs — LOGS-IN-TREE: the very last entry, a panel per program that writes a log, then the RF log ===== #}
+  <div class="stackrow-wrap">
+  {% include "_stack_logs.html" %}
+  {{ page_actions(g.stack.id, 'logs-' ~ g.stack.id) }}
+  </div>
 </div>

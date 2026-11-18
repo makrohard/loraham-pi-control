@@ -1,0 +1,17 @@
+{#- LOGS-IN-TREE: a stack's Logs, the last entry of its row: a panel per program that writes a log, then its RF log
+    (submenus.stack_logs, the descriptors' one list). -#}
+{% from "_menu.html" import page_actions -%}
+{% set _logs = stack_logs(g.stack) %}
+<details class="advcfg" id="logs-{{ g.stack.id }}">
+  <summary>Logs</summary>
+  <div class="body">
+    {% for lp in _logs %}
+      <div class="stackrow-wrap">
+      {% if lp.kind == "note" %}{% include "_rflog_note.html" %}{% else %}{% include "_log_panel.html" %}{% endif %}
+      {{ page_actions(g.stack.id, lp.id) }}
+      </div>
+    {% else %}
+      <p class="muted">No program of {{ g.stack.name }} writes a log.</p>
+    {% endfor %}
+  </div>
+</details>
