@@ -172,7 +172,7 @@ def test_the_stack_row_is_the_registry_for_that_radio(tmp_path, rid, band):
                                                                             ("r2", "868", rid == "r2")]
     expected = []
     for e in rflog.REGISTRY:
-        if e.banded:
+        if e.per_radio:
             expected.append((e.writer, e.radio_job(rid), e.surface))
         elif band in _declared(svc, e.surface):          # the stack's row, then its instance's on this radio (K4b)
             expected.append((e.writer, e.job(), e.surface))
@@ -192,7 +192,7 @@ def test_the_shown_radio_is_the_arg_else_the_files_radio_else_one_on_the_stacks_
     assert svc.rflog_switcher("r2/rf-daemon.log", "r1")["radio"] == "r1"       # the arg wins
     assert svc.rflog_switcher("r2/rf-daemon.log", "r9")["radio"] == "r2"       # a rid of no enabled radio is ignored
     assert svc.rflog_switcher("rf-meshcore.log")["radio"] == "r2"              # nothing runs: the first on its 868
-    assert svc.rflog_switcher("rf-daemon-868.log")["radio"] == "r1"            # a 0.13.x band file: the first radio
+    assert svc.rflog_job("loraham-daemon", "rf-daemon-868.log") is None         # a 0.13.x band file: no RF log (LEGACY-RFLOG)
     assert not [s for s in svc.rflog_switcher("r2/rf-daemon.log", "r1")["stacks"] if s["current"]]   # not on r1
 
 
@@ -451,19 +451,19 @@ def test_only_the_radio_form_is_an_rf_log(job):
     assert rflog.by_job(job) is None
 
 
-def test_the_listing_has_one_entry_per_enabled_radio_and_the_old_band_files_read_only():
+def test_the_listing_has_one_entry_per_enabled_radio_and_no_old_band_file():
     from lhpc.core import radios
     rows = (radios.Radio("r12", "c", "loraham", "868"), radios.Radio("r2", "b", "loraham", "433"),
             radios.Radio("r3", "d", "loraham", "868", enabled=False))
-    jobs = rflog.list_jobs(rows, ["rf-daemon-868.log", "other.log"])
-    assert [(j.job, j.readonly) for j in jobs] == [("r2/rf-daemon.log", False), ("r12/rf-daemon.log", False),
-                                                    ("rf-daemon-868.log", True)]
+    jobs = rflog.list_jobs(rows)
+    assert [j.job for j in jobs] == ["r2/rf-daemon.log", "r12/rf-daemon.log"]
     assert jobs[0].label == "daemon r2 (433)"
 
 
 def test_a_prune_never_takes_an_rf_log_of_either_form():
-    names = ["build-x.log", "rf-daemon-868.log", "r1/rf-daemon.log", "keep.log"]
-    assert rflog.prune_targets(names, lambda n: n == "keep.log") == ["build-x.log"]
+    # a 0.13.x band file is no RF log any more (LEGACY-RFLOG): an old log the prune may take
+    names = ["build-x.log", "rf-daemon-868.log", "r1/rf-daemon.log", "rf-kiss.log", "keep.log"]
+    assert rflog.prune_targets(names, lambda n: n == "keep.log") == ["build-x.log", "rf-daemon-868.log"]
 
 
 def test_the_job_selector_takes_no_other_nested_name(tmp_path):

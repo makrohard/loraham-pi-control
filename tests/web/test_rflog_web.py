@@ -141,13 +141,14 @@ def test_the_page_has_a_radio_row_and_the_stack_row_of_that_radio(tmp_path, rid,
     assert doc.within(doc.by_id("rflog-clear")).field_default("radio") == rid
 
 
-@pytest.mark.no_default_hardware   # the 0.13.x band files of a box without a list (per-radio files: below)
-def test_without_a_list_the_page_shows_the_file_with_no_radio_row(web):
+@pytest.mark.no_default_hardware   # a box without a list (per-radio files: below)
+def test_without_a_list_a_typed_013x_band_file_is_a_plain_job_log(web):
+    # LEGACY-RFLOG (his word 11-18): the 0.13.x band file is no RF log: no RF view, switcher or Clear
     c = web()
-    doc = parse(c.get("/logs/loraham-daemon?job=rf-daemon-868.log").get_data(as_text=True))
-    assert not _row(doc, "RF log radios").find("a")
-    assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-daemon-868.log"
-    assert not doc.find("input", name="band") and not doc.find("input", name="radio")
+    r = c.get("/logs/loraham-daemon?job=rf-daemon-868.log")
+    doc = parse(r.get_data(as_text=True))
+    assert r.status_code == 200 and not doc.by_id("rfview") and not doc.by_id("rflog-clear")
+    assert not doc.find("nav", **{"aria-label": "RF logs"})
 
 
 def test_a_rid_that_is_no_radio_of_the_list_is_refused_by_name(web):
@@ -365,7 +366,7 @@ def test_a_decoder_level_error_is_reported_with_the_records_intact(tmp_path, mon
     ("/logs/meshcore-node?job=rf-meshcore.log", True),
     ("/logs/rns?job=rf-reticulum.log", True),
     ("/logs/loraham-kiss-tnc?job=rf-kiss.log", False),
-    ("/logs/loraham-daemon?job=rf-daemon-433.log", False),
+    ("/logs/loraham-daemon?job=r1/rf-daemon.log", False),
     ("/logs/meshcom-bridge?job=rf-meshcom.log", False),
 ])
 def test_the_page_carries_the_table_and_decrypt_only_where_keys_can_open_it(url, encrypted, web):

@@ -49,7 +49,7 @@ class Entry:
     key: str              # the switch's bundle key on the owner: run `rf_log` / file `file_rf_log`
     jobs: tuple           # ((band, job), …) — band "" for a single file
     native: bool = False  # the process's own trace (meshtasticd): LHPC rolls it opportunistically
-    per_radio: bool = False  # stage L5: the file is the radio's, `<rid>/rf-daemon.log` (W7-8a); `jobs` stay legacy
+    per_radio: bool = False  # stage L5: the file is the radio's, `<rid>/rf-daemon.log` (W7-8a); no `jobs` of its own
     decoder: str = ""     # the offline decoder that can open this log's encrypted payloads ("" = plaintext)
 
     @property
@@ -69,15 +69,11 @@ class Entry:
             return f"{rid}/{RADIO_FILE}"
         return None
 
-    @property
-    def banded(self) -> bool:
-        return any(b for b, _j in self.jobs)
-
 
 REGISTRY: tuple[Entry, ...] = (
-    # the band files are the 0.13.x daemon's, kept read-only while they exist (I11); the live files are per radio
-    Entry("daemon", "daemon", "loraham-daemon", "rf_log",
-          (("433", "rf-daemon-433.log"), ("868", "rf-daemon-868.log")), per_radio=True),
+    # the daemon's files are per radio only: the 0.13.x band files (rf-daemon-<band>.log) are not compatible and no
+    # registered RF log (LEGACY-RFLOG: not listed; a typed URL shows one as any job log)
+    Entry("daemon", "daemon", "loraham-daemon", "rf_log", (), per_radio=True),
     Entry("graywolf", "kiss", "loraham-kiss-tnc", "rf_log", (("", "rf-kiss.log"),)),
     Entry("meshcom", "meshcom", "meshcom-bridge", "rf_log", (("", "rf-meshcom.log"),)),
     Entry("meshtastic", "meshtastic", "meshtastic", "rf_log", (("", "rf-meshtastic.log"),),
@@ -103,7 +99,7 @@ def by_job(job: str) -> tuple[Entry, str] | None:
     m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
     if m:
         name = job.partition("/")[2]
-        e = next((x for x in REGISTRY if (x.per_radio and name == RADIO_FILE) or (not x.banded and x.job() == name)), None)
+        e = next((x for x in REGISTRY if (x.per_radio and name == RADIO_FILE) or (not x.per_radio and x.job() == name)), None)
         if e is not None:
             return e, m.group(1)
     return None
@@ -302,28 +298,24 @@ def parse_lines(lines) -> list:
 
 @dataclass(frozen=True)
 class Job:
-    key: str              # the radio id, or the band of a 0.13.x band file
+    key: str              # the radio id
     job: str              # the job under logs/
     label: str
-    readonly: bool        # True for a 0.13.x band file: shown while it exists, never written again (I11)
 
 
-def list_jobs(radios, logs_dir_entries) -> tuple:
+def list_jobs(radios) -> tuple:
     """The daemon's RF-log jobs to list (W7-8a, B4-D23/D24): one per enabled radio, in numeric id order
-    ("daemon r1 (433)"), then each 0.13.x `rf-daemon-<band>.log` that exists among `logs_dir_entries` (the names
-    in logs/), flagged read-only. Pure: the caller reads the directory and the hardware list."""
+    ("daemon r1 (433)"). Pure: the caller reads the hardware list."""
     e = next(x for x in REGISTRY if x.per_radio)
-    names = set(logs_dir_entries)
-    out = [Job(r.id, e.radio_job(r.id), f"{e.surface} {r.id} ({r.band})", False)
-           for r in sorted(radios, key=lambda r: int(r.id[1:])) if r.enabled and e.radio_job(r.id)]
-    out += [Job(band, job, f"{e.surface} {band} (0.13.x, read-only)", True) for band, job in e.jobs if job in names]
-    return tuple(out)
+    return tuple(Job(r.id, e.radio_job(r.id), f"{e.surface} {r.id} ({r.band})")
+                 for r in sorted(radios, key=lambda r: int(r.id[1:])) if r.enabled and e.radio_job(r.id))
 
 
 def prune_targets(entries, keep_rule) -> list:
-    """The names among `entries` a job-log prune may delete: never a registered RF log in either form (a band
+    """The names among `entries` a job-log prune may delete: never a registered RF log in either form (a stack's
     file or a radio's `<rid>/rf-daemon.log`, which is persistent by contract), and never what `keep_rule(name)`
-    keeps. Pure; the caller deletes."""
+    keeps (a 0.13.x `rf-daemon-<band>.log` is no registered RF log: an old job log to the prune). Pure; the caller
+    deletes."""
     return [n for n in entries if by_job(n) is None and not keep_rule(n)]
 
 
@@ -383,8 +375,8 @@ def switcher(svc, job: str, rid: str = "") -> dict:
                   if r in rids), rids[0] if rids else "")
     band, stacks = radio_start.rf_band(svc, shown), []
     for x in svc._rflog_entries():
-        if x.banded:
-            jobs = [(x.radio_job(shown) or x.job(band), f"{x.surface} {shown}")]
+        if x.per_radio:
+            jobs = [(x.radio_job(shown), f"{x.surface} {shown}")]
         elif band and band in svc._declared_bands(svc.stack(x.surface)):
             jobs = [(x.job(), x.surface), (f"{shown}/{x.job()}", f"{x.surface} {shown}")]
         else:
@@ -393,8 +385,8 @@ def switcher(svc, job: str, rid: str = "") -> dict:
                    for j, label in jobs if j and by_job(j)]
 
     def pill_job(r, b):                       # G1-W5 B1: a radio's pill opens that radio's own file, never the shown one's
-        if e.banded:
-            return e.radio_job(r) or e.job(b)
+        if e.per_radio:
+            return e.radio_job(r)
         own = f"{r}/{job.partition('/')[2]}"
         return (own if by_job(own) else e.job()) if RADIO_JOB.fullmatch(job) else job   # G1-W5-RE B1: by its shape
     radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]

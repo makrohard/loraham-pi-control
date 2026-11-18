@@ -54,9 +54,9 @@ def test_only_the_six_surfaces_resolve():
         assert rflog.entry(other) is None
     assert rflog.by_job("rf-made-up.log") is None
     assert rflog.by_job("rf-kiss.log")[0].surface == "graywolf"
-    e = rflog.entry("daemon")
-    assert e.job("433") == "rf-daemon-433.log" and e.job("868") == "rf-daemon-868.log"
-    assert e.job() is None and e.banded and not rflog.entry("meshcom").banded
+    e = rflog.entry("daemon")              # LEGACY-RFLOG: per radio only, no 0.13.x band file
+    assert e.jobs == () and e.job("433") is None and e.job("868") is None and e.job() is None
+    assert e.per_radio and not rflog.entry("meshcom").per_radio
 
 
 @pytest.mark.parametrize("surface,band", [("daemon", "433"), ("daemon", "868"),

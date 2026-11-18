@@ -1460,7 +1460,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         rule for its tree link, its "page ›" and menu_page's redirect: the page's radio goes along only where the
         destination takes it and the stack runs on that radio; an RF log's writer and job come from the registry. An
         RF log without a page radio opens on the radio the stack runs on (W4: its first running instance's), a
-        per-radio file else on the stack's first radio, else its first registered file."""
+        per-radio file else on the stack's first radio, else r1's (LEGACY-RFLOG: never a 0.13.x band file)."""
         d = _submenus.own_page(mid)
         if d is None:
             return None
@@ -1473,7 +1473,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             rid = rid or min(_instances.recorded(service, owner), key=lambda r: int(r[1:]), default="")
             if e.per_radio:
                 rid = rid or (rids[0] if rids else "")
-                job = e.radio_job(rid) if rid else e.jobs[0][1]
+                job = e.radio_job(rid or "r1")
             else:
                 job = e.job()
             args.update(target=e.writer, job=job)

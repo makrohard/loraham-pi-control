@@ -150,7 +150,7 @@ class RflogOpsMixin:
         up = {s["id"] for s in running}
         out = []
         for e in self._rflog_entries():
-            if e.banded:
+            if e.per_radio:
                 out.extend(radio_start.daemon_rf_links(self, e, band))
             elif e.surface in up:
                 out.append({"label": e.surface, "target": e.writer, "job": e.job()})
