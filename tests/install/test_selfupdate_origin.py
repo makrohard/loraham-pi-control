@@ -7,6 +7,7 @@ bare repo standing in for someone's own copy of LHPC, `up` advances it.
 """
 from __future__ import annotations
 
+import html
 import os
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult
 
 MARK = "different from the official repo"
+HIDDEN = "<URL not shown>"                    # a URL whose secret cannot be bounded
 
 
 def _line(url, official=None):
@@ -171,10 +173,18 @@ def test_the_console_shows_where_updates_come_from(world, web, capsys):
     assert _line(world.fork, world.official) in body
 
 
-# A token, one with a quote (git's http transport takes it), one with an unescaped slash (git refuses it and
-# echoes the URL), one with a space (git keeps it as typed) and one with an `@`: S3C and R3T are its two halves,
-# neither may show.
-TOKENS = ["S3CR3T", "S3C'R3T", "S3C/R3T", "S3C R3T", "S3C@R3T"]
+# Credentialed URLs as an operator may configure them; S3C and R3T are the token's two halves, neither may show.
+# `{s}`/`{h}`: scheme and the rest. A quote (git's http transport takes it), a space (git keeps it as typed) and
+# an `@` are removed with the userinfo; what cannot be bounded (an unescaped slash, a malformed URL) is not shown.
+CRED = [("{s}://user:S3CR3T@{h}", True), ("{s}://user:S3C'R3T@{h}", True), ("{s}://user:S3C/R3T@{h}", False),
+        ("{s}://user:S3C R3T@{h}", True), ("{s}://user:S3C@R3T@{h}", True), ("{s}:/user:S3CR3T@{h}", False),
+        ("user:S3CR3T@{s}://{h}", False)]
+CRED_IDS = ["plain", "quote", "slash", "space", "at", "one-slash", "userinfo-before-scheme"]
+
+
+def _cred(template, clean, s, h):
+    """(the configured URL, how it is shown)."""
+    return template.format(s=s, h=h), (f"{s}://{h}" if clean else HIDDEN)
 
 
 def _no_token(*texts):
@@ -182,14 +192,16 @@ def _no_token(*texts):
         assert "S3C" not in text and "R3T" not in text, text
 
 
-@pytest.mark.parametrize("token", TOKENS, ids=["plain", "quote", "slash", "space", "at"])
-def test_a_token_in_the_origin_is_never_shown_or_stored(world, web, capfd, token):
-    """Test 8: an origin carrying a user and token: the line names it without them, and the token is
-    in no output (stdout or stderr), no answer, no page, not in the cached envelope and not in the
-    controller data, serialised as JSON too."""
+@pytest.mark.parametrize("template,clean", CRED, ids=CRED_IDS)
+def test_a_token_in_the_origin_is_never_shown_or_stored(world, web, capfd, template, clean):
+    """Test 8: an origin carrying a user and token: the line names it without them (or, malformed, not at
+    all), and the token is in no output (stdout or stderr), no answer, no page, not in the cached envelope
+    and not in the controller data, serialised as JSON too."""
     import json
-    gitrepo.git(world.co, "remote", "set-url", "origin", f"http://user:{token}@127.0.0.1:1/lhpc.git")
-    shown = _line("http://127.0.0.1:1/lhpc.git", world.official)
+    url, display = _cred(template, clean, "http", "127.0.0.1:1/lhpc.git")
+    gitrepo.git(world.co, "remote", "set-url", "origin", url)
+    gitrepo.git(world.co, "config", "core.sshCommand", "false")  # a malformed URL git reads as ssh: no ssh
+    shown = _line(display, world.official)
     assert world.main(["self-update"]) == 1                    # unreachable, port 1
     seen = capfd.readouterr()
     assert shown in seen.out.splitlines(), seen.out
@@ -199,31 +211,45 @@ def test_a_token_in_the_origin_is_never_shown_or_stored(world, web, capfd, token
     assert shown in seen.out.splitlines(), seen.out
     _no_token(seen.out, seen.err)
     body = web(paths=Paths(runtime_root=world.rt)).get("/stacks").get_data(as_text=True)
-    assert shown in body
     svc = _svc(world)
     _no_token(body, (world.rt / "state" / "selfupdate.json").read_text(),
               json.dumps([svc.self_update_status(), svc.controller_status()], default=str))
+    assert shown in html.unescape(body)
 
 
-@pytest.mark.parametrize("token", TOKENS, ids=["plain", "quote", "slash", "space", "at"])
-def test_a_token_in_the_official_url_is_never_shown(world, monkeypatch, capfd, token):
-    """Test 8: the manifest's official URL carrying userinfo is named without it."""
-    _official(monkeypatch, f"https://user:{token}@github.com/makrohard/loraham-pi-control.git")
+@pytest.mark.parametrize("template,clean", CRED, ids=CRED_IDS)
+def test_a_token_in_the_official_url_is_never_shown(world, monkeypatch, capfd, template, clean):
+    """Test 8: the manifest's official URL carrying userinfo is named without it (malformed: not at all)."""
+    url, display = _cred(template, clean, "https", "github.com/makrohard/loraham-pi-control.git")
+    _official(monkeypatch, url)
     assert world.main(["self-update"]) == 0
     seen = capfd.readouterr()
-    assert _line(world.fork, "https://github.com/makrohard/loraham-pi-control.git") in seen.out.splitlines(), seen.out
+    assert _line(world.fork, display) in seen.out.splitlines(), seen.out
     _no_token(seen.out, seen.err, (world.rt / "state" / "selfupdate.json").read_text())
 
 
+@pytest.mark.parametrize("url,display", [
+    ("git@github.com:makrohard/loraham-pi-control.git", "git@github.com:makrohard/loraham-pi-control.git"),
+    ("/srv/git/lhpc.git", "/srv/git/lhpc.git"), ("origin", "origin"), ("ssh://git@host.invalid/lhpc.git",
+     "ssh://host.invalid/lhpc.git"), ("https://git.invalid/team@work/lhpc.git", HIDDEN)],
+    ids=["scp", "local-path", "literal-origin", "ssh-user", "at-in-the-path"])
+def test_a_url_without_a_secret_is_shown_as_it_is(url, display):
+    """Test 8: an scp-style address, a local path, the literal `origin` keep their form, an ssh user is
+    dropped like any userinfo; an `@` the userinfo rule cannot place (in the path) is not shown at all."""
+    assert selfupdate.redact_url(url) == display
+
+
 @pytest.mark.parametrize("token,pad,colour", [("S3CR3T", 0, ""), ("S3CR3T", 173, ""), ("S3C'R3T", 0, ""),
-                                              ("S3C/R3T", 0, ""), ("S3CR3T", 0, "\x1b[31m")],
-                         ids=["short", "cut-before-the-at", "quote", "slash", "coloured"])
+                                              ("S3C/R3T", 0, ""), ("S3CR3T", 0, "\x1b[31m"), ("S3C R3T", 0, ""),
+                                              ("S3C R3T", 173, "")],
+                         ids=["short", "cut-before-the-at", "quote", "slash", "coloured", "space", "space-cut"])
 def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch, web, token, pad, colour):
-    """Test 8: a git (or a transport wrapper) that echoes the credentialed URL in its fetch error: the
+    """Test 8: a git (or a transport helper) that echoes the credentialed URL in its fetch error: the
     error is returned without the token, and the result still says where it tried to update from. With
     `pad`, the error's 200-character cut falls between the token and its `@`; with `colour`, an ANSI
-    colour code is glued to the URL's scheme. The answer goes on through the cache, the controller
-    data and the console page without the token too."""
+    colour code is glued to the URL's scheme; with a space in the token the userinfo cannot be bounded
+    in free text, and the error is the generic "fetch failed" (fail closed). The answer goes on through
+    the cache, the controller data and the console page without the token too."""
     import json
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
@@ -244,8 +270,12 @@ def test_a_token_in_a_fetch_error_is_never_returned(tmp_path, monkeypatch, web, 
     out = selfupdate.check_upstream(system, "main", official="https://x.invalid/o.git")
     assert out["ok"] is False, out
     _no_token(json.dumps(out))
-    assert "https://example.invalid" in out["error"] or pad, out
-    assert out["origin"]["line"] == _line("https://example.invalid/lhpc.git", "https://x.invalid/o.git")
+    if " " in token:
+        assert out["error"] == "fetch failed", out
+    else:
+        assert "https://example.invalid" in out["error"] or pad, out
+    shown = HIDDEN if "/" in token else "https://example.invalid/lhpc.git"
+    assert out["origin"]["line"] == _line(shown, "https://x.invalid/o.git")
     svc = ControllerService(system=system, paths=Paths(runtime_root=tmp_path / "rt"))
     monkeypatch.setattr(ControllerService, "_official_remote", lambda self: "https://x.invalid/o.git")
     res = svc.self_update_check()
@@ -289,15 +319,17 @@ def test_an_unreachable_fork_still_says_where_it_tried(world, tmp_path, capsys):
     assert "Could not reach upstream" in out and _line(gone, world.official) in out.splitlines(), out
 
 
-@pytest.mark.parametrize("token", TOKENS, ids=["plain", "quote", "slash", "space", "at"])
-def test_the_no_origin_remedy_never_shows_a_token(world, monkeypatch, capfd, token):
+@pytest.mark.parametrize("template,clean", CRED, ids=CRED_IDS)
+def test_the_no_origin_remedy_never_shows_a_token(world, monkeypatch, capfd, template, clean):
     """Test 8: a checkout without origin is refused with `git remote add origin <official>`; an
-    official URL carrying userinfo is printed without it, in the command and in the text."""
-    _official(monkeypatch, f"https://user:{token}@github.com/makrohard/loraham-pi-control.git")
+    official URL carrying userinfo is printed without it (malformed: not at all), in the command and in
+    the text."""
+    url, display = _cred(template, clean, "https", "github.com/makrohard/loraham-pi-control.git")
+    _official(monkeypatch, url)
     gitrepo.git(world.co, "remote", "remove", "origin")
     assert world.main(["self-update", "--apply", "--yes"]) == 1
     seen = capfd.readouterr()
-    assert "remote add origin https://github.com/makrohard/loraham-pi-control.git" in seen.out, seen.out
+    assert f"remote add origin {display}" in seen.out, seen.out
     _no_token(seen.out, seen.err)
 
 
@@ -314,3 +346,41 @@ def test_an_origin_without_a_url_is_no_origin(world, capsys, how):
     assert "checkout has no origin remote" in out, out
     assert not [ln for ln in out.splitlines() if ln.strip().startswith("updates from")], out
     assert gitrepo.git(world.co, "rev-parse", "HEAD") == head
+
+
+def _repo_in_a_directory_named_origin(world, tmp_path):
+    """A repository at <checkout>/origin with a commit of its own; its head."""
+    stray = world.co / "origin"
+    gitrepo.git(tmp_path, "clone", "--bare", str(world.fork), str(stray))
+    s = tmp_path / "s"
+    gitrepo.git(tmp_path, "clone", str(stray), str(s))
+    (s / "stray.txt").write_text("not the origin\n")
+    gitrepo.git(s, "add", "-A")
+    gitrepo.git(s, "commit", "-m", "stray")
+    gitrepo.git(s, "push", "origin", "main")
+    return gitrepo.git(s, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("how", [("config", "--unset", "remote.origin.url"), ("config", "remote.origin.url", "")],
+                         ids=["url-unset", "url-empty"])
+def test_a_check_without_an_origin_url_fetches_nothing(world, tmp_path, capsys, how):
+    """Test 12b: no configured origin URL and a repository in a directory named `origin` in the checkout
+    (where git's fetch of "origin" would go): the check says the checkout has no origin URL and fetches
+    nothing from that directory."""
+    stray_head = _repo_in_a_directory_named_origin(world, tmp_path)
+    gitrepo.git(world.co, *how)
+    assert world.main(["self-update"]) == 1
+    out = capsys.readouterr().out
+    assert "the checkout has no origin URL" in out and stray_head[:9] not in out, out
+    assert gitrepo.git(world.co, "rev-parse", "refs/remotes/origin/main") != stray_head
+
+
+def test_an_origin_url_set_to_the_word_origin_is_followed(world, tmp_path, capsys):
+    """Test 12c: remote.origin.url explicitly set to "origin" (a local path next to the checkout) is a
+    configured origin: the check names it and fetches from it."""
+    head = _repo_in_a_directory_named_origin(world, tmp_path)
+    gitrepo.git(world.co, "config", "remote.origin.url", "origin")
+    assert world.main(["self-update"]) == 0
+    out = capsys.readouterr().out
+    assert _line("origin", world.official) in out.splitlines() and head[:9] in out, out
+    assert gitrepo.git(world.co, "rev-parse", "refs/remotes/origin/main") == head

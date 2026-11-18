@@ -79,6 +79,8 @@ def _fake_commands(root, *, clean_rc):
         ("git", "-C", r, "rev-parse", "HEAD"): R(out="aaaaaaaaa\n"),
         ("git", "-C", r, "rev-parse", "--abbrev-ref", "HEAD"): R(out="main\n"),
         ("git", "-C", r, "status", "--porcelain"): R(out="?? junk\n"),         # dirty -> needs force
+        ("git", "-C", r, "config", "--get", "remote.origin.url"): R(out="https://example.invalid/lhpc.git\n"),
+        ("git", "-C", r, "remote", "get-url", "origin"): R(out="https://example.invalid/lhpc.git\n"),
         ("git", "-C", r, "fetch", "--quiet", "--force", "origin", "--",
          "refs/heads/main:refs/remotes/origin/main"): R(),
         ("git", "-C", r, "rev-parse", "origin/main"): R(out="bbbbbbbbb\n"),

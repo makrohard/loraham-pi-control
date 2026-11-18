@@ -214,11 +214,12 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b
 _NOISE_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f─-▟]")
 
 
-def _summarize_output(text: str, limit: int = 200) -> str:
+def _summarize_output(text: str, limit: int = 200, hidden: str = "") -> str:
     """Reduce raw command output (git/pip stderr, possibly multi-line with ANSI colour, indented
     `hint:` blocks, or Unicode box-drawing) to ONE clean, bounded, single-line human string safe to
     drop into a status summary. Empty input → ''. This is presentation hygiene only; the underlying
-    command result is unchanged."""
+    command result is unchanged. With `hidden` (fail closed): a text still holding an `@` after the
+    redaction (a userinfo the redaction could not bound) is `hidden` instead."""
     if not text:
         return ""
     # Escapes out first (a colour code glued to "https" hides the URL), then a URL's userinfo, then the cut:
@@ -227,14 +228,16 @@ def _summarize_output(text: str, limit: int = 200) -> str:
     # Collapse every whitespace run (incl. the now-stripped newlines) to single spaces, so nothing
     # depends on HTML/terminal whitespace handling downstream.
     collapsed = " ".join(cleaned.split())
+    if hidden and "@" in collapsed:                # checked before the cut, which could drop the `@`
+        return hidden
     if len(collapsed) > limit:
         collapsed = collapsed[:limit].rstrip() + "…"
     return collapsed
 
 
-# The user/token part of a `scheme://user:token@host/…` URL: everything after `://` up to the LAST `@` before
-# whitespace, so a password with `@`, a quote or a slash goes whole (a path holding `@` loses more than its
-# userinfo: shown short, never with a secret). An scp-style `git@host:path` has no scheme and names no secret.
+# The user/token part of a `scheme://user:token@host/…` URL in free text: everything after `://` up to the LAST
+# `@` before whitespace, so a password with `@`, a quote or a slash goes whole. What it cannot bound (a space in
+# the password) leaves an `@`, and a shown error with an `@` is hidden (`_summarize_output(hidden=…)`).
 _USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)\S*@")
 
 
@@ -243,12 +246,24 @@ def redact_userinfo(text: str) -> str:
     return _USERINFO_RE.sub(r"\1", text or "")
 
 
+URL_HIDDEN = "<URL not shown>"
+_SCP_RE = re.compile(r"[\w.-]+@[\w.-]+:[^@\s]*")     # git@host:path: a user name, no secret
+
+
 def redact_url(url: str) -> str:
-    """ONE URL (a configured value, not free text) without its user/token part: everything between `://`
-    and its last `@`, whitespace included (git keeps a password with a space as it was typed)."""
+    """ONE URL (a configured value, not free text) without its user/token part: the authority's (between
+    `://` and the next `/`) up to its last `@`, whitespace included (git keeps a password with a space as it
+    was typed). Fail closed: a value that still holds an `@` (a malformed URL, an `@` in the path) is
+    URL_HIDDEN, except an scp-style `git@host:path`."""
     s = url or ""
-    i, j = s.find("://"), s.rfind("@")
-    return s[:i + 3] + s[j + 1:] if 0 <= i < j else s
+    i = s.find("://")
+    if i >= 0:
+        k = s.find("/", i + 3)
+        k = len(s) if k < 0 else k
+        j = s.rfind("@", i + 3, k)
+        if j >= 0:
+            s = s[:i + 3] + s[j + 1:]
+    return URL_HIDDEN if "@" in s and not _SCP_RE.fullmatch(s) else s
 
 
 def origin_info(system: System, root: Path, official: str) -> dict:
@@ -397,17 +412,19 @@ def check_upstream(system: System, branch: str = "", official: str = "") -> dict
     # Explicit forced refspec into the remote-tracking ref: THIS fetch updates
     # `refs/remotes/origin/<br>` regardless of the `remote.origin.fetch` config or a rewritten
     # upstream, so the ancestry below is computed against a fresh ref.
+    if not org["present"]:     # no configured URL: a fetch of "origin" would read a directory of that name
+        return {"ok": False, "error": "the checkout has no origin URL", "origin": org}
     f = _git(system, root, ["fetch", "--quiet", "--force", _REMOTE, "--",
                             f"refs/heads/{br}:refs/remotes/{_REMOTE}/{br}"], _NET_TIMEOUT)
     if getattr(f, "not_found", False):
         return {"ok": False, "error": "git not found", "origin": org}
     if f.returncode != 0:
-        return {"ok": False, "error": _summarize_output(f.stderr) or "fetch failed",
+        return {"ok": False, "error": _summarize_output(f.stderr, hidden="fetch failed") or "fetch failed",
                 "origin": org}
     ref = f"{_REMOTE}/{br}"
     h = _git(system, root, ["rev-parse", ref], _LOCAL_TIMEOUT)
     if h.returncode != 0:
-        return {"ok": False, "error": _summarize_output(h.stderr) or "no upstream ref",
+        return {"ok": False, "error": _summarize_output(h.stderr, hidden="no upstream ref") or "no upstream ref",
                 "origin": org}
     head = h.stdout.strip()
     return {"ok": True, "origin": org, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],

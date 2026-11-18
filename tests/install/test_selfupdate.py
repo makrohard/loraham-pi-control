@@ -597,6 +597,8 @@ def test_check_upstream_fetch_error_is_sanitized(tmp_path, monkeypatch):
         g("rev-parse", "HEAD"): CR(0, "h\n", ""),
         g("rev-parse", "--abbrev-ref", "HEAD"): CR(0, "main\n", ""),
         g("status", "--porcelain"): CR(0, "", ""),
+        g("config", "--get", "remote.origin.url"): CR(0, "https://example.invalid/lhpc.git\n", ""),
+        g("remote", "get-url", "origin"): CR(0, "https://example.invalid/lhpc.git\n", ""),
         # forced refspec: check_upstream must follow a rewritten upstream (see
         # test_check_upstream_follows_a_rewritten_upstream)
         g("fetch", "--quiet", "--force", "origin", "--",
