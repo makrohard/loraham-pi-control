@@ -1,6 +1,7 @@
 """LOGS-IN-TREE (plan v4 N2-N4, test 4), in a real browser: a log entry's panel on the Apps page asks for nothing while
 it is closed, exactly once when it is opened, once per Reload and never on its own (no timer: none after 15 s); it
-shows the LAST 30 lines (an RF log: the last 30 records, raw) as text, and its status line says what happened.
+shows the LAST 30 lines (an RF log: the last 30 records, raw) as text, and its status line says what happened; a late
+reply to an earlier request (another source picked meanwhile) is dropped.
 
 The log APIs are answered by the test (counted at the route); time is Playwright's clock, advanced and never slept."""
 from __future__ import annotations
@@ -39,8 +40,8 @@ def _status(page, panel, text):
 
 
 def test_a_log_panel_asks_once_on_open_once_per_reload_and_never_by_itself(page):
-    seen, settled = _serve(page, lambda route: _json(route, {"source": "controller-web",
-                                                            "lines": [f"line {i}" for i in range(40)]}))
+    lines = [f"line {i}" for i in range(39)] + ['<b id="lp-mark">line 39</b>']      # markup stays text
+    seen, settled = _serve(page, lambda route: _json(route, {"source": "controller-web", "lines": lines}))
     page.goto(page.lab_base + "/stacks/controller/menu/controller-row", wait_until="load")
     page.clock.run_for(15000)
     settled()
@@ -49,7 +50,8 @@ def test_a_log_panel_asks_once_on_open_once_per_reload_and_never_by_itself(page)
     _status(page, "#controller-logs", "updated")
     settled()
     assert [u.rsplit("/", 1)[1] for u in seen] == ["controller-web"]       # opened: exactly one
-    assert page.text_content("#controller-logs .logpanel-text").split("\n") == [f"line {i}" for i in range(10, 40)]
+    assert page.text_content("#controller-logs .logpanel-text").split("\n") == lines[10:]
+    assert page.evaluate("() => document.getElementById('lp-mark') === null")
     page.evaluate("() => document.querySelector('#controller-logs .logpanel-status').textContent = ''")
     page.click("#controller-logs .logpanel-reload")
     _status(page, "#controller-logs", "updated")
@@ -64,6 +66,37 @@ def test_a_log_panel_asks_once_on_open_once_per_reload_and_never_by_itself(page)
     page.select_option("#controller-logs .logpanel-src", label="boot-restore")    # a source change: one request
     settled()
     assert seen[-1].endswith("/api/logpreview/controller-boot-restore") and len(seen) == 3
+
+
+def test_a_late_reply_to_the_previous_source_is_dropped(page):
+    held = []
+
+    def answer(route):
+        if route.request.url.endswith("/controller-web"):
+            held.append(route)                                              # the first source's reply comes late
+        else:
+            _json(route, {"source": "controller-boot-restore", "lines": ["BOOT-RESTORE"]})
+    # counts the JSON bodies read, so the test knows when the late reply has reached the panel's handler
+    page.add_init_script("""(() => { const j = Response.prototype.json; window.lpJson = 0;
+        Response.prototype.json = function () { return j.call(this).then(v => { window.lpJson += 1; return v; }); };
+    })()""")
+    _seen, settled = _serve(page, answer)
+    page.goto(page.lab_base + "/stacks/controller/menu/controller-row", wait_until="load")
+    with page.expect_request(re.compile(r".*/api/logpreview/controller-web$")):   # toggle is a queued task: wait
+        page.click("#controller-logs > summary")
+    settled()
+    assert len(held) == 1
+    page.select_option("#controller-logs .logpanel-src", label="boot-restore")
+    _status(page, "#controller-logs", "updated")
+    page.evaluate("() => document.querySelector('#controller-logs .logpanel-status').textContent = ''")
+    held[0].fulfill(status=200, content_type="application/json", body=json.dumps({"source": "controller-web",
+                                                                                  "lines": ["WEB"]}))
+    page.wait_for_function("() => window.lpJson === 2", timeout=15000)
+    settled()                                                               # a task later: its handler has run
+    assert page.text_content("#controller-logs .logpanel-text") == "BOOT-RESTORE"
+    assert page.text_content("#controller-logs .logpanel-status") == ""
+    assert page.evaluate("() => document.querySelector('#controller-logs .logpanel-src').selectedOptions[0].text") \
+        == "boot-restore"
 
 
 def test_an_rf_log_panel_shows_the_last_30_records_raw(page):

@@ -158,6 +158,9 @@ def test_a_log_entry_is_a_closed_panel_with_reload_and_a_status_line(tmp_path, w
         status = inside.find("span", class_="logpanel-status")[0]
         assert status["role"] == "status" and status["aria-live"] == "polite"
         assert [p.text for p in inside.find("pre")] == [""]                    # empty until opened; no live region
+        block = body[body.index(tag):body.index("</details>", body.index(tag))]
+        assert re.search(r"<noscript><p[^>]*>The last 30 lines need JavaScript; .page ›. opens the full log\.</p>"
+                         r"</noscript>", block), mid                          # without JS: a short note
     page = [a["href"] for a in doc.find("a", class_="pagelink")]
     assert "/logs/meshcom-bridge" in page and "/logs/meshcom-bridge?job=rf-meshcom.log" in page
     assert any(s.endswith("/logpanel.js") for s in (x["src"] for x in parse(_html(c, "/stacks")).find("script")

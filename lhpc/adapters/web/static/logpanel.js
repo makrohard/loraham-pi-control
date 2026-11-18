@@ -12,6 +12,8 @@
     var url = pick ? pick.value : panel.getAttribute("data-src");
     var text = panel.querySelector(".logpanel-text");
     var status = panel.querySelector(".logpanel-status");
+    var seq = (panel.lpSeq || 0) + 1;
+    panel.lpSeq = seq;
     panel.setAttribute("data-loaded", "1");
     fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
@@ -19,13 +21,14 @@
         var rows = panel.getAttribute("data-kind") === "records"
           ? (d.records || []).map(function (rec) { return String(rec.raw || ""); })
           : (d.lines || []).map(String);
-        rows = rows.slice(-LINES);
-        text.textContent = rows.join("\n");
-        status.textContent = rows.length ? "updated" : "no entries yet";
+        return rows.slice(-LINES);
       })
-      .catch(function () {
-        text.textContent = "";
-        status.textContent = "could not load the log (reload or open the page)";
+      .catch(function () { return null; })            // any failure up to here: no rows
+      .then(function (rows) {
+        if (panel.lpSeq !== seq) return;     // a reply to an earlier request (a slow one, then another source picked)
+        text.textContent = rows ? rows.join("\n") : "";      // is dropped: the panel shows what its selector reads
+        status.textContent = !rows ? "could not load the log (reload or open the page)"
+          : rows.length ? "updated" : "no entries yet";
       });
   }
 
