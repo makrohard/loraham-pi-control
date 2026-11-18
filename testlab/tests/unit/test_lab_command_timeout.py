@@ -314,3 +314,20 @@ def test_an_outer_kill_of_the_keeper_leaves_no_descendant(tmp_path):
             keeper.kill()
             keeper.wait()
             _sweep(tag)
+
+
+@pytest.mark.wallclock("a real forking lab that ignores SIGABRT: run_lab's 5 s wait, then its SIGTERM; bounded at 20 s")
+def test_a_lab_that_ignores_the_abort_is_ended_by_the_keeper_after_5_s(tmp_path, monkeypatch):
+    # the lab does not end on SIGABRT: after 5 s run_lab sends the keeper SIGTERM, and the keeper kills all it keeps
+    tag = f"33.{os.getpid()}"
+    _stand_in(tmp_path, monkeypatch, "import signal\nsignal.signal(signal.SIGABRT, signal.SIG_IGN)\n" + _forker(tag) +
+              "import time\ntime.sleep(60)\n")
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(RuntimeError, match="timed out"):
+            testing.run_lab({}, "reset", timeout=0.3)
+        assert time.monotonic() - t0 < 20
+        time.sleep(0.3)                                   # a survivor would have forked on by now
+        assert _tagged(tag) == []
+    finally:
+        _sweep(tag)

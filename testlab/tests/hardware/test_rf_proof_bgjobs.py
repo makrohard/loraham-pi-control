@@ -106,6 +106,34 @@ def test_a_listed_job_whose_pid_is_now_another_process_is_left_alone(tmp_path):
         other.wait()
 
 
+@pytest.mark.wallclock("a real lock holder; bounded at 12 s")
+def test_a_peer_lock_still_held_after_the_jobs_ended_is_named_before_any_undo(tmp_path):
+    # the jobs listed are gone, but the peer lock is still held (an unlisted holder): bgend fails naming the lock, so the
+    # caller STOPs (runrow) or records it (recover) instead of a restore refused with rc 75
+    lock = tmp_path / "evd" / "lock"
+    lock.parent.mkdir()
+    holder = subprocess.Popen(["flock", str(lock), "sleep", "30"], stdin=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            if subprocess.run(["flock", "-n", str(lock), "true"], check=False).returncode != 0:
+                break
+            time.sleep(0.05)   # wallclock: the holder's start (marked test)
+        r, _ = _source_only_in(tmp_path, 'LOCK=./lock; echo "1 1" > "$(bgfile)"; bgend; echo "RC=$?"')
+    finally:
+        holder.kill()
+        holder.wait()
+    assert "RC=1" in r.stdout and "the peer lock is still held" in r.stderr, r.stdout + r.stderr
+
+
+def _source_only_in(tmp_path, script):
+    """source_only with an $EVD that may exist already."""
+    evd = tmp_path / "evd"
+    prelude = f'RFPROOF_SOURCE_ONLY=1 . "{HW}/rf-proof.sh"; EVD="{evd}"; OUT=$EVD; MODE=live; : > "$EVD/state.env"\n'
+    r = subprocess.run(["bash", "-c", prelude + script], env=_env(tmp_path), stdin=subprocess.DEVNULL, cwd=evd,
+                       capture_output=True, text=True, timeout=120, check=False)
+    return r, evd
+
+
 # ---- G2-RELP4a B2: row 5's RNode port, held only by the lab's rnsd, passes R0 ----------------------------------------------
 
 def _holder(tmp_path, cfg, dev, name="rnsd"):

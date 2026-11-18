@@ -138,7 +138,8 @@ Finding them on the PC:
 - `bluetoothctl devices`: the T-Deck Pro. Its address is the one its BLE advert carries now, not a stale cached advert of
   another name.
 - The Heltec RNode is reached only through the PC's shared rnsd instance (the RNS config path in the local file), never
-  by opening its port.
+  by opening its port. That rnsd runs as your user with `rnsd --config <that path>` (also for the default directory):
+  R0 accepts its hold on the RNode's port only then.
 - On a box: `lhpc hardware` shows its radio setup ([CLI](../../docs/cli.md#hardware)).
 
 Known traps: the PC's gpsd claims every CP2102 port on each replug, the RNode's included, so stop it (or narrow its udev

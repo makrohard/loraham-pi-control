@@ -775,7 +775,7 @@ row_R0() {
       if [ "${ep%%:*}" = peer ]; then pr="PC:${ep#*:}"; else pr="${ep%%:*}:$(getk "${ep#*:}")"; fi; SUM[$pr]=$(( ${SUM[$pr]:-0} + $2 )); done; done
   r0grants
   [ -z "$devs" ] || { X PC R0-peer-ports.txt "python3 -I -c $(printf %q "$PORTS_PY")${rdevs:+ $(shq "--rns=$RNSCFG")} $devs"; [ "$MODE" = dry ] || { [ "$XRC" = 0 ] || stop "R0: the peer ports cannot be checked (gpsd answer unreadable?)"
-    held=$(heldports R0-peer-ports.txt "$rdevs"); [ -z "$held" ] || stop "R0: a peer port is held: $held (free it first: gpsd, a console)"
+    held=$(heldports R0-peer-ports.txt "$rdevs"); [ -z "$held" ] || stop "R0: a peer port is held: $held (free it first: gpsd, a console; row 5's rnsd only as your user with --config RNS_CONFIG)"
     ! grep '^HELD ' "$OUT/R0-peer-ports.txt" | grep -q ' rnsd-shared$' || data "R0: the RNode's port is held by rnsd alone (the shared RNode, row 5)"; }; }
   for pr in $(printf '%s\n' "${!SUM[@]}" | sort); do say "BUDGET | $pr | ${SUM[$pr]} | $TXMAX"; done
   for pr in "${!SUM[@]}"; do [ "${SUM[$pr]}" -le $TXMAX ] || stop "budget $pr: ${SUM[$pr]} of $TXMAX"; done; }
