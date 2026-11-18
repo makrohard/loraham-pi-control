@@ -432,3 +432,90 @@ def test_ctrl_c_while_waiting_for_the_console_exits_130_and_says_the_restart_was
     cap = capsys.readouterr()
     assert "not verified" in cap.err and "systemctl --user status lhpc-web.service" in cap.err, cap
     assert "did NOT restart" not in cap.out + cap.err and _service_calls(calls) == [STOP, START], (cap, calls)
+
+
+@pytest.mark.parametrize("sync_raises", [None, KeyboardInterrupt], ids=["normal", "exc-path"])
+def test_a_readiness_wait_that_raises_is_still_reported(env, cli, monkeypatch, capsys, sync_raises):
+    """The wait for the started console itself raises (socket() hits EMFILE): the restart is not established,
+    the report stays, and the apply's own exception is not replaced."""
+    from lhpc.core.services import ControllerService
+    main, calls = cli
+
+    def no_socket(self):
+        raise OSError(24, "Too many open files")
+    monkeypatch.setattr(ControllerService, "_web_answers", no_socket)
+    if sync_raises is not None:
+        def sync(*a, **k):
+            raise sync_raises("pip interrupted")
+        monkeypatch.setattr(selfupdate, "venv_sync", sync)
+    gitrepo.upstream_commit(env["up"])
+    try:
+        rc = main(["self-update", "--apply", "--yes"])
+    except BaseException as exc:                              # noqa: BLE001 - the red-before shape: it escaped
+        rc = f"raised {type(exc).__name__}"
+    cap = capsys.readouterr()
+    assert rc == 1 and "lhpc-web did NOT restart" in cap.out, (rc, cap)
+    assert "systemctl --user start lhpc-web.service" in cap.out, cap
+    assert sync_raises is None or "The update stopped (KeyboardInterrupt" in cap.out, cap
+
+
+def test_a_console_that_accepts_and_hangs_up_without_an_answer_did_not_restart(env, cli, monkeypatch, capsys):
+    """Accepting the connection is not an answer: a console that closes it without an HTTP status line (an empty
+    read) is not taken as restarted."""
+    import contextlib
+    import threading
+
+    from lhpc.core.services import ControllerService
+    main, calls = cli
+    monkeypatch.setattr(ControllerService, "_WEB_UP_S", 1.0, raising=False)
+    held, up = [], threading.Event()
+
+    def hang_up(listener):                                    # reads the request, then closes: an empty read
+        listener.settimeout(0.2)
+        while up.is_set():
+            with contextlib.suppress(OSError):
+                conn = listener.accept()[0]
+                with conn:
+                    conn.recv(1024)
+
+    def start():
+        held.append(_listen(calls.sock_path))
+        up.set()
+        threading.Thread(target=hang_up, args=(held[0],), daemon=True).start()
+        return CommandResult(0, "", "")
+    calls.answer["start"] = start
+    gitrepo.upstream_commit(env["up"])
+    waits = _retry_clock(monkeypatch)
+    try:
+        assert main(["self-update", "--apply", "--yes"]) == 1
+    finally:
+        up.clear()
+        for listener in held:
+            listener.close()
+    out = capsys.readouterr().out
+    assert "lhpc-web did NOT restart" in out and waits, (out, waits)
+
+
+def test_an_apply_that_raises_then_ctrl_c_while_waiting_says_the_restart_was_not_verified(env, cli, monkeypatch,
+                                                                                          capsys):
+    """The apply raised, the console was started again, and Ctrl-C cut the wait for its answer: the report names
+    the apply's exception and says the restart was not verified (it may still come up)."""
+    import time as _time
+    main, calls = cli
+
+    def sync(*a, **k):
+        raise OSError("pip failed to launch")
+    monkeypatch.setattr(selfupdate, "venv_sync", sync)
+
+    def ctrl_c(s):
+        raise KeyboardInterrupt
+
+    def start():
+        monkeypatch.setattr(_time, "sleep", ctrl_c)
+        return CommandResult(0, "", "")
+    calls.answer["start"] = start
+    gitrepo.upstream_commit(env["up"])
+    assert main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "The update stopped (OSError" in out and "restart not verified" in out, out
+    assert "did NOT restart" not in out and _service_calls(calls) == [STOP, START], (out, calls)
