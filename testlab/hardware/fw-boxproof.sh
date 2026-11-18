@@ -22,7 +22,7 @@
 #  row radio. Before FW7's reboot (bootcheck), every unit boot restore may start on a row radio (an owned record with no
 #  operator stop intent, running or not) is power-checked too, else STOP: no reboot (a daemon there that is not running has
 #  no STATUS to read, so it STOPs). Units on other radios are never stopped or started (they stay as they are). BEFORE any start (mtpre): the radio's row (one,
-#  no high-power grant), its model's power_max_dbm, and the stack's max_power (meshtasticd's cap before its first frame) <=
+#  no high-power grant), its model's power_default_dbm, and the stack's max_power (meshtasticd's cap before its first frame) <=
 #  min(17, that cap), else STOP; after a start, its "Final Tx power" <= 17 (corroboration), else STOP. r4's expected refusal
 #  counts only when a read of the running set shows it is not running.
 # Box writes, each with its undo journalled BEFORE it: r4 enabled off/on (undo: on); the row radios' running units stopped
@@ -159,7 +159,7 @@ fwstate() { X "$1" "$LH firewall"; }
 ROWRID='^r[24]$'   # the radios this proof's rows use: r2 (meshtastic@r2 starts) and r4 (FW3 off, FW5 on, FW6's try)
 pwrok() {   # pwrok <tag> <key>: rc 0 when the unit's power reads within min(17, its radio model's cap) and its radio has one row with no
   # high-power grant; else WHY = the reason. Reads only and never STOPs (the recovery uses it too). The cap table is CAPS_PY's
-  # (radio_models power_max_dbm), the one mtpre always read. Meshtastic: max_power (meshtasticd's cap before its first frame) in
+  # (radio_models power_default_dbm), the one mtpre always read. Meshtastic: max_power (meshtasticd's cap before its first frame) in
   # pdom's mt-power domain 1..17 (0 is no cap: LHPC's own domain starts at 1, manifest.example.toml max_power min = 1, and
   # Meshtastic reads a 0 power as "the maximum"; no max_power line, meshtasticd's default 20, is no value). A daemon: its STATUS
   # (jstatus: one POWER in pdom, HIGHPOWER=0). Any other stack: no check here, so no start. MP = the value read.
@@ -176,7 +176,7 @@ pwrok() {   # pwrok <tag> <key>: rc 0 when the unit's power reads within min(17,
   o=$(jgrant "$(body "$1-radios.txt")" "$r") || { WHY=$o; return 1; }
   m=$(body "$1-radios.txt" | awk -v r="$r" '$1 == "ROW" && $2 == r {print $3}'); c=$(body "$1-caps.txt" | awk -v m="$m" '$1 == "CAP" && $2 == m {print $3}')
   [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { WHY="no single power cap of $r's model ('$m')"; return 1; }
-  [ "$c" -le 17 ] || c=17; [ "$MP" -le "$c" ] || { WHY="$w $MP above $c dBm (min(17, $m's power_max_dbm))"; return 1; }; }
+  [ "$c" -le 17 ] || c=17; [ "$MP" -le "$c" ] || { WHY="$w $MP above $c dBm (min(17, $m's power_default_dbm))"; return 1; }; }
 mtpre() { pwrok "$1" "meshtastic@$2" || stop "$1: $WHY: no start"; }   # mtpre <file-tag> <rid>: BEFORE any start of meshtastic@<rid>
 runset0() {   # FW0 (read-only): the running set (KEYS) and, of it, the units on the row radios (TOUCH): FW3 stops those and FE (or a
   # STOP's replay) starts them again, so each needs its power check now, before any change: one that fails STOPs here, no undo
