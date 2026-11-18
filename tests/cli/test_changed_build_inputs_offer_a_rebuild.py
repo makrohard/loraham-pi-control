@@ -3,6 +3,8 @@ against today's sources but whose recorded build INPUTS changed (an lhpc update 
 `meshcore_host`) starts; the stack page offers "Rebuild available" instead of "Build required to start",
 and the web start is not refused. A provider with changed inputs is still rebuilt before its dependent.
 Through `lhpc stack start meshcore@r3`, the web POST op=start and the stack page."""
+import shutil
+
 from radios_fixture import R1, R2_868, R3
 
 from lhpc.core import config as cfgmod
@@ -193,3 +195,58 @@ def test_an_unbuilt_source_dependency_is_named_to_build_first(box, web, tmp_path
     assert dict(svc.start_readiness("daemon")[0])["radiolib"] == f"not built — run: {svc.build_remedy('daemon', 'radiolib')}"
     body = web().get("/stacks/daemon/body").get_data(as_text=True)
     assert "radiolib not built" in body and "Build this dependency first" in body, body
+
+
+# G2-RELP5b B1 B2: the start readiness reads the stack's components in the run order on the starting radio
+# and the build providers those consume.
+_PRESENT = ControllerService._source_present        # the box fixture reports every checkout present
+
+
+def _fresh(tmp_path, monkeypatch):
+    """A new service over the same box, the real checkout presence: no read memoised before a checkout went."""
+    monkeypatch.setattr(ControllerService, "_source_present", _PRESENT)
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_a_required_component_whose_checkout_is_gone_refuses_the_start(box, web, csrf, tmp_path, monkeypatch):
+    """meshcom's bridge (required, not the main) with its checkout removed: the CLI start refuses it
+    ("not installed"); the readiness names it too, so the web start lands on the Install section with the
+    reason. Red before: start_readiness("meshcom") == ([], []) and the web start went on."""
+    run = box((R1, R2_868))
+    svc = _built(tmp_path, monkeypatch, "meshcom", "")
+    bridge = svc.stack("meshcom").component("meshcom-bridge")
+    shutil.rmtree(svc._lifecycle().source_dir(bridge))
+    svc = _fresh(tmp_path, monkeypatch)
+    why = svc.install_blocker(bridge)
+    assert why.startswith("not installed"), why
+    assert svc.set_operator_identity(callsign="XX0XXA").ok                    # meshcom's identity gate comes first
+    rc, out, _launches = run("start", "meshcom@r1")
+    assert rc != 0 and f"meshcom-bridge: {why}" in out, out                   # the CLI start refuses it
+    page = _start_flash(web(), csrf, "meshcom@r1")
+    assert f"meshcom-bridge: {why}" in page and "cannot start yet" in page, page
+    assert dict(svc.start_readiness("meshcom", Instance("r1"))[0])["meshcom-bridge"] == why
+
+
+def test_an_unticked_optional_component_does_not_refuse_the_start(box, web, csrf, tmp_path, monkeypatch):
+    """meshcore's web UI (optional, not ticked, so not in the run order) present and unbuilt: the start does
+    not launch it, so it neither refuses the start nor offers a rebuild. Ticked on r2 only, it refuses meshcore@r2, not r3.
+    Red before: [("meshcore-webui", "not built — ...")] refused the web start of meshcore@r3."""
+    box((R1, R2_868, R3))
+    svc = _built(tmp_path, monkeypatch, "meshcore", "")
+    webui = svc.stack("meshcore").component("meshcore-webui")
+    (svc._lifecycle().source_dir(webui) / webui.build_marker).unlink()
+    svc = _fresh(tmp_path, monkeypatch)
+    assert not svc.is_built(webui) and svc.install_blocker(webui).startswith("not built")
+    page = _start_flash(web(), csrf, "meshcore@r3")
+    assert "cannot start yet" not in page, page
+    assert svc.start_readiness("meshcore", Instance("r3")) == ([], [])
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"autostart_meshcore-webui": "on"},
+                               inst=Instance("r2"))                          # ticked on r2 only
+    svc = _fresh(tmp_path, monkeypatch)
+    assert [cid for cid, _why in svc.start_readiness("meshcore", Instance("r2"))[0]] == ["meshcore-webui"]
+    assert svc.start_readiness("meshcore", Instance("r3")) == ([], [])
+    c = web()                                                                # the start gate, on the radio it starts on:
+    resp = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "meshcore@r2"})
+    page = c.get(resp.location.split("#")[0]).get_data(as_text=True)
+    assert "inst=meshcore" in resp.location and "cannot start yet — meshcore-webui: not built" in page, resp.location
+    assert "cannot start yet" not in _start_flash(web(), csrf, "meshcore@r3")
