@@ -37,7 +37,8 @@ COULD_NOT_CHECK = "could not check the installed commit's history — try again 
 # The plan's warnings (X4): a move the user chose that goes back, sideways or away from commits not upstream.
 WARN_LINE = ("the {lane} target ({label}) is {how} the installed version: its saved config/state may not match; "
              "if the stack fails: remove it, reinstall Known working")
-WARN_OWN = ("the installed commit {installed} is not upstream; installing deletes {n} commit(s) only this checkout "
+WARN_OWN = ("the installed commit {installed} is not on the configured branch or a tag upstream; installing deletes "
+            "{n} commit(s) only this checkout "
             "has, not recoverable by LHPC: {commits}; to keep them, push or copy them first")
 WARN_MOVED = ("the checkout moved since LHPC installed it (HEAD {installed}, installed {recorded}); installing "
               "replaces it")
@@ -349,7 +350,7 @@ def keeps(run, paths, src, comp, remote: str, selector: str, frozen: str) -> str
     if how == "forward":
         return ""
     why = {"sideways": f"the {selector} target {target[:9]} is on another line than the installed version",
-           "own": f"the installed commit {installed[:9]} is not upstream"}.get(how or "", COULD_NOT_CHECK)
+           "own": f"the installed commit {installed[:9]} is not on the configured branch or a tag upstream"}.get(how or "", COULD_NOT_CHECK)
     return f"{why}; auto-install never moves it (to move it: lhpc update <stack> --source {selector})"
 
 
@@ -380,11 +381,19 @@ def update_gate(run, paths, items, source: str, remote_of):
             continue                                       # a local source: nothing upstream to place it against
         else:
             want = c.source.pin_commit if lane == "pinned" else remote_tip(run, remote, branch or "HEAD", 15.0)
-            if not want and lane == "dev" and not source and branch and c.source.pin_commit and (installed := assess(
-                    run, src)) and is_final(target.history(remote, branch)[1]):   # gone: the pin only forward
+            gone = not want and lane == "dev" and branch and run(
+                ["git", "ls-remote", "--exit-code", remote, f"refs/heads/{branch}"], timeout=15.0).returncode == 2
+            if gone and source:                                # a named dev: the selector is unavailable, never the pin
+                refused.append(f"  {c.id}: selector unavailable: upstream branch {branch!r} gone; nothing moves")
+                continue
+            if gone and c.source.pin_commit and (installed := assess(run, src)):   # routine: the pin only forward
+                if not is_final(target.history(remote, branch)[1]):    # its copy could not be read again: fail closed
+                    refused.append(f"  {c.id}: {COULD_NOT_CHECK}")
+                    continue
                 copy = held_copy(run, paths, remote, branch, installed)     # --source pinned places the pin with it
-                way = "--source pinned moves it to the pin, after a warning" if copy else \
-                    "to go to the pin: remove the stack, reinstall Known working"
+                way = "it is the pin (Known working)" if installed == c.source.pin_commit else \
+                    "--source pinned moves it to the pin, after a warning" if copy else \
+                    "this checkout may hold the only copy of its commits: copy them before any change"
                 has = contains(run, copy, src, installed, c.source.pin_commit)
                 how = classify(run, copy, installed, c.source.pin_commit) if has is False and copy else None
                 if has is None or (has is False and how is None):          # no copy: retrying cannot help

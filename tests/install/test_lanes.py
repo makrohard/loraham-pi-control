@@ -61,6 +61,7 @@ def box(tmp_path, git, make_repo, monkeypatch):
         fail_mirror_tags = False                      # the history mirror's `tag --points-at` exits 128
         fail_head = False
         fail_fetch = False
+        fail_tag_refresh = False                      # only the history copy's tags-only re-read fails
         fail_ancestry = False                         # the history mirror's `merge-base` exits 128
         fail_ancestry_to = ""                         # ... only `merge-base --is-ancestor <x> <this commit>`
         api_calls: list = []
@@ -83,6 +84,9 @@ def box(tmp_path, git, make_repo, monkeypatch):
         if b.fail_ancestry_to and argv[3:5] == ["merge-base", "--is-ancestor"] and argv[-1] in (
                 b.fail_ancestry_to if isinstance(b.fail_ancestry_to, tuple) else (b.fail_ancestry_to,)):
             return CommandResult(128, "", "fatal: could not read the history")
+        if b.fail_tag_refresh and argv[:2] == ["git", "-C"] and argv[3] == "fetch" and argv[-1] == \
+                "+refs/tags/*:refs/tags/*" and not argv[-2].startswith("+"):
+            return CommandResult(128, "", "fatal: unable to access the remote")
         if b.fail_fetch and argv[:2] == ["git", "-C"] and argv[3] == "fetch":
             return CommandResult(128, "", "fatal: unable to access the remote")
         if argv[0] != "curl":
@@ -496,7 +500,7 @@ def test_an_older_head_target_refuses_the_downgrade(box, git, capsys):
     capsys.readouterr()                               # STABLE-LANE X4/R7 (was: refused by name): the own-changes
     assert box.cli("update", "s", "--source", "stable") == 0   # warning, then the move on --yes
     out = capsys.readouterr().out                     # slice A: c2 is on no branch or tag any more
-    assert f"the installed commit {box.c[1][:9]} is not upstream" in out and "try again later" not in out, out
+    assert f"the installed commit {box.c[1][:9]} is not on the configured branch or a tag upstream" in out and "try again later" not in out, out
     assert box.head() == box.c[1]
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0 and box.head() == box.c[0]
 
@@ -644,7 +648,7 @@ def test_control_a_release_less_source_still_installs_its_default_branch_head(bo
 
 # ---- MESHCOM-STABLE slice A: the history decides (the LoRaHAM_Daemon `v112` class) -----------------------------
 
-OWN = "is not upstream; installing deletes"        # STABLE-LANE X4/R11/R-2: the own-changes warning
+OWN = "is not on the configured branch or a tag upstream; installing deletes"        # STABLE-LANE X4/R11/R-2: the own-changes warning
 NOT_ONE_LINE = "its release and version tags are not one line of history; refused; use --source pinned or dev"
 
 
@@ -768,7 +772,7 @@ def test_a_commit_the_upstream_rewrote_away_is_not_published_although_the_mirror
     assert box.status() == su.BEHIND                  # STABLE-LANE X5 (was: "could not check"): it lacks v3.1
     capsys.readouterr()                               # X4/R7 (was: refused by name): the warning, then the move
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
-    assert f"the installed commit {box.c[2][:9]} is not upstream" in capsys.readouterr().out
+    assert f"the installed commit {box.c[2][:9]} is not on the configured branch or a tag upstream" in capsys.readouterr().out
     assert box.head() == new
 
 
@@ -783,7 +787,7 @@ def test_a_rebuilt_mirror_never_fetches_a_commit_the_upstream_rewrote_away(box, 
     shutil.rmtree(box.mirror())                              # the mirror is rebuilt from the current refs only
     capsys.readouterr()                               # STABLE-LANE X4/R7 (was: refused by name): warned, then moved
     assert box.cli("update", "s", "--source", "stable", "--yes") == 0
-    assert f"the installed commit {box.c[2][:9]} is not upstream" in capsys.readouterr().out
+    assert f"the installed commit {box.c[2][:9]} is not on the configured branch or a tag upstream" in capsys.readouterr().out
     assert box.head() != box.c[2]
     held = git(box.mirror(), "cat-file", "--batch-all-objects", "--batch-check=%(objectname)",
                env={"GIT_NO_LAZY_FETCH": "1"}).split()
@@ -1881,7 +1885,7 @@ def test_an_installed_commit_force_pushed_away_moves_with_the_own_changes_warnin
     _rewind(box, git, box.c[1])
     new = box.advance()                              # main: c1, c2, new; c3 is in no ref
     rc, out = _run(box, capsys, "update", "s", "--yes")
-    assert rc == 0 and f"the installed commit {box.c[2][:9]} is not upstream" in out, out   # RED before: refused
+    assert rc == 0 and f"the installed commit {box.c[2][:9]} is not on the configured branch or a tag upstream" in out, out   # RED before: refused
     assert box.head() == new
 
 
@@ -1963,7 +1967,7 @@ def test_an_old_all_branches_mirror_never_makes_a_commit_published(box, capsys, 
     box.drop_tags("v3.0.0")
     box.release = "404"                              # the old layout still holds `feat`; the lane's mirror never
     rc, out = _run(box, capsys, "update", "s", "--source", "stable", "--yes")
-    assert rc == 0 and f"the installed commit {feat[:9]} is not upstream" in out and box.head() == box.c[0], out
+    assert rc == 0 and f"the installed commit {feat[:9]} is not on the configured branch or a tag upstream" in out and box.head() == box.c[0], out
 
 
 def test_a_plain_tag_after_the_release_on_the_branch_is_the_target(box):
@@ -2256,7 +2260,8 @@ def test_a_gone_branch_with_no_history_to_place_the_pin_names_the_way_out(box, c
     git(bare, "update-ref", "-d", "refs/heads/main")
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc != 0 and "upstream branch 'main' gone and this box holds no history placing the pin: nothing moves; " \
-        "to go to the pin: remove the stack, reinstall Known working" in out and box.head() == box.c[2], out
+        "this checkout may hold the only copy of its commits: copy them before any change" in out \
+        and "reinstall" not in out and box.head() == box.c[2], out          # RED before: advised remove + reinstall
 
 
 def test_a_shallow_checkout_holding_an_older_target_is_could_not_check(box, capsys, git):
@@ -2472,3 +2477,40 @@ def test_a_plain_update_keeps_an_upstream_dev_commit_whose_branch_is_gone_and_pi
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; --source pinned moves it to the pin, " \
         "after a warning" in out and box.head() == box.c[2], out    # mutant W5 (sideways falls through): the pin
+
+
+def test_a_gone_branch_whose_copy_cannot_be_read_again_is_could_not_check(box, capsys, git):
+    """G2-STABLELANER3 B1: main deleted upstream, the history copy's tags cannot be read again: fail closed (could
+    not check), never the unreadable-branch fallback to the pin."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.cli("source-check", "s")
+    box.side(box.c[0], "keep")
+    _delete_main(box, git, "keep")
+    box.fail_tag_refresh = True
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "could not check" in out and box.head() == box.c[2], out   # RED before: back to the pin c1
+
+
+def test_an_explicit_dev_update_of_a_gone_branch_is_refused(box, capsys, git):
+    """G2-STABLELANER3 B2: main deleted upstream, `--source dev` named: the development branch is an unavailable
+    selector; nothing moves (never the pin in its place)."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.cli("source-check", "s")
+    box.side(box.c[0], "keep")
+    _delete_main(box, git, "keep")
+    rc, out = _run(box, capsys, "update", "s", "--source", "dev", "--yes")
+    assert rc != 0 and "selector unavailable: upstream branch 'main' gone" in out and box.head() == box.c[2], out
+    #                                                   RED before: FELL BACK to the pin c1, no back warning
+
+
+def test_a_gone_branch_already_at_its_pin_names_no_move(box, capsys, git):
+    """G2-STABLELANER3 B5: main deleted upstream, the checkout already at the pin: kept, and the line promises no
+    move to it."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], box.c[2]))   # the pin is c3
+    box.cli("source-check", "s")
+    box.side(box.c[0], "keep")
+    _delete_main(box, git, "keep")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; it is the pin (Known working)" in out \
+        and "moves it to the pin" not in out and box.head() == box.c[2], out    # RED before: "moves it to the pin"

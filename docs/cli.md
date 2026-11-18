@@ -370,7 +370,7 @@ is a host test too; it runs against the pinned upstream in the built environment
 - Without `--source` the update keeps the installed lane, per source, and never goes back (one
   exception, in [selections](provenance.md#selections)); a named
   `--source` installs its lane's target wherever it lies, with a warning when back, sideways or over
-  commits not upstream ([selections](provenance.md#selections)).
+  commits not on the configured branch or a tag upstream ([selections](provenance.md#selections)).
 - A fetched release (graywolf) has no checkout: `--source binary` (also a bare update) is its
   pinned release, which its build fetches; `--source stable` the latest upstream release, verified
   against its `checksums.txt`, named every time (`--upstream` still works); `pinned` and `dev` are
