@@ -1471,9 +1471,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if d.rf:
             e = _submenus.rf_entry(d.rf)
             rid = rid or min(_instances.recorded(service, owner), key=lambda r: int(r[1:]), default="")
-            if e.per_radio:
+            if e.per_radio or e.instanced:   # #75: a stack's RF log is its radio's file too, never the band-less one
                 rid = rid or (rids[0] if rids else "")
-                job = e.radio_job(rid or "r1")
+                job = e.radio_job(rid or "r1") if e.per_radio else f"{rid or 'r1'}/{e.job()}"
             else:
                 job = e.job()
             args.update(target=e.writer, job=job)

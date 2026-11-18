@@ -86,7 +86,9 @@ def test_g1_w5_b1_a_radio_pill_on_an_instances_file_opens_that_radios_own_file(b
     assert page.by_id("log-card")["data-job"] == "r2/rf-kiss.log"
     assert page.within(page.by_id("rflog-clear")).field_default("job") == "r2/rf-kiss.log"      # Clear empties r2's
     shared = parse(c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log&radio=r1").get_data(as_text=True))
-    assert {parse_qs(urlsplit(a["href"]).query)["job"][0] for a in _radio_row(shared).find("a")} == {"rf-kiss.log"}
+    # #75: on the band-less file's page too, each pill opens that radio's own file
+    pills = [parse_qs(urlsplit(a["href"]).query) for a in _radio_row(shared).find("a")]
+    assert pills and all(q["job"] == [f"{q['radio'][0]}/rf-kiss.log"] for q in pills), pills
 
 
 @pytest.mark.parametrize("path, form", [("/rflog/all", {"value": "off"}), ("/rflog/clear-all", {}),

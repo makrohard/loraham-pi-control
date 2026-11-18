@@ -20,17 +20,18 @@ from lhpc.core.services import ControllerService
 
 # N4: an INDEPENDENT inventory of the shipped manifest, by hand: each stack -> its programs that write a log (Home's
 # log links), and its RF log: "own" (the job its Logs › RF log opens), "note" (another stack writes it) or None.
+# #75: a "per radio" file (every instance writes its own <rid>/<file>) opens the entry's radio's own file.
 _INVENTORY = {
     "daemon": (["loraham-daemon"], ("own", "loraham-daemon")),
     "chat": ([], None),
     "voice": (["loraham-voice"], None),
-    "kiss": (["loraham-kiss-tnc", "loraham-kiss-serial"], ("own", "loraham-kiss-tnc", "rf-kiss.log")),
+    "kiss": (["loraham-kiss-tnc", "loraham-kiss-serial"], ("own", "loraham-kiss-tnc", "rf-kiss.log", "per radio")),
     "graywolf": (["graywolf"], ("note", "kiss")),
-    "meshtastic": (["meshtastic-gps", "meshtastic"], ("own", "meshtastic", "rf-meshtastic.log")),
+    "meshtastic": (["meshtastic-gps", "meshtastic"], ("own", "meshtastic", "rf-meshtastic.log", "per radio")),
     "meshcom": (["meshcom-bridge", "meshcom-gps", "meshcom-gps-relay", "meshcom-qemu"],
-                ("own", "meshcom-bridge", "rf-meshcom.log")),
+                ("own", "meshcom-bridge", "rf-meshcom.log", "per radio")),
     "meshcore": (["meshcore-gps", "meshcore-node", "meshcore-webui", "meshcore-cli"],
-                 ("own", "meshcore-node", "rf-meshcore.log")),
+                 ("own", "meshcore-node", "rf-meshcore.log", "per radio")),
     "reticulum": (["rns", "lxmd", "sideband", "meshchat"], ("own", "rns", "rf-reticulum.log")),
 }
 _CTL = "LoRaHAM Pi Control"
@@ -116,7 +117,9 @@ def test_every_app_ends_with_its_logs_its_programs_then_its_rf_log(tmp_path, web
             assert "RF log" not in below, sid
         elif rf[0] == "own":
             path, q = _q(below["RF log"])
-            assert path == f"/logs/{rf[1]}" and (q["job"] == rf[2] if len(rf) > 2 else True), (sid, below["RF log"])
+            job = f"{q.get('radio', '')}/{rf[2]}" if len(rf) > 3 else rf[2] if len(rf) > 2 else None
+            assert path == f"/logs/{rf[1]}" and (q["job"] == job if job else True), (sid, below["RF log"])
+            assert len(rf) < 4 or q.get("radio"), (sid, below["RF log"])          # a per-radio file names its radio
         else:                                          # Graywolf: an entry with no log of its own (its page: the note)
             assert _q(below["RF log"])[0] == f"/stacks/{sid}/menu/rflog-{sid}", sid
         assert (st.name, "Logs") in tree, sid          # every row has its Logs (chat's says that none writes one)
@@ -151,7 +154,8 @@ def test_graywolfs_rf_log_entry_names_the_kiss_tnc_and_links_its_rf_log(tmp_path
     note = doc.by_id("rflog-graywolf")
     text = " ".join(note.text.split())
     assert f"{svc.stack('graywolf').name}'s RF traffic is written by the {svc.stack('kiss').name}" in text
-    assert [_q(a["href"]) for a in doc.within(note).find("a")] == [("/logs/loraham-kiss-tnc", {"job": "rf-kiss.log"})]
+    assert [_q(a["href"]) for a in doc.within(note).find("a")] == [("/logs/loraham-kiss-tnc",       # #75: r1's own file
+                                                                    {"job": "r1/rf-kiss.log", "radio": "r1"})]
 
 
 # ---- the Apps page's panels (plan §2, v4 N2/N3) -----------------------------------------------------------------
@@ -161,7 +165,7 @@ def test_a_log_entry_is_a_closed_panel_with_reload_and_a_status_line(tmp_path, w
     body = _html(c, "/stacks/meshcom/body")
     doc = parse(body)
     for mid, src, kind in (("log-meshcom-bridge", "/api/logs/meshcom-bridge", "lines"),
-                           ("rflog-meshcom", "/api/rflog/meshcom-bridge?job=rf-meshcom.log", "records")):
+                           ("rflog-meshcom", "/api/rflog/meshcom-bridge?job=r1/rf-meshcom.log", "records")):   # #75
         panel = doc.by_id(mid)
         tag = re.search(r'<details\b[^>]*\bid="' + mid + r'"[^>]*>', body).group(0)
         assert " open" not in tag and panel["data-src"] == src and panel["data-kind"] == kind, mid
@@ -174,7 +178,7 @@ def test_a_log_entry_is_a_closed_panel_with_reload_and_a_status_line(tmp_path, w
         assert re.search(r"<noscript><p[^>]*>The last 30 lines need JavaScript; .page ›. opens the full log\.</p>"
                          r"</noscript>", block), mid                          # without JS: a short note
     page = [a["href"] for a in doc.find("a", class_="pagelink")]
-    assert "/logs/meshcom-bridge" in page and "/logs/meshcom-bridge?job=rf-meshcom.log" in page
+    assert "/logs/meshcom-bridge" in page and "/logs/meshcom-bridge?job=r1/rf-meshcom.log&radio=r1" in page   # #75
     assert any(s.endswith("/logpanel.js") for s in (x["src"] for x in parse(_html(c, "/stacks")).find("script")
                                                     if x["src"]))
 

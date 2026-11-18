@@ -146,13 +146,17 @@ class RflogOpsMixin:
         return [e for e in _rflog.REGISTRY if self.stack(e.surface) is not None]
 
     def _rflogs_for_band(self, band: str, running: list) -> list[dict]:
-        """The dashboard's RF-log links for a band: the daemon's file for it, then the file of
-        every running stack the registry knows."""
+        """The dashboard's RF-log links for a band: the daemon's file for it, then every running stack's: one link per
+        running instance launched on that band (its launch record, #75: `<rid>/<file>`), a one-node stack's one file."""
         up = {s["id"] for s in running}
         out = []
         for e in self._rflog_entries():
             if e.per_radio:
                 out.extend(radio_start.daemon_rf_links(self, e, band))
+            elif e.instanced:
+                rec = instances.recorded_bands(self, self.stack_of(e.writer) or e.surface)
+                out += [{"label": f"{e.surface} {r}", "target": e.writer, "job": f"{r}/{e.job()}"}
+                        for r in sorted(rec, key=lambda r: int(r[1:])) if rec[r] == band]
             elif e.surface in up:
                 out.append({"label": e.surface, "target": e.writer, "job": e.job()})
         return out

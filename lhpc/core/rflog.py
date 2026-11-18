@@ -63,6 +63,12 @@ class Entry:
                 return j
         return None
 
+    @property
+    def instanced(self) -> bool:
+        """#75: a stack's file every listed instance writes as its own `<rid>/<file>` (its writer's {instance_dir});
+        RADIO_JOB names it. Not the daemon's (per_radio) and not a one-node stack's (Reticulum: one file)."""
+        return not self.per_radio and bool(self.jobs) and RADIO_JOB.fullmatch(f"r1/{self.job()}") is not None
+
     def radio_job(self, rid) -> str | None:
         """The radio's own job `<rid>/rf-daemon.log` (W7-8a, B4-D23), only for r1..r99 and a per-radio entry."""
         if self.per_radio and isinstance(rid, str) and _RID.fullmatch(rid):
@@ -161,7 +167,7 @@ def resolve_job(surface: str, rid: str = "") -> tuple[Entry, str]:
     if e is None:
         raise ValueError(f"'{surface}' has no RF log")
     job = e.radio_job(rid) if e.per_radio else (f"{rid}/{e.job()}" if rid else e.job())
-    per_instance = e.per_radio or bool(RADIO_JOB.fullmatch(f"r1/{e.job()}"))
+    per_instance = e.per_radio or e.instanced
     if not rid and per_instance:
         raise ValueError(f"'{surface}' logs per radio: name one, lhpc rflog {surface}@<rid>")
     if job is None or (rid and not per_instance) or (rid and not _RID.fullmatch(rid)):
@@ -394,8 +400,8 @@ def switcher(svc, job: str, rid: str = "") -> dict:
     def pill_job(r, b):                       # G1-W5 B1: a radio's pill opens that radio's own file, never the shown one's
         if e.per_radio:
             return e.radio_job(r)
-        own = f"{r}/{job.partition('/')[2]}"
-        return (own if by_job(own) else e.job()) if RADIO_JOB.fullmatch(job) else job   # G1-W5-RE B1: by its shape
+        own = f"{r}/{e.job()}"         # #75: that radio's own file, also from the band-less (0.13.x) file's page
+        return own if by_job(own) else e.job()                               # a one-node stack: its one file
     radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]
     return {"radio": shown, "radios": radios, "stacks": stacks}
 

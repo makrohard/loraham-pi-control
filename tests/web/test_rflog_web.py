@@ -11,7 +11,7 @@ import launch_band_fixture
 import pytest
 
 from htmlq import parse
-from lhpc.core import config as cfgmod, radios, rflog
+from lhpc.core import config as cfgmod, instances, radios, rflog
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -128,8 +128,8 @@ def test_the_page_has_a_radio_row_and_the_stack_row_of_that_radio(tmp_path, rid,
     radios_row = _row(doc, "RF log radios")
     assert [a.text for a in radios_row.find("a")] == ["r1 · 433", "r2 · 868"]
     assert [a.text for a in radios_row.find("a", **{"aria-current": "page"})] == [f"{rid} · {band}"]
-    for r in ("r1", "r2"):
-        assert len(_links(radios_row, "loraham-kiss-tnc", "rf-kiss.log", r)) == 1
+    for r in ("r1", "r2"):   # #75: each pill opens that radio's own file, also from the band-less file's page
+        assert len(_links(radios_row, "loraham-kiss-tnc", f"{r}/rf-kiss.log", r)) == 1
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     expected = svc.rflog_switcher("rf-kiss.log", rid)["stacks"]
     stacks = _row(doc, "RF logs")
@@ -232,7 +232,7 @@ def test_clear_all_empties_every_registered_log_and_nothing_else(tmp_path, web, 
 
 # ---- the dashboard's second line -----------------------------------------------------------------
 
-def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
+def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch):
     """Under each radio card's daemon control: the daemon's file for that band, then the file of
     every running stack the registry knows — on its own band only. No file exists yet: the links
     still lead to a page (200), and its viewer data reports no file (the page itself carries no
@@ -252,6 +252,9 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
         launch_band_fixture.set_launch_band(svc, "meshtastic", "868")   # K6: its running band (13.12.5: no marker)
         return svc
+    real = instances.recorded_bands
+    monkeypatch.setattr(instances, "recorded_bands",   # #75: meshtastic@r2's launch record (868): its link is its file
+                        lambda svc, sid: {"r2": "868"} if sid == "meshtastic" else real(svc, sid))
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))
     col433 = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
@@ -259,11 +262,12 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     # Every link carries the card's radio (W4), so the page opens on it (the stack's running band, not
     # its manifest default).
     assert len(_links(col433, "loraham-daemon", "r1/rf-daemon.log", "r1")) == 1
-    assert not _links(col433, "meshtastic", "rf-meshtastic.log", "r1")
+    assert not _links(col433, "meshtastic", "r1/rf-meshtastic.log", "r1")
     assert len(_links(col868, "loraham-daemon", "r2/rf-daemon.log", "r2")) == 1
-    assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "r2")) == 1
-    assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "r2")    # not running
-    r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "r2")[0]["href"])
+    assert len(_links(col868, "meshtastic", "r2/rf-meshtastic.log", "r2")) == 1
+    assert not _links(col868, "meshtastic", "rf-meshtastic.log", "r2")    # #75: never the band-less file
+    assert not _links(col868, "loraham-kiss-tnc", "r2/rf-kiss.log", "r2")    # not running
+    r = c.get(_links(col868, "meshtastic", "r2/rf-meshtastic.log", "r2")[0]["href"])
     assert r.status_code == 200
     # The empty state as a typed field: the page's viewer data reports no file (the empty path).
     d = c.get("/api/rflog/meshtastic?job=rf-meshtastic.log").get_json()
