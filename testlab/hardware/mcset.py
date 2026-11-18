@@ -21,6 +21,7 @@ import urllib.request
 
 job, sid, src, rid, keys, port = sys.argv[1:7]
 override = globals().get("OVERRIDE", "-")
+TIMEOUT = globals().get("LH_TIMEOUT", 600)            # seconds per lhpc call (tests set it on the stdin prelude)
 RT = os.path.expanduser(sys.argv[7])
 LH = RT + "/venv/lhpc/bin/lhpc"
 ST = RT + "/config/stacks"
@@ -49,10 +50,17 @@ def first(t, n):
 
 
 def lh(*a):
-    p = subprocess.run([LH, "config", inst, *a], capture_output=True, text=True, timeout=600, check=False)
-    t = p.stdout + p.stderr
-    say(f"--- lhpc config {inst} {' '.join(a)} (rc {p.returncode})\n{t}")
-    return p.returncode, t
+    """One `lhpc config` call: (rc, output). A hang (rc 124) or a call that cannot start (rc 127) is a failed call, so
+    a failed set goes through the undo like any other (an exception here would skip it)."""
+    try:
+        p = subprocess.run([LH, "config", inst, *a], capture_output=True, text=True, timeout=TIMEOUT, check=False)
+        rc, t = p.returncode, p.stdout + p.stderr
+    except subprocess.TimeoutExpired:
+        rc, t = 124, f"TIMEOUT after {TIMEOUT} s"
+    except OSError as e:
+        rc, t = 127, f"NOT STARTED: {e}"
+    say(f"--- lhpc config {inst} {' '.join(a)} (rc {rc})\n{t}")
+    return rc, t
 
 
 def page():

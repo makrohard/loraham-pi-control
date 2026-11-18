@@ -38,6 +38,7 @@ FAKE_LHPC = textwrap.dedent('''\
         print(f"{g[1] if g else 'OK'} {a[0]}"); print(f"  value   = {v[a[0]] or '(empty)'}"); rc = g[0] if g else 0
     else:
         n, x = a; c = s["sets"][n] = s["sets"].get(n, 0) + 1
+        if c == 1 and n in s.get("hang", []): json.dump(s, open(st, "w")); import time; time.sleep(30)
         if c == 1 and n in s.get("fail_set", []): rc = 1; print("refused")
         elif c > 1 and s.get("fail_undo"): print("OK (ignored)")
         else:
@@ -95,14 +96,15 @@ def page_server(tmp_path_factory):
     srv.shutdown()
 
 
-def run(tmp_path, page_server, job, sid, rid, keys, src, vals, fields, override="-", inst_file=None, glob_file=None, **state):
+def run(tmp_path, page_server, job, sid, rid, keys, src, vals, fields, override="-", inst_file=None, glob_file=None, prelude="",
+        lh_exec=True, **state):
     port, box = page_server
     rt = tmp_path / "rt"
     (rt / "config" / "stacks").mkdir(parents=True)
     (rt / "venv" / "lhpc" / "bin").mkdir(parents=True)
     lh = rt / "venv" / "lhpc" / "bin" / "lhpc"
     lh.write_text(f"#!{sys.executable}\n" + FAKE_LHPC)
-    lh.chmod(0o755)
+    lh.chmod(0o755 if lh_exec else 0o644)
     pkg = tmp_path / "pkg" / "lhpc" / "core"
     pkg.mkdir(parents=True)
     (pkg.parent / "__init__.py").write_text("")
@@ -120,7 +122,7 @@ def run(tmp_path, page_server, job, sid, rid, keys, src, vals, fields, override=
                      for k, kind in fields], **state}
     (rt / "state.json").write_text(json.dumps(st))
     box["state"], box["hits"] = str(rt / "state.json"), 0
-    text = f"OVERRIDE = '{override}'\n" + HELPER.read_text()
+    text = f"OVERRIDE = '{override}'\n{prelude}" + HELPER.read_text()
     # cwd: the test's own directory (the stdin script's sys.path[0] is the cwd: the repo's real lhpc must not be imported)
     p = subprocess.run([sys.executable, "-", job, sid, srcname, rid, keys, str(port), str(rt)], input=text, capture_output=True,
                        cwd=tmp_path, text=True, timeout=60, check=False, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path / "pkg"),
@@ -162,6 +164,23 @@ def test_a_failed_set_runs_the_undo_and_stops_with_pre_restored(tmp_path, page_s
     assert sets == ["config meshtastic@r2 node_name LAB", "config meshtastic@r2 node_short LB",
                     "config meshtastic@r2 node_name A", "config meshtastic@r2 node_short a"]
     assert end == {"node_name": "A", "node_short": "a"}
+
+
+def test_a_set_that_hangs_runs_the_undo_and_stops_with_pre_restored(tmp_path, page_server):
+    # G2-RELGAPS B2 (red-before 19c6da04): a hung lhpc call raised TimeoutExpired: no verdict, no undo, node_name stayed LAB
+    v, sets, end = run(tmp_path, page_server, *MT, {"node_name": "A", "node_short": "a"}, MTF, inst_file='x = 1\n',
+                       prelude="LH_TIMEOUT = 2\n", hang=["node_short"])
+    assert v == "JOB J3 meshtastic@r2 STOP: M2: set node_short rc 124; the undo restored PRE", v
+    assert sets[:2] == ["config meshtastic@r2 node_name LAB", "config meshtastic@r2 node_short LB"]
+    assert sets[2:] == ["config meshtastic@r2 node_name A", "config meshtastic@r2 node_short a"]
+    assert end == {"node_name": "A", "node_short": "a"}
+
+
+def test_an_lhpc_that_cannot_start_is_a_failed_call(tmp_path, page_server):
+    # the same B2 path: an lhpc that cannot run raised PermissionError (an OSError) instead of a refused call
+    v, sets, _ = run(tmp_path, page_server, *GW, {"call": "OLD"}, [("call", "run")], lh_exec=False)
+    assert v.startswith("JOB J2 graywolf@r1 STOP: M0: the instance list is refused (NOT STARTED: "), v
+    assert sets == []
 
 
 def test_an_undo_that_does_not_restore_pre_is_unresolved(tmp_path, page_server):
