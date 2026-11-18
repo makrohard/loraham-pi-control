@@ -227,7 +227,17 @@ MCS
 # gpsd answer = rc 3.
 PORTS_PY=$(cat <<'PPY'
 import json, os, socket, sys
+# --rns=<config dir>: an rnsd of this user running that config is named rnsd-shared (row 5's shared RNode), any other rnsd
+rns = os.path.realpath(sys.argv.pop(1)[6:]) if sys.argv[1:2] and sys.argv[1].startswith("--rns=") else None
 devs = {os.path.realpath(d): d for d in sys.argv[1:]}; held = {}
+def shared(p):
+    try:
+        a = [x.decode(errors="replace") for x in open(f"/proc/{p}/cmdline", "rb").read().split(b"\0") if x]
+        mine = os.stat(f"/proc/{p}").st_uid == os.getuid()
+    except OSError:
+        return False
+    return (rns is not None and mine and any(os.path.basename(x) == "rnsd" for x in a) and "--config" in a[:-1]
+            and os.path.realpath(a[a.index("--config") + 1]) == rns)
 for p in (x for x in os.listdir("/proc") if x.isdigit()):
     try: fds = os.listdir(f"/proc/{p}/fd")
     except OSError: continue
@@ -237,7 +247,7 @@ for p in (x for x in os.listdir("/proc") if x.isdigit()):
         if t in devs:
             try: who = open(f"/proc/{p}/comm").read().strip()
             except OSError: who = p
-            held.setdefault(t, set()).add(who)
+            held.setdefault(t, set()).add("rnsd-shared" if who == "rnsd" and shared(p) else who)
 try:
     s = socket.create_connection(("127.0.0.1", 2947), 3)
 except OSError:
@@ -440,11 +450,24 @@ peerrun() {   # peerrun <file> <pin|-> <py> <action> <args...>: THE one place a 
   local -a run; if [ "$MODE" = dry ]; then run=(env "RFPROOF_PEER_CTX=$x" python3 -I "$FAKE_PEER" "$@")
   elif [ "$pin" = pin ]; then run=(pinrun "$x" "$py" "$@"); else run=(env "RFPROOF_PEER_CTX=$x" bash -c "$c"); fi
   if [ "${BG:-0}" = 1 ]; then ( capture "$f" "${run[@]}" < /dev/null ) & SPAWN=$!; SPAWNF[$SPAWN]=$f
+    echo "$SPAWN $(pst "$SPAWN")" >> "$(bgfile)" || stop "$f: the background job list is not written (the job runs: $SPAWN)"
   else capture "$f" "${run[@]}" < /dev/null; peerdone "$f"; fi; }
 pinrun() { local x=$1 py=$2; shift 2; printf '%s\n' "$MC_PIN" | RFPROOF_PEER_CTX=$x flock -n -E 75 "$LOCK" "$py" -I "$PEER" "$@"; }
 peerdone() { XRC=$(cat "${OUT:-$EVD}/$1.rc" 2>/dev/null || echo 99); [ "$XRC" != 75 ] || stop "$1: the peer lock is held (one peer at a time)"
   [ "$MODE" = live ] || { local l; while IFS= read -r l; do set -- $l; frame "$3" "${*:5}"; done < <(grep '^FRAME | ' "${OUT:-$EVD}/$1"); }; }
 reap() { [ -n "$1" ] || return 0; wait "$1"; peerdone "${SPAWNF[$1]}"; }
+# bgend: every background peer job (BG=1, listed in bg.pids with its start time) that still runs ends now, its whole process
+# tree (the flock holding the peer lock and the peer under it): TERM, after 5 s KILL, waited for (10 s at most). It runs before
+# any undo replays (runrow, recover): a reader left by a STOP or FAIL would hold the lock and refuse the restore (rc 75).
+# rc 1 when one is still there after 10 s.
+bgfile() { printf '%s/bg.pids' "${SCRATCH:-$EVD}"; }
+pst() { local s; s=$(sed -E 's/^.*\) //' "/proc/$1/stat" 2>/dev/null) || return 0; set -- $s; [ "$1" = Z ] || echo "${20}"; }   # start time; ended/zombie: none
+ptree() { local c; for c in $(pgrep -P "$1"); do ptree "$c"; done; echo "$1 $(pst "$1")"; }   # the tree, children first
+bgend() { local f p st t all= left; f=$(bgfile); [ -s "$f" ] || return 0
+  while read -r p st; do [ -n "$st" ] && [ "$(pst "$p")" = "$st" ] && all="$all$(ptree "$p")"$'\n'; done < "$f"
+  for t in $(seq 1 20); do left=$(while read -r p st; do [ -n "$p" ] && [ -n "$st" ] && [ "$(pst "$p")" = "$st" ] && echo "$p"; done <<< "$all")
+    [ -n "$left" ] || { : > "$f"; [ "$MODE" != live ] || flock -n "$LOCK" true || { echo "the peer lock is still held ($LOCK)" >&2; return 1; }; return 0; }; [ "$t" = 1 ] && kill -TERM $left 2>/dev/null; [ "$t" = 11 ] && kill -KILL $left 2>/dev/null; sleep 0.5; done
+  echo "background peer job(s) still running: $(echo $left)" >&2; return 1; }
 peer() { local f=$1 py=$2; shift 2; peerrun "$f" - "$py" "$@"; }
 peerpin() { local f=$1; shift; peerrun "$f" pin "$VMT" "$@"; }
 body() { cat "${OUT:-$EVD}/$1" 2>/dev/null; return 0; }
@@ -494,6 +517,7 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
     n=$((n - 1)); done; return $rc; }
 ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX PAUTH; done; }   # every scope's flag: an exit inside pset/pread/tx keeps its local
 recover() { trap - EXIT INT TERM; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
+  ( bgend ) || rec "recover: a background peer job does not end: an undo through the peer lock may be refused" || lost=1
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
   ( secret_scan ) || rec "recover: the evidence scan found a secret or failed: do not publish $EVD" || lost=1
   echo "== RESULT"; ( restable STOPPED ) || rec "recover: RESULT.md not written" || lost=1   # a STOP after the table: it says STOPPED
@@ -737,10 +761,11 @@ row_R0() {
     ord=$(body "R0-$b-status.txt" | ordkeys $keys) || stop "R0 $b: an instance key's stack has no status header ($keys)"
     keep "RUN_$b" "$ord"; data "R0 $b: running instances: '${ord}'"
   done
-  local r e ep k o why devs= pr bud; declare -A SUM=()
+  local r e ep k o why devs= rdevs= pr pk bud held; declare -A SUM=()
   for r in $RUN; do why=; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in -) continue;; esac
       if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
-        k="PEER_${ep#*:}"; read -r _ pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
+        k="PEER_${ep#*:}"; read -r pk pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
+        [ -n "$o" ] || [ "$pk" != rnode ] || rdevs="$rdevs /dev/serial/by-id/$pr "   # row 5's RNode: the PC's rnsd holds it (hpower)
       else k=${ep#*:}; radiokey "$k"; o=$RK; case "$o" in "why "*) why="$why${o#why }; ";;
           rid*) read -r _ v bb m <<< "$o"; [ "$bb" = "${ep%%:*}" ] || stop "row $r: $k is on box $bb, the table says ${ep%%:*}"
             [[ "$v" =~ ^r([1-9]|[1-9][0-9])$ ]] || stop "R0: $k = '$v' is not a radio id"; keep "$k" "$v"; keep "MODEL_${bb}_$v" "$m"; data "R0: row $r: $k = $bb:$v ($m)";; esac; fi; done
@@ -749,10 +774,16 @@ row_R0() {
     for e in "a $wa" "b $wb"; do set -- $e; [ "$2" -gt 0 ] || continue; ep=$(rowf "$r" "$1")
       if [ "${ep%%:*}" = peer ]; then pr="PC:${ep#*:}"; else pr="${ep%%:*}:$(getk "${ep#*:}")"; fi; SUM[$pr]=$(( ${SUM[$pr]:-0} + $2 )); done; done
   r0grants
-  [ -z "$devs" ] || { X PC R0-peer-ports.txt "python3 -I -c $(printf %q "$PORTS_PY") $devs"; [ "$MODE" = dry ] || { [ "$XRC" = 0 ] || stop "R0: the peer ports cannot be checked (gpsd answer unreadable?)"
-    ! grep -q '^HELD ' "$OUT/R0-peer-ports.txt" || stop "R0: a peer port is held: $(grep '^HELD ' "$OUT/R0-peer-ports.txt" | tr '\n' '|') (free it first: gpsd, a console)"; }; }
+  [ -z "$devs" ] || { X PC R0-peer-ports.txt "python3 -I -c $(printf %q "$PORTS_PY")${rdevs:+ $(shq "--rns=$RNSCFG")} $devs"; [ "$MODE" = dry ] || { [ "$XRC" = 0 ] || stop "R0: the peer ports cannot be checked (gpsd answer unreadable?)"
+    held=$(heldports R0-peer-ports.txt "$rdevs"); [ -z "$held" ] || stop "R0: a peer port is held: $held (free it first: gpsd, a console)"
+    ! grep '^HELD ' "$OUT/R0-peer-ports.txt" | grep -q ' rnsd-shared$' || data "R0: the RNode's port is held by rnsd alone (the shared RNode, row 5)"; }; }
   for pr in $(printf '%s\n' "${!SUM[@]}" | sort); do say "BUDGET | $pr | ${SUM[$pr]} | $TXMAX"; done
   for pr in "${!SUM[@]}"; do [ "${SUM[$pr]}" -le $TXMAX ] || stop "budget $pr: ${SUM[$pr]} of $TXMAX"; done; }
+heldports() {   # heldports <PORTS_PY capture> "<the RNode ports, each with a space either side>": the HELD lines that STOP, joined
+  # by '|'. The RNode's port held only by this user's rnsd running RNS_CONFIG (rnsd-shared) is the shared setup row 5 needs
+  # (hpower then checks that rnsd); any other or extra holder, and any holder of another peer's port, STOPs.
+  local d w; grep '^HELD ' "$OUT/$1" | while read -r _ d w; do case "$2" in *" $d "*) [ "$w" = rnsd-shared ] && continue;; esac
+    echo "HELD $d $w"; done | paste -sd '|'; }
 r0grants() {   # before anything starts, every resolved radio of the chosen rows has no high-power grant (hp= None/False), else STOP
   local r e ep k v o; for r in $RUN; do [ -z "$(getk "SKIP_$r")" ] || continue; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in peer:*|-) continue;; esac
     k=${ep#*:}; v=$(getk "$k"); o=$(jgrant "$(body "R0-${ep%%:*}-radios.txt")" "$v") || stop "R0: row $r, $k = $v: $o: nothing starts"; done; done
@@ -986,6 +1017,7 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
   m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; usbguard "pre-$r"; : > "$OUT/rowfail.txt"; : > "$OUT/rowleg.txt"
   if [ "$(rowf "$r" kind)" = frame ]; then ( CURROW=$r; frame_row "$r" "$(rowf "$r" a)" "$(rowf "$r" b)" "$(rowf "$r" power)" "$(rowf "$r" flags)" ); rc=$?
   else ( CURROW=$r; "row_$r" "$(rowf "$r" a)" "$(rowf "$r" b)" ); rc=$?; fi
+  bgend || stop "row $r: a background peer job does not end (its undos would find the peer lock held)"
   if [ "$rc" = 1 ] && [ -s "$OUT/rowfail.txt" ]; then
     # a stack row: the leg it named last (leg) FAILed, else (a FAIL before any leg) its first direction without a result;
     # every other direction without a result did not run (NOT RUN, naming that FAIL). A frame row's FAIL (an incompatible

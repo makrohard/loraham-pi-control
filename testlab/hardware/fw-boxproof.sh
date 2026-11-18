@@ -79,8 +79,8 @@ ROWR4_PY='from lhpc.core import paths, radios; [print("ROW", r.id, r.model, r.ba
 # the apply: the root steps read the password ONCE (sudo -S -v on the only stdin line), then sudo -n; lhpc reads no stdin
 APPLY="cd $RTB && ./venv/lhpc/bin/lhpc firewall --script > /dev/null && sudo -S -p '' -v && sudo -n bash $RTB/config/files/firewall/firewall-apply.sh < /dev/null && sudo -n systemctl start lhpc-firewall-check.service < /dev/null && ./venv/lhpc/bin/lhpc webserver apply < /dev/null"
 PORT_PY='from lhpc.core.services import ControllerService; print("PORT", ControllerService()._page_ports().get("meshtastic@r2", 0))'
-FTX="grep -ac 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log 2>/dev/null || true"
-FSZ="stat -c %s $RTB/logs/start-meshtastic-868-r2.log 2>/dev/null || echo 0"   # the start log's size: a shrink = the product capped it
+FTX="if test -e $RTB/logs/start-meshtastic-868-r2.log; then grep -ac 'Final Tx power' $RTB/logs/start-meshtastic-868-r2.log; [ \$? -le 1 ]; else echo 0; fi"   # no log yet (a first start): 0; grep rc 2 (unreadable): no number, rc 1 (STOP)
+FSZ="if test -e $RTB/logs/start-meshtastic-868-r2.log; then stat -c %s $RTB/logs/start-meshtastic-868-r2.log; else echo 0; fi"   # the start log's size: a shrink = the product capped it
 # fwapply <tag>: the apply; a TRANSITIONAL result -> the transition judge, then the product's cleanup (designed two-phase)
 TRANS_PY='import json
 from lhpc.core.services import ControllerService
@@ -127,8 +127,7 @@ onexit() { local rc=$? k i u; trap - EXIT; trap '' INT TERM HUP; [ "$MODE" = liv
   for ((i = ${#UNDOS[@]} - 1; i >= 0; i--)); do u=${UNDOS[$i]}
     # PSTART <unit>: the restart of a unit FW3 stopped, only after its power check (pwrok, reads only); a failed check leaves it
     #  stopped and UNRESOLVED (fail closed)
-    if [[ $u == "PSTART "* ]]; then if pwrok "UNDO-$i" "${u#PSTART }"; then capture "UNDO-$i.txt" sshx n "$(gstart "${u#PSTART }")"
-      else XRC="power check: $WHY"; fi; else capture "UNDO-$i.txt" sshx n "$u"; fi
+    if [[ $u == "PSTART "* ]]; then pstart "UNDO-$i" "${u#PSTART }"; else capture "UNDO-$i.txt" sshx n "$u"; fi
     if [ "$XRC" = 0 ]; then say "undo $i: replayed"; else say "UNRESOLVED: undo $i (rc $XRC, UNDO-$i.txt): ${UNDOS[$i]}"
       echo "UNRESOLVED: undo $i (rc $XRC): ${UNDOS[$i]}" >> "$EVD/STOP.txt"; [ "$rc" = 3 ] || rc=4; fi; done
   exit "$rc"; }
@@ -163,26 +162,42 @@ pwrok() {   # pwrok <tag> <key>: rc 0 when the unit's power reads within min(17,
   # pdom's mt-power domain 1..17 (0 is no cap: LHPC's own domain starts at 1, manifest.example.toml max_power min = 1, and
   # Meshtastic reads a 0 power as "the maximum"; no max_power line, meshtasticd's default 20, is no value). A daemon: its STATUS
   # (jstatus: one POWER in pdom, HIGHPOWER=0). Any other stack: no check here, so no start. MP = the value read.
+  # pwrok <tag> <key> cold: a stopped daemon's restart (FE, the replay), which has no STATUS: the POWER it starts with (DCFG_PY:
+  # the product's post_power, its high-power grant off) must equal its FW0 STATUS POWER (P0) and lie within the cap; pstart
+  # checks the STATUS again once it runs.
   local st=${2%@*} r=${2#*@} o m c w; WHY= MP=
   case $st in meshtastic|daemon) ;; *) WHY="no power check for a $st stack"; return 1;; esac
   X "$1-radios.txt" "$PY -c '$RADIOS_PY'"; [ "$XRC" = 0 ] || { WHY="the radio rows were not read (rc $XRC)"; return 1; }
   X "$1-caps.txt" "$PY -c '$CAPS_PY'"; [ "$XRC" = 0 ] || { WHY="the model caps were not read (rc $XRC)"; return 1; }
-  if [ "$st" = meshtastic ]; then X "$1-maxpower.txt" "$LH config $2 list"; else X "$1-status.txt" "$PY -c '$STATUS_PY' $r"; fi
+  if [ "$st" = meshtastic ]; then X "$1-maxpower.txt" "$LH config $2 list"
+  elif [ "${3:-}" = cold ]; then X "$1-dcfg.txt" "$PY -c '$DCFG_PY' $r"
+  else X "$1-status.txt" "$PY -c '$STATUS_PY' $r"; fi
   [ "$XRC" = 0 ] || { WHY="the power was not read (rc $XRC)"; return 1; }; [ "$MODE" = dry ] && return 0
   if [ "$st" = meshtastic ]; then w=max_power; MP=$(body "$1-maxpower.txt" | sed -nE 's/^ *max_power *= *([0-9]+).*/\1/p' | head -n 1)
     case "$MP" in ''|*[!0-9]*) WHY="no max_power value"; return 1;; esac; [ "$MP" -le 17 ] || { WHY="max_power $MP above 17"; return 1; }
     pdom "$MP" mt-power || { WHY="max_power $MP is outside 1..17 (0 = the firmware maximum, no cap)"; return 1; }
+  elif [ "${3:-}" = cold ]; then w="start POWER"; MP=$(body "$1-dcfg.txt" | sed -n 's/^POWER //p')
+    [[ "$MP" =~ ^[0-9]{1,2}$ ]] && [ "$(body "$1-dcfg.txt" | sed -n 's/^HP //p')" = False ] || { WHY="no start POWER, or a high-power grant ($1-dcfg.txt)"; MP=; return 1; }
+    [ "$MP" = "${P0[$2]:-}" ] || { WHY="start POWER $MP differs from its FW0 STATUS POWER '${P0[$2]:-}'"; return 1; }
   else w=POWER; MP=$(jstatus "$(body "$1-status.txt" | head -n 1)") || { WHY=$MP; MP=; return 1; }; fi
   o=$(jgrant "$(body "$1-radios.txt")" "$r") || { WHY=$o; return 1; }
   m=$(body "$1-radios.txt" | awk -v r="$r" '$1 == "ROW" && $2 == r {print $3}'); c=$(body "$1-caps.txt" | awk -v m="$m" '$1 == "CAP" && $2 == m {print $3}')
   [ -n "$m" ] && [[ "$c" =~ ^[0-9]{1,2}$ ]] || { WHY="no single power cap of $r's model ('$m')"; return 1; }
   [ "$c" -le 17 ] || c=17; [ "$MP" -le "$c" ] || { WHY="$w $MP above $c dBm (min(17, $m's power_default_dbm))"; return 1; }; }
 mtpre() { pwrok "$1" "meshtastic@$2" || stop "$1: $WHY: no start"; }   # mtpre <file-tag> <rid>: BEFORE any start of meshtastic@<rid>
+declare -A P0=()   # a daemon's POWER at FW0 (runset0), for its restart
+DCFG_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; s = ControllerService(); r = sys.argv[1]; print("POWER", radio_start.post_power(s, "daemon", r) or "-"); print("HP", radio_start.effective_high_power(s, r))'
+pstart() {   # pstart <tag> <key>: the restart of a unit FW3 stopped (FE, the replay): its power checked (a daemon: cold, then its
+  # STATUS once it runs; one that does not hold is stopped again); rc 0 = it runs, checked; else WHY, XRC
+  pwrok "$1" "$2" cold || { XRC="power check: $WHY"; return 1; }; X "$1-start.txt" "$(gstart "$2")"; [ "$XRC" = 0 ] || { WHY="start rc $XRC"; return 1; }
+  [ "${2%@*}" = daemon ] || return 0; pwrok "$1-after" "$2" && return 0
+  local why=$WHY; X "$1-stop.txt" "$(gstop "$2")"; WHY="$why after its start (stopped again: rc $XRC)"; XRC="power check: $WHY"; return 1; }
 runset0() {   # FW0 (read-only): the running set (KEYS) and, of it, the units on the row radios (TOUCH): FW3 stops those and FE (or a
   # STOP's replay) starts them again, so each needs its power check now, before any change: one that fails STOPs here, no undo
   # journalled. A unit on another radio is never stopped or started by this proof (it stays as it is: no check, no STOP).
   local k; must F0-runset.txt "$RUNSET"; KEYS=$(body F0-runset.txt | grep -E '^[a-z0-9_-]+@r[0-9]+$' | tr '\n' ' '); TOUCH=
-  for k in $KEYS; do [[ ${k#*@} =~ $ROWRID ]] || continue; TOUCH+="$k "; pwrok "F0-$k" "$k" || stop "F0-$k: $WHY: no change"; done; }
+  for k in $KEYS; do [[ ${k#*@} =~ $ROWRID ]] || continue; TOUCH+="$k "; pwrok "F0-$k" "$k" || stop "F0-$k: $WHY: no change"
+    [ "${k%@*}" != daemon ] || P0[$k]=$MP; done; }
 rowcheck() {   # rowcheck <tag>: after FW7's reboot (FW5 changed r4's config): every unit running on a row radio is power-checked
   # before the next step; each is safety-stopped on any STOP (started), FE's end releases those it restored
   local k; must "$1-runset.txt" "$RUNSET"
@@ -204,7 +219,7 @@ fe() {   # FE: this run's changes undone, each restore checked; one that did not
   must FE-stop.txt "$(gstop meshtastic@r2)"; stopped meshtastic@r2
   must FE-reset.txt "$LH config meshtastic@r2 --reset --yes < /dev/null"; must FE-mtid.txt "$LH config meshtastic@r2 list"
   [ "$MODE" = dry ] || { grep -qE 'node_name \* = \(empty\)' "$EVD/FE-mtid.txt" && grep -qE 'node_short \* = \(empty\)' "$EVD/FE-mtid.txt"; } || stop "FE: meshtastic@r2's identity is not empty after the reset"
-  local k; for k in $TOUCH; do pwrok "FE-$k" "$k" || stop "FE-$k: $WHY: not restarted"; must "FE-start-$k.txt" "$(gstart "$k")"; done
+  local k; for k in $TOUCH; do pstart "FE-$k" "$k" || stop "FE-$k: $WHY: not restarted"; done
   must FE-runset.txt "$RUNSET"; [ "$MODE" = dry ] || for k in $TOUCH; do grep -qxF -- "$k" "$EVD/FE-runset.txt" || stop "FE: $k does not run again (the running set differs from FW0)"; done
   [ "$MODE" = dry ] || [ "$(body FE-runset.txt | sort | tr '\n' ' ')" = "$(body F0-runset.txt | sort | tr '\n' ' ')" ] || say "note: FE's running set differs from FW0 off the row radios (units this proof never touched; the reboot's resting state)"
   fwstate FE-fw.txt; must FE-ws.txt "$LH webserver status"; lan FE-lan.txt 8443; page_ok "$LANCODE" || stop "FE: the console is not reachable from the LAN after the undo (code $LANCODE)"
@@ -235,6 +250,13 @@ r4refused() {   # FW6 (claim 1b): meshtastic@r4's start (the changed radio) is r
 endscan() {   # RE: the captures are redacted, so any occurrence of the password in the evidence is a leak
   pweq H && { ok "RE: box H password equals its login name (lab box): not scanned"; return 0; }
   local c; c=$(grep -rlF -- "$PW" "$EVD" | wc -l); [ "$c" = 0 ] || stop "RE: the box password is in $c evidence file(s): do not publish"; }
+
+rend() {   # RE's end (live): the scan, then the manifest as the last write: the lines after it are plain echo (say appends to
+  # run.log, a file it lists); rc 1 when a row FAILED
+  endscan
+  ( cd "$EVD" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS ) || stop "RE: SHA256SUMS not written"
+  echo "$(date -u +%FT%TZ) evidence $EVD, SHA256SUMS $(sha256sum "$EVD/SHA256SUMS" | cut -c1-8)"
+  [ ! -s "$EVD/FAILED.txt" ] || { echo "$(date -u +%FT%TZ) FAILED rows: $(tr '\n' '|' < "$EVD/FAILED.txt")"; return 1; }; }
 
 [ "${FWPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions only, as a dry start; no prep, box or evidence
 echo "== PREP (the PC; no box touched)"
@@ -317,9 +339,5 @@ echo "== FE undo (this run's changes; the firewall stays at FWSHA's apply, the c
 fe
 
 echo "== RE"
-if [ "$MODE" = live ]; then
-  endscan
-  ( cd "$EVD" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS ); say "evidence $EVD, SHA256SUMS $(sha256sum "$EVD/SHA256SUMS" | cut -c1-8)"
-  [ ! -s "$EVD/FAILED.txt" ] || { say "FAILED rows: $(tr '\n' '|' < "$EVD/FAILED.txt")"; exit 1; }
-fi
+[ "$MODE" = live ] && { rend || exit 1; }
 echo "DONE ($MODE)"

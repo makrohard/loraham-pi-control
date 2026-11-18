@@ -3,7 +3,9 @@ command starts stays a descendant of this process while the command runs. That i
 has exited and one started with setsid. run_lab's timeout can therefore find all of it and kill it. The
 keeper runs the command without core dumps and passes SIGABRT on to it (the stack dump). On SIGTERM, SIGINT or SIGHUP
 (an outer kill) it kills all it keeps and ends. When the command ends, the keeper ends the same way (its exit status,
-or its signal). What the command left running on purpose (a lab daemon) lives on.
+or its signal). What the command left running on purpose (a lab daemon) lives on, except after a SIGABRT (an abort):
+then the command's end, too, kills all it keeps first. Killing all it keeps (`clean`) repeats until no live descendant
+is left (one forked after a pass is found by the next), with a deadline.
 
 Run as `python -I -S reaper.py PROGRAM ARG...` (-I: PYTHONFAULTHANDLER and the rest are the command's, not its own)."""
 from __future__ import annotations
@@ -13,6 +15,7 @@ import os
 import resource
 import signal
 import sys
+import time
 
 PR_SET_CHILD_SUBREAPER = 36
 
@@ -72,14 +75,50 @@ def kill(fds: list[int]) -> None:
             os.close(fd)
 
 
+def _live(listed: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The listed processes that are not zombies (a zombie is reaped by its parent or, orphaned, by this keeper)."""
+    out = []
+    for pid, start in listed:
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                if fh.read().rsplit(")", 1)[1].split()[0] != "Z":
+                    out.append((pid, start))
+        except (OSError, IndexError):
+            pass                                             # ended
+    return out
+
+
+def clean(deadline: float = 30.0) -> bool:
+    """Kill every descendant of this process and reap the orphans it keeps, pass after pass, until none is live
+    (False: still one at the deadline, e.g. in uninterruptible sleep)."""
+    end = time.monotonic() + deadline
+    while True:
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0] > 0:
+                pass
+        except ChildProcessError:
+            pass
+        live = _live(descendants(os.getpid()))
+        if not live:
+            return True
+        if time.monotonic() > end:
+            os.write(2, f"reaper: {len(live)} descendant(s) still live after {deadline:g} s\n".encode())
+            return False
+        kill(pin(live))
+        time.sleep(0.01)
+
+
 def main(argv: list[str]) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
         sys.exit(f"reaper: prctl(PR_SET_CHILD_SUBREAPER): {os.strerror(ctypes.get_errno())}")
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))         # no core dumps, for it and the command
     child = 0
+    aborted = False
 
     def forward(sig, _frame):
+        nonlocal aborted
+        aborted = True                                       # the command's end kills all it keeps (clean)
         if child:
             try:
                 os.kill(child, sig)
@@ -87,7 +126,9 @@ def main(argv: list[str]) -> None:
                 pass
 
     def end(sig, _frame):
-        kill(pin(descendants(os.getpid())))
+        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(s, signal.SIG_IGN)                 # one clean: a second signal does not restart it
+        clean()
         os._exit(128 + sig)
 
     signal.signal(signal.SIGABRT, forward)
@@ -104,6 +145,8 @@ def main(argv: list[str]) -> None:
         pid, status = os.waitpid(-1, 0)                      # reaps the orphans it keeps, too
         if pid != child:
             continue
+        if aborted:
+            clean()
         if os.WIFSIGNALED(status):                           # end as the command ended
             sig = os.WTERMSIG(status)
             if sig not in (signal.SIGKILL, signal.SIGSTOP):  # those two have no handler to reset

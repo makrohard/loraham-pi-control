@@ -71,8 +71,9 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     stack) is waited for up to 5 s and kept in the error with the rest of its output; then it and
     all it had started are killed: a child holding the output or not, one started with setsid, a
     grandchild whose parent has ended. The command runs under a keeper (`reaper`, a child subreaper)
-    that keeps all of these its descendants while the command runs; each is pinned by a pidfd before
-    the dump, so no recycled pid is signalled. The keeper stays in the caller's process group: an
+    that keeps all of these its descendants while the command runs and kills them itself (after the
+    abort: at the command's end, or on the SIGTERM sent 5 s after it), pass after pass until none is
+    live, each pinned by a pidfd, so no recycled pid is signalled. The keeper stays in the caller's process group: an
     outer kill of that group (a lane's timeout, Ctrl-C) reaches it, and it kills all it keeps. That
     includes the lab daemons this command started: a timed-out command leaves none of them (the lab
     reset tolerates that: it signals a recorded pid only while it is still that daemon). A command
@@ -88,15 +89,16 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
         try:
             proc.wait(timeout=timeout)                      # the keeper's end is the command's end
         except subprocess.TimeoutExpired:
-            held = reaper.pin(reaper.descendants(proc.pid))   # before the dump: the lab and all it started
-            proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab
+            proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab: its stack dump
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=5)                            # the lab's end: the keeper kills all it keeps, then ends
             except subprocess.TimeoutExpired:
-                pass
-            reaper.kill(held)                                   # ended or not
-            proc.kill()
-            proc.wait()
+                proc.terminate()                                # no end in 5 s: the keeper kills all it keeps, then ends
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()                                 # a keeper that does not end (its stderr names what lives)
+                    proc.wait()
             out, err = _read_back(out_f), _read_back(err_f)
             raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
                                f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None

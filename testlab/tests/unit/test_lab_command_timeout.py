@@ -243,3 +243,74 @@ def test_a_command_that_ends_returns_its_status_and_output(tmp_path, monkeypatch
     assert (r.returncode, r.stdout, r.stderr) == (3, "out status\n", "err\n")
     with pytest.raises(RuntimeError, match=r"^lhpc-testlab status rc=3\nstdout: out status\n"):
         testing.run_lab({}, "status", check=True)
+
+
+# ---- G2-RELP4c B1: the keeper's kill repeats until no descendant is live -------------------------------------------------
+
+def _forker(tag: str) -> str:
+    """Lab-command text: a setsid worker forking a `sleep <tag>` every 1 ms (one forked after any single snapshot)."""
+    loop = f"import subprocess, time\\nwhile True:\\n    subprocess.Popen([\"sleep\", \"{tag}\"])\\n    time.sleep(0.001)\\n"
+    return f"import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', '{loop}'], start_new_session=True)\n"
+
+
+def _tagged(tag: str) -> list[int]:
+    """The live processes whose command line holds `tag` (the forker's sleeps and the worker itself)."""
+    found = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) == os.getpid():
+            continue
+        try:
+            with open(f"/proc/{name}/cmdline", "rb") as fh:
+                cmd = fh.read()
+            with open(f"/proc/{name}/stat") as fh:
+                state = fh.read().rsplit(")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            continue
+        if tag.encode() in cmd and state != "Z":
+            found.append(int(name))
+    return found
+
+
+def _sweep(tag: str) -> None:
+    for pid in _tagged(tag):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+@pytest.mark.wallclock("a real forking worker past run_lab's timeout; three trials, each bounded at 5 s")
+def test_a_timeout_leaves_no_descendant_forked_after_the_snapshot(tmp_path, monkeypatch):
+    # red-before (13c5b1be): run_lab pinned one snapshot before the SIGABRT and the keeper exited at the command's end: a
+    # worker forking after the snapshot left live sleeps (a22's repro: survivors in 7 of 20 trials at 200 ms)
+    for trial in range(3):
+        tag = f"31.{os.getpid()}{trial}"
+        _stand_in(tmp_path, monkeypatch, _forker(tag) + "import time\ntime.sleep(60)\n")
+        try:
+            with pytest.raises(RuntimeError, match="timed out"):
+                testing.run_lab({}, "reset", timeout=0.3)
+            time.sleep(0.3)                               # a survivor would have forked on by now
+            assert _tagged(tag) == [], f"trial {trial}"
+        finally:
+            _sweep(tag)
+
+
+@pytest.mark.wallclock("a real forking worker under the keeper, SIGTERM after 0.3 s; three trials, each bounded at 10 s")
+def test_an_outer_kill_of_the_keeper_leaves_no_descendant(tmp_path):
+    # red-before (13c5b1be): the keeper's SIGTERM handler killed one snapshot and exited at once
+    exe = tmp_path / "lab"
+    for trial in range(3):
+        tag = f"32.{os.getpid()}{trial}"
+        exe.write_text(f"#!{sys.executable}\n" + _forker(tag) + "import time\ntime.sleep(60)\n")
+        exe.chmod(0o755)
+        keeper = subprocess.Popen([sys.executable, "-I", "-S", testing.reaper.__file__, str(exe)], stdin=subprocess.DEVNULL)
+        try:
+            time.sleep(0.3)
+            keeper.terminate()
+            assert keeper.wait(timeout=10) == 128 + signal.SIGTERM
+            time.sleep(0.3)
+            assert _tagged(tag) == [], f"trial {trial}"
+        finally:
+            keeper.kill()
+            keeper.wait()
+            _sweep(tag)
