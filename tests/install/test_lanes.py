@@ -2457,3 +2457,18 @@ def test_a_gone_branch_whose_pin_cannot_be_placed_is_could_not_check(box, capsys
     box.fail_ancestry_to = side                       # "is the pin after c3?" cannot be read
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc != 0 and "could not check" in out and box.head() == box.c[2], out
+
+
+def test_a_plain_update_keeps_an_upstream_dev_commit_whose_branch_is_gone_and_pin_is_sideways(box, capsys, git):
+    """G2-STABLELANER2 B2 / SR T-1: main deleted, the installed c3 still upstream through a tag it keeps, the pin on
+    a sibling line: the move reads "sideways" (not "own"), and a plain Update keeps the checkout, named."""
+    side = box.side(box.c[0])
+    box.push_tag("sibling", side)
+    box.push_tag("v2.9.0", box.c[2])                  # the upstream keeps c3 through this tag
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], side))   # the pin beside main
+    box.cli("source-check", "s")
+    _delete_main(box, git, "side")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; --source pinned moves it to the pin, " \
+        "after a warning" in out and box.head() == box.c[2], out    # mutant W5 (sideways falls through): the pin
