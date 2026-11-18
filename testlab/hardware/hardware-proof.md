@@ -22,8 +22,8 @@ The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that
 | row | stack | endpoint A | endpoint B | power A / B |
 |---|---|---|---|---|
 | 7 | daemon text frames | box H, board 433 | box H, the 433 stick | minimum / minimum, restored; plus a per-radio stop check |
-| 8 | daemon text frames | box H, Meshstick 868 | the Zero, board 868 | minimum, restored / as-is |
-| 9 | daemon text frames | box H, PineDio 868 | the Zero, board 868 | minimum, restored / as-is |
+| 8 | daemon text frames | box H, Meshstick 868 | the Zero, board 868 | minimum, restored / minimum, restored |
+| 9 | daemon text frames | box H, PineDio 868 | the Zero, board 868 | minimum, restored / minimum, restored |
 | 10 | daemon text frames | box H, board 433 | the Zero, board 433 | as-is / as-is |
 | 11 | daemon text frames | box H, board 868 | the Zero, board 868 | as-is / as-is |
 | 1 | MeshCom | box H, board 433 | the MeshCom T-Deck | as-is / read only (its stored power 0..17 dBm, else a STOP: set it by hand first) |
@@ -40,11 +40,22 @@ line); a failed direction does not skip the other.
 A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; a difference is a FAIL (the radio is
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
 Row 5 has no on-air PASS yet.
+Row 5 proves the shipped defaults: it reads `rnode_framing` (it must be `yes`, else STOP; the kit sets nothing), and the PC
+listens before the MeshChat start, whose own announce it must hear (the kit asks for none; the start is counted as that send).
 Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
 listener on the box, connected before the G2 sends (Meshtastic keeps no history to read later), and MeshCore's own message
 queue, read with meshcore-cli. That read takes the messages out of the queue, so a MeshCore client already running there
 (the web UI, an interactive meshcore-cli) makes row 4 NOT RUN. A direction passes only with both checks. Their evidence holds
 markers only: `SEEN <nonce> <time>` (the app gives no RSSI), and for row 3 `LISTENER-ENDED <rc>` when its listener ended early.
+
+## The pre-step M
+
+After R1 (nothing of the kit's runs then) and before the rows, `mcset.py` copies each stack row's instance settings from the
+stack's source file into the instance of that row's radio: row 1 MeshCom's callsign (the value from `MCSET_J1`, a
+callsign[-SSID] or `global`; empty = that job NOT RUN), row 2 Graywolf's call, row 3 Meshtastic's node names, row 4 MeshCore's
+node name and mode. The changes are kept (the lab's settings); a job undoes its own change only when its own set or read-back
+fails. One line per job in `MCSET.md`; a job that is not a PASS or NOOP is named in `NOT-RUN.txt` and never stops the run; an
+undo that does not restore the instance (UNRESOLVED) fails the run at RS. `MCSET=on|off` (default: on in RF full, off in RF fast).
 
 ## Hardware that is not there
 

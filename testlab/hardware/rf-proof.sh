@@ -11,7 +11,8 @@
 # INPUTS (env): LANE (fast|full, default fast); ROWS_ONLY (row ids, overrides the lane); LAB_ENV (the lab file); INTHEAD (the
 #  Zero's head, 40 hex), INTHEAD_H (box H's head, default INTHEAD), INTCI (a green CI run of INTHEAD); FORMS_OK (the confirmed
 #  form names at FORMS_HEAD = INTHEAD); TRACKER_CALL (row 2: the tracker's call-SSID, on stdin to the box only); TRACKER_DBM
-#  (row 2: the tracker's power from its portal); NONCE_PREFIX (default rfkit). Dry takes placeholders for INTHEAD/INTCI.
+#  (row 2: the tracker's power from its portal); NONCE_PREFIX (default rfkit); MCSET (on|off, the pre-step M; default on in
+#  LANE=full); MCSET_J1 (M's row-1 callsign[-SSID] or 'global'; on the box's stdin only). Dry takes placeholders for INTHEAD/INTCI.
 # STDIN (live only, read once before R0, then closed): line 1 box H's password, line 2 the Zero's; an EMPTY line = that box is
 #  ABSENT (its rows NOT RUN, no ssh). Line 3 = the MeshCore PIN, only when row 4 runs (empty = the stored bond).
 #
@@ -44,8 +45,8 @@ PEER=${PEER:-$HERE/peer.py}; FAKE_PEER=${FAKE_PEER:-$HERE/fake_peer.py}; VMT=${V
 # id lane kind  endpoint A    endpoint B    power        flags
 ROWS=(
   "7  fast frame H:H433        H:HSTK        min,min      same-box"
-  "8  fast frame H:HMS         Z:Z868        min,as-is    -"
-  "9  fast frame H:HPINE       Z:Z868        min,as-is    -"
+  "8  fast frame H:HMS         Z:Z868        min,min      -"
+  "9  fast frame H:HPINE       Z:Z868        min,min      -"
   "10 fast frame H:H433        Z:Z433        as-is,as-is  -"
   "11 fast frame H:H868        Z:Z868        as-is,as-is  -"
   "1  full stack H:H433        peer:tdeck    as-is,read   -"
@@ -57,8 +58,8 @@ ROWS=(
 )
 # The worst-case frames of a row per endpoint ("A B"): frame rows one each way; row 1 the box's three console attempts, and
 # the T-Deck's one send plus its mesh's relays of those three attempts (3 frames the kit never dispatches; its sends stay one,
-# `tx R1-tdeck 1`; the box's node runs with mesh off: it repeats nothing); row 5 the box's announce + delivery proof + own
-# send, the RNode's announce + message + path request.
+# `tx R1-tdeck 1`; the box's node runs with mesh off: it repeats nothing); row 5 the box's announce (inside its MeshChat start)
+# + delivery proof + own send, the RNode's announce + message + path request.
 declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="3 3" [6]="1 1")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
@@ -81,7 +82,6 @@ declare -A F=(
   [mt_cap]="{LH} config meshtastic@{rid} max_power | sed -n 's/^ *value *= *//p'"
   [rt_get]="{LH} config reticulum@{rid} {k} | sed -n 's/^ *value *= *//p'"
   [rt_pget]="{LH} config reticulum@{rid} txpower | sed -n 's/^ *value *= *//p'"
-  [rt_set]='{LH} config reticulum@{rid} {k} {v}'
   [rt_send]='{LH} meshchat@{rid} send {dest} "{n}"'
   [chat_client]='{LH} stack start chat@{rid} --yes'
   [tx_text]="python3 -c \"import os,socket,struct,sys; p='/run/loraham/loraf-{rid}.sock'; p=p if os.path.exists(p) else '/tmp/loraf-{rid}.sock'; s=socket.socket(socket.AF_UNIX); s.connect(p); b=sys.argv[1].encode(); s.sendall(bytes([2])+struct.pack('<H',len(b))+b); s.close()\" '{n}'"
@@ -106,7 +106,11 @@ declare -A F=(
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional: row 5 box -> peer is NOT RUN without it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
-  [5]="start stop rt_get rt_pget rt_set rx_mchat" [6]="start stop chat_client rx_rf")
+  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf")
+# The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
+# source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
+declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
+  [3]="J3 meshtastic meshtastic@{band}.toml node_name,node_short" [4]="J4 meshcore meshcore.toml file_node_name,file_mode")
 rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
 # ---- 4. the box-side helpers (python, run on the box) ----------------------------------------------------------------------
 STATUS_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock" for d in ("/run/loraham","/tmp") if os.path.exists(d+"/loraconf-"+r+".sock")),None); assert p, "no conf socket of "+r; s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect(p); s.sendall(b"GET STATUS\n"); b=b""
@@ -389,7 +393,8 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 redact() {   # the passwords, the PIN, the tracker call and the operator's call (any SSID or none, any case) -> masked
   local t s c=${OPERATOR_CALL:-} m=(); t=$(cat; echo x); t=${t%x}
   pweq H || m+=("${PW_H:-}"); pweq Z || m+=("${PW_Z:-}")   # a password equal to its login name stays (masking it = the login)
-  for s in "${m[@]}" "${MC_PIN:-}" "${TRACKER_CALL:-}"; do [ -n "$s" ] || continue
+  local j1=${MCSET_J1:-}; j1=${j1#global}
+  for s in "${m[@]}" "${MC_PIN:-}" "${TRACKER_CALL:-}" "$j1"; do [ -n "$s" ] || continue
     t=${t//"$s"/<REDACTED>}; done
   [[ "$c" =~ ^[A-Za-z0-9]+$ ]] || { printf '%s' "$t"; return; }; printf '%s' "$t" | sed -E "s/\\b$c(-[0-9]{1,2})?\\b/<CALL>/Ig"; }
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
@@ -518,7 +523,7 @@ frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
   local w=$1 c=$2 in=$3 send= base= rid='*' cls
   if [[ $c =~ LHPC_PROOF=([HZ]):[a-z]+@(r[0-9]+) ]]; then frame "${BASH_REMATCH[1]}:${BASH_REMATCH[2]}" control; return 0; fi   # the release: the box's delivery proof
-  case "$c" in *loraf-*struct.pack*|*"--sendtext"*|*meshcore-cli*" public "*|*meshchat@r*" send "*|*"tmux send-keys"*|*"/api/v1/announce"*|*"create_connection(('127.0.0.1',"*) send=1;; esac
+  case "$c" in *loraf-*struct.pack*|*"--sendtext"*|*meshcore-cli*" public "*|*meshchat@r*" send "*|*"tmux send-keys"*|*"/api/v1/announce"*|*" stack start meshchat@r"*|*"create_connection(('127.0.0.1',"*) send=1;; esac
   [[ $c == *meshcore-cli* ]] && base=5000; [[ $in == *"Type --help for commands"* ]] && { send=1; base=12323; }; [[ $in == *'"/api/messages"'* ]] && { send=1; base=8080; }
   [ -n "$send" ] || return 0
   if [[ $c =~ @(r[0-9]+) ]] || [[ $c =~ lora[a-z]*-(r[0-9]+)\.sock ]] || [[ $c =~ rfchat-(r[0-9]+) ]]; then rid=${BASH_REMATCH[1]}
@@ -764,7 +769,8 @@ peerok() {   # peerok <name>: PK = "" when the peer is present, else the why; ca
 row_R0() {
   [ "$MODE" = dry ] || { [ ! -e "$EVD" ] || stop "$EVD exists"; mkdir -p "$EVD" || stop "$EVD: mkdir"; : > "$EVD/state.env"; : > "$EVD/undo.list"; : > "$EVD/undo.done"
     { pwnote | awk '{ print } END { if (NR) print "" }'
-      printf '| row | stack | box | band | peer | direction | nonce seen | power used | result |\n|---|---|---|---|---|---|---|---|---|\n'; } > "$EVD/REPORT.md" || stop "REPORT.md: not written"; }
+      printf '| row | stack | box | band | peer | direction | nonce seen | power used | result |\n|---|---|---|---|---|---|---|---|---|\n'; } > "$EVD/REPORT.md" || stop "REPORT.md: not written"
+    printf '| job | box | instance | verdict |\n|---|---|---|---|\n' > "$EVD/MCSET.md" || stop "MCSET.md: not written"; }
   for v in INTHEAD INTCI; do [ -n "${!v:-}" ] || stop "$v is not set"; done; [[ "$INTHEAD" =~ ^[0-9a-f]{40}$ ]] || stop "INTHEAD: 40 hex"
   INTHEAD_H=${INTHEAD_H:-$INTHEAD}; [[ "$INTHEAD_H" =~ ^[0-9a-f]{40}$ ]] || stop "INTHEAD_H: 40 hex"; data "R0: lane $LANE, rows $RUN; boxes present: '${BOXES}'"
   [ "$MODE" = dry ] || [ "$FORMS_HEAD" = "$INTHEAD" ] || stop "FORMS_HEAD '$FORMS_HEAD' is not INTHEAD: confirm the forms at this head first"
@@ -831,6 +837,22 @@ row_R1() { local b i keys rev; for b in $BOXES; do   # instance keys; starts jou
   for i in $rev; do undo_push $b "$(gstart "$i")"; done          # newest first in recovery = the daemon first, dependents after
   for i in $rev; do must $b "R1-$b-stop-$i.txt" "$(gstop "$i")"; done; done; }
 
+row_M() {   # the pre-step M, after R1 (nothing of ours runs): one mcset.py job per stack row of this run; its changes are KEPT
+  [ "$MCSET" = on ] || { say "M: MCSET=off: the pre-step is not run"; [ "$MODE" = dry ] || echo "| — | — | — | NOT RUN: MCSET=off |" >> "$EVD/MCSET.md"; return 0; }
+  local r j sid src ks ep b k rid band v ov
+  for r in $RUN; do [ -n "${MJOB[$r]:-}" ] || continue; read -r j sid src ks <<< "${MJOB[$r]}"
+    [ -z "$(getk "SKIP_$r")" ] || { mrec "$j" - "$sid" "NOT RUN: row $r: $(getk "SKIP_$r")"; continue; }
+    ep=$(rowf "$r" a); b=${ep%%:*}; k=${ep#*:}; rid=$(getk "$k"); v="RADIO_$k"; read -r _ _ band _ <<< "${!v}"; src=${src//\{band\}/$band}
+    ov=-; if [ "$j" = J1 ]; then [ -n "$MCSET_J1" ] || { mrec "$j" "$b" "$sid@$rid" "NOT RUN: no per-radio callsign given (MCSET_J1)"; continue; }; ov=$MCSET_J1; fi
+    XIN "$b" "M-$j-$sid@$rid.txt" "OVERRIDE = '$ov'"$'\n'"$MCSET_PY" "cd {RT} && ./venv/lhpc/bin/python - $j $sid $src $rid $ks $WEBPORT {RT}"; [ "$MODE" = dry ] && continue   # the value on stdin only
+    v=$(grep '^JOB ' "$OUT/M-$j-$sid@$rid.txt" | tail -n 1)
+    if [ "$XRC" != 0 ] || [ -z "$v" ]; then rec "M $j $sid@$rid: the helper ended rc $XRC without a verdict: the instance's settings are unknown (M-$j-$sid@$rid.txt)"; v="JOB $j $sid@$rid UNKNOWN: helper rc $XRC"; fi
+    case "$v" in *" UNRESOLVED"*) rec "M: $v";; esac
+    mrec "$j" "$b" "$sid@$rid" "${v#JOB $j $sid@$rid }"; done; }
+mrec() {   # mrec <job> <box> <instance> <verdict>: one MCSET.md line; anything but PASS/NOOP is also named for the coordinator
+  say "M $1 $3: $4"; [ "$MODE" = dry ] && return 0; echo "| $1 | $2 | $3 | $4 |" >> "$EVD/MCSET.md" || stop "MCSET.md: append failed"
+  case "$4" in PASS*|NOOP*) ;; *) echo "M $1 $3: $4" >> "$EVD/NOT-RUN.txt" || stop "NOT-RUN.txt: append failed";; esac; }
+
 # ---- 11. the rows -------------------------------------------------------------------------------------------------------------
 usbcheck() {   # usbcheck <file> <KEY>: a USB radio (serial= or port= in its key) is still there after a frame, else STOP
   local v="RADIO_$2" b m bd sel; read -r b m bd sel <<< "${!v}"; case "$sel" in
@@ -838,7 +860,7 @@ usbcheck() {   # usbcheck <file> <KEY>: a USB radio (serial= or port= in its key
     port=*) must "$b" "$1" "test -e /sys/bus/usb/devices/$(shq "${sel#port=}")/idVendor && echo 1 || echo 0";; *) return 0;; esac
   [ "$MODE" = dry ] || [ "$(body "$1")" = 1 ] || stop "$2 ($b) is gone after a frame (brown-out / re-enumeration)"; }
 frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the daemons of both radios, one nonce frame each way
-  local id=$1 pa=${4%,*} pb=${4#*,} fl=$5 m ka=${2#*:} kb=${3#*:} ba=${2%%:*} bb=${3%%:*} ra rb e x n
+  local id=$1 pa=${4%,*} pb=${4#*,} fl=$5 m ka=${2#*:} kb=${3#*:} ba=${2%%:*} bb=${3%%:*} ra rb e x n p0
   needs $(rforms "$id") || { notrun_row "$id" "form not confirmed: $NEEDS_MISSING"; return 0; }
   m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; ra=$(getk "$ka"); rb=$(getk "$kb")
   started "$ba" "$id-start-a.txt" "daemon@$ra"; started "$bb" "$id-start-b.txt" "daemon@$rb"
@@ -848,7 +870,9 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     [ "$x" = "$n" ] || fail "incompatible: $f $x vs $n"; done
   data "row $id: FREQ and SF match ($(jfield "$la" FREQ), SF $(jfield "$la" SF)); BW, CR and the sync word are not in the daemon's STATUS: not compared"
   for e in "a $ba $ra $qa $pa" "b $bb $rb $qb $pb"; do set -- $e; [ "$5" = min ] || continue
-    jpower "$2" "$3" "$(getk "P_$4" 10)"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
+    p0=$(getk "P_$4"); [ "$MODE" = live ] || p0=${p0:-10}   # the undo restores only the recorded value: none = STOP
+    [ -n "$p0" ] || stop "row $id: no recorded power of $2:$3: no undo, no set, no TX"
+    jpower "$2" "$3" "$p0"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
     [ "$MODE" = dry ] || [ "$(getk "P_$4")" = "$STICK_MIN" ] || stop "row $id: $2:$3 reads back '$(getk "P_$4")' dBm after POWER=$STICK_MIN: no TX"; done
   local sa sb; sa=$([ "$pa" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qa" as-is) dBm (as-is)"); sb=$([ "$pb" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qb" as-is) dBm (as-is)")
   for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce)
@@ -992,26 +1016,24 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   REPORT 4 meshcore "$b ($r)" "869.618 MHz, eu_uk_narrow" "T-Deck Pro (BLE companion)" "box -> peer" yes "$(getk "P_R4-$b-$r" as-is) dBm (as-is)" PASS
   undo_to "$m"; }
 
-# the MeshChat port from the start's own ready line ("[verified] meshchat: started; ready endpoint(s) up (127.0.0.1:<port>: present")
-mcport() { body "$1" | sed -nE 's/.*\[verified\] meshchat: started; ready endpoint\(s\) up \(127\.0\.0\.1:([0-9]+): present.*/\1/p' | head -n 1; }
 row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the PC's shared rnsd (<= 7 dBm)
   local b=${1%%:*} k=${1#*:}
   needs $(rforms 5) || { notrun_row 5 "form not confirmed: $NEEDS_MISSING"; return 0; }
-  local m r n1 n2 o pr mp dest prc; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
+  local m r n1 n2 o pr dest prc; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
   local q="R5-$b-$r" go=$SCRATCH/5-tx2.go pcd=$SCRATCH/5-pcdest.txt   # the peer's control files: private scratch, never the evidence
   must "$b" 5-framing0.txt "$(form rt_get rid="$r" k=rnode_framing)"; o=$(body 5-framing0.txt | tail -n 1)
-  [ "$MODE" = dry ] || case "$o" in yes|no) ;; *) stop "row 5: rnode_framing read '$o'";; esac
-  undo_push "$b" "$(form rt_set rid="$r" k=rnode_framing v="${o:-no}")"; must "$b" 5-framing1.txt "$(form rt_set rid="$r" k=rnode_framing v=yes)"
+  [ "$MODE" = dry ] || [ "$o" = yes ] || stop "row 5: rnode_framing reads '$o', not yes (the product default): the kit sets nothing, no TX"
   keep "RNS_$b" "$r"   # RS counts logs/rf-reticulum.log on this radio (rnsrids)
-  spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"; started "$b" 5-start.txt "meshchat@$r"
+  spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"
   hpower R5-rnode 5-rnode-power.txt
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
-  # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists
-  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 240 "$pcd" "$n1" "$go"; pr=$SPAWN
-  mp=$(mcport 5-start.txt); [ "$MODE" = dry ] && mp=8790
-  [[ "$mp" =~ ^[0-9]{2,5}$ ]] || stop "row 5: no MeshChat ready endpoint port in 5-start.txt"
+  # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists;
+  # it listens BEFORE the MeshChat start, whose own announce (the product's start step) it must hear
+  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
   [ "$MODE" = dry ] || sleep 10
-  tx "$q" 1 control -- must "$b" 5-announce.txt "LHPC_INST=meshchat@$r curl -fsS --max-time 15 http://127.0.0.1:$mp/api/v1/announce"   # 3. the box's announce
+  # 3. the box's announce: MeshChat announces once inside its own start (no request from the kit): the start is that send
+  keep "STARTED_${b}_$r" 1; undo_push "$b" "$(gstop "meshchat@$r")"
+  tx "$q" 1 control -- must "$b" 5-start.txt "$(form start inst="meshchat@$r")"
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
   hpower R5-rnode 5-rnode-power-2.txt; tx R5-rnode 1 control --reserve; tx "$q" 1 control --reserve
   tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
@@ -1164,6 +1186,7 @@ secret_scan() {
     if pweq "$b"; then ok "RE: box $b password equals its login name (lab box): not scanned"; else scan "box password" -F -- "${!p}"; fi; done
   [ -z "${MC_PIN:-}" ] || scan "PIN" -F -- "$MC_PIN"
   scan "the operator's call (any SSID)" -iE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b"; [ -z "${TRACKER_CALL:-}" ] || scan "tracker call" -iF -- "$TRACKER_CALL"
+  local j1=${MCSET_J1:-}; j1=${j1#global}; [ -z "$j1" ] || scan "the J1 callsign" -iF -- "$j1"
   scan "full node id" -E -- '![0-9a-f]{8}'; coords; }
 coords() {   # a coordinate-shaped number in the evidence = FAIL, except a 'FREQ=' value (the daemon status line)
   local o rc c; o=$(grep -rhoE -- '(FREQ=)?-?[0-9]{1,3}\.[0-9]{5,}' "$EVD"); rc=$?; [ $rc -le 1 ] || stop "RE: the coordinate scan failed (rc $rc)"
@@ -1396,6 +1419,9 @@ TRACKER_CALL=${TRACKER_CALL:-}; TRACKER_DBM=${TRACKER_DBM:-}; [ "$MODE" = live ]
 declare +x TRACKER_CALL
 [ -z "$TRACKER_DBM" ] || pdom "$TRACKER_DBM" || stop "TRACKER_DBM is not a power value in 0..17 dBm"
 [ -z "$TRACKER_CALL" ] || [[ "$TRACKER_CALL" =~ ^[A-Z0-9]{3,8}-[0-9]{1,2}$ ]] || stop "TRACKER_CALL is not a call-SSID"
+MCSET=${MCSET:-$([ "$LANE" = full ] && echo on || echo off)}; case "$MCSET" in on|off) ;; *) stop "MCSET=on|off";; esac
+MCSET_J1=${MCSET_J1:-}; case "$MCSET_J1" in ''|global) ;; *) [[ "$MCSET_J1" =~ ^[A-Z0-9]{3,8}(-[0-9]{1,2})?$ ]] || stop "MCSET_J1 is not a callsign[-SSID] or 'global'";; esac
+declare +x MCSET_J1; MCSET_PY=$(cat "$HERE/mcset.py") || stop "mcset.py: unreadable"
 # the forms: dry confirms every form (every row prints all its commands); live needs every form of the chosen rows
 if [ "$MODE" = dry ]; then FORMS_OK="${!F[*]}"; FORMS_HEAD=$INTHEAD
 else FORMS_OK=${FORMS_OK:-}; FORMS_HEAD=${FORMS_HEAD:-}; [ -n "$FORMS_OK" ] || stop "FORMS_OK is empty: confirm the forms at INTHEAD first"
@@ -1408,7 +1434,7 @@ else EVD=$EVDROOT/rf-proof-$(date -u +%Y%m%dT%H%M%SZ)-$LANE; OUT=$EVD; fi
 trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap 'stop "interrupted (signal): the recovery runs"' INT TERM
 
 [ "$MODE" = dry ] || echo "LIVE: this run transmits. It needs the transmit and lab permission and the GO for this run, with the hardware connected, reachable and set up."
-for r in R0 R1; do echo "== ROW $r"; "row_$r"; done
+for r in R0 R1 M; do echo "== ROW $r"; "row_$r"; done
 for r in $RUN; do echo "== ROW $r"; runrow "$r"; done
 echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; echo "== ROW RE"; row_RE
 [ "$MODE" = live ] || selfcheck
