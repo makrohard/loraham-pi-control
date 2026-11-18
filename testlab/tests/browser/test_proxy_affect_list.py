@@ -27,13 +27,14 @@ def test_the_rows_stand_in_columns_on_a_large_screen_and_in_one_on_a_phone(flask
     assert small["cols"] == 1 and small["inside"] and small["scrollW"] <= 390, (path, small)
 
 
+@pytest.mark.parametrize("width", [220, 300])          # a phone at 200 % zoom has ~300 px; 220: well below one column
 @pytest.mark.parametrize("path", ["/stacks?open=webserver", "/stacks/controller/menu/ws-stackwebs"])
-def test_the_list_fits_a_box_narrower_than_one_column(flask_page, path):
+def test_the_list_fits_a_box_narrower_than_one_column(flask_page, path, width):
     # G2-RELUI B3: below 16rem of room the one column shrinks to the box, never wider than it
     page, _posts = flask_page(path=path, unix_replies=_LIVE)
-    page.set_viewport_size({"width": 220, "height": 900})
+    page.set_viewport_size({"width": width, "height": 900})
     m = page.evaluate(_MEASURE)
     box = page.evaluate("() => { const u = document.querySelector('#ws-stackwebs ul.affectlist');"
                         " return {ul: u.getBoundingClientRect().width, parent: u.parentElement.getBoundingClientRect().width}; }")
     assert m["cols"] == 1 and m["inside"] and box["ul"] <= box["parent"] + 1, (path, m, box)
-    assert box["ul"] < 256, box                                               # the box is narrower than 16rem here
+    assert box["ul"] < 256 and m["scrollW"] <= width, box                     # narrower than 16rem; no sideways scroll
