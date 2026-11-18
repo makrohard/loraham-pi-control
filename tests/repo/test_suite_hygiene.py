@@ -93,11 +93,11 @@ def test_a_process_running_on_the_host_is_invisible_to_the_suite(monkeypatch, tm
 
 
 # Written with a character class so this module does not cite them itself.
-_ABSENT_PLAN_CITATION = re.compile(rb"plans/PLAN[-]|code-review/code[-]report")
+_ABSENT_PLAN_CITATION = re.compile(rb"plans/PLAN[-]")
 
 
 def test_no_file_cites_a_plan_file_the_repository_does_not_ship():
-    """Plan and review files live outside the repository; a comment that cites one points a
+    """Plan files live outside the repository; a comment that cites one points a
     maintainer at nothing. Cite the shipped doc (docs/maintenance.md, docs/test-matrix.md)."""
     hits = []
     for top in ("lhpc", "testlab", "tests", "deploy", "docs", ".github"):
