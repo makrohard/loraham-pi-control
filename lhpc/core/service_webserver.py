@@ -840,7 +840,9 @@ class WebserverOpsMixin:
         ws = self.config().webserver
         used = {c.port for sid, c in self.config().stackweb.items()
                 if sid != page_id and c.enabled}
-        suggested, suggested_note = (swc.port, "") if swc.port else self._default_stack_web_port(page_id)
+        suggested, suggested_note = (swc.port, "") if swc.port else next(     # an unsaved page: its row of the ONE walk
+            ((p, w) for sid, p, _k, w in self._stack_webs_candidates() if sid == page_id), None) or \
+            self._default_stack_web_port(page_id)                               # bulk, Apply and `_page_ports` use
         try:
             upstream_port = int(str(address).rsplit(":", 1)[1])
         except (IndexError, ValueError):

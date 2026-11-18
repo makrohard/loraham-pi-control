@@ -78,6 +78,20 @@ def test_a_console_on_a_derived_port_pushes_that_page_forward_only(tmp_path):
     assert _saved(svc2) == {p: _derived(p) for p in _saved(svc2)}
 
 
+def test_an_unsaved_page_s_panel_suggests_the_port_the_bulk_walk_assigns_it(tmp_path):
+    """G2-RELP2a N: with the console on graywolf@r1's port, both unsaved r1 pages would move to 8445 alone; the walk
+    gives graywolf@r1 8445 and meshcom@r1 the next free port. Each panel suggests its walk row."""
+    svc = _svc(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, port=8444)
+    svc._invalidate_config()
+    walk = {sid: (port, why) for sid, port, _keeps, why in svc._stack_webs_candidates()}
+    assert walk["graywolf@r1"][0] == 8445 and walk["meshcom@r1"][0] not in (8444, 8445), walk
+    for sid in ("graywolf@r1", "meshcom@r1"):
+        v = svc.stack_web_view(sid)
+        assert (v["suggested_port"], v["suggested_note"]) == walk[sid], (sid, v["suggested_port"])  # RED before: 8445
+        assert svc._page_ports()[sid] == walk[sid][0]
+
+
 def test_two_hand_saved_pages_on_derived_ports_push_both_unsaved_ones_to_distinct_ports(tmp_path):
     svc = _svc(tmp_path)
     assert svc.stack_web_configure("graywolf@r2", port=8445).ok          # meshcom@r1's derived port

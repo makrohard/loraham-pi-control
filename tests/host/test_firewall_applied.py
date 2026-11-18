@@ -830,8 +830,8 @@ def test_a_saved_page_port_conflict_is_never_preopened_and_is_shown(tmp_path, mo
     lines = svc.firewall_settings_view()["port_conflicts"]
     why = {"console": "meshcom@r1: it is the console's port", "shared": "graywolf@r1, meshcom@r1: the pages share it",
            "listener-later": "meshcom@r1: kiss@r1/loraham-kiss-tnc listens on it"}[case]
-    assert lines == [f"port conflict: page port {port} of {why} — not opened by the firewall; save the page on another "
-                     "port"], lines
+    assert lines == [f"port conflict: page port {port} of {why} — excluded from automatic page pre-opening; existing "
+                     "ingress rules may still allow this port; save the page on another port"], lines
     assert (svc._page_ports()["graywolf@r1"] if case != "shared" else svc._page_ports()["meshtastic@r1"]) in rows
 
 

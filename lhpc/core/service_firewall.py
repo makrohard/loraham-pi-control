@@ -203,8 +203,8 @@ class FirewallOpsMixin:
                   ([f"{', '.join(owners[port])} listens on it"] if port in owners else []) + \
                   (["the pages share it"] if len(sids) > 1 else [])
             if why:
-                out[port] = (f"port conflict: page port {port} of {', '.join(sorted(sids))}: {'; '.join(why)} "
-                             "— not opened by the firewall; save the page on another port")
+                out[port] = (f"port conflict: page port {port} of {', '.join(sorted(sids))}: {'; '.join(why)} — excluded "
+                             "from automatic page pre-opening; existing ingress rules may still allow this port; save the page on another port")
         return out
 
     # ---- status (FW-4): three honest dimensions ---------------------------------------------

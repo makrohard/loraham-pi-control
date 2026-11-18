@@ -42,7 +42,7 @@ BUDGETS = {
     "service_selfupdate.py": (1935, 22),  # G2-RELP1a: the stack list runs once the console is started again; SELFUPDATE-REFUSED-RESTART: the running console stopped only right before the first change (stop hook, shared lock retry); SELFUPDATE-ORIGIN: every check and apply answer names where updates come from (hook refusals kept as they are)
     "service_stop.py": (768, 5),  # split-s7: split from service_lifecycle_ops.py; K6: lowered (the band-marker clear out); K7: a released dependency is the stopped instance's own radio's; K8: a named stop never hides an unclaimed process
     "service_system.py": (759, 2),
-    "service_webserver.py": (2399, 42),  # K4b: port suggestions radio by radio, a page's mode note per instance; K6: a password per instance; A21: the firewall's page-port read (_page_ports)
+    "service_webserver.py": (2400, 42),  # G2-RELP2a: an unsaved page's panel reads its bulk walk row; K4b: port suggestions radio by radio, a page's mode note per instance; K6: a password per instance; A21: the firewall's page-port read (_page_ports)
 }
 
 
