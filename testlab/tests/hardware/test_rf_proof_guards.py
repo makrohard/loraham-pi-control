@@ -1428,6 +1428,65 @@ def test_row_1_each_direction_fails_when_either_of_its_checks_is_missing(tmp_pat
     assert results[why.split(":")[0]].startswith("FAIL: "), results
 
 
+def test_row_1_a_failed_tdeck_send_stops_the_run_and_restores_setinfo(tmp_path):
+    # a24 M1 (dc8b6bf0): the T-Deck's send rc != 0 is a STOP (an unknown TX state), never a later FAIL of the box's checks
+    script = ('trap \'rc=$?; [ "$rc" = 0 ] || recover\' EXIT; '
+              'FORMS_OK="start stop tx_mcom rx_mcom rx_mcom_app"; : > "$EVD/undo.list"; keep H433 r1; BOXES=; '
+              'X() { printf "%s\\t%s\\n" "$2" "${*:3}" >> "$EVD/xlog"; XRC=0; }; XIN() { X "$1" "$2" "${@:4}"; }; '
+              'pread() { printf "POWER 17\\n" > "$OUT/$2"; XRC=0; }; started() { :; }; dpower() { :; }; '
+              'usbguard() { :; }; peer() { XRC=0; SPAWN=; [ "$3" != meshcom-send ] || XRC=1; }; reap() { :; }; '
+              'verify_set() { :; }; result() { :; }; tx() { shift 4; "$@"; }; RUN=1; runrow 1')
+    r, evd = source_only(tmp_path, script)
+    assert r.returncode == 2 and "STOP: row 1: the T-Deck send failed (rc 1)" in r.stderr, r.stdout + r.stderr
+    assert not (evd / "FAILED.txt").exists(), (evd / "FAILED.txt").read_text()   # a STOP, not a row FAIL
+    lines = (evd / "xlog").read_text().splitlines()
+    assert not any(line.startswith(("1-box-app.txt", "1-box-rx.txt")) for line in lines), lines   # no check after the STOP
+    on, off = _undone(evd)
+    assert len(on) == 1 and len(off) == 1 and on[0] < off[0], lines
+
+
+def _console(tmp_path, arg):
+    """`setinfo <arg> r1` as rendered, run against a fake node console on a free local port: banner, then it echoes each
+    line it gets; returns the run and every byte the console received."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    srv.settimeout(20)
+    got = []
+
+    def serve():
+        try:
+            c, _ = srv.accept()
+        except OSError:
+            return
+        with c:
+            c.sendall(b"MeshCom console\r\nType --help for commands\r\n")
+            c.settimeout(5)
+            try:
+                while (d := c.recv(4096)):
+                    got.append(d)
+                    c.sendall(d)
+            except OSError:
+                pass
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    r, _ = source_only(tmp_path, f'rport() {{ echo {srv.getsockname()[1]}; }}; eval "$(setinfo {arg} r1)"; echo "RC=$?"')
+    srv.close()
+    t.join(10)
+    return r, b"".join(got)
+
+
+def test_the_box_consoles_setinfo_line_is_only_setinfo_on_or_off(tmp_path):
+    # a24 M2 (dc8b6bf0): MCINFO_PY refuses any other line before it connects: the console never gets a sending command
+    r, got = _console(tmp_path, "on")
+    assert "ECHOED" in r.stdout and "RC=0" in r.stdout and got == b"--setinfo on\n", (r.stdout, r.stderr, got)
+    (tmp_path / "x").mkdir()
+    r, got = _console(tmp_path / "x", "'on; ::rfkit 0a1b2c3d'")
+    assert "AssertionError" in r.stderr and "RC=1" in r.stdout and got == b"", (r.stdout, r.stderr, got)
+
+
 def test_row_1_names_its_peer_to_box_leg_before_that_legs_first_change(tmp_path):
     # the leg file says "peer -> box" from the setinfo on to the row's last check; before it, every check is box -> peer
     script = ('FORMS_OK="start stop tx_mcom rx_mcom rx_mcom_app"; : > "$EVD/undo.list"; keep H433 r1; BOXES=; '
