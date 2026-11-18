@@ -644,6 +644,8 @@ class SelfUpdateOpsMixin:
                         return "ok" if self._web_answers() else "failed"
                     except KeyboardInterrupt:         # started, its answer not waited for: it may still come up
                         return "unverified"
+                    except BaseException:             # the wait itself failed (a socket error): not established
+                        return "failed"
                 try:
                     res = self._apply_and_sync(force, stop_console)   # admission still held; venv synced here
                 except BaseException as exc:
