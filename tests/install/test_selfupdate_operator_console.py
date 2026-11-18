@@ -33,8 +33,8 @@ def _tree(root):
 
 class _Calls(list):
     """The systemctl calls; `locked`: (step, controller-runtime lock held EXCLUSIVE then) per mutation step and
-    start; `answer`: verb -> a replacement answer for that systemctl verb (a result, or raises); `console`: the
-    console's SHARED hold while it runs."""
+    start; `answer`: verb -> a replacement answer for that systemctl verb (a result, or raises; a replaced start
+    is a console that never answers); `console`: the console's SHARED hold while it runs."""
 
 
 def _exclusive_held(paths) -> bool:
@@ -49,7 +49,11 @@ def _exclusive_held(paths) -> bool:
 def cli(env, monkeypatch):
     """`main` with the console ACTIVE, holding the controller-runtime lock SHARED until it is stopped: each
     systemctl call is recorded with the HEAD and the state/ + config/ files at that moment; the venv sync
-    and the unit refresh are stubbed (not this behaviour) and record whether the lock is held EXCLUSIVE."""
+    and the unit refresh are stubbed (not this behaviour) and record whether the lock is held EXCLUSIVE.
+    A start brings the console up: it answers on its unix socket (a short path: a socket path is <= 107 bytes)."""
+    import socket
+    import tempfile
+
     from lhpc.adapters.cli.main import main
     from lhpc.core.probes.backends import RealCommandRunner
     from lhpc.core.services import ControllerService
@@ -60,6 +64,8 @@ def cli(env, monkeypatch):
     calls.locked, calls.answer = [], {}
     console = calls.console = [selfupdate.controller_runtime_lock(env["paths"], exclusive=False)]
     console[0].__enter__()
+    sock_path, listeners = tempfile.mkdtemp(prefix="lhpc-web-") + "/lhpc-web.sock", []
+    monkeypatch.setattr(ControllerService, "_web_socket_path", lambda self: sock_path, raising=False)
     real = RealCommandRunner.run
 
     def run(self, argv, timeout=None, *a, **kw):
@@ -72,6 +78,10 @@ def cli(env, monkeypatch):
             calls.locked.append(("start", _exclusive_held(env["paths"])))
         if (answer := calls.answer.get(argv[2])) is not None:
             return answer()
+        if argv[2] == "start" and not listeners:            # the console comes up and answers
+            listeners.append(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+            listeners[0].bind(sock_path)
+            listeners[0].listen()
         return CommandResult(0, "", "")                      # is-active: active; stop/start: done
 
     def step(name, result):
@@ -83,6 +93,8 @@ def cli(env, monkeypatch):
     yield main, calls
     if console:
         console.pop().__exit__(None, None, None)
+    for listener in listeners:
+        listener.close()
 
 
 def _service_calls(calls):
@@ -301,3 +313,52 @@ def test_an_apply_that_raises_and_a_failed_restart_say_the_console_did_not_resta
     assert rc == 1, (rc, cap)
     assert "lhpc-web did NOT restart" in cap.out and "systemctl --user start lhpc-web.service" in cap.out, cap
     assert _service_calls(calls) == [STOP, START] and calls.locked == [("start", False)], calls
+
+
+def test_a_start_that_returns_0_while_the_console_never_comes_up_says_it_did_not_restart(env, cli, monkeypatch,
+                                                                                       capsys):
+    """`systemctl start` of the simple unit returns 0 once the process is launched; a console that then exits at
+    once (a dependency the update broke) never answers on its socket: the bounded wait says it did NOT restart."""
+    from lhpc.core.services import ControllerService
+    main, calls = cli
+    monkeypatch.setattr(ControllerService, "_WEB_UP_S", 2.0, raising=False)
+    calls.answer["start"] = lambda: CommandResult(0, "", "")
+    gitrepo.upstream_commit(env["up"])
+    waits = _retry_clock(monkeypatch)
+    assert main(["self-update", "--apply", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "lhpc-web did NOT restart" in out and "systemctl --user start lhpc-web.service" in out, out
+    assert waits == [0.5] * 4 and _service_calls(calls) == [STOP, START], (waits, calls)
+
+
+def _start_raises(exc):
+    def start():
+        raise exc("start interrupted")
+    return start
+
+
+@pytest.mark.parametrize("sync_raises, start_raises, said", [
+    (KeyboardInterrupt, KeyboardInterrupt, "The update stopped (KeyboardInterrupt"),
+    (OSError, OSError, "The update stopped (OSError"),
+    (None, KeyboardInterrupt, "Update applied"),
+    (None, OSError, "Update applied"),
+], ids=["ctrl-c-twice", "error-twice", "start-ctrl-c", "start-error"])
+def test_a_restart_that_raises_still_says_the_console_did_not_restart(env, cli, monkeypatch, capsys,
+                                                                     sync_raises, start_raises, said):
+    """A second Ctrl-C (or a launch error) during the restart keeps the first failure's report and still says
+    the console did NOT restart, with the command to start it."""
+    main, calls = cli
+    if sync_raises is not None:
+        def sync(*a, **k):
+            raise sync_raises("pip interrupted")
+        monkeypatch.setattr(selfupdate, "venv_sync", sync)
+    calls.answer["start"] = _start_raises(start_raises)
+    gitrepo.upstream_commit(env["up"])
+    try:
+        rc = main(["self-update", "--apply", "--yes"])
+    except BaseException as exc:                              # noqa: BLE001 - the red-before shape: it escaped
+        rc = f"raised {type(exc).__name__}"
+    cap = capsys.readouterr()
+    assert rc == 1, (rc, cap)
+    assert said in cap.out and "lhpc-web did NOT restart" in cap.out, cap
+    assert "systemctl --user start lhpc-web.service" in cap.out and _service_calls(calls) == [STOP, START], cap
