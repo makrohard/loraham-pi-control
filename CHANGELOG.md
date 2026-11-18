@@ -2,140 +2,118 @@
 
 ## 0.14.0
 
-- Dashboard Webserver box: a port row per running instance (its own port, bind host, allow-list and process); a
-  stack whose running instances cannot be told apart keeps its one row.
-- Test lab: the testlab lane's own Python packages, Chromium and Meshtastic web client are fetched before the
-  lane and proved complete offline; the product's pip steps still fetch from PyPI, as for a user.
-- `LHPC_MESHTASTIC_WEB_TARBALL` (a local Meshtastic web client `build.tar`, still sha256-checked) now reaches
-  `lhpc build`'s web client step.
-- Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>`) names each radio; a daemon
-  starts per enabled radio, with its own sockets, `--id` and RF log. Old setups are not converted.
-- USB radios (Meshstick and PINE64 adapter at 868 MHz, CH341A + RFM98PW stick at 433 MHz): Hardware adds and binds
-  a stick, offers the USB setup as one command; a start is refused by name when the stick or its access is missing.
-- Radio power: USB radios start at 14 dBm, SPI at 17; a POWER set by hand stays. The limit is the chip range:
-  SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22.
+- Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>` or the Hardware page) names each
+  radio; a daemon runs per enabled radio, with its own sockets, settings and RF log.
+- USB radios: Meshstick and PINE64 adapter (868 MHz), CH341A + RFM98PW stick (433 MHz); Hardware adds and binds a
+  stick. A USB radios page and a build guide for the 433 MHz stick are in the docs.
+- Radio power: USB radios start at 14 dBm, SPI radios at 17; a POWER set by hand stays. The limit is the chip's range:
+  SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22. A MeshCom node gets the radio's POWER at every start.
 - KISS: the TNC (v0.6.4, power 0–22) reads config/files/<rid>/loraham_kiss_tnc.conf (kiss's POWER, at the next start);
-  its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) is unread: shipped defaults; note yours.
-- A stick added next to the board's 868 radio: two radios on one band each run their own daemon: address one by its
-  radio id (`lhpc stack stop daemon@rN`).
-- LoRaHAM daemon v1.4.2 (c951d820, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
-  with high power, else 100 mA; set per radio with `lhpc hardware --ocp <rid>`.
-- Daemon: the binary carries the Meshstick library (`lib/`, the project's fork of libch341-spi-userspace, 745bd067).
-  Source builds need `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch it before `lhpc build daemon`.
-- Update: a libch341 checkout LHPC cloned from pine64 is re-cloned from the fork on `lhpc update`, not refused as
-  identity drift; an unregistered tree, a differing `local.toml` override or a tree off its commit is still refused.
-- Docs: a USB radios page (the sticks, PINE64's adapter page linked, one USB id for every stick) and a build
-  guide for a 433 MHz CH341A + RFM98PW stick.
-- Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands, started, stopped and restored alone;
-  ports base + 133 × (n − 1), r1 keeps today's. From 0.13.x: run `lhpc hardware <setup>`, re-enter settings and pages.
-- MeshCore keeps its identities: before the first start, move config/secrets/meshcore_identity.key,
-  openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/
-- After the update, re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n−1)).
-- Scripts: a bare `lhpc config <stack>` that several radios can run is refused with its instances (`lhpc config
-  <stack>@<rid>`), and one that no listed radio can run is refused (not the global file); a band field is refused.
-- Meshtastic on r2 and up now listens on its own ports (API 4403 + 133 × (n − 1), web 9443 + 133 × (n − 1)); before,
-  every meshtastic@rN bound r1's 4403/9443.
-- Each instance has its own GPS feed (state/<rid>/gps/<consumer>) and interactive-app marker; `lhpc meshtastic@rN`
-  names the node. After the update, restart running GPS stacks so their feeds move.
-- Every stack runs once per radio but Reticulum (one node, one LoRa interface on its radio): MeshCom per radio, each
-  QEMU guest on its radio's ports and its own bridge (socat per connection, one XR password); rebuild it from source.
+  the keys of its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) are unread: shipped defaults.
+- A stick next to the board's radio: two radios on one band each run their own daemon: address one by its radio id
+  (`lhpc stack stop daemon@rN`).
+- Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands (Reticulum once per box), started,
+  stopped and restored alone; ports base + 133 × (n − 1), r1 keeps today's.
+- Every stack verb, `lhpc kill` and the console's Kill name the instance; `--band` is gone (`lhpc config kiss@r2 …`,
+  `lhpc rflog daemon@r1`).
+- Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,
+  applied over the radio's row when it starts there).
+- LoRaHAM daemon v1.4.2 (c951d820): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`) and the
+  Meshstick library (a source-built daemon: see the update steps).
+- Reticulum: `rnode_framing` defaults to `yes` (was `no`), so LHPC boxes and RNode devices hear each other; a framed
+  box and a bare box cannot.
+- MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
+  the start stands.
+- Updates: a bare `lhpc update <stack>` keeps the installed lane; `lhpc source-check`, the stack page and `lhpc status
+  --versions` give one verdict per source: current, update available, update LHPC first, could not check, unknown or unchecked.
+- `lhpc self-update` updates from the checkout's own origin, whatever repo it is, and names it (the check, the result and
+  the console's update panel); a checkout without an origin is still refused.
+- `lhpc known-working` and the "Confirm this stack as working" button are gone: `--source pinned` is the manifest pin.
+- Binaries: install and update take the newest published binary that covers every component; changed build inputs
+  or a moved binary pin no longer refuse a start (the stack page says "Rebuild available").
+- A self-update no longer changes saved settings to a release's new defaults, and its result lists the stacks with an
+  update (from the next self-update on).
 - meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
 - meshcom-loraham-bridge: 8500df8bf -> 47c8876be (v0.3.0), used by meshcom-bridge
-- `--band` is gone: use `<stack>@<rid>` (`lhpc config kiss@r2 …`, `lhpc rflog daemon@r1`, `lhpc daemon r1`).
-- `lhpc kill <stack>@<band>` is gone: name the instance (`lhpc kill kiss@r1`); a band form is refused with the running ones.
-- The MeshCore Mode switch saves the shown radio's mode; with a hardware list, a request without a radio is refused, naming the radios.
-- MeshCore on several radios: status, a stop's check and the Pages mode notes take each radio's own mode, not one
-  radio's for all.
-- After an update, each running instance is restarted by name; a running process no instance names, or an instance
-  whose radio is gone, is not restarted (the update names it).
-- A binary install holds the configuration for its whole run, as an auto-install does: a save or start meanwhile is
-  refused as busy; a mesh password set by hand meanwhile fails the install by name.
-- Home: each radio's card has its own daemon state, stacks and conflicts (two radios on one band too); a stack running
-  on one radio can be started on another radio of the band; graywolf@rN brings its own kiss@rN beside another radio's.
-- Daemon parameters per radio and per instance: `daemon@<rid>`'s (CLI `--daemon-param`, its panel) are radio rN's row;
-  `<stack>@<rid>`'s are that instance's own, in `<stack>@<rid>.toml`, applied over the row when it starts there.
-- Upgrade: per-band daemon values (`dp_<band>_<PARAM>` in `<stack>.toml` or `daemon.toml`) are no longer read; move each
-  by hand to `dp_<PARAM>` in `<stack>@<rid>.toml`, or to the radio's row with `lhpc config daemon@<rid> --daemon-param`.
-- Daemon per radio: the daemon's live views and settings panel take a radio (`?rid=rN`); a radio's settings are saved
-  in its row of config/radios.toml.
-- Start logs are named by radio (`logs/start-<comp>-<band>-<rid>.log`), so two radios of one band keep their own;
-  an old `start-<comp>-<band>.log` stays until the next start, and `lhpc logs` shows it until then.
-- README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
-  after the reboot; the German block installs from the lock file like the English one.
-- Binary installs: a download failing in transfer (5xx, timeout, reset, DNS) is retried at once, then after 5, 15,
-  45, 120 s, in about 10 min (a server trickling its headers can stretch it); a 4xx, TLS error, bad sha256 fail at once.
-- `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
-  rc it returned, instead of only its last output line.
-- Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
-  not reported as failed while it still completes.
-- Every stack verb and `lhpc kill` name the instance, `<stack>@<rid>`; a bare `<stack>` is refused with the radios it
-  can run on ("kiss can run on r1 or r3: use kiss@r1 or kiss@r3"), and the stack verbs take no `--band`.
-- The console's Kill names its instance too (after a failed stop, on the Apps page): it kills that radio's processes
-  only, never another radio's instance of the stack.
+
+Known limitations
+
+- An interactive app's command on the Apps page runs only after its first start from the console (the start writes
+  that radio's own config directory).
+- A client's stop also stops its radio's daemon when no other client uses it, also a daemon started by hand.
+- The Apps page without `?radio=` shows each stack's Settings for one instance: the radio it runs on, else the first
+  radio able to run it.
 
 Upgrading from 0.13.x
 
-- The box says "the old [radio] configuration is present and nothing was converted": run `lhpc hardware <setup>`
-  to list your radios (an existing list is kept), then re-enter settings and pages.
-- `lhpc self-update` leaves installed stacks as they are; run `lhpc update <stack> --yes` for each installed stack
-  whose pin moved: from 0.13.8 daemon, chat, meshcom; from 0.13.0–0.13.7 also meshcore, reticulum, voice.
+In this order. Before the update:
+
+- Finish or undo an interrupted binary install with 0.13.x (`lhpc install <stack> --source binary --yes` completes
+  its recovery): 0.14.0 refuses the older binary-install journal by name.
+- Reticulum links switch to RNode framing together: on every box, stop Reticulum first (`lhpc stack stop
+  reticulum@<rid> --yes`; an update never stops a running stack).
+
+The update, then before the reboot:
+
+- `lhpc self-update --apply`. Its result may say "N config default migration(s) could NOT be completed and will be
+  retried on the next self-update.": ignore it, 0.14.0 no longer migrates settings.
 <!-- upgrade-0138: the slow-build lane runs these commands (lhpc_testlab.upgrade_0138); a test keeps them equal -->
 - 0.13.8's update stopped with "git refused the fast-forward": in `~/loraham-pi-control/src/loraham-pi-control` run `git status --short --ignored` (what the reset replaces, ignored files marked !! included: copy away any you need),
   `git log --oneline origin/main..HEAD` (local commits the reset abandons: if it lists any, keep them first, e.g. `git branch keep-local`), `git reset --hard origin/main`, `lhpc self-update --apply --yes`; if that still reports local changes, copy away anything you need, then run `lhpc self-update --apply --overwrite --yes` only if you agree to discard them.
 - If that reset fails with "index.lock': File exists": once no git runs in that checkout, `rm .git/index.lock`, then
   run the reset again.
 <!-- /upgrade-0138 -->
-- `lhpc update <stack>` without `--source` (and the console's Update) no longer moves a dev or stable source to the
-  pin; to go back to the pins run `lhpc update <stack> --source pinned --yes`.
-- A stable source installed on a commit whose only tag is a pre-release (`v3.0-rc1`) is not updated on the stable
-  lane ("could not be checked"): move it with `lhpc update <stack> --source pinned --yes` (or `dev`), or reinstall it.
-- Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`, then reboot
-  (or `sudo modprobe spi_ch341`).
-- A radio whose saved POWER is above its model's maximum (a PineDio stick: 14 dBm) is named on the Hardware page and
-  by `lhpc hardware`: lower it there; until then its daemon refuses the value.
-- The 0.13.x per-band `tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>` values are no longer read: set them per radio;
-  grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried).
-- An update adds no USB stick: add your USB sticks on the Hardware page.
-- After the update, dismiss the old hardware warning once if it shows twice.
-- A script calling `lhpc stack <verb> <stack> [--band B]` or `lhpc kill <stack>[@<band>]`: name the instance,
-  `<stack>@<rid>` (`lhpc hardware` lists the radios; `daemon --radio rN` still works).
-- Finish or undo an interrupted binary install with 0.13.x before updating (`lhpc install <stack> --source binary --yes`
-  completes its recovery): 0.14.0 refuses the older binary-install journal by name.
-- Radio detection needs the system gpiod/spidev in the console's venv (include-system-site-packages): run once
-  `sed -i 's/= false$/= true/' ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
-- A port save is judged per radio (each instance at its own base's port, a radio not yet listed at the manifest's):
-  a port refused only by base arithmetic (or its r64 projection) saves; one another instance listens on is refused.
-- MeshCom mesh password: "enabled" means every meshcom instance names it (one at least); the web client's status
-  names each meshtastic instance whose own web_root serves another directory.
-- Auto-start ticks are per radio now: tick them again on each radio's Settings page; the old stack-wide ticks are no
-  longer read.
-- A Settings reset resets one radio: its own settings and its auto-start ticks.
-- With the managed firewall installed, apply it once after the update, before you reboot (the helper changed, each
-  radio has its own rows): `sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh`.
+- Radio detection needs the system gpiod/spidev in the console's venv: run once `sed -i 's/= false$/= true/'
+  ~/loraham-pi-control/venv/lhpc/pyvenv.cfg`.
+- With the managed firewall installed, apply it once (the helper changed, each radio has its own rows): `sudo bash
+  ~/loraham-pi-control/config/files/firewall/firewall-apply.sh`.
+- Remove the old host-wide USB blacklist if present: `sudo rm -f /etc/modprobe.d/lhpc-usb-radio.conf`; then reboot.
 
-Fixed
+Radios and settings:
 
-- Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
-  checkouts one after another instead of failing; the demo's own workaround is removed.
-- GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the
-  feed until it was killed (endpoint and marker left behind); the signal handler now takes no lock.
-- Update view: the note to repair another release's units says "then update" only when an update is
-  available.
-- Self-update: a units-stale result says whether boot restore runs on the old units (another release's
-  web unit: it does) instead of always "skipped".
-- `lhpc self-update --apply` ending units-stale no longer asks to sync the venv and restart the console:
-  it had done both.
-- Docs: after an update from 0.12.10 or older, one venv sync to `requirements.lock` (that release synced
-  without it).
-- The board setup moved from the daemon's Settings to the Board setup form on Add Hardware; `lhpc hardware <setup>`
-  stays.
-- Known limitation: an interactive app's command on the Apps page runs only after its first start from the console
-  (the start writes that radio's own config directory); before it, the command stops at its `cd`.
-- Known limitation: a client's stop also stops its radio's daemon when no other client uses it, also a daemon
-  started by hand (`lhpc stack start daemon@<rid>`).
-- Known limitation: the Apps page without `?radio=` (or with a radio a stack cannot run on) shows each stack's
-  Settings for one instance, the radio it runs on, else the first able to run it (the daemon's are global).
-- Latest stable sources read "unchecked" once after the update, until `lhpc source-check` reads them on their branch.
+- The box says "the old [radio] configuration is present and nothing was converted": set up your radio list with
+  `lhpc hardware <setup>` (an existing list is kept; a bare `lhpc hardware` only shows it), add your USB sticks on the Hardware page, dismiss the old warning.
+- MeshCore keeps its identities: before its first start, move config/secrets/meshcore_identity.key,
+  openhop_repeater_identity.key and openhop_repeater_admin.txt to config/secrets/<rid>/.
+- The 0.13.x per-band values (`tx_`/`cadmon_`/`cadrssi_`/`hipower_`/`ocp_<band>`) and the stack-wide auto-start
+  ticks are no longer read: set them per radio, and re-enter settings and pages.
+- Per-band daemon values (`dp_<band>_<PARAM>`) are no longer read: move each by hand to `dp_<PARAM>` in
+  `<stack>@<rid>.toml`, or to the radio's row with `lhpc config daemon@<rid> --daemon-param`.
+- Grant +20 dBm again with `lhpc hardware --high-power <rid> on` (it is never carried). A POWER you set by hand stays;
+  a USB stick that should keep 17 dBm: set it (`lhpc config daemon@<rid> --daemon-param POWER=17`).
+- KISS: edits you made in a `loraham_kiss_tnc.conf.example` are no longer read: note them, set POWER in kiss's settings.
+- A MeshCore in mode chat+repeater needs a repeater name before the mode is saved again: Settings → Repeater →
+  "Repeater node name", or `lhpc config meshcore@<rid> repeater_name <name>`.
+
+Stacks:
+
+- Reticulum, on every box: `lhpc config reticulum@<rid> rnode_framing yes` (where `no` was saved; harmless
+  elsewhere), then `lhpc update reticulum --source pinned --yes` and `lhpc build reticulum --yes`.
+- Go on only when that succeeded on every box. Set the RNode devices on the link to the boxes' frequency,
+  bandwidth, spreading factor and coding rate.
+- Then on every box `lhpc stack start reticulum@<rid>`: `rnstatus` shows the LoRa interface's MTU 508 (255 = still
+  bare). Until every box has started, a started box and one not yet started cannot hear each other.
+- Every other installed stack whose pin moved (from 0.13.8: daemon, chat, kiss, meshcom; from 0.13.0–0.13.7 also
+  meshcore, voice): stop it (`lhpc stack stop <stack>@<rid> --yes`), `lhpc update <stack> --yes`, start it.
+- A source-built daemon: once `lhpc install daemon --source <your lane> --yes` (adds the Meshstick library clone; needs
+  `libusb-1.0-0-dev`), then `lhpc build daemon --yes` after the update.
+- Re-point phone apps and clients of a radio other than r1 to its ports (base + 133 × (n − 1)); restart running GPS
+  stacks so their feeds move.
+- Scripts: `lhpc stack <verb> <stack> [--band B]` and `lhpc kill <stack>[@<band>]` name the instance now,
+  `<stack>@<rid>` (`lhpc hardware` lists the radios).
+- A hand-written manifest's post-start step (`tcp_wait`, `tcp_send`) names its host as an IP address: a name is refused.
+- A bare `lhpc update <stack>` (and the console's Update) no longer moves a dev or stable source to the pin; to go
+  back to the pins run `lhpc update <stack> --source pinned --yes`.
+- Latest stable is the latest release (any branch) unless a plain version tag (`v1.2.3`) on the branch comes after it;
+  with no release the latest plain tag, else the branch tip. Pre-release (`v3.0-rc1`) and four-part tags are not plain.
+- Latest stable sources read "unchecked" until the next `lhpc source-check` reads them on their branch (the console runs
+  it in the background).
+- If a stack should use a new default, reset that setting: `lhpc config <stack>@<rid> <param> <new default>`, or all
+  of its settings with `lhpc config <stack>@<rid> --reset`.
+- A stack whose boot restore was skipped (a 0.13.x band record, a disabled or missing radio) is not restored at a
+  later boot either: start it by hand.
+- No longer read, remove them if you like: `~/loraham-pi-control/profiles/known-working/`,
+  `~/loraham-pi-control/state/last-start/` and `~/loraham-pi-control/state/selfupdate-migrate.json`.
 
 ## 0.13.8
 
