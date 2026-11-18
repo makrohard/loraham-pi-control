@@ -8,6 +8,7 @@ LHPC_CLEAN_S; a failure fails the step. A create that a client dying mid-create 
 fails the job; after the job the hosted runner is discarded (G2-TESTSD fix plan v1)."""
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import select
@@ -230,7 +231,24 @@ def _end(tmp_path, proc=None):
         proc.wait()
     for pid in [_pid(tmp_path / "client.pid"), *_boxes(tmp_path)]:
         if pid and _alive(pid):
-            os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):     # it may exit between the check and the kill
+                os.kill(pid, signal.SIGKILL)
+
+
+def test_the_cleanup_takes_a_process_that_exits_between_its_check_and_its_kill(tmp_path, monkeypatch):
+    """The cleanup of a failing run races the processes it ends: one alive at the check may be gone at the kill
+    (ESRCH, a CI run's error in the cleanup). Simulated, so no real pid is signalled."""
+    (tmp_path / "client.pid").write_text("4242424")
+    (tmp_path / "boxes").write_text("4242425")
+    killed = []
+
+    def gone(pid, sig):
+        killed.append((pid, sig))
+        raise ProcessLookupError(3, "No such process")
+    monkeypatch.setattr(sys.modules[__name__], "_alive", lambda pid: True)    # alive at the check
+    monkeypatch.setattr(os, "kill", gone)                                     # gone at the kill
+    _end(tmp_path)                                                            # RED before: ProcessLookupError
+    assert killed == [(4242424, signal.SIGKILL), (4242425, signal.SIGKILL)]
 
 
 def _rest(proc, timeout: float = 10.0) -> str:
