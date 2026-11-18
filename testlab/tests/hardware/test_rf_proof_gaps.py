@@ -125,7 +125,7 @@ def test_m_runs_one_job_per_stack_row_after_r1_in_the_full_lane(tmp_path):
     assert "M J1 meshcom@r1: NOT RUN: no per-radio callsign given (MCSET_J1)" in b
     want = [("H", "M-J2-graywolf@r1.txt", "J2 graywolf graywolf@433.toml r1 call 8443"),
             ("Z", "M-J3-meshtastic@r2.txt", "J3 meshtastic meshtastic@868.toml r2 node_name,node_short 8443"),
-            ("Z", "M-J4-meshcore@r2.txt", "J4 meshcore meshcore.toml r2 file_node_name,file_mode 8443")]
+            ("Z", "M-J4-meshcore@r2.txt", "J4 meshcore meshcore.toml r2 file_node_name 8443")]
     got = [x for x in b.splitlines() if x.startswith("  [dry] ")]
     assert len(got) == 3, got
     for (box, f, args), line in zip(want, got, strict=True):
@@ -224,14 +224,18 @@ def test_the_helper_takes_the_override_from_its_stdin_prelude(tmp_path):
 ROW4_M = ('MCSET=${MC:-on}; MCSET_J1=; MCSET_PY=x; RUN="${RR:-4}"; WEBPORT=8443; RADIO_Z868="Z loraham 868"; keep Z868 r2; [ -z "${PRE:-}" ] || keep SKIP_4 "absent: radio Z868"; '
           'printf "| job | box | instance | verdict |\\n" > "$EVD/MCSET.md"; '
           'XIN() { printf "%s\\n" "$V" > "$OUT/$2"; XRC=0; }; row_M; echo "SKIP4=$(getk SKIP_4)"')
-MODE_STOP = "JOB J4 meshcore@r2 STOP: M1: file_mode would be 'repeater', not chat: row 4's node would relay frames the kit never counts; nothing set"
+MODE_STOP = ("JOB J4 meshcore@r2 STOP: M1: the node's mode reads 'repeater', not chat: row 4's node would relay frames the kit "
+             "never counts; nothing set")
 
 
 @pytest.mark.parametrize("env, want", [
-    ({"V": MODE_STOP}, "SKIP4=J4: M1: file_mode would be 'repeater', not chat: row 4's node would relay frames the kit never counts; nothing set"),
+    ({"V": MODE_STOP}, "SKIP4=J4: " + MODE_STOP.split("meshcore@r2 ", 1)[1]),
     ({"MC": "off", "V": "x"}, "SKIP4=MCSET=off: J4 did not check MeshCore's mode"),
     ({"V": "JOB J4 meshcore@r2 PASS: set node_name"}, "SKIP4="),                  # mode checked: row 4 runs
-    ({"V": "JOB J4 meshcore@r2 STOP: M1: 'x' maps to 0 parameters of meshcore"}, "SKIP4="),   # another STOP: not a mode STOP
+    # fail closed (handler DEC): only a J4 PASS lets row 4 run
+    ({"V": "JOB J4 meshcore@r2 STOP: M1: 'x' maps to 0 parameters of meshcore"}, "SKIP4=J4: STOP: M1: 'x' maps to 0 parameters of meshcore"),
+    ({"V": "JOB J4 meshcore@r2 NOOP: no source file meshcore.toml"}, "SKIP4=J4: NOOP: no source file meshcore.toml"),
+    ({"V": ""}, "SKIP4=J4: UNKNOWN: helper rc 0"),
     ({"MC": "off", "RR": "3", "V": "x"}, "SKIP4="),                                # row 4 not in this run: nothing kept
     ({"MC": "off", "V": "x", "PRE": "1"}, "SKIP4=absent: radio Z868"),             # an earlier reason stays
 ])

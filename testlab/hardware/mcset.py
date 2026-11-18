@@ -25,9 +25,9 @@ RT = os.path.expanduser(sys.argv[7])
 LH = RT + "/venv/lhpc/bin/lhpc"
 ST = RT + "/config/stacks"
 inst = f"{sid}@{rid}"
-# a value the kit's rows cannot run with: MeshCore in a repeater mode relays every frame it hears (sends no tx counts), so
-# the job STOPs before any set when the instance would end in one (the source's value, or the instance file's on KEEP)
-ONLY = {("meshcore", "file_mode"): ("chat",)}
+# read-only checks, never copied: MeshCore in a repeater mode relays every frame it hears (sends no tx counts), so its job
+# READS the instance's current mode and STOPs before any set unless it is one of these; a job asking to copy it STOPs
+CHECK = {"meshcore": ("mode", ("chat",))}
 
 
 def mask(t):
@@ -88,6 +88,8 @@ def main():
         done("NOOP", f"no source file {src}")
     data = load(srcf)
     want = [k for k in keys.split(",") if k]
+    if sid in CHECK and "file_" + CHECK[sid][0] in want:
+        done("STOP", f"M1: file_{CHECK[sid][0]} is checked read-only, never copied; nothing set")
     vals = {k: tstr(data[k]) for k in want if k in data and not isinstance(data[k], (dict, list))}
     if override not in ("-", "global"):
         vals = {want[0]: override}                   # J1: the per-radio value given at the start
@@ -108,6 +110,17 @@ def main():
         done("STOP", f"M0: PAGE0 status {st}")
     from lhpc.core.services import ControllerService
     fields = ControllerService().config_param_fields(sid)
+    if sid in CHECK:                                      # before any set: the instance's own value, read only
+        key, ok = CHECK[sid]
+        m = [f for f in fields if f["kind"] == "file" and f["key"] == key]
+        if len(m) != 1:
+            done("STOP", f"M1: the {key} check maps to {len(m)} parameters of {sid}; nothing set")
+        rc, t = lh(m[0]["name"])
+        cur = shown(t)
+        if rc != 0 or not t.startswith("OK") or cur not in ok:
+            done("STOP", f"M1: the node's {key} reads '{cur}', not {'/'.join(ok)}: row {job[1:]}'s node would relay frames "
+                         "the kit never counts; nothing set")
+        say(f"CHECK {key}: {cur} (read only)")
     plan = []
     for k, v in vals.items():
         m = [f for f in fields if (("file_" + f["key"]) if f["kind"] == "file" else f["key"]) == k]
@@ -122,10 +135,6 @@ def main():
             done("STOP", f"M1: '{f['name']}' shows no single value line")
         if f'name="{f["field"]}"' not in p0:
             done("STOP", f"M1: the field {f['field']} is absent from PAGE0")
-        end = tstr(idat[k]) if k in idat else v
-        if (sid, k) in ONLY and end not in ONLY[(sid, k)]:
-            done("STOP", f"M1: {k} would be '{end}', not {'/'.join(ONLY[(sid, k)])}: row {job[1:]}'s node would relay "
-                         "frames the kit never counts; nothing set")
         if k in idat:
             say(f"KEEP {k}: the instance file holds it (a 0.14.0 entry wins): SKIP-SET")
             continue

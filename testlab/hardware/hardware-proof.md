@@ -53,11 +53,11 @@ markers only: `SEEN <nonce> <time>` (the app gives no RSSI), and for row 3 `LIST
 After R1 (nothing of the kit's runs then) and before the rows, `mcset.py` copies each stack row's instance settings from the
 stack's source file into the instance of that row's radio: row 1 MeshCom's callsign (the value from `MCSET_J1`, a
 callsign[-SSID] or `global`; empty = that job NOT RUN), row 2 Graywolf's call, row 3 Meshtastic's node names, row 4 MeshCore's
-node name and mode. The changes are kept (the lab's settings); a job undoes its own change only when its own set or read-back
+node name (its mode is never copied: the job reads it and stops unless it is `chat`). The changes are kept (the lab's settings); a job undoes its own change only when its own set or read-back
 fails. One line per job in `MCSET.md`; a job that is not a PASS or NOOP is named in `NOT-RUN.txt` and never stops the run; an
 undo that does not restore the instance (UNRESOLVED) fails the run at RS. `MCSET=on|off` (default: on in RF full, off in RF fast).
-Row 4 runs only after J4 checked MeshCore's mode: with `MCSET=off`, or when J4 stops on a mode other than `chat` (a repeater
-relays frames no `tx` counts), row 4 is NOT RUN by name.
+Row 4 runs only after a J4 PASS, which read MeshCore's mode as `chat` (a repeater relays frames no `tx` counts): with
+`MCSET=off`, or any other J4 verdict, row 4 is NOT RUN by name.
 
 ## Hardware that is not there
 

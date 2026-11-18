@@ -110,7 +110,7 @@ declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop"
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
-  [3]="J3 meshtastic meshtastic@{band}.toml node_name,node_short" [4]="J4 meshcore meshcore.toml file_node_name,file_mode")
+  [3]="J3 meshtastic meshtastic@{band}.toml node_name,node_short" [4]="J4 meshcore meshcore.toml file_node_name")
 rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
 # ---- 4. the box-side helpers (python, run on the box) ----------------------------------------------------------------------
 STATUS_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock" for d in ("/run/loraham","/tmp") if os.path.exists(d+"/loraconf-"+r+".sock")),None); assert p, "no conf socket of "+r; s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect(p); s.sendall(b"GET STATUS\n"); b=b""
@@ -838,7 +838,7 @@ row_R1() { local b i keys rev; for b in $BOXES; do   # instance keys; starts jou
   for i in $rev; do must $b "R1-$b-stop-$i.txt" "$(gstop "$i")"; done; done; }
 
 row_M() {   # the pre-step M, after R1 (nothing of ours runs): one mcset.py job per stack row of this run; its changes are KEPT
-  # row 4 runs only after J4 checked MeshCore's mode (a repeater mode relays frames no tx counts): MCSET=off or J4's mode STOP = NOT RUN
+  # row 4 runs only after a J4 PASS (it reads MeshCore's mode, chat only: a repeater relays frames no tx counts): fail closed
   [ "$MCSET" = on ] || { say "M: MCSET=off: the pre-step is not run"; [ "$MODE" = dry ] || echo "| — | — | — | NOT RUN: MCSET=off |" >> "$EVD/MCSET.md"
     m4skip "MCSET=off: J4 did not check MeshCore's mode"; return 0; }
   local r j sid src ks ep b k rid band v ov
@@ -851,7 +851,7 @@ row_M() {   # the pre-step M, after R1 (nothing of ours runs): one mcset.py job 
     if [ "$XRC" != 0 ] || [ -z "$v" ]; then rec "M $j $sid@$rid: the helper ended rc $XRC without a verdict: the instance's settings are unknown (M-$j-$sid@$rid.txt)"; v="JOB $j $sid@$rid UNKNOWN: helper rc $XRC"; fi
     case "$v" in *" UNRESOLVED"*) rec "M: $v";; esac
     mrec "$j" "$b" "$sid@$rid" "${v#JOB $j $sid@$rid }"
-    case "$j ${v#JOB $j $sid@$rid }" in "J4 STOP: M1: file_mode "*) m4skip "J4: ${v#JOB $j $sid@$rid STOP: }";; esac; done; }
+    case "$j ${v#JOB $j $sid@$rid }" in "J4 PASS"*|J[!4]*) ;; *) m4skip "J4: ${v#JOB $j $sid@$rid }";; esac; done; }
 m4skip() { case " $RUN " in *" 4 "*) [ -n "$(getk SKIP_4)" ] || keep SKIP_4 "$1";; esac; }   # row 4 NOT RUN by name (runrow)
 mrec() {   # mrec <job> <box> <instance> <verdict>: one MCSET.md line; anything but PASS/NOOP is also named for the coordinator
   say "M $1 $3: $4"; [ "$MODE" = dry ] && return 0; echo "| $1 | $2 | $3 | $4 |" >> "$EVD/MCSET.md" || stop "MCSET.md: append failed"

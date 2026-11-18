@@ -50,6 +50,7 @@ FAKE_SERVICES = textwrap.dedent('''\
     import json, os
     class ControllerService:
         def config_param_fields(self, sid):
+            open(os.environ["FAKE_STATE"] + ".used", "a").close()
             return json.load(open(os.environ["FAKE_STATE"]))["fields"]
     ''')
 
@@ -119,8 +120,9 @@ def run(tmp_path, page_server, job, sid, rid, keys, src, vals, fields, override=
     (rt / "state.json").write_text(json.dumps(st))
     box["state"], box["hits"] = str(rt / "state.json"), 0
     text = f"OVERRIDE = '{override}'\n" + HELPER.read_text()
+    # cwd: the test's own directory (the stdin script's sys.path[0] is the cwd: the repo's real lhpc must not be imported)
     p = subprocess.run([sys.executable, "-", job, sid, srcname, rid, keys, str(port), str(rt)], input=text, capture_output=True,
-                       text=True, timeout=60, check=False, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path / "pkg"),
+                       cwd=tmp_path, text=True, timeout=60, check=False, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path / "pkg"),
                                                                 "FAKE_STATE": str(rt / "state.json")})
     assert p.returncode == 0, p.stdout + p.stderr
     sets = [ln for ln in log.read_text().splitlines() if len(ln.split()) >= 4 or "--reset" in ln] if log.exists() else []
@@ -136,6 +138,7 @@ MTF = [("node_name", "run"), ("node_short", "run")]
 def test_a_new_value_is_set_read_back_and_kept(tmp_path, page_server):
     v, sets, end = run(tmp_path, page_server, *GW, {"call": "OLD", "other": "Z"}, [("call", "run")], inst_file='x = 1\n')
     assert v == "JOB J2 graywolf@r1 PASS: set call"
+    assert (tmp_path / "rt" / "state.json.used").exists()          # the fake ControllerService answered, not the repo's
     assert sets == ["config graywolf@r1 call N0CALL-3"] and end["call"] == "N0CALL-3"
 
 
@@ -194,23 +197,36 @@ def test_a_page_without_the_value_stops_and_keeps_the_set(tmp_path, page_server)
     assert sets == ["config graywolf@r1 call N0CALL-3"] and end == {"call": "N0CALL-3"}
 
 
-MC = ("J4", "meshcore", "r2", "file_node_name,file_mode")
+MC = ("J4", "meshcore", "r2", "file_node_name")
 MCF = [("node_name", "file"), ("mode", "file")]
+LAB = 'file_node_name = "LAB"\nfile_mode = "chat+repeater"\n'      # the lab's source (2026-11-18): its mode is never copied
 
 
-@pytest.mark.parametrize("src, inst, want", [
-    ('file_node_name = "LAB"\nfile_mode = "repeater"\n', None, "M1: file_mode would be 'repeater', not chat"),
-    ('file_node_name = "LAB"\nfile_mode = "chat+repeater"\n', None, "M1: file_mode would be 'chat+repeater', not chat"),
-    ('file_node_name = "LAB"\nfile_mode = "chat"\n', 'file_mode = "repeater"\n', "M1: file_mode would be 'repeater', not chat"),
-])
-def test_meshcore_in_a_repeater_mode_stops_the_job_before_any_set(tmp_path, page_server, src, inst, want):
-    # a24 M1: J4 copied a repeater mode unchecked: row 4's node would relay frames no tx counts
-    v, sets, _ = run(tmp_path, page_server, *MC, ("meshcore.toml", src), {"node_name": "OLD", "mode": "chat"}, MCF, inst_file=inst)
-    assert v.startswith(f"JOB J4 meshcore@r2 STOP: {want}: row 4's node would relay frames the kit never counts; nothing set"), v
-    assert sets == []
+@pytest.mark.parametrize("mode", ["chat+repeater", "repeater", "", "Chat"])
+def test_meshcore_whose_node_is_not_in_chat_mode_stops_before_any_set(tmp_path, page_server, mode):
+    # a24 M1 / handler DEC: the job reads the instance's mode (read only) and stops unless it is chat: row 4 then is NOT RUN
+    v, sets, end = run(tmp_path, page_server, *MC, ("meshcore.toml", LAB), {"node_name": "OLD", "mode": mode}, MCF,
+                       inst_file='x = 1\n')
+    assert v == (f"JOB J4 meshcore@r2 STOP: M1: the node's mode reads '{mode}', not chat: row 4's node would relay frames "
+                 "the kit never counts; nothing set"), v
+    assert sets == [] and end["mode"] == mode
 
 
-def test_meshcore_in_chat_mode_is_copied(tmp_path, page_server):
-    v, sets, _ = run(tmp_path, page_server, *MC, ("meshcore.toml", 'file_node_name = "LAB"\nfile_mode = "chat"\n'),
-                     {"node_name": "OLD", "mode": "chat"}, MCF, inst_file='x = 1\n')
-    assert v == "JOB J4 meshcore@r2 PASS: set node_name" and sets == ["config meshcore@r2 node_name LAB"]
+def test_meshcore_in_chat_mode_copies_the_name_and_never_writes_the_mode(tmp_path, page_server):
+    # the lab's case (the source says chat+repeater, the node runs chat): only the name is written. At 61dd5667 the kit's J4
+    # also listed file_mode and stopped on it (red: test_m_runs_one_job_per_stack_row_after_r1_in_the_full_lane)
+    v, sets, end = run(tmp_path, page_server, *MC, ("meshcore.toml", LAB), {"node_name": "OLD", "mode": "chat"}, MCF,
+                       inst_file='x = 1\n')
+    assert v == "JOB J4 meshcore@r2 PASS: set node_name"
+    assert sets == ["config meshcore@r2 node_name LAB"] and end == {"node_name": "LAB", "mode": "chat"}
+
+
+def test_a_job_that_asks_to_copy_the_mode_stops(tmp_path, page_server):
+    v, sets, _ = run(tmp_path, page_server, "J4", "meshcore", "r2", "file_node_name,file_mode", ("meshcore.toml", LAB),
+                     {"node_name": "OLD", "mode": "chat"}, MCF)
+    assert v == "JOB J4 meshcore@r2 STOP: M1: file_mode is checked read-only, never copied; nothing set" and sets == []
+
+
+def test_without_one_mode_parameter_the_check_stops(tmp_path, page_server):
+    v, sets, _ = run(tmp_path, page_server, *MC, ("meshcore.toml", LAB), {"node_name": "OLD"}, [("node_name", "file")])
+    assert v == "JOB J4 meshcore@r2 STOP: M1: the mode check maps to 0 parameters of meshcore; nothing set" and sets == []
