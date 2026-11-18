@@ -1,4 +1,4 @@
-// LOGS-IN-TREE (v4 N2/N3): a log entry's closed panel on the Apps page. Opened the first time it fetches the LAST 30
+// LOGS-IN-TREE (v4 N2/N3): a log entry's closed panel on the Apps page. Each time it is opened it fetches the LAST 30
 // lines of its log (an RF log: the last 30 records, each its raw line, never decoded), and again on Reload or when
 // its source changes; nothing while closed, no timer (the live tail is the full page's). The text is set with
 // textContent; the polite status line outside it says what happened. Delegated on the document, so a Stacks body
@@ -14,7 +14,6 @@
     var status = panel.querySelector(".logpanel-status");
     var seq = (panel.lpSeq || 0) + 1;
     panel.lpSeq = seq;
-    panel.setAttribute("data-loaded", "1");
     fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
@@ -34,8 +33,7 @@
 
   document.addEventListener("toggle", function (e) {
     var panel = e.target;
-    if (panel && panel.classList && panel.classList.contains("logpanel") && panel.open
-        && !panel.hasAttribute("data-loaded")) load(panel);
+    if (panel && panel.classList && panel.classList.contains("logpanel") && panel.open) load(panel);
   }, true);                                        // toggle does not bubble: caught on the way down
   document.addEventListener("click", function (e) {
     var btn = e.target && e.target.closest ? e.target.closest(".logpanel-reload") : null;

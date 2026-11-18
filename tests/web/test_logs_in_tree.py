@@ -110,6 +110,8 @@ def test_every_app_ends_with_its_logs_its_programs_then_its_rf_log(tmp_path, web
         below = {p[-1]: href for p, href in tree.items() if p[:-1] == (st.name, "Logs")}
         want = {st.component(cid).name: f"/logs/{cid}" for cid in programs}
         assert {k: _q(v)[0] for k, v in below.items() if k != "RF log"} == want, sid
+        if rf is not None:
+            assert list(below)[-1] == "RF log", sid    # programs, then the RF log
         if rf is None:
             assert "RF log" not in below, sid
         elif rf[0] == "own":
@@ -120,6 +122,16 @@ def test_every_app_ends_with_its_logs_its_programs_then_its_rf_log(tmp_path, web
         assert (st.name, "Logs") in tree, sid          # every row has its Logs (chat's says that none writes one)
         # Logs is the row's last entry
         assert [p for p in tree if len(p) == 2 and p[0] == st.name][-1] == (st.name, "Logs"), sid
+
+
+def test_the_apps_pages_logs_show_the_programs_then_the_rf_log(tmp_path, web):
+    c, _svc = _client(web, tmp_path)
+    for sid, (programs, rf) in _INVENTORY.items():
+        doc = parse(_html(c, f"/stacks/{sid}/body"))
+        ids = [d["id"] for d in doc.within(doc.by_id(f"logs-{sid}")).find("details")][1:]   # in page order
+        n = len(programs)
+        assert sorted(ids[:n]) == sorted(f"log-{cid}" for cid in programs), (sid, ids)
+        assert ids[n:] == ([f"rflog-{sid}"] if rf else []), (sid, ids)                # the RF log last
 
 
 def test_the_controller_the_webserver_and_the_firewall_end_with_their_logs(tmp_path, web):
@@ -295,4 +307,5 @@ def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_and_no_rf_pill
 def test_home_keeps_its_log_links(tmp_path, web):
     # green on the base too: Home is not the Apps page
     c, _svc = _client(web, tmp_path, radios=True)
-    assert parse(_html(c, "/")).find("a", class_="logslink")
+    # (an instance row's config/logs links are pinned in test_home_instance_card_links)
+    assert [a["href"] for a in parse(_html(c, "/")).find("a", class_="logslink")] == ["/webserver/logs"]

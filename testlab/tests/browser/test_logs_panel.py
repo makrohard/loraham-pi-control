@@ -1,5 +1,5 @@
 """LOGS-IN-TREE (plan v4 N2-N4, test 4), in a real browser: a log entry's panel on the Apps page asks for nothing while
-it is closed, exactly once when it is opened, once per Reload and never on its own (no timer: none after 15 s); it
+it is closed, exactly once each time it is opened, once per Reload and never on its own (no timer: none after 15 s); it
 shows the LAST 30 lines (an RF log: the last 30 records, raw) as text, and its status line says what happened; a late
 reply to an earlier request (another source picked meanwhile) is dropped.
 
@@ -58,14 +58,15 @@ def test_a_log_panel_asks_once_on_open_once_per_reload_and_never_by_itself(page)
     settled()
     assert len(seen) == 2                                                   # one per Reload
     assert page.evaluate("() => document.activeElement.classList.contains('logpanel-reload')")   # focus stays
-    page.click("#controller-logs > summary")                                # closed and opened again: no request
-    page.click("#controller-logs > summary")
+    page.click("#controller-logs > summary")                                # closed: no request
+    with page.expect_request(re.compile(r".*/api/logpreview/controller-web$")):   # opened again: a fresh one
+        page.click("#controller-logs > summary")
     page.clock.run_for(15000)
     settled()
-    assert len(seen) == 2                                                   # and none on its own
+    assert len(seen) == 3                                                   # exactly one, and none on its own
     page.select_option("#controller-logs .logpanel-src", label="boot-restore")    # a source change: one request
     settled()
-    assert seen[-1].endswith("/api/logpreview/controller-boot-restore") and len(seen) == 3
+    assert seen[-1].endswith("/api/logpreview/controller-boot-restore") and len(seen) == 4
 
 
 def test_a_late_reply_to_the_previous_source_is_dropped(page):
