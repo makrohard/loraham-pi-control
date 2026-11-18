@@ -66,6 +66,15 @@ def test_the_pages_outside_the_tree_show_all_menus_home_apps_and_their_name(tmp_
     assert [_text(s) for s in doc.within(nav[0]).find("span", class_="here")] == [here]
 
 
+def test_the_auto_install_crumb_line_stands_before_the_acknowledge_banner(tmp_path, web):
+    """With an unreadable run state the page opens on its "Acknowledge & recover" banner: the crumb line comes first."""
+    (tmp_path / "state").mkdir(parents=True)
+    (tmp_path / "state" / "auto-install.json").write_text("{broken")
+    c, _svc = _client(web, tmp_path)
+    html = _html(c, "/auto-install")
+    assert "unreadable or malformed" in html and "Acknowledge &amp; recover" in html
+    assert html.index('class="crumbline"') < html.index('class="depnote depnote-bad"')
+
 # ---- (1) a web proxy's Info page (was "Monitor") ----------------------------------------------------------------
 
 def _tree_levels(c):
