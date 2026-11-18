@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from htmlq import parse
 
 from lhpc.core import config as cfgmod
@@ -63,21 +64,33 @@ def test_home_and_the_hardware_page_link_only_the_radios_rf_logs(tmp_path, web, 
     assert "job=r1/rf-daemon.log" in hw
 
 
-def test_the_daemons_tree_rf_log_never_opens_a_band_file(tmp_path, web):
-    # without a hardware list the daemon has no radio: its RF log opens r1's file (was the 433 band file)
-    for radios in (False, True):
-        c, _svc = _client(web, tmp_path / str(radios), radios=radios)
-        tree = _html(c, "/stacks/menus")
-        _no_band_file(tree, f"tree radios={radios}")
-        links = [a["href"] for a in parse(tree).find("a") if a["href"].startswith("/logs/loraham-daemon?job=")]
-        assert links and all(re.search(r"job=r\d/rf-daemon\.log", h) for h in links), links
-        r = c.get("/stacks/daemon/menu/rflog-daemon")
-        assert r.status_code == 302 and "job=r1/rf-daemon.log" in r.headers["Location"], r.headers.get("Location")
+def _tree_rf_log(c, where):
+    tree = _html(c, "/stacks/menus")
+    _no_band_file(tree, where)
+    links = [a["href"] for a in parse(tree).find("a") if a["href"].startswith("/logs/loraham-daemon?job=")]
+    assert links and all(re.search(r"job=r\d/rf-daemon\.log", h) for h in links), (where, links)
+    r = c.get("/stacks/daemon/menu/rflog-daemon")
+    assert r.status_code == 302, (where, r.status_code)
+    return r.headers["Location"]
+
+
+@pytest.mark.no_default_hardware        # no hardware list at all: the daemon has no radio
+def test_without_a_radio_the_daemons_tree_rf_log_opens_r1s_file(tmp_path, web):
+    # was the 433 band file (app._own_page's fallback)
+    c, _svc = _client(web, tmp_path, radios=False)
+    assert _tree_rf_log(c, "no radio") == "/logs/loraham-daemon?job=r1/rf-daemon.log"
+
+
+def test_with_radios_the_daemons_tree_rf_log_opens_a_radios_file(tmp_path, web):
+    c, _svc = _client(web, tmp_path)
+    assert "job=r1/rf-daemon.log" in _tree_rf_log(c, "radios")
 
 
 def test_a_typed_band_file_url_is_a_plain_job_log_and_the_rf_api_refuses_it(tmp_path, web):
     c, _svc = _client(web, tmp_path)
-    doc = parse(_html(c, "/logs/loraham-daemon?job=rf-daemon-433.log"))
+    html = _html(c, "/logs/loraham-daemon?job=rf-daemon-433.log")
+    doc = parse(html)
+    assert "Job log" in html and "2026-01-01T00:00:00Z RX rssi=-90" in html      # the file's line, as any job log
     assert not doc.by_id("rfview") and not doc.by_id("rflog-clear") and not doc.find("nav", **{"aria-label": "RF logs"})
     assert c.get("/api/rflog/loraham-daemon?job=rf-daemon-433.log").status_code == 404
     assert c.get("/api/rflog/loraham-daemon/decoded?job=rf-daemon-433.log").status_code == 404
