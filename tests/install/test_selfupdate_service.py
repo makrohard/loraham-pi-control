@@ -932,6 +932,7 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
     from lhpc.core.services import ControllerService
 
     svc, _fake = op_svc(_WEB_ACTIVE if web == "running" else _WEB_INACTIVE, invocation=False)
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings the console up
     instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
     service_path_result = ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE,
@@ -968,6 +969,7 @@ def test_operator_apply_ending_units_stale_drops_the_advice_for_steps_it_took(op
     from lhpc.core.services import ControllerService
 
     svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings the console up
     instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
     monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE,
@@ -993,6 +995,7 @@ def test_operator_apply_whose_venv_sync_failed_keeps_the_sync_advice(op_svc, mon
     from lhpc.core.services import ControllerService
 
     svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings the console up
     instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
     monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False, stop_console=None: ActionResult(
         True, selfupdate.APPLIED_RESTART_MESSAGE, details=(instr["note"],),

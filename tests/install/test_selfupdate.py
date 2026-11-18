@@ -628,6 +628,7 @@ def test_self_update_apply_operator_stops_and_restarts_web(op_svc, monkeypatch):
         ("systemctl", "--user", "start", "lhpc-web.service"): CR(0, "", ""),
     }
     svc, fake = op_svc(cmds, invocation=False)
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings the console up
     monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "n/a"))   # a real advance refreshes
     r = svc.self_update_apply_operator(force=True)
     assert r.ok and seen == [True]
@@ -1285,6 +1286,7 @@ def test_cleanup_partial_does_not_advise_a_restart_already_done(op_svc, monkeypa
         ("systemctl", "--user", "start", "lhpc-web.service"): CR(0, "", ""),
     }
     svc, fake = op_svc(cmds, invocation=False)
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings the console up
     monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "ok"))
     r = svc.self_update_apply_operator(force=True)
     assert not r.ok and "delete them manually" in r.summary and "then restart the console" not in r.summary

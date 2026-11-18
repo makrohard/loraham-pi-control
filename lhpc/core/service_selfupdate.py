@@ -634,8 +634,11 @@ class SelfUpdateOpsMixin:
                     return None
 
                 def start_failed():                   # started again only if this apply asked for the stop
-                    start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
-                    return getattr(start, "not_found", False) or start.returncode != 0
+                    try:                              # a 2nd Ctrl-C or a launch error: the restart is not established
+                        start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
+                        return getattr(start, "not_found", False) or start.returncode != 0 or not self._web_answers()
+                    except BaseException:
+                        return True
                 try:
                     res = self._apply_and_sync(force, stop_console)   # admission still held; venv synced here
                 except BaseException as exc:
@@ -713,6 +716,29 @@ class SelfUpdateOpsMixin:
             summary = ("Update applied, but some untracked files could NOT be removed — delete them "
                        "manually (no restart needed).")
         return _dc.replace(res, summary=summary, details=tuple(details), next_commands=[])
+
+    _WEB_UP_S = 60.0
+
+    def _web_socket_path(self) -> str:
+        from .webserver import WAITRESS_SOCK
+        return str(self._paths.under(*WAITRESS_SOCK))
+
+    def _web_answers(self) -> bool:
+        """After `systemctl start` returned 0 (the simple unit's process was launched): the console answers on its
+        unix socket, bound only after its imports, its lock and its self-check, within `_WEB_UP_S`."""
+        import socket as _socket
+        import time as _time
+        deadline = _time.monotonic() + self._WEB_UP_S
+        while True:
+            with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+                try:
+                    s.connect(self._web_socket_path())
+                    return True
+                except OSError:
+                    pass
+            if _time.monotonic() >= deadline:
+                return False
+            _time.sleep(0.5)
 
     def _runtime_lock_exclusive(self, held: contextlib.ExitStack) -> ActionResult | None:
         """Take the controller-runtime lock EXCLUSIVE into `held`, retrying for `_LOCK_WAIT_S` while a just-stopped
