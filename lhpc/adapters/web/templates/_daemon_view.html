@@ -1,0 +1,13 @@
+{#- DAEMON-MONITOR-TREE: one live daemon view of a radio, a closed native panel (as a log panel). daemoncfg.js asks
+    while it is open: Get STATUS / Get STATS one read of /api/daemon/<rid> per open and per Reload; View Socket polls
+    /api/daemon/<rid>/socket each second (a rolling 22 lines), RX/TX View /api/daemon/<rid>/feed every 3 s; closing
+    it stops that. Text only, in a fixed 22-line window. `dv`: {id, rid, kind, label} (submenus.daemon_views). -#}
+<details class="advcfg daemonview" id="{{ dv.id }}" data-rid="{{ dv.rid }}" data-kind="{{ dv.kind }}">
+  <summary>{{ dv.label }}</summary>
+  <div class="body">
+    <button type="button" class="daemonview-reload">Reload</button>
+    <span class="daemonview-status muted" role="status" aria-live="polite"></span>
+    <pre class="next liveout-body stream22 daemonview-text"></pre>
+    <noscript><p class="muted">This live view needs JavaScript.</p></noscript>
+  </div>
+</details>

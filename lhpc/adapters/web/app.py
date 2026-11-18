@@ -1503,6 +1503,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["level_url"] = _level_url
     app.jinja_env.globals["log_preview_url"] = _log_preview_url
     app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
+    app.jinja_env.globals["daemon_views"] = _submenus.daemon_views
     app.jinja_env.globals["log_panels"] = _submenus.LOG_PANELS
     # U5: a page outside the Stacks page names a stack's row as the Stacks crumbs do (its stack's name)
     app.jinja_env.globals["stack_label"] = lambda sid: s.name if (s := service.stack(sid)) is not None else sid

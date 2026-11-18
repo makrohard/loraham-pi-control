@@ -1,11 +1,14 @@
-// Daemon config panel (in the daemon stack body): live read-only views of the daemon over the
-// /api/daemon endpoints — "Get STATUS/STATS" (one-shot), "View Socket" (rolling 22-line poll) and
-// "TX-Viewer" (RX/TX feed). Display only (textContent, never innerHTML); no settings are changed.
-// init(root) re-runs on lhpc:bodyloaded so a lazily-loaded daemon body gets wired too.
+// DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html), each a closed panel under its Monitor, read-only
+// over the /api/daemon endpoints. A view asks only while it is open, driven by the panel's open state (a click, the
+// accordion, a restore or a page that opens it at load): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per
+// open and per Reload; "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View"
+// the dashboard's RX/TX feed every 3 s. Closing stops the polling; Reload starts the view afresh. A reply to an earlier
+// run of the view (before a close or a Reload) is dropped. textContent only, never innerHTML; no setting is changed.
+// Delegated on the document, so a Stacks body that arrives later needs no wiring.
 (function () {
   "use strict";
 
-  var SOCKET_LINES = 22, SOCKET_POLL_MS = 1000, TX_POLL_MS = 3000;
+  var SOCKET_LINES = 22, POLL_MS = { socket: 1000, rxtx: 3000 };
 
   function render(obj) {
     if (!obj || !Object.keys(obj).length) return "(no data)";
@@ -17,117 +20,81 @@
     return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
   }
 
-  // "Get STATUS" / "Get STATS": one-shot read of the daemon's config socket.
-  function wireLive(b) {
-    b.addEventListener("click", function () {
-      var rid = b.getAttribute("data-rid");
-      var kind = b.getAttribute("data-kind");
-      var wrap = document.getElementById("liveout-" + rid);
-      var body = document.getElementById("liveout-body-" + rid);
-      if (!wrap || !body) return;
-      wrap.hidden = false;
-      body.textContent = "loading…";
-      fetch("/api/daemon/" + encodeURIComponent(rid))
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          if (!d || !d.reachable) { body.textContent = "daemon not reachable on " + rid; return; }
-          var data = kind === "stats" ? d.stats : d.status;
-          body.textContent = kind.toUpperCase() + " — " + rid + " (live)\n" + render(data);
-        })
-        .catch(function () { body.textContent = "request failed"; });
-    });
-  }
-  function wireLiveClose(x) {
-    x.addEventListener("click", function () {
-      var wrap = document.getElementById("liveout-" + x.getAttribute("data-rid"));
-      if (wrap) wrap.hidden = true;
-    });
+  // GET `path` under /api/daemon/<rid>; `done(data or null, failed)` only while this run of the view is the current one.
+  function ask(panel, path, done) {
+    var gen = panel.dvGen;
+    fetch("/api/daemon/" + encodeURIComponent(panel.getAttribute("data-rid")) + path,
+          { headers: { Accept: "application/json" }, cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { return { d: d, failed: false }; }, function () { return { d: null, failed: true }; })
+      .then(function (res) { if (panel.dvGen === gen && panel.dvRunning) done(res.d, res.failed); });
   }
 
-  // "View Socket": a live, rolling 22-line window streamed from the daemon CONF socket. The X closes
-  // the window AND stops the polling. textContent only; one poller per radio; cleared on close.
-  function wireSocket(b) {
-    b.addEventListener("click", function () {
-      var rid = b.getAttribute("data-rid");
-      var wrap = document.getElementById("socketout-" + rid);
-      var body = document.getElementById("socketout-body-" + rid);
-      if (!wrap || !body || wrap.dataset.timer) return;   // no double-start
-      wrap.hidden = false;
+  function stop(panel) {
+    if (panel.dvTimer) { clearInterval(panel.dvTimer); panel.dvTimer = 0; }
+    panel.dvRunning = false;
+    panel.dvGen = (panel.dvGen || 0) + 1;            // every reply still on its way is dropped
+  }
+
+  function start(panel) {
+    if (panel.dvRunning) return;                     // one run per open
+    panel.dvRunning = true;
+    panel.dvGen = (panel.dvGen || 0) + 1;
+    var rid = panel.getAttribute("data-rid"), kind = panel.getAttribute("data-kind");
+    var text = panel.querySelector(".daemonview-text"), status = panel.querySelector(".daemonview-status");
+    if (kind === "status" || kind === "stats") {
+      text.textContent = "loading…";
+      status.textContent = "";
+      ask(panel, "", function (d, failed) {
+        if (failed) { text.textContent = "request failed"; status.textContent = "Reload to ask again"; return; }
+        text.textContent = !d || !d.reachable ? "daemon not reachable on " + rid
+          : kind.toUpperCase() + " — " + rid + " (live)\n" + render(kind === "stats" ? d.stats : d.status);
+        status.textContent = "updated " + stamp();
+      });
+      return;
+    }
+    var poll;
+    if (kind === "socket") {
       var buf = [];
-      body.textContent = "connecting to config socket (" + rid + ")…";
-      function push(text) {
-        buf.push("[" + stamp() + "] " + text);
-        if (buf.length > SOCKET_LINES) buf = buf.slice(-SOCKET_LINES);   // rolling window
-        body.textContent = buf.join("\n");                              // textContent -> no HTML injection
-      }
-      function poll() {
-        fetch("/api/daemon/" + encodeURIComponent(rid) + "/socket", { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (d) {
-            push(d && d.reachable && d.line ? d.line : "(no response on " + rid + ")");
-          })
-          .catch(function () { push("(request failed)"); });
-      }
-      poll();
-      wrap.dataset.timer = String(setInterval(poll, SOCKET_POLL_MS));
-    });
-  }
-  function wireSocketClose(x) {
-    x.addEventListener("click", function () {
-      var wrap = document.getElementById("socketout-" + x.getAttribute("data-rid"));
-      if (!wrap) return;
-      if (wrap.dataset.timer) {           // stop polling = disconnect the "socket"
-        clearInterval(Number(wrap.dataset.timer));
-        delete wrap.dataset.timer;
-      }
-      wrap.hidden = true;
-    });
+      text.textContent = "connecting to config socket (" + rid + ")…";
+      poll = function () {
+        ask(panel, "/socket", function (d, failed) {
+          buf.push("[" + stamp() + "] " + (failed ? "(request failed)"
+            : d && d.reachable && d.line ? d.line : "(no response on " + rid + ")"));
+          if (buf.length > SOCKET_LINES) buf = buf.slice(-SOCKET_LINES);       // rolling window
+          text.textContent = buf.join("\n");
+        });
+      };
+    } else if (kind === "rxtx") {
+      text.textContent = "loading RX/TX activity (" + rid + ")…";
+      poll = function () {
+        // FEED ONLY: /api/daemon/<radio> would drag a CAD scan behind a text log at every poll.
+        ask(panel, "/feed", function (d, failed) {
+          if (failed) return;                                                   // transient; the next tick retries
+          var next = (d && d.feed && d.feed.length) ? d.feed.join("\n") : "(no recent RX/TX activity)";
+          if (text.textContent !== next) text.textContent = next;              // no flicker
+        });
+      };
+    } else {
+      return;
+    }
+    status.textContent = "live — every " + POLL_MS[kind] / 1000 + " s while open";
+    var tick = function () { if (!panel.isConnected) { stop(panel); return; } poll(); };   // a replaced body: stop
+    tick();
+    panel.dvTimer = setInterval(tick, POLL_MS[kind]);
   }
 
-  // "TX-Viewer": the SAME read-only RX/TX feed as the dashboard, in a closable 22-line window.
-  function wireTx(b) {
-    b.addEventListener("click", function () {
-      var rid = b.getAttribute("data-rid");
-      var wrap = document.getElementById("txout-" + rid);
-      var body = document.getElementById("txout-body-" + rid);
-      if (!wrap || !body || wrap.dataset.timer) return;   // no double-start
-      wrap.hidden = false;
-      body.textContent = "loading RX/TX activity (" + rid + ")…";
-      function poll() {
-        // FEED ONLY. This used to poll /api/daemon/<radio> and discard status/stats/channel,
-        // which dragged a destructive CAD scan behind a text log every 3 s.
-        fetch("/api/daemon/" + encodeURIComponent(rid) + "/feed", { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (d) {
-            var next = (d && d.feed && d.feed.length) ? d.feed.join("\n")
-                                                      : "(no recent RX/TX activity)";
-            if (body.textContent !== next) body.textContent = next;   // avoid flicker
-          })
-          .catch(function () { /* transient; retry next tick */ });
-      }
-      poll();
-      wrap.dataset.timer = String(setInterval(poll, TX_POLL_MS));
-    });
-  }
-  function wireTxClose(x) {
-    x.addEventListener("click", function () {
-      var wrap = document.getElementById("txout-" + x.getAttribute("data-rid"));
-      if (!wrap) return;
-      if (wrap.dataset.timer) { clearInterval(Number(wrap.dataset.timer)); delete wrap.dataset.timer; }
-      wrap.hidden = true;
-    });
-  }
+  function sync(panel) { if (panel.open) start(panel); else stop(panel); }
 
-  function init(root) {
-    var scope = root || document;
-    scope.querySelectorAll(".livebtn").forEach(wireLive);
-    scope.querySelectorAll(".liveclose").forEach(wireLiveClose);
-    scope.querySelectorAll(".socketbtn").forEach(wireSocket);
-    scope.querySelectorAll(".socketclose").forEach(wireSocketClose);
-    scope.querySelectorAll(".txbtn").forEach(wireTx);
-    scope.querySelectorAll(".txclose").forEach(wireTxClose);
-  }
-
-  init();
-  document.addEventListener("lhpc:bodyloaded", function (e) { init((e.detail || {}).root); });
+  document.addEventListener("toggle", function (e) {
+    var panel = e.target;
+    if (panel && panel.classList && panel.classList.contains("daemonview")) sync(panel);
+  }, true);                                          // toggle does not bubble: caught on the way down
+  document.addEventListener("click", function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest(".daemonview-reload") : null;
+    var panel = btn ? btn.closest(".daemonview") : null;
+    if (panel) { stop(panel); sync(panel); }         // afresh (a closed panel stays quiet)
+  });
+  // a view's own page opens its panel at load
+  document.querySelectorAll(".daemonview[open]").forEach(sync);
 })();

@@ -81,7 +81,9 @@ def test_a_live_setting_of_a_band_or_a_disabled_radio_is_a_404(client, csrf):
 def test_the_daemon_panel_and_the_dashboard_address_each_radio(client):
     c, _fake = client
     body = c.get("/stacks?cfg=daemon&radio=r2").get_data(as_text=True)            # W2: ?radio=, no dp=&rid=
-    assert 'id="liveout-r2"' in body and 'data-rid="r2"' in body and 'action="/radio/r2/set"' in body
+    # DAEMON-MONITOR-TREE: the r2 Monitor's views are panels of r2 (was its button row's output window liveout-r2)
+    assert 'id="stack-settings-daemon--r2-status"' in body and 'data-rid="r2" data-kind="status"' in body
+    assert 'data-rid="r2"' in body and 'action="/radio/r2/set"' in body
     assert "liveout-433" not in body and 'data-band="433" data-kind' not in body
     dash = c.get("/").get_data(as_text=True)
     assert 'data-scan-rid="r1"' in dash and 'data-scan-rid="r2"' in dash and "data-scan-band" not in dash

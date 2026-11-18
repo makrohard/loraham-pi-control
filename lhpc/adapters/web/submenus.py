@@ -38,6 +38,17 @@ OWN_PAGES = {"stack-hardware-daemon": Dest("hardware_view"),
 _PROGRAM_LOG, _RF_LOG = "log-", "rflog-"
 
 
+# DAEMON-MONITOR-TREE: a radio's live daemon views, each a level under its "Monitor · rN" (his words), in page order
+DAEMON_VIEWS = (("status", "Get STATUS"), ("stats", "Get STATS"), ("socket", "View Socket"), ("rxtx", "RX/TX View"))
+
+
+def daemon_views(sid: str, rid: str) -> list[dict]:
+    """The views of the daemon stack `sid` on radio `rid`: {id, rid, kind, label}, the descriptors' and the
+    Monitor template's one list."""
+    return [{"id": f"stack-settings-{sid}--{rid}-{kind}", "rid": rid, "kind": kind, "label": f"{name} · {rid}"}
+            for kind, name in DAEMON_VIEWS]
+
+
 def rf_entry(sid: str):
     """The RF-log registry entry the stack `sid` owns (its config store holds the switch), or None."""
     return next((e for e in _rflog.REGISTRY if e.owner == sid), None)
@@ -186,6 +197,8 @@ def stack_menus(g: dict) -> list[Submenu]:
             rid = radio["rid"]
             add(f"{settings}--{rid}-monitor", settings, f"Monitor · {rid}", "_settings_radio_monitor.html",
                 radio=radio, **sv)
+            for dv in daemon_views(sid, rid):
+                add(dv["id"], f"{settings}--{rid}-monitor", dv["label"], "_daemon_view.html", dv=dv, radio=radio, **sv)
             add(f"{settings}--{rid}-live", settings, f"Live radio settings · {rid}", "_settings_radio_live.html",
                 radio=radio, **sv)
     if view.get("live_band"):
