@@ -838,7 +838,9 @@ row_R1() { local b i keys rev; for b in $BOXES; do   # instance keys; starts jou
   for i in $rev; do must $b "R1-$b-stop-$i.txt" "$(gstop "$i")"; done; done; }
 
 row_M() {   # the pre-step M, after R1 (nothing of ours runs): one mcset.py job per stack row of this run; its changes are KEPT
-  [ "$MCSET" = on ] || { say "M: MCSET=off: the pre-step is not run"; [ "$MODE" = dry ] || echo "| — | — | — | NOT RUN: MCSET=off |" >> "$EVD/MCSET.md"; return 0; }
+  # row 4 runs only after J4 checked MeshCore's mode (a repeater mode relays frames no tx counts): MCSET=off or J4's mode STOP = NOT RUN
+  [ "$MCSET" = on ] || { say "M: MCSET=off: the pre-step is not run"; [ "$MODE" = dry ] || echo "| — | — | — | NOT RUN: MCSET=off |" >> "$EVD/MCSET.md"
+    m4skip "MCSET=off: J4 did not check MeshCore's mode"; return 0; }
   local r j sid src ks ep b k rid band v ov
   for r in $RUN; do [ -n "${MJOB[$r]:-}" ] || continue; read -r j sid src ks <<< "${MJOB[$r]}"
     [ -z "$(getk "SKIP_$r")" ] || { mrec "$j" - "$sid" "NOT RUN: row $r: $(getk "SKIP_$r")"; continue; }
@@ -848,7 +850,9 @@ row_M() {   # the pre-step M, after R1 (nothing of ours runs): one mcset.py job 
     v=$(grep '^JOB ' "$OUT/M-$j-$sid@$rid.txt" | tail -n 1)
     if [ "$XRC" != 0 ] || [ -z "$v" ]; then rec "M $j $sid@$rid: the helper ended rc $XRC without a verdict: the instance's settings are unknown (M-$j-$sid@$rid.txt)"; v="JOB $j $sid@$rid UNKNOWN: helper rc $XRC"; fi
     case "$v" in *" UNRESOLVED"*) rec "M: $v";; esac
-    mrec "$j" "$b" "$sid@$rid" "${v#JOB $j $sid@$rid }"; done; }
+    mrec "$j" "$b" "$sid@$rid" "${v#JOB $j $sid@$rid }"
+    case "$j ${v#JOB $j $sid@$rid }" in "J4 STOP: M1: file_mode "*) m4skip "J4: ${v#JOB $j $sid@$rid STOP: }";; esac; done; }
+m4skip() { case " $RUN " in *" 4 "*) [ -n "$(getk SKIP_4)" ] || keep SKIP_4 "$1";; esac; }   # row 4 NOT RUN by name (runrow)
 mrec() {   # mrec <job> <box> <instance> <verdict>: one MCSET.md line; anything but PASS/NOOP is also named for the coordinator
   say "M $1 $3: $4"; [ "$MODE" = dry ] && return 0; echo "| $1 | $2 | $3 | $4 |" >> "$EVD/MCSET.md" || stop "MCSET.md: append failed"
   case "$4" in PASS*|NOOP*) ;; *) echo "M $1 $3: $4" >> "$EVD/NOT-RUN.txt" || stop "NOT-RUN.txt: append failed";; esac; }

@@ -56,6 +56,8 @@ callsign[-SSID] or `global`; empty = that job NOT RUN), row 2 Graywolf's call, r
 node name and mode. The changes are kept (the lab's settings); a job undoes its own change only when its own set or read-back
 fails. One line per job in `MCSET.md`; a job that is not a PASS or NOOP is named in `NOT-RUN.txt` and never stops the run; an
 undo that does not restore the instance (UNRESOLVED) fails the run at RS. `MCSET=on|off` (default: on in RF full, off in RF fast).
+Row 4 runs only after J4 checked MeshCore's mode: with `MCSET=off`, or when J4 stops on a mode other than `chat` (a repeater
+relays frames no `tx` counts), row 4 is NOT RUN by name.
 
 ## Hardware that is not there
 

@@ -217,3 +217,35 @@ def test_the_helper_takes_the_override_from_its_stdin_prelude(tmp_path):
     assert "M0 source=meshcom.toml keys=mc_callsign " in p.stdout
     q = _helper(tmp_path / "b", "-", {"meshcom.toml": 'other = "x"\n'})
     assert q.stdout.strip() == "JOB J1 meshcom@r1 NOOP: none of the job's keys in the source", q.stdout
+
+
+# ---- row 4 runs only after J4 checked MeshCore's mode --------------------------------------------------------------------
+
+ROW4_M = ('MCSET=${MC:-on}; MCSET_J1=; MCSET_PY=x; RUN="${RR:-4}"; WEBPORT=8443; RADIO_Z868="Z loraham 868"; keep Z868 r2; [ -z "${PRE:-}" ] || keep SKIP_4 "absent: radio Z868"; '
+          'printf "| job | box | instance | verdict |\\n" > "$EVD/MCSET.md"; '
+          'XIN() { printf "%s\\n" "$V" > "$OUT/$2"; XRC=0; }; row_M; echo "SKIP4=$(getk SKIP_4)"')
+MODE_STOP = "JOB J4 meshcore@r2 STOP: M1: file_mode would be 'repeater', not chat: row 4's node would relay frames the kit never counts; nothing set"
+
+
+@pytest.mark.parametrize("env, want", [
+    ({"V": MODE_STOP}, "SKIP4=J4: M1: file_mode would be 'repeater', not chat: row 4's node would relay frames the kit never counts; nothing set"),
+    ({"MC": "off", "V": "x"}, "SKIP4=MCSET=off: J4 did not check MeshCore's mode"),
+    ({"V": "JOB J4 meshcore@r2 PASS: set node_name"}, "SKIP4="),                  # mode checked: row 4 runs
+    ({"V": "JOB J4 meshcore@r2 STOP: M1: 'x' maps to 0 parameters of meshcore"}, "SKIP4="),   # another STOP: not a mode STOP
+    ({"MC": "off", "RR": "3", "V": "x"}, "SKIP4="),                                # row 4 not in this run: nothing kept
+    ({"MC": "off", "V": "x", "PRE": "1"}, "SKIP4=absent: radio Z868"),             # an earlier reason stays
+])
+def test_row_4_is_not_run_unless_j4_checked_the_mode(tmp_path, env, want):
+    # red-before (5ef04ac0, a24 N2): a J4 mode STOP or MCSET=off left row 4 running in a repeater mode
+    r, _ = source_only(tmp_path, ROW4_M, **env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.splitlines()[-1] == want
+
+
+def test_row_4_with_mcset_off_is_not_run_by_name(tmp_path):
+    d = dry(tmp_path, MCSET="off")
+    assert d.rc == 0, d.err[-2000:]
+    got = [ln for ln in d.out.splitlines() if re.fullmatch(r"NOT RUN: row 4 meshcore (box -> peer|peer -> box): MCSET=off: "
+                                                           r"J4 did not check MeshCore's mode", ln)]
+    assert len(got) == 2, d.out[-3000:]
+    assert not re.search(r"^  \[dry\] Z > 4-", d.out, re.MULTILINE)        # nothing of row 4 runs
