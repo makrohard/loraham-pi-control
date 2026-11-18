@@ -800,16 +800,17 @@ class BuildOpsMixin:
             return f"not built — run: {self.build_remedy(sid, comp.id)}"
         return ""
 
-    def start_readiness(self, target: str) -> tuple[list[tuple[str, str]], list[str]]:
-        """(blocked, rebuild) for the web start gate and the stack page: `blocked` = [(id, `install_blocker`
-        reason)], what refuses a start; `rebuild` = source-built ids that start with changed build inputs (a
-        rebuild picks them up). An absent checkout off a binary, or GUI toolkit, is in neither."""
-        s = self.stack(target)
+    def start_readiness(self, target: str, inst=None) -> tuple[list[tuple[str, str]], list[str]]:
+        """(blocked, rebuild) of what the start launches (`_run_order` on `inst`'s radio) and their build providers:
+        `blocked` = [(id, `install_blocker` reason)] refuses the web start (the stack page shows it); `rebuild` =
+        source-built ids with changed build inputs (they start). Neither: a provider absent off a binary, a GUI drop."""
+        s, blocked, rebuild = self.stack(target), [], []
+        run = {c.id for st, c in (self._run_order(target, inst) or ()) if st.id == target}
+        used = run | {d for c in (s.components if s else ()) if c.id in run for d in (c.build_requires or ())}
         gui_dropped = set(self.gui_unavailable_components(s)) if s else set()
-        blocked, rebuild = [], []
         for c in (s.components if s else ()):
-            if (c.id in gui_dropped and (c.optional or c.gui_optional)) or (
-                    c.source and self._binary_ready(c) is None and not self._source_present(c)):
+            if c.id not in used or (c.id in gui_dropped and (c.optional or c.gui_optional)) or (c.id not in run
+                    and c.source and self._binary_ready(c) is None and not self._source_present(c)):
                 continue
             if (why := self.install_blocker(c)):
                 blocked.append((c.id, why))

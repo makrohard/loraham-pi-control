@@ -27,6 +27,7 @@ def test_an_instances_action_hands_the_core_its_instance_never_a_band(web, csrf,
     monkeypatch.setattr(ControllerService, "spawn_start_job", lambda self, *a, **k: (None, "blocked", "spied"))
     monkeypatch.setattr(ControllerService, "is_installed", lambda self, t: True)
     monkeypatch.setattr(ControllerService, "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(ControllerService, "start_readiness", lambda self, t, inst=None: ([], []))   # installed (RELP5b)
     c = web()
     tok = csrf(c)
     c.post("/action", data={"_csrf": tok, "op": op, "target": "kiss@r1"})

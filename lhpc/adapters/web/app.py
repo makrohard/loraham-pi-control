@@ -1212,7 +1212,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
                     # U8: what refuses a start ([(cid, reason)]) and what starts but has a rebuild available
-                    "start_ready": (_sr := service.start_readiness(stack.id)),
+                    "start_ready": (_sr := service.start_readiness(stack.id, _view_inst)),   # its shown radio's run order
                     # a provider to build BEFORE the main, and only one whose start refusal is a source build (N1)
                     "needs_build_deps": [c for c in service.unbuilt_build_deps(stack.id)
                                          if dict(_sr[0]).get(c, "").startswith("not built")],
@@ -2211,7 +2211,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _install_back(target)
             # The start readiness names each refusal with its own remedy (a build, the binary
             # reinstall, an unsafe install to resolve); changed build inputs alone start.
-            blocked, _rebuild = service.start_readiness(target)
+            blocked, _rebuild = service.start_readiness(target, inst)     # the radio it starts on
             if blocked:
                 flash(f"'{target}' cannot start yet — "
                       + "; ".join(f"{cid}: {why}" for cid, why in blocked) + ".", "warn")

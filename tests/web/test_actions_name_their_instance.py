@@ -13,6 +13,7 @@ def _box(tmp_path, monkeypatch):
     radios_fixture.write(tmp_path)
     monkeypatch.setattr(ControllerService, "is_installed", lambda self, t: True)
     monkeypatch.setattr(ControllerService, "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(ControllerService, "start_readiness", lambda self, t, inst=None: ([], []))   # installed (RELP5b)
 
 
 def _spy(monkeypatch):

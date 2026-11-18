@@ -49,7 +49,8 @@ def test_a_receipt_whose_recorded_file_is_gone_refuses_the_start(short_tmp_path,
     assert f"binary artifact file {rel!r} is gone" in why, why          # its reason, not a source build
     assert "lhpc build" not in why
     why = svc.install_blocker(svc.stack("daemon").component(DAEMON))
-    assert svc.start_readiness("daemon")[0] == [(c, why) for c in svc.binary_spec("daemon").covers]   # each by the receipt
+    assert svc.start_readiness("daemon")[0] == [(c, why) for c in svc.binary_spec("daemon").covers   # each by the receipt
+                                                if c != "libch341"]      # not launched, no build provider (RELP5b)
 
 
 def test_an_interrupted_binary_transaction_refuses_the_start(short_tmp_path, monkeypatch, binary_receipt):
@@ -208,4 +209,5 @@ def test_an_unsafe_receipt_without_its_checkout_refuses_by_its_reason(short_tmp_
     assert svc.binary_receipt_state("daemon")[0] == "unsafe" and not svc._source_present(daemon)
     why = _refused(svc, spawned)
     assert "is gone" in why and "not installed" not in why, why
-    assert svc.start_readiness("daemon")[0] == [(c, svc.install_blocker(daemon)) for c in svc.binary_spec("daemon").covers]
+    assert svc.start_readiness("daemon")[0] == [(c, svc.install_blocker(daemon)) for c in svc.binary_spec("daemon").covers
+                                                if c != "libch341"]      # not launched, no build provider (RELP5b)

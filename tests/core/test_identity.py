@@ -1027,7 +1027,7 @@ def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t, inst=None: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
@@ -1061,7 +1061,7 @@ def test_settings_and_cli_may_clear_an_identity(tmp_path, monkeypatch):
     assert svc.save_config_bundle("meshtastic", values={"node_name": "Shack"}).ok
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t, inst=None: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
@@ -1265,7 +1265,7 @@ def _web(svc, monkeypatch):
     from lhpc.adapters.web.app import create_app
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
     monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t: ([], []))   # U8: the web start gate
+    monkeypatch.setattr(type(svc), "start_readiness", lambda self, t, inst=None: ([], []))   # U8: the web start gate
     monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
     client = create_app(lambda: svc).test_client()
     tok = re.search(r'name="_csrf" value="([^"]+)"',
