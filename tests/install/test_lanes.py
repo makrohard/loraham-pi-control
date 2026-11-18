@@ -2241,8 +2241,8 @@ def test_a_plain_update_keeps_a_dev_source_whose_upstream_branch_is_gone(box, ca
     git(git(box.work, "remote", "get-url", "origin"), "symbolic-ref", "HEAD", "refs/heads/keep")
     git(git(box.work, "remote", "get-url", "origin"), "update-ref", "-d", "refs/heads/main")
     rc, out = _run(box, capsys, "update", "s", "--yes")
-    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; --source pinned goes back with the back " \
-        "warning" in out, out                         # RED before: the dev fallback moved it back to the pin c1
+    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; --source pinned moves it to the pin, " \
+        "after a warning" in out, out                         # RED before: the dev fallback moved it back to the pin c1
     assert box.head() == box.c[2]
 
 
@@ -2256,7 +2256,7 @@ def test_a_gone_branch_with_no_history_to_place_the_pin_names_the_way_out(box, c
     git(bare, "update-ref", "-d", "refs/heads/main")
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc != 0 and "upstream branch 'main' gone and this box holds no history placing the pin: nothing moves; " \
-        "to go back to the pin: remove the stack, reinstall Known working" in out and box.head() == box.c[2], out
+        "to go to the pin: remove the stack, reinstall Known working" in out and box.head() == box.c[2], out
 
 
 def test_a_shallow_checkout_holding_an_older_target_is_could_not_check(box, capsys, git):
@@ -2321,14 +2321,16 @@ def test_a_head_restored_after_the_web_warning_is_refused(box, capsys, git, web,
 
 def test_the_pinned_way_out_of_a_gone_branch_goes_back_to_the_pin(box, capsys, git):
     """G2-STABLELANE-S1 N2: the kept line's way out (--source pinned) places the pin with the history this box
-    holds, the branch being gone upstream, and goes back with the back warning."""
+    holds, the branch being gone upstream, and warns first: c3 only the gone branch and `keep` reach is not upstream
+    for the lane (its copy holds the branch and the tags; G2 R2 B1)."""
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
     box.cli("source-check", "s")                      # the box's history copy
     git(box.work, "push", "-q", "origin", f"{box.c[2]}:refs/heads/keep")
     git(git(box.work, "remote", "get-url", "origin"), "symbolic-ref", "HEAD", "refs/heads/keep")
     git(git(box.work, "remote", "get-url", "origin"), "update-ref", "-d", "refs/heads/main")
     rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
-    assert rc == 0 and "older than" in out and box.head() == box.c[0], out      # RED before: could not check
+    assert rc == 0 and f"the installed commit {box.c[2][:9]} {OWN}" in out and box.head() == box.c[0], out
+    #                                                   RED before 81807779: could not check
 
 
 def test_a_confirmed_head_put_back_at_the_recorded_commit_is_refused(box, git):
@@ -2390,3 +2392,68 @@ def test_the_pinned_move_uses_the_boxs_copy_only_when_the_branch_is_gone(box, ca
     box.fail_fetch = True                             # a failing read, not a gone branch
     rc, out = _run(box, capsys, "update", "s", "--source", "pinned", "--yes")
     assert rc != 0 and "could not check" in out and box.head() == box.c[2], out  # mutant Y1: back to the pin c1
+
+
+def _delete_main(box, git, keep):
+    """The upstream deletes main; the branch `keep` (already pushed) stays and carries the bare repository's HEAD."""
+    bare = git(box.work, "remote", "get-url", "origin")
+    git(bare, "symbolic-ref", "HEAD", f"refs/heads/{keep}")
+    git(bare, "update-ref", "-d", "refs/heads/main")
+
+
+def test_a_gone_branchs_cached_tip_is_not_upstream_for_the_pinned_move(box, capsys, git):
+    """G2-STABLELANER2 B1: main deleted upstream, the box's copy still holding refs/heads/main at c3; c3 only that
+    gone branch reached (its tag deleted too): --source pinned warns that it deletes commits not upstream (not only
+    "older than")."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3; the pin is c1
+    box.push_tag("v2.9.0", box.c[2])
+    box.cli("source-check", "s")                      # the box's copy: main and v2.9.0 at c3
+    box.side(box.c[0], "keep")                        # an unrelated branch stays
+    _delete_main(box, git, "keep")
+    box.drop_tags("v2.9.0")                           # c3's tag goes too: the copy's tags are read again
+    rc, out = _run(box, capsys, "update", "s", "--source", "pinned")
+    assert rc == 0 and f"the installed commit {box.c[2][:9]} {OWN} 1 commit(s)" in out, out  # RED before: "older
+    assert box.head() == box.c[2]                                                       # than" only
+
+
+def test_a_plain_update_keeps_a_dev_source_whose_branch_is_gone_and_pin_is_sideways(box, capsys, git):
+    """G2-STABLELANER2 B2: main deleted upstream, the pin on a sibling line (tagged, in the box's copy): a plain
+    Update keeps the checkout, named; it never falls through to the pin."""
+    side = box.side(box.c[0])
+    box.push_tag("sibling", side)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], side))   # the pin beside main
+    box.cli("source-check", "s")                      # the box's copy holds c3 and the pin
+    _delete_main(box, git, "side")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}" in out, out   # RED before: no line
+    assert box.head() == box.c[2]                     # RED before: moved sideways to the pin
+
+
+def test_a_plain_update_moves_a_dev_source_whose_branch_is_gone_forward_to_a_newer_pin(box, capsys, git):
+    """G2-STABLELANER2 B2 control: main deleted upstream, the pin a tagged commit after the checkout: a plain
+    forward move, so the plain Update installs the pin (disclosed), as for an unreadable branch."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    newer = box.advance()
+    box.push_tag("v3.0.0", newer)
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], newer))  # the pin after the checkout
+    box.cli("source-check", "s")                      # the box's copy holds c3 and the pin
+    box.side(box.c[0], "keep")
+    _delete_main(box, git, "keep")
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc == 0 and "gone; kept" not in out and box.head() == newer, out
+
+
+def test_a_gone_branch_whose_pin_cannot_be_placed_is_could_not_check(box, capsys, git):
+    """G2-STABLELANER2 B2: main deleted, the box's copy holds the sibling pin but the direction read fails: a plain
+    Update refuses (could not check), never keeps silently or moves."""
+    side = box.side(box.c[0])
+    box.push_tag("sibling", side)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0             # c3
+    box.manifest.write_text(box.manifest.read_text().replace(box.c[0], side))
+    box.push_tag("v2.9.0", box.c[2])                  # c3 stays upstream (tagged): only the direction is asked
+    box.cli("source-check", "s")
+    _delete_main(box, git, "side")
+    box.fail_ancestry_to = side                       # "is the pin after c3?" cannot be read
+    rc, out = _run(box, capsys, "update", "s", "--yes")
+    assert rc != 0 and "could not check" in out and box.head() == box.c[2], out
