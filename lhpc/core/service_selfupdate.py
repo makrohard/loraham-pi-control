@@ -633,21 +633,27 @@ class SelfUpdateOpsMixin:
                     locked.append(True)
                     return None
 
-                def start_failed():                   # started again only if this apply asked for the stop
+                def restart():                        # only if this apply asked for the stop: "ok", "failed", "unverified"
                     try:                              # a 2nd Ctrl-C or a launch error: the restart is not established
                         start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
-                        return getattr(start, "not_found", False) or start.returncode != 0 or not self._web_answers()
+                        if getattr(start, "not_found", False) or start.returncode != 0:
+                            return "failed"
                     except BaseException:
-                        return True
+                        return "failed"
+                    try:
+                        return "ok" if self._web_answers() else "failed"
+                    except KeyboardInterrupt:         # started, its answer not waited for: it may still come up
+                        return "unverified"
                 try:
                     res = self._apply_and_sync(force, stop_console)   # admission still held; venv synced here
                 except BaseException as exc:
                     held.close()
-                    if not stop_requested or not start_failed():
+                    if not stop_requested or (outcome := restart()) == "ok":
                         raise
                     # The operator still learns the console is down: the interruption is named, not lost.
                     why = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-                    return ActionResult(False, f"The update stopped ({why}) — AND lhpc-web did NOT restart. "
+                    said = "did NOT restart" if outcome == "failed" else "was started, its restart not verified"
+                    return ActionResult(False, f"The update stopped ({why}) — AND lhpc-web {said}. "
                                         "Recover with: systemctl --user start lhpc-web.service",
                                         data={"web_restart_failed": True, "interrupted": type(exc).__name__},
                                         next_commands=["systemctl --user start lhpc-web.service", "lhpc status"])
@@ -656,7 +662,12 @@ class SelfUpdateOpsMixin:
                     return self._operator_outcome(res, restarted=False)
                 if not stop_requested:
                     return res                                # a refusal or a no-op: console untouched
-                if start_failed():
+                if (outcome := restart()) == "unverified":
+                    cut = KeyboardInterrupt()
+                    cut.add_note("lhpc-web was started again; its restart was not verified — check: "
+                                 "systemctl --user status lhpc-web.service")
+                    raise cut
+                if outcome == "failed":
                     # A failed REQUIRED restart is ALWAYS ok=False (the console is unavailable). Distinguish
                     # partial success: the source update may have applied (update_applied) — preserve that
                     # AND any venv_sync failure. The summary gives the exact recovery command, no raw output.
@@ -724,16 +735,20 @@ class SelfUpdateOpsMixin:
         return str(self._paths.under(*WAITRESS_SOCK))
 
     def _web_answers(self) -> bool:
-        """After `systemctl start` returned 0 (the simple unit's process was launched): the console answers on its
-        unix socket, bound only after its imports, its lock and its self-check, within `_WEB_UP_S`."""
+        """After `systemctl start` returned 0 (the simple unit's process was launched): the console answers HTTP on
+        its unix socket (any status line), bound only after its imports, its lock and its self-check, within
+        `_WEB_UP_S`. A console that exits after answering is not seen (a stated limit)."""
         import socket as _socket
         import time as _time
         deadline = _time.monotonic() + self._WEB_UP_S
         while True:
             with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+                s.settimeout(max(0.1, min(2.0, deadline - _time.monotonic())))
                 try:
                     s.connect(self._web_socket_path())
-                    return True
+                    s.sendall(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    if s.recv(5) == b"HTTP/":
+                        return True
                 except OSError:
                     pass
             if _time.monotonic() >= deadline:

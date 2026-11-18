@@ -1058,9 +1058,11 @@ def main(argv: list[str] | None = None) -> int:
             f"error: a stored configuration file is unreadable or malformed — {exc}\n"
             "It was left untouched for inspection; repair or remove it, then retry.\n")
         return 1
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as cut:
         # Every `finally` below has run by now; the operator needs where to look, not a traceback.
         sys.stderr.write("interrupted — `lhpc status` shows where it stopped\n")
+        for note in getattr(cut, "__notes__", ()):           # what the interrupted step could not finish
+            sys.stderr.write(note + "\n")
         return 130
 
 
