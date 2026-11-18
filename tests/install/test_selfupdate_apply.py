@@ -193,7 +193,9 @@ def test_a_refusing_firewall_preflight_stops_the_apply_before_the_checkout_moves
     monkeypatch.setattr(svc, "_fw_mark_post_update", lambda: marks.append("fw") or "")
     monkeypatch.setattr(proxy_rerender, "mark", lambda paths: marks.append("proxy") or "")
     res = svc.self_update_apply()
-    assert res is refusal
+    # that refusal, ending with where updates come from (the source line every apply answer carries)
+    assert (res.ok, res.summary, res.details[:-1]) == (False, refusal.summary, []), res
+    assert res.details[-1].startswith("updates from "), res
     assert _head(work) == before
     assert marks == []
 

@@ -221,7 +221,9 @@ def _summarize_output(text: str, limit: int = 200) -> str:
     command result is unchanged."""
     if not text:
         return ""
-    cleaned = _NOISE_RE.sub(" ", _ANSI_RE.sub("", text))
+    # Escapes out first (a colour code glued to "https" hides the URL), then a URL's userinfo, then the cut:
+    # a cut first could split a token from its `@`.
+    cleaned = _NOISE_RE.sub(" ", redact_userinfo(_ANSI_RE.sub("", text)))
     # Collapse every whitespace run (incl. the now-stripped newlines) to single spaces, so nothing
     # depends on HTML/terminal whitespace handling downstream.
     collapsed = " ".join(cleaned.split())
@@ -230,14 +232,23 @@ def _summarize_output(text: str, limit: int = 200) -> str:
     return collapsed
 
 
-# The user/token part of a `scheme://user:token@host/…` URL (greedy to the LAST `@` of the authority, so a
-# password containing `@` goes too). An scp-style `git@host:path` has no scheme and names no secret.
-_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s'\"]*@")
+# The user/token part of a `scheme://user:token@host/…` URL: everything after `://` up to the LAST `@` before
+# whitespace, so a password with `@`, a quote or a slash goes whole (a path holding `@` loses more than its
+# userinfo: shown short, never with a secret). An scp-style `git@host:path` has no scheme and names no secret.
+_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)\S*@")
 
 
 def redact_userinfo(text: str) -> str:
     """`text` with the user/token part of every `scheme://user:token@host` URL in it removed."""
     return _USERINFO_RE.sub(r"\1", text or "")
+
+
+def redact_url(url: str) -> str:
+    """ONE URL (a configured value, not free text) without its user/token part: everything between `://`
+    and its last `@`, whitespace included (git keeps a password with a space as it was typed)."""
+    s = url or ""
+    i, j = s.find("://"), s.rfind("@")
+    return s[:i + 3] + s[j + 1:] if 0 <= i < j else s
 
 
 def origin_info(system: System, root: Path, official: str) -> dict:
@@ -247,16 +258,18 @@ def origin_info(system: System, root: Path, official: str) -> dict:
     this function. An official URL that normalises to "" (degenerate) never matches; with none declared
     there is no official repo to name."""
     from .service_base import _canon_git_url
-    r = _git(system, root, ["remote", "get-url", _REMOTE], _LOCAL_TIMEOUT)
-    raw = r.stdout.strip() if r.returncode == 0 else ""
+    # A configured, non-empty URL first: with it unset or empty, get-url still answers "origin" (a path).
+    c = _git(system, root, ["config", "--get", f"remote.{_REMOTE}.url"], _LOCAL_TIMEOUT)
+    r = _git(system, root, ["remote", "get-url", _REMOTE], _LOCAL_TIMEOUT) if c.returncode == 0 and c.stdout.strip() else None
+    raw = r.stdout.strip() if r is not None and r.returncode == 0 else ""
     if not raw:
         return {"present": False, "display": "", "canonical": False, "line": ""}
     want = _canon_git_url(official)
     canonical = bool(want) and _canon_git_url(raw) == want
-    display = redact_userinfo(raw)
+    display = redact_url(raw)
     line = f"updates from {display}"
     if not canonical and official:
-        line += f" (different from the official repo {redact_userinfo(official)})"
+        line += f" (different from the official repo {redact_url(official)})"
     return {"present": True, "display": display, "canonical": canonical, "line": line}
 
 
@@ -389,12 +402,12 @@ def check_upstream(system: System, branch: str = "", official: str = "") -> dict
     if getattr(f, "not_found", False):
         return {"ok": False, "error": "git not found", "origin": org}
     if f.returncode != 0:
-        return {"ok": False, "error": _summarize_output(redact_userinfo(f.stderr)) or "fetch failed",
+        return {"ok": False, "error": _summarize_output(f.stderr) or "fetch failed",
                 "origin": org}
     ref = f"{_REMOTE}/{br}"
     h = _git(system, root, ["rev-parse", ref], _LOCAL_TIMEOUT)
     if h.returncode != 0:
-        return {"ok": False, "error": _summarize_output(redact_userinfo(h.stderr)) or "no upstream ref",
+        return {"ok": False, "error": _summarize_output(h.stderr) or "no upstream ref",
                 "origin": org}
     head = h.stdout.strip()
     return {"ok": True, "origin": org, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],

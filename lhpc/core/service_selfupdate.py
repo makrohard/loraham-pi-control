@@ -34,10 +34,10 @@ def _with_origin(res: ActionResult, line: str) -> ActionResult:
 def _identity_remedy(reason: str, root, spec) -> tuple[list[str], list[str]]:
     """(next_commands, details) for an unsafe controller identity, chosen by the cause
     `controller_identity_live` names in `reason`. Text only: the refusal does not change."""
-    from .selfupdate import redact_userinfo
+    from .selfupdate import redact_url
     checkout = f"{root}/src/loraham-pi-control"
     # The official URL is shown (in the command too) without its userinfo, as everywhere.
-    branch, remote = getattr(spec, "branch", "main"), redact_userinfo(getattr(spec, "remote", ""))
+    branch, remote = getattr(spec, "branch", "main"), redact_url(getattr(spec, "remote", ""))
     if reason == "checkout is in detached HEAD" or reason.startswith("checkout branch "):
         return ([f"git -C {checkout} switch {branch}", _RETRY],
                 [f"  the checkout is off its branch {branch}; git refuses the switch while it "
@@ -814,8 +814,8 @@ class SelfUpdateOpsMixin:
         org = selfupdate.origin_info(self._system, root, self._official_remote()) if root is not None else {}
         try:
             res = self._self_update_locked_apply(force, before_advance)
-        except _FWAbort as abort:              # firewall preflight / before_advance refused: returned as it is
-            return abort.result
+        except _FWAbort as abort:              # firewall preflight / before_advance refused: its own answer
+            res = abort.result
         return _with_origin(res, org.get("line", ""))
 
     def _self_update_locked_apply(self, force: bool, before_advance=None) -> ActionResult:
