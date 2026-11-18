@@ -50,9 +50,10 @@ def cli(env, monkeypatch):
     """`main` with the console ACTIVE, holding the controller-runtime lock SHARED until it is stopped: each
     systemctl call is recorded with the HEAD and the state/ + config/ files at that moment; the venv sync
     and the unit refresh are stubbed (not this behaviour) and record whether the lock is held EXCLUSIVE.
-    A start brings the console up: it answers on its unix socket (a short path: a socket path is <= 107 bytes)."""
-    import socket
+    A start brings the console up: it answers HTTP on its unix socket (a short path: a socket path is <= 107
+    bytes)."""
     import tempfile
+    import threading
 
     from lhpc.adapters.cli.main import main
     from lhpc.core.probes.backends import RealCommandRunner
@@ -64,7 +65,8 @@ def cli(env, monkeypatch):
     calls.locked, calls.answer = [], {}
     console = calls.console = [selfupdate.controller_runtime_lock(env["paths"], exclusive=False)]
     console[0].__enter__()
-    sock_path, listeners = tempfile.mkdtemp(prefix="lhpc-web-") + "/lhpc-web.sock", []
+    sock_path, listeners, up = tempfile.mkdtemp(prefix="lhpc-web-") + "/lhpc-web.sock", [], threading.Event()
+    calls.sock_path = sock_path
     monkeypatch.setattr(ControllerService, "_web_socket_path", lambda self: sock_path, raising=False)
     real = RealCommandRunner.run
 
@@ -79,9 +81,9 @@ def cli(env, monkeypatch):
         if (answer := calls.answer.get(argv[2])) is not None:
             return answer()
         if argv[2] == "start" and not listeners:            # the console comes up and answers
-            listeners.append(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
-            listeners[0].bind(sock_path)
-            listeners[0].listen()
+            listeners.append(_listen(sock_path))
+            up.set()
+            threading.Thread(target=_answer_http, args=(listeners[0], up), daemon=True).start()
         return CommandResult(0, "", "")                      # is-active: active; stop/start: done
 
     def step(name, result):
@@ -93,8 +95,31 @@ def cli(env, monkeypatch):
     yield main, calls
     if console:
         console.pop().__exit__(None, None, None)
+    up.clear()
     for listener in listeners:
         listener.close()
+
+
+def _listen(path):
+    import socket
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen()
+    return listener
+
+
+def _answer_http(listener, up):
+    """The console serving: each connection gets an HTTP status line, until the test ends."""
+    import contextlib
+    listener.settimeout(0.2)
+    while up.is_set():
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            continue
+        with conn, contextlib.suppress(OSError):             # a client that hung up gets no answer
+            conn.recv(1024)
+            conn.sendall(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n")
 
 
 def _service_calls(calls):
@@ -362,3 +387,48 @@ def test_a_restart_that_raises_still_says_the_console_did_not_restart(env, cli, 
     assert rc == 1, (rc, cap)
     assert said in cap.out and "lhpc-web did NOT restart" in cap.out, cap
     assert "systemctl --user start lhpc-web.service" in cap.out and _service_calls(calls) == [STOP, START], cap
+
+
+def test_a_console_that_listens_but_never_answers_http_did_not_restart(env, cli, monkeypatch, capsys):
+    """The console binds its socket and then stops (an exit after the bind): a connection is accepted by the
+    kernel, but no HTTP answer comes, so the restart is not taken as proven."""
+    from lhpc.core.services import ControllerService
+    main, calls = cli
+    monkeypatch.setattr(ControllerService, "_WEB_UP_S", 1.0, raising=False)
+    held = []
+
+    def start():
+        held.append(_listen(calls.sock_path))                 # listening, never accepting or answering
+        return CommandResult(0, "", "")
+    calls.answer["start"] = start
+    gitrepo.upstream_commit(env["up"])
+    waits = _retry_clock(monkeypatch)
+    try:
+        assert main(["self-update", "--apply", "--yes"]) == 1
+    finally:
+        for listener in held:
+            listener.close()
+    out = capsys.readouterr().out
+    assert "lhpc-web did NOT restart" in out and "systemctl --user start lhpc-web.service" in out, out
+    assert waits and _service_calls(calls) == [STOP, START], (waits, calls)
+
+
+def test_ctrl_c_while_waiting_for_the_console_exits_130_and_says_the_restart_was_not_verified(env, cli, monkeypatch,
+                                                                                             capsys):
+    """The operator presses Ctrl-C while the apply waits for the started console to answer: the start may
+    still complete, so it says the restart was not verified (not that it failed) and ends as interrupted."""
+    import time as _time
+    main, calls = cli
+
+    def ctrl_c(s):
+        raise KeyboardInterrupt
+
+    def start():                                               # started; not answering yet, and the wait is cut
+        monkeypatch.setattr(_time, "sleep", ctrl_c)
+        return CommandResult(0, "", "")
+    calls.answer["start"] = start
+    gitrepo.upstream_commit(env["up"])
+    assert main(["self-update", "--apply", "--yes"]) == 130
+    cap = capsys.readouterr()
+    assert "not verified" in cap.err and "systemctl --user status lhpc-web.service" in cap.err, cap
+    assert "did NOT restart" not in cap.out + cap.err and _service_calls(calls) == [STOP, START], (cap, calls)
