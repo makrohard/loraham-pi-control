@@ -9,9 +9,12 @@
         gets its normal suggested default. Each stack's own Proxy entry remains available for
         individual exceptions.</p>
       {% if ws_stackwebs.stacks %}
-        <p class="muted">Will affect:
-          {% for r in ws_stackwebs.stacks %}<code>{{ r.sid }}</code> {{ r.label }}
-            ({% if r.keeps %}keeps port {{ r.port }}{% else %}gets port {{ r.port }}{% endif %}){{ ", " if not loop.last }}{% endfor %}</p>
+        {# PROXY-AFFECT-LIST: one row per stack proxy, in columns as wide as the panel allows (style.css .affectlist) #}
+        <p class="muted affecthead">Will affect:</p>
+        <ul class="affectlist muted">
+          {% for r in ws_stackwebs.stacks %}<li><code>{{ r.sid }}</code> {{ r.label }}
+            ({% if r.keeps %}keeps port {{ r.port }}{% else %}gets port {{ r.port }}{% endif %})</li>
+          {% endfor %}</ul>
         <form method="post" action="{{ url_for('stack_webs_configure') }}">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
           <table class="paramgrid dptab">
