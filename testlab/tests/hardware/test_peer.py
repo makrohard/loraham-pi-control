@@ -471,7 +471,9 @@ def _fake_rns(monkeypatch, sent, box=None):
 
         def announce(self, h):
             for x in handlers:                                   # the box's announce is heard at once
-                x.received_announce(b"box", None, b"app")
+                for h in (box or {}).get("others", []):           # another node's announce, before the box's
+                    x.received_announce(h, None, b"app")
+                x.received_announce(BOXH, None, b"app")
 
         MAX_DELIVERY_ATTEMPTS = 5                                # LXMF 1.1.1's value
 
@@ -482,7 +484,7 @@ def _fake_rns(monkeypatch, sent, box=None):
             if (box or {}).get("answers"):
                 self.incoming(types.SimpleNamespace(content=IN1.encode()))
     lxmf.LXMRouter = Router
-    lxmf.display_name_from_app_data = lambda d: "LHPC"
+    lxmf.display_name_from_app_data = lambda d: "Anonymous Peer"
 
     class Msg:
         OPPORTUNISTIC = 1
@@ -495,6 +497,10 @@ def _fake_rns(monkeypatch, sent, box=None):
     lxmf.LXMessage = Msg
     monkeypatch.setitem(sys.modules, "RNS", rns)
     monkeypatch.setitem(sys.modules, "LXMF", lxmf)
+
+
+BOXHEX = "6326b7e6a36b7912ba02bfc8260bfc77"            # the lab box's MeshChat LXMF address (2026-11-18)
+BOXH = bytes.fromhex(BOXHEX)
 
 
 class FastClock:
@@ -517,13 +523,13 @@ def rns_sent(monkeypatch):
 
 
 def test_rns_exchange_no_go_file_no_second_tx(rns_sent, tmp_path, capsys):
-    assert peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == peer.NOT_SEEN
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == peer.NOT_SEEN
     assert rns_sent == [] and "TX2-NOT-GATED" in capsys.readouterr().out   # the public path: the runner's own call form
 
 
 def test_rns_exchange_go_file_sends_once(rns_sent, tmp_path, capsys):
     (tmp_path / "go").write_text("")
-    peer.rns_exchange(IN1, "LHPC", 5, str(tmp_path / "dest"), OUT1, str(tmp_path / "go"))
+    peer.rns_exchange(IN1, BOXHEX, 5, str(tmp_path / "dest"), OUT1, str(tmp_path / "go"))
     assert len(rns_sent) == 1 and "TX2-NOT-GATED" not in capsys.readouterr().out
 
 
@@ -533,7 +539,7 @@ def test_an_rnode_the_local_file_does_not_name_is_refused_before_anything_opens(
     monkeypatch.setattr(sys.modules["RNS"], "Reticulum", lambda **k: made.append("reticulum"))
     monkeypatch.delenv("PEER_rnode")
     with pytest.raises(RuntimeError, match="PEER_rnode is not set"):
-        peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     assert made == [] and rns_sent == []
 
 
@@ -541,7 +547,7 @@ def test_rns_exchange_removes_its_scratch_config(rns_sent, monkeypatch, tmp_path
     made = []
     real = tempfile.mkdtemp
     monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append(real(dir=tmp_path, **k)) or made[-1])
-    peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     assert len(made) == 1 and not os.path.exists(made[0])
 
 
@@ -554,14 +560,14 @@ def test_rns_exchange_succeeds_only_with_the_boxs_message_and_its_delivery_proof
     monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
     monkeypatch.setattr(peer.time, "sleep", c.sleep)
     (tmp_path / "go").write_text("")
-    assert peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == rc
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == rc
     assert " ".join(capsys.readouterr().out.splitlines()[-1].split()[:3]) == last
 
 
 def test_the_shared_rnsd_instance_comes_from_the_local_file(rns_sent, tmp_path):
     CONFIGS.clear()
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     assert len(CONFIGS) == 1 and [line.strip() for line in CONFIGS[0].splitlines() if "instance" in line] == [
         "share_instance = Yes", "instance_name = lab-rns", "shared_instance_port = 40001", "instance_control_port = 40002"]
 
@@ -578,18 +584,18 @@ def test_a_missing_or_malformed_rns_instance_is_refused_before_anything_opens(rn
     monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append("mkdtemp") or str(tmp_path / "scratch"))
     monkeypatch.setenv("PEER_rnode", f"rnode usb-Example_RNode-if00-port0 hub1 {fields}")
     with pytest.raises(RuntimeError, match=why):
-        peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     assert made == [] and rns_sent == []
 
 
 def test_rns_exchange_needs_the_go_file_argument(capsys):
-    assert peer.main(["rns-exchange", IN1, "LHPC", "5", "/x/dest", OUT1]) == 2
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", "/x/dest", OUT1]) == 2
 
 
 def test_rns_exchange_message_sent_once_no_retries(rns_sent, tmp_path):
     # the opportunistic message goes with MAX_DELIVERY_ATTEMPTS 0 = exactly one send (no retry)
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, "LHPC", "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     assert [a for _m, a in rns_sent] == [0]
 
 
@@ -638,3 +644,31 @@ def test_the_peer_side_starts_no_process(name):
     # The peer driver talks to its radio in-process: no module or call that starts a process, so no PEER_* field or
     # other lab value ever enters a shell string (a field is only an argument or a device name).
     assert spawns((pathlib.Path(PEER).parent / name).read_text()) == []
+
+
+def test_rns_exchange_tells_the_box_by_its_lxmf_address_not_its_name(monkeypatch, tmp_path, capsys):
+    # red-before (81c0f431, GO-F row 5): the exchange waited for the display name "LHPC"; the box's MeshChat announces its
+    # default "Anonymous Peer" (meshchat.py:3402), so its announce was never taken. Another node's announce stays ignored.
+    sent, c = [], FastClock()
+    _fake_rns(monkeypatch, sent, {"answers": True, "confirms": True, "others": [bytes(16)]})
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "BOX-NAME Anonymous Peer" in out and any(ln.startswith("BOX-ANNOUNCE heard ") for ln in out)
+
+
+def test_rns_exchange_ignores_an_announce_of_another_address(monkeypatch, tmp_path, capsys):
+    sent, c = [], FastClock()
+    _fake_rns(monkeypatch, sent, {"answers": True, "confirms": True})
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    assert peer.main(["rns-exchange", IN1, "ff" * 16, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == peer.NOT_SEEN
+    assert "BOX-ANNOUNCE not heard" in capsys.readouterr().out and sent == []
+
+
+@pytest.mark.parametrize("dest", ["LHPC", "6326B7E6A36B7912BA02BFC8260BFC77", "6326b7e6", "6326b7e6a36b7912ba02bfc8260bfc77ff"])
+def test_rns_exchange_refuses_a_box_address_that_is_not_32_hex(dest, tmp_path):
+    assert peer.main(["rns-exchange", IN1, dest, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 2

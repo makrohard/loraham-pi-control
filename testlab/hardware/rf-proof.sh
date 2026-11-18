@@ -118,6 +118,9 @@ STATUS_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock"
 while not b.endswith(b"\n") and len(b) < 4096:
  c=s.recv(4096 - len(b)); assert c, "EOF before the end of the STATUS line"; b+=c
 print(b.decode().strip())'
+# MCHASH_PY: the LXMF delivery address of the box's MeshChat, read only from its identity file (the manifest runs MeshChat with
+# --storage-dir {runtime}/state/meshchat and no --identity-file: its identity is <storage>/identity); prints the hash only
+MCHASH_PY='import sys, RNS; i = RNS.Identity.from_file(sys.argv[1]); assert i, "no identity"; print("LXMF", RNS.Destination.hash(i, "lxmf", "delivery").hex())'
 CPORT_PY='import sys; from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); sid, inst, _b, why = instances.resolve(s, sys.argv[1]); print("WHY", why or "-"); [print("CPORT", e.address.rsplit(":", 1)[1]) for c in (s.stack(sid).components if inst is not None else ()) for t, e in zip(c.endpoints, instances.endpoints_for(c.endpoints, inst)) if t.kind == "tcp" and t.address.endswith(":5000")]; life = s._lifecycle(); [print("OWNED", r.get("pgid")) for r in (life.owned_records("meshcore-node", rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]; [print("OTHER", c) for c in ("meshcore-webui", "meshcore-cli") for r in (life.owned_records(c, rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]'
 RADIOS_PY='from lhpc.core import paths, radios; s = radios.load(paths.resolve_paths()); print("STATE", s.kind); [print("ROW", r.id, r.model, r.band, r.enabled, "serial=" + r.usb_serial, "port=" + r.usb_port, "hp=" + str(r.high_power)) for r in s.radios]'
 CAPS_PY='import sys; sys.argv[1:] and sys.path.insert(0, sys.argv[1]); from lhpc.core import radio_models; [print("CAP", m.id, m.power_default_dbm) for m in radio_models.load().values()]'
@@ -535,7 +538,8 @@ drystatus() { local v="DRY_STATUS_${1}_$2" bd f sf; [ -n "${!v:-}" ] && { printf
 dryradios() { local v="DRY_RADIOS_$1"; printf '%s\n' "${!v:-STATE valid}"; }
 dryout() { local w=$1 f=$2 c=$3; : > "$OUT/$f"
   case "$c" in *"$RADIOS_PY"*) dryradios "$w" > "$OUT/$f";; *"$STATUS_PY"*) drystatus "$w" "${c##* }" > "$OUT/$f";;
-    *"$CPORT_PY"*) [ -z "${DRY_MC_OTHER:-}" ] || echo "OTHER $DRY_MC_OTHER" > "$OUT/$f";; esac; }   # another MeshCore client
+    *"$CPORT_PY"*) [ -z "${DRY_MC_OTHER:-}" ] || echo "OTHER $DRY_MC_OTHER" > "$OUT/$f";;
+    *"$MCHASH_PY"*) echo "LXMF ${DRY_MCHASH:-00112233445566778899aabbccddeeff}" > "$OUT/$f";; esac; }   # another MeshCore client
 frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
   local w=$1 c=$2 in=$3 send= base= rid='*' cls
@@ -1052,7 +1056,11 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists;
   # it listens BEFORE the MeshChat start, whose own announce (the product's start step) it must hear
-  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "${RT_BOXNAME:-LHPC}" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
+  must "$b" 5-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"   # read only
+  local bh; bh=$(body 5-lxmf.txt | sed -n 's/^LXMF //p' | tail -n 1)
+  [[ "$bh" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no LXMF address of the box's MeshChat (5-lxmf.txt): the PC cannot tell its announce"
+  data "row 5: the box's MeshChat LXMF address $bh"
+  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "$bh" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
   [ "$MODE" = dry ] || sleep 10
   # 3. the box's announce: MeshChat announces once inside its own start (no request from the kit): the start is that send
   keep "STARTED_${b}_$r" 1; undo_push "$b" "$(gstop "meshchat@$r")"

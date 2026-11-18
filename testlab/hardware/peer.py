@@ -28,7 +28,7 @@ The runner holds an exclusive flock around every call, so two peers never act at
   peer.py mc-power      [<p>]          T-Deck Pro (BLE): tx power (with <p>: set, then the device query reads it back)
   peer.py mc-send       <nonce>        T-Deck Pro: one public-channel message
   peer.py mc-read       <nonce> <s>    T-Deck Pro: a channel or contact message with the nonce
-  peer.py rns-exchange  <nonce-in> <box-name> <s> <dest-file> <nonce-out> <go-file>   a client of the PC's shared rnsd:
+  peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file>   a client of the PC's shared rnsd:
                                        announce, write the PC's LXMF destination hash to <dest-file>, wait for the box's announce
                                        (its display name), send <nonce-out> to it and wait for its delivery proof (the box's
                                        receipt: `DELIVERED <nonce-out> <time>`), and wait for an LXMF message carrying <nonce-in>;
@@ -55,7 +55,7 @@ ACTIONS = {"meshcom-power": ("tdeck", "power"), "meshcom-send": ("tdeck", "send"
            "mc-power": ("tdpro", "power"), "mc-send": ("tdpro", "send"), "mc-read": ("tdpro", "read"),
            "rns-exchange": ("rnode", "exchange")}
 ARGS = {"power": ("[<p>]",), "send": ("<nonce>",), "read": ("<nonce>", "<s>"),
-        "exchange": ("<nonce-in>", "<box-name>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>")}
+        "exchange": ("<nonce-in>", "<box-dest>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>")}
 
 
 def power_ok(act, v):
@@ -78,7 +78,8 @@ def usage_error(a):
             return f"{a[0]} <p>: a power set runs only from the runner's one setter ({CTX}=set|restore)"
         return None
     ok = len(args) == len(want) and all(
-        re.fullmatch(r"\d+(\.\d+)?", v, re.ASCII) if w == "<s>" else NONCE.fullmatch(v) if w.startswith("<nonce") else True
+        re.fullmatch(r"\d+(\.\d+)?", v, re.ASCII) if w == "<s>" else NONCE.fullmatch(v) if w.startswith("<nonce")
+        else re.fullmatch(r"[0-9a-f]{32}", v, re.ASCII) if w == "<box-dest>" else True
         for w, v in zip(want, args, strict=True))
     if not ok:
         return f"{a[0]}: {' '.join(want)} (a nonce: <a-z prefix> <8 hex>)"
@@ -427,7 +428,7 @@ def mc_read(nonce, secs):
     return hit[0] if hit else None
 
 
-def rns_exchange(inn, box_name, secs, dest_file, out, go_file):
+def rns_exchange(inn, box_dest, secs, dest_file, out, go_file):
     """One exchange through the PC's shared rnsd, in a scratch config removed afterwards; the local file must name the
     RNode peer (PEER_rnode) before anything is opened."""
     import shutil
@@ -436,12 +437,12 @@ def rns_exchange(inn, box_name, secs, dest_file, out, go_file):
     instance = rns_instance()
     d = tempfile.mkdtemp(prefix="rfproof-rns-")
     try:
-        return rns_run(d, instance, inn, box_name, secs, dest_file, out, go_file)
+        return rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def rns_run(d, instance, inn, box_name, secs, dest_file, out, go_file):
+def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file):
     import LXMF
     import RNS
     with open(os.path.join(d, "config"), "w") as f:
@@ -465,7 +466,8 @@ def rns_run(d, instance, inn, box_name, secs, dest_file, out, go_file):
         aspect_filter = "lxmf.delivery"
 
         def received_announce(self, destination_hash, announced_identity, app_data):
-            if app_data and LXMF.display_name_from_app_data(app_data) == box_name and not box:
+            if destination_hash.hex() == box_dest and not box:   # the box's LXMF address; its name only for the log
+                print(f"BOX-NAME {LXMF.display_name_from_app_data(app_data) if app_data else '-'}")
                 box.append((ts(), destination_hash))
     RNS.Transport.register_announce_handler(Ann())
     with open(dest_file, "w") as f:

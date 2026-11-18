@@ -90,7 +90,7 @@ def exchange(monkeypatch, capsys, tmp_path, clock):
     monkeypatch.setattr(fake.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(fake.time, "sleep", clock.sleep)
     monkeypatch.setenv(CTX, "tx")
-    rc = fake.main(["rns-exchange", IN1, "LHPC", "60", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    rc = fake.main(["rns-exchange", IN1, "6326b7e6a36b7912ba02bfc8260bfc77", "60", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     return rc, capsys.readouterr().out
 
 

@@ -306,3 +306,34 @@ def test_row_2_runs_the_tracker_as_is_only_with_tracker_asis(tmp_path, env, out)
 def test_a_bad_tracker_asis_stops_at_the_start(tmp_path):
     d = dry(tmp_path, TRACKER_ASIS="yes")
     assert d.rc == 2 and "STOP: TRACKER_ASIS is '' or 1" in d.err, d.err[-500:]
+
+
+# ---- row 5 tells the box's announce by its LXMF address (handler DEC 11-18; GO-F row 5 failed on the display name) -------
+
+def test_row_5_reads_the_boxs_lxmf_address_before_the_exchange_and_passes_it(tmp_path):
+    # red-before (81c0f431): the exchange was given the fixed name "LHPC"; the box announced "Anonymous Peer"
+    d = dry(tmp_path, DRY_MCHASH="6326b7e6a36b7912ba02bfc8260bfc77")
+    assert d.rc == 0, d.err[-2000:]
+    lines = block(d.out, 5).splitlines()
+    rd = next(i for i, x in enumerate(lines) if x.startswith("  [dry] Z > 5-lxmf.txt: "))
+    ex = next(i for i, x in enumerate(lines) if "rns-exchange" in x and "[dry] PC > 5-peer.txt" in x)
+    assert rd < ex and "state/meshchat/identity" in lines[rd]
+    assert " rns-exchange rfkit\\ " in lines[ex] and " 6326b7e6a36b7912ba02bfc8260bfc77 420 " in lines[ex], lines[ex]
+    assert " LHPC " not in lines[ex]
+
+
+ROW5H = ('MODE=live; SCRATCH=$EVD; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; '
+         'must() { case $2 in 5-framing0.txt) echo yes > "$OUT/$2";; 5-lxmf.txt) printf "%s\\n" "$H" > "$OUT/$2";; esac; XRC=0; }; '
+         'spower() { :; }; hpower() { :; }; tx() { echo "TX-REACHED $*"; exit 0; }; keep KZ r2; row_5 Z:KZ')
+
+
+@pytest.mark.parametrize("h, stop", [("LXMF 6326b7e6a36b7912ba02bfc8260bfc77", False), ("", True), ("LXMF 6326b7e6", True),
+                                     ("LXMF 6326B7E6A36B7912BA02BFC8260BFC77", True), ("Traceback (most recent call last):", True)])
+def test_row_5_without_a_valid_lxmf_address_stops_before_any_tx(tmp_path, h, stop):
+    r, _ = source_only(tmp_path, ROW5H, H=h)
+    if stop:
+        assert r.returncode == 2 and "TX-REACHED" not in r.stdout, r.stdout + r.stderr
+        assert stop_lines(r) == ["STOP: row 5: no LXMF address of the box's MeshChat (5-lxmf.txt): the PC cannot tell its announce"]
+    else:
+        assert r.returncode == 0 and "TX-REACHED R5-rnode 1 control -- peer 5-peer.txt" in r.stdout, r.stdout + r.stderr
+        assert " rns-exchange rfkit 0a1b2c3d 6326b7e6a36b7912ba02bfc8260bfc77 420 " in r.stdout
