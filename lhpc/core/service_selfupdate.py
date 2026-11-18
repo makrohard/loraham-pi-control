@@ -586,6 +586,16 @@ class SelfUpdateOpsMixin:
             # Only now is the update finished: `venv-unsynced` stays recorded until the units are refreshed
             # too, so an interruption in between leaves a record the next `--apply` resumes from (`_resumes_sync`).
             res = self._clear_incomplete_states(res, ("venv-unsynced", "units-stale")) or res
+        return res
+
+    def _with_stack_updates(self, res: ActionResult) -> ActionResult:
+        """After a synced advance: `res` with the stacks that have an update (`_stacks_with_an_update`); every other
+        result unchanged. Advisory, so the operator flow runs it after its locks are let go and the console is started
+        again (never while it is down); the one-click unit before it records the outcome (its record carries it)."""
+        import dataclasses as _dc
+        import sys as _sys
+        if not res.data.get("update_applied") or res.data.get("venv_sync_failed"):
+            return res
         if line := self._stacks_with_an_update(_sys.executable):
             res = _dc.replace(res, details=[*res.details, line], data={**res.data, "stack_updates": line})
         return res
@@ -682,7 +692,7 @@ class SelfUpdateOpsMixin:
                                         next_commands=["systemctl --user start lhpc-web.service", "lhpc status"])
                 held.close()                                  # let go right before the console starts again
                 if not web_active:
-                    return self._operator_outcome(res, restarted=False)
+                    return self._operator_outcome(self._with_stack_updates(res), restarted=False)
                 if not stop_requested:
                     return res                                # a refusal or a no-op: console untouched
                 if (outcome := restart()) == "unverified":
@@ -690,6 +700,7 @@ class SelfUpdateOpsMixin:
                     cut.add_note("lhpc-web was started again; its restart was not verified — check: "
                                  "systemctl --user status lhpc-web.service")
                     raise cut
+                res = self._with_stack_updates(res)           # advisory: after the restart, whatever its outcome
                 if outcome == "failed":
                     # A failed REQUIRED restart is ALWAYS ok=False (the console is unavailable). Distinguish
                     # partial success: the source update may have applied (update_applied) — preserve that
@@ -1172,7 +1183,7 @@ class SelfUpdateOpsMixin:
                 if (refused := self._runtime_lock_exclusive(probe)) is not None:
                     res = refused
                     raise _StopRun()
-            res = self._apply_and_sync(force)                 # the one post-update path (venv sync, units)
+            res = self._with_stack_updates(self._apply_and_sync(force))   # the one post-update path (venv sync, units)
             if "pip_sync_s" in res.data:  # the slow-target budget's L4 quantity (docs/test-matrix.md#slow-target-baseline)
                 print(f"[selfupdate] pip sync {res.data['pip_sync_s']:.1f} s", file=sys.stderr, flush=True)
             res = self._oneclick_outcome(res)

@@ -166,9 +166,10 @@ def _published(run, mirror, commit: str) -> bool | None:
     return bool(out.stdout.strip()) if out.returncode == 0 else None
 
 
-def resolve(run, remote: str, branch: str, paths) -> StableRef:
+def resolve(run, remote: str, branch: str, paths, history=None) -> StableRef:
     """The stable target on `remote`'s `branch` (the remote validated here first), through `run(argv, timeout=)`: the
-    mirror's fetch and, on GitHub, the releases API (curl, 10 s, no retry; on a 404 the repository's own page)."""
+    mirror's fetch (`history(remote, branch)` when given: the operation's one fetch, `resolver`) and, on GitHub, the
+    releases API (curl, 10 s, no retry; on a 404 the repository's own page)."""
     from . import validators
     try:
         remote = validators.remote_url(remote or "", field="remote")
@@ -176,7 +177,7 @@ def resolve(run, remote: str, branch: str, paths) -> StableRef:
         return StableRef(why=f"invalid remote ({exc})")
     if not remote:
         return StableRef(why="no remote configured")
-    mirror, why = fetch_history(run, remote, branch, paths)
+    mirror, why = history(remote, branch) if history is not None else fetch_history(run, remote, branch, paths)
     if mirror is None:
         return StableRef(why=why)
     refs = _git(run, mirror, "for-each-ref", "refs/tags", "--format=%(refname:strip=2) %(objectname) %(*objectname)")
@@ -239,7 +240,7 @@ def resolver(run, paths):
 
     def get(remote: str, branch: str) -> StableRef:
         if (remote, branch) not in seen:
-            seen[remote, branch] = resolve(run, remote, branch, paths)
+            seen[remote, branch] = resolve(run, remote, branch, paths, history)
         return seen[remote, branch]
 
     def history(remote: str, branch: str) -> tuple:

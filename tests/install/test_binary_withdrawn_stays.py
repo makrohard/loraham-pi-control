@@ -656,7 +656,9 @@ def test_plan_and_apply_refuse_a_dirty_stale_checkout_of_the_same_artifact_alike
     state["dirty"] = ["run.sh"]
     plan, apply = (svc.install("meshcom", apply=a, source="binary") for a in (False, True))
     for res in (plan, apply):
-        assert not res.ok and "the artifact's run scripts must come from that checkout" in res.summary, res.summary
+        assert not res.ok and "has local changes" in res.summary and "the binary was built from" in res.summary, res
+        assert "  changed: run.sh" in res.details, res.details            # the cause, named (G2-RELP1b N)
+        assert "lhpc install meshcom --source binary --yes" not in res.next_commands, res.next_commands  # no retry
     assert plan.summary == apply.summary and plan.next_commands == apply.next_commands
     assert state["adopted"] == []
 

@@ -569,10 +569,10 @@ def read_journal(paths: Paths):
             isinstance(k, str) and validators.safe_rel(k) and isinstance(v, str) and validators.safe_rel(v)
             for k, v in dirs.items()):
         return None, "unsafe"
-    clones = d.get("clones", {})                # {component: {commit, path}} (`record_clone`): the recovery reads both
+    clones = d.get("clones", {})                # {component: {commit, path, selector}} (`record_clone`)
     if not isinstance(clones, dict) or not all(
             isinstance(v, dict) and isinstance(v.get("commit"), str) and validators.safe_rel(v.get("path"))
-            for v in clones.values()):
+            and v.get("selector", "pinned") in CLONE_SELECTORS for v in clones.values()):
         return None, "unsafe"
     made = d.get("created_dirs", [])
     if not isinstance(made, list) or not all(isinstance(x, str) and validators.safe_rel(x) for x in made):
@@ -612,32 +612,37 @@ def _journal_update(paths: Paths, **fields) -> dict:
     return j
 
 
-def record_clone(paths: Paths, comp, commit: str | None) -> None:
-    """Journal a supporting checkout's commit AND its source path BEFORE the transaction moves it ("" = it did not
-    exist), so the rollback moves that very checkout back (`restore_clones`, whatever the manifest says by then);
-    None forgets it (its adoption failed and changed nothing)."""
+CLONE_SELECTORS = ("pinned", "stable", "dev")   # a journaled checkout's lane; a journal without one: pinned
+
+
+def record_clone(paths: Paths, comp, commit: str | None, selector: str = "pinned") -> None:
+    """Journal a supporting checkout's commit, its source path AND its selector BEFORE the transaction moves it
+    ("" = it did not exist), so the rollback moves that very checkout back on its own lane (`restore_clones`,
+    whatever the manifest says by then); None forgets it (its adoption failed and changed nothing)."""
     j, _state = read_journal(paths)
     clones = {k: v for k, v in ((j or {}).get("clones") or {}).items() if k != comp.id}
     _journal_update(paths, clones=clones if commit is None else
-                    {**clones, comp.id: {"commit": commit, "path": comp.source.path}})
+                    {**clones, comp.id: {"commit": commit, "path": comp.source.path, "selector": selector}})
 
 
 def move_clones(svc, stack_id: str, moves, locked: bool) -> tuple[list, str]:
     """Adopt each supporting checkout in `moves` [(component, the binary's commit, its commit now or "")] at
     the binary's commit, under the held locks, inside an open binary transaction: (notes, "") or (notes so far, why
-    it failed). Each checkout's commit is journaled BEFORE it is moved, so the rollback (in-process or the next
-    recovery) moves it back: a failed install never leaves the old binary with new run scripts."""
+    it failed). Each checkout's commit and selector are journaled BEFORE it is moved, so the rollback (in-process or
+    the next recovery) moves it back on its lane: a failed install never leaves the old binary with new run scripts."""
+    from .install import new_source_active
     inst, notes = svc._installer(), []
     for comp, want, prev in moves:
-        record_clone(svc._paths, comp, prev)
+        record_clone(svc._paths, comp, prev, source_registry.recorded_selector(svc._paths, comp.source.path))
         # The source lock of this path is held by an OUTER boundary (the auto-install run, `locked`) or by
         # THIS install's own guard over `_binary_source_paths`: re-acquiring it would self-contend.
         held = locked or comp.source.path in set(svc._binary_source_paths(stack_id))
         act = inst.adopt_source(comp, source="pinned", locked=held,
                                 force=svc._paths.resolve_source(comp.source.path).is_dir(),
                                 pinned_expected=(want, "the binary artifact's commit"))   # exact, not the pin (U9)
-        if act.status == "failed":                 # the adoption changes nothing when it fails
-            record_clone(svc._paths, comp, None)
+        if act.status == "failed":
+            if not new_source_active(act):         # changed nothing: nothing to move back
+                record_clone(svc._paths, comp, None)
             return notes, (f"{comp.id} needs its source checkout (run scripts live there) and it could not "
                            f"be adopted ({act.detail}).")
         notes.append(f"  adopted pinned source for {comp.id} (run scripts)")
@@ -709,21 +714,14 @@ def inspect_clones(svc, stack_id: str, spec, commits: dict, src_cmd: str):
                 # AT the pin is not UNMODIFIED: run.sh / gps-relay.py run FROM this tree,
                 # so a locally edited copy would run operator code under a "pinned" install.
                 _dirty = inst.dirty_report(dest, comp.source.path)
-                if stale and _dirty:
-                    return [], ActionResult(
-                        False,
-                        f"Binary install of '{stack_id}' blocked: {comp.source.path} is at "
-                        f"{(rec.resolved_commit or '?')[:9]}, the binary was built from "
-                        f"{want[:9]} — the artifact's run scripts must come from that "
-                        "checkout.",
-                        next_commands=[f"lhpc install {stack_id} --source binary --yes"],
-                        data={"binary_failed": True})
                 if _dirty:
                     _ch = list(_dirty.tracked) + list(_dirty.untracked)
                     return [], ActionResult(
                         False,
                         f"Binary install of '{stack_id}' blocked: {comp.source.path} has "
-                        "local changes — the artifact runs scripts from that checkout.",
+                        "local changes — the artifact runs scripts from that checkout"
+                        + (f" (it is at {(rec.resolved_commit or '?')[:9]}, the binary was built from {want[:9]})."
+                           if stale else "."),
                         details=[f"  changed: {c}" for c in _ch[:5]],
                         next_commands=[src_cmd], data={"binary_failed": True})
                 if not stale:   # clean and at the binary's commit: reuse it
@@ -733,9 +731,9 @@ def inspect_clones(svc, stack_id: str, spec, commits: dict, src_cmd: str):
 
 
 def journaled_clones(svc, stack_id: str, clones: dict) -> tuple[list, str]:
-    """(the (component, journaled commit) pairs the recovery moves back, refusal), by reading alone: the recovery
-    and the plan of an install with that journal open give the same refusal. A checkout to move back the manifest
-    no longer names at its journaled path is refused by name; one created by the install ("" commit) is not."""
+    """(the (component, journaled commit, selector) triples the recovery moves back, refusal), by reading alone: the
+    recovery and the plan of an install with that journal open give the same refusal. A checkout to move back the
+    manifest no longer names at its journaled path is refused by name; one created by the install ("" commit) is not."""
     st = svc.stack(stack_id)
     by_id = {c.id: c for c in (st.components if st else ())}
     comps, lost = [], []
@@ -743,7 +741,7 @@ def journaled_clones(svc, stack_id: str, clones: dict) -> tuple[list, str]:
         prev, rel = rec["commit"], rec["path"]
         c = by_id.get(cid)
         if c is not None and c.source is not None and c.source.path == rel:
-            comps.append((c, prev))
+            comps.append((c, prev, rec.get("selector", "pinned")))
         elif prev:                                   # a checkout to move back that cannot be found as journaled
             lost.append(f"{cid} at {rel} (was at {prev[:9]})")
     if lost:
@@ -754,7 +752,8 @@ def journaled_clones(svc, stack_id: str, clones: dict) -> tuple[list, str]:
 
 def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
     """Move every checkout a rolled-back binary transaction moved back to its journaled commit, at its journaled
-    path. One that did not exist before stays as adopted: nothing older to return to. One the manifest no longer
+    path, on its journaled selector (a stable checkout stays stable). One that did not exist before stays as
+    adopted: nothing older to return to. One the manifest no longer
     names at that path is refused by name with the journal kept: never skipped, never moved at another path. Under THAT stack's source locks, taken here (sorted;
     re-entrant when the install of that stack holds them): another stack's install never moves them under its own
     locks, and a busy lock refuses by name with the journal kept. (ok, why, the moved paths' ownership baseline read
@@ -766,15 +765,15 @@ def restore_clones(svc, stack_id: str, clones: dict) -> tuple[bool, str, dict]:
         return False, why, {}
     try:
         with svc._source_operation_guard(svc._binary_source_paths(stack_id), op="binary-recover"):
-            for comp, prev in comps:
+            for comp, prev, sel in comps:
                 if not prev:
                     continue
-                act = svc._installer().adopt_source(comp, source="pinned", locked=True, force=True,
+                act = svc._installer().adopt_source(comp, source=sel, locked=True, force=True,
                                                      pinned_expected=(prev, "the checkout before the failed install"))
                 if act.status == "failed":
                     return False, (f"the {comp.source.path} checkout could not be moved back to {prev[:9]} "
                                    f"({act.detail})"), {}
-            now, why = registry_baseline(svc._paths, [c.source.path for c, _p in comps])
+            now, why = registry_baseline(svc._paths, [c.source.path for c, _p, _s in comps])
             return True, "", None if why else now     # a damaged record: judged by the receipt that needs it
     except (reslock.ResourceBusy, SourceTxnBlocked) as busy:
         return False, (f"a binary install of '{stack_id}' was interrupted after moving its supporting checkout, "

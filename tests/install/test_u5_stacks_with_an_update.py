@@ -89,6 +89,25 @@ def test_the_operator_update_names_the_stack_whose_source_is_behind(op_svc, monk
     assert not any(a[:1] == ("systemctl",) and a[2:3] in (("start",), ("stop",)) for a, _t, _e in seen)
 
 
+def test_the_operator_update_lists_the_stacks_only_once_the_console_runs_again(op_svc, monkeypatch, tmp_path, capsys):
+    """G2-RELP1a N: the list is advisory; its run (up to 60 s) never extends the console's outage, so it starts after
+    the console is started again."""
+    from lhpc.core import updater_units
+    box, sweep = _behind(tmp_path, monkeypatch, capsys)
+    svc, fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=False, sweep=sweep)
+    unit = updater_units.WEB_UNIT
+    fake.commands.update({("systemctl", "--user", verb, *(["--quiet"] if verb == "is-active" else []), unit):
+                          CommandResult(0, "", "") for verb in ("is-active", "stop", "start")})
+    monkeypatch.setattr(ControllerService, "_web_answers", lambda self: True)   # the fake start brings it up
+    seen, run = [], fake.run
+    monkeypatch.setattr(fake, "run", lambda argv, timeout, cwd=None, env=None:
+                        (seen.append(tuple(argv)), run(argv, timeout, cwd, env))[1])
+    res = svc.self_update_apply_operator()
+    assert res.ok and f"Stacks with an update: {box.stack_of('loraham-daemon')}." in res.details, res
+    start = seen.index(("systemctl", "--user", "start", unit))
+    assert seen.index(("systemctl", "--user", "stop", unit)) < start < seen.index(SWEEP), seen  # RED before: sweep first
+
+
 def test_the_one_click_update_records_the_stacks_with_an_update(op_svc, monkeypatch, tmp_path, capsys):
     box, sweep = _behind(tmp_path, monkeypatch, capsys)
     svc, _fake = _advancing(op_svc, monkeypatch, tmp_path, invocation=True, sweep=sweep)

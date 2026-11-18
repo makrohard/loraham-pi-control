@@ -24,6 +24,7 @@ from . import (
     validators,
     web_client,
 )
+from .install import new_source_active
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import (
@@ -1685,7 +1686,7 @@ class MaintenanceOpsMixin:
                     out.append(f"  [{r.status}] {c.id}: {r.detail}")
                     if r.status == "failed":
                         ok = False                    # incl. prior-dirty: NEVER success
-                        if r.detail.startswith(("prior-dirty:", "prior-in-use:")):
+                        if new_source_active(r):
                             # the NEW source IS active (record coherent) — its stacks
                             # are checked for a build like any updated source
                             mutated_paths.append(path)

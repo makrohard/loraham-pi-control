@@ -152,6 +152,12 @@ class PlanAction:
     provenance: str = ""      # provenance state of an activated source (see provenance.py)
 
 
+def new_source_active(act: PlanAction) -> bool:
+    """A failed adoption that nevertheless ACTIVATED the new source: its archived prior is kept (`prior-in-use`,
+    `prior-dirty`), the record names the new source. Every other failure changed nothing."""
+    return act.status == "failed" and act.detail.startswith(("prior-dirty:", "prior-in-use:"))
+
+
 @dataclass
 class Plan:
     title: str

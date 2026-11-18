@@ -563,10 +563,10 @@ def test_the_apply_reads_each_release_once_and_under_its_locks(box, monkeypatch)
         state["apply"] = k.get("apply", False)
         return real_update(self, *a, **k)
 
-    def resolve(run, remote, branch, paths):
+    def resolve(run, remote, branch, paths, history=None):
         if state["apply"]:
             reads.append(state["locked"])
-        return real_resolve(run, remote, branch, paths)
+        return real_resolve(run, remote, branch, paths, history)
     monkeypatch.setattr(ControllerService, "_source_operation_guard", guard)
     monkeypatch.setattr(ControllerService, "update", update)
     monkeypatch.setattr(stable_lane, "resolve", resolve)
@@ -2514,3 +2514,15 @@ def test_a_gone_branch_already_at_its_pin_names_no_move(box, capsys, git):
     rc, out = _run(box, capsys, "update", "s", "--yes")
     assert rc == 0 and f"upstream branch 'main' gone; kept {box.c[2][:9]}; it is the pin (Known working)" in out \
         and "moves it to the pin" not in out and box.head() == box.c[2], out    # RED before: "moves it to the pin"
+
+
+def test_one_operation_fetches_a_remote_branch_once_for_its_stable_target_and_its_history(tmp_path, monkeypatch):
+    """G2-RELP1c N: the stable lookup of one operation reads the same cached mirror fetch as its history lookups."""
+    from lhpc.core import stable_lane
+    calls = []
+    monkeypatch.setattr(stable_lane, "fetch_history",
+                        lambda run, remote, branch, paths: (calls.append((remote, branch)), (None, "offline"))[1])
+    get = stable_lane.resolver(lambda *a, **k: pytest.fail("no other command"), Paths(runtime_root=tmp_path))
+    assert get(GH, "main").why == "offline"
+    assert get.history(GH, "main") == (None, "offline")
+    assert calls == [(GH, "main")]                     # RED before: fetched twice

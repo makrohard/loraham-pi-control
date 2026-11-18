@@ -1507,7 +1507,8 @@ def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch
 
 def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
     """meshcom-qemu's checkout present, proven ours, at an OLDER commit than the pin (the
-    0.9.2 -> 0.10.0 upgrade case); `update` and the adoption are stubbed to record the call and to move it."""
+    0.9.2 -> 0.10.0 upgrade case); `update` and the adoption are stubbed to record the call and to move it
+    (`state["fail"]`, when set, is the detail the next adoption fails with AFTER moving it)."""
     from lhpc.core.install import DirtyReport
     svc = _svc(tmp_path, monkeypatch)
     comp = next(c for st in svc.stacks() if st.id == "meshcom"
@@ -1532,6 +1533,8 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
 
             class _Done:
                 status, detail = "done", "moved to the pin"
+            if state.get("fail"):
+                _Done.status, _Done.detail = "failed", state.pop("fail")
             return _Done()
         def _index_key(self):
             return "source-txn-index"
@@ -1550,6 +1553,62 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
     monkeypatch.setattr(ControllerService, "update", _update)
     monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
     return svc, comp, state
+
+
+@pytest.mark.parametrize("detail", ["prior-in-use: the update activated the new source, but its archived prior is kept",
+                                    "prior-dirty: the update activated the new source, but the archived prior holds"])
+def test_an_adoption_that_activated_the_new_checkout_and_failed_is_moved_back(tmp_path, monkeypatch, stub_pipeline,
+                                                                              detail):
+    """G2-RELP1b B1: `prior-in-use` / `prior-dirty` fail AFTER the new checkout is active; the journal keeps the
+    previous commit, so the rollback moves it back (the old binary never runs the new run scripts)."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc)
+    state["fail"] = detail
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and detail in res.summary, res.summary
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit),
+                                ("meshcom-qemu", "pinned", True, True, "0" * 40)], res   # RED before: no move back
+    assert state["commit"] == "0" * 40
+
+
+def test_an_adoption_that_failed_and_changed_nothing_is_not_moved_back(tmp_path, monkeypatch, stub_pipeline):
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc)
+    state["fail"] = "clone failed"
+    state["commit"] = "0" * 40
+    real = ControllerService._installer
+
+    def _unmoved(self):                                        # a failure that changed nothing: still at 0*40
+        inst = real(self)
+        adopt = inst.adopt_source
+
+        def _adopt(c, **kw):
+            failing = bool(state.get("fail"))
+            out = adopt(c, **kw)
+            if failing:
+                state["commit"] = "0" * 40
+            return out
+        inst.adopt_source = _adopt
+        return inst
+    monkeypatch.setattr(ControllerService, "_installer", _unmoved)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and "clone failed" in res.summary, res.summary
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit)], res
+    assert state["commit"] == "0" * 40
+
+
+def test_the_rollback_moves_a_stable_checkout_back_on_the_stable_lane(tmp_path, monkeypatch, stub_pipeline):
+    """G2-RELP1b B2: the journal keeps the checkout's selector; the rollback restores the previous commit on it, so a
+    failed binary install never turns a stable checkout into a pinned one."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+        source_rel=comp.source.path, remote=comp.source.remote, selector="stable", resolved_commit="0" * 40,
+        adopted_at=1.0, txn_id="t-stable", components=(comp.id,)))
+    stub_pipeline(svc)                                         # the swap stops at DOWNLOAD-REACHED
+    res = svc.binary_install("meshcom", apply=True)
+    assert "DOWNLOAD-REACHED" in res.summary and res.data["rolled_back"], res.summary
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit),
+                                ("meshcom-qemu", "stable", True, True, "0" * 40)], res   # RED before: "pinned"
 
 
 def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch, stub_pipeline):
