@@ -1428,6 +1428,22 @@ def test_row_1_each_direction_fails_when_either_of_its_checks_is_missing(tmp_pat
     assert results[why.split(":")[0]].startswith("FAIL: "), results
 
 
+def test_row_1_names_its_peer_to_box_leg_before_that_legs_first_change(tmp_path):
+    # the leg file says "peer -> box" from the setinfo on to the row's last check; before it, every check is box -> peer
+    script = ('FORMS_OK="start stop tx_mcom rx_mcom rx_mcom_app"; : > "$EVD/undo.list"; keep H433 r1; BOXES=; '
+              'X() { printf "%s\\t%s\\n" "$2" "$(cat "$OUT/rowleg.txt" 2>/dev/null)" >> "$EVD/legs"; XRC=0; }; '
+              'XIN() { X "$1" "$2" "${@:4}"; }; pread() { printf "POWER 17\\n" > "$OUT/$2"; XRC=0; }; started() { :; }; '
+              'dpower() { :; }; usbguard() { :; }; peer() { XRC=0; SPAWN=; }; reap() { :; }; verify_set() { :; }; '
+              'result() { printf "%s\\t%s\\n" "$1" "$(cat "$OUT/rowleg.txt")" >> "$EVD/legs"; }; '
+              'tx() { shift 4; "$@"; }; RUN=1; runrow 1')
+    r, evd = source_only(tmp_path, script)
+    assert r.returncode == 0, r.stdout + r.stderr
+    legs = dict(line.split("\t", 1) for line in (evd / "legs").read_text().splitlines())
+    assert legs["1-box-tx.txt"] == "box -> peer", legs
+    for f in ("1-setinfo-on.txt", "1-box-app.txt", "1-box-rx.txt"):
+        assert legs[f] == "peer -> box", (f, legs)
+
+
 def test_row_1_needs_its_three_meshcom_forms_confirmed(tmp_path):
     # mutant M11 (6f09f3cb): row 1's forms back to "start stop" - its new judges ran unconfirmed. A live row 1 whose
     # FORMS_OK holds only start and stop stops before any box, naming the three

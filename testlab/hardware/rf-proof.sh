@@ -893,6 +893,7 @@ row_1() {   # MeshCom box radio 433.175 <-> the MeshCom T-Deck. Peer -> box: the
   REPORT 1 meshcom "$b ($r)" "433.175 MHz" "MeshCom T-Deck" "box -> peer" "yes (in MeshCom on the T-Deck + TX on $r)" "$(getk "P_R1-$b-$r" as-is) dBm (as-is)" PASS
   # peer -> box: the box node prints what it accepts only with --setinfo on (RAM only); its off is journalled BEFORE the on, so
   # the row's end, a FAIL (runrow's undo_to) and a STOP or signal (recover) all restore it; a lost box H loses the flag with its node
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   undo_push "$b" "$(setinfo off "$r")"; X "$b" 1-setinfo-on.txt "$(setinfo on "$r")"
   [ "$MODE" = dry ] || [ "$XRC" = 0 ] || fail "peer -> box: the box node did not take --setinfo on (rc $XRC: 4 = no banner, 3 = no echo)"
   tx R1-tdeck 1 "$n2" -- peer 1-peer-send.txt "$VMT" meshcom-send "$n2"; [ "$XRC" = 0 ] || stop "row 1: the T-Deck send failed (rc $XRC)"
