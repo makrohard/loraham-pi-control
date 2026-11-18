@@ -163,3 +163,23 @@ def test_a_kept_pick_shows_once_on_the_page_that_consumes_it(web, tmp_path, monk
     c.get("/hardware/radio/r1")                                         # consumes the entry
     page = c.get("/hardware/add").get_data(as_text=True)
     assert (_picked(page, "board"), _picked(page, "band")) == (first, "433") and "no SX127x answered" not in page
+
+
+@pytest.mark.parametrize("gpiod, why", [
+    (None, "does not see the system gpiod binding (python3-libgpiod)"),
+    ("1.x", "needs python3-libgpiod 2.x"),
+])
+def test_a_console_without_a_usable_gpiod_shows_a_refusal_not_a_500(web, tmp_path, monkeypatch, csrf, gpiod, why):
+    # DETECT-500 (box H, rc0 fe33ead8: POST /hardware/detect r1 -> 500 ModuleNotFoundError 'gpiod'). The REAL SPI bus,
+    # no seam: the route reaches spi.py's own gpiod request; the console's Python without a usable binding refuses.
+    import sys
+    import types
+    c = _box(web, tmp_path, monkeypatch)
+    if gpiod is None:
+        monkeypatch.setitem(sys.modules, "gpiod", None)
+    else:
+        monkeypatch.setitem(sys.modules, "gpiod", types.ModuleType("gpiod"))
+    where, page = _detect(c, csrf, page="/hardware/radio/r1", kind="radio", rid="r1")
+    assert where.endswith("/hardware/radio/r1#detect-r1")
+    outcome, css, text = _result(page, "r1")
+    assert (outcome, css) == ("refused", "bad") and why in text, text

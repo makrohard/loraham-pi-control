@@ -11,12 +11,14 @@
   other radio's daemon) refuses Detect with the reason; nothing else is requested.
 - The bus: each transfer holds the daemon's `spi0.lock` (an exclusive flock from before CS low to after
   CS high), so it never interleaves with a daemon's transaction. 2 MHz, mode 0, the daemon's settings.
-spidev and gpiod are imported only when a bus opens.
+spidev and gpiod are imported only when a bus opens; both come from the system packages (python3-spidev,
+python3-libgpiod 2.x), so a console venv that does not see them, or a 1.x gpiod, is a refusal, never an error.
 """
 from __future__ import annotations
 
 import errno
 import fcntl
+import importlib
 import os
 import time
 from pathlib import Path
@@ -57,17 +59,26 @@ class SpiBus:
             held = exc.errno == errno.EBUSY
             raise DetectRefused(f"GPIO line(s) {outputs + inputs} "
                                 + ("held by another process" if held else f"unavailable: {exc}")) from exc
-        self._spi = (spi_factory or _spidev_open)(node)
-        if not self._kernel:
-            try:
+        self._spi = None
+        try:   # from here every failure gives back what this bus already holds: the spidev, then the lines
+            self._spi = (spi_factory or _spidev_open)(node)
+            if not self._kernel:
                 _no_kernel_cs(self._spi, sys / "class/spidev" / Path(node).name)
-            except DetectRefused:
-                self._spi.close()
-                if self._lines is not None:
-                    self._lines.release()
-                raise
-        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)     # as the daemon's start pre_step makes it
-        self._lock = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+            lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)  # as the daemon's start pre_step makes it
+            self._lock = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        except BaseException:
+            self._give_back()
+            raise
+
+    def _give_back(self) -> None:
+        """A failed open's cleanup: each step on its own, and an OSError of one never replaces the open's error."""
+        for step in (self._spi.close if self._spi is not None else None,
+                     self._lines.release if self._lines is not None else None):
+            if step is not None:
+                try:
+                    step()
+                except OSError:
+                    pass
 
     def reset(self, level: int) -> None:
         if self._rst is not None:
@@ -121,8 +132,17 @@ def _no_kernel_cs(spi, spidev: Path) -> None:
                             "assert one during this transfer. Boot with dtoverlay=spi0-0cs")
 
 
+def _binding(name: str, package: str):
+    """The system binding `name` (apt `package`), or a refusal that says the console's Python does not see it."""
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        raise DetectRefused(f"the console's Python does not see the system {name} binding ({package}): its venv "
+                            "venv/lhpc must include the system site packages (the 0.14.0 CHANGELOG upgrade step)") from None
+
+
 def _spidev_open(node: str):
-    import spidev
+    spidev = _binding("spidev", "python3-spidev")
     spi = spidev.SpiDev()
     bus, dev = node.rsplit("spidev", 1)[1].split(".")
     spi.open(int(bus), int(dev))
@@ -147,7 +167,10 @@ class _GpiodLines:
 
 
 def _gpiod_request(chip: str, outputs: list, inputs: list) -> _GpiodLines:
-    import gpiod
+    gpiod = _binding("gpiod", "python3-libgpiod")
+    if not hasattr(gpiod, "request_lines"):   # libgpiod 1.x (e.g. Debian 12's 1.6): another API, no request_lines
+        raise DetectRefused(f"the system gpiod binding is {getattr(gpiod, '__version__', 'older than 2')}; Detect "
+                            "needs python3-libgpiod 2.x")
     from gpiod.line import Direction, Value
     config = {tuple(outputs): gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE)} if outputs else {}
     if inputs:

@@ -91,3 +91,25 @@ def test_a_radio_not_in_the_list_is_refused(box):
 def test_a_usage_error_exits_2_and_detects_nothing(box, argv):
     rc, out, opened = box()(*argv)
     assert (rc, opened) == (2, []) and "lhpc hardware detect <rid>" in out
+
+
+# ---- DETECT-500 (box H, rc0): the console's venv without the system gpiod; through the CLI with the REAL SPI bus ------
+
+@pytest.mark.parametrize("gpiod, why", [
+    (None, "does not see the system gpiod binding (python3-libgpiod)"),     # import fails (venv without system packages)
+    ("1.x", "needs python3-libgpiod 2.x"),                                    # Debian 12's 1.6: no request_lines
+])
+def test_a_console_without_a_usable_gpiod_refuses_detect_instead_of_failing(box, monkeypatch, gpiod, why):
+    # red-before (fe33ead8): ModuleNotFoundError / AttributeError out of main(), no line printed
+    import sys
+    import types
+
+    from lhpc.core.radio_detect import spi
+    cli = box()
+    monkeypatch.setattr(run, "spi_bus", spi.SpiBus)                     # the real bus: its own gpiod request
+    if gpiod is None:
+        monkeypatch.setitem(sys.modules, "gpiod", None)                 # `import gpiod` raises ImportError
+    else:
+        monkeypatch.setitem(sys.modules, "gpiod", types.ModuleType("gpiod"))
+    rc, out, _opened = cli("detect", "r1")
+    assert rc == 1 and out.startswith("ERR   ") and why in out, out

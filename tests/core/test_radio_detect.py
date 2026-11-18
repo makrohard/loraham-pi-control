@@ -595,3 +595,93 @@ def test_by_port_through_libusb_a_stalling_serial_proceeds_and_another_stalling_
     assert lib.held["claimed"] == 1
     bus.close()
     assert lib.held["claimed"] == lib.held["open"] == 0
+
+
+# ---- DETECT-500: the system bindings missing or old are refusals; a failed open gives back what it already holds ------
+
+class _Held(_Lines):
+    """Lines that record their release."""
+
+    def __init__(self, outputs, inputs):
+        super().__init__(outputs, inputs)
+        self.released = 0
+
+    def release(self):
+        self.released += 1
+
+
+def test_a_missing_spidev_on_kernel_chip_selects_is_a_refusal_and_requests_no_line(tmp_path, monkeypatch):
+    # C3: the Uputronics board on kernel CS needs no line, so spidev is the first binding it imports (dev seam)
+    import sys
+
+    from lhpc.core import radio_models
+    (tmp_path / "spidev0.1").touch()
+    monkeypatch.setitem(sys.modules, "spidev", None)
+    asked = []
+    with pytest.raises(DetectRefused, match=r"does not see the system spidev binding \(python3-spidev\)"):
+        spi.SpiBus(radio_models.load()["uputronics"].variant("ce0").pins, "sx127x", tmp_path / "spi0.lock",
+                   dev=tmp_path, gpio_request=lambda c, o, i: asked.append((o, i)))
+    assert asked == []
+
+
+def _soft(tmp_path, **kw):
+    """A soft-CS SX127x bus (RESET 5 + CS 8 requested as lines) on the dev seam; returns (the lines, the call)."""
+    seen = []
+    def make():
+        return spi.SpiBus({"cs": 8, "irq": 25, "rst": 5, "gpio": 24}, "sx127x", kw.pop("lock", tmp_path / "spi0.lock"),
+                          dev=tmp_path, sys=tmp_path, gpio_request=lambda c, o, i: seen.append(_Held(o, i)) or seen[-1],
+                          **kw)
+    return seen, make
+
+
+@pytest.mark.parametrize("fail", ["no-spidev", "spidev-oserror"])
+def test_a_spidev_that_does_not_open_releases_the_lines_already_requested(tmp_path, monkeypatch, fail):
+    # C1: the lines (RESET, soft CS) are requested before the spidev opens; its failure gives them back
+    import sys
+    if fail == "no-spidev":
+        monkeypatch.setitem(sys.modules, "spidev", None)
+        seen, make = _soft(tmp_path)
+        err = DetectRefused
+    else:
+        def factory(node):
+            raise OSError(errno.ENOENT, "No such file or directory", node)
+        seen, make = _soft(tmp_path, spi_factory=factory)
+        err = OSError
+    with pytest.raises(err):
+        make()
+    assert seen[0].requested == ([5, 8], []) and seen[0].released == 1
+
+
+class _Closing(_Echo):
+    def __init__(self, fail=False):
+        self.closed, self.fail = 0, fail
+
+    def close(self):
+        self.closed += 1
+        if self.fail:
+            raise OSError(errno.EIO, "Input/output error")
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_a_lock_that_does_not_open_gives_back_the_spidev_and_the_lines(tmp_path, close_fails):
+    # C1 swept: the spi0.lock open after the spidev; an OSError of the spidev's close never replaces the open's error
+    (tmp_path / "spidev0.1").touch()                                     # kernel CS: no _no_kernel_cs read
+    blocker = tmp_path / "state"
+    blocker.write_text("")                                               # a file where the lock's folder must be
+    dev = _Closing(fail=close_fails)
+    seen, make = _soft(tmp_path, spi_factory=lambda node: dev, lock=blocker / "loraham" / "spi0.lock")
+    with pytest.raises(OSError) as exc:
+        make()
+    assert exc.value.errno in (errno.ENOTDIR, errno.EEXIST), exc.value
+    assert dev.closed == 1 and seen[0].released == 1
+
+
+def test_a_gpiod_1x_binding_is_a_refusal_before_any_line_is_asked_for(monkeypatch):
+    # C2: python3-libgpiod 1.x imports, but has no request_lines (its API is gpiod.Chip): a refusal, not AttributeError
+    import sys
+    import types
+    old = types.ModuleType("gpiod")
+    old.__version__ = "1.6.3"
+    monkeypatch.setitem(sys.modules, "gpiod", old)
+    with pytest.raises(DetectRefused, match=r"the system gpiod binding is 1\.6\.3; Detect needs python3-libgpiod 2\.x"):
+        spi._gpiod_request("/dev/gpiochip0", [5], [])
