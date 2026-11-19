@@ -107,7 +107,7 @@ def test_an_rf_log_panel_shows_the_last_30_records_raw(page):
     page.click("#rflog-meshcom > summary")
     _status(page, "#rflog-meshcom", "updated")
     settled()
-    assert [u.split("/api/", 1)[1] for u in seen] == ["rflog/meshcom-bridge?job=rf-meshcom.log"]
+    assert [u.split("/api/", 1)[1] for u in seen] == ["rflog/meshcom-bridge?job=r1/rf-meshcom.log"]   # #75: r1's own file
     assert page.text_content("#rflog-meshcom .logpanel-text").split("\n") == [f"rec {i}" for i in range(5, 35)]
 
 
