@@ -1,0 +1,3 @@
+{#- F12: the line under the breadcrumb on a page that is a Stacks tree level (a menu page, /hardware, a log page):
+    its place on the Stacks page (`show_url`, app._show_url; none on a job or build log). -#}
+{% if show_url %}<p class="pagebar"><a href="{{ show_url }}">‹ show in Stacks</a></p>{% endif %}

@@ -4,6 +4,7 @@
     refreshed every 3 s by logs.js from /api/logpreview/<source>?lines=300 (`log_source`, the page's history depth). -#}
 {% block content %}
   {% include "_log_crumbs.html" %}
+  {% include "_show_in_stacks.html" %}
   <div class="card" id="log-card" data-preview="{{ log_source }}">
     <header>{% block header %}{% endblock %}</header>
     <div class="body">

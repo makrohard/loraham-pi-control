@@ -1543,15 +1543,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return redirect(own)
         request.environ["lhpc.menu_return"] = _menu_url(owner, mid)
         body = _level_html(owner, here, ctx)
-        if owner == _submenus.CONTROLLER:
-            show = url_for("stacks_overview") + "#" + mid
-        else:
-            show = url_for("stacks_overview", open=owner, radio=request.args.get("radio") or None) + "#" + mid
         # `body` is the output of Jinja's own autoescaped render of the level's partial, not request text
         return render_template("menu_page.html", body=Markup(_open_first_details(body)), here=here,  # noqa: S704
                                page_rid=_submenus.id_radio(mid),          # UI-REORG s4: a Monitor/Live full page
                                crumbs=[(m.label, _level_url(owner, m.id, request.args.get("radio"))) for m in path],
-                               show_url=show, **ctx)
+                               show_url=_stacks_place(owner, mid), **ctx)
+
+    def _show_url(owner: str, mid: str) -> str:
+        """F12: a log page's "‹ show in Stacks" link: its level's place (_stacks_place) when `mid` is a level of
+        `owner` (the menus its crumbs build anyway), else "" (a job or build log, a program the tree does not list)."""
+        return _stacks_place(owner, mid) if mid and _submenus.chain(_owner_menus(owner)[1], mid) else ""
+
+    def _stacks_place(owner: str, mid: str) -> str:
+        """The "‹ show in Stacks" link of the tree level `mid` (a menu page, /hardware, a log page): its place on the
+        Stacks page, keeping the page's radio."""
+        if owner == _submenus.CONTROLLER:
+            return url_for("stacks_overview") + "#" + mid
+        return url_for("stacks_overview", open=owner, radio=request.args.get("radio") or None) + "#" + mid
 
     def _log_crumbs(owner: str, mid: str, fallback: tuple = ()):
         """LOGS-IN-TREE: a log page's crumbs below Apps, from the tree: the chain down to its level `mid`, the last
@@ -2432,8 +2440,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # An RF log (registry-authorized, never by name): the writer's run state is the badge,
         # the header carries the radio row and the stack row, the bottom the switches and Clear.
         switcher = service.rflog_switcher(job, rid) if rf else None
+        owner, mid, fallback = _logs_view_level(target, job, rf)
         return render_template("logs.html", version=__version__, target=target, job=job,
-                               log_crumbs=_logs_view_crumbs(target, job, rf),
+                               log_crumbs=_log_crumbs(owner, mid, fallback),
+                               show_url=_show_url(owner, mid),          # F12: a job / build log has no level: none
                                radio=switcher["radio"] if rf else rid,
                                stack_id=service.stack_of(target), path=path, lines=lines,
                                running=_log_running(target, job, rid, rf),
@@ -2441,18 +2451,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                switch=service.rflog_switch(rf["surface"]) if rf else None,
                                logging=service.rflog_logging_state() if rf else "")
 
-    def _logs_view_crumbs(target, job, rf):
-        """/logs/<target>'s crumbs: an RF log's entry, a program's (a stack's own name: its main program's), else
-        (v4 B4) a run's job log below the stack's Install, a program the tree does not list below its Dependencies
-        row (each with a synthetic last crumb)."""
+    def _logs_view_level(target, job, rf):
+        """/logs/<target>'s tree place (owner, level id, fallback crumb) for its crumbs: an RF log's entry, a program's
+        (a stack's own name: its main program's), else (v4 B4) a run's job log below the stack's Install, a program
+        the tree does not list below its Dependencies row (each with a synthetic last crumb)."""
         if rf:
-            return _log_crumbs(rf["owner"], f"rflog-{rf['owner']}")
+            return rf["owner"], f"rflog-{rf['owner']}", ()
         owner = service.stack_of(target)
         st = service.stack(owner)
         if job:
-            return _log_crumbs(owner, "", (f"stack-install-{owner}--actions", "Job log"))
+            return owner, "", (f"stack-install-{owner}--actions", "Job log")
         comp = st.main_component.id if st is not None and target == st.id and st.main_component else target
-        return _log_crumbs(owner, f"log-{comp}", (f"comp-{comp}", "Log"))
+        return owner, f"log-{comp}", (f"comp-{comp}", "Log")
 
     def _log_running(target, job, rid, rf) -> bool:
         """The log page's badge: an RF log's writer; a radio's process log, that instance's verified launch record
@@ -2701,7 +2711,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         it writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic) only when it is
         missing or differs (B6-D)."""
         from lhpc.core import radio_start
-        return render_template("hardware.html", **_hw_list_ctx(radio_start.hardware_view(service)))
+        return render_template("hardware.html", **_hw_list_ctx(radio_start.hardware_view(service)),
+                               show_url=_stacks_place("daemon", "stack-hardware-daemon"))   # always a level
 
     @app.get("/hardware/radio/<rid>")
     def hardware_radio(rid: str):
@@ -2999,7 +3010,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template("webserver_logs.html", version=__version__, src=src, path=path, lines=lines,
                                log_source="webserver-" + src,
                                log_crumbs=_log_crumbs(_submenus.CONTROLLER, "webserver-row--logs",
-                                                      ("webserver-row", "Logs")))
+                                                      ("webserver-row", "Logs")),
+                               show_url=_show_url(_submenus.CONTROLLER, "webserver-row--logs"))
 
     @app.get("/firewall/logs")
     def firewall_logs():
@@ -3007,7 +3019,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
         return render_template("firewall_logs.html", version=__version__, path=path, lines=lines, log_source="firewall",
-                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "firewall-row--log", ("firewall-row", "Log")))
+                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "firewall-row--log", ("firewall-row", "Log")),
+                               show_url=_show_url(_submenus.CONTROLLER, "firewall-row--log"))
 
     @app.get("/controller/logs")
     def controller_logs():
@@ -3024,7 +3037,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         path, lines = service.controller_log_tail(src, 300)
         return render_template("controller_logs.html", version=__version__, src=src, unit=unit,
                                path=path, lines=lines, log_source="controller-" + src,
-                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "controller-logs", ("controller-row", "Logs")))
+                               log_crumbs=_log_crumbs(_submenus.CONTROLLER, "controller-logs", ("controller-row", "Logs")),
+                               show_url=_show_url(_submenus.CONTROLLER, "controller-logs"))
 
     # LOGS-IN-TREE B2 (G1-R2 N5): the Apps page's preview of the controller's, the webserver's and the firewall's logs.
     # A fixed whitelist, each source the bounded tail reader its full page uses; any other value is 404. The answer

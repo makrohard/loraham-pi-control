@@ -2,6 +2,7 @@
 {% block title %}Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
 {% with here = "" %}{% include "_hw_crumbs.html" %}{% endwith %}
+{% include "_show_in_stacks.html" %}
 <section class="card" id="hardware-section">
   <div class="body">
     <p class="muted" id="hardware-list-notice">The hardware list (config/radios.toml) has one row per radio; each enabled
